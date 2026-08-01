@@ -1,0 +1,179 @@
+# Atenea settings.
+#
+# One file, on purpose: ceilings, rhythms and the catalogue live here and
+# nowhere else. Nothing in this file is compiled into the binary -- Atenea is a
+# declarative engine, so changing behaviour means editing this, not the core.
+#
+# Conversation with the user is in Spanish; every technical artifact, this file
+# included, is in English.
+
+# Version of the core<->adapter contract this file is written against.
+contract = "1.0.0"
+
+[core]
+# How long a shutdown waits for in-flight work before walking away.
+shutdown_grace = "10s"
+
+# ---------------------------------------------------------------------------
+# Capabilities: the stable "what". Agnostic of any tool, by definition.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "code.search"
+version = "1.0.0"
+summary = "Find literal text in a repository without understanding the code."
+semantics = """
+Flat text search. The engine behind it does not need to parse anything: this is \
+the ripgrep-shaped capability, not the symbol-shaped one. Options are stated as \
+INTENT, never as a technical order, so the capability is not married to any one \
+engine. Snippets carry two lines of context above and below unless the caller \
+asks for more.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "query"
+  type = "string"
+  required = true
+  summary = "The text to look for."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Paths to search: the repository, a folder or a single file. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "match_case"
+  type = "bool"
+  required = false
+  summary = "Intent: distinguish upper from lower case."
+
+  [[capability.input]]
+  name = "regex"
+  type = "bool"
+  required = false
+  summary = "Intent: read the query as a pattern rather than as literal text."
+
+  [[capability.input]]
+  name = "whole_word"
+  type = "bool"
+  required = false
+  summary = "Intent: match whole words only."
+
+  [[capability.input]]
+  name = "file_types"
+  type = "string_list"
+  required = false
+  summary = "Intent: restrict the search to these file types."
+
+  [[capability.input]]
+  name = "context_lines"
+  type = "int"
+  required = false
+  summary = "Lines of context around each match. Defaults to 2 above and 2 below."
+
+  [[capability.output]]
+  name = "matches"
+  type = "record_list"
+  required = true
+  summary = "Every hit, in the order the engine found them."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File containing the match, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line number of the match, starting at 1."
+
+    [[capability.output.field]]
+    name = "column"
+    type = "int"
+    required = true
+    summary = "Column where the match starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The matching line with its surrounding context."
+
+# ---------------------------------------------------------------------------
+# Implementations: the "who and how". Four blocks each -- capability,
+# constraints, cost and health.
+#
+# Health starts unknown for everyone: nothing has been probed yet. Declare a
+# state here to take a provider out of the running by hand; once the health
+# checker exists, live probes own this value.
+# ---------------------------------------------------------------------------
+
+[[implementation]]
+id = "ripgrep"
+provider = "ripgrep"
+capability = "code.search"
+
+  [implementation.constraints]
+  languages = []          # agnostic: it does not parse anything
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "80ms"
+  estimated_tokens = 400
+
+[[implementation]]
+id = "serena.search"
+provider = "serena"
+capability = "code.search"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "600ms"
+  estimated_tokens = 900
+
+[[implementation]]
+id = "codebase-memory.search"
+provider = "codebase-memory"
+capability = "code.search"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+  min_scale = "medium"    # the graph only pays for itself on a big repository
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "1.2s"
+  estimated_tokens = 700
+
+# ---------------------------------------------------------------------------
+# Repositories: the unit of work. Not the project -- the repository.
+# ---------------------------------------------------------------------------
+
+[[repository]]
+id = "current"
+path = "."
+languages = ["go"]
+scale = "small"
+indexed_by = []           # providers holding a ready index for this repository
+
+# ---------------------------------------------------------------------------
+# Selector rules: the user's word, above any automatic ranking.
+# Omit `repository` to make a rule apply everywhere.
+# ---------------------------------------------------------------------------
+
+# [[selector.rule]]
+# capability = "code.search"
+# repository = "current"
+# prefer = "ripgrep"

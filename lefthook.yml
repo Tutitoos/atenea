@@ -1,0 +1,30 @@
+# Pre-commit checks, run on the developer machine before anything reaches CI.
+#
+# lefthook, not Husky: Husky belongs to the Node world and this project is Go.
+# Install once with `lefthook install`.
+
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: |
+        unformatted=$(gofmt -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "gofmt would rewrite:"
+          echo "$unformatted"
+          exit 1
+        fi
+
+    govet:
+      glob: "*.go"
+      run: go vet ./...
+
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run
+
+pre-push:
+  commands:
+    test:
+      run: go test -race ./...

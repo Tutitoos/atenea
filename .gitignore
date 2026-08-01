@@ -1,0 +1,20 @@
+# Build output. The leading slash matters: a bare `atenea` would also match the
+# cmd/atenea package directory.
+/bin/
+/dist/
+/tmp/
+/atenea
+
+# Air hot reload
+/build-errors.log
+
+# Hugo
+/docs/public/
+/docs/resources/
+/docs/.hugo_build.lock
+
+# Local machine state
+*.duckdb
+*.duckdb.wal
+.env
+.DS_Store

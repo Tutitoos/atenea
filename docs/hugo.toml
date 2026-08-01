@@ -1,0 +1,31 @@
+# Hugo turns the plain text under docs/content into the documentation site
+# served by GitHub Pages. The docs live in this repository on purpose: beside
+# the code they travel in the same pull request and go stale far more slowly
+# than a wiki, which is a separate repository nobody remembers to update.
+#
+# baseURL is overridden by the workflow with the real Pages URL.
+baseURL = "https://tutitoos.github.io/atenea/"
+locale = "en-us"
+title = "Atenea"
+enableGitInfo = false
+
+# The theme is pulled as a Hugo module, so there is no vendored copy to keep in
+# sync and no git submodule to forget to initialise.
+[module]
+  [[module.imports]]
+    path = "github.com/alex-shpak/hugo-book"
+
+[params]
+  BookTheme = "auto"
+  BookSearch = true
+  # The pages live at the root of content/, not under content/docs/.
+  BookSection = "*"
+  BooktoC = true
+  BookRepo = "https://github.com/Tutitoos/atenea"
+
+[markup.goldmark.renderer]
+  unsafe = false
+
+[markup.highlight]
+  noClasses = false
+  style = "github"

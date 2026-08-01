@@ -1,0 +1,51 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - misspell
+    - nilerr
+    - predeclared
+    - revive
+    - unconvert
+  settings:
+    errcheck:
+      # A failed write to stdout is not actionable from inside a CLI command:
+      # the only honest reaction would be another write to the same broken
+      # stream. Checking every Fprintf would bury the code in noise it cannot
+      # act on.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+  exclusions:
+    rules:
+      # Tests lean on t.Fatalf and write to a bytes.Buffer, where checking every
+      # returned error buys nothing.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Tutitoos/atenea
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
