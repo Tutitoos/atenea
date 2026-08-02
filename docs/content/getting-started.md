@@ -149,3 +149,16 @@ go test -race ./...     # the suite
 lefthook install        # pre-commit: gofmt, go vet, golangci-lint
 air                     # hot reload while developing, local only
 ```
+
+### Publishing these docs
+
+The `docs` workflow builds this site and deploys it to GitHub Pages on every
+push that touches `docs/`. It needs Pages to already exist, and the workflow
+cannot create it: `GITHUB_TOKEN` can deploy to a site, but creating one is
+repository administration and that escalation is deliberately closed. On a
+fresh fork it is one command, run once, by an account that administers the
+repository:
+
+```sh
+gh api -X POST /repos/OWNER/REPO/pages -f build_type=workflow
+```
