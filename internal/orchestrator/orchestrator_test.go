@@ -104,6 +104,12 @@ func (f *fakeRunner) Serves(id string) bool {
 	return false
 }
 
+// Implementations is the same declaration Serves answers one id at a time, and
+// it has to agree with it: a double that claimed everything through one and
+// nothing through the other would fail the reach stage for reasons no
+// production runner ever could. build fills it from the fixture catalog.
+func (f *fakeRunner) Implementations() []string { return f.serves }
+
 func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	now := f.live.Add(1)
 	for {
@@ -160,6 +166,18 @@ func hits(paths ...string) contract.Outcome {
 func build(t *testing.T, runner contract.Runner, maxParallel int, dir string) (*orchestrator.Agent, *registry.Registry) {
 	t.Helper()
 	reg := catalog(t)
+	if fake, ok := runner.(*fakeRunner); ok && fake.serves == nil {
+		// The default double answers for whatever the fixture registered.
+		for _, capability := range reg.Capabilities() {
+			impls, err := reg.ImplementationsFor(capability.ID)
+			if err != nil {
+				t.Fatalf("ImplementationsFor: %v", err)
+			}
+			for _, impl := range impls {
+				fake.serves = append(fake.serves, impl.ID)
+			}
+		}
+	}
 	chooser, err := selector.New(selector.Config{})
 	if err != nil {
 		t.Fatalf("selector.New: %v", err)
@@ -561,9 +579,16 @@ func TestAgreementIsNotRecordedAsADispute(t *testing.T) {
 
 // Running a step is a probe, and a provider that reports itself unusable is
 // news the catalog needs: the funnel filters on health.
+//
+// The provider is reachable here and fails anyway. That is the only shape this
+// case can take now: one nothing serves never reaches dispatch, so it could
+// never report anything about itself.
 func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 	runner := &fakeRunner{
-		serves: []string{}, // serves nothing
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+				"the index is not built")
+		},
 	}
 	agent, reg := build(t, runner, 0, "")
 

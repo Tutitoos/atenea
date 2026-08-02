@@ -26,17 +26,20 @@ what it knows about the repository in front of it.
 | **Capability** | A stable, tool-agnostic action. `code.search`, `symbol.definition`. |
 | **Implementation** | A concrete provider of a capability, in four blocks: capability, constraints, cost, health. |
 | **Repository** | The unit of work. Not the project — the repository. |
-| **Selector** | The funnel that picks an implementation: constraints, then health, then cost. |
+| **Selector** | The funnel that picks an implementation: constraints, reach, health, then cost. |
 | **Adapter** | A dumb translator between the core and one CLI. All the intelligence stays in the core. |
 
 ## Where the project stands
 
-Alpha, version `0.x.y`. The first brick is in place: the core, the Capability
-Registry and the funnel selector running on constraints and health.
+Alpha, version `0.x.y`. The core, the Capability Registry and the funnel run on
+all four stages, and two client adapters ship: `omp` and Claude Code.
 
-The cost filter is deliberately not wired yet. On a cold start there are no
-fresh measurements, so ranking by cost would mean ranking by guesswork. It joins
-the funnel once the metrics base is feeding real numbers.
+Cost ranks the survivors rather than filtering them, and it says which figure
+it used. Until an implementation has been measured a couple of times, that
+figure is the estimate the catalog declared — the trace prints `estimated` so
+nobody reads a guess as an observation. This is the design's break-in period:
+the numbers get better as real work runs through, and nothing has to be
+rewritten when they do.
 
 ## Read next
 

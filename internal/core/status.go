@@ -43,6 +43,9 @@ type Status struct {
 	Orchestrator OrchestratorStatus
 	Capabilities []CapabilityStatus
 	Repositories []RepositoryStatus
+	// Chats are the sessions open right now. Two clients at once is the whole
+	// point of the isolation, and an isolation nobody can see is a claim.
+	Chats []ChatStatus
 }
 
 // CapabilityStatus is one capability and the providers behind it.
@@ -70,6 +73,20 @@ type RepositoryStatus struct {
 	Indexes   []string
 }
 
+// ChatStatus is one open session: who it belongs to, what it may authorize
+// and what it is entitled to read.
+type ChatStatus struct {
+	ID     string
+	Client string
+	Uptime string
+	Runs   int64
+	// Grant is what this chat may authorize beyond reading, by effect name.
+	// Empty means it can look and nothing else.
+	Grant []string
+	// Context lists the heights it may read.
+	Context []string
+}
+
 // OrchestratorStatus is the agent that does the work, at a glance: who it is,
 // what it may ask for, which context levels it is entitled to, and who is
 // actually behind it. An agent with nobody behind it can plan and choose but
@@ -79,9 +96,10 @@ type OrchestratorStatus struct {
 	Type         string
 	Capabilities []string
 	Context      []string
-	// Runner is the id of the far side, or empty when nothing is attached.
-	Runner string
-	// Serves lists the implementations the attached runner can execute.
+	// Runners lists the ids of the far sides attached, empty when none is.
+	Runners []string
+	// Serves lists the implementations the attached runners can execute
+	// between them.
 	Serves []string
 	// Unreachable lists registered implementations no attached runner can
 	// execute. They survive the funnel and then fail on dispatch, so naming
@@ -92,9 +110,9 @@ type OrchestratorStatus struct {
 	Light       Light
 }
 
-// funnelDescription says out loud which filters are wired, so nobody reads a
-// two-filter decision as a three-filter one.
-const funnelDescription = "constraints -> health (cost joins once the metrics base feeds real measurements)"
+// funnelDescription says out loud which filters are wired and how far the last
+// one is to be trusted, so nobody reads an estimate as a measurement.
+const funnelDescription = "constraints -> reach -> health -> cost (estimated until an implementation has been measured)"
 
 // Status builds the snapshot.
 func (c *Core) Status() Status {
@@ -153,6 +171,22 @@ func (c *Core) Status() Status {
 		})
 	}
 
+	for _, chat := range c.Sessions() {
+		entry := ChatStatus{
+			ID:     chat.ID(),
+			Client: chat.Client(),
+			Uptime: time.Since(chat.Opened()).Truncate(time.Second).String(),
+			Runs:   chat.Runs(),
+		}
+		for _, effect := range chat.Grant() {
+			entry.Grant = append(entry.Grant, effect.String())
+		}
+		for _, level := range chat.Context() {
+			entry.Context = append(entry.Context, level.String())
+		}
+		status.Chats = append(status.Chats, entry)
+	}
+
 	status.Orchestrator = c.orchestratorStatus()
 	status.Light = worst(status.Light, status.Orchestrator.Light)
 	return status
@@ -175,21 +209,23 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 	if out.Checkpoints == "" {
 		out.Checkpoints = "off"
 	}
-	if c.runner == nil {
+	if len(c.runners) == 0 {
 		// Planning and choosing still work; dispatching does not. That is not
 		// broken, but it is not ready either.
 		out.Light = LightAmber
 		return out
 	}
 
-	out.Runner = c.runner.ID()
+	for _, runner := range c.runners {
+		out.Runners = append(out.Runners, runner.ID())
+	}
 	for _, capability := range c.catalog.Capabilities() {
 		impls, err := c.catalog.ImplementationsFor(capability.ID)
 		if err != nil {
 			continue
 		}
 		for _, impl := range impls {
-			if c.runner.Serves(impl.ID) {
+			if c.serves(impl.ID) {
 				out.Serves = append(out.Serves, impl.ID)
 			} else {
 				out.Unreachable = append(out.Unreachable, impl.ID)
@@ -207,6 +243,15 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 	return out
 }
 
+// serves reports whether any attached runner can execute that implementation.
+func (c *Core) serves(implementationID string) bool {
+	for _, runner := range c.runners {
+		if runner.Serves(implementationID) {
+			return true
+		}
+	}
+	return false
+}
 func lightFor(state contract.HealthState) Light {
 	switch state {
 	case contract.HealthAlive:

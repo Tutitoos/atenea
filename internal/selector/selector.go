@@ -19,6 +19,7 @@ import (
 // Stage names, in funnel order.
 const (
 	StageConstraints = "constraints"
+	StageReach       = "reach"
 	StageHealth      = "health"
 	StageChoice      = "choice"
 )
@@ -84,6 +85,17 @@ type Request struct {
 	Capability string
 	Repository contract.Repository
 	Candidates []contract.Implementation
+	// Reachable lists the implementations the attached far side can actually
+	// execute, and it is required: a funnel that did not know would happily
+	// choose a provider nothing can invoke, and the step would die on dispatch
+	// instead of falling back to whoever could have answered.
+	//
+	// It is its own stage rather than a health verdict because the two are
+	// different kinds of fact. Health is what a probe found -- running a step
+	// is what updates it -- while reach is a wiring decision that was made
+	// before anything ran. Filing one under the other would mean a settings
+	// change had to wait for a probe to be believed.
+	Reachable []string
 }
 
 // Drop records one implementation leaving the funnel, and why.
@@ -125,14 +137,21 @@ func (s *Selector) Select(req Request) (Decision, error) {
 			"capability %s has no registered implementations", req.Capability)
 	}
 
-	fitting, constraintStage := s.filterConstraints(req)
+	fitting, constraintStage := s.filterConstraints(req, req.Candidates)
 	decision.Stages = append(decision.Stages, constraintStage)
 	if len(fitting) == 0 {
 		return decision, contract.Fail(contract.FailureNotFound,
 			"no implementation of %s fits repository %s", req.Capability, req.Repository.ID)
 	}
 
-	usable, healthStage := filterHealth(fitting)
+	within, reachStage := filterReach(req, fitting)
+	decision.Stages = append(decision.Stages, reachStage)
+	if len(within) == 0 {
+		return decision, contract.Fail(contract.FailureUnavailable,
+			"no attached runner serves any implementation of %s", req.Capability)
+	}
+
+	usable, healthStage := filterHealth(within)
 	decision.Stages = append(decision.Stages, healthStage)
 	if len(usable) == 0 {
 		return decision, contract.Fail(contract.FailureUnavailable,
@@ -151,10 +170,33 @@ func (s *Selector) Select(req Request) (Decision, error) {
 	return decision, nil
 }
 
-func (s *Selector) filterConstraints(req Request) ([]contract.Implementation, Stage) {
-	stage := Stage{Name: StageConstraints, In: ids(req.Candidates)}
-	kept := make([]contract.Implementation, 0, len(req.Candidates))
-	for _, impl := range req.Candidates {
+// filterReach drops what no attached far side can execute.
+//
+// It runs after constraints so the trace carries the most useful reason it
+// can: a provider that needs an index it does not have should be told so, not
+// merely reported as unwired. Only what could otherwise have worked here is
+// left to fail on wiring.
+func filterReach(req Request, candidates []contract.Implementation) ([]contract.Implementation, Stage) {
+	stage := Stage{Name: StageReach, In: ids(candidates)}
+	kept := make([]contract.Implementation, 0, len(candidates))
+	for _, impl := range candidates {
+		if !slices.Contains(req.Reachable, impl.ID) {
+			stage.Dropped = append(stage.Dropped, Drop{
+				Implementation: impl.ID,
+				Reason:         "no attached runner serves it",
+			})
+			continue
+		}
+		kept = append(kept, impl)
+	}
+	stage.Out = ids(kept)
+	return kept, stage
+}
+
+func (s *Selector) filterConstraints(req Request, candidates []contract.Implementation) ([]contract.Implementation, Stage) {
+	stage := Stage{Name: StageConstraints, In: ids(candidates)}
+	kept := make([]contract.Implementation, 0, len(candidates))
+	for _, impl := range candidates {
 		if reason, ok := fits(impl, req.Repository); !ok {
 			stage.Dropped = append(stage.Dropped, Drop{Implementation: impl.ID, Reason: reason})
 			continue
@@ -206,9 +248,17 @@ func filterHealth(candidates []contract.Implementation) ([]contract.Implementati
 	return kept, stage
 }
 
+// BreakInSamples is how many real measurements an implementation needs before
+// its own numbers are believed over its declared estimate.
+//
+// The design calls the state before that "modo de rodaje": on day one there is
+// no baseline, so the estimate is all there is. Two rather than one because a
+// single call can be a cold cache.
+const BreakInSamples = 2
+
 // choose settles the survivors. A user rule wins outright; otherwise the
-// healthiest one does, with the implementation id as the final tie-break so the
-// same catalog always produces the same answer.
+// healthiest one does, the cheaper of two equally healthy ones next, and the
+// implementation id last so the same catalog always produces the same answer.
 func (s *Selector) choose(req Request, survivors []contract.Implementation) (contract.Implementation, string, []string) {
 	var notices []string
 	if rule, ok := s.ruleFor(req.Capability, req.Repository.ID); ok {
@@ -224,11 +274,42 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer))
 	}
 	ranked := slices.Clone(survivors)
-	slices.SortFunc(ranked, byHealthThenID)
-	return ranked[0], "healthiest surviving implementation", notices
+	slices.SortFunc(ranked, byHealthThenCostThenID)
+	return ranked[0], reasonFor(ranked), notices
 }
 
-func byHealthThenID(a, b contract.Implementation) int {
+// reasonFor names what actually settled the choice, so the trace never claims
+// more certainty than it has. "estimated" is the word that says no measurement
+// exists yet, which is the whole difference between a decision and a guess.
+func reasonFor(ranked []contract.Implementation) string {
+	if len(ranked) < 2 {
+		return "the only surviving implementation"
+	}
+	first, second := ranked[0], ranked[1]
+	if first.Health.State != second.Health.State || first.Health.Score != second.Health.Score {
+		return "healthiest surviving implementation"
+	}
+	if cheaper(first, second) {
+		if first.Cost.HasMeasurements(BreakInSamples) && second.Cost.HasMeasurements(BreakInSamples) {
+			return "cheapest of the healthy ones (measured)"
+		}
+		return "cheapest of the healthy ones (estimated)"
+	}
+	// Neither is cheaper on both axes, so Atenea has no basis to prefer one.
+	// Saying so is the point: this is where a user rule belongs.
+	return "no cheaper option among equals, settled by id"
+}
+
+// byHealthThenCostThenID orders the survivors. It is a ranking and never a
+// filter: nobody leaves the funnel for being expensive.
+//
+// That distinction is deliberate and load-bearing. A cost FILTER would starve
+// the loser of the very measurements that could correct its estimate -- the
+// expensive one is never run, so it is never measured, so the hybrid cost of
+// hoja 13 stays frozen on day-one guesswork forever. As a ranking, break-in
+// mode can later promote an unmeasured implementation to earn its number
+// without anything here being rewritten.
+func byHealthThenCostThenID(a, b contract.Implementation) int {
 	if d := a.Health.State.Rank() - b.Health.State.Rank(); d != 0 {
 		return d
 	}
@@ -238,7 +319,30 @@ func byHealthThenID(a, b contract.Implementation) int {
 	case a.Health.Score < b.Health.Score:
 		return 1
 	}
+	switch {
+	case cheaper(a, b):
+		return -1
+	case cheaper(b, a):
+		return 1
+	}
 	return strings.Compare(a.ID, b.ID)
+}
+
+// cheaper reports whether a costs less than b on BOTH axes, using each one's
+// best available figure: its measurements once it has enough, its estimate
+// until then.
+//
+// Requiring both axes is what keeps this free of invented weights. Nobody has
+// decided what a second of wall clock is worth in tokens, so a genuine
+// trade-off -- faster but chattier -- is reported as a tie rather than settled
+// by a number this package made up.
+func cheaper(a, b contract.Implementation) bool {
+	x := a.Cost.Effective(BreakInSamples)
+	y := b.Cost.Effective(BreakInSamples)
+	if x.Tokens > y.Tokens || x.Duration > y.Duration {
+		return false
+	}
+	return x.Tokens < y.Tokens || x.Duration < y.Duration
 }
 
 // ruleFor returns the most specific rule matching the request.

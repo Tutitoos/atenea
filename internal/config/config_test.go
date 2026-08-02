@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,8 +45,16 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		t.Errorf("the declared output shape rejects a valid payload: %v", err)
 	}
 
-	if len(cfg.Implementations) != 3 {
-		t.Fatalf("implementations = %d, want 3", len(cfg.Implementations))
+	// By name, not by count: a bare number says nothing about which provider
+	// went missing when it changes.
+	shipped := make([]string, len(cfg.Implementations))
+	for i, impl := range cfg.Implementations {
+		shipped[i] = impl.ID
+	}
+	slices.Sort(shipped)
+	want := []string{"claude.search", "codebase-memory.search", "ripgrep", "serena.search"}
+	if !slices.Equal(shipped, want) {
+		t.Fatalf("implementations = %v, want %v", shipped, want)
 	}
 	// Nothing has been probed on a cold start, and pretending otherwise would
 	// let the funnel trust a provider that may not even be installed.
@@ -211,8 +220,15 @@ func TestWriteDefaultRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(written.Implementations) != 3 {
-		t.Fatalf("implementations = %d", len(written.Implementations))
+	// The point is that what was written reads back as what shipped, not that
+	// either of them has a particular size.
+	shipped, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	if len(written.Implementations) != len(shipped.Implementations) {
+		t.Fatalf("implementations = %d, want the %d that ship",
+			len(written.Implementations), len(shipped.Implementations))
 	}
 }
 
@@ -227,8 +243,19 @@ func TestTheOrchestratorHasWorkingDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Runner != config.RunnerOMP {
-		t.Errorf("runner = %q, want the adapter that ships", cfg.Orchestrator.Runner)
+	if got := cfg.Orchestrator.Runners; len(got) != 1 || got[0] != config.RunnerOMP {
+		t.Errorf("runners = %v, want just the adapter that ships", got)
+	}
+	// Claude Code is a first-class client, but it is the only far side that
+	// costs money per call, so a fresh install must not have it attached.
+	if slices.Contains(cfg.Orchestrator.Runners, config.RunnerClaudeCode) {
+		t.Error("a fresh install would start spending without being asked")
+	}
+	if cfg.Orchestrator.ClaudeCode.BudgetUSD <= 0 {
+		t.Error("a ceiling of zero would let one turn run away")
+	}
+	if cfg.Orchestrator.ClaudeCode.Timeout <= cfg.Orchestrator.OMP.Timeout {
+		t.Error("a model turn given a tool's patience will be cut off mid-thought")
 	}
 	if cfg.Orchestrator.OMP.Binary == "" {
 		t.Error("the adapter has no command to run")
@@ -264,7 +291,7 @@ func TestTheOrchestratorBlockIsRead(t *testing.T) {
 	body := minimal + `
 [orchestrator]
 max_parallel = 2
-runner = "none"
+runners = []
 checkpoint_dir = "/tmp/receipts"
 
   [orchestrator.local]
@@ -278,7 +305,7 @@ sensitive = ["*.pem"]
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.MaxParallel != 2 || cfg.Orchestrator.Runner != config.RunnerNone {
+	if cfg.Orchestrator.MaxParallel != 2 || len(cfg.Orchestrator.Runners) != 0 {
 		t.Errorf("orchestrator = %+v", cfg.Orchestrator)
 	}
 	if cfg.Orchestrator.CheckpointDir != "/tmp/receipts" {
@@ -311,7 +338,56 @@ func TestAnEmptySensitiveListDisarmsTheGuardOnPurpose(t *testing.T) {
 }
 
 func TestAnUnknownRunnerIsRefused(t *testing.T) {
-	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nrunner = \"magic\"\n"))
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nrunners = [\"magic\"]\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+// A name written twice would build the same adapter again and then collide
+// with itself over every implementation it serves.
+func TestARunnerListedTwiceIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nrunners = [\"omp\", \"omp\"]\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+// The singular spelling is gone. Accepting it silently would leave a settings
+// file that reads as if it configured something and does not.
+func TestTheOldSingularRunnerKeyIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nrunner = \"omp\"\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+func TestTheClaudeCodeBlockIsRead(t *testing.T) {
+	body := minimal + `
+[orchestrator]
+runners = ["claudecode"]
+
+  [orchestrator.claudecode]
+  binary = "/opt/bin/claude"
+  implementations = ["claude.search"]
+  budget_usd = 1.5
+  timeout = "2m"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	claude := cfg.Orchestrator.ClaudeCode
+	if claude.Binary != "/opt/bin/claude" || claude.BudgetUSD != 1.5 || claude.Timeout != 2*time.Minute {
+		t.Errorf("claudecode = %+v", claude)
+	}
+}
+
+// Zero reads as "no ceiling" everywhere else in this file, and it is the one
+// value a spending cap must not accept.
+func TestAZeroBudgetIsRefused(t *testing.T) {
+	body := minimal + "\n[orchestrator]\n  [orchestrator.claudecode]\n  budget_usd = 0\n"
+	_, err := config.Load(write(t, body))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", got)
 	}

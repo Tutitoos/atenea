@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ shutdown_grace = "2s"
 # running the suite. The omp adapter is exercised for real from cmd, where a
 # missing binary is a fact about the machine rather than a broken unit test.
 [orchestrator]
-runner = "local"
+runners = ["local"]
 
   [orchestrator.local]
   implementations = ["ripgrep", "serena.search", "graph.search"]
@@ -361,24 +362,70 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 // Building the adapter needs no omp on this machine. A client that is not
 // installed is a provider that is unreachable, which the funnel already knows
 // how to handle, so refusing to boot over it would be the wrong trade.
-func TestTheAttachedRunnerIsWhateverTheSettingsName(t *testing.T) {
-	cases := map[string]string{
-		"omp":   "omp",
-		"local": "local",
-		"none":  "",
+func TestTheAttachedRunnersAreWhateverTheSettingsName(t *testing.T) {
+	cases := map[string][]string{
+		`["omp"]`:          {"omp"},
+		`["local"]`:        {"local"},
+		`["omp", "local"]`: {"omp", "local"},
+		`[]`:               nil,
 	}
-	for runner, want := range cases {
-		t.Run(runner, func(t *testing.T) {
-			atenea := build(t, strings.Replace(catalog, `runner = "local"`, `runner = "`+runner+`"`, 1))
-			if got := atenea.Status().Orchestrator.Runner; got != want {
-				t.Errorf("runner = %q, want %q", got, want)
+	for list, want := range cases {
+		t.Run(list, func(t *testing.T) {
+			body := strings.Replace(catalog, `runners = ["local"]`, `runners = `+list, 1)
+			if strings.Contains(list, "omp") {
+				// The two adapters would otherwise both claim ripgrep, which
+				// is refused before either of them runs anything.
+				body = strings.Replace(body,
+					`implementations = ["ripgrep", "serena.search", "graph.search"]`,
+					`implementations = ["serena.search", "graph.search"]`, 1)
+			}
+			atenea := build(t, body)
+			if got := atenea.Status().Orchestrator.Runners; !slices.Equal(got, want) {
+				t.Errorf("runners = %v, want %v", got, want)
 			}
 		})
 	}
 }
 
+// Two clients claiming the same implementation is a settings mistake, not a
+// race to be won by declaration order: which of them ran the user's work is
+// not a detail to decide silently.
+func TestTwoRunnersClaimingOneImplementationIsRefused(t *testing.T) {
+	body := strings.Replace(catalog, `runners = ["local"]`, `runners = ["omp", "local"]`, 1)
+	cfg, err := config.Load(writeTemp(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := core.New(cfg); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+}
+
+// Reach is the union of what is attached, and the funnel is told about a hole
+// rather than discovering it on dispatch.
+func TestReachIsSharedBetweenTheAttachedRunners(t *testing.T) {
+	body := strings.Replace(catalog, `runners = ["local"]`, `runners = ["omp", "local"]`, 1)
+	body = strings.Replace(body,
+		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
+		`implementations = ["serena.search"]`, 1)
+	atenea := build(t, body)
+	status := atenea.Status().Orchestrator
+
+	// ripgrep comes from the omp adapter's own defaults, serena from the
+	// stand-in: neither runner reaches both.
+	if !slices.Contains(status.Serves, "ripgrep") || !slices.Contains(status.Serves, "serena.search") {
+		t.Errorf("serves = %v, want both halves of the union", status.Serves)
+	}
+	if !slices.Contains(status.Unreachable, "graph.search") {
+		t.Errorf("unreachable = %v, want the one nobody claimed", status.Unreachable)
+	}
+	if status.Light != core.LightAmber {
+		t.Errorf("light = %v, want amber while something is out of reach", status.Light)
+	}
+}
+
 func TestARunnerTheCoreDoesNotKnowIsRefused(t *testing.T) {
-	path := writeTemp(t, strings.Replace(catalog, `runner = "local"`, `runner = "magic"`, 1))
+	path := writeTemp(t, strings.Replace(catalog, `runners = ["local"]`, `runners = ["magic"]`, 1))
 	if _, err := config.Load(path); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}

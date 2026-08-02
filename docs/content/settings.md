@@ -30,7 +30,7 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```toml
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
-runner = "omp"              # omp | local | none
+runners = ["omp"]           # any of omp, claudecode, local; [] dispatches nowhere
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.omp]
@@ -42,17 +42,31 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   [orchestrator.local]
   implementations = ["ripgrep"]        # what the stand-in can actually execute
   skip_dirs = [".git", "node_modules"] # never walked
+
+  [orchestrator.claudecode]
+  binary = "claude"                    # bare name is looked up on PATH
+  implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
+  budget_usd = 0.25                    # what one call may spend before it is cut
+  timeout = "5m"                       # a model turn is slower than a tool call
 ```
 
 `max_parallel` is the real brake on total memory: four steps of one wave run at
 a time so a laptop stays responsive. `0` means no ceiling, which is a choice
 for a build machine, not a default.
 
-`runner` picks the far side of the contract. `omp` is the adapter that ships.
-`local` is a stand-in that searches the disk directly, for a machine with no
-client installed. `none` leaves the core able to plan and choose but unable to
+`runners` names the far sides of the contract, and it is a list because omp and
+Claude Code are both first-class clients that can be attached at once. `omp` is
+the adapter that ships. `claudecode` drives the Claude Code CLI and is off by
+default, because it is the only far side that costs money per call. `local` is
+a stand-in that searches the disk directly, for a machine with no client
+installed. An empty list leaves the core able to plan and choose but unable to
 dispatch — a working core with nobody attached, and the status screen says so
 rather than failing halfway through a commission.
+
+Each runner answers for its own implementations, and two of them claiming the
+same one is refused at load. Dispatch would still work — whoever was asked
+first would answer — but which client ran your work is not a detail to settle
+by declaration order.
 
 `match_limit` cannot be `0`. Zero reads like "no limit" and is precisely the
 value omp treats as "use a small default", after which it reports the short
@@ -60,10 +74,14 @@ answer as complete. Atenea states the number instead, and a search that reaches
 it comes back with the ceiling named in `discovered` — a partial answer that
 does not say so is a wrong answer.
 
-An implementation the attached runner cannot execute is not removed from the
-catalog: it survives the funnel, fails on dispatch as `unavailable`, and is
-marked down so the next run picks somebody else. The status screen lists those
-up front, under `no runner`.
+`budget_usd` cannot be `0` either, for the same reason and with worse
+consequences: a model turn with no ceiling is a runaway.
+
+An implementation no attached runner can execute is not removed from the
+catalog. It is dropped by the funnel's `reach` stage, which says so in the
+trace — `no attached runner serves it`, not `down`, because a provider nobody
+wired up is not a provider that is broken. The status screen lists them up
+front, under `no runner`.
 
 Setting `checkpoint_dir = ""` after an explicit path does not disable dumps; it
 falls back to the default location. To turn checkpointing off, point the

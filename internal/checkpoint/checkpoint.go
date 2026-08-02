@@ -23,7 +23,11 @@ import (
 
 // Run is the paper copy of one commission in flight.
 type Run struct {
-	ID      string      `json:"id"`
+	ID string `json:"id"`
+	// Session is the chat this run belongs to, when one owns it. History is
+	// common property across chats; knowing whose it was is what keeps it
+	// readable rather than a pile.
+	Session string      `json:"session,omitempty"`
 	Task    string      `json:"task"`
 	Started time.Time   `json:"started"`
 	Updated time.Time   `json:"updated"`

@@ -157,7 +157,7 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "  agent      %s (%s)\n", agent.Agent, agent.Type)
 	fmt.Fprintf(out, "  asks for   %s\n", strings.Join(agent.Capabilities, ", "))
 	fmt.Fprintf(out, "  context    %s\n", strings.Join(agent.Context, ", "))
-	fmt.Fprintf(out, "  runner     %s\n", orDash(agent.Runner))
+	fmt.Fprintf(out, "  runners    %s\n", orDash(strings.Join(agent.Runners, ", ")))
 	fmt.Fprintf(out, "  serves     %s\n", orDash(strings.Join(agent.Serves, ", ")))
 	if len(agent.Unreachable) > 0 {
 		fmt.Fprintf(out, "  no runner  %s\n", strings.Join(agent.Unreachable, ", "))

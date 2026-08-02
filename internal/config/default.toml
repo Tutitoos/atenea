@@ -29,14 +29,19 @@ checkpoints = true
 # Empty means $XDG_STATE_HOME/atenea/runs, or ~/.local/state/atenea/runs.
 checkpoint_dir = ""
 
-# Who actually executes a step: "omp", "local" or "none".
+# Who actually executes a step: any of "omp", "claudecode" and "local".
 #
 # Atenea decides and delegates, so execution always happens on the far side of
 # this line, and that far side is a client adapter: a dumb translator with no
-# logic of its own. "omp" is the adapter that ships. "local" is a stand-in that
-# searches the disk directly, for a machine with no client installed. "none"
-# leaves the core able to plan and choose, with nothing to dispatch to.
-runner = "omp"
+# logic of its own. It is a list because omp and Claude Code are both
+# first-class clients and can be attached at once; each answers for its own
+# implementations, and two of them claiming the same one is refused at load.
+#
+# "omp" is the adapter that ships. "claudecode" drives the Claude Code CLI and
+# is off by default because it costs money per call. "local" is a stand-in that
+# searches the disk directly, for a machine with no client installed. An empty
+# list leaves the core able to plan and choose, with nothing to dispatch to.
+runners = ["omp"]
 
   [orchestrator.omp]
   # The omp executable. A bare name is looked up on PATH, which is the normal
@@ -55,6 +60,25 @@ runner = "omp"
   # How long one omp call may take before it is treated as stuck rather than
   # slow. The timeout bin is what lets the core fall back instead of waiting.
   timeout = "30s"
+
+  [orchestrator.claudecode]
+  # The claude executable. A bare name is looked up on PATH.
+  binary = "claude"
+  # Implementations the adapter answers for. This is a different id from
+  # ripgrep's on purpose: the same question answered by a model is not the same
+  # answer at the same price, and the funnel has to be able to tell them apart.
+  implementations = ["claude.search"]
+  # What one call may spend before it is cut off.
+  #
+  # Same trap as match_limit above, with money instead of matches: zero reads
+  # as "no ceiling" and is refused, because a model turn with nothing stopping
+  # it is a runaway. This one answers a flat text search; a search that needs
+  # more than this has gone wrong.
+  budget_usd = 0.25
+  # How long one call may take. A model turn is slower than a tool call by
+  # nature, so this sits far above omp's ceiling; past it the turn is stuck
+  # rather than thinking, and the timeout bin is what lets the core fall back.
+  timeout = "5m"
 
   [orchestrator.local]
   # Implementations the stand-in answers for.
@@ -227,6 +251,25 @@ capability = "code.search"
   [implementation.cost]
   estimated_duration = "1.2s"
   estimated_tokens = 700
+
+[[implementation]]
+id = "claude.search"
+provider = "claude-code"
+capability = "code.search"
+
+  [implementation.constraints]
+  languages = []          # a model reads whatever it is shown
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Two orders of magnitude above ripgrep on both axes, and that is the point:
+  # the funnel is cost-aware, so declaring this honestly is what keeps a model
+  # from being chosen for work a tool already does well. It wins when the
+  # cheaper providers are unhealthy or cannot work here at all.
+  estimated_duration = "12s"
+  estimated_tokens = 20000
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

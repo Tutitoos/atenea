@@ -16,7 +16,6 @@ package local
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -412,9 +411,4 @@ func intAt(payload map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// Describe is what the status screen prints for this runner.
-func (r *Runner) Describe() string {
-	return fmt.Sprintf("local stand-in over %d implementation(s)", len(r.implementations))
 }

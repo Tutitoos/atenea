@@ -18,7 +18,7 @@ go build -o bin/atenea ./cmd/atenea
 
 A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
-its three candidate providers.
+its four candidate providers.
 
 ```sh
 ./bin/atenea status
@@ -27,8 +27,27 @@ its three candidate providers.
 Dispatching real work needs the `omp` CLI on `PATH`: that is the client adapter
 the defaults attach. Without it Atenea still plans and chooses — the step fails
 as `unavailable`, says which binary it looked for, and the catalog marks that
-provider down. On a machine with no client installed, set `runner = "local"`
-for the stand-in that searches the disk directly.
+provider down. On a machine with no client installed, set
+`runners = ["local"]` for the stand-in that searches the disk directly.
+
+### Attaching Claude Code
+
+The second client adapter drives the `claude` CLI you are already logged into.
+It is off by default because it is the only far side that costs money per call:
+
+```toml
+[orchestrator]
+runners = ["omp", "claudecode"]
+```
+
+No API key is involved. Atenea never sees a credential — it speaks to a client
+that is already authenticated, and the session lives inside that client.
+
+With both attached, `ripgrep` still answers an ordinary search: the funnel
+ranks on cost, and a flat text search is two orders of magnitude cheaper
+through a tool than through a model. Claude Code wins when the cheaper
+providers cannot work on that repository or are down — and a `[[selector.rule]]`
+will hand it the work outright when you want it.
 
 ## Write your own settings
 
@@ -58,18 +77,27 @@ typo.
 ```text
 capability  code.search
 repository  current
-chosen      ripgrep  (healthiest surviving implementation)
+chosen      ripgrep  (cheapest of the healthy ones (estimated))
 
 funnel
-  constraints  3 in -> 1 out: ripgrep
+  constraints  4 in -> 2 out: claude.search, ripgrep
       dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none
       dropped serena.search: needs an index from provider serena, repository has none
+  reach        2 in -> 1 out: ripgrep
+      dropped claude.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep
   choice       1 in -> 1 out: ripgrep
 ```
 
 Every decision carries its trace. A choice nobody can explain is a choice nobody
 can trust, and the trace is what later turns into the observability layer.
+
+Each stage answers a different question, and the trace says which one settled
+it. `constraints` asks whether a provider can work on this repository at all;
+`reach` asks whether anything attached can even invoke it; `health` asks whether
+it is well. What is left, `cost` ranks — and the word `estimated` in the reason
+is the trace admitting that no measurement exists yet, so the number is the one
+the catalog declared rather than one Atenea observed.
 
 ## Hand it a commission
 

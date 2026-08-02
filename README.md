@@ -38,8 +38,13 @@ defaults. `atenea config init` writes them out so you can edit them.
 `task` dispatches to `omp`, so it needs that CLI on `PATH`. Without it the step
 fails as `unavailable`, the report says which binary it looked for, and the
 command exits `6` — a commission that failed, not a crash. On a machine with no
-client installed, set `runner = "local"` for the stand-in that searches the
+client installed, set `runners = ["local"]` for the stand-in that searches the
 disk directly.
+
+Claude Code is the second client adapter. It is off by default because it is
+the only far side that costs money per call; `runners = ["omp", "claudecode"]`
+attaches both, and the funnel then ranks on cost, so a flat text search still
+goes to `ripgrep` and the model is kept for what only a model can answer.
 
 ```text
 run       20260802T003739-e22d82
@@ -69,18 +74,19 @@ wide rather than quietly dropping it.)
 ## Layout
 
 ```text
-cmd/atenea/        entry point: the service and the operator commands
-internal/          the brain, not importable from outside
-  adapter/omp/       the client adapter: translates for the omp CLI
-  checkpoint/        run receipts on disk
-  config/            the single settings file
-  core/              wiring, status and clean shutdown
-  orchestrator/      the agent: explore, split, dispatch, review
-  registry/          the Capability Registry
-  runner/local/      stand-in far side, for a machine with no client installed
-  selector/          the funnel
-pkg/contract/      the contract shared by the core and its adapters
-docs/              documentation sources, served by Hugo on GitHub Pages
+cmd/atenea/         entry point: the service and the operator commands
+internal/           the brain, not importable from outside
+  adapter/claudecode/  the client adapter: translates for the Claude Code CLI
+  adapter/omp/         the client adapter: translates for the omp CLI
+  checkpoint/          run receipts on disk
+  config/              the single settings file
+  core/                wiring, status and clean shutdown
+  orchestrator/        the agent: explore, split, dispatch, review
+  registry/            the Capability Registry
+  runner/local/        stand-in far side, for a machine with no client installed
+  selector/            the funnel
+pkg/contract/       the contract shared by the core and its adapters
+docs/               documentation sources, served by Hugo on GitHub Pages
 ```
 
 ## Development

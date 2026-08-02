@@ -19,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -61,10 +62,15 @@ type Orchestrator struct {
 	// CheckpointDir is where the paper copy of a run in flight is written. It
 	// is empty when checkpointing is off.
 	CheckpointDir string
-	// Runner names who is behind the agent.
-	Runner string
-	Local  LocalRunner
-	OMP    OMPAdapter
+	// Runners names the client adapters that are live, in the order they are
+	// declared. It is a list and not a choice because omp and Claude Code are
+	// both first-class: with one slot, whichever client lost would have every
+	// implementation it serves permanently unreachable. An empty list leaves
+	// the core able to plan and choose, with nothing to dispatch to.
+	Runners    []string
+	Local      LocalRunner
+	OMP        OMPAdapter
+	ClaudeCode ClaudeCodeAdapter
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -92,6 +98,23 @@ type OMPAdapter struct {
 	Timeout time.Duration
 }
 
+// ClaudeCodeAdapter configures the Claude Code client adapter.
+//
+// It is off in the shipped defaults. Unlike every other far side here, this
+// one costs money per invocation, and a fresh install that quietly started
+// spending would be a bad surprise however good the answers were.
+type ClaudeCodeAdapter struct {
+	// Binary is the claude executable. A bare name is looked up on PATH.
+	Binary string
+	// Implementations the adapter answers for.
+	Implementations []string
+	// BudgetUSD caps what one invocation may spend.
+	BudgetUSD float64
+	// Timeout caps one invocation. A model turn is slower than a tool call by
+	// nature, so this sits far above omp's ceiling.
+	Timeout time.Duration
+}
+
 // Security is the one place delicate files are declared.
 type Security struct {
 	// Sensitive holds the path patterns that carry secrets. Reading is free by
@@ -100,12 +123,12 @@ type Security struct {
 	Sensitive []string
 }
 
-// RunnerOMP, RunnerLocal and RunnerNone are the values orchestrator.runner
-// accepts.
+// RunnerOMP, RunnerClaudeCode and RunnerLocal are the values
+// orchestrator.runners accepts.
 const (
-	RunnerOMP   = "omp"
-	RunnerLocal = "local"
-	RunnerNone  = "none"
+	RunnerOMP        = "omp"
+	RunnerClaudeCode = "claudecode"
+	RunnerLocal      = "local"
 )
 
 // DefaultPath returns where Atenea looks for its settings when nothing else
@@ -193,12 +216,16 @@ type fileCore struct {
 }
 
 type fileOrchestrator struct {
-	MaxParallel   *int            `toml:"max_parallel"`
-	Checkpoints   *bool           `toml:"checkpoints"`
-	CheckpointDir string          `toml:"checkpoint_dir"`
-	Runner        string          `toml:"runner"`
-	Local         fileLocalRunner `toml:"local"`
-	OMP           fileOMPAdapter  `toml:"omp"`
+	MaxParallel   *int   `toml:"max_parallel"`
+	Checkpoints   *bool  `toml:"checkpoints"`
+	CheckpointDir string `toml:"checkpoint_dir"`
+	// Runners uses a pointer so an omitted list and an explicitly empty one
+	// are different things: leaving the block out keeps the shipped adapter,
+	// while writing an empty list is how a user says "dispatch nowhere".
+	Runners    *[]string             `toml:"runners"`
+	Local      fileLocalRunner       `toml:"local"`
+	OMP        fileOMPAdapter        `toml:"omp"`
+	ClaudeCode fileClaudeCodeAdapter `toml:"claudecode"`
 }
 
 type fileLocalRunner struct {
@@ -210,6 +237,13 @@ type fileOMPAdapter struct {
 	Binary          string    `toml:"binary"`
 	Implementations *[]string `toml:"implementations"`
 	MatchLimit      *int      `toml:"match_limit"`
+	Timeout         string    `toml:"timeout"`
+}
+
+type fileClaudeCodeAdapter struct {
+	Binary          string    `toml:"binary"`
+	Implementations *[]string `toml:"implementations"`
+	BudgetUSD       *float64  `toml:"budget_usd"`
 	Timeout         string    `toml:"timeout"`
 }
 
@@ -401,10 +435,16 @@ var defaultSensitive = []string{
 	"*service-account*.json",
 }
 
+// defaultClaudeImplementations is what the Claude Code adapter answers for
+// once it is switched on. It is a separate id from ripgrep's on purpose: the
+// two are not the same answer at the same price, and the selector has to be
+// able to tell them apart.
+var defaultClaudeImplementations = []string{"claude.search"}
+
 func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	out := Orchestrator{
 		MaxParallel:   defaultMaxParallel,
-		Runner:        RunnerOMP,
+		Runners:       []string{RunnerOMP},
 		CheckpointDir: checkpoint.DefaultDir(),
 		Local:         LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
 		OMP: OMPAdapter{
@@ -412,6 +452,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Implementations: defaultServedImplementations,
 			MatchLimit:      omp.DefaultMatchLimit,
 			Timeout:         omp.DefaultTimeout,
+		},
+		ClaudeCode: ClaudeCodeAdapter{
+			Binary:          claudecode.DefaultBinary,
+			Implementations: defaultClaudeImplementations,
+			BudgetUSD:       claudecode.DefaultBudgetUSD,
+			Timeout:         claudecode.DefaultTimeout,
 		},
 	}
 	if o.MaxParallel != nil {
@@ -422,14 +468,28 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		}
 		out.MaxParallel = *o.MaxParallel
 	}
-	switch o.Runner {
-	case "":
-	case RunnerOMP, RunnerLocal, RunnerNone:
-		out.Runner = o.Runner
-	default:
-		return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.runner %q is not one of %s, %s, %s",
-			source, o.Runner, RunnerOMP, RunnerLocal, RunnerNone)
+	if o.Runners != nil {
+		seen := make(map[string]struct{}, len(*o.Runners))
+		list := make([]string, 0, len(*o.Runners))
+		for _, name := range *o.Runners {
+			switch name {
+			case RunnerOMP, RunnerClaudeCode, RunnerLocal:
+			default:
+				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerLocal)
+			}
+			// A name written twice is a mistake, not an instruction: it would
+			// build the same adapter again and then collide with itself over
+			// every implementation it serves.
+			if _, dup := seen[name]; dup {
+				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+					"settings %s: orchestrator.runners lists %q twice", source, name)
+			}
+			seen[name] = struct{}{}
+			list = append(list, name)
+		}
+		out.Runners = list
 	}
 	if o.CheckpointDir != "" {
 		out.CheckpointDir = o.CheckpointDir
@@ -448,6 +508,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.OMP = adapter
+	claude, err := o.ClaudeCode.build(source, out.ClaudeCode)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.ClaudeCode = claude
 	return out, nil
 }
 
@@ -479,6 +544,39 @@ func (o fileOMPAdapter) build(source string, out OMPAdapter) (OMPAdapter, error)
 		if timeout <= 0 {
 			return OMPAdapter{}, contract.Fail(contract.FailureInvalidInput,
 				"settings %s: orchestrator.omp.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	return out, nil
+}
+
+func (c fileClaudeCodeAdapter) build(source string, out ClaudeCodeAdapter) (ClaudeCodeAdapter, error) {
+	if strings.TrimSpace(c.Binary) != "" {
+		out.Binary = strings.TrimSpace(c.Binary)
+	}
+	if c.Implementations != nil {
+		out.Implementations = *c.Implementations
+	}
+	if c.BudgetUSD != nil {
+		if *c.BudgetUSD <= 0 {
+			// Same trap as omp's match_limit, with money instead of matches:
+			// zero reads as "no ceiling" and is the one value that must not
+			// mean that. A model turn with nothing stopping it is a runaway.
+			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.claudecode.budget_usd must be above 0, got %v",
+				source, *c.BudgetUSD)
+		}
+		out.BudgetUSD = *c.BudgetUSD
+	}
+	if c.Timeout != "" {
+		timeout, err := time.ParseDuration(c.Timeout)
+		if err != nil {
+			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.claudecode.timeout %q: %v", source, c.Timeout, err)
+		}
+		if timeout <= 0 {
+			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.claudecode.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
 	}

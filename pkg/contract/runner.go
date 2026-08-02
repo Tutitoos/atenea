@@ -23,6 +23,11 @@ type Runner interface {
 	// runner that cannot is not a failure: it is a provider that is simply not
 	// reachable from here, which is exactly what health and fallback are for.
 	Serves(implementationID string) bool
+	// Implementations lists every implementation this runner declares itself
+	// the far side of. Serves answers the same question one id at a time; this
+	// is the whole list, which is what lets the wiring above catch two clients
+	// claiming the same work before either of them runs any.
+	Implementations() []string
 	// Run executes one step with the implementation the funnel chose.
 	Run(ctx context.Context, req RunRequest) (Outcome, error)
 }

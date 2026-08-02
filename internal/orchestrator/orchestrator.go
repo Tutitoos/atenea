@@ -159,6 +159,10 @@ type Task struct {
 	// Effects the user authorized beyond reading. Reading is free by default,
 	// so an ordinary search needs nothing here.
 	Effects []contract.Effect
+	// Session is the chat that commissioned this, when there is one. It buys
+	// the run nothing: it is written to the receipt so a shared history stays
+	// attributable to the isolated chat that produced it.
+	Session string
 }
 
 // Result is what a finished commission looks like, at both heights: the
@@ -232,7 +236,9 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
-	record := checkpoint.Run{ID: result.RunID, Task: task.Text, Started: started}
+	record := checkpoint.Run{
+		ID: result.RunID, Session: task.Session, Task: task.Text, Started: started,
+	}
 
 	// The run closing is the second of the two moments the paper copy is
 	// written, and it has to happen whether the run finished or was cut short:
@@ -486,6 +492,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		Capability: step.Capability,
 		Repository: repository,
 		Candidates: candidates,
+		Reachable:  a.runner.Implementations(),
 	})
 	out.Decision = decision
 	if err != nil {

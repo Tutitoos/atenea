@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -35,6 +36,19 @@ func provider(name string) implOption {
 	return func(i *contract.Implementation) { i.Provider = name }
 }
 
+func estimated(d time.Duration, tokens int) implOption {
+	return func(i *contract.Implementation) {
+		i.Cost.Estimated = contract.Sample{Duration: d, Tokens: tokens}
+	}
+}
+
+func measured(d time.Duration, tokens, samples int) implOption {
+	return func(i *contract.Implementation) {
+		i.Cost.Measured = contract.Sample{Duration: d, Tokens: tokens}
+		i.Cost.Samples = samples
+	}
+}
+
 func impl(id string, opts ...implOption) contract.Implementation {
 	out := contract.Implementation{ID: id, Provider: id, Capability: "code.search"}
 	for _, opt := range opts {
@@ -47,13 +61,29 @@ func smallGoRepo(indexes ...string) contract.Repository {
 	return contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, indexes)
 }
 
-func mustSelector(t *testing.T, rules ...selector.Rule) *selector.Selector {
+// funnel wraps the selector so the cases that are not about reach do not have
+// to restate it. Reach is required on the real API on purpose -- a caller that
+// forgets it is the bug this stage exists to prevent -- but repeating it in
+// every case here would bury what each one is actually pinning down. The reach
+// tests set it themselves.
+type funnel struct{ *selector.Selector }
+
+func (f funnel) Select(req selector.Request) (selector.Decision, error) {
+	if req.Reachable == nil {
+		for _, impl := range req.Candidates {
+			req.Reachable = append(req.Reachable, impl.ID)
+		}
+	}
+	return f.Selector.Select(req)
+}
+
+func mustSelector(t *testing.T, rules ...selector.Rule) funnel {
 	t.Helper()
 	s, err := selector.New(selector.Config{Rules: rules})
 	if err != nil {
 		t.Fatalf("selector.New: %v", err)
 	}
-	return s
+	return funnel{s}
 }
 
 func stage(t *testing.T, decision selector.Decision, name string) selector.Stage {
@@ -317,6 +347,241 @@ func TestFailuresLandInTheRightBin(t *testing.T) {
 				t.Fatal("a failed selection must still carry its trace")
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reach
+// ---------------------------------------------------------------------------
+
+// The funnel is cost- and health-aware but blind to wiring, so without this
+// stage it would happily pick a provider nothing on this machine can invoke.
+// The step would then die on dispatch instead of falling back to whoever could
+// have answered -- which is exactly what happened when the second adapter was
+// added to the catalog before this stage existed.
+func TestAProviderNobodyServesNeverWins(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("claude.search", provider("claude-code"), health(contract.HealthAlive, 1)),
+			impl("ripgrep", health(contract.HealthAlive, 1)),
+		},
+		Reachable: []string{"ripgrep"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "ripgrep" {
+		t.Fatalf("chose %q, want the only one anything can run", decision.Chosen.ID)
+	}
+
+	// And it has to say why, because "down" would send someone to debug a
+	// provider that is perfectly healthy.
+	dropped := stage(t, decision, selector.StageReach).Dropped
+	if len(dropped) != 1 || dropped[0].Implementation != "claude.search" {
+		t.Fatalf("reach dropped %+v", dropped)
+	}
+	if !strings.Contains(dropped[0].Reason, "no attached runner") {
+		t.Errorf("reason = %q, want it to name the wiring", dropped[0].Reason)
+	}
+}
+
+// Reach runs after constraints so the trace carries the most useful reason it
+// can. A provider that both needs a missing index and has nothing wired up
+// should be reported for the index: that is the fact the user can act on, and
+// the one that would still block it after the wiring was fixed.
+func TestTheMostUsefulReasonWins(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("ripgrep"),
+			impl("serena.search", provider("serena"), needsIndex()),
+		},
+		Reachable: []string{"ripgrep"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if names := stageNames(decision); !slices.Equal(names, []string{
+		selector.StageConstraints, selector.StageReach, selector.StageHealth, selector.StageChoice,
+	}) {
+		t.Fatalf("funnel order = %v", names)
+	}
+
+	dropped := stage(t, decision, selector.StageConstraints).Dropped
+	if len(dropped) != 1 || !strings.Contains(dropped[0].Reason, "index") {
+		t.Errorf("constraints dropped %+v, want the index reason", dropped)
+	}
+	if len(stage(t, decision, selector.StageReach).Dropped) != 0 {
+		t.Error("reach repeated a drop that constraints had already explained")
+	}
+}
+
+func stageNames(decision selector.Decision) []string {
+	out := make([]string, len(decision.Stages))
+	for i, s := range decision.Stages {
+		out[i] = s.Name
+	}
+	return out
+}
+
+// A catalog full of providers and nothing wired up is unavailable, not
+// not_found: the implementations exist, there is just no way to ask them.
+func TestNothingReachableIsUnavailable(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Reachable:  []string{},
+	})
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable", got)
+	}
+	if len(decision.Stages) == 0 {
+		t.Fatal("a failed selection must still carry its trace")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cost
+// ---------------------------------------------------------------------------
+
+// Two providers, equally healthy, wildly different prices. Before cost was
+// wired the id decided, so attaching a second client made a model answer every
+// search because "claude" sorts before "ripgrep".
+func TestTheCheaperOfTwoEqualsWins(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("claude.search", estimated(12*time.Second, 20000)),
+			impl("ripgrep", estimated(80*time.Millisecond, 400)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "ripgrep" {
+		t.Fatalf("chose %q, want the cheap one", decision.Chosen.ID)
+	}
+	// And the trace has to admit the number is a guess, because on day one it
+	// is: nothing has been measured yet.
+	if !strings.Contains(decision.Reason, "estimated") {
+		t.Errorf("reason = %q, want it to say the figure is an estimate", decision.Reason)
+	}
+}
+
+// Health outranks cost: a cheap provider that is degraded loses to a healthy
+// expensive one. Cost decides between equals, never over them.
+func TestHealthStillOutranksCost(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("cheap.but.sick", health(contract.HealthDegraded, 1), estimated(time.Millisecond, 1)),
+			impl("dear.but.well", health(contract.HealthAlive, 1), estimated(time.Minute, 99999)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "dear.but.well" {
+		t.Fatalf("chose %q, want the healthy one", decision.Chosen.ID)
+	}
+}
+
+// Once an implementation has been measured enough, its own numbers replace the
+// declared guess -- which is the hybrid cost the design asked for.
+func TestMeasurementsReplaceTheEstimate(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			// Declared cheap, measured expensive. The measurement wins.
+			impl("optimist", estimated(time.Millisecond, 1),
+				measured(30*time.Second, 50000, selector.BreakInSamples)),
+			impl("realist", estimated(time.Second, 900),
+				measured(time.Second, 900, selector.BreakInSamples)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "realist" {
+		t.Fatalf("chose %q, want the one the measurements favor", decision.Chosen.ID)
+	}
+	if !strings.Contains(decision.Reason, "measured") {
+		t.Errorf("reason = %q, want it to say the figure is measured", decision.Reason)
+	}
+}
+
+// One measurement is not enough: a single call can be a cold cache. Until an
+// implementation is out of break-in its declared estimate is what is believed.
+func TestOneMeasurementIsStillBreakIn(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("unlucky", estimated(time.Millisecond, 1), measured(time.Hour, 99999, 1)),
+			impl("steady", estimated(time.Second, 900)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "unlucky" {
+		t.Fatalf("chose %q: one bad sample was believed over the estimate", decision.Chosen.ID)
+	}
+}
+
+// Nobody has decided what a second of wall clock is worth in tokens, so a
+// genuine trade-off is declared a tie instead of being settled by a weighting
+// this package invented. That is the point at which a user rule belongs, and
+// the trace says so.
+func TestATradeOffIsNotPretendedToBeADecision(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("chatty.but.quick", estimated(time.Millisecond, 9000)),
+			impl("terse.but.slow", estimated(time.Minute, 10)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !strings.Contains(decision.Reason, "settled by id") {
+		t.Errorf("reason = %q, want it to admit no cost decided this", decision.Reason)
+	}
+}
+
+// Cost ranks, it never filters. An expensive provider that is the only one
+// left still answers -- and it has to, or it would never earn the measurements
+// that could correct its estimate.
+func TestBeingExpensiveNeverRemovesAProvider(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("claude.search", estimated(12*time.Second, 20000)),
+			impl("ripgrep", estimated(80*time.Millisecond, 400)),
+		},
+		Reachable: []string{"claude.search"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "claude.search" {
+		t.Fatalf("chose %q, want the expensive survivor", decision.Chosen.ID)
+	}
+	for _, stage := range decision.Stages {
+		for _, drop := range stage.Dropped {
+			if drop.Implementation == "claude.search" {
+				t.Fatalf("cost acted as a filter: %+v", drop)
+			}
+		}
 	}
 }
 

@@ -174,7 +174,7 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, status)
 	}
-	if !strings.Contains(status, "runner     omp") {
+	if !strings.Contains(status, "runners    omp") {
 		t.Fatalf("the far side is not the omp adapter:\n%s", status)
 	}
 

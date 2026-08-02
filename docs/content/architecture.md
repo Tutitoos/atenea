@@ -64,32 +64,53 @@ it, so two implementations of Serena share one warm index.
      [1] constraints   who CAN work here
                 |          language, index, scale
                 v
-     [2] health        who is AVAILABLE right now
+     [2] reach         who is WIRED UP at all
+                |          no attached client serves it
+                v
+     [3] health        who is AVAILABLE right now
                 |          only "down" leaves; degraded stays
                 v
-     [3] choice        user rule first, then the healthiest
-                |          cost joins this stage later
+     [4] choice        user rule, then health, then cost
+                |          cheapest of the equally healthy
                 v
           one implementation
 ```
 
-**Stage 3 today.** A standing user rule wins outright. Otherwise the survivors
-are ranked by health state, then by health score, then by id — that last
-tie-break exists so the same catalog always produces the same answer. A
-selector that shuffled would make every measurement below it unreproducible.
+Reach runs after constraints and before health because the trace should carry
+the most useful reason it can. A provider that both needs a missing index and
+has nothing wired up should be reported for the index: that is the fact the
+user can act on, and the one that would still block after the wiring was fixed.
 
-**Stage 3 tomorrow.** Cost slots in ahead of the health ranking, and the rule
-still outranks it: the user's word comes before Atenea's opinion. It is not
-wired yet on purpose — see the break-in mode below.
+Reach is its own stage rather than a health verdict because the two are
+different kinds of fact. Health is what a probe found — running a step is a
+probe, and what a runner reports updates it. Reach is a wiring decision that
+was made before anything ran. Filing one under the other would mean a settings
+change had to wait for a probe to be believed, and it would send someone to
+debug a provider that is perfectly well.
+
+**Stage 4.** A standing user rule wins outright — the user's word comes before
+Atenea's opinion. Otherwise the survivors are ranked by health state, then by
+health score, then by cost, then by id. That last tie-break exists so the same
+catalog always produces the same answer: a selector that shuffled would make
+every measurement below it unreproducible.
+
+Cost ranks; it never filters. An expensive provider that is the only one left
+still gets the work, because "too expensive" is not the same answer as "nobody
+can do this". And cost only breaks a tie when one side is cheaper on *both*
+axes — time and tokens. Trading one against the other needs an exchange rate
+nobody has, so a genuine trade-off falls through to the id and stays stable.
 
 ### Break-in mode
 
-On the very first boot there is no baseline. Ranking by cost would mean ranking
-by the estimates somebody typed into a settings file, which is guesswork wearing
-a number. So the funnel runs on constraints and health until real measurements
-exist. The same applies after a tool is upgraded: measurements are stored with
-the version they belong to, and a new version starts a fresh baseline rather
-than dragging the old, slower numbers into the average.
+On the very first boot there is no baseline, and ranking by cost would mean
+ranking by estimates somebody typed into a settings file — guesswork wearing a
+number. So an implementation's own measurements only outrank its declared
+estimate once it has a couple of them; until then the estimate is used and the
+trace says `estimated` out loud, so a guess is never read as an observation.
+
+The same applies after a tool is upgraded: measurements are stored with the
+version they belong to, and a new version starts a fresh baseline rather than
+dragging the old, slower numbers into the average.
 
 ### When the funnel comes up empty
 
@@ -97,7 +118,8 @@ than dragging the old, slower numbers into the average.
 | --- | --- |
 | The capability has no registered provider | `not_found` |
 | Nothing fits this repository | `not_found` |
-| Everything that fits is down | `unavailable` |
+| Nothing that fits is wired up to any attached client | `unavailable` |
+| Everything that fits and is reachable is down | `unavailable` |
 
 Those are different problems and the caller reacts differently to each, so they
 are different bins. Retrying a provider that just blinked is the orchestrator's
@@ -173,16 +195,30 @@ writing and reaching outside the machine are not.
 ### The runner seam
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
-far side belongs to somebody else: a client adapter. The one that ships drives
-`omp`, and it sits outside the core, chosen by the settings file. A local
-stand-in sits in the same place for a machine where no client is installed —
-one interface, several possible far sides, and swapping them changes nothing
-above the line.
+far side belongs to somebody else: a client adapter. Two ship — one drives
+`omp`, one drives the Claude Code CLI — and a local stand-in sits in the same
+place for a machine where no client is installed. One interface, several
+possible far sides, and swapping them changes nothing above the line.
+
+Several can be attached at once, because omp and Claude Code are both
+first-class clients. Each declares the implementations it answers for, the
+funnel picks an implementation without caring who runs it, and the wiring
+carries the request to whoever serves it. Two clients claiming the same
+implementation is refused at load rather than settled by declaration order.
+
+The far sides are not interchangeable in kind. `omp` answers a search with a
+tool call and the adapter parses what comes back; Claude Code answers with a
+model turn, so the adapter has to ask precisely — the capability's own output
+shape becomes a JSON Schema the turn is held to — and then check the answer
+again, because a far side that thinks can report a file it was told to leave
+alone. Trusting the instruction alone would make the security design advisory.
 
 A runner that cannot reach a provider says so, and that is not a bug: it is a
-provider that is not reachable from here. The step fails as `unavailable`, the
-catalog marks that provider down, and the next run picks somebody else. That
-loop is the fallback design working, not an error path.
+provider that is not reachable from here. The funnel drops it at the `reach`
+stage before anything is dispatched, saying `no attached runner serves it` —
+not `down`, because a provider nobody wired up is not a provider that is
+broken, and sending someone to debug the healthy one is what an explainable
+decision exists to prevent.
 
 ### The paper copy
 
@@ -230,6 +266,25 @@ sample of what a CLI actually hands you:
 
 None of that is policy, and none of it leaks upwards. The core never sees a
 line of omp's output.
+
+### What that costs in practice: the Claude Code adapter
+
+The second adapter drives a client that *thinks*, and every hard part follows
+from that. omp answers a search with a tool call; Claude Code answers with a
+model turn, so the same capability needs a different kind of care at both ends.
+
+| What a thinking far side does | What the adapter does about it |
+| --- | --- |
+| Answers in prose unless told otherwise | Turns the capability's declared output shape into a JSON Schema and holds the turn to it |
+| May report a file the commission excluded | Re-checks every path against the request before returning, because a prompt is an instruction and not a guard |
+| Costs real money per call | Caps each turn with a budget the settings declare; zero is refused rather than read as "no limit" |
+| Is slow by nature | Gets a timeout an order of magnitude past omp's, because a model that is thinking is not a model that is stuck |
+| Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
+| Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill |
+
+Both adapters translate into the same six failure bins and the same output
+shape. That is the whole point of the seam: the funnel above them ranks a tool
+call against a model turn without knowing that either exists.
 
 ## Effects
 
