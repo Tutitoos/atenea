@@ -37,7 +37,8 @@ Usage:
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
   select CAPABILITY      Ask the funnel who should answer a capability
-  task "TEXT"            Hand a commission to the orchestrator
+  task "TEXT"            Hand a commission to the orchestrator; --budget USD
+                         funds this one above the settings file
   ask CAPABILITY         Dispatch one capability against one repository
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
@@ -443,9 +444,11 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 
 	var repositories repoList
 	var trace bool
+	var budget float64
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&repositories, "repo", "repository to act on; repeat for several (default: all)")
+	flags.Float64Var(&budget, "budget", 0, "what this commission may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
@@ -463,7 +466,9 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	result, runErr := atenea.Do(ctx, orchestrator.Task{Text: text, Repositories: repositories})
+	result, runErr := atenea.Do(ctx, orchestrator.Task{
+		Text: text, Repositories: repositories, BudgetUSD: budget,
+	})
 	if result != nil {
 		printResult(out, result, trace)
 	}
@@ -494,10 +499,12 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	var fields fieldList
 	var repository string
 	var trace bool
+	var budget float64
 	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository to ask about (required when several are registered)")
 	flags.Var(&fields, "set", "payload field as name=value; repeat for several")
+	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
@@ -538,6 +545,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		Capability: capabilityID,
 		Repository: repository,
 		Payload:    payload,
+		BudgetUSD:  budget,
 	})
 	if result != nil {
 		printResult(out, result, trace)

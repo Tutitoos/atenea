@@ -167,6 +167,7 @@ func New(cfg config.Config) (*Core, error) {
 		Base:        base,
 		Notebook:    book,
 		MaxParallel: cfg.Orchestrator.MaxParallel,
+		BudgetUSD:   cfg.Orchestrator.BudgetUSD,
 	})
 	if err != nil {
 		return nil, err
@@ -321,7 +322,6 @@ func buildRunner(name string, cfg config.Config) (contract.Runner, error) {
 			Binary:          cfg.Orchestrator.ClaudeCode.Binary,
 			Implementations: cfg.Orchestrator.ClaudeCode.Implementations,
 			Sensitive:       cfg.Security.Sensitive,
-			BudgetUSD:       cfg.Orchestrator.ClaudeCode.BudgetUSD,
 			Timeout:         cfg.Orchestrator.ClaudeCode.Timeout,
 		})
 	case config.RunnerSerena:

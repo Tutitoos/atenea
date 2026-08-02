@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -40,6 +41,63 @@ func TestPermissionCoversOnlyWhatWasAuthorised(t *testing.T) {
 func TestPermissionNeedsTheCommissionItCameFrom(t *testing.T) {
 	if err := (contract.Permission{Effects: []contract.Effect{contract.EffectRead}}).Validate(); err == nil {
 		t.Fatal("a permission with no commission behind it must be refused")
+	}
+}
+
+// Money is a permission, and the question a paid far side asks is the same
+// shape as the one it asks about effects: may I. Zero is a no.
+func TestAPermissionWithNoMoneyIsNotFunded(t *testing.T) {
+	grant := readOnly("find every TODO")
+	if grant.Funded() {
+		t.Error("a permission nobody put money on reads as funded")
+	}
+	grant.BudgetUSD = 0.25
+	if !grant.Funded() {
+		t.Error("a granted quarter reads as unfunded")
+	}
+}
+
+// Reaching zero is the ordinary end of a grant: the commission spent what it
+// had. It must stay valid, because every later step still carries it and a
+// permission that failed validation would fail the step for the wrong reason.
+func TestASpentGrantIsStillAValidPermission(t *testing.T) {
+	grant := readOnly("find every TODO")
+	grant.BudgetUSD = 0
+	if err := grant.Validate(); err != nil {
+		t.Errorf("a spent grant was refused: %v", err)
+	}
+}
+
+// Below zero is not a spent grant, it is arithmetic that went wrong upstream
+// -- and the one shape that would read as a license if it ever reached a far
+// side, because "less than nothing" is not a ceiling anybody enforces.
+func TestANegativeOrNonsenseGrantIsRefused(t *testing.T) {
+	for name, usd := range map[string]float64{
+		"negative": -0.01,
+		"nan":      math.NaN(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			grant := readOnly("find every TODO")
+			grant.BudgetUSD = usd
+			if err := grant.Validate(); err == nil {
+				t.Fatalf("a budget of %v was accepted", usd)
+			}
+		})
+	}
+}
+
+// A step carries the share it was cut, and cloning a plan must not let two
+// steps share one figure by accident.
+func TestCloningAPermissionCarriesTheGrant(t *testing.T) {
+	grant := readOnly("find every TODO")
+	grant.BudgetUSD = 0.25
+	clone := grant.Clone()
+	clone.BudgetUSD = 9
+	if grant.BudgetUSD != 0.25 {
+		t.Errorf("the original moved to %v", grant.BudgetUSD)
+	}
+	if clone.Task != grant.Task {
+		t.Error("the clone lost the commission it came from")
 	}
 }
 

@@ -48,23 +48,17 @@ const DefaultBinary = "claude"
 // rather than thinking, and the timeout bin is what lets the core fall back.
 const DefaultTimeout = 5 * time.Minute
 
-// DefaultBudgetUSD caps what one invocation may spend.
-//
-// A model turn with no ceiling is a runaway, and unlike a tool call it costs
-// real money. The number is deliberately small: this adapter answers a flat
-// text search, and a search that needs more than this has gone wrong.
-//
-// One invocation, not one commission: a run that dispatches four steps to this
-// adapter may spend this four times over. A ceiling that belongs to the
-// commission has to live with the grant, not here -- see contract.Permission,
-// where the gap is written down.
-const DefaultBudgetUSD = 0.25
-
 // defaultContextLines matches the capability's declared semantics.
 const defaultContextLines = 2
 
 // Options configure the adapter. Everything here is declared in the settings
 // file, so retuning it never means touching Go.
+//
+// There is no ceiling here. What one call may spend arrives on the request, in
+// contract.Permission, cut from the commission's grant by the core -- money is
+// a permission, and permissions are granted per commission. An adapter holding
+// a private ceiling could only ever cap one call, so a run of four steps spent
+// it four times and no adapter could see the others doing the same.
 type Options struct {
 	// Binary is the claude executable. A bare name is looked up on PATH.
 	Binary string
@@ -76,9 +70,6 @@ type Options struct {
 	// answer is filtered again on the way back. Belt and braces, because the
 	// far side is the one thing here that can decide for itself.
 	Sensitive []string
-	// BudgetUSD caps what one invocation may spend. Zero takes
-	// DefaultBudgetUSD.
-	BudgetUSD float64
 	// Timeout caps one invocation. Zero takes DefaultTimeout.
 	Timeout time.Duration
 }
@@ -88,7 +79,6 @@ type Runner struct {
 	binary          string
 	implementations []string
 	sensitive       []string
-	budget          float64
 	timeout         time.Duration
 	// version asks the binary who it is, once. A client that updates itself
 	// on a schedule is exactly the case a declared version cannot track.
@@ -108,10 +98,6 @@ func New(opts Options) (*Runner, error) {
 				"claude-code adapter: sensitive pattern %q: %v", pattern, err)
 		}
 	}
-	if opts.BudgetUSD < 0 {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"claude-code adapter: budget must not be negative, got %v", opts.BudgetUSD)
-	}
 	if opts.Timeout < 0 {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"claude-code adapter: timeout must not be negative, got %s", opts.Timeout)
@@ -120,14 +106,10 @@ func New(opts Options) (*Runner, error) {
 		binary:          strings.TrimSpace(opts.Binary),
 		implementations: slices.Clone(opts.Implementations),
 		sensitive:       slices.Clone(opts.Sensitive),
-		budget:          opts.BudgetUSD,
 		timeout:         opts.Timeout,
 	}
 	if runner.binary == "" {
 		runner.binary = DefaultBinary
-	}
-	if runner.budget == 0 {
-		runner.budget = DefaultBudgetUSD
 	}
 	if runner.timeout == 0 {
 		runner.timeout = DefaultTimeout
@@ -173,6 +155,16 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if req.Capability.ID != CodeSearch {
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
 			"claude-code adapter has no implementation of %s", req.Capability.ID)
+	}
+	// The commission's grant is what this call may draw, and it arrives cut to
+	// this step's share. Nothing left is a refusal, not a free ride: a far side
+	// that charges must stop rather than run up a bill nobody granted. It is
+	// the permission bin because that is what ran out -- the tool is fine, and
+	// saying otherwise here would take it out of the funnel for every later
+	// step, including the ones that were never going to cost anything.
+	if !req.Permission.Funded() {
+		return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
+			"claude code costs money and the commission has none left to spend")
 	}
 
 	started := time.Now()
@@ -224,7 +216,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
 			Level: contract.ContextRepository,
 			Note: fmt.Sprintf("claude code answered %s for $%.4f of its $%.2f ceiling over %d turn(s)",
-				req.Repository.ID, answer.TotalCostUSD, r.budget, answer.NumTurns),
+				req.Repository.ID, answer.TotalCostUSD, req.Permission.BudgetUSD, answer.NumTurns),
 		})
 	}
 	return outcome, nil
@@ -312,7 +304,12 @@ func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
 		"--no-session-persistence",
 		"--tools", strings.Join(allowed, ","),
 		"--allowedTools", strings.Join(allowed, ","),
-		"--max-budget-usd", strconv.FormatFloat(r.budget, 'f', -1, 64),
+		// The share the core cut for this step, not a number this adapter
+		// keeps. Enforcing it here as well as in the core is deliberate: the
+		// core's arithmetic bounds what CAN be handed out, and this bounds what
+		// the far side is allowed to draw against what it was handed. Without
+		// the second the figure on the receipt would be a hope.
+		"--max-budget-usd", strconv.FormatFloat(req.Permission.BudgetUSD, 'f', -1, 64),
 	}, nil
 }
 

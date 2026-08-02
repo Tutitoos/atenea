@@ -2,6 +2,7 @@ package contract
 
 import (
 	"maps"
+	"math"
 	"slices"
 	"strings"
 )
@@ -15,22 +16,24 @@ import (
 // Letting each child decide would mean every agent interpreting the boundary
 // its own way, and one of them eventually reading it generously.
 //
-// # Money belongs here, and is not here yet
+// # Money is one of these
 //
 // A spending ceiling is a permission, not a cost: it is the user saying how
 // much a piece of work may draw, in the same breath as saying which effects it
 // may cause. Cost is what something turned out to be; a grant is what it was
 // allowed to be, decided before anything ran.
 //
-// Today the only ceiling is `budget_usd` on the Claude Code adapter, which
-// means each paid adapter would grow its own, none of them would add up, and a
-// commission could spend the same ceiling once per provider. Moving it here --
-// a grant attached to the commission, spent down as steps close, and refused
-// when it runs out -- is its own brick. It is not built.
+// It travels the same way effects do, with one difference that matters: money
+// is consumable, so it is SPLIT rather than copied. Handing every child the
+// same list of effects is right -- two children both allowed to write is what
+// the user asked for. Handing every child the same ceiling is the bug this
+// field exists to end: four steps would each spend the whole grant, and the
+// commission would come back having spent it four times.
 //
-// Until it is, a ceiling reached is reported as FailurePermissionDenied and
-// what was actually charged is reported on the receipt, so the gap is visible
-// rather than silent.
+// So the parent divides. A commission holds the grant; each step is handed a
+// share of whatever is left when its wave starts, and gives back what it did
+// not spend. What the far side is held to is the share, which is why the
+// figure on the receipt means something.
 type Permission struct {
 	// Task is the commission the permission came from, kept verbatim so an
 	// audit can see what was actually authorized.
@@ -38,7 +41,21 @@ type Permission struct {
 	// Effects the commission already covers. An effect outside this list is not
 	// forbidden forever; it is the point at which Atenea has to stop and ask.
 	Effects []Effect
+	// BudgetUSD is how much money this permission carries. On a commission it
+	// is the whole grant; on a step it is that step's share of what was left.
+	//
+	// Zero means no money, and that is a refusal rather than a license: a far
+	// side that charges must stop instead of running up a bill nobody granted.
+	// It is the opposite reading from the settings file, where zero would mean
+	// "no ceiling" and is refused for exactly that reason -- here the value is
+	// spent down and reaching zero is the normal end of a grant, not a typo.
+	BudgetUSD float64
 }
+
+// Funded reports whether this permission carries money to spend. A far side
+// that costs nothing never asks; a far side that charges must, and must refuse
+// when the answer is no.
+func (p Permission) Funded() bool { return p.BudgetUSD > 0 }
 
 // Allows reports whether the commission already covers this effect. When it
 // does not, the action is not refused outright: it is the moment to ask.
@@ -53,6 +70,13 @@ func (p Permission) Validate() error {
 		if _, ok := effectNames[effect]; !ok {
 			return Fail(FailureInvalidInput, "permission for %q: unknown effect", p.Task)
 		}
+	}
+	if p.BudgetUSD < 0 || math.IsNaN(p.BudgetUSD) {
+		// Zero is a grant that is spent, which is ordinary. Below zero is an
+		// arithmetic mistake upstream, and the one shape that would silently
+		// turn a ceiling into a license if it were ever handed to a far side.
+		return Fail(FailureInvalidInput,
+			"permission for %q: budget must not be negative, got %v", p.Task, p.BudgetUSD)
 	}
 	return nil
 }

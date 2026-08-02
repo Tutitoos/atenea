@@ -15,8 +15,10 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"path"
 	"slices"
 	"strings"
@@ -136,6 +138,10 @@ type Config struct {
 	// ceiling. The ceiling belongs in the settings because the real limit is
 	// the machine, and the machine is not the same one everywhere.
 	MaxParallel int
+	// BudgetUSD is what one commission may spend when the commission does not
+	// say for itself. Zero means no paid provider can run, which is what a
+	// machine with none attached wants anyway.
+	BudgetUSD float64
 }
 
 // Agent is the orchestrator. It is safe for concurrent use: two chats can be
@@ -150,6 +156,7 @@ type Agent struct {
 	base        Base
 	notebook    *notebook.Notebook
 	maxParallel int
+	budget      float64
 }
 
 // card is what the orchestrator declares about itself. Declaring a context
@@ -186,6 +193,10 @@ func New(cfg Config) (*Agent, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"orchestrator: max_parallel must not be negative")
 	}
+	if cfg.BudgetUSD < 0 {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"orchestrator: budget_usd must not be negative")
+	}
 	store := cfg.Checkpoints
 	if store == nil {
 		disabled, err := checkpoint.New("")
@@ -208,6 +219,7 @@ func New(cfg Config) (*Agent, error) {
 		base:        cfg.Base,
 		notebook:    cfg.Notebook,
 		maxParallel: cfg.MaxParallel,
+		budget:      cfg.BudgetUSD,
 	}, nil
 }
 
@@ -235,6 +247,10 @@ type Task struct {
 	// Effects the user authorized beyond reading. Reading is free by default,
 	// so an ordinary search needs nothing here.
 	Effects []contract.Effect
+	// BudgetUSD is what this commission may spend, across every step. Zero
+	// takes the standing grant from the settings file, which is the usual
+	// case: the operator granted it once by writing the number down.
+	BudgetUSD float64
 	// Session is the chat that commissioned this, when there is one. It buys
 	// the run nothing: it is written to the receipt so a shared history stays
 	// attributable to the isolated chat that produced it.
@@ -304,6 +320,13 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	if strings.TrimSpace(task.Text) == "" {
 		return nil, contract.Fail(contract.FailureInvalidInput, "task: text is required")
 	}
+	// A negative grant is not "spend nothing", it is a typo. Clamping it would
+	// silently switch off every paid provider for the run, and the operator
+	// would read the refusals as an outage rather than as their own mistake.
+	if task.BudgetUSD < 0 || math.IsNaN(task.BudgetUSD) {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"task: budget must not be negative, got %v", task.BudgetUSD)
+	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"no runner is attached, so nothing can be dispatched")
@@ -318,6 +341,10 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		// commission itself, which is what the caller passes in.
 		Effects: append([]contract.Effect{contract.EffectRead}, task.Effects...),
 	}
+	// The grant is opened once, here, and spent down by every wave. It is the
+	// commission that holds it -- not the step, not the adapter -- which is
+	// what makes four steps cost one ceiling instead of four.
+	purse := newGrant(cmp.Or(task.BudgetUSD, a.budget))
 
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
@@ -364,7 +391,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	}
 	result.Plan = plan
 
-	explored, err := a.dispatch(ctx, plan, PhaseExplore, result, &record)
+	explored, err := a.dispatch(ctx, plan, PhaseExplore, result, &record, purse)
 	if err != nil {
 		return result, err
 	}
@@ -377,7 +404,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	}
 	result.Plan = plan
 
-	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record)
+	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse)
 	return result, err
 }
 
@@ -404,6 +431,10 @@ type Question struct {
 	Payload map[string]any
 	// Effects the caller authorized beyond reading.
 	Effects []contract.Effect
+	// BudgetUSD is what this question may spend. Zero takes the standing
+	// grant, exactly as a commission does: one capability is a commission of
+	// one step, not a cheaper kind of thing.
+	BudgetUSD float64
 	// Session is the chat that asked, written to the receipt.
 	Session string
 }
@@ -422,6 +453,12 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	if strings.TrimSpace(q.Repository) == "" {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"ask: repository is required; a position belongs to exactly one")
+	}
+	// One capability is a commission of one step, so the same typo is refused
+	// here for the same reason.
+	if q.BudgetUSD < 0 || math.IsNaN(q.BudgetUSD) {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"ask: budget must not be negative, got %v", q.BudgetUSD)
 	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
@@ -470,7 +507,8 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	}
 	result.Plan = plan
 
-	_, err = a.dispatch(ctx, plan, PhaseAsk, result, &record)
+	_, err = a.dispatch(ctx, plan, PhaseAsk, result, &record,
+		newGrant(cmp.Or(q.BudgetUSD, a.budget)))
 	return result, err
 }
 
@@ -552,7 +590,7 @@ func (a *Agent) hint(payload map[string]any, field string, value any) {
 // The steps already closed are handed to the plan as finished, so a work step
 // waiting on a look that happened in the previous phase is ready rather than
 // dangling.
-func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, result *Result, record *checkpoint.Run) ([]StepResult, error) {
+func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, result *Result, record *checkpoint.Run, purse *grant) ([]StepResult, error) {
 	finished := make([]string, 0, len(result.Steps))
 	failed := make(map[string]struct{})
 	for _, step := range result.Steps {
@@ -589,7 +627,7 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 			runnable = append(runnable, step)
 		}
-		done = append(done, a.runWave(ctx, result.RunID, runnable)...)
+		done = append(done, a.runWave(ctx, result.RunID, runnable, purse)...)
 		slices.SortFunc(done, func(x, y StepResult) int { return strings.Compare(x.Step.ID, y.Step.ID) })
 
 		for _, step := range done {
@@ -637,12 +675,20 @@ func blockedBy(step contract.Step, failed map[string]struct{}) (string, bool) {
 }
 
 // runWave executes one wave and reviews each child as it finishes.
-func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step) []StepResult {
+//
+// The wave is also where the commission's grant is cut. Every step is handed
+// an equal share of whatever is left, which is what stops a wave of four from
+// spending the ceiling four times: four shares of a quarter add up to the one
+// grant, however hard each of them tries. What a step is actually charged
+// comes off the grant as it closes, so the wave behind this one divides the
+// money nobody touched.
+func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step, purse *grant) []StepResult {
 	out := make([]StepResult, len(wave))
 	limit := a.maxParallel
 	if limit <= 0 || limit > len(wave) {
 		limit = len(wave)
 	}
+	shares := purse.shares(len(wave))
 	slots := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i, step := range wave {
@@ -664,7 +710,16 @@ func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step)
 				Fields:     notebook.FieldsOf(step.Payload),
 				Version:    buildinfo.Version,
 			})
+			// The share is stamped on the step as dispatched, not on the plan:
+			// a plan is written before anything ran and cannot know what is
+			// left. Recording it here is what lets the trace say afterwards
+			// what each step was actually held to.
+			step.Permission.BudgetUSD = shares[i]
 			out[i] = a.runStep(ctx, step)
+			// Spent down as the step closes, whoever it was charged by. A
+			// refusal spends nothing and a free provider spends nothing, so
+			// the money simply stays for whoever comes next.
+			purse.spend(out[i].Outcome.SpentUSD)
 		}()
 	}
 	wg.Wait()

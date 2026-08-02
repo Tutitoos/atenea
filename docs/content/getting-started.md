@@ -38,10 +38,17 @@ It is off by default because it is the only far side that costs money per call:
 ```toml
 [orchestrator]
 runners = ["omp", "claudecode"]
+budget_usd = 0.25            # what ONE COMMISSION may spend, across every step
 ```
 
 No API key is involved. Atenea never sees a credential — it speaks to a client
 that is already authenticated, and the session lives inside that client.
+
+`budget_usd` is granted per commission, not per call: a task that dispatches
+four steps splits that quarter between them rather than spending it four times.
+`atenea task "..." --budget 3` funds one commission above the standing grant.
+When a commission runs out, paid steps come back `permission_denied` and free
+providers keep working.
 
 With both attached, `ripgrep` still answers an ordinary search: the funnel
 ranks on cost, and a flat text search is two orders of magnitude cheaper
@@ -199,6 +206,10 @@ the axes the funnel ranks on, so it stays out of the base and goes on the
 receipt instead: a `charged` line on the summary when a run cost anything, the
 step that incurred it under `--trace`, and `spent_usd` on the run in
 `$XDG_STATE_HOME/atenea/runs`.
+
+The ceiling each step was held to goes on the receipt beside what it charged,
+so a run that came back short says whether the provider stopped or the money
+did: `answered current for $0.10 of its $0.90 ceiling`.
 
 ## Ask for one capability
 

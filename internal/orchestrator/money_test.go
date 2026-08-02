@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -167,5 +169,218 @@ func TestARefusalDoesNotMarkTheProviderDown(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no implementation was reached, so nothing was proven")
+	}
+}
+
+// budgeted builds an agent whose standing grant is usd, which is the number an
+// operator writes once in the settings file.
+func budgeted(t *testing.T, runner contract.Runner, usd float64) *orchestrator.Agent {
+	t.Helper()
+	reg := catalog(t)
+	if fake, ok := runner.(*fakeRunner); ok && fake.serves == nil {
+		for _, capability := range reg.Capabilities() {
+			impls, err := reg.ImplementationsFor(capability.ID)
+			if err != nil {
+				t.Fatalf("ImplementationsFor: %v", err)
+			}
+			for _, impl := range impls {
+				fake.serves = append(fake.serves, impl.ID)
+			}
+		}
+	}
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	store, err := checkpoint.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:     reg,
+		Chooser:     chooser,
+		Runner:      runner,
+		Checkpoints: store,
+		BudgetUSD:   usd,
+	})
+	if err != nil {
+		t.Fatalf("orchestrator.New: %v", err)
+	}
+	return agent
+}
+
+// spendsItsCeiling is the honest double of a paid far side: it bills exactly
+// what it was handed, and it refuses when it was handed nothing. A far side
+// that ignored its grant would let this suite pass over a broken core.
+func spendsItsCeiling() func(contract.RunRequest) (contract.Outcome, error) {
+	return func(req contract.RunRequest) (contract.Outcome, error) {
+		if !req.Permission.Funded() {
+			return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
+				"the commission has nothing left to spend")
+		}
+		out := hits("cmd/main.go")
+		out.SpentUSD = req.Permission.BudgetUSD
+		return out, nil
+	}
+}
+
+// The defect this brick exists to fix. A ceiling that lived on the adapter was
+// re-applied to every invocation, so a commission dispatching four steps could
+// spend it four times over. The grant belongs to the commission: however many
+// steps it takes, the total is what the user agreed to.
+func TestACommissionCannotSpendItsGrantMoreThanOnce(t *testing.T) {
+	const grant = 0.25
+	runner := &fakeRunner{answer: spendsItsCeiling()}
+	agent := budgeted(t, runner, grant)
+
+	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(result.Steps) < 2 {
+		t.Fatalf("%d step(s) ran, so nothing was shared", len(result.Steps))
+	}
+	if result.SpentUSD > grant+1e-9 {
+		t.Errorf("a $%v commission spent $%v over %d steps",
+			grant, result.SpentUSD, len(result.Steps))
+	}
+}
+
+// The share is what the step is actually handed, not a note in the plan. Every
+// dispatched request carries a piece of the remainder, and no piece is the
+// whole grant: that is the difference between splitting and copying.
+func TestEveryDispatchedStepCarriesAShareOfTheGrant(t *testing.T) {
+	const grant = 0.25
+	runner := &fakeRunner{answer: spendsItsCeiling()}
+	agent := budgeted(t, runner, grant)
+
+	if _, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	seen := runner.requests()
+	if len(seen) < 2 {
+		t.Fatalf("%d request(s) reached the far side", len(seen))
+	}
+	var total float64
+	for _, req := range seen {
+		if req.Permission.BudgetUSD > grant+1e-9 {
+			t.Errorf("a step was handed $%v out of a $%v grant",
+				req.Permission.BudgetUSD, grant)
+		}
+		total += req.Permission.BudgetUSD
+	}
+	if total <= grant+1e-9 && seen[0].Permission.BudgetUSD >= grant-1e-9 {
+		t.Errorf("the first step was handed the whole grant: $%v",
+			seen[0].Permission.BudgetUSD)
+	}
+}
+
+// What one wave leaves behind is what the next one divides. A commission whose
+// first wave came in cheap must not carry that saving to the floor: the money
+// was granted to the commission, and it is still the commission's to spend.
+func TestTheNextWaveDividesWhatTheLastOneLeft(t *testing.T) {
+	const grant = 1.0
+	runner := &fakeRunner{answer: func(contract.RunRequest) (contract.Outcome, error) {
+		out := hits("cmd/main.go")
+		out.SpentUSD = 0.01
+		return out, nil
+	}}
+	agent := budgeted(t, runner, grant)
+
+	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.SpentUSD <= 0 {
+		t.Fatal("nothing was spent, so there is no remainder to divide")
+	}
+
+	// A wave is a barrier, so arrival order is wave order: everything the
+	// first wave was handed arrives before anything the second one gets.
+	seen := runner.requests()
+	if len(seen) < 3 {
+		t.Fatalf("%d request(s): too few to span two waves", len(seen))
+	}
+	first := seen[0].Permission.BudgetUSD
+	last := seen[len(seen)-1].Permission.BudgetUSD
+	if first <= 0 || last <= 0 {
+		t.Fatalf("both waves must have been funded: first $%v, last $%v", first, last)
+	}
+	if last >= first {
+		t.Errorf("a later step was handed $%v after $%v was already spent of $%v",
+			last, result.SpentUSD, grant)
+	}
+}
+
+// A commission that arrives with its own figure carries that one. The settings
+// file is a standing grant, not a cap on what the user may authorize in the
+// moment: one order beats the default, in both directions.
+func TestACommissionCarriesItsOwnGrant(t *testing.T) {
+	runner := &fakeRunner{answer: spendsItsCeiling()}
+	agent := budgeted(t, runner, 0.25)
+
+	if _, err := agent.Run(context.Background(), orchestrator.Task{
+		Text: "find TODO", BudgetUSD: 2,
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	seen := runner.requests()
+	if len(seen) == 0 {
+		t.Fatal("nothing was dispatched")
+	}
+	var total float64
+	for _, req := range seen {
+		total += req.Permission.BudgetUSD
+	}
+	if total <= 0.25 {
+		t.Errorf("the commission's own $2 was capped at the standing grant: $%v", total)
+	}
+}
+
+// Money running out stops paid work, not all work. A free provider has nothing
+// to charge against and keeps answering, which is the whole reason a spent
+// grant is a refusal on one step rather than a dead run.
+func TestAnEmptyGrantStillLetsFreeWorkThrough(t *testing.T) {
+	agent := budgeted(t, &fakeRunner{}, 0)
+
+	result, err := agent.Run(context.Background(), orchestrator.Task{Text: "find TODO"})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Verdict != contract.VerdictOK {
+		t.Errorf("verdict = %v: free work was stopped by an empty grant", result.Verdict)
+	}
+	if result.SpentUSD != 0 {
+		t.Errorf("a free run was billed $%v", result.SpentUSD)
+	}
+}
+
+// A negative grant is a typo, not an instruction to spend nothing. Clamping it
+// would switch off every paid provider for the run and the operator would read
+// the refusals as an outage rather than as their own mistake.
+func TestANonsenseGrantIsRefusedRatherThanClamped(t *testing.T) {
+	agent := budgeted(t, &fakeRunner{}, 0.25)
+
+	for name, usd := range map[string]float64{
+		"negative": -1,
+		"nan":      math.NaN(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := agent.Run(context.Background(), orchestrator.Task{
+				Text: "find TODO", BudgetUSD: usd,
+			})
+			if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+				t.Errorf("a budget of %v was filed as %v", usd, got)
+			}
+			_, err = agent.Ask(context.Background(), orchestrator.Question{
+				Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "TODO"}, BudgetUSD: usd,
+			})
+			if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+				t.Errorf("a question budget of %v was filed as %v", usd, got)
+			}
+		})
 	}
 }

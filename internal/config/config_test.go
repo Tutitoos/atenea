@@ -270,8 +270,8 @@ func TestTheOrchestratorHasWorkingDefaults(t *testing.T) {
 	if slices.Contains(cfg.Orchestrator.Runners, config.RunnerClaudeCode) {
 		t.Error("a fresh install would start spending without being asked")
 	}
-	if cfg.Orchestrator.ClaudeCode.BudgetUSD <= 0 {
-		t.Error("a ceiling of zero would let one turn run away")
+	if cfg.Orchestrator.BudgetUSD <= 0 {
+		t.Error("a ceiling of zero would let a commission run away")
 	}
 	if cfg.Orchestrator.ClaudeCode.Timeout <= cfg.Orchestrator.OMP.Timeout {
 		t.Error("a model turn given a tool's patience will be cut off mid-thought")
@@ -389,7 +389,6 @@ runners = ["claudecode"]
   [orchestrator.claudecode]
   binary = "/opt/bin/claude"
   implementations = ["claude.search"]
-  budget_usd = 1.5
   timeout = "2m"
 `
 	cfg, err := config.Load(write(t, body))
@@ -397,18 +396,47 @@ runners = ["claudecode"]
 		t.Fatalf("Load: %v", err)
 	}
 	claude := cfg.Orchestrator.ClaudeCode
-	if claude.Binary != "/opt/bin/claude" || claude.BudgetUSD != 1.5 || claude.Timeout != 2*time.Minute {
+	if claude.Binary != "/opt/bin/claude" || claude.Timeout != 2*time.Minute {
 		t.Errorf("claudecode = %+v", claude)
 	}
 }
 
-// Zero reads as "no ceiling" everywhere else in this file, and it is the one
-// value a spending cap must not accept.
-func TestAZeroBudgetIsRefused(t *testing.T) {
-	body := minimal + "\n[orchestrator]\n  [orchestrator.claudecode]\n  budget_usd = 0\n"
+// The ceiling is the commission's, so it is read from the commission's block.
+func TestTheCommissionCeilingIsRead(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[orchestrator]\nbudget_usd = 1.5\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.BudgetUSD != 1.5 {
+		t.Errorf("budget_usd = %v, want 1.5", cfg.Orchestrator.BudgetUSD)
+	}
+}
+
+// The ceiling used to live on the adapter, where it capped one call and a
+// four-step run spent it four times. A settings file still carrying it must
+// not load quietly with the key ignored: that would be the old number sitting
+// in the file looking effective while the real one came from somewhere else.
+func TestTheOldAdapterCeilingIsRefused(t *testing.T) {
+	body := minimal + "\n[orchestrator]\n  [orchestrator.claudecode]\n  budget_usd = 0.25\n"
 	_, err := config.Load(write(t, body))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+	if !strings.Contains(err.Error(), "budget_usd") {
+		t.Errorf("the error does not name the key that moved: %v", err)
+	}
+}
+
+// Zero reads as "no ceiling" everywhere else in this file, and it is the one
+// value a spending cap must not accept. A grant that reaches zero while a
+// commission runs is a different thing and perfectly ordinary; this is
+// somebody typing it, which is always a mistake.
+func TestAZeroBudgetIsRefused(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		_, err := config.Load(write(t, minimal+"\n[orchestrator]\nbudget_usd = "+value+"\n"))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Fatalf("budget_usd = %s: kind = %v, want invalid_input", value, got)
+		}
 	}
 }
 

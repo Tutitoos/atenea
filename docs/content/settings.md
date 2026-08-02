@@ -30,6 +30,7 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```toml
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
+budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
 runners = ["omp"]           # any of omp, claudecode, serena, local; [] dispatches nowhere
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
@@ -46,7 +47,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   [orchestrator.claudecode]
   binary = "claude"                    # bare name is looked up on PATH
   implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
-  budget_usd = 0.25                    # what one call may spend before it is cut
+  # no ceiling here: what a call may spend arrives with the commission
   timeout = "5m"                       # a model turn is slower than a tool call
 
   [orchestrator.serena]
@@ -81,18 +82,30 @@ answer as complete. Atenea states the number instead, and a search that reaches
 it comes back with the ceiling named in `discovered` — a partial answer that
 does not say so is a wrong answer.
 
-`budget_usd` cannot be `0` either, for the same reason and with worse
-consequences: a model turn with no ceiling is a runaway.
+`budget_usd` is what **one commission** may spend, added up across every step
+and every paid provider it dispatches to. It lives under `[orchestrator]` and
+not on an adapter because money is a permission, and permissions are granted
+per commission: an adapter with a ceiling of its own could only ever cap one
+call, so a run of four steps would spend it four times over.
 
-It caps **one invocation**, not one commission: a task that dispatches four
-steps to Claude Code may spend it four times over. A grant that belongs to the
-whole commission is its own brick and is not built yet, so until it is, what
-each call actually charged is on the receipt — `charged` on the summary, and
-per step under `--trace`.
+Zero is not a typo and not "no limit": it is a commission that may not spend,
+which is exactly what a machine with no paid provider attached wants. Free
+providers keep working. A negative number *is* a typo and is refused at load,
+because clamping it would silently switch off every paid provider and the
+refusals that followed would read as an outage.
 
-Reaching the ceiling is reported as `permission_denied`, not as slowness: the
-far side was not slow, the grant was too small. It does not mark the provider
-down, so the next step can still go to it.
+A wave hands each of its steps an equal share of whatever is left, so even if
+every step spends its share to the last cent the wave cannot draw more than the
+commission had. The next wave divides what the last one did not touch. What
+each step was actually held to, and what it actually charged, are both on the
+receipt — `charged` on the summary, and per step under `--trace`.
+
+One order beats the standing grant, in both directions: `atenea task "..."
+--budget 3` funds that commission and nothing else.
+
+Running out is reported as `permission_denied`, not as slowness: the far side
+was not slow, the grant was spent. It does not mark the provider down, so the
+next step can still go to it — and a step that costs nothing still runs.
 
 An implementation no attached runner can execute is not removed from the
 catalog. It is dropped by the funnel's `reach` stage, which says so in the

@@ -478,7 +478,7 @@ model turn, so the same capability needs a different kind of care at both ends.
 | --- | --- |
 | Answers in prose unless told otherwise | Turns the capability's declared output shape into a JSON Schema and holds the turn to it |
 | May report a file the commission excluded | Re-checks every path against the request before returning, because a prompt is an instruction and not a guard |
-| Costs real money per call | Caps each turn with a budget the settings declare; zero is refused rather than read as "no limit" |
+| Costs real money per call | Holds the turn to the share the commission granted it, and refuses before spawning when that share is zero |
 | Is slow by nature | Gets a timeout an order of magnitude past omp's, because a model that is thinking is not a model that is stuck |
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
 | Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill |
@@ -525,25 +525,47 @@ give the dangerous one the permissions of the harmless one.
 
 ### Money is a permission, not a cost
 
-A spending ceiling belongs in this list, even though it is not written in it
-yet. Cost is what something turned out to be; a ceiling is what it was allowed
-to be, decided before anything ran — which makes it the same kind of thing as
-an effect the commission does or does not cover. So running out of it is
-`permission_denied`, not `timeout`: the provider was not slow, the grant was
-too small, and calling it slowness sends whoever reads the receipt to look at
-latency.
+A spending ceiling is in this list, next to the effects. Cost is what something
+turned out to be; a ceiling is what it was allowed to be, decided before
+anything ran — the same kind of thing as an effect the commission does or does
+not cover. So running out of it is `permission_denied`, not `timeout`: the
+provider was not slow, the grant was spent, and calling it slowness sends
+whoever reads the receipt to look at latency.
 
 Nothing about the fallback changes. Only `unavailable` marks a provider down,
 and a ceiling reached says nothing about health — the funnel is free to hand
 the next step to the same provider, which is right, because the next step may
 be one it can afford.
 
-Today the only ceiling is `budget_usd` on the Claude Code adapter, and it caps
-**one invocation**: a commission that dispatches four steps to it may spend it
-four times over. A grant that belongs to the commission has to live with the
-permission, spent down as steps close. That is its own brick and it is not
-built; until it is, what was actually charged is on the receipt, so the gap is
-visible rather than silent.
+#### One difference from an effect: money is consumed
+
+An effect copied down to every child stays true. A ceiling copied down to every
+child is spent once per child, so a commission dispatching four steps would
+spend it four times over. That is why the grant is **split, not copied**.
+
+`budget_usd` under `[orchestrator]` is what one commission may spend across
+every step. A wave asks for as many shares as it has steps and gets what is
+left divided evenly among them, so the shares of a wave add up to exactly what
+the commission had left: even if every step spends its share to the last cent
+the wave cannot draw more. Waves are sequential, so the next one divides
+whatever the last did not touch. Nothing is reserved and nothing is refunded,
+because nothing was taken away in advance.
+
+```
+grant $1.00   wave 1: 2 steps -> $0.50 each, spends $0.10 total
+              wave 2: 2 steps -> $0.45 each   (the remaining $0.90, split)
+```
+
+The split is deliberately blind to which steps will cost anything, and it has
+to be: which implementation answers a step is settled by the funnel at
+dispatch, *after* the shares are cut, and no implementation declares that it
+charges. A free step simply never spends its share.
+
+An adapter therefore carries no ceiling of its own. What a call may spend
+arrives on the request, in `contract.Permission`, and the far side is held to
+that number — for Claude Code, by passing it as `--max-budget-usd`. A share of
+zero is refused before anything is spawned, which is why an exhausted
+commission keeps working through whoever charges nothing.
 
 ## Contract versioning
 

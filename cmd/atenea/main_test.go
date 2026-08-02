@@ -332,6 +332,31 @@ func TestTaskWithoutACommissionIsRefused(t *testing.T) {
 	}
 }
 
+// A one-off order beats the standing grant, and a typo in it must not quietly
+// mean "spend nothing": that would read as an outage the next time a paid
+// provider refused, and the operator would go looking for a broken tool.
+func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
+	freshInstall(t)
+	for _, arg := range []string{"-1", "-0.01"} {
+		if _, err := exec(t, "task", "TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("--budget %s was filed as %v", arg, contract.KindOf(err))
+		}
+		if _, err := exec(t, "ask", "code.search", "--repo", "current",
+			"--set", "query=TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("ask --budget %s was filed as %v", arg, contract.KindOf(err))
+		}
+	}
+}
+
+// The flag has to reach the run, not just parse. A commission the operator
+// funded by hand is the one case where the settings file is not the answer.
+func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
+	freshInstall(t)
+	if _, err := exec(t, "task", "TODO", "--budget", "5"); err != nil {
+		t.Fatalf("a funded commission was refused: %v", err)
+	}
+}
+
 // The trace is the deliverable, not a debug extra: a decision nobody can
 // explain is a decision nobody can trust.
 func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {

@@ -22,6 +22,20 @@ shutdown_grace = "10s"
 # is the memory of the machine, which arrives with the metrics base.
 max_parallel = 4
 
+# What ONE COMMISSION may spend, across every step and every paid provider it
+# dispatches to. Money is a permission, not a cost: this is the user saying how
+# much a piece of work may draw, in the same breath as saying which effects it
+# may cause.
+#
+# The commission, not the call. A run that splits into four steps divides this
+# between them and gives back what it did not use; it does not hand each of
+# them a fresh one. Same trap as match_limit above, with money instead of
+# matches: 0 reads as "no ceiling" and is refused, because a commission with
+# nothing stopping it is a runaway. A grant that reaches zero WHILE running is
+# a different thing and perfectly ordinary -- from there on the paid providers
+# refuse and whoever charges nothing keeps working.
+budget_usd = 0.25
+
 # Whether the state of a run in flight is written to disk. Memory is a
 # whiteboard; disk is paper. The dump happens when a step closes and again when
 # the run closes, and at no other moment.
@@ -71,13 +85,10 @@ runners = ["omp"]
   # ripgrep's on purpose: the same question answered by a model is not the same
   # answer at the same price, and the funnel has to be able to tell them apart.
   implementations = ["claude.search"]
-  # What one call may spend before it is cut off.
+  # This adapter has no ceiling of its own. What a call may spend arrives with
+  # the commission, from budget_usd under [orchestrator] above -- money is a
+  # permission, and permissions are granted per commission.
   #
-  # Same trap as match_limit above, with money instead of matches: zero reads
-  # as "no ceiling" and is refused, because a model turn with nothing stopping
-  # it is a runaway. This one answers a flat text search; a search that needs
-  # more than this has gone wrong.
-  budget_usd = 0.25
   # How long one call may take. A model turn is slower than a tool call by
   # nature, so this sits far above omp's ceiling; past it the turn is stuck
   # rather than thinking, and the timeout bin is what lets the core fall back.

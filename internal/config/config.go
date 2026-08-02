@@ -87,6 +87,14 @@ type Orchestrator struct {
 	// ceiling. The real limit is the machine, and the machine is not the same
 	// one everywhere, so it is declared rather than compiled in.
 	MaxParallel int
+	// BudgetUSD is what one commission may spend, across every step and every
+	// paid provider it dispatches to.
+	//
+	// It lives here and not on an adapter because money is a permission, and
+	// permissions are granted per commission. An adapter holding its own
+	// ceiling could only ever cap one invocation, so a run of four steps spent
+	// it four times and no adapter could see the others doing the same.
+	BudgetUSD float64
 	// CheckpointDir is where the paper copy of a run in flight is written. It
 	// is empty when checkpointing is off.
 	CheckpointDir string
@@ -137,8 +145,6 @@ type ClaudeCodeAdapter struct {
 	Binary string
 	// Implementations the adapter answers for.
 	Implementations []string
-	// BudgetUSD caps what one invocation may spend.
-	BudgetUSD float64
 	// Timeout caps one invocation. A model turn is slower than a tool call by
 	// nature, so this sits far above omp's ceiling.
 	Timeout time.Duration
@@ -271,9 +277,10 @@ type fileMetrics struct {
 }
 
 type fileOrchestrator struct {
-	MaxParallel   *int   `toml:"max_parallel"`
-	Checkpoints   *bool  `toml:"checkpoints"`
-	CheckpointDir string `toml:"checkpoint_dir"`
+	MaxParallel   *int     `toml:"max_parallel"`
+	BudgetUSD     *float64 `toml:"budget_usd"`
+	Checkpoints   *bool    `toml:"checkpoints"`
+	CheckpointDir string   `toml:"checkpoint_dir"`
 	// Runners uses a pointer so an omitted list and an explicitly empty one
 	// are different things: leaving the block out keeps the shipped adapter,
 	// while writing an empty list is how a user says "dispatch nowhere".
@@ -299,7 +306,6 @@ type fileOMPAdapter struct {
 type fileClaudeCodeAdapter struct {
 	Binary          string    `toml:"binary"`
 	Implementations *[]string `toml:"implementations"`
-	BudgetUSD       *float64  `toml:"budget_usd"`
 	Timeout         string    `toml:"timeout"`
 }
 
@@ -473,6 +479,12 @@ const defaultShutdownGrace = 10 * time.Second
 const (
 	defaultMaxParallel = 4
 	maxMaxParallel     = 100
+	// defaultBudgetUSD is what one commission may spend when the settings file
+	// does not say. It is deliberately small: the paid far side that ships
+	// answers a flat text search, and a search that needs more than this has
+	// gone wrong. It used to be the ceiling on ONE invocation, which is why a
+	// four-step run could quietly draw four times it.
+	defaultBudgetUSD = 0.25
 )
 
 // defaultServedImplementations is what a runner answers for unless the
@@ -510,6 +522,7 @@ var defaultClaudeImplementations = []string{"claude.search"}
 func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	out := Orchestrator{
 		MaxParallel:   defaultMaxParallel,
+		BudgetUSD:     defaultBudgetUSD,
 		Runners:       []string{RunnerOMP},
 		CheckpointDir: checkpoint.DefaultDir(),
 		Local:         LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
@@ -522,7 +535,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		ClaudeCode: ClaudeCodeAdapter{
 			Binary:          claudecode.DefaultBinary,
 			Implementations: defaultClaudeImplementations,
-			BudgetUSD:       claudecode.DefaultBudgetUSD,
 			Timeout:         claudecode.DefaultTimeout,
 		},
 		Serena: SerenaAdapter{
@@ -538,6 +550,21 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 				source, maxMaxParallel, *o.MaxParallel)
 		}
 		out.MaxParallel = *o.MaxParallel
+	}
+	if o.BudgetUSD != nil {
+		if *o.BudgetUSD <= 0 {
+			// Same trap as omp's match_limit, with money instead of matches:
+			// zero reads as "no ceiling" and is the one value that must not
+			// mean that. A commission with nothing stopping it is a runaway.
+			//
+			// A grant that reaches zero while running is a different thing and
+			// perfectly ordinary -- see contract.Permission. This is somebody
+			// typing it, which is always a mistake.
+			return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.budget_usd must be above 0, got %v",
+				source, *o.BudgetUSD)
+		}
+		out.BudgetUSD = *o.BudgetUSD
 	}
 	if o.Runners != nil {
 		seen := make(map[string]struct{}, len(*o.Runners))
@@ -695,17 +722,6 @@ func (c fileClaudeCodeAdapter) build(source string, out ClaudeCodeAdapter) (Clau
 	}
 	if c.Implementations != nil {
 		out.Implementations = *c.Implementations
-	}
-	if c.BudgetUSD != nil {
-		if *c.BudgetUSD <= 0 {
-			// Same trap as omp's match_limit, with money instead of matches:
-			// zero reads as "no ceiling" and is the one value that must not
-			// mean that. A model turn with nothing stopping it is a runaway.
-			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.claudecode.budget_usd must be above 0, got %v",
-				source, *c.BudgetUSD)
-		}
-		out.BudgetUSD = *c.BudgetUSD
 	}
 	if c.Timeout != "" {
 		timeout, err := time.ParseDuration(c.Timeout)

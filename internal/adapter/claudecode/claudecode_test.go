@@ -77,6 +77,11 @@ func request(t *testing.T, payload map[string]any, effects ...contract.Effect) c
 		Permission: contract.Permission{
 			Task:    "find it",
 			Effects: append([]contract.Effect{contract.EffectRead}, effects...),
+			// A funded commission, because that is the ordinary case and every
+			// test below is about something else. The grant arrives on the
+			// request now: this adapter holds no ceiling of its own. What
+			// happens when it is empty has its own tests in money_test.go.
+			BudgetUSD: 0.25,
 		},
 	}
 }
@@ -545,9 +550,6 @@ func TestAnImplementationThisAdapterDoesNotServeIsUnavailable(t *testing.T) {
 
 func TestABrokenSensitivePatternIsRefusedAtBuildTime(t *testing.T) {
 	if _, err := New(Options{Sensitive: []string{"[3"}}); contract.KindOf(err) != contract.FailureInvalidInput {
-		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
-	}
-	if _, err := New(Options{BudgetUSD: -1}); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
 	if _, err := New(Options{Timeout: -time.Second}); contract.KindOf(err) != contract.FailureInvalidInput {

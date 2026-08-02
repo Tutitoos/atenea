@@ -52,6 +52,13 @@ the only far side that costs money per call; `runners = ["omp", "claudecode"]`
 attaches both, and the funnel then ranks on cost, so a flat text search still
 goes to `ripgrep` and the model is kept for what only a model can answer.
 
+Money is a permission, granted per commission and split between its steps:
+`budget_usd` under `[orchestrator]` is what one `task` may spend in total, not
+per call, so four steps share one quarter rather than spending four. `--budget`
+funds one commission above it. A commission that runs out gets
+`permission_denied` on the paid steps and keeps going through whoever charges
+nothing.
+
 Symbols are the second family of capabilities: `symbol.definition`,
 `symbol.references` and `symbol.implementations`. They are answered by Serena,
 which is not a CLI at all but an MCP server behind a local proxy, so the third
