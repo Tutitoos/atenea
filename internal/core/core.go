@@ -18,6 +18,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
+	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/clock"
@@ -25,6 +26,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/registry"
 	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -47,6 +49,16 @@ type Core struct {
 	// notebook is the crash notebook. Always present: it needs no settings and
 	// there is no state of the world in which not having one is better.
 	notebook *notebook.Notebook
+	// copies protects the history. Nil when the settings turned copying off,
+	// and read by the status screen even then so the screen can say so rather
+	// than say nothing.
+	copies *backup.Store
+	// recovered is what the last ugly close cost, assessed before any work
+	// was accepted. It is kept so the status screen can say so: a start that
+	// had to repair something is a fact about this process, and finding it
+	// only in the notebook would mean reading a file to learn why the
+	// history looks shorter than it did yesterday.
+	recovered Recovery
 	// beats serves every background maintenance task in one lane, so the
 	// flush, the roll-up and whatever comes next cannot come due at the same
 	// second and fight over the same file.
@@ -70,6 +82,7 @@ type Core struct {
 const (
 	jobFlush   = "metrics.flush"
 	jobCompact = "metrics.compact"
+	jobBackup  = "backup"
 )
 
 // meter is the orchestrator's end of the measurement seam.
@@ -133,10 +146,29 @@ func New(cfg config.Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, beats, err := buildMetrics(cfg.Metrics, book)
+	// The damage assessment, before anything is served. Receipts first: an
+	// interrupted dump is swept and a torn one set aside, so nothing that
+	// follows reads a record of a run that never happened that way.
+	found, err := recoverReceipts(checkpoints)
 	if err != nil {
 		return nil, err
 	}
+	var store *metrics.Store
+	if cfg.Metrics.Enabled {
+		store, found.BaseSetAside, err = openBase(cfg.Metrics)
+		if err != nil {
+			return nil, err
+		}
+	}
+	copies, err := openCopies(cfg.Backup, platform.StateDir())
+	if err != nil {
+		return nil, err
+	}
+	beats, err := buildLanes(cfg, store, copies, book)
+	if err != nil {
+		return nil, err
+	}
+	fileRecovery(book, found)
 	var collector orchestrator.Meter
 	// Both seams stay nil together when there is no store. Assigning a nil
 	// *Store into an interface would produce a non-nil interface holding
@@ -180,57 +212,13 @@ func New(cfg config.Config) (*Core, error) {
 		checkpoints:  checkpoints,
 		measurements: store,
 		notebook:     book,
+		copies:       copies,
+		recovered:    found,
 		beats:        beats,
 		agent:        agent,
 		sessions:     make(map[string]*Session),
 		started:      time.Now(),
 	}, nil
-}
-
-// buildMetrics opens the baseline and registers the two jobs that maintain it.
-//
-// The clock exists either way. A core with measuring switched off still has a
-// maintenance lane, it simply has nothing in it, and that keeps the shutdown
-// path from having to ask which kind of core it is stopping.
-//
-// Both jobs are wrapped so their failures reach the crash notebook. A job that
-// runs on a beat has nobody waiting on its return value -- that is the whole
-// point of a beat -- so until now a flush failing every thirty seconds for an
-// hour looked exactly like a flush succeeding every thirty seconds for an
-// hour.
-func buildMetrics(cfg config.Metrics, book *notebook.Notebook) (*metrics.Store, *clock.Clock, error) {
-	if !cfg.Enabled {
-		beats, err := clock.New()
-		return nil, beats, err
-	}
-	store, err := metrics.Open(cfg.Path, metrics.Options{BufferLimit: cfg.BufferLimit})
-	if err != nil {
-		return nil, nil, err
-	}
-	watch := &maintenance{book: book, store: store}
-	beats, err := clock.New(
-		clock.Job{
-			Name:  jobFlush,
-			Every: cfg.Flush,
-			Run:   watch.wrap(jobFlush, store.Flush),
-		},
-		clock.Job{
-			Name:  jobCompact,
-			Every: cfg.Compact,
-			Run: watch.wrap(jobCompact, func(ctx context.Context) error {
-				// Guarded by a mark on disk rather than by the beat alone.
-				// The beat only exists while a core is held up; most Atenea
-				// processes are a command that lives for a second, and the
-				// history still has to be kept in shape for them.
-				_, err := store.CompactIfDue(ctx, time.Now(), cfg.Compact)
-				return err
-			}),
-		},
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	return store, beats, nil
 }
 
 // maintenance turns a failed background job into an incident.

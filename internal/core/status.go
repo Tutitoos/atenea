@@ -52,6 +52,53 @@ type Status struct {
 	// it sits beside the light rather than inside it: a fault Atenea already
 	// survived is not the same claim as a provider being down now.
 	Incidents IncidentStatus
+	// Maintenance is the background lane: the rhythms that keep the history in
+	// shape. It is on the screen because these jobs have nobody waiting on
+	// their return value -- that is what a beat is -- so a flush failing every
+	// thirty seconds for an hour looks exactly like a flush succeeding every
+	// thirty seconds for an hour to anyone not reading the notebook.
+	Maintenance []MaintenanceStatus
+	// Backups is what protects the history, and whether it is actually
+	// happening. A copy nobody can see the state of is a copy nobody trusts.
+	Backups BackupStatus
+	// Recovered is what the last ugly close cost. Empty after a clean stop,
+	// which is the normal case and prints nothing.
+	Recovered Recovery
+}
+
+// MaintenanceStatus is one background lane and what it has been doing.
+type MaintenanceStatus struct {
+	Name string
+	// Every is the rhythm the lane keeps. Without it "last ran at 21:20" is
+	// not a fact anybody can act on.
+	Every   time.Duration
+	Runs    int
+	LastRun time.Time
+	// Failure is what went wrong last time, empty when the lane is clean. The
+	// text, not a boolean: "database is locked" and "no space left on device"
+	// send whoever is reading to two different places.
+	Failure string
+}
+
+// BackupStatus is the history's insurance in one line.
+//
+// Latest is the load-bearing field. Count says five copies exist; only Latest
+// says whether the newest of them is from this morning or from March.
+type BackupStatus struct {
+	Enabled bool
+	Dir     string
+	Every   string
+	Keep    int
+	Count   int
+	Latest  time.Time
+	// Stale is the verdict, not the arithmetic. The operator reading this
+	// screen should not have to subtract Latest from now and compare it
+	// against Every to learn that copying quietly stopped -- that is the
+	// one fault here which produces no error anywhere, so it has to be
+	// stated rather than left to be worked out.
+	Stale bool
+	// Failure is why the copies could not even be counted, when that happened.
+	Failure string
 }
 
 // IncidentStatus is the crash notebook in one line.
@@ -244,7 +291,108 @@ func (c *Core) Status() Status {
 
 	status.Orchestrator = c.orchestratorStatus()
 	status.Light = worst(status.Light, status.Orchestrator.Light)
+
+	status.Maintenance = c.maintenance()
+	for _, lane := range status.Maintenance {
+		// A lane that failed its last pass is Atenea being unwell, not a
+		// provider being down: amber, never red. The work still gets done --
+		// the rows are still in the buffer and the next beat tries again --
+		// so calling it red would send somebody looking for an outage that
+		// is not there.
+		if lane.Failure != "" {
+			status.Light = worst(status.Light, LightAmber)
+		}
+	}
+	status.Backups = c.backups()
+	status.Backups.Stale = status.Backups.stale()
+	if status.Backups.Stale {
+		status.Light = worst(status.Light, LightAmber)
+	}
+	status.Recovered = c.recovered
+	if !status.Recovered.Clean() {
+		// An ugly close Atenea already recovered from is amber, not red, and
+		// not green either. Green would hide that yesterday's history is
+		// shorter than it was; red would claim something is broken now, when
+		// the repair is exactly what makes it not broken.
+		status.Light = worst(status.Light, LightAmber)
+	}
+	// An incident nobody has read is Atenea being unwell, and unlike the two
+	// checks above this one crosses processes: the notebook is on disk, so a
+	// background lane that has been failing inside the service for a day is
+	// seen by every command that asks. Amber, never red, for the same reason
+	// as the lane above -- and it clears when somebody says they have read
+	// it, which is what `atenea incidents clear` is for.
+	if status.Incidents.Unread > 0 || status.Incidents.Unreadable > 0 {
+		status.Light = worst(status.Light, LightAmber)
+	}
 	return status
+}
+
+// maintenance reports what each background lane has been doing.
+func (c *Core) maintenance() []MaintenanceStatus {
+	states := c.beats.States()
+	out := make([]MaintenanceStatus, 0, len(states))
+	for _, state := range states {
+		entry := MaintenanceStatus{
+			Name:    state.Name,
+			Every:   state.Every,
+			Runs:    state.Runs,
+			LastRun: state.LastRun,
+		}
+		if state.LastErr != nil {
+			entry.Failure = state.LastErr.Error()
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// backups counts what is on disk right now rather than trusting a number the
+// core kept in memory. The question this answers is "is there a copy", and
+// only the disk can answer it: a core that believed its own bookkeeping would
+// keep reporting five copies after somebody deleted the folder.
+func (c *Core) backups() BackupStatus {
+	out := BackupStatus{
+		Enabled: c.settings.Backup.Enabled,
+		Dir:     c.settings.Backup.Dir,
+		Every:   c.settings.Backup.Every.String(),
+		Keep:    c.settings.Backup.Keep,
+	}
+	if c.copies == nil {
+		return out
+	}
+	taken, err := c.copies.List()
+	if err != nil {
+		out.Failure = err.Error()
+		return out
+	}
+	out.Count = len(taken)
+	if len(taken) > 0 {
+		out.Latest = taken[0].At
+	}
+	return out
+}
+
+// stale reports a copying rhythm that has quietly stopped happening.
+//
+// Two periods, not one: a copy comes due at exactly one period and the beat
+// that takes it can be seconds late, so one period would flap amber on a
+// perfectly healthy machine. Two is the first gap that cannot be explained by
+// timing. The same caution the break-in mode applies to slowness alarms --
+// no alarm until the absence is unambiguous.
+//
+// A machine with no copy yet is not stale. A fresh install has nothing to
+// protect, and shouting about it on day one is the false alarm the design
+// spent a whole row avoiding.
+func (b BackupStatus) stale() bool {
+	if !b.Enabled || b.Latest.IsZero() {
+		return false
+	}
+	every, err := time.ParseDuration(b.Every)
+	if err != nil || every <= 0 {
+		return false
+	}
+	return time.Since(b.Latest) > 2*every
 }
 
 // orchestratorStatus describes the agent and the far side behind it.

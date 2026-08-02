@@ -49,6 +49,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -115,16 +116,7 @@ const (
 // the run receipts and the measurement base, under the same state root. All
 // three are the same kind of thing -- what Atenea remembers about work it has
 // done -- and the point of a crash notebook is that you can find it.
-func DefaultPath() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "atenea", FileName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "state", "atenea", FileName)
-	}
-	return filepath.Join(home, ".local", "state", "atenea", FileName)
-}
+func DefaultPath() string { return filepath.Join(platform.StateDir(), FileName) }
 
 // New prepares the notebook at path, creating the directory if it is missing.
 //

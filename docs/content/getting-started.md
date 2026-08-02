@@ -267,6 +267,103 @@ It boots the catalog and waits. `Ctrl-C` or `SIGTERM` starts a clean stop: new
 work is refused immediately, and whatever is already running gets the margin set
 by `core.shutdown_grace`.
 
+## Install it on the machine
+
+`run` in a terminal lasts as long as the terminal. To have Atenea there after a
+reboot, install it — the binary writes its own unit:
+
+```sh
+atenea service install     # writes the unit, enables it, does not start it
+systemctl --user start atenea.service
+atenea service status      # where it stands
+```
+
+A user unit, never a system one. Atenea holds no privilege worth borrowing and
+everything it touches is inside your home, so `sudo` would only widen what a
+bug could reach. The price is that a user unit needs lingering to survive a
+logout; `service status` prints whether you have it, and the command to get it
+if you do not.
+
+`ExecStart` is the absolute path of whichever binary installed the unit. Move
+the binary and the unit points at nothing, so install from where it will live:
+
+```sh
+go build -o ~/.local/bin/atenea ./cmd/atenea
+~/.local/bin/atenea service install
+```
+
+Nothing listens. There is no port, no socket and no API: the service is the same
+core the commands use, kept up so the rhythms can beat. `atenea status` reads the
+same disk rather than asking it anything, which is why it works whether the
+service is running or not.
+
+`atenea service uninstall` stops it, disables it and removes the unit. It leaves
+the state root alone — what Atenea has learned is not the service's to delete.
+
+## Day to day
+
+Three things happen on their own once it is installed, and one line tells you
+whether they are still happening:
+
+```text
+background
+  rhythms      metrics.flush 30s, metrics.compact 1h, backup 6h
+  copies       5 of 5 kept in ~/.local/state/atenea-backups, newest 2026-08-02 21:26
+```
+
+`rhythms` comes from the settings file, `copies` from the disk. Neither is a
+tally this command kept in memory, which matters because the command is a
+process that lives for a second and the service it reports on is not: a per
+process counter would say "not yet" on a machine that has been copying all day.
+
+**Copies** are hard-linked, so five snapshots of an unchanged base cost one
+base. A file that changed is copied and the older snapshot keeps the older
+bytes. The sixth arrives and the oldest leaves. They live *beside* the state
+root, never inside it — a copy under the tree it copies recurses into itself.
+Restoring is `cp -a`: point `XDG_STATE_HOME` at the restored folder and Atenea
+opens it.
+
+`STALE` appears when the newest copy is older than two rhythms. Two, not one:
+a beat can be seconds late and a light that flapped would train the eye to skip
+it.
+
+**An ugly close** — a power cut, a `SIGKILL` — is repaired on the way up, before
+any work is accepted, and says so once:
+
+```text
+recovered 1 interrupted dump(s) swept, 1 torn receipt(s) set aside
+```
+
+A dump interrupted mid-write is removed: it is a record of a run that never
+happened that way. A receipt that will not parse is renamed `.torn` rather than
+deleted, because the bytes are the only evidence left of what was lost. Good
+receipts are never touched. If the measurement base itself will not answer it is
+moved aside under its own name and a fresh one opened in its place — the history
+that went with it is what the copies are for.
+
+A base held open by another Atenea is not damage and is never moved. That check
+is the difference between recovering from corruption and manufacturing it.
+
+**The light** is one glance, and it is the worst of everything under it. Amber
+for Atenea being unwell — a lane that failed, copies gone stale, an ugly close
+it recovered from, an incident nobody has read — and amber for a provider that
+is down or has never been measured. The work still gets done in every one of
+those cases, which is why none of them is red.
+
+```sh
+atenea status              # the light, the providers, the background
+atenea incidents           # what went wrong, with paths
+atenea incidents clear     # says you have read them
+```
+
+Clearing removes *that* reason for amber and no other. A fresh install stays
+amber until something has actually been measured, because `health=unknown` is
+not a claim that anything works — it is the funnel saying it is still guessing.
+That is the break-in mode, and it ends on its own after a run or two.
+
+The amber from a fault comes back the next time it happens. That is what makes
+*unread* the honest word for it.
+
 ## When Atenea itself falls over
 
 Providers fail all the time; that is a normal answer with a bin on it. Atenea

@@ -25,6 +25,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -42,6 +43,9 @@ Commands:
   ask CAPABILITY         Dispatch one capability against one repository
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
+  service install        Install atenea as a background service that starts
+                         with the system; 'uninstall' undoes it, 'status'
+                         says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
@@ -137,6 +141,8 @@ func run(args []string, out io.Writer) error {
 		return cmdAsk(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
+	case "service":
+		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
 		return cmdIncidents(settingsPath, commandArgs, out)
 	case "config":
@@ -175,6 +181,9 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
 	fmt.Fprintf(out, "funnel    %s\n", status.Funnel)
 	printIncidentLine(out, status.Incidents)
+	if summary := status.Recovered.Summary(); summary != "" {
+		fmt.Fprintf(out, "recovered %s\n", summary)
+	}
 
 	agent := status.Orchestrator
 	fmt.Fprintf(out, "\norchestrator %s\n", strings.ToUpper(agent.Light.String()))
@@ -188,6 +197,8 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "  parallel   %s\n", ceiling(agent.MaxParallel))
 	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
+
+	printBackground(out, status)
 
 	fmt.Fprintf(out, "\ncapabilities\n")
 	for _, capability := range status.Capabilities {
@@ -213,6 +224,61 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 			orDash(strings.Join(repo.Indexes, ",")))
 	}
 	return nil
+}
+
+// printBackground is Atenea's own house, at the same height as the orchestrator:
+// the rhythms that keep the history in shape, and the copies that protect it.
+//
+// Every fact here has to be true no matter which process prints it. That rules
+// out the running tally each lane keeps in memory: this command is a process
+// that lives for a second and whose clock never ticks, so its own "last ran"
+// would say "not yet" while the service behind it has been copying all day.
+// What is left is the pair that actually answers the question -- the rhythms,
+// which come from the settings file and are the same everywhere, and the copies
+// on disk, which are the same for everybody looking. A lane that fails reaches
+// the reader through the crash notebook on the line above.
+func printBackground(out io.Writer, status core.Status) {
+	fmt.Fprintf(out, "\nbackground\n")
+	rhythms := make([]string, 0, len(status.Maintenance))
+	for _, lane := range status.Maintenance {
+		rhythms = append(rhythms, fmt.Sprintf("%s %s", lane.Name, rhythm(lane.Every)))
+	}
+	fmt.Fprintf(out, "  %-12s %s\n", "rhythms", orDash(strings.Join(rhythms, ", ")))
+
+	copies := status.Backups
+	if !copies.Enabled {
+		fmt.Fprintf(out, "  %-12s off\n", "copies")
+		return
+	}
+	line := fmt.Sprintf("  %-12s %d of %d kept in %s", "copies", copies.Count, copies.Keep, copies.Dir)
+	switch {
+	case copies.Failure != "":
+		line += "  FAILED: " + copies.Failure
+	case copies.Count == 0:
+		// Not a fault on a machine that has only just started, and not a
+		// silence either: the one number that matters here is missing.
+		line += "  (none taken yet)"
+	default:
+		line += fmt.Sprintf(", newest %s", copies.Latest.Local().Format("2006-01-02 15:04"))
+		if copies.Stale {
+			line += "  STALE"
+		}
+	}
+	fmt.Fprintln(out, line)
+}
+
+// rhythm drops the zero tail Go prints on round durations: "6h", not "6h0m0s".
+// Trimming the text would be the obvious way and the wrong one -- it turns
+// "30s" into "3".
+func rhythm(every time.Duration) string {
+	switch {
+	case every >= time.Hour && every%time.Hour == 0:
+		return fmt.Sprintf("%dh", every/time.Hour)
+	case every >= time.Minute && every%time.Minute == 0:
+		return fmt.Sprintf("%dm", every/time.Minute)
+	default:
+		return every.String()
+	}
 }
 
 // printIncidentLine is the fourth thing the short screen owes the design,
@@ -765,6 +831,13 @@ func cmdRun(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "atenea %s ready  contract %s  %s\n",
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings %s\n", status.Settings)
+	// A repair is said on the way up, not left for somebody to find by asking
+	// for a status screen. This line is the only place the operator learns
+	// that the last close was ugly: the service starts on its own after a
+	// reboot or a crash, so there is nobody watching a terminal to notice.
+	if summary := status.Recovered.Summary(); summary != "" {
+		fmt.Fprintf(out, "recovered %s\n", summary)
+	}
 	fmt.Fprintf(out, "waiting for work; press Ctrl-C to stop\n")
 
 	if err := atenea.Run(ctx); err != nil {
@@ -772,6 +845,120 @@ func cmdRun(settingsPath string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "stopped cleanly\n")
 	return nil
+}
+
+// cmdService puts Atenea on the machine as a background service, takes it off
+// again, and says which of those is currently true.
+func cmdService(settingsPath string, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"service needs a subcommand: install, uninstall or status")
+	}
+	switch args[0] {
+	case "install":
+		return serviceInstall(settingsPath, out)
+	case "uninstall":
+		return serviceUninstall(out)
+	case "status":
+		return serviceStatus(out)
+	default:
+		return contract.Fail(contract.FailureInvalidInput, "unknown service subcommand %q", args[0])
+	}
+}
+
+// serviceInstall reads the settings for one number and ignores the rest.
+//
+// core.shutdown_grace is the margin `run` gives in-flight work on the way
+// down, and the unit has to be told to wait longer than that. Nothing else in
+// the file has anything to do with this command, and an install that failed
+// because some provider is misconfigured would be refusing to set up the
+// machine over a problem the machine does not have yet.
+func serviceInstall(settingsPath string, out io.Writer) error {
+	cfg, err := config.Load(settingsPath)
+	if err != nil {
+		return err
+	}
+	service, err := runningBinaryService(cfg.Core.ShutdownGrace)
+	if err != nil {
+		return err
+	}
+	if err := service.Install(); err != nil {
+		return err
+	}
+	state, err := platform.Query(service.Name)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "unit      %s\n", service.Unit)
+	fmt.Fprintf(out, "starts    %s run\n", service.Exec)
+	fmt.Fprintf(out, "enabled   %s\n", yesNo(state.Enabled))
+	if !state.Linger {
+		// Enabled is only half of "starts with the system" on a user manager.
+		// Without lingering the unit waits for a login that a machine
+		// rebooting unattended never performs. Atenea cannot switch it on for
+		// itself, so the operator has to be handed the line.
+		fmt.Fprintf(out, "\nlingering is off: the service waits for your next login instead of\n")
+		fmt.Fprintf(out, "starting at boot. Run this once to fix that:\n")
+		fmt.Fprintf(out, "  %s\n", platform.LingerCommand())
+	}
+	return nil
+}
+
+// serviceUninstall asks for no settings. It is removing a unit rather than
+// writing one, and reading the settings file here would let a broken one block
+// the command that cleans up after it.
+func serviceUninstall(out io.Writer) error {
+	// The grace goes nowhere, since no unit is rendered; a Service is built
+	// only because it is what carries the name and the path.
+	service, err := runningBinaryService(0)
+	if err != nil {
+		return err
+	}
+	if err := service.Uninstall(); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "removed   %s\n", service.Unit)
+	return nil
+}
+
+// serviceStatus reports and never fails, the same as the health screen. A
+// machine with no service manager is a finding the operator needs on the
+// screen; turning it into an exit code would hide it on exactly the machine
+// where somebody is trying to work out why nothing is running.
+func serviceStatus(out io.Writer) error {
+	state, err := platform.Query(platform.ServiceName)
+	fmt.Fprintf(out, "unit      %s\n", orDash(state.Unit))
+	if err != nil {
+		fmt.Fprintf(out, "manager   %s\n", oneLine(err.Error()))
+		return nil
+	}
+	fmt.Fprintf(out, "installed %s\n", yesNo(state.Installed))
+	fmt.Fprintf(out, "enabled   %s\n", yesNo(state.Enabled))
+	fmt.Fprintf(out, "active    %s\n", yesNo(state.Active))
+	fmt.Fprintf(out, "linger    %s\n", yesNo(state.Linger))
+	fmt.Fprintf(out, "detail    %s\n", oneLine(state.Detail))
+	if state.Installed && !state.Linger {
+		// The same warning install gives, at the moment somebody is actually
+		// looking for why nothing came up after a reboot. A count with no
+		// address is a nag, and so is a "no" with no remedy.
+		fmt.Fprintf(out, "\nlingering is off: an installed service still waits for your next\n")
+		fmt.Fprintf(out, "login instead of starting at boot. Run this once to fix that:\n")
+		fmt.Fprintf(out, "  %s\n", platform.LingerCommand())
+	}
+	return nil
+}
+
+// runningBinaryService describes the service around the binary executing right
+// now. Pointing the unit anywhere else would install a service that starts a
+// copy of Atenea nobody is looking at.
+func runningBinaryService(stopGrace time.Duration) (platform.Service, error) {
+	binary, err := os.Executable()
+	if err != nil {
+		return platform.Service{}, contract.Fail(contract.FailureUnavailable,
+			"cannot find the running atenea binary to point the service at: %v", err)
+	}
+	return platform.NewService(binary, stopGrace)
 }
 
 func cmdConfig(settingsPath string, args []string, out io.Writer) error {
@@ -814,6 +1001,13 @@ func orDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func oneLine(value string) string {

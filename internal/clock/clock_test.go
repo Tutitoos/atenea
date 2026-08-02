@@ -214,3 +214,62 @@ func TestAnIdleClockIsHarmless(t *testing.T) {
 		t.Fatalf("states = %+v, want one job that never ran", c.States())
 	}
 }
+
+// A rhythm's first pass happens on the first beat, not one period later.
+//
+// This is the whole reason a six-hour copy works on a laptop. The clock only
+// exists while a service is up, so a machine restarted more often than the
+// period would hand out a due date it never reaches, and the copy nobody
+// notices missing is missing forever. Every job in this lane is guarded by its
+// own mark on disk, so being asked early costs nothing -- but it has to be
+// asked.
+func TestAJobThatHasNeverRunIsDueOnTheFirstBeat(t *testing.T) {
+	var slow, quick atomic.Int64
+	c, err := New(
+		// Six hours stands in for the backup rhythm; the ten milliseconds is
+		// what sets the resolution, exactly as the flush does in the core.
+		Job{Name: "slow", Every: 6 * time.Hour, Run: func(context.Context) error { slow.Add(1); return nil }},
+		Job{Name: "quick", Every: 10 * time.Millisecond, Run: func(context.Context) error { quick.Add(1); return nil }},
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c.Start(context.Background())
+	defer c.Stop()
+
+	// Both jobs are due on this first beat, and the sweep runs them in
+	// registration order -- so waiting only for the slow one and then reading
+	// the quick one races the sweep rather than testing it.
+	deadline := time.Now().Add(2 * time.Second)
+	for (slow.Load() == 0 || quick.Load() == 0) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := slow.Load(); got != 1 {
+		t.Fatalf("the six-hour job ran %d times on the first beat, want exactly 1", got)
+	}
+	if quick.Load() == 0 {
+		t.Error("the short rhythm never ran at all")
+	}
+}
+
+// Due once, then on the rhythm. The first beat must not turn into a job that
+// runs on every beat: a six-hour copy firing every thirty seconds would fill
+// the disk with snapshots and rotate the real history out of existence.
+func TestTheFirstBeatDoesNotBecomeEveryBeat(t *testing.T) {
+	var slow atomic.Int64
+	c, err := New(
+		Job{Name: "slow", Every: time.Hour, Run: func(context.Context) error { slow.Add(1); return nil }},
+		Job{Name: "quick", Every: 5 * time.Millisecond, Run: noop},
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c.Start(context.Background())
+	defer c.Stop()
+
+	// Long enough for many beats of the short rhythm to have gone by.
+	time.Sleep(300 * time.Millisecond)
+	if got := slow.Load(); got != 1 {
+		t.Errorf("the hourly job ran %d times in 300ms, want exactly 1", got)
+	}
+}

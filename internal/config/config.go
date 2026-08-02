@@ -24,6 +24,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/metrics"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -43,6 +44,7 @@ type Config struct {
 	Core            Core
 	Orchestrator    Orchestrator
 	Metrics         Metrics
+	Backup          Backup
 	Security        Security
 	Selector        selector.Config
 	Capabilities    []contract.Capability
@@ -79,6 +81,26 @@ type Metrics struct {
 	// takes the store's own ceiling here, so the value downstream is always
 	// the one the status screen shows.
 	BufferLimit int
+}
+
+// Backup holds what protects the history and how often.
+//
+// The rhythm lives beside the metrics rhythms on purpose: they all run in the
+// one clock lane, and the design asks for retuning a beat to be a line in this
+// file rather than a rebuild. Two beats set to collide are visible here and
+// nowhere else.
+type Backup struct {
+	// Dir is where copies go. Empty means platform.BackupDir -- a folder of
+	// its own beside the state root, never inside it.
+	Dir string
+	// Enabled is false when the user does not want copies kept. A machine
+	// whose state root is already on replicated storage does not need them.
+	Enabled bool
+	// Every is how often a copy is taken.
+	Every time.Duration
+	// Keep is how many copies survive. The oldest is dropped when the next
+	// one lands.
+	Keep int
 }
 
 // Orchestrator holds the knobs of the agent that splits and hands out work.
@@ -185,16 +207,7 @@ const (
 
 // DefaultPath returns where Atenea looks for its settings when nothing else
 // says otherwise.
-func DefaultPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "atenea", "atenea.toml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".config", "atenea", "atenea.toml")
-	}
-	return filepath.Join(home, ".config", "atenea", "atenea.toml")
-}
+func DefaultPath() string { return filepath.Join(platform.ConfigDir(), "atenea.toml") }
 
 // ResolvePath picks the settings file: an explicit path wins, then
 // ATENEA_CONFIG, then the default location.
@@ -257,6 +270,7 @@ type file struct {
 	Core            fileCore         `toml:"core"`
 	Orchestrator    fileOrchestrator `toml:"orchestrator"`
 	Metrics         fileMetrics      `toml:"metrics"`
+	Backup          fileBackup       `toml:"backup"`
 	Security        fileSecurity     `toml:"security"`
 	Selector        fileSelector     `toml:"selector"`
 	Capabilities    []fileCapability `toml:"capability"`
@@ -274,6 +288,13 @@ type fileMetrics struct {
 	Flush       string `toml:"flush"`
 	Compact     string `toml:"compact"`
 	BufferLimit *int   `toml:"buffer_limit"`
+}
+
+type fileBackup struct {
+	Dir     string `toml:"dir"`
+	Enabled *bool  `toml:"enabled"`
+	Every   string `toml:"every"`
+	Keep    *int   `toml:"keep"`
 }
 
 type fileOrchestrator struct {
@@ -436,6 +457,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
+		return Config{}, err
+	}
+	if cfg.Backup, err = decoded.Backup.build(source); err != nil {
 		return Config{}, err
 	}
 	cfg.Security = decoded.Security.build()
@@ -712,6 +736,55 @@ func (m fileMetrics) build(source string) (Metrics, error) {
 				source, *m.BufferLimit)
 		}
 		out.BufferLimit = *m.BufferLimit
+	}
+	return out, nil
+}
+
+const (
+	// Six hours and five copies are the design's numbers, not a guess: a day
+	// of history in four snapshots plus the one being replaced.
+	defaultBackupEvery = 6 * time.Hour
+	defaultBackupKeep  = 5
+)
+
+func (b fileBackup) build(source string) (Backup, error) {
+	out := Backup{
+		Dir:     platform.BackupDir(),
+		Enabled: true,
+		Every:   defaultBackupEvery,
+		Keep:    defaultBackupKeep,
+	}
+	if strings.TrimSpace(b.Dir) != "" {
+		out.Dir = strings.TrimSpace(b.Dir)
+	}
+	if b.Enabled != nil {
+		out.Enabled = *b.Enabled
+	}
+	if b.Every != "" {
+		every, err := time.ParseDuration(b.Every)
+		if err != nil {
+			return Backup{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: backup.every %q: %v", source, b.Every, err)
+		}
+		if every <= 0 {
+			// Same trap as the metrics beats: zero reads like "never", and a
+			// backup that never fires is the one maintenance task whose
+			// absence is invisible until the day it is needed.
+			return Backup{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: backup.every must be above 0, got %s; use enabled = false to stop copying",
+				source, every)
+		}
+		out.Every = every
+	}
+	if b.Keep != nil {
+		if *b.Keep < 1 {
+			// Keeping zero copies is not a rotation setting, it is copying
+			// switched off with the work still being done every six hours.
+			return Backup{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: backup.keep must be at least 1, got %d; use enabled = false to stop copying",
+				source, *b.Keep)
+		}
+		out.Keep = *b.Keep
 	}
 	return out, nil
 }

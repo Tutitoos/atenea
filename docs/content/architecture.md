@@ -430,6 +430,79 @@ A torn last line — the file's own crash, mid-write — is counted and announce
 rather than skipped. It is the one thing that would make the count quietly
 wrong.
 
+## Staying up
+
+Atenea installs itself as a `systemd --user` unit and nothing more. There is no
+system unit and no daemon user: everything it touches is under one person's
+home, so a system unit would hand a bug reach it never needs. It listens on
+nothing — no port, no socket, no API. The commands are not clients of the
+service; they are the same core, built again, reading the same disk.
+
+That has a consequence worth being explicit about: **nothing on the status
+screen may come from a tally kept in memory**. The command that prints it is a
+process that lives for a second and whose clock never beats. So the screen
+reports the rhythms, which come from the settings file and are the same
+everywhere, and the copies, which are on disk and the same for everybody
+looking. A lane that fails reaches the reader through the notebook, which is
+also on disk. Every fact on that screen is true no matter who prints it.
+
+### One lane for everything in the background
+
+Three rhythms — the measurement flush, the history roll-up, the copies — run in
+a single lane, one at a time. They touch the same files, so a second lane would
+only buy the chance of two of them meeting on the same one.
+
+A job's first pass is due on the first beat, not one period later. The
+alternative looks harmless and is not: a six-hour rhythm on a laptop that is
+shut every evening would hand out a due date it never reaches, and the copy
+nobody notices missing is missing forever. Being asked early costs nothing
+because every job in this lane is guarded by its own mark on disk — the roll-up
+reads when it last folded, the copies read the newest one taken. The clock says
+*consider it*; the disk says *is it due*.
+
+### Copies
+
+Everything Atenea has learned is one directory: the measurement base, the run
+receipts, the notebook. A copy is a hard-linked snapshot of it, beside it and
+never inside it. Unchanged files are shared with the snapshot before, so five
+copies of an unchanged base cost one base; a changed file is copied whole and
+the older snapshot keeps the older bytes, which is what makes dropping the
+oldest safe at any moment.
+
+Unchanged means same size, same modification time and same permissions, with
+the times compared exactly rather than rounded to the second. Rounding is the
+tempting simplification and the one that breaks the guarantee: a file rewritten
+in the same second as the last snapshot would be called unchanged, and the copy
+would quietly hold the old bytes — a backup lying about what it holds. Being
+too strict only ever costs disk.
+
+A symlink is recreated rather than followed, and never hard-linked: whether
+`link(2)` targets the link or what it names is not the same answer on every
+filesystem, and a link costs nothing to remake.
+
+### Coming up after an ugly close
+
+A clean stop refuses new work and gives what is running a bounded margin. A
+power cut gives nothing, and the next start is the delicate moment — so the
+damage is assessed before any work is accepted, never lazily on first use.
+
+A dump interrupted mid-write is swept: it is a record of a run that never
+happened that way, and leaving it would let a half-written file pass for a
+finished one. A receipt that will not parse is renamed rather than deleted,
+because those bytes are the only evidence of what was lost. Good receipts are
+not touched — including the receipt of a commission the cut interrupted, which
+is exactly the one worth reading back.
+
+If the measurement base will not answer, it is moved aside under its own name
+and a fresh one opened where it was. Refusing to start would be the wrong
+trade: the funnel already copes with having no measurements — that is the cold
+start it was built for — and the history that went is what the copies protect.
+
+The one case that must never be treated as damage is a base another live Atenea
+is holding. Moving a healthy file out from under a running process would
+manufacture the corruption this check exists to catch, so the two are told
+apart by their failure bin and only `unavailable` moves anything.
+
 ## Adapters are dumb
 
 All the intelligence stays in the core. An adapter translates a request into

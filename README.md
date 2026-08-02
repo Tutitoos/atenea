@@ -100,6 +100,34 @@ the docs now quote the search term themselves. The README is a root file, and
 a hit with no directory above it cannot be narrowed away — so the work runs
 wide rather than quietly dropping it.)
 
+## Leave it running
+
+Atenea is a core, not a command: the commands are how you talk to it, and the
+background rhythms are what keep it worth talking to. Install it and it is
+there after a reboot.
+
+```sh
+go build -o ~/.local/bin/atenea ./cmd/atenea
+~/.local/bin/atenea service install     # writes a systemd --user unit
+systemctl --user start atenea.service
+```
+
+A user unit, never a system one, and nothing listens: no port, no socket, no
+API. Atenea holds no privilege worth borrowing, so `sudo` would only widen what
+a bug could reach, and the commands read the same disk rather than asking the
+service anything — which is why they work whether it is running or not.
+
+What runs on its own: the measurement batch reaches disk every 30s, the history
+is folded hourly, and every six hours a hard-linked copy of everything Atenea
+has learned is taken, five kept in rotation. A start after a power cut repairs
+what the cut left half-written *before* accepting any work, and says so.
+
+```text
+background
+  rhythms      metrics.flush 30s, metrics.compact 1h, backup 6h
+  copies       1 of 5 kept in /home/tutitoos/.local/state/atenea-backups, newest 2026-08-02 21:26
+```
+
 ## Layout
 
 ```text

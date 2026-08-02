@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -500,5 +501,86 @@ func TestBrokenSettingsFailLoudly(t *testing.T) {
 	_, err := exec(t, "--config", path, "status")
 	if contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+}
+
+// The background section is Atenea's own house. Every line has to be true in
+// whichever process prints it, which is why the rhythms come from the settings
+// and the copies from the disk, and why nothing here reports a tally this
+// one-second process keeps in its own memory.
+func TestTheScreenShowsTheBackgroundRhythmsAndTheCopies(t *testing.T) {
+	freshInstall(t)
+	out, err := exec(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	for _, want := range []string{
+		"background",
+		"metrics.flush 30s",
+		"metrics.compact 1h",
+		"backup 6h",
+		"copies",
+		"of 5 kept in",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the screen is missing %q:\n%s", want, out)
+		}
+	}
+	// "not yet" is what a per-process lane tally would print here, and it
+	// would be a lie about a machine whose service has been copying all day.
+	if strings.Contains(out, "not yet") {
+		t.Errorf("the screen reports this process's own lane state:\n%s", out)
+	}
+}
+
+// Whole hours print as hours. The obvious implementation trims the text and
+// turns a thirty-second rhythm into "3", which is the kind of wrong that reads
+// as right.
+func TestARoundRhythmDropsItsZeroTailWithoutLosingDigits(t *testing.T) {
+	for every, want := range map[time.Duration]string{
+		6 * time.Hour:           "6h",
+		time.Hour:               "1h",
+		90 * time.Minute:        "90m",
+		30 * time.Second:        "30s",
+		1500 * time.Millisecond: "1.5s",
+	} {
+		if got := rhythm(every); got != want {
+			t.Errorf("rhythm(%v) = %q, want %q", every, got, want)
+		}
+	}
+}
+
+// Copying switched off says so. A screen that simply omitted the line would be
+// indistinguishable from one where copying is on and working.
+func TestTheScreenSaysWhenCopyingIsOff(t *testing.T) {
+	freshInstall(t)
+	// The shipped file, written out and then amended: a hand-written catalog
+	// here would drift from what actually ships.
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	if _, err := exec(t, "config", "init"); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	path := filepath.Join(cfg, "atenea", "atenea.toml")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// The shipped block already exists, so this switches the word rather than
+	// writing a second [backup] the parser would refuse.
+	head, tail, found := strings.Cut(string(body), "[backup]")
+	if !found {
+		t.Fatal("the shipped settings no longer have a [backup] block")
+	}
+	off := head + "[backup]" + strings.Replace(tail, "enabled = true", "enabled = false", 1)
+	if err := os.WriteFile(path, []byte(off), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	out, err := exec(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(out, "copies       off") {
+		t.Errorf("the screen does not say copying is off:\n%s", out)
 	}
 }

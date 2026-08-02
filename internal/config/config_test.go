@@ -616,3 +616,56 @@ func TestAnUnknownMetricsKeyIsRefused(t *testing.T) {
 		t.Fatalf("a typo in the metrics block was accepted: %v", err)
 	}
 }
+
+// Six hours and five copies are the design's numbers, not a guess. A default
+// that drifted to a day would leave a whole working day unprotected, and one
+// that kept a single copy would mean a corrupted base copied over the only
+// good snapshot destroys the history it was meant to save.
+func TestTheShippedBackupRhythmIsSixHoursAndFiveCopies(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	if !cfg.Backup.Enabled {
+		t.Error("a fresh install would keep no copies at all")
+	}
+	if cfg.Backup.Every != 6*time.Hour {
+		t.Errorf("every = %v, want 6h", cfg.Backup.Every)
+	}
+	if cfg.Backup.Keep != 5 {
+		t.Errorf("keep = %d, want 5", cfg.Backup.Keep)
+	}
+}
+
+// Keeping zero copies is not "copying is off", it is a rotation that deletes
+// the snapshot it just took. The two are different intents and the file has a
+// separate word for the other one, so the nonsense must be refused rather than
+// quietly read as the sane one next to it.
+func TestARotationThatKeepsNothingIsRefused(t *testing.T) {
+	for _, keep := range []string{"0", "-1"} {
+		body := minimal + "\n[backup]\nkeep = " + keep + "\n"
+		_, err := config.Load(write(t, body))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("keep = %s was answered with %v, want invalid_input", keep, got)
+		}
+		if err != nil && !strings.Contains(err.Error(), "enabled = false") {
+			t.Errorf("the refusal does not point at the way to turn copying off: %v", err)
+		}
+	}
+}
+
+// Turning copying off is a sentence the operator can write, and it must not
+// drag the rest of the block down with it: a disabled block with a rhythm
+// still written in it is somebody who switched copies off for an afternoon.
+func TestCopyingCanBeTurnedOffWithoutErasingTheBlock(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[backup]\nenabled = false\nevery = \"2h\"\nkeep = 9\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Backup.Enabled {
+		t.Error("copying stayed on after being switched off")
+	}
+	if cfg.Backup.Every != 2*time.Hour || cfg.Backup.Keep != 9 {
+		t.Errorf("the block was erased: every = %v, keep = %d", cfg.Backup.Every, cfg.Backup.Keep)
+	}
+}

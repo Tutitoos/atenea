@@ -153,6 +153,41 @@ flushes are failing. Past it the oldest are dropped and counted, because the
 only thing worse than losing a measurement is not knowing that you did — the
 count lands in the crash notebook, where `atenea incidents` will show it.
 
+## What protects the history
+
+```toml
+[backup]
+enabled = true              # off means no copies at all
+dir = ""                    # "" -> a folder BESIDE the state root
+every = "6h"                # how often a copy is taken
+keep = 5                    # how many survive; the sixth arrives, the oldest leaves
+```
+
+The measurement base, the run receipts and the crash notebook are everything
+Atenea has learned. A disk that loses them loses the reason the funnel picks
+anybody, and unlike a provider going down there is no bin for it and no
+recovering afterwards.
+
+`dir = ""` is a folder of its own beside the state root, never inside it: a
+copy under the tree it copies recurses into itself, and dies with the tree it
+exists to survive. A path inside the state root is refused rather than
+corrected. Point this at another disk and it stops being a copy and starts
+being a backup.
+
+Copies are hard-linked against the one before, so a snapshot of an unchanged
+base costs a directory entry rather than a database. What changed is copied,
+and the older snapshot keeps the older bytes — dropping the oldest can never
+take a file another copy still needs.
+
+`keep = 0` is refused. It reads as "copy, then delete the copy", and the way to
+say what it looks like it means is `enabled = false`. Every rhythm in this file
+refuses zero for the same reason.
+
+`every` is a floor, not an alarm clock. Whether a copy is due is read from the
+newest one on disk rather than from an in-memory timer, so a machine restarted
+more often than the rhythm still copies: without that, a six-hour rhythm on a
+laptop shut every evening would never take a single one.
+
 ## The crash notebook
 
 It has none, deliberately. A notebook you have to switch on before it works is

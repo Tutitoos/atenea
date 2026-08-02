@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -55,16 +56,7 @@ type StepState struct {
 }
 
 // DefaultDir is where runs are kept when the settings file says nothing.
-func DefaultDir() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "atenea", "runs")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "state", "atenea", "runs")
-	}
-	return filepath.Join(home, ".local", "state", "atenea", "runs")
-}
+func DefaultDir() string { return filepath.Join(platform.StateDir(), "runs") }
 
 var runID = regexp.MustCompile(`^[0-9a-zA-Z._-]+$`)
 

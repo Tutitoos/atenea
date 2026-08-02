@@ -51,6 +51,7 @@ import (
 
 	_ "github.com/marcboeker/go-duckdb/v2" // database/sql driver "duckdb"
 
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -117,16 +118,7 @@ type Measurement struct {
 // DefaultPath is where the database lives when the settings file says nothing.
 // It sits beside the run receipts, under the same state root, because both are
 // the same kind of thing: what Atenea remembers about work it has done.
-func DefaultPath() string {
-	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "atenea", "metrics.duckdb")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "state", "atenea", "metrics.duckdb")
-	}
-	return filepath.Join(home, ".local", "state", "atenea", "metrics.duckdb")
-}
+func DefaultPath() string { return filepath.Join(platform.StateDir(), "metrics.duckdb") }
 
 // Options configure a store. The zero value is usable: it means the defaults.
 type Options struct {

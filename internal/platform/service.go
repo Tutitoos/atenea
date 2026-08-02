@@ -1,0 +1,159 @@
+package platform
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// ServiceName is the one name the background service answers to, on the
+// machine and on the command line. One copy, for the same reason the roots
+// above have one: two spellings disagree the first time one of them is fixed.
+const ServiceName = "atenea"
+
+// Service is Atenea as a thing the machine starts on its own.
+//
+// It is a systemd *user* service, at ~/.config/systemd/user, and never a
+// system one under /etc. The target machine forces that -- an unprivileged
+// account with no sudo -- but it is also the only shape that works. Atenea
+// drives CLIs that are already logged in as this user: Claude Code holds an
+// OAuth session under this home, and every byte Atenea writes lands under this
+// user's XDG roots. A root unit would start a process owning none of that: no
+// session to reuse, no tokens, and every file it wrote afterwards owned by
+// root in a directory the user then has to repair by hand.
+type Service struct {
+	Name string
+	// Unit is where the description of the service goes on disk.
+	Unit string
+	// Exec is the binary the manager starts, absolute always. See NewService.
+	Exec string
+	// StopGrace is the margin `run` gives in-flight work on the way down: the
+	// settings file's core.shutdown_grace, carried here so the unit can be
+	// told to wait longer than that rather than cut it short.
+	StopGrace time.Duration
+}
+
+// ServiceState is what the machine currently says about the service.
+type ServiceState struct {
+	Installed bool
+	// Enabled means the manager has been told to start it. On a user manager
+	// that is only half the answer -- see Linger.
+	Enabled bool
+	Active  bool
+	// Linger means this user's services run without the user being logged in.
+	// It is what turns Enabled into "starts at boot" rather than "starts at
+	// next login", and Atenea cannot switch it on for itself.
+	Linger bool
+	Unit   string
+	// Detail is one line from the manager for the status screen, in the
+	// manager's own words: the screen shows a handful of booleans and the
+	// booleans never say why.
+	Detail string
+}
+
+// stopMargin is what TimeoutStopSec gets on top of StopGrace.
+//
+// `atenea run` stops cleanly and that stop is bounded by core.shutdown_grace:
+// in-flight work is given that long to finish and the measurement batch is
+// written on the way out. A TimeoutStopSec equal to or shorter than the grace
+// would have systemd send SIGKILL in the middle of the very flush the grace
+// exists to allow -- and it would look like a clean stop from the outside
+// while losing data every single time. The margin covers the signal arriving,
+// the grace running its full length, and the last write landing.
+const stopMargin = 5 * time.Second
+
+// NewService describes the service that would run exec. It touches nothing.
+func NewService(exec string, stopGrace time.Duration) (Service, error) {
+	if strings.TrimSpace(exec) == "" {
+		return Service{}, contract.Fail(contract.FailureInvalidInput,
+			"the service needs the path of the atenea binary it should start")
+	}
+	if !filepath.IsAbs(exec) {
+		// A service manager starts a binary from no particular directory and
+		// with no PATH worth relying on, so a relative path does not fail
+		// here: it fails at the next boot, in a log nobody is reading.
+		return Service{}, contract.Fail(contract.FailureInvalidInput,
+			"the service needs an absolute path to the atenea binary, got %q", exec)
+	}
+	if stopGrace < 0 {
+		// A negative grace would eat into the margin and render a unit that
+		// kills sooner than it asks. The settings file validates its own
+		// value; this is the floor for everyone who does not.
+		stopGrace = 0
+	}
+	return Service{
+		Name:      ServiceName,
+		Unit:      unitPath(ServiceName),
+		Exec:      exec,
+		StopGrace: stopGrace,
+	}, nil
+}
+
+// unitPath is where the unit file goes: the user's own config root, cut from
+// the same place ConfigDir is. Sharing the root is what makes a test that
+// moves XDG_CONFIG_HOME move this too, so nothing can write into the real home
+// by accident.
+//
+// On a machine with no systemd the path means nothing, and nothing reads it:
+// the three verbs that touch the machine refuse first.
+func unitPath(name string) string {
+	return filepath.Join(filepath.Dir(ConfigDir()), "systemd", "user", name+".service")
+}
+
+// The unit below is rendered here, in the portable half of this package, and
+// not beside the code that installs it. It is pure text: no machine is asked
+// anything to produce it. Keeping it here means the unit a Debian box will get
+// can be printed, diffed and tested from any developer laptop -- including the
+// one guard rail below, which is worth nothing if it only runs on the platform
+// that would notice too late.
+//
+// What the unit does contain is deliberately modest. NoNewPrivileges and
+// PrivateTmp cannot break a process that only spawns CLIs and writes under its
+// own XDG roots, so they cost nothing.
+//
+// What it does NOT contain is the part worth explaining. The network posture
+// is "local and not exposed", and the obvious way to spell that in a unit is
+// IPAddressDeny=any or PrivateNetwork=yes. Both would break Atenea. The
+// posture is already true by construction: searching this repository for
+// net.Listen, ListenAndServe and Accept turns up nothing outside two
+// httptest stubs in _test.go files, which never enter the binary. Atenea
+// accepts a connection from nobody. But it dials out constantly.
+// The Serena adapter posts JSON-RPC to an MCP proxy on 127.0.0.1:40010 and the
+// Claude Code adapter reaches a paid model over the internet; denying egress
+// takes both providers down, and the failure would read as two broken adapters
+// rather than as one line in a unit file. Not exposed is a claim about
+// connections accepted, never about connections made.
+const unitTemplate = `[Unit]
+Description=Atenea orchestration core
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%s run
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=%d
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
+`
+
+// UnitText renders the unit file.
+//
+// The same Service always renders the same bytes. An operator has to be able
+// to diff what is installed against what this version would install, and a
+// unit carrying a timestamp or the order of a map walk differs from itself for
+// no reason anyone can act on.
+func (s Service) UnitText() string {
+	// Rounded up, because systemd counts TimeoutStopSec in whole seconds and
+	// rounding a 10.5s grace down to 10 would put the kill back inside the
+	// window the margin exists to clear.
+	seconds := int64((s.StopGrace + stopMargin + time.Second - 1) / time.Second)
+	return fmt.Sprintf(unitTemplate, s.Exec, seconds)
+}

@@ -148,6 +148,29 @@ compact = "1h"
 # knowing that you did. Empty means 10000.
 # buffer_limit = 10000
 
+[backup]
+# What protects the history. The measurement base, the run receipts and the
+# crash notebook are everything Atenea has learned; a disk that loses them
+# loses the reason the funnel picks anybody.
+#
+# Copies are incremental in the only way compatible with dropping the oldest
+# one: a file that has not changed is hard-linked to the copy before it, so it
+# costs no bytes, and every snapshot stays a complete tree you can restore on
+# its own. A chain of deltas would be smaller and would collapse the day the
+# rotation removed the base of the chain.
+enabled = true
+# Empty means a folder of its own BESIDE the state root, never inside it: a
+# copy under the tree it copies recurses into itself, and dies with the tree it
+# exists to survive. Point this at another disk and it becomes a real backup.
+dir = ""
+# The rhythm, served by the same clock as the flush and the compaction above so
+# the three cannot come due at once and fight over the disk. It is read from
+# what is on disk, not from a timer in memory: a service that restarts more
+# often than this would otherwise never copy anything at all.
+every = "6h"
+# How many copies survive. The sixth arrives, the oldest leaves.
+keep = 5
+
 [security]
 # The files that carry secrets inside them. Reading is free by default, and
 # this list is the exception. While exploring, a match here is skipped in

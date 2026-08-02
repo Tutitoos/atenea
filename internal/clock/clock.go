@@ -35,7 +35,11 @@ type Job struct {
 
 // State is what a job has been doing, for whoever is watching.
 type State struct {
-	Name    string
+	Name string
+	// Every is the rhythm this job was registered with. It travels with the
+	// state because "last ran at 21:20" answers nothing on its own: whether
+	// that is healthy or six hours overdue is a question about the pair.
+	Every   time.Duration
 	Runs    int
 	LastRun time.Time
 	LastErr error
@@ -77,8 +81,15 @@ func New(jobs ...Job) (*Clock, error) {
 			return nil, fmt.Errorf("clock: job %q is registered twice", job.Name)
 		}
 		c.jobs = append(c.jobs, job)
-		c.state[job.Name] = &State{Name: job.Name}
-		c.due[job.Name] = now.Add(job.Every)
+		c.state[job.Name] = &State{Name: job.Name, Every: job.Every}
+		// Due now, not one period from now. A job that has never run is
+		// overdue by definition, and the alternative is worse than it looks:
+		// a six-hour rhythm on a machine that is restarted more often than
+		// that would never reach its first pass at all. Every job in this
+		// lane carries its own mark on disk for exactly this reason -- being
+		// asked "is there anything to do" costs nothing and is the only way
+		// the mark ever gets read.
+		c.due[job.Name] = now
 	}
 	return c, nil
 }
