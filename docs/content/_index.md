@@ -54,3 +54,4 @@ rewritten when they do.
 - [Getting started]({{< relref "getting-started" >}})
 - [Architecture]({{< relref "architecture" >}})
 - [Settings]({{< relref "settings" >}})
+- [When a provider looks flaky]({{< relref "diagnosing-providers" >}})

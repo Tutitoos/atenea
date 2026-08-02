@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -668,4 +670,34 @@ func TestCopyingCanBeTurnedOffWithoutErasingTheBlock(t *testing.T) {
 	if cfg.Backup.Every != 2*time.Hour || cfg.Backup.Keep != 9 {
 		t.Errorf("the block was erased: every = %v, keep = %d", cfg.Backup.Every, cfg.Backup.Keep)
 	}
+}
+
+// Every endpoint the shipped settings reach over the network names an address,
+// never a hostname. A proxy binds an address; a name is a question the machine
+// answers, and it may answer it differently tomorrow -- `localhost` resolving
+// to ::1 first is the default nearly everywhere, and a proxy listening only on
+// 127.0.0.1 would start refusing connections with nothing on this side having
+// changed. `localhost` is friendlier, which is exactly why somebody will try
+// to tidy this into one. See docs/content/diagnosing-providers.md.
+func TestTheShippedEndpointsNameAnAddressAndNeverAName(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	endpoint := cfg.Orchestrator.Serena.Endpoint
+	host, err := hostOf(endpoint)
+	if err != nil {
+		t.Fatalf("serena endpoint %q: %v", endpoint, err)
+	}
+	if net.ParseIP(host) == nil {
+		t.Fatalf("serena endpoint %q reaches the proxy by the name %q; pin the address it binds", endpoint, host)
+	}
+}
+
+func hostOf(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	return parsed.Hostname(), nil
 }

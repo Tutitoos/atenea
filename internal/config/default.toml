@@ -99,6 +99,14 @@ runners = ["omp"]
   # rather than as a command, so this is a URL and not a binary. The port is
   # whatever the proxy was told to bind; leaving it unpinned is how you end up
   # with a URL that works until the next restart.
+  #
+  # The host is a literal address and NOT `localhost`, deliberately. The proxy
+  # binds 127.0.0.1 -- IPv4, and only IPv4 -- while `localhost` is a name whose
+  # answer belongs to the machine, not to Atenea. The day it resolves ::1 first,
+  # which is the default nearly everywhere and arrives on its own with a
+  # resolver update, a name here would start refusing connections with nothing
+  # on this side having changed. An address cannot be reinterpreted.
+  # See docs/content/diagnosing-providers.md.
   endpoint = "http://127.0.0.1:40010/mcp"
   # Implementations the adapter answers for. serena.search is deliberately NOT
   # here: this adapter is wired for the symbol capabilities, and claiming a
