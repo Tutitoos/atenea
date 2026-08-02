@@ -13,8 +13,8 @@ in the same pull request as the code.
 Status: alpha (`0.x.y`). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
-them in waves and reviews every answer. The far side of that dispatch is now a
-real client adapter driving the `omp` CLI, not a stand-in.
+them in waves and reviews every answer. Three adapters ship: two client CLIs
+(`omp`, Claude Code) for text search, and Serena over MCP for symbols.
 
 ## Why
 
@@ -45,6 +45,22 @@ Claude Code is the second client adapter. It is off by default because it is
 the only far side that costs money per call; `runners = ["omp", "claudecode"]`
 attaches both, and the funnel then ranks on cost, so a flat text search still
 goes to `ripgrep` and the model is kept for what only a model can answer.
+
+Symbols are the second family of capabilities: `symbol.definition`,
+`symbol.references` and `symbol.implementations`. They are answered by Serena,
+which is not a CLI at all but an MCP server behind a local proxy, so the third
+adapter speaks JSON-RPC over HTTP instead of spawning a process.
+
+```sh
+./bin/atenea ask symbol.definition --repo current \
+  --set file=internal/selector/selector.go --set line=118 --set column=18
+```
+
+`ask` is one capability against one repository — the atomic unit a workflow is
+built out of, and the way a client that already has a cursor hands it over.
+Atenea's contract names a *position* because that is what an editor has;
+Serena's API names a *symbol*. Reading the word under the cursor is the
+adapter's job, and the trace says which name it resolved to.
 
 ```text
 run       20260802T003739-e22d82
@@ -78,6 +94,7 @@ cmd/atenea/         entry point: the service and the operator commands
 internal/           the brain, not importable from outside
   adapter/claudecode/  the client adapter: translates for the Claude Code CLI
   adapter/omp/         the client adapter: translates for the omp CLI
+  adapter/serena/      the symbol adapter: MCP over HTTP, positions to names
   checkpoint/          run receipts on disk
   config/              the single settings file
   core/                wiring, status and clean shutdown

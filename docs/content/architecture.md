@@ -142,6 +142,21 @@ There is **one** agent contract, not two. An orchestrator and a specialist
 differ by a field, not by a type: two separate contracts would drift apart the
 first time one of them grew a field.
 
+### One capability, directly
+
+A workflow is several capabilities chained; the single capability is the atom
+those chains are made of. `atenea ask` dispatches exactly one, against exactly
+one repository, through the same funnel and the same review as any step of a
+commission — a second, quieter dispatch path would be a second set of rules to
+keep in step with the first.
+
+A commission with no repository means all of them, because the user excluded
+none. An `ask` cannot borrow that: a position belongs to one unit of work, and
+running it against the rest would answer about files that merely share a path.
+
+This is how a caller that already *has* a cursor hands it over. Exploring finds
+text, and a text hit is not a cursor.
+
 ### Look before you split
 
 ```text
@@ -195,15 +210,14 @@ writing and reaching outside the machine are not.
 ### The runner seam
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
-far side belongs to somebody else: a client adapter. Two ship — one drives
-`omp`, one drives the Claude Code CLI — and a local stand-in sits in the same
-place for a machine where no client is installed. One interface, several
-possible far sides, and swapping them changes nothing above the line.
+far side belongs to somebody else: an adapter. Three ship — one drives `omp`,
+one drives the Claude Code CLI, one speaks MCP to Serena — and a local stand-in
+sits in the same place for a machine where nothing is installed. One interface,
+several possible far sides, and swapping them changes nothing above the line.
 
-Several can be attached at once, because omp and Claude Code are both
-first-class clients. Each declares the implementations it answers for, the
-funnel picks an implementation without caring who runs it, and the wiring
-carries the request to whoever serves it. Two clients claiming the same
+Several can be attached at once. Each declares the implementations it answers
+for, the funnel picks an implementation without caring who runs it, and the
+wiring carries the request to whoever serves it. Two runners claiming the same
 implementation is refused at load rather than settled by declaration order.
 
 The far sides are not interchangeable in kind. `omp` answers a search with a
@@ -212,6 +226,8 @@ model turn, so the adapter has to ask precisely — the capability's own output
 shape becomes a JSON Schema the turn is held to — and then check the answer
 again, because a far side that thinks can report a file it was told to leave
 alone. Trusting the instruction alone would make the security design advisory.
+Serena is not a command at all: it is a server, so that adapter holds a session
+instead of spawning a process, and the difference stops at the seam.
 
 A runner that cannot reach a provider says so, and that is not a bug: it is a
 provider that is not reachable from here. The funnel drops it at the `reach`
@@ -232,8 +248,9 @@ The dump is deliberately narrow. It is a receipt, not a transcript.
 
 ## Adapters are dumb
 
-All the intelligence stays in the core. An adapter translates a request into its
-CLI's shape and translates the answer back, and that is all it does.
+All the intelligence stays in the core. An adapter translates a request into
+its far side's shape and translates the answer back, and that is all it does.
+The far side may be a CLI or a server; the seam does not care.
 
 The return path is the treacherous one, because every CLI phrases failure
 differently. Each adapter sorts its own errors into a handful of shared bins:
@@ -282,9 +299,38 @@ model turn, so the same capability needs a different kind of care at both ends.
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
 | Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill |
 
-Both adapters translate into the same six failure bins and the same output
+### What that costs in practice: the Serena adapter
+
+The third far side is not a command line at all. Serena is an MCP server behind
+a local proxy, so this adapter opens a session and speaks JSON-RPC over HTTP
+instead of spawning a process. That changes the mechanics and nothing else: the
+same six bins, the same declared output shape, the same funnel above it.
+
+The hard part is not the transport. Atenea's contract names a **position** —
+file, line, column — because that is what an editor has. Serena's API names a
+**symbol**. One of them has to give, and it is the adapter.
+
+| What Serena does | What the adapter does about it |
+| --- | --- |
+| Takes a name path, never a position | Reads the one line the caller pointed at and takes the word under the cursor, then asks about that name |
+| Its symbol overview carries no line numbers, and a wildcard search times out on a real repository | Neither is used; the file is read directly, which is one line instead of a project walk |
+| Numbers lines from 0 | Converts once, on the way out, in a function with a name so the off-by-one has one place to be wrong |
+| Answers references in a different shape from symbols, with the referring line marked in a rendered block | Parses that block, because the entry's own location is the *enclosing function* — the wrong answer to the question asked |
+| Keys references by path, and a map has no order | Sorts, so two identical commissions cannot answer the same thing shuffled |
+| Has no scope parameter for references | Narrows here, because a caller that asked about one directory and got the repository was answered a different question |
+| Holds one active project at a time | Serializes every exchange and activates once, since a second caller could otherwise retarget the server mid-answer |
+| Refuses requests its language server does not implement | Bins that as `unavailable`, so the funnel falls back to somebody who can |
+
+This is also the only adapter that opens a file to do its job, which makes the
+sensitive-path list load-bearing rather than advisory. Exploring skips those
+files in silence because a missed hit costs nothing; a caller pointing at one
+exact position inside one is refused out loud, because "nothing here" would be
+a lie.
+
+All three adapters translate into the same six failure bins and the same output
 shape. That is the whole point of the seam: the funnel above them ranks a tool
-call against a model turn without knowing that either exists.
+call against a model turn against a language server without knowing that any of
+them exists.
 
 ## Effects
 

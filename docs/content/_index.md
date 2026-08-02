@@ -27,12 +27,14 @@ what it knows about the repository in front of it.
 | **Implementation** | A concrete provider of a capability, in four blocks: capability, constraints, cost, health. |
 | **Repository** | The unit of work. Not the project — the repository. |
 | **Selector** | The funnel that picks an implementation: constraints, reach, health, then cost. |
-| **Adapter** | A dumb translator between the core and one CLI. All the intelligence stays in the core. |
+| **Adapter** | A dumb translator between the core and one far side — a CLI, or an MCP server. All the intelligence stays in the core. |
 
 ## Where the project stands
 
 Alpha, version `0.x.y`. The core, the Capability Registry and the funnel run on
-all four stages, and two client adapters ship: `omp` and Claude Code.
+all four stages. Three adapters ship: `omp` and Claude Code answer text search
+by driving a CLI, and Serena answers the three symbol capabilities by speaking
+MCP over HTTP.
 
 Cost ranks the survivors rather than filtering them, and it says which figure
 it used. Until an implementation has been measured a couple of times, that

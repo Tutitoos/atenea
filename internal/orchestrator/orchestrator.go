@@ -54,10 +54,27 @@ const (
 	PhaseExplore = "explore"
 	// PhaseWork is the split-up commission itself.
 	PhaseWork = "work"
+	// PhaseAsk is one capability, asked directly. Hoja 15 calls this the
+	// atomic base that workflows are built out of; Run is one such workflow,
+	// hard-wired. It is a phase of its own rather than a borrowed name so a
+	// receipt never claims a run explored or split when it did neither.
+	PhaseAsk = "ask"
 )
 
-// searchCapability is the single capability wired end to end in this brick.
+// searchCapability is what a commission is planned around: a text search is
+// how the orchestrator explores a repository and how it splits the work.
 const searchCapability = "code.search"
+
+// The symbol capabilities. The orchestrator does not plan a commission around
+// them -- it plans around a text search, which is brick 4's shape and stays --
+// but it declares them because declaring is what makes a step askable at all.
+// A capability the card does not name cannot be dispatched even when the
+// catalog, the funnel and a runner are all ready for it.
+const (
+	definitionCapability      = "symbol.definition"
+	referencesCapability      = "symbol.references"
+	implementationsCapability = "symbol.implementations"
+)
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
@@ -95,6 +112,9 @@ var card = contract.Agent{
 	Summary: "Explores the repositories in scope, splits the commission into a graph of steps and hands them out.",
 	Capabilities: []string{
 		searchCapability,
+		definitionCapability,
+		referencesCapability,
+		implementationsCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,
@@ -292,6 +312,98 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	result.Plan = plan
 
 	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record)
+	return result, err
+}
+
+// Question is one capability asked of one repository, with the payload the
+// caller already knows how to build.
+//
+// This is the atomic base of hoja 15: a workflow is several of these chained,
+// and Run is one such chain with its shape written into the code. Symbol
+// resolution arrives through here because a position is something the caller
+// has and the orchestrator does not -- exploring finds text, and a text hit is
+// not a cursor.
+type Question struct {
+	// Capability is what to ask for. It has to be on the card: a capability
+	// the agent does not declare cannot be dispatched, however ready the rest
+	// of the machinery is.
+	Capability string
+	// Repository is the unit of work. Unlike a commission this one is
+	// required: a symbol lives in exactly one repository, and asking every
+	// repository the same positional question would answer about files that
+	// merely share a path.
+	Repository string
+	// Payload is the capability's declared input. It is checked against the
+	// schema by the runner, not here: one gate, at the door it belongs to.
+	Payload map[string]any
+	// Effects the caller authorized beyond reading.
+	Effects []contract.Effect
+	// Session is the chat that asked, written to the receipt.
+	Session string
+}
+
+// Ask dispatches a single capability and returns the step that closed.
+//
+// It shares every mechanism with a commission -- the funnel picks the
+// implementation, the parent reviews the child, and the receipt is written
+// when the step closes and again when the run does. A second, quieter dispatch
+// path would be a second set of rules to keep in step with the first.
+func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error) {
+	capabilityID := strings.TrimSpace(q.Capability)
+	if capabilityID == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "ask: capability is required")
+	}
+	if strings.TrimSpace(q.Repository) == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"ask: repository is required; a position belongs to exactly one")
+	}
+	if a.runner == nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"no runner is attached, so nothing can be dispatched")
+	}
+	repositories, repoErr := a.resolveRepositories([]string{q.Repository})
+	if repoErr != nil {
+		return nil, repoErr
+	}
+
+	// The commission text is what a receipt is read back by, and there is no
+	// user sentence here. Saying what was actually asked beats leaving it
+	// blank or inventing prose nobody typed.
+	text := capabilityID + " in " + repositories[0].ID
+	started := time.Now()
+	result = &Result{RunID: checkpoint.NewID(started), Task: text}
+	record := checkpoint.Run{
+		ID: result.RunID, Session: q.Session, Task: text, Started: started,
+	}
+	defer func() {
+		result.Spent = totalSpent(result.Steps)
+		result.Verdict = overallVerdict(result.Steps)
+		result.Matches = countMatches(result.Steps)
+		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
+		record.Closed = true
+		record.Verdict = result.Verdict.String()
+		record.Updated = time.Now()
+		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
+			err = saveErr
+		}
+	}()
+
+	plan := contract.Plan{Task: text, Steps: []contract.Step{{
+		ID:         "ask-" + repositories[0].ID,
+		Capability: capabilityID,
+		Repository: repositories[0].ID,
+		Payload:    q.Payload,
+		Permission: contract.Permission{
+			Task:    text,
+			Effects: append([]contract.Effect{contract.EffectRead}, q.Effects...),
+		},
+	}}}
+	if err := plan.Validate(); err != nil {
+		return result, err
+	}
+	result.Plan = plan
+
+	_, err = a.dispatch(ctx, plan, PhaseAsk, result, &record)
 	return result, err
 }
 

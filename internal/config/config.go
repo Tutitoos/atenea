@@ -21,6 +21,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
+	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -71,6 +72,7 @@ type Orchestrator struct {
 	Local      LocalRunner
 	OMP        OMPAdapter
 	ClaudeCode ClaudeCodeAdapter
+	Serena     SerenaAdapter
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -115,6 +117,22 @@ type ClaudeCodeAdapter struct {
 	Timeout time.Duration
 }
 
+// SerenaAdapter configures the Serena adapter.
+//
+// Serena is the first far side that is not a CLI: it is an MCP server behind a
+// local proxy. Nothing above this line changes because of that -- a capability
+// does not care whether its provider is a command or a server, which is the
+// point of having the seam at all.
+type SerenaAdapter struct {
+	// Endpoint is where the MCP server is listening.
+	Endpoint string
+	// Implementations the adapter answers for.
+	Implementations []string
+	// Timeout caps one call. A language server indexing a cold repository is
+	// slow long before it is stuck.
+	Timeout time.Duration
+}
+
 // Security is the one place delicate files are declared.
 type Security struct {
 	// Sensitive holds the path patterns that carry secrets. Reading is free by
@@ -123,11 +141,12 @@ type Security struct {
 	Sensitive []string
 }
 
-// RunnerOMP, RunnerClaudeCode and RunnerLocal are the values
+// RunnerOMP, RunnerClaudeCode, RunnerSerena and RunnerLocal are the values
 // orchestrator.runners accepts.
 const (
 	RunnerOMP        = "omp"
 	RunnerClaudeCode = "claudecode"
+	RunnerSerena     = "serena"
 	RunnerLocal      = "local"
 )
 
@@ -226,6 +245,7 @@ type fileOrchestrator struct {
 	Local      fileLocalRunner       `toml:"local"`
 	OMP        fileOMPAdapter        `toml:"omp"`
 	ClaudeCode fileClaudeCodeAdapter `toml:"claudecode"`
+	Serena     fileSerenaAdapter     `toml:"serena"`
 }
 
 type fileLocalRunner struct {
@@ -244,6 +264,12 @@ type fileClaudeCodeAdapter struct {
 	Binary          string    `toml:"binary"`
 	Implementations *[]string `toml:"implementations"`
 	BudgetUSD       *float64  `toml:"budget_usd"`
+	Timeout         string    `toml:"timeout"`
+}
+
+type fileSerenaAdapter struct {
+	Endpoint        string    `toml:"endpoint"`
+	Implementations *[]string `toml:"implementations"`
 	Timeout         string    `toml:"timeout"`
 }
 
@@ -459,6 +485,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			BudgetUSD:       claudecode.DefaultBudgetUSD,
 			Timeout:         claudecode.DefaultTimeout,
 		},
+		Serena: SerenaAdapter{
+			Endpoint:        serena.DefaultEndpoint,
+			Implementations: serena.DefaultImplementations(),
+			Timeout:         serena.DefaultTimeout,
+		},
 	}
 	if o.MaxParallel != nil {
 		if *o.MaxParallel < 0 || *o.MaxParallel > maxMaxParallel {
@@ -473,11 +504,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerLocal:
+			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s",
-					source, name, RunnerOMP, RunnerClaudeCode, RunnerLocal)
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -513,6 +544,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.ClaudeCode = claude
+	symbols, err := o.Serena.build(source, out.Serena)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Serena = symbols
 	return out, nil
 }
 
@@ -577,6 +613,28 @@ func (c fileClaudeCodeAdapter) build(source string, out ClaudeCodeAdapter) (Clau
 		if timeout <= 0 {
 			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
 				"settings %s: orchestrator.claudecode.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	return out, nil
+}
+
+func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapter, error) {
+	if strings.TrimSpace(s.Endpoint) != "" {
+		out.Endpoint = strings.TrimSpace(s.Endpoint)
+	}
+	if s.Implementations != nil {
+		out.Implementations = *s.Implementations
+	}
+	if s.Timeout != "" {
+		timeout, err := time.ParseDuration(s.Timeout)
+		if err != nil {
+			return SerenaAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.timeout %q: %v", source, s.Timeout, err)
+		}
+		if timeout <= 0 {
+			return SerenaAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
 	}

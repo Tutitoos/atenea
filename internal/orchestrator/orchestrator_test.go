@@ -844,3 +844,94 @@ func TestCheckpointingOffLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("a run with checkpointing off still has to work: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ask: one capability, directly
+// ---------------------------------------------------------------------------
+
+// The atomic base of hoja 15. It shares every mechanism with a commission --
+// the funnel picks, the parent reviews, the receipt is written -- and these
+// tests are about the two rules that are its own.
+
+// A commission with no repository means every repository, because the user
+// excluded none. A direct ask cannot borrow that: a position belongs to
+// exactly one unit of work, and running it against the rest would answer about
+// files that merely share a path.
+func TestAskNeedsToKnowWhichRepository(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+
+	_, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search",
+		Payload:    map[string]any{"query": "x"},
+	})
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input; err = %v", contract.KindOf(err), err)
+	}
+}
+
+// The card is the gate, not the catalog. A capability the agent does not
+// declare is refused even when the registry knows it and a runner serves it,
+// because the card is what a client reads to find out what it may ask for.
+func TestAskRefusesWhatTheCardDoesNotDeclare(t *testing.T) {
+	agent, reg := build(t, &fakeRunner{}, 0, "")
+	undeclared := codeSearch()
+	undeclared.ID = "code.rewrite"
+	if err := reg.AddCapability(undeclared); err != nil {
+		t.Fatalf("AddCapability: %v", err)
+	}
+	if err := reg.AddImplementation(contract.Implementation{
+		ID: "rewriter", Provider: "rewriter", Capability: "code.rewrite",
+		Health: contract.Health{State: contract.HealthAlive, Score: 1},
+	}); err != nil {
+		t.Fatalf("AddImplementation: %v", err)
+	}
+	if agent.Card().CanAsk("code.rewrite") {
+		t.Fatal("the fixture card already declares the capability; the gate cannot be tested")
+	}
+
+	result, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.rewrite",
+		Repository: "api",
+		Payload:    map[string]any{"query": "x"},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	// The step closes failed rather than the call erroring: an undeclared
+	// capability is a bad step, and a bad step is reviewed like any other so
+	// the receipt records what was attempted.
+	if result.Verdict != contract.VerdictFailed {
+		t.Fatalf("verdict = %v, want failed", result.Verdict)
+	}
+	if len(result.Steps) != 1 || !strings.Contains(result.Steps[0].Failure, "code.rewrite") {
+		t.Fatalf("steps = %+v, want one naming the refused capability", result.Steps)
+	}
+}
+
+// The receipt says what happened, and what happened was an ask. Borrowing
+// "explore" would make a run claim it looked around when it did not.
+func TestAskIsItsOwnPhaseOnTheReceipt(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+
+	result, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search",
+		Repository: "api",
+		Payload:    map[string]any{"query": "x"},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result.Verdict != contract.VerdictOK {
+		t.Fatalf("verdict = %v, want ok", result.Verdict)
+	}
+	if len(result.Phases) != 1 || result.Phases[0].Name != orchestrator.PhaseAsk {
+		t.Fatalf("phases = %+v, want one named %q", result.Phases, orchestrator.PhaseAsk)
+	}
+	if len(result.Steps) != 1 || result.Steps[0].Step.Repository != "api" {
+		t.Fatalf("steps = %+v, want one against api", result.Steps)
+	}
+	// One repository was asked, so the other one was left alone.
+	if got := result.Steps[0].Decision.Repository; got != "api" {
+		t.Errorf("the funnel was consulted for %q, want api", got)
+	}
+}

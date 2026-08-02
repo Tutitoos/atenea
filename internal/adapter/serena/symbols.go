@@ -1,0 +1,373 @@
+package serena
+
+// Turning Atenea's coordinates into Serena's names, and Serena's answers back
+// into Atenea's shape.
+//
+// Two coordinate systems meet here and they disagree about everything. Atenea
+// counts lines and columns from 1, because that is what an editor shows and
+// what the capability declares. Serena counts from 0. Atenea names a symbol by
+// where it sits; Serena names it by what it is called. Every conversion lives
+// in this file so the disagreement has exactly one place to be wrong.
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// maxLineBytes caps one line read out of a source file. A minified bundle or a
+// checked-in blob is not something to pull into memory whole just to find the
+// word under a cursor.
+const maxLineBytes = 1 << 20
+
+// symbol is one entry of a find_symbol answer, in Serena's words.
+type symbol struct {
+	NamePath string `json:"name_path"`
+	Kind     string `json:"kind"`
+	Path     string `json:"relative_path"`
+	Body     string `json:"body"`
+	Location struct {
+		// Both are 0-based. See toContractLine: they are converted once, on
+		// the way out, and nowhere else.
+		StartLine int `json:"start_line"`
+		EndLine   int `json:"end_line"`
+	} `json:"body_location"`
+}
+
+// toContractLine converts one of Serena's 0-based lines into the 1-based line
+// the capability declares. It is a function and not an inline `+1` so that the
+// off-by-one has a name, a comment and one place to be tested.
+func toContractLine(serenaLine int) int { return serenaLine + 1 }
+
+// covers reports whether the symbol's body contains a 1-based contract line.
+func (s symbol) covers(line int) bool {
+	return toContractLine(s.Location.StartLine) <= line &&
+		line <= toContractLine(s.Location.EndLine)
+}
+
+// parseSymbols reads a find_symbol answer: a JSON array of symbols.
+func parseSymbols(text string) ([]symbol, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, nil
+	}
+	var out []symbol
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return nil, fmt.Errorf("serena sent a symbol list nobody can read: %s", clip(trimmed))
+	}
+	return out, nil
+}
+
+// parseReferences reads a find_referencing_symbols answer, which is a
+// different shape from find_symbol's on purpose: path -> kind -> entries.
+//
+// The location that matters is NOT the entry's body_location. That is the
+// enclosing symbol -- the function doing the referring -- and returning it
+// would point the caller at a definition it did not ask about. The reference
+// itself is the line Serena marks with ">" in the rendered context, so that is
+// what gets parsed out.
+func parseReferences(text string) ([]location, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || trimmed == "{}" {
+		return nil, nil
+	}
+	var byPath map[string]map[string][]struct {
+		NamePath string `json:"name_path"`
+		Location struct {
+			StartLine int `json:"start_line"`
+		} `json:"body_location"`
+		Around string `json:"content_around_reference"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &byPath); err != nil {
+		return nil, fmt.Errorf("serena sent references nobody can read: %s", clip(trimmed))
+	}
+	var out []location
+	for path, byKind := range byPath {
+		for _, entries := range byKind {
+			for _, entry := range entries {
+				line, snippet, ok := markedLine(entry.Around)
+				if !ok {
+					// No marker: the enclosing symbol is all Serena gave, so
+					// that is what is reported. Silently dropping the hit
+					// would lose a real reference; pretending to know the
+					// exact line would invent one.
+					line = toContractLine(entry.Location.StartLine)
+					snippet = strings.TrimSpace(entry.Around)
+				}
+				out = append(out, location{Path: path, Line: line, Snippet: snippet})
+			}
+		}
+	}
+	// Serena hands references back keyed by path, and a Go map has no order.
+	// Two identical commissions returning the same locations shuffled would
+	// make every answer unreproducible and every diff of two runs noise.
+	slices.SortFunc(out, func(a, b location) int {
+		if c := strings.Compare(a.Path, b.Path); c != 0 {
+			return c
+		}
+		return a.Line - b.Line
+	})
+	return out, nil
+}
+
+// markedLine pulls the reference out of Serena's rendered context block, which
+// looks like:
+//
+//	...   7:def twice():
+//	  >   8:    return total() * 2
+//	...   9:
+//
+// The ">" marks the referring line and the numbers are 0-based, like every
+// other line number Serena reports.
+func markedLine(around string) (int, string, bool) {
+	for _, raw := range strings.Split(around, "\n") {
+		rest, found := strings.CutPrefix(strings.TrimSpace(raw), ">")
+		if !found {
+			continue
+		}
+		number, text, split := strings.Cut(strings.TrimSpace(rest), ":")
+		if !split {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(number))
+		if err != nil {
+			continue
+		}
+		return toContractLine(n), strings.TrimSpace(text), true
+	}
+	return 0, "", false
+}
+
+// locationsFrom turns symbols into the capability's locations.
+func locationsFrom(symbols []symbol, a ask) []location {
+	out := make([]location, 0, len(symbols))
+	for _, s := range symbols {
+		loc := location{Path: s.Path, Line: toContractLine(s.Location.StartLine)}
+		if a.snippet {
+			loc.Snippet = trimToLines(s.Body, a.lines)
+		}
+		out = append(out, loc)
+	}
+	return out
+}
+
+// trimToLines honors "small by default, expandable": the caller said how much
+// of a definition it wanted and a provider that returned a thousand-line class
+// would have answered a different question.
+func trimToLines(body string, lines int) string {
+	if body == "" || lines <= 0 {
+		return body
+	}
+	split := strings.Split(body, "\n")
+	if len(split) <= lines {
+		return body
+	}
+	return strings.Join(split[:lines], "\n")
+}
+
+// pick chooses which candidate the position meant.
+//
+// This is the whole reason the capability names a symbol by position: a file
+// can hold several symbols with the same leaf name, and the design chose
+// position precisely because it is unambiguous where a name is not. One
+// candidate needs no choosing. Several, with the position inside one of them,
+// is the case position exists for. Several with the position inside none is
+// genuinely unresolved, and saying so beats guessing -- a wrong symbol answers
+// a question nobody asked and looks exactly like a right one.
+func pick(candidates []symbol, a ask) (symbol, error) {
+	switch len(candidates) {
+	case 0:
+		return symbol{}, contract.Fail(contract.FailureNotFound,
+			"serena knows no symbol named %q in %s", a.identifier, a.file)
+	case 1:
+		return candidates[0], nil
+	}
+	var covering []symbol
+	for _, candidate := range candidates {
+		if candidate.covers(a.line) {
+			covering = append(covering, candidate)
+		}
+	}
+	if len(covering) == 1 {
+		return covering[0], nil
+	}
+	if len(covering) > 1 {
+		// Nested symbols both cover the line -- a method inside a class, say.
+		// The innermost one is the one the cursor is actually on.
+		best := covering[0]
+		for _, candidate := range covering[1:] {
+			if candidate.Location.StartLine > best.Location.StartLine {
+				best = candidate
+			}
+		}
+		return best, nil
+	}
+	names := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		names = append(names, candidate.NamePath)
+	}
+	return symbol{}, contract.Fail(contract.FailureInvalidInput,
+		"%s:%d:%d names %q, which is any of %s here; the position is inside none of them",
+		a.file, a.line, a.column, a.identifier, strings.Join(names, ", "))
+}
+
+// identifierAt reads the one word the caller pointed at.
+//
+// This is the only place any adapter touches the filesystem, and it is the
+// smallest thing that could work: one line, one word, no syntax. Serena names
+// symbols and Atenea names positions, and something has to know which word
+// sits at a position. Asking Serena is not an option -- its symbol overview
+// carries no line numbers, and its wildcard search times out on a real
+// repository. Both were measured, not assumed.
+//
+// The read stays inside the repository. That is not politeness: a step carries
+// permission for the unit of work it was commissioned against, and a path that
+// climbs out of it -- with .., with an absolute path, or through a symlink --
+// is reading something nobody authorized.
+func identifierAt(r *Runner, root string, a ask) (string, error) {
+	if r.isSensitive(a.file) {
+		// Exploring skips these in silence because a skipped hit costs
+		// nothing. This is not exploring: a caller asked about one exact
+		// position, and answering "nothing found" would be a lie. It is
+		// refused out loud instead.
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"%s carries secrets and is not read", a.file)
+	}
+	path, err := within(root, a.file)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", contract.Fail(contract.FailureNotFound,
+				"%s is not in this repository", a.file)
+		}
+		return "", contract.Fail(contract.FailureUnavailable,
+			"cannot read %s: %v", a.file, err)
+	}
+	// Nothing was written, so a failed close has nothing to report.
+	defer func() { _ = file.Close() }()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	for n := 1; scanner.Scan(); n++ {
+		if n != a.line {
+			continue
+		}
+		return wordAt(scanner.Text(), a.column, a)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", contract.Fail(contract.FailureUnavailable,
+			"cannot read %s: %v", a.file, err)
+	}
+	return "", contract.Fail(contract.FailureInvalidInput,
+		"%s has fewer than %d line(s)", a.file, a.line)
+}
+
+// isSensitive matches the patterns against both the bare file name and the
+// repository-relative path, so `.env` catches a root file and `config/*.pem`
+// catches a nested one. Same rule as the other two adapters: one security
+// design, applied the same way wherever a file is touched.
+func (r *Runner) isSensitive(relative string) bool {
+	name := path.Base(relative)
+	for _, pattern := range r.sensitive {
+		if ok, _ := path.Match(pattern, relative); ok {
+			return true
+		}
+		if ok, _ := path.Match(pattern, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// within resolves a repository-relative path and refuses anything that leaves
+// the repository, symlinks included.
+func within(root, name string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = filepath.Clean(root)
+	}
+	joined := filepath.Clean(filepath.Join(realRoot, name))
+	// The lexical check comes first so a path that never existed is still
+	// refused for the right reason rather than as a missing file.
+	if err := contained(realRoot, joined, name); err != nil {
+		return "", err
+	}
+	// Then the real one. A symlink inside the repository pointing out of it
+	// passes every string test there is, and following it would read a file
+	// the commission never covered.
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing to resolve: the file is simply not there, which the
+			// caller finds out when it opens it and reports as not_found.
+			return joined, nil
+		}
+		// Anything else means containment could not be verified. Failing open
+		// on the check that keeps a read inside the commission would defeat
+		// the point of having it.
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"file %q cannot be checked against the repository: %v", name, err)
+	}
+	if err := contained(realRoot, resolved, name); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func contained(root, path, name string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"file %q leaves the repository", name)
+	}
+	return nil
+}
+
+// wordAt extracts the identifier sitting at a 1-based column.
+//
+// Identifier here means what every language this provider supports agrees on:
+// letters, digits and underscore. It is lexical on purpose. An adapter that
+// started deciding what is a type and what is a variable would be a second
+// brain, and there is only supposed to be one.
+func wordAt(line string, column int, a ask) (string, error) {
+	runes := []rune(line)
+	index := column - 1
+	if index >= len(runes) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"%s:%d has %d column(s), so column %d is past its end",
+			a.file, a.line, len(runes), column)
+	}
+	if !isWord(runes[index]) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"%s:%d:%d is %q, which is not part of a name",
+			a.file, a.line, column, string(runes[index]))
+	}
+	start := index
+	for start > 0 && isWord(runes[start-1]) {
+		start--
+	}
+	end := index
+	for end+1 < len(runes) && isWord(runes[end+1]) {
+		end++
+	}
+	return string(runes[start : end+1]), nil
+}
+
+func isWord(r rune) bool {
+	return r == '_' ||
+		(r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r > 127 // identifiers are not ASCII-only in Go, Python or TypeScript
+}

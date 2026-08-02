@@ -49,6 +49,36 @@ through a tool than through a model. Claude Code wins when the cheaper
 providers cannot work on that repository or are down — and a `[[selector.rule]]`
 will hand it the work outright when you want it.
 
+### Attaching Serena for symbols
+
+Serena answers `symbol.definition`, `symbol.references` and
+`symbol.implementations`. It is not a CLI: it runs as an MCP server behind a
+local proxy, so the setting is a URL rather than a binary.
+
+```toml
+[orchestrator]
+runners = ["omp", "serena"]
+
+  [orchestrator.serena]
+  endpoint = "http://127.0.0.1:40010/mcp"
+```
+
+Two things have to be true for the funnel to reach it. Serena drives one
+language server per language, so the repository's `languages` must be among the
+ones the implementation declares; and it is useless on a repository it has not
+indexed, so name it in `indexed_by`:
+
+```toml
+[[repository]]
+id = "current"
+path = "."
+languages = ["go"]
+indexed_by = ["serena"]
+```
+
+Miss either and the funnel drops it at `reach` or `constraints` and says which
+— a provider nobody wired up is not a provider that is broken.
+
 ## Write your own settings
 
 ```sh
@@ -151,6 +181,52 @@ reports more hits and no `scope` line.
 
 `--repo` narrows the commission; repeat it for several. Every run leaves a
 receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.
+
+## Ask for one capability
+
+`task` is a commission: explore, split, dispatch. `ask` is the atom underneath
+it — one capability, one repository, no planning:
+
+```sh
+./bin/atenea ask symbol.definition --repo current \
+  --set file=internal/selector/selector.go --set line=118 --set column=18
+```
+
+```text
+run       20260802T132043-9f7e98
+task      symbol.definition in current
+verdict   ok
+spent     41ms over 1 step(s)
+  ask      1 step(s), 41ms
+
+discovered
+  [repository] position internal/selector/selector.go:118:18 names "Select", which is symbol Selector/Select
+  [repository] serena answered symbol.definition for current with 1 location(s)
+
+answer
+  location
+    line     118
+    path     internal/selector/selector.go
+```
+
+`--set` takes `name=value` and is typed by the capability's own declaration:
+`line` is an integer because the capability says so, and a value that is not
+one is refused before anything is dispatched. Repeat it for a list field, and
+repeat the flag for each entry:
+
+```sh
+./bin/atenea ask symbol.references --repo current \
+  --set file=pkg/contract/capability.go --set line=140 --set column=6 \
+  --set scope=internal --set scope=cmd
+```
+
+There is no `matches` line: a commission counts hits across repositories, an
+ask has an answer. Printing a zero nobody counted would read as "found
+nothing" rather than "did not count".
+
+The trace names the symbol the position resolved to. That is not decoration:
+Atenea speaks positions and Serena speaks symbols, so the answer cannot be
+checked against the question without it.
 
 ## Run it as a service
 

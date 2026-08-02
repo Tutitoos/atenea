@@ -25,14 +25,27 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	if cfg.Core.ShutdownGrace != 10*time.Second {
 		t.Errorf("ShutdownGrace = %v", cfg.Core.ShutdownGrace)
 	}
-	if len(cfg.Capabilities) != 1 || cfg.Capabilities[0].ID != "code.search" {
-		t.Fatalf("capabilities = %+v, want the single P0 capability", cfg.Capabilities)
+	// By name, not by count, and the same for the implementations below: a
+	// bare number says nothing about which entry went missing when it changes.
+	ids := make([]string, len(cfg.Capabilities))
+	for i, capability := range cfg.Capabilities {
+		ids[i] = capability.ID
+	}
+	slices.Sort(ids)
+	wantIDs := []string{"code.search", "symbol.definition", "symbol.implementations", "symbol.references"}
+	if !slices.Equal(ids, wantIDs) {
+		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
+	}
+
+	// The symbol three are read-only like the search: none of them may ship
+	// declaring an effect that lets a provider write.
+	for _, capability := range cfg.Capabilities {
+		if len(capability.Effects) != 1 || capability.Effects[0] != contract.EffectRead {
+			t.Errorf("%s effects = %v, want read", capability.ID, capability.Effects)
+		}
 	}
 
 	capability := cfg.Capabilities[0]
-	if len(capability.Effects) != 1 || capability.Effects[0] != contract.EffectRead {
-		t.Errorf("effects = %v, want read", capability.Effects)
-	}
 	// The output shape from the design: a list of records, each with a path and
 	// a line number.
 	matches := capability.Outputs[0]
@@ -45,14 +58,20 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		t.Errorf("the declared output shape rejects a valid payload: %v", err)
 	}
 
-	// By name, not by count: a bare number says nothing about which provider
-	// went missing when it changes.
 	shipped := make([]string, len(cfg.Implementations))
 	for i, impl := range cfg.Implementations {
 		shipped[i] = impl.ID
 	}
 	slices.Sort(shipped)
-	want := []string{"claude.search", "codebase-memory.search", "ripgrep", "serena.search"}
+	want := []string{
+		"claude.search",
+		"codebase-memory.search",
+		"ripgrep",
+		"serena.definition",
+		"serena.implementations",
+		"serena.references",
+		"serena.search",
+	}
 	if !slices.Equal(shipped, want) {
 		t.Fatalf("implementations = %v, want %v", shipped, want)
 	}

@@ -30,7 +30,7 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```toml
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
-runners = ["omp"]           # any of omp, claudecode, local; [] dispatches nowhere
+runners = ["omp"]           # any of omp, claudecode, serena, local; [] dispatches nowhere
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.omp]
@@ -48,16 +48,23 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
   budget_usd = 0.25                    # what one call may spend before it is cut
   timeout = "5m"                       # a model turn is slower than a tool call
+
+  [orchestrator.serena]
+  endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
+  implementations = ["serena.definition", "serena.references", "serena.implementations"]
+  timeout = "90s"                      # a language server indexing cold is slow, not stuck
 ```
 
 `max_parallel` is the real brake on total memory: four steps of one wave run at
 a time so a laptop stays responsive. `0` means no ceiling, which is a choice
 for a build machine, not a default.
 
-`runners` names the far sides of the contract, and it is a list because omp and
-Claude Code are both first-class clients that can be attached at once. `omp` is
-the adapter that ships. `claudecode` drives the Claude Code CLI and is off by
-default, because it is the only far side that costs money per call. `local` is
+`runners` names the far sides of the contract, and it is a list because several
+can be attached at once. `omp` is the client adapter that ships attached.
+`claudecode` drives the Claude Code CLI and is off by default, because it is
+the only far side that costs money per call. `serena` is not a CLI at all: it
+is an MCP server, which is why its block takes a URL instead of a binary, and
+it answers the three symbol capabilities rather than a text search. `local` is
 a stand-in that searches the disk directly, for a machine with no client
 installed. An empty list leaves the core able to plan and choose but unable to
 dispatch — a working core with nobody attached, and the status screen says so
@@ -99,6 +106,12 @@ A single list of paths and patterns governs what is never read, matched against
 both the file name and its repository-relative path. Sensitive files are
 skipped in silence: a search that reported "1 match in .env" would leak the
 very thing the list exists to protect.
+
+There is one exception, and it is the opposite of silence. A symbol lookup
+points at one exact position, so the adapter has to open that file to read the
+word under the cursor. Skipping a search hit costs the caller nothing; telling
+someone who named a line that there is nothing there would be a lie. That is
+refused out loud, as `permission_denied`.
 
 Declaring it in one place is the point. The moment the answer to "is this
 sensitive?" lives in several files, it starts differing between them.

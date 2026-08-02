@@ -29,18 +29,21 @@ checkpoints = true
 # Empty means $XDG_STATE_HOME/atenea/runs, or ~/.local/state/atenea/runs.
 checkpoint_dir = ""
 
-# Who actually executes a step: any of "omp", "claudecode" and "local".
+# Who actually executes a step: any of "omp", "claudecode", "serena" and
+# "local".
 #
 # Atenea decides and delegates, so execution always happens on the far side of
-# this line, and that far side is a client adapter: a dumb translator with no
-# logic of its own. It is a list because omp and Claude Code are both
-# first-class clients and can be attached at once; each answers for its own
+# this line, and that far side is an adapter: a dumb translator with no logic
+# of its own. It is a list because omp and Claude Code are both first-class
+# clients and can be attached at once; each answers for its own
 # implementations, and two of them claiming the same one is refused at load.
 #
 # "omp" is the adapter that ships. "claudecode" drives the Claude Code CLI and
-# is off by default because it costs money per call. "local" is a stand-in that
-# searches the disk directly, for a machine with no client installed. An empty
-# list leaves the core able to plan and choose, with nothing to dispatch to.
+# is off by default because it costs money per call. "serena" is not a CLI at
+# all: it is an MCP server, attached the same way because a capability does not
+# care whether its provider is a command or a server. "local" is a stand-in
+# that searches the disk directly, for a machine with no client installed. An
+# empty list leaves the core able to plan and choose, with nothing to dispatch.
 runners = ["omp"]
 
   [orchestrator.omp]
@@ -79,6 +82,22 @@ runners = ["omp"]
   # nature, so this sits far above omp's ceiling; past it the turn is stuck
   # rather than thinking, and the timeout bin is what lets the core fall back.
   timeout = "5m"
+
+  [orchestrator.serena]
+  # Where Serena is listening. It runs as an MCP server behind a local proxy
+  # rather than as a command, so this is a URL and not a binary. The port is
+  # whatever the proxy was told to bind; leaving it unpinned is how you end up
+  # with a URL that works until the next restart.
+  endpoint = "http://127.0.0.1:40010/mcp"
+  # Implementations the adapter answers for. serena.search is deliberately NOT
+  # here: this adapter is wired for the symbol capabilities, and claiming a
+  # text search it has no code for would make the funnel promise an answer
+  # nobody can give.
+  implementations = ["serena.definition", "serena.references", "serena.implementations"]
+  # How long one call may take. A language server that has to index a cold
+  # repository is slow long before it is stuck, so this sits above omp's
+  # ceiling and well below a model turn's.
+  timeout = "90s"
 
   [orchestrator.local]
   # Implementations the stand-in answers for.
@@ -198,6 +217,241 @@ effects = ["read"]
     required = false
     summary = "The matching line with its surrounding context."
 
+[[capability]]
+id = "symbol.definition"
+version = "1.0.0"
+summary = "From a symbol, find the one place where it is born."
+semantics = """
+Where a symbol is DEFINED, not where it is mentioned -- that second question is \
+code.search's, and answering this one with a text match would be a different \
+answer wearing the same name. The symbol is given by POSITION: a workspace of \
+forty repositories holds the same name many times over, and a position is \
+unambiguous where a name is not. The name is a hint -- it breaks a tie and it \
+makes the request readable -- and an implementation may ignore it. The location \
+always comes back; the fragment only when asked, so a caller that needs to read \
+the definition does not pay a second round trip for it.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File holding the symbol, relative to the repository root."
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+  summary = "Line where the symbol appears, starting at 1."
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+  summary = "Column where the symbol starts on that line, starting at 1."
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: return the definition itself, not only where it is."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "How much of the definition to return. Small by default, on purpose."
+
+  [[capability.output]]
+  name = "location"
+  type = "record"
+  required = true
+  summary = "Where the symbol is defined."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the definition, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the definition starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The definition itself, present only when it was asked for."
+
+[[capability]]
+id = "symbol.references"
+version = "1.0.0"
+summary = "From a symbol, find every place it is used."
+semantics = """
+Every site that USES or mentions the symbol, which is the opposite direction \
+from symbol.definition and inherits its way of naming one: position first, name \
+as a hint. The one thing it adds is scope, and it is not decoration -- with \
+forty repositories a question asked without one drowns the caller in hundreds \
+of hits. Empty scope means the whole repository, deliberately, so the default \
+is honest rather than quietly narrow.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File holding the symbol, relative to the repository root."
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+  summary = "Line where the symbol appears, starting at 1."
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+  summary = "Column where the symbol starts on that line, starting at 1."
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Paths to look in. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: return the line at each use site, not only where it is."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "How much to return around each use. Small by default, on purpose."
+
+  [[capability.output]]
+  name = "locations"
+  type = "record_list"
+  required = true
+  summary = "Every place the symbol is used, in the order the provider found them."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the use, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line of the use, starting at 1."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The line at the use site, present only when it was asked for."
+
+[[capability]]
+id = "symbol.implementations"
+version = "1.0.0"
+summary = "From something abstract, find who really implements it."
+semantics = """
+Given an interface or an overridable method, the concrete implementations \
+behind it. Same mould as symbol.references down to the last field, because the \
+question is shaped the same way and only its meaning changes: not who mentions \
+this, but who fulfils it. Asking it of something concrete is not an error, it \
+is an empty answer.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File holding the symbol, relative to the repository root."
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+  summary = "Line where the symbol appears, starting at 1."
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+  summary = "Column where the symbol starts on that line, starting at 1."
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Paths to look in. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: return the line at each implementation, not only where it is."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "How much to return around each implementation. Small by default."
+
+  [[capability.output]]
+  name = "locations"
+  type = "record_list"
+  required = true
+  summary = "Every concrete implementation, in the order the provider found them."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the implementation, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the implementation starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The line at the implementation, present only when it was asked for."
+
 # ---------------------------------------------------------------------------
 # Implementations: the "who and how". Four blocks each -- capability,
 # constraints, cost and health.
@@ -270,6 +524,63 @@ capability = "code.search"
   # cheaper providers are unhealthy or cannot work here at all.
   estimated_duration = "12s"
   estimated_tokens = 20000
+
+# The three symbol implementations share a provider, and therefore share an
+# index and a language list. Serena drives a language server per language: it
+# understands only the ones it has a server for, and it is useless on a
+# repository it has not indexed. Both facts are constraints, so both live here
+# and not in the capability -- a capability that grew a language list would
+# stop being swappable, which is the whole point of having one.
+#
+# The cost of all three is one activation plus two round trips: the adapter
+# turns the position the capability speaks into the name path Serena speaks,
+# and it asks Serena itself to do it rather than parsing code on its own.
+
+[[implementation]]
+id = "serena.definition"
+provider = "serena"
+capability = "symbol.definition"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "700ms"
+  estimated_tokens = 500
+
+[[implementation]]
+id = "serena.references"
+provider = "serena"
+capability = "symbol.references"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Dearer than a definition: one answer versus every use site in the scope.
+  estimated_duration = "1.5s"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "serena.implementations"
+provider = "serena"
+capability = "symbol.implementations"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "1.5s"
+  estimated_tokens = 1200
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
+	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -142,6 +143,13 @@ func buildRunner(name string, cfg config.Config) (contract.Runner, error) {
 			Sensitive:       cfg.Security.Sensitive,
 			BudgetUSD:       cfg.Orchestrator.ClaudeCode.BudgetUSD,
 			Timeout:         cfg.Orchestrator.ClaudeCode.Timeout,
+		})
+	case config.RunnerSerena:
+		return serena.New(serena.Options{
+			Endpoint:        cfg.Orchestrator.Serena.Endpoint,
+			Implementations: cfg.Orchestrator.Serena.Implementations,
+			Sensitive:       cfg.Security.Sensitive,
+			Timeout:         cfg.Orchestrator.Serena.Timeout,
 		})
 	case config.RunnerLocal:
 		return local.New(local.Options{
@@ -323,6 +331,16 @@ func (c *Core) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Re
 	}
 	defer c.inflight.Done()
 	return c.agent.Run(ctx, task)
+}
+
+// Ask dispatches one capability against one repository, with the same
+// in-flight bookkeeping a commission gets: a clean stop waits for it too.
+func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (*orchestrator.Result, error) {
+	if err := c.enter(); err != nil {
+		return nil, err
+	}
+	defer c.inflight.Done()
+	return c.agent.Ask(ctx, q)
 }
 
 // enter registers a unit of in-flight work, refusing it once a stop is under

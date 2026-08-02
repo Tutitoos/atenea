@@ -11,8 +11,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +37,7 @@ Commands:
   status                 Short health screen: one light for Atenea, one per provider
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator
+  ask CAPABILITY         Dispatch one capability against one repository
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
   config init            Write the built-in settings file to disk
@@ -114,6 +118,8 @@ func run(args []string, out io.Writer) error {
 		return cmdSelect(settingsPath, commandArgs, out)
 	case "task":
 		return cmdTask(settingsPath, commandArgs, out)
+	case "ask":
+		return cmdAsk(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
 	case "config":
@@ -363,6 +369,184 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	return nil
 }
 
+// cmdAsk dispatches one capability. It is the atomic base a workflow is built
+// out of, and the only way a caller who already has a position -- an editor,
+// a client with a cursor -- can hand it over: exploring finds text, and a text
+// hit is not a cursor.
+func cmdAsk(settingsPath string, args []string, out io.Writer) error {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			`ask needs the capability first, e.g. atenea ask symbol.definition --repo current --set file=main.go --set line=12 --set column=6`)
+	}
+	capabilityID, args := strings.TrimSpace(args[0]), args[1:]
+
+	var fields fieldList
+	var repository string
+	var trace bool
+	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&repository, "repo", "", "repository to ask about (required when several are registered)")
+	flags.Var(&fields, "set", "payload field as name=value; repeat for several")
+	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"unexpected argument %q after the capability", flags.Arg(0))
+	}
+
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	capability, err := atenea.Registry().Capability(capabilityID)
+	if err != nil {
+		return err
+	}
+	// The capability's own declaration is what types the payload. A parser of
+	// its own here would be a second schema to keep in step with the first,
+	// and it would be wrong the moment a capability gains a field.
+	payload, err := fields.payload(capability)
+	if err != nil {
+		return err
+	}
+	if repository == "" {
+		repos := atenea.Registry().Repositories()
+		if len(repos) != 1 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"--repo is required: %d repositories are registered", len(repos))
+		}
+		repository = repos[0].ID
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	result, runErr := atenea.Ask(ctx, orchestrator.Question{
+		Capability: capabilityID,
+		Repository: repository,
+		Payload:    payload,
+	})
+	if result != nil {
+		printResult(out, result, trace)
+		printAnswer(out, result)
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if result != nil && result.Verdict != contract.VerdictOK {
+		return errCommissionFailed
+	}
+	return nil
+}
+
+// printAnswer shows what came back. A commission reports how many matches it
+// found because that is all a caller can act on across several repositories;
+// one capability against one repository has an actual answer, and hiding it
+// behind a run receipt would make the verb useless.
+func printAnswer(out io.Writer, result *orchestrator.Result) {
+	if len(result.Steps) != 1 {
+		return
+	}
+	step := result.Steps[0]
+	if step.Review.Parent != contract.VerdictOK {
+		return
+	}
+	fmt.Fprintf(out, "\nanswer\n")
+	for _, name := range slices.Sorted(maps.Keys(step.Outcome.Result)) {
+		printValue(out, "  ", name, step.Outcome.Result[name])
+	}
+}
+
+func printValue(out io.Writer, indent, name string, value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		fmt.Fprintf(out, "%s%s\n", indent, name)
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			printValue(out, indent+"  ", key, typed[key])
+		}
+	case []any:
+		fmt.Fprintf(out, "%s%s (%d)\n", indent, name, len(typed))
+		for i, item := range typed {
+			printValue(out, indent+"  ", strconv.Itoa(i+1), item)
+		}
+	default:
+		fmt.Fprintf(out, "%s%-8s %v\n", indent, name, value)
+	}
+}
+
+// fieldList collects a repeated --set flag and types it against a capability.
+type fieldList []string
+
+func (f *fieldList) String() string     { return strings.Join(*f, ",") }
+func (f *fieldList) Set(v string) error { *f = append(*f, v); return nil }
+
+func (f fieldList) payload(capability contract.Capability) (map[string]any, error) {
+	declared := make(map[string]contract.Field, len(capability.Inputs))
+	for _, field := range capability.Inputs {
+		declared[field.Name] = field
+	}
+	out := make(map[string]any, len(f))
+	for _, entry := range f {
+		name, raw, found := strings.Cut(entry, "=")
+		if !found {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"--set %q is not name=value", entry)
+		}
+		name = strings.TrimSpace(name)
+		field, known := declared[name]
+		if !known {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"%s has no input named %q", capability.ID, name)
+		}
+		value, err := coerce(field, raw)
+		if err != nil {
+			return nil, err
+		}
+		// A repeated name builds a list rather than overwriting: that is the
+		// only way --set scope=a --set scope=b can mean both.
+		if previous, seen := out[name]; seen {
+			if field.Type != contract.TypeStringList {
+				return nil, contract.Fail(contract.FailureInvalidInput,
+					"%s: %s was given twice and is not a list", capability.ID, name)
+			}
+			out[name] = append(previous.([]any), value.([]any)...)
+			continue
+		}
+		out[name] = value
+	}
+	return out, nil
+}
+
+func coerce(field contract.Field, raw string) (any, error) {
+	switch field.Type {
+	case contract.TypeString:
+		return raw, nil
+	case contract.TypeInt:
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"%s must be a whole number, got %q", field.Name, raw)
+		}
+		return n, nil
+	case contract.TypeBool:
+		b, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"%s must be true or false, got %q", field.Name, raw)
+		}
+		return b, nil
+	case contract.TypeStringList:
+		return []any{raw}, nil
+	default:
+		// Records are a shape a shell cannot express without becoming a JSON
+		// parser. Refusing is honest; a half-parser would be worse.
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"%s is a %s, which --set cannot express", field.Name, field.Type)
+	}
+}
+
 // repoList collects a repeated --repo flag.
 type repoList []string
 
@@ -373,7 +557,14 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 	fmt.Fprintf(out, "run       %s\n", result.RunID)
 	fmt.Fprintf(out, "task      %s\n", result.Task)
 	fmt.Fprintf(out, "verdict   %s\n", result.Verdict)
-	fmt.Fprintf(out, "matches   %d\n", result.Matches)
+	// Matches are counted out of the split-up commission. A direct ask has an
+	// answer rather than a tally, and printing a zero nobody measured would
+	// read as "found nothing" instead of "did not count".
+	if slices.ContainsFunc(result.Phases, func(p orchestrator.Phase) bool {
+		return p.Name == orchestrator.PhaseWork
+	}) {
+		fmt.Fprintf(out, "matches   %d\n", result.Matches)
+	}
 	fmt.Fprintf(out, "spent     %s over %d step(s)\n",
 		result.Spent.Duration.Round(time.Millisecond), len(result.Steps))
 	for _, phase := range result.Phases {
