@@ -64,6 +64,21 @@ type unmetered struct{}
 func (unmetered) Record(metrics.Measurement) {}
 func (unmetered) Settle(context.Context)     {}
 
+// Base is Meter's twin: one writes down what a step cost, the other reads it
+// back so the funnel can rank on it instead of on a guess.
+//
+// It is asked per repository because cost is not a property of the tool. The
+// same provider is cheap against a warm index and expensive without one, so a
+// figure borrowed from another repository would be the confident kind of
+// wrong.
+//
+// Like Meter it is optional. A core with the base switched off dispatches
+// exactly as well; it simply keeps ranking on the estimates in the settings
+// file, and the trace keeps saying so.
+type Base interface {
+	Costs(ctx context.Context, capability, repository string) (map[string]metrics.Baseline, error)
+}
+
 // Phase names, in the order they run.
 const (
 	// PhaseExplore is the look before the split. It is measured like any other
@@ -108,6 +123,10 @@ type Config struct {
 	// Meter collects what each step cost. Nil means nobody is collecting,
 	// which is a working core, just one that never learns.
 	Meter Meter
+	// Base is what the funnel ranks on once real numbers exist. Nil means the
+	// funnel keeps ranking on the declared estimates, and break-in turns are
+	// off: nothing can be earned when nothing is written down.
+	Base Base
 	// MaxParallel caps how many steps of one wave run at a time. Zero means no
 	// ceiling. The ceiling belongs in the settings because the real limit is
 	// the machine, and the machine is not the same one everywhere.
@@ -123,6 +142,7 @@ type Agent struct {
 	runner      contract.Runner
 	checkpoints *checkpoint.Store
 	meter       Meter
+	base        Base
 	maxParallel int
 }
 
@@ -179,6 +199,7 @@ func New(cfg Config) (*Agent, error) {
 		runner:      cfg.Runner,
 		checkpoints: store,
 		meter:       meter,
+		base:        cfg.Base,
 		maxParallel: cfg.MaxParallel,
 	}, nil
 }
@@ -651,12 +672,17 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if err != nil {
 		return a.close(out, err)
 	}
+	measuring, gap := a.priced(ctx, step.Capability, repository.ID, candidates)
 	decision, err := a.chooser.Select(selector.Request{
 		Capability: step.Capability,
 		Repository: repository,
 		Candidates: candidates,
 		Reachable:  a.runner.Implementations(),
+		Measuring:  measuring,
 	})
+	if gap != "" {
+		decision.Notices = append(decision.Notices, gap)
+	}
 	out.Decision = decision
 	if err != nil {
 		return a.close(out, err)
@@ -693,6 +719,28 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		return a.close(out, runErr)
 	}
 	return a.close(out, nil)
+}
+
+// priced fills the candidates with what the base measured for this repository
+// and reports whether the funnel may treat those numbers as live.
+//
+// A base that cannot be read is not a reason to refuse the work: the funnel
+// still has the declared estimates and the commission still gets done. But it
+// is a reason to say so out loud, because a decision explained by an estimate
+// when a measurement exists on disk is a decision nobody can reproduce. The
+// second return is that sentence, empty when there is nothing to admit.
+func (a *Agent) priced(ctx context.Context, capability, repository string,
+	candidates []contract.Implementation) (bool, string) {
+	if a.base == nil {
+		return false, ""
+	}
+	base, err := a.base.Costs(ctx, capability, repository)
+	if err != nil {
+		return false, fmt.Sprintf(
+			"the measurement base could not be read (%v); ranking on the declared estimates", err)
+	}
+	metrics.Apply(base, candidates)
+	return true, ""
 }
 
 // close is the parent's review. It runs for every child, always.

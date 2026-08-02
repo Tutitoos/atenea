@@ -16,7 +16,8 @@ at the repositories in scope, splits the work into a graph of steps, dispatches
 them in waves and reviews every answer. Three adapters ship: two client CLIs
 (`omp`, Claude Code) for text search, and Serena over MCP for symbols. Every
 attempt is measured — time, tokens and peak memory, per capability and per
-implementation — into an embedded DuckDB base that the funnel will rank on.
+implementation — into an embedded DuckDB base, and the funnel ranks on it:
+what a step cost on the way out is what decides who answers next time in.
 
 ## Why
 

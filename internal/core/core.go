@@ -8,6 +8,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -124,8 +125,14 @@ func New(cfg config.Config) (*Core, error) {
 		return nil, err
 	}
 	var collector orchestrator.Meter
+	// Both seams stay nil together when there is no store. Assigning a nil
+	// *Store into an interface would produce a non-nil interface holding
+	// nothing, and every "is the base attached?" check downstream would answer
+	// yes and then panic on the first read.
+	var base orchestrator.Base
 	if store != nil {
 		collector = meter{store: store, beats: beats}
+		base = store
 		// The history is put in shape when the database is opened, through the
 		// same lane everything else uses. The mark on disk is what keeps this
 		// from happening on every command: most passes find nothing due and
@@ -140,6 +147,11 @@ func New(cfg config.Config) (*Core, error) {
 		Runner:      attach(runners),
 		Checkpoints: checkpoints,
 		Meter:       collector,
+		// The same store on both seams, which is the point: what a step cost
+		// on the way out is what the funnel ranks on next time in. A nil store
+		// leaves both off together -- a core that never learns is at least
+		// consistent about it.
+		Base:        base,
 		MaxParallel: cfg.Orchestrator.MaxParallel,
 	})
 	if err != nil {
@@ -387,12 +399,39 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 	if err != nil {
 		return selector.Decision{}, err
 	}
-	return c.chooser.Select(selector.Request{
+	// Select is a one-shot lookup with no caller to cancel it: the CLI asks,
+	// prints and exits. The store bounds its own wait on the file lock, so a
+	// background context here cannot hang on a second Atenea's flush.
+	measuring, gap := c.priced(context.Background(), capabilityID, repo.ID, candidates)
+	decision, err := c.chooser.Select(selector.Request{
 		Capability: capabilityID,
 		Repository: repo,
 		Candidates: candidates,
 		Reachable:  c.reach(),
+		Measuring:  measuring,
 	})
+	if gap != "" {
+		decision.Notices = append(decision.Notices, gap)
+	}
+	return decision, err
+}
+
+// priced fills the candidates with what the base measured here. It is the same
+// seam the orchestrator uses, and for the same reason: the catalog declares
+// what a provider is guessed to cost, the store knows what it did cost, and
+// the funnel is the one place the two meet.
+func (c *Core) priced(ctx context.Context, capability, repository string,
+	candidates []contract.Implementation) (bool, string) {
+	if c.measurements == nil {
+		return false, ""
+	}
+	base, err := c.measurements.Costs(ctx, capability, repository)
+	if err != nil {
+		return false, fmt.Sprintf(
+			"the measurement base could not be read (%v); ranking on the declared estimates", err)
+	}
+	metrics.Apply(base, candidates)
+	return true, ""
 }
 
 // reach is every implementation the attached runners can execute between them.

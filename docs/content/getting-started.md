@@ -127,7 +127,8 @@ it. `constraints` asks whether a provider can work on this repository at all;
 `reach` asks whether anything attached can even invoke it; `health` asks whether
 it is well. What is left, `cost` ranks — and the word `estimated` in the reason
 is the trace admitting that no measurement exists yet, so the number is the one
-the catalog declared rather than one Atenea observed.
+the catalog declared rather than one Atenea observed. Hand it some work and
+that word changes; [the base](#hand-it-a-commission) is where it comes from.
 
 ## Hand it a commission
 
@@ -183,9 +184,15 @@ reports more hits and no `scope` line.
 receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.
 
 What each step cost lands beside it, in `metrics.duckdb`: one row per attempt,
-including the ones that failed. That base is what the funnel will rank on once
-it has real figures to prefer over the estimates in the settings file. Nothing
+including the ones that failed. That base is what the funnel ranks on. Nothing
 has to be switched on for it, and `enabled = false` under `[metrics]` stops it.
+
+Run the same ask a few times and watch the reason on `select` change. It opens
+at `(estimated)`, passes through `break-in turn` while each provider is handed
+the work often enough to earn its own numbers, and settles at `(measured)` —
+at which point the estimates in the settings file stop mattering for that
+repository. A provider the file guessed was expensive can win here, and that
+is the entire point of handing out those turns.
 
 What a step *charged*, if anything did, is not in there. Money is never one of
 the axes the funnel ranks on, so it stays out of the base and goes on the

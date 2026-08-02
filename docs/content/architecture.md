@@ -96,9 +96,10 @@ every measurement below it unreproducible.
 
 Cost ranks; it never filters. An expensive provider that is the only one left
 still gets the work, because "too expensive" is not the same answer as "nobody
-can do this". And cost only breaks a tie when one side is cheaper on *both*
-axes — time and tokens. Trading one against the other needs an exchange rate
-nobody has, so a genuine trade-off falls through to the id and stays stable.
+can do this". And one side only counts as cheaper when it is no worse on
+*either* axis — time and tokens — and better on at least one. Trading one
+against the other needs an exchange rate nobody has, so a genuine trade-off —
+faster but chattier — falls through to the id and stays stable.
 
 ### Break-in mode
 
@@ -107,6 +108,16 @@ ranking by estimates somebody typed into a settings file — guesswork wearing a
 number. So an implementation's own measurements only outrank its declared
 estimate once it has a couple of them; until then the estimate is used and the
 trace says `estimated` out loud, so a guess is never read as an observation.
+
+Waiting for those measurements is not enough, because a provider the estimate
+ranks last never runs, and one that never runs is never measured. So while a
+base is attached and somebody still owes it numbers, the turn goes to whoever
+owes the most — ahead of cost, behind health. The trace names that outright:
+`break-in turn` means cost did not decide this one at all. Once everybody has
+paid, the rotation stops on its own and cost takes over for good.
+
+That is also why cost never filters. A provider dropped for being expensive
+could never earn the measurement that showed the estimate was wrong.
 
 The same applies after a tool is upgraded: measurements are stored with the
 version they belong to, and a new version starts a fresh baseline rather than
@@ -248,10 +259,18 @@ The dump is deliberately narrow. It is a receipt, not a transcript.
 
 ## The measurement base
 
-The funnel ranks on cost, and until something measures it, cost is whatever
-somebody typed into the settings file. The base is where the real figures go:
-one row per attempt, filed under the capability that was asked for and the
-implementation that answered.
+The funnel ranks on cost, and on a cold machine cost is whatever somebody typed
+into the settings file. The base is where the real figures go: one row per
+attempt, filed under the capability that was asked for and the implementation
+that answered.
+
+It is a loop, not an archive. What a step cost on the way out is what the
+funnel reads on the way in next time, so the estimate in the settings file is
+only ever the opening position — it is overtaken the moment an implementation
+has measurements of its own on that repository. Per repository, because cost
+is not a property of a tool: the same provider is cheap against a warm index
+and expensive without one, and a figure borrowed from somewhere else would be
+the confident kind of wrong.
 
 ```text
   a step closes
@@ -265,6 +284,9 @@ implementation that answered.
        |
        v
   measurement (one row per attempt)
+       |
+       +--- the next funnel asks ---> costs per capability x repository
+       |         (flushed first, so it reads what just ran)
        |
    hour -> day -> week -> month                ← the retention ladder
 ```

@@ -2,11 +2,17 @@
 // repository.
 //
 // It is a funnel. Constraints say who CAN work here, health says who is
-// AVAILABLE right now, and the last stage picks among whoever is left. The
-// third filter -- cost -- is not wired yet. The measurement base now records
-// what every attempt costs, so the numbers exist; reading them back into the
-// ranking, with the break-in rule that keeps a guess from outranking a
-// measurement, is the step after this one.
+// AVAILABLE right now, and the last stage picks among whoever is left. That
+// last stage ranks on cost, and cost is hybrid: an implementation is ranked on
+// its own measurements once the base holds enough of them, and on the estimate
+// declared in the settings file until then.
+//
+// Cost only ever orders. Nobody leaves the funnel for being expensive, and a
+// standing user rule outranks the whole ranking.
+//
+// While an implementation still owes the base its first measurements the
+// funnel hands it the turn, so the numbers it is missing get made rather than
+// waited for. The trace says which of the three settled each choice.
 package selector
 
 import (
@@ -97,6 +103,13 @@ type Request struct {
 	// before anything ran. Filing one under the other would mean a settings
 	// change had to wait for a probe to be believed.
 	Reachable []string
+	// Measuring says whether a measurement base is feeding this funnel. It is
+	// what makes break-in mode meaningful: a turn handed to an unmeasured
+	// implementation only pays for itself if the call it earns is written
+	// down somewhere. With the base switched off nothing can ever be earned,
+	// so the funnel ranks on the declared estimates and says so rather than
+	// rotating forever between providers to fill a ledger nobody keeps.
+	Measuring bool
 }
 
 // Drop records one implementation leaving the funnel, and why.
@@ -257,9 +270,16 @@ func filterHealth(candidates []contract.Implementation) ([]contract.Implementati
 // single call can be a cold cache.
 const BreakInSamples = 2
 
-// choose settles the survivors. A user rule wins outright; otherwise the
-// healthiest one does, the cheaper of two equally healthy ones next, and the
-// implementation id last so the same catalog always produces the same answer.
+// inBreakIn reports whether an implementation still owes the base measurements
+// before its own numbers can be believed.
+func inBreakIn(impl contract.Implementation) bool {
+	return !impl.Cost.HasMeasurements(BreakInSamples)
+}
+
+// choose settles the survivors: a user rule outright, then the healthiest one,
+// then the break-in turn while anybody still owes the base its samples, then
+// the cheaper of two equals, and the implementation id last so the same
+// catalog always produces the same answer.
 func (s *Selector) choose(req Request, survivors []contract.Implementation) (contract.Implementation, string, []string) {
 	var notices []string
 	if rule, ok := s.ruleFor(req.Capability, req.Repository.ID); ok {
@@ -275,20 +295,30 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer))
 	}
 	ranked := slices.Clone(survivors)
-	slices.SortFunc(ranked, byHealthThenCostThenID)
-	return ranked[0], reasonFor(ranked), notices
+	slices.SortFunc(ranked, rankWith(req.Measuring))
+	return ranked[0], reasonFor(ranked, req.Measuring), notices
 }
 
 // reasonFor names what actually settled the choice, so the trace never claims
-// more certainty than it has. "estimated" is the word that says no measurement
-// exists yet, which is the whole difference between a decision and a guess.
-func reasonFor(ranked []contract.Implementation) string {
+// more certainty than it has. Three words carry that: "measured" means the
+// numbers came from the base, "estimated" means no measurement exists yet and
+// the figure is the one somebody typed into the settings file, and "break-in
+// turn" means cost did not decide this at all.
+func reasonFor(ranked []contract.Implementation, measuring bool) string {
 	if len(ranked) < 2 {
 		return "the only surviving implementation"
 	}
 	first, second := ranked[0], ranked[1]
 	if first.Health.State != second.Health.State || first.Health.Score != second.Health.Score {
 		return "healthiest surviving implementation"
+	}
+	if measuring && owesMore(first, second) {
+		// Said plainly and without the word "cheapest" anywhere near it: this
+		// dispatch is buying a measurement, not spending the cheapest option.
+		// A reader who mistook it for a cost decision would go looking for a
+		// cost bug that is not there.
+		return fmt.Sprintf("break-in turn: %s has %d of %d measurements, not a cost decision",
+			first.ID, first.Cost.Samples, BreakInSamples)
 	}
 	if cheaper(first, second) {
 		if first.Cost.HasMeasurements(BreakInSamples) && second.Cost.HasMeasurements(BreakInSamples) {
@@ -301,32 +331,60 @@ func reasonFor(ranked []contract.Implementation) string {
 	return "no cheaper option among equals, settled by id"
 }
 
-// byHealthThenCostThenID orders the survivors. It is a ranking and never a
-// filter: nobody leaves the funnel for being expensive.
+// owesMore reports whether a should go first because it owes the base more
+// measurements than b does. Only meaningful while somebody is still in
+// break-in: two implementations that have both earned their numbers owe
+// nothing, however far apart their sample counts have since drifted.
+func owesMore(a, b contract.Implementation) bool {
+	if !inBreakIn(a) && !inBreakIn(b) {
+		return false
+	}
+	return a.Cost.Samples < b.Cost.Samples
+}
+
+// rankWith orders the survivors: health, then the break-in turn, then cost,
+// then id. It is a ranking and never a filter -- nobody leaves the funnel for
+// being expensive.
 //
-// That distinction is deliberate and load-bearing. A cost FILTER would starve
-// the loser of the very measurements that could correct its estimate -- the
-// expensive one is never run, so it is never measured, so the hybrid cost of
-// hoja 13 stays frozen on day-one guesswork forever. As a ranking, break-in
-// mode can later promote an unmeasured implementation to earn its number
-// without anything here being rewritten.
-func byHealthThenCostThenID(a, b contract.Implementation) int {
-	if d := a.Health.State.Rank() - b.Health.State.Rank(); d != 0 {
-		return d
+// That distinction is deliberate and load-bearing, and the break-in turn is
+// what finally makes it pay. A cost FILTER would starve the loser of the very
+// measurements that could correct its estimate: the expensive one is never
+// run, so it is never measured, so the hybrid cost stays frozen on day-one
+// guesswork forever. Ranking alone does not fix that on its own -- the
+// estimated-cheapest still wins every time and the other never earns a number
+// either. So while anybody still owes the base its samples, fewest samples
+// goes first, and the rotation ends by itself the moment everyone has enough.
+//
+// It converges because each turn adds a sample to whoever had the fewest: two
+// providers at zero alternate until both hold BreakInSamples, and from then on
+// cost decides with real numbers on both sides and never rotates again.
+func rankWith(measuring bool) func(a, b contract.Implementation) int {
+	return func(a, b contract.Implementation) int {
+		if d := a.Health.State.Rank() - b.Health.State.Rank(); d != 0 {
+			return d
+		}
+		switch {
+		case a.Health.Score > b.Health.Score:
+			return -1
+		case a.Health.Score < b.Health.Score:
+			return 1
+		}
+		if measuring {
+			switch {
+			case owesMore(a, b):
+				return -1
+			case owesMore(b, a):
+				return 1
+			}
+		}
+		switch {
+		case cheaper(a, b):
+			return -1
+		case cheaper(b, a):
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
 	}
-	switch {
-	case a.Health.Score > b.Health.Score:
-		return -1
-	case a.Health.Score < b.Health.Score:
-		return 1
-	}
-	switch {
-	case cheaper(a, b):
-		return -1
-	case cheaper(b, a):
-		return 1
-	}
-	return strings.Compare(a.ID, b.ID)
 }
 
 // cheaper reports whether a costs less than b on BOTH axes, using each one's

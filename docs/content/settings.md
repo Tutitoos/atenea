@@ -121,6 +121,12 @@ asked for and the implementation that answered. It is the fuel the funnel ranks
 on; until it has real figures the funnel uses the estimates written further
 down the file, which is guesswork wearing a decimal point.
 
+`enabled = false` is a bigger switch than it looks. Nothing is written, so
+nothing is ever read back: the funnel keeps ranking on those estimates forever,
+and break-in mode is off with it — there is no point handing a provider a turn
+to earn numbers nobody will record. A core with the base switched off works
+exactly as well on its first day and never gets better.
+
 `path = ""` is not "nowhere", it is the default location, beside the run
 receipts and under the same state root: both are the same kind of thing, what
 Atenea remembers about work it has done.

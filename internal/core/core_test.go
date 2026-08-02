@@ -355,7 +355,10 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 	if !strings.Contains(status.Funnel, "cost") {
-		t.Errorf("the status must say out loud that cost is not wired yet: %q", status.Funnel)
+		t.Errorf("the status must name every stage the funnel runs: %q", status.Funnel)
+	}
+	if !strings.Contains(status.Funnel, "estimated") {
+		t.Errorf("the status must say how far the cost figure can be trusted: %q", status.Funnel)
 	}
 	if len(status.Capabilities) != 1 || len(status.Capabilities[0].Implementations) != 3 {
 		t.Fatalf("capabilities = %+v", status.Capabilities)
