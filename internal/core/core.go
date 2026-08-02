@@ -463,7 +463,7 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 	// Select is a one-shot lookup with no caller to cancel it: the CLI asks,
 	// prints and exits. The store bounds its own wait on the file lock, so a
 	// background context here cannot hang on a second Atenea's flush.
-	measuring, gap := c.priced(context.Background(), capabilityID, repo.ID, candidates)
+	measuring, notices := c.priced(context.Background(), capabilityID, repo.ID, candidates)
 	decision, err := c.chooser.Select(selector.Request{
 		Capability: capabilityID,
 		Repository: repo,
@@ -471,9 +471,7 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 		Reachable:  c.reach(),
 		Measuring:  measuring,
 	})
-	if gap != "" {
-		decision.Notices = append(decision.Notices, gap)
-	}
+	decision.Notices = append(decision.Notices, notices...)
 	return decision, err
 }
 
@@ -482,17 +480,16 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 // what a provider is guessed to cost, the store knows what it did cost, and
 // the funnel is the one place the two meet.
 func (c *Core) priced(ctx context.Context, capability, repository string,
-	candidates []contract.Implementation) (bool, string) {
+	candidates []contract.Implementation) (bool, []string) {
 	if c.measurements == nil {
-		return false, ""
+		return false, nil
 	}
-	base, err := c.measurements.Costs(ctx, capability, repository)
+	base, err := c.measurements.Baselines(ctx, capability, repository)
 	if err != nil {
-		return false, fmt.Sprintf(
-			"the measurement base could not be read (%v); ranking on the declared estimates", err)
+		return false, []string{fmt.Sprintf(
+			"the measurement base could not be read (%v); ranking on the declared estimates", err)}
 	}
-	metrics.Apply(base, candidates)
-	return true, ""
+	return true, metrics.Apply(base, candidates, time.Now())
 }
 
 // reach is every implementation the attached runners can execute between them.

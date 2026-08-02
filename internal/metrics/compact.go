@@ -21,7 +21,8 @@ const (
 // rollupColumns is the insert order every fold shares.
 const rollupColumns = `grain, bucket, capability, implementation, provider,
 	repository, tool_version, attempts, failures, duration_us_sum,
-	duration_us_max, tokens_sum, peak_rss_max, rss_samples`
+	duration_us_max, tokens_sum, peak_rss_max, rss_samples,
+	ok_attempts, ok_duration_us_sum, ok_tokens_sum`
 
 // mergeRollup is what happens when a fold lands on a bucket that already
 // exists. Counts add and maxima take the larger, which is why only mergeable
@@ -44,19 +45,30 @@ DO UPDATE SET
 		WHEN rollup.peak_rss_max IS NULL THEN excluded.peak_rss_max
 		WHEN excluded.peak_rss_max IS NULL THEN rollup.peak_rss_max
 		ELSE greatest(rollup.peak_rss_max, excluded.peak_rss_max) END,
-	rss_samples     = rollup.rss_samples + excluded.rss_samples`
+	rss_samples     = rollup.rss_samples + excluded.rss_samples,
+	ok_attempts        = rollup.ok_attempts + excluded.ok_attempts,
+	ok_duration_us_sum = rollup.ok_duration_us_sum + excluded.ok_duration_us_sum,
+	ok_tokens_sum      = rollup.ok_tokens_sum + excluded.ok_tokens_sum`
 
 // foldAttempts counts closed attempts into their hour.
 //
 // count(peak_rss_bytes) skips the NULLs, so the sample count is how many
 // attempts could actually be weighed rather than how many happened. An average
 // taken later divides by the right number.
+//
+// The three ok_ columns carry the successful half on its own, because that is
+// the half allowed to be a price. Everything else here counts every attempt:
+// how often a provider was tried and how slow its worst call was stay true
+// whether or not the call worked.
 const foldAttempts = `INSERT INTO rollup (` + rollupColumns + `)
 SELECT '` + grainHour + `', date_trunc('hour', happened_at), capability, implementation,
        any_value(provider), repository, tool_version,
        count(*), count(*) FILTER (WHERE NOT ok),
        sum(duration_us), max(duration_us), sum(tokens),
-       max(peak_rss_bytes), count(peak_rss_bytes)
+       max(peak_rss_bytes), count(peak_rss_bytes),
+       count(*) FILTER (WHERE ok),
+       coalesce(sum(duration_us) FILTER (WHERE ok), 0),
+       coalesce(sum(tokens) FILTER (WHERE ok), 0)
 FROM measurement
 WHERE NOT folded AND happened_at < ?
 GROUP BY 2, 3, 4, 6, 7
@@ -67,7 +79,8 @@ const promoteRollup = `INSERT INTO rollup (` + rollupColumns + `)
 SELECT ?, date_trunc(?, bucket), capability, implementation,
        any_value(provider), repository, tool_version,
        sum(attempts), sum(failures), sum(duration_us_sum), max(duration_us_max),
-       sum(tokens_sum), max(peak_rss_max), sum(rss_samples)
+       sum(tokens_sum), max(peak_rss_max), sum(rss_samples),
+       sum(ok_attempts), sum(ok_duration_us_sum), sum(ok_tokens_sum)
 FROM rollup
 WHERE grain = ? AND bucket < ?
 GROUP BY 2, 3, 4, 6, 7

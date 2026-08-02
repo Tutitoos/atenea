@@ -20,11 +20,19 @@ type Row struct {
 
 	Attempts int64
 	Failures int64
-	// Mean is the average call, over every attempt including the failed ones:
-	// a tool that gives up quickly is not fast, and one that hangs before
-	// failing has still eaten the wait.
+	// Successes is how many attempts worked, and the only count Mean divides
+	// by. It is printed beside the other two because the gap between them is
+	// the whole diagnosis: a provider with attempts and no successes has a
+	// long record and no price at all.
+	Successes int64
+	// Mean is the average SUCCESSFUL call -- the figure the funnel ranks on.
+	// Failures are counted above and priced nowhere: a tool that refuses
+	// instantly is not the cheapest thing on the machine.
 	Mean time.Duration
-	// Slowest is the worst single call seen.
+	// Slowest is the worst single call seen, successful or not. This one does
+	// span the failures on purpose: a provider that hangs for thirty seconds
+	// before giving up has still cost somebody thirty seconds, and that is
+	// worth seeing even though it is not a price.
 	Slowest time.Duration
 	Tokens  int64
 	// PeakRSS is the largest the far side ever grew, in bytes. Zero with
@@ -41,21 +49,25 @@ type Row struct {
 const summarize = `WITH parts AS (
 	SELECT capability, implementation, any_value(provider) AS provider, repository, tool_version,
 	       count(*) AS attempts, count(*) FILTER (WHERE NOT ok) AS failures,
-	       sum(duration_us) AS dsum, max(duration_us) AS dmax, sum(tokens) AS tsum,
+	       count(*) FILTER (WHERE ok) AS wins,
+	       coalesce(sum(duration_us) FILTER (WHERE ok), 0) AS dsum,
+	       max(duration_us) AS dmax,
+	       coalesce(sum(tokens) FILTER (WHERE ok), 0) AS tsum,
 	       max(peak_rss_bytes) AS rmax, count(peak_rss_bytes) AS rn
 	FROM measurement
 	WHERE NOT folded AND happened_at >= ?
 	GROUP BY 1, 2, 4, 5
 	UNION ALL
 	SELECT capability, implementation, any_value(provider), repository, tool_version,
-	       sum(attempts), sum(failures), sum(duration_us_sum), max(duration_us_max),
-	       sum(tokens_sum), max(peak_rss_max), sum(rss_samples)
+	       sum(attempts), sum(failures), sum(ok_attempts),
+	       sum(ok_duration_us_sum), max(duration_us_max),
+	       sum(ok_tokens_sum), max(peak_rss_max), sum(rss_samples)
 	FROM rollup
 	WHERE bucket >= ?
 	GROUP BY 1, 2, 4, 5
 )
 SELECT capability, implementation, any_value(provider), repository, tool_version,
-       sum(attempts), sum(failures), sum(dsum), max(dmax), sum(tsum),
+       sum(attempts), sum(failures), sum(wins), sum(dsum), max(dmax), sum(tsum),
        max(rmax), sum(rn)
 FROM parts
 GROUP BY 1, 2, 4, 5
@@ -90,12 +102,12 @@ func (s *Store) Summary(ctx context.Context, since time.Time) ([]Row, error) {
 		var dsum, dmax int64
 		var rmax *int64
 		if err := rows.Scan(&r.Capability, &r.Implementation, &r.Provider,
-			&r.Repository, &r.ToolVersion, &r.Attempts, &r.Failures,
+			&r.Repository, &r.ToolVersion, &r.Attempts, &r.Failures, &r.Successes,
 			&dsum, &dmax, &r.Tokens, &rmax, &r.RSSSamples); err != nil {
 			return nil, fmt.Errorf("metrics: summary: %w", err)
 		}
-		if r.Attempts > 0 {
-			r.Mean = time.Duration(dsum/r.Attempts) * time.Microsecond
+		if r.Successes > 0 {
+			r.Mean = time.Duration(dsum/r.Successes) * time.Microsecond
 		}
 		r.Slowest = time.Duration(dmax) * time.Microsecond
 		if rmax != nil {

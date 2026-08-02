@@ -27,7 +27,7 @@ type stubBase struct {
 	asked []string
 }
 
-func (s *stubBase) Costs(_ context.Context, capability, repository string) (map[string]metrics.Baseline, error) {
+func (s *stubBase) Baselines(_ context.Context, capability, repository string) (map[string]metrics.Baseline, error) {
 	s.mu.Lock()
 	s.asked = append(s.asked, capability+"@"+repository)
 	s.mu.Unlock()
@@ -149,11 +149,13 @@ func TestAMeasurementOutranksTheEstimateThatContradictsIt(t *testing.T) {
 		"fast": {
 			Spent:       contract.Sample{Duration: 900 * time.Millisecond, Tokens: 900},
 			Attempts:    5,
+			Successes:   5,
 			ToolVersion: "1.0",
 		},
 		"slow": {
 			Spent:       contract.Sample{Duration: 20 * time.Millisecond, Tokens: 20},
 			Attempts:    5,
+			Successes:   5,
 			ToolVersion: "1.0",
 		},
 	}}
@@ -209,6 +211,7 @@ func TestAnUnmeasuredProviderKeepsItsDeclaredEstimate(t *testing.T) {
 		"fast": {
 			Spent:       contract.Sample{Duration: 900 * time.Millisecond, Tokens: 900},
 			Attempts:    5,
+			Successes:   5,
 			ToolVersion: "1.0",
 		},
 	}}

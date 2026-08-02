@@ -1,9 +1,11 @@
 package core
 
 import (
+	"context"
 	"slices"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -214,6 +216,37 @@ func (c *Core) Incidents() (notebook.Read, error) { return c.notebook.Read() }
 // reports how many that was. It is the only call that moves the mark, which
 // is why it is a separate verb everywhere it appears.
 func (c *Core) ClearIncidents() (int, error) { return c.notebook.Clear() }
+
+// Measurements reports everything the base has recorded at or after since.
+//
+// It is the reading half of the pair below, and like the notebook it changes
+// nothing: two people looking see the same thing, and looking is never the
+// reason a number moved.
+//
+// Measuring switched off is not an error here. There is simply nothing to
+// report, which is the true answer and a shorter one than an excuse.
+func (c *Core) Measurements(since time.Time) ([]metrics.Row, error) {
+	if c.measurements == nil {
+		return nil, nil
+	}
+	return c.measurements.Summary(context.Background(), since)
+}
+
+// ClearMeasurements empties the base, or the part of it the filter names, and
+// reports what went.
+//
+// The base is the only thing in Atenea that decides behavior and cannot be
+// edited: the catalog is a settings file, health comes back on its own, but a
+// baseline poisoned by an afternoon of misconfiguration used to have exactly
+// one cure -- deleting the database, which threw away every honest number
+// with it. This is the surgical version, and like every other destructive act
+// here it is a separate word somebody has to type.
+func (c *Core) ClearMeasurements(filter metrics.Filter) (metrics.Cleared, error) {
+	if c.measurements == nil {
+		return metrics.Cleared{}, nil
+	}
+	return c.measurements.Clear(context.Background(), filter)
+}
 
 // Status builds the snapshot.
 func (c *Core) Status() Status {

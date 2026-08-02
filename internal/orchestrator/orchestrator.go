@@ -80,7 +80,7 @@ func (unmetered) Settle(context.Context)     {}
 // exactly as well; it simply keeps ranking on the estimates in the settings
 // file, and the trace keeps saying so.
 type Base interface {
-	Costs(ctx context.Context, capability, repository string) (map[string]metrics.Baseline, error)
+	Baselines(ctx context.Context, capability, repository string) (map[string]metrics.Baseline, error)
 }
 
 // Phase names, in the order they run.
@@ -747,7 +747,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if err != nil {
 		return a.close(out, err)
 	}
-	measuring, gap := a.priced(ctx, step.Capability, repository.ID, candidates)
+	measuring, notices := a.priced(ctx, step.Capability, repository.ID, candidates)
 	decision, err := a.chooser.Select(selector.Request{
 		Capability: step.Capability,
 		Repository: repository,
@@ -755,9 +755,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		Reachable:  a.runner.Implementations(),
 		Measuring:  measuring,
 	})
-	if gap != "" {
-		decision.Notices = append(decision.Notices, gap)
-	}
+	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision
 	if err != nil {
 		return a.close(out, err)
@@ -803,19 +801,19 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 // still has the declared estimates and the commission still gets done. But it
 // is a reason to say so out loud, because a decision explained by an estimate
 // when a measurement exists on disk is a decision nobody can reproduce. The
-// second return is that sentence, empty when there is nothing to admit.
+// second return carries that admission and anything else the base wants the
+// trace to know, and is empty when there is nothing to say.
 func (a *Agent) priced(ctx context.Context, capability, repository string,
-	candidates []contract.Implementation) (bool, string) {
+	candidates []contract.Implementation) (bool, []string) {
 	if a.base == nil {
-		return false, ""
+		return false, nil
 	}
-	base, err := a.base.Costs(ctx, capability, repository)
+	base, err := a.base.Baselines(ctx, capability, repository)
 	if err != nil {
-		return false, fmt.Sprintf(
-			"the measurement base could not be read (%v); ranking on the declared estimates", err)
+		return false, []string{fmt.Sprintf(
+			"the measurement base could not be read (%v); ranking on the declared estimates", err)}
 	}
-	metrics.Apply(base, candidates)
-	return true, ""
+	return true, metrics.Apply(base, candidates, time.Now())
 }
 
 // close is the parent's review. It runs for every child, always.

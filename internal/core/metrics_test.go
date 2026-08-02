@@ -11,6 +11,8 @@ import (
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // measured builds a core over the fixture catalog with two real directories
@@ -162,5 +164,121 @@ func TestWithMeasuringOffNothingIsWritten(t *testing.T) {
 	commission(t, atenea)
 	if _, err := os.Stat(base); !os.IsNotExist(err) {
 		t.Fatalf("a database exists at %s despite enabled = false (%v)", base, err)
+	}
+}
+
+// poison writes a run of identical failures straight into the base, which is
+// what a provider that is simply down leaves behind. A second store on the
+// same file is not a trick: the core holds the file only for the length of a
+// flush, and two Ateneas taking turns is the ordinary case.
+func poison(t *testing.T, path, implementation, provider string, times int) {
+	t.Helper()
+	store, err := metrics.Open(path, metrics.Options{})
+	if err != nil {
+		t.Fatalf("open the base: %v", err)
+	}
+	now := time.Now().UTC()
+	for i := range times {
+		store.Record(metrics.Measurement{
+			At:             now.Add(time.Duration(i) * time.Second),
+			RunID:          "audit",
+			StepID:         "ask",
+			Capability:     "code.search",
+			Implementation: implementation,
+			Provider:       provider,
+			Repository:     "api",
+			ToolVersion:    "1.0.0",
+			Spent:          contract.Sample{Duration: 20 * time.Millisecond},
+			FailureKind:    string(contract.FailureUnavailable),
+			Failure:        "claude code is not logged in on this machine",
+		})
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("flush the base: %v", err)
+	}
+}
+
+// The defect this brick was written for, end to end.
+//
+// A provider that refuses every call used to stay in the funnel forever: the
+// only thing that could mark it down was a probe, nothing probes, and the
+// refusals themselves were being read as a very fast and very cheap call. The
+// record on disk is the witness that a fresh CLI process still has.
+func TestAProviderThatKeepsFailingLeavesTheFunnel(t *testing.T) {
+	atenea, base := measured(t, "")
+	before, err := atenea.Select("code.search", "api")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if before.Chosen.ID != "serena.search" {
+		t.Fatalf("chosen = %s before any failure, want serena.search", before.Chosen.ID)
+	}
+
+	poison(t, base, "serena.search", "serena", metrics.FaultStreak)
+
+	after, err := atenea.Select("code.search", "api")
+	if err != nil {
+		t.Fatalf("Select after the failures: %v", err)
+	}
+	if after.Chosen.ID != "ripgrep" {
+		t.Fatalf("chosen = %s, want the funnel to move on to ripgrep", after.Chosen.ID)
+	}
+
+	// Moving on is half of it. The trace has to name who left and why, or the
+	// operator is looking at a silent fallback again.
+	var reason string
+	for _, stage := range after.Stages {
+		if stage.Name != selector.StageHealth {
+			continue
+		}
+		for _, dropped := range stage.Dropped {
+			if dropped.Implementation == "serena.search" {
+				reason = dropped.Reason
+			}
+		}
+	}
+	if reason == "" {
+		t.Fatalf("the health stage never mentions serena.search: %+v", after.Stages)
+	}
+	if !strings.Contains(reason, "in a row") || !strings.Contains(reason, "not logged in") {
+		t.Errorf("reason %q does not say how many failed nor what the provider said", reason)
+	}
+}
+
+// The way back, on the real funnel. A verdict with no expiry would be a
+// provider nobody ever calls again, because health drops it before anything
+// can prove it recovered.
+func TestAStaleOutageStopsCountingSoTheProviderIsTriedAgain(t *testing.T) {
+	atenea, base := measured(t, "")
+	store, err := metrics.Open(base, metrics.Options{})
+	if err != nil {
+		t.Fatalf("open the base: %v", err)
+	}
+	old := time.Now().UTC().Add(-metrics.FaultWindow - time.Hour)
+	for i := range metrics.FaultStreak {
+		store.Record(metrics.Measurement{
+			At:             old.Add(time.Duration(i) * time.Second),
+			RunID:          "audit",
+			StepID:         "ask",
+			Capability:     "code.search",
+			Implementation: "serena.search",
+			Provider:       "serena",
+			Repository:     "api",
+			ToolVersion:    "1.0.0",
+			FailureKind:    string(contract.FailureUnavailable),
+			Failure:        "was down an hour ago",
+		})
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("flush the base: %v", err)
+	}
+
+	decision, err := atenea.Select("code.search", "api")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "serena.search" {
+		t.Errorf("chosen = %s, want serena.search: an hour-old outage still had it banned",
+			decision.Chosen.ID)
 	}
 }

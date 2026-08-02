@@ -14,6 +14,28 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// TestMain puts a floor under the whole package: no test may inherit the state
+// directory, settings directory or config path of the machine running the
+// suite.
+//
+// Pinning per test is one line and every test that forgets it writes real
+// failures into a real measurement base -- which is now a health input, so a
+// suite run could talk a developer's funnel out of a provider that works.
+// That already happened once. A test that wants its own state still calls
+// t.Setenv and wins; this only decides where the ones that say nothing land.
+func TestMain(m *testing.M) {
+	root, err := os.MkdirTemp("", "atenea-cli-suite")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	os.Setenv("ATENEA_CONFIG", "")
+	code := m.Run()
+	os.RemoveAll(root)
+	os.Exit(code)
+}
+
 const settings = `
 contract = "1.0.0"
 
@@ -51,10 +73,24 @@ languages = ["go"]
 scale = "small"
 `
 
+// settingsFile writes the fixture catalog somewhere disposable, with its
+// measurement base pinned to the same throwaway directory.
+//
+// The base matters as much as the catalog does. Without pinning it these tests
+// read and write the base of whoever is running them: the fixture searches
+// /srv/api, which exists nowhere, so every run files another failure, and once
+// enough pile up the health rule stops choosing ripgrep on a developer's
+// machine and nowhere else. Found exactly that way.
+//
+// Only the base is redirected, not the whole state root: tests that care about
+// the crash notebook set that up themselves, and a helper that quietly moved
+// it under them would undo their arrangements.
 func settingsFile(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "atenea.toml")
-	if err := os.WriteFile(path, []byte(settings), 0o600); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "atenea.toml")
+	body := settings + "\n[metrics]\npath = \"" + filepath.Join(dir, "base.duckdb") + "\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	return path

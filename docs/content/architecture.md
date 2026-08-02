@@ -88,6 +88,23 @@ was made before anything ran. Filing one under the other would mean a settings
 change had to wait for a probe to be believed, and it would send someone to
 debug a provider that is perfectly well.
 
+Health has two witnesses, and they answer different questions. A probe — and
+running a step is a probe — says what a provider reported the last time
+somebody spoke to it. The measurement base says what actually happened here,
+repeatedly, and it survives the process: Atenea is a CLI at least as often as
+it is a service, and a fresh process starts with a clean catalog that has
+forgotten every fault before it. Without the second witness a provider that
+refuses every single call stays healthy forever, because the only thing that
+could mark it down evaporated when the last command exited.
+
+So a run of failures on disk is a health verdict too. Three in a row in the
+same bin is an outage and leaves the funnel; three in different bins is a
+provider in trouble with no single cause, which ranks last but stays. Both
+expire after a quiet window, because a provider health has dropped is a
+provider nothing calls, and nothing that is never called can ever prove it
+recovered. Neither verdict ever promotes: a streak can only make a candidate
+worse than the prober found it.
+
 **Stage 4.** A standing user rule wins outright — the user's word comes before
 Atenea's opinion. Otherwise the survivors are ranked by health state, then by
 health score, then by cost, then by id. That last tie-break exists so the same
@@ -271,6 +288,43 @@ has measurements of its own on that repository. Per repository, because cost
 is not a property of a tool: the same provider is cheap against a warm index
 and expensive without one, and a figure borrowed from somewhere else would be
 the confident kind of wrong.
+
+### Only a successful call is a price
+
+Every attempt is recorded, successful or not, with its bin and the untranslated
+reason. Only the successful ones are averaged into what an implementation
+costs.
+
+The first version of this store counted them all, on the argument that a tool
+which hangs before failing has still eaten the wait. That much is true, and the
+conclusion drawn from it was still wrong: the same average lets an
+implementation that refuses *instantly* — not logged in, no index, no server —
+record a stream of very fast, very cheap calls. It then becomes the cheapest
+thing on the board, the funnel hands it everything, and every commission fails.
+Health does not save it either, because nothing probed it. Failing cheaply paid
+better than working.
+
+So a failure is not a price; it is the absence of one. It stays in the record —
+attempts and failures are both counted, and they are what health reads — but it
+divides nothing. An implementation with a long record and no successful call
+has no measured cost at all and falls back to its declared estimate, and the
+trace says exactly that rather than leaving a reader to wonder why the ranking
+ignored a base full of rows.
+
+### Forgetting
+
+The base is the only thing in Atenea that decides behaviour and cannot be
+edited. A settings file is text; health repairs itself the moment a provider
+answers. A baseline is neither: it is true by construction and stays true long
+after the machine it describes has been fixed. An afternoon of misconfiguration
+leaves numbers nothing will ever contradict, because the calls really were that
+shape.
+
+`atenea metrics` prints it and `atenea metrics clear` forgets it, narrowed to
+one capability, implementation or repository. Both tables go together — leaving
+the folded half behind would let the numbers reappear an hour later with no
+explanation — and clearing everything needs `--all` on top of the word, because
+it is the one act here that destroys something nothing can rebuild.
 
 ```text
   a step closes

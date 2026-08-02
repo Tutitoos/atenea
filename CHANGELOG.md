@@ -13,6 +13,76 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **A failure is no longer a price.** The cost base averaged every attempt
+  together, so an implementation that refused instantly — not logged in, no
+  index, no server — recorded a stream of very fast, very cheap calls, became
+  the cheapest thing on the board, and was handed every commission from then
+  on. Health did not save it, because nothing probed it. Failing cheaply paid
+  better than working, and the outage reinforced itself: found on a real
+  machine, where twelve refusals in a row moved the funnel off a provider that
+  worked and onto one that could not answer at all.
+
+  Only successful calls are averaged now. Attempts and failures are still
+  counted — they are what health reads — but they divide nothing, and an
+  implementation with a record and no successful call falls back to its
+  declared estimate. The trace says so outright instead of leaving a reader to
+  wonder why the ranking ignored a base full of rows.
+
+- **Health learns from the record, not only from probes.** Running a step is a
+  probe and always was, but that verdict lived in a catalog held in memory, and
+  Atenea is a CLI at least as often as it is a service: every fresh process
+  started with a clean catalog and forgot every fault before it. A provider
+  that refused every single call stayed healthy forever.
+
+  Three failures in a row in the same bin is now an outage — the provider
+  leaves the funnel and the trace names the count, the bin and what the
+  provider actually said. Three in different bins is degraded instead: a
+  provider in trouble with no single cause ranks last but stays, because the
+  funnel would rather use a flaky provider than none. Both verdicts expire
+  after five quiet minutes, because a provider health has dropped is one
+  nothing calls, and nothing that is never called can prove it recovered. A
+  streak only ever makes a candidate worse than a prober found it.
+
+- Test runs no longer write into the measurement base of the machine running
+  them. The CLI suite searches `/srv/api`, which exists nowhere, so it filed a
+  failure on every run; with health now reading the record, enough of those
+  made the funnel refuse a working provider on a developer's box and nowhere
+  else. The fixture pins its own base.
+
+### Added
+
+- **`atenea metrics`** prints what the base measured, per capability,
+  implementation and repository: attempts, failures, how many were priced, the
+  average of the calls that worked and the worst single call. The three counts
+  sit together because the gap between them is the diagnosis.
+- **`atenea metrics clear`** forgets it, narrowed by `--capability`,
+  `--implementation` or `--repository`. The base is the only thing here that
+  decides behaviour and cannot be edited by hand — true by construction, and
+  still true long after the machine it describes has been fixed. Clearing all
+  of it needs `--all` on top of the word: it is the one act that destroys
+  something nothing can rebuild. Attempts and folded buckets go together, since
+  leaving the folded half would let the numbers reappear an hour later.
+- A migration carries the successful half of each rollup in its own columns.
+  A legacy bucket that mixed successes and failures cannot be split after the
+  fact, so it keeps its counts and contributes nothing to cost — the tempting
+  repair, keeping the count and zeroing the sum, would invent an average of
+  zero and re-create the bug.
+
+### Documentation
+
+- The settings file **replaces** the built-in defaults rather than patching
+  them. A file holding only an `[orchestrator]` block is a complete description
+  of an Atenea with no catalogue at all: it boots, reports red, and answers
+  `unknown capability` to everything. `atenea config init` writes the whole
+  file to start from. This was true from the first release and written nowhere.
+- `.serena/` is ignored. Serena writes a project config into whatever
+  repository it is pointed at, describing one machine and belonging to nobody
+  else.
+
 ## [0.1.0] - 2026-08-02
 
 First tagged release. Atenea decides and delegates: `goal -> capability ->

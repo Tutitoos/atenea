@@ -364,6 +364,57 @@ That is the break-in mode, and it ends on its own after a run or two.
 The amber from a fault comes back the next time it happens. That is what makes
 *unread* the honest word for it.
 
+## What the base measured, and how to forget it
+
+Every attempt is written down: what it cost, whether it worked, and the bin it
+failed in. That record is what the funnel ranks on, so it is worth being able
+to look at.
+
+```sh
+atenea metrics             # per capability, implementation and repository
+```
+
+```text
+capability         implementation         repository      tries   failed   priced       each      worst
+code.search        ripgrep                current            40        0       40     1.01s      1.04s
+code.search        claude.search          current            14       14        0         -    948ms
+```
+
+The three counts sit together because the gap between them is the diagnosis.
+**Only the priced ones are a price.** A failure is counted and never averaged
+in: a provider that refuses instantly — not logged in, no index, no server —
+would otherwise record a stream of very fast, very cheap calls and become the
+cheapest thing on the machine, and the funnel would hand it everything while
+every commission failed. Failing cheaply must not pay. `claude.search` above
+has fourteen attempts and no cost at all, so it ranks on whatever estimate the
+settings file declared for it, and the trace says so.
+
+Failures decide health instead. Three in a row *in the same bin* is an outage:
+the provider leaves the funnel and the trace names the count, the bin and what
+the provider actually said. Three in a row in *different* bins is a provider in
+trouble with no single cause, so it is marked degraded and ranks last rather
+than being dropped — the funnel would rather use a flaky provider than none.
+
+Both verdicts expire. A provider dropped by health is a provider nothing calls,
+so nothing could ever prove it recovered; after five quiet minutes the streak
+stops counting and the next call goes through. The older failures stay on
+record, so a relapse costs one call and a recovery costs one call.
+
+The base is the only thing here that decides behaviour and cannot be edited by
+hand. It is true by construction — those calls really did fail — and it stays
+true long after the machine it describes has been fixed. So it can be forgotten,
+narrowly:
+
+```sh
+atenea metrics clear --implementation claude.search   # one provider's record
+atenea metrics clear --repository api                 # one repository's
+atenea metrics clear --all                            # the lot; --all is required
+```
+
+A narrowing flag is a statement of intent on its own. A bare `clear` is refused,
+because emptying the whole base is the one act in Atenea that destroys something
+nothing else can rebuild.
+
 ## When Atenea itself falls over
 
 Providers fail all the time; that is a normal answer with a bin on it. Atenea

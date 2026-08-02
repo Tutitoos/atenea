@@ -23,6 +23,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/platform"
@@ -47,6 +48,9 @@ Commands:
                          with the system; 'uninstall' undoes it, 'status'
                          says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
+  metrics                What the base measured, per capability and provider;
+                         'clear' empties it, narrowed by --capability,
+                         --implementation or --repository, or --all for the lot
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
   version                Print the product and contract versions
@@ -145,6 +149,8 @@ func run(args []string, out io.Writer) error {
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
 		return cmdIncidents(settingsPath, commandArgs, out)
+	case "metrics":
+		return cmdMetrics(settingsPath, commandArgs, out)
 	case "config":
 		return cmdConfig(settingsPath, commandArgs, out)
 	case "help", "-h", "--help":
@@ -373,6 +379,111 @@ func cmdIncidents(settingsPath string, args []string, out io.Writer) error {
 		fmt.Fprintf(out, "\n%d shown. 'atenea incidents clear' marks them read.\n", book.Unread)
 	}
 	return nil
+}
+
+// cmdMetrics prints the measurement base, and with 'clear' empties it.
+//
+// Reading is the default and touches nothing, the same pairing as the crash
+// notebook: emptying is the destructive half and has to be typed.
+//
+// The base needs a way in because it is the one thing in Atenea that decides
+// behavior and cannot be edited. The catalog is a settings file anybody can
+// open; health repairs itself the moment a provider answers again. A baseline
+// is neither -- it is true by construction, and an afternoon of failures
+// stays true long after the machine it describes has been fixed.
+func cmdMetrics(settingsPath string, args []string, out io.Writer) error {
+	clearing := false
+	if len(args) > 0 && args[0] == "clear" {
+		clearing, args = true, args[1:]
+	}
+	var filter metrics.Filter
+	flags := flag.NewFlagSet("metrics", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&filter.Capability, "capability", "", "narrow to one capability")
+	flags.StringVar(&filter.Implementation, "implementation", "", "narrow to one implementation")
+	flags.StringVar(&filter.Repository, "repository", "", "narrow to one repository")
+	all := flags.Bool("all", false, "with clear: confirm emptying the whole base")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() > 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"metrics takes 'clear' and flags, got %q", flags.Arg(0))
+	}
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	if clearing {
+		return clearMetrics(atenea, filter, *all, out)
+	}
+	if *all {
+		return contract.Fail(contract.FailureInvalidInput,
+			"--all belongs to 'metrics clear'; reading already shows everything")
+	}
+	return printMetrics(atenea, filter, out)
+}
+
+// clearMetrics empties the base. Emptying all of it needs --all on top of the
+// word 'clear': a narrowing flag is itself a statement of intent, but a bare
+// 'clear' is as likely to be a misunderstanding as a decision, and this is the
+// one command in Atenea that destroys something nothing else can rebuild.
+func clearMetrics(atenea *core.Core, filter metrics.Filter, all bool, out io.Writer) error {
+	if filter.Empty() && !all {
+		return contract.Fail(contract.FailureInvalidInput,
+			"clearing the whole base needs --all; "+
+				"--capability, --implementation or --repository clear only part of it")
+	}
+	cleared, err := atenea.ClearMeasurements(filter)
+	if err != nil {
+		return err
+	}
+	if cleared.Total() == 0 {
+		fmt.Fprintf(out, "nothing to clear for %s\n", filter)
+		return nil
+	}
+	fmt.Fprintf(out, "cleared %s: %d attempt(s) and %d folded bucket(s)\n",
+		filter, cleared.Attempts, cleared.Rollups)
+	return nil
+}
+
+func printMetrics(atenea *core.Core, filter metrics.Filter, out io.Writer) error {
+	// Everything, not a window. The store's own retention decides how far back
+	// there is anything to see, and a command that quietly hid the older half
+	// would be the second place a number can go missing.
+	rows, err := atenea.Measurements(time.Time{})
+	if err != nil {
+		return err
+	}
+	rows = slices.DeleteFunc(rows, func(r metrics.Row) bool { return !matches(filter, r) })
+	if len(rows) == 0 {
+		fmt.Fprintf(out, "the measurement base holds nothing for %s\n", filter)
+		return nil
+	}
+	fmt.Fprintf(out, "%-18s %-22s %-12s %8s %8s %8s %10s %10s\n",
+		"capability", "implementation", "repository", "tries", "failed", "priced", "each", "worst")
+	for _, r := range rows {
+		// The three counts sit next to each other because the gap between them
+		// is the diagnosis. Attempts with no priced calls is a provider with a
+		// long record and no cost at all -- it ranks on the estimate somebody
+		// typed, however many times it has run.
+		each := "-"
+		if r.Successes > 0 {
+			each = r.Mean.String()
+		}
+		fmt.Fprintf(out, "%-18s %-22s %-12s %8d %8d %8d %10s %10s\n",
+			r.Capability, r.Implementation, r.Repository,
+			r.Attempts, r.Failures, r.Successes, each, r.Slowest)
+	}
+	fmt.Fprintf(out, "\n'each' is the average of the calls that WORKED. "+
+		"A failure is counted, never priced.\n")
+	return nil
+}
+
+func matches(f metrics.Filter, r metrics.Row) bool {
+	return (f.Capability == "" || f.Capability == r.Capability) &&
+		(f.Implementation == "" || f.Implementation == r.Implementation) &&
+		(f.Repository == "" || f.Repository == r.Repository)
 }
 
 func cmdCatalog(settingsPath string, out io.Writer) error {

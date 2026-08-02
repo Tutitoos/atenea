@@ -16,6 +16,40 @@ nothing ends up baked into the code or scattered across three configs.
 Unknown keys are refused. A typo that is silently ignored is a setting the user
 believes is in force and is not.
 
+## The file replaces the defaults, it does not patch them
+
+Atenea ships a full settings file compiled into the binary, and that is what
+runs when no file exists on disk. The moment a file does exist it is used
+*instead* — not merged on top. There is no layering: a setting you leave out is
+not inherited from the built-in copy, it is absent.
+
+That matters most for the catalog, because the catalog is the largest thing in
+the file and the easiest to forget. A settings file containing only
+
+```toml
+contract = "1.0.0"
+
+[orchestrator]
+runners = ["omp", "claudecode"]
+```
+
+is a complete, valid file describing an Atenea that knows no capabilities at
+all. It boots, `atenea status` shows the orchestrator red and `serves -`, and
+every command answers `unknown capability`. Nothing is hidden and nothing
+crashed; you asked for an empty catalog and got one.
+
+So the way to change one setting is to start from the whole file:
+
+```sh
+atenea config init          # writes the built-in file, catalog and all
+atenea config path          # says where that is
+```
+
+then edit it. Merging was considered and refused: a half-file whose meaning
+depends on what a particular binary happened to ship is a file nobody can read
+on its own, and an upgrade that changed a default would silently change a
+machine whose settings file never moved.
+
 ## Skeleton
 
 ```toml
