@@ -1,9 +1,8 @@
 // Command atenea is the entry point of the Atenea orchestration core.
 //
 // Atenea lives outside the CLIs it serves, so this binary is what gets started
-// on the machine. Until the first adapter exists there is nothing to serve, so
-// `run` is the lifecycle and the rest of the commands are the operator's window
-// into the catalog and the selector.
+// on the machine. `run` is the lifecycle and the rest of the commands are the
+// operator's window into the catalog, the selector and the agent.
 package main
 
 import (

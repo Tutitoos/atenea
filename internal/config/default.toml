@@ -29,18 +29,35 @@ checkpoints = true
 # Empty means $XDG_STATE_HOME/atenea/runs, or ~/.local/state/atenea/runs.
 checkpoint_dir = ""
 
-# Who actually executes a step: "local" or "none".
+# Who actually executes a step: "omp", "local" or "none".
 #
 # Atenea decides and delegates, so execution always happens on the far side of
-# this line. In production that far side is a client adapter. Until the first
-# adapter exists, "local" is a stand-in that runs code.search against the disk
-# and is deleted the day the adapter lands. "none" leaves the core able to plan
-# and choose, but with nothing to dispatch to.
-runner = "local"
+# this line, and that far side is a client adapter: a dumb translator with no
+# logic of its own. "omp" is the adapter that ships. "local" is a stand-in that
+# searches the disk directly, for a machine with no client installed. "none"
+# leaves the core able to plan and choose, with nothing to dispatch to.
+runner = "omp"
+
+  [orchestrator.omp]
+  # The omp executable. A bare name is looked up on PATH, which is the normal
+  # case; a full path covers an install somewhere unusual.
+  binary = "omp"
+  # Implementations the adapter answers for. Anything else it is handed comes
+  # back as unavailable, which is the bin that drives fallback.
+  implementations = ["ripgrep"]
+  # How many matches one search asks omp for.
+  #
+  # omp always caps. Its own zero is not "no limit": it falls back to a small
+  # internal default and then reports the short answer as if it were complete,
+  # so Atenea always states the number instead and says out loud when a search
+  # reached it.
+  match_limit = 10000
+  # How long one omp call may take before it is treated as stuck rather than
+  # slow. The timeout bin is what lets the core fall back instead of waiting.
+  timeout = "30s"
 
   [orchestrator.local]
-  # Implementations the stand-in answers for. Anything else it is handed comes
-  # back as unavailable, which is the bin that drives fallback.
+  # Implementations the stand-in answers for.
   implementations = ["ripgrep"]
   # Directories never descended into. A real search tool skips these by reading
   # .gitignore; the stand-in does not read it, so it is told instead.

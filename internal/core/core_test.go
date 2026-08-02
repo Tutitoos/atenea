@@ -24,10 +24,12 @@ contract = "1.0.0"
 [core]
 shutdown_grace = "2s"
 
-# The stand-in reaches every provider in this catalog, so the overall light
-# answers the question this fixture is about -- health -- and not a separate
-# one about who is plugged in.
+# This fixture is about health, so it pins the stand-in: it reaches every
+# provider in the catalog, and it needs nothing installed on the machine
+# running the suite. The omp adapter is exercised for real from cmd, where a
+# missing binary is a fact about the machine rather than a broken unit test.
 [orchestrator]
+runner = "local"
 
   [orchestrator.local]
   implementations = ["ripgrep", "serena.search", "graph.search"]
@@ -349,5 +351,35 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 	// A capability nobody can answer is red, not amber.
 	if got := atenea.Status().Light; got != core.LightRed {
 		t.Errorf("light = %s, want red when nothing can answer", got)
+	}
+}
+
+// Which far side is attached is a settings question, and the status screen is
+// where the answer has to be visible: a core that quietly fell back to the
+// stand-in would otherwise look identical from the outside.
+//
+// Building the adapter needs no omp on this machine. A client that is not
+// installed is a provider that is unreachable, which the funnel already knows
+// how to handle, so refusing to boot over it would be the wrong trade.
+func TestTheAttachedRunnerIsWhateverTheSettingsName(t *testing.T) {
+	cases := map[string]string{
+		"omp":   "omp",
+		"local": "local",
+		"none":  "",
+	}
+	for runner, want := range cases {
+		t.Run(runner, func(t *testing.T) {
+			atenea := build(t, strings.Replace(catalog, `runner = "local"`, `runner = "`+runner+`"`, 1))
+			if got := atenea.Status().Orchestrator.Runner; got != want {
+				t.Errorf("runner = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestARunnerTheCoreDoesNotKnowIsRefused(t *testing.T) {
+	path := writeTemp(t, strings.Replace(catalog, `runner = "local"`, `runner = "magic"`, 1))
+	if _, err := config.Load(path); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
 }

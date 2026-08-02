@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -126,6 +128,19 @@ func realRepo(t *testing.T) string {
 	return root
 }
 
+// requireOMP skips a test that needs the real client.
+//
+// These tests boot the shipped defaults, and what ships dispatches to omp, so
+// without the binary there is no far side to reach. Skipping is the honest
+// answer: the adapter's translation is pinned hermetically by its own unit
+// tests, and this file is where the claim is that the two really meet.
+func requireOMP(t *testing.T) {
+	t.Helper()
+	if _, err := osexec.LookPath(omp.DefaultBinary); err != nil {
+		t.Skipf("omp is not installed on this machine: %v", err)
+	}
+}
+
 // freshInstall is the strongest end-to-end claim available: no settings file
 // at all, the shipped defaults, and a real repository under the working
 // directory that the default `current` entry points at. A hand-copied
@@ -133,6 +148,7 @@ func realRepo(t *testing.T) string {
 // testing it.
 func freshInstall(t *testing.T) (repo, runs string) {
 	t.Helper()
+	requireOMP(t)
 	repo = realRepo(t)
 	state := t.TempDir()
 	t.Chdir(repo)
@@ -141,6 +157,53 @@ func freshInstall(t *testing.T) (repo, runs string) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ATENEA_CONFIG", "")
 	return repo, filepath.Join(state, "atenea", "runs")
+}
+
+// The brick-5 claim, stated where it cannot be satisfied by accident: the far
+// side of the contract is the omp adapter driving the real client, and the
+// skeleton still beats through it.
+//
+// Everything else in this file would pass just as happily against the
+// stand-in, so a quiet revert of the runner would leave the suite green. This
+// test is what refuses that.
+func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
+	freshInstall(t)
+
+	// Who is behind the catalog, according to the core itself.
+	status, err := exec(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, status)
+	}
+	if !strings.Contains(status, "runner     omp") {
+		t.Fatalf("the far side is not the omp adapter:\n%s", status)
+	}
+
+	// And it is that far side that answers a real commission.
+	out, err := exec(t, "task", "TODO", "--trace")
+	if err != nil {
+		t.Fatalf("task: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"verdict   ok",
+		// Two source files hold the text. The vendored copy is gitignored to
+		// omp and the credentials file is refused by the adapter, so neither
+		// can be among them.
+		"matches   2",
+		"search-current       work     ripgrep",
+		"review   child=ok parent=ok (output matches the capability)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+
+	// `verdict ok` is a stronger claim than it looks. The adapter runs every
+	// record it built through the capability's declared output schema before
+	// handing it back, and that schema requires a column -- which omp never
+	// prints. A verdict of ok therefore means the translation really happened:
+	// had the column been dropped, this would read `failed invalid_input`.
+	// That the column is also the RIGHT one is pinned next to the code, in
+	// TestTheColumnIsRecoveredFromTheLineOmpReturned.
 }
 
 // The one test that proves the skeleton beats: a commission enters the CLI,

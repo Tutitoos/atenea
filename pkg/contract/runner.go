@@ -11,9 +11,10 @@ import "context"
 // across. What comes back is an Outcome or one of the failure bins -- never
 // vendor error text.
 //
-// One interface, several possible far sides: the omp adapter, the Claude Code
-// adapter, or a local stand-in while no client is wired yet. Swapping one for
-// another changes nothing above this line, which is the point.
+// One interface, several possible far sides: the omp adapter, a Claude Code
+// adapter when it exists, or a local stand-in on a machine where no client is
+// installed. Swapping one for another changes nothing above this line, which
+// is the point.
 type Runner interface {
 	// ID names the runner, so a status screen can say who is actually behind
 	// the catalog rather than implying that something is.

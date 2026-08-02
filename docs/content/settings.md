@@ -30,8 +30,14 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```toml
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
-runner = "local"            # local | none
+runner = "omp"              # omp | local | none
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
+
+  [orchestrator.omp]
+  binary = "omp"                       # bare name is looked up on PATH
+  implementations = ["ripgrep"]        # what the adapter answers for
+  match_limit = 10000                  # matches one search asks omp for
+  timeout = "30s"                      # after this, omp is stuck, not slow
 
   [orchestrator.local]
   implementations = ["ripgrep"]        # what the stand-in can actually execute
@@ -42,15 +48,22 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 a time so a laptop stays responsive. `0` means no ceiling, which is a choice
 for a build machine, not a default.
 
-`runner = "none"` leaves the core able to plan and choose but unable to
-dispatch. That is a working core with nobody attached, and the status screen
-says so rather than failing halfway through a commission.
+`runner` picks the far side of the contract. `omp` is the adapter that ships.
+`local` is a stand-in that searches the disk directly, for a machine with no
+client installed. `none` leaves the core able to plan and choose but unable to
+dispatch — a working core with nobody attached, and the status screen says so
+rather than failing halfway through a commission.
 
-The `[orchestrator.local]` block only matters while the stand-in is the runner.
-An implementation the stand-in cannot execute is not removed from the catalog:
-it survives the funnel, fails on dispatch as `unavailable`, and is marked down
-so the next run picks somebody else. The status screen lists those up front,
-under `no runner`.
+`match_limit` cannot be `0`. Zero reads like "no limit" and is precisely the
+value omp treats as "use a small default", after which it reports the short
+answer as complete. Atenea states the number instead, and a search that reaches
+it comes back with the ceiling named in `discovered` — a partial answer that
+does not say so is a wrong answer.
+
+An implementation the attached runner cannot execute is not removed from the
+catalog: it survives the funnel, fails on dispatch as `unavailable`, and is
+marked down so the next run picks somebody else. The status screen lists those
+up front, under `no runner`.
 
 Setting `checkpoint_dir = ""` after an explicit path does not disable dumps; it
 falls back to the default location. To turn checkpointing off, point the

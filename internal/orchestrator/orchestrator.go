@@ -241,6 +241,11 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		result.Spent = totalSpent(result.Steps)
 		result.Verdict = overallVerdict(result.Steps)
 		result.Matches = countMatches(result.Steps)
+		// What the far side said for itself travels too. The summary the
+		// orchestrator writes below is what it worked out by looking; this is
+		// what the runner reported, and it is the only way something like a
+		// search cut short at a ceiling ever reaches the screen.
+		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
 		record.Closed = true
 		record.Verdict = result.Verdict.String()
 		record.Updated = time.Now()
@@ -605,6 +610,27 @@ func discoveriesFrom(explored []StepResult) []contract.Discovery {
 			note += ", under " + strings.Join(areas, ", ")
 		}
 		out = append(out, contract.Discovery{Level: contract.ContextRepository, Note: note})
+	}
+	return out
+}
+
+// reported collects what each far side said about its own answer.
+//
+// The orchestrator can describe what a step found, but only the runner knows
+// how it found it, and some of that changes what the answer means: a search
+// stopped at a ceiling is not the same fact as a search that ran out of
+// matches. Two steps hitting the same wall say so once.
+func reported(steps []StepResult) []contract.Discovery {
+	var out []contract.Discovery
+	seen := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		for _, discovery := range step.Outcome.Discoveries {
+			if _, dup := seen[discovery.Note]; dup {
+				continue
+			}
+			seen[discovery.Note] = struct{}{}
+			out = append(out, discovery)
+		}
 	}
 	return out
 }

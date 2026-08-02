@@ -13,7 +13,8 @@ in the same pull request as the code.
 Status: alpha (`0.x.y`). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
-them in waves and reviews every answer.
+them in waves and reviews every answer. The far side of that dispatch is now a
+real client adapter driving the `omp` CLI, not a stand-in.
 
 ## Why
 
@@ -33,6 +34,11 @@ go build -o bin/atenea ./cmd/atenea
 
 No setup needed: with no settings file present, Atenea boots on its built-in
 defaults. `atenea config init` writes them out so you can edit them.
+
+`task` dispatches to `omp`, so it needs that CLI on `PATH`. Without it the step
+fails as `unavailable` and says so — nothing crashes. On a machine with no
+client installed, set `runner = "local"` for the stand-in that searches the
+disk directly.
 
 ```text
 run       20260802T003739-e22d82
@@ -64,12 +70,13 @@ wide rather than quietly dropping it.)
 ```text
 cmd/atenea/        entry point: the service and the operator commands
 internal/          the brain, not importable from outside
+  adapter/omp/       the client adapter: translates for the omp CLI
   checkpoint/        run receipts on disk
   config/            the single settings file
   core/              wiring, status and clean shutdown
   orchestrator/      the agent: explore, split, dispatch, review
   registry/          the Capability Registry
-  runner/local/      stand-in for the far side, until the first adapter exists
+  runner/local/      stand-in far side, for a machine with no client installed
   selector/          the funnel
 pkg/contract/      the contract shared by the core and its adapters
 docs/              documentation sources, served by Hugo on GitHub Pages

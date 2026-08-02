@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -94,10 +95,22 @@ func New(cfg config.Config) (*Core, error) {
 // buildRunner returns the far side of the dispatch seam. A core with no runner
 // is still a working core: it can plan and choose, it simply has nobody to
 // hand the work to, and the status screen says so out loud.
+//
+// Which far side is a settings question, not a code one. The omp adapter is
+// the one that ships; the stand-in is what answers on a machine where no
+// client is installed.
 func buildRunner(cfg config.Config) (contract.Runner, error) {
 	switch cfg.Orchestrator.Runner {
 	case config.RunnerNone:
 		return nil, nil
+	case config.RunnerOMP:
+		return omp.New(omp.Options{
+			Binary:          cfg.Orchestrator.OMP.Binary,
+			Implementations: cfg.Orchestrator.OMP.Implementations,
+			Sensitive:       cfg.Security.Sensitive,
+			MatchLimit:      cfg.Orchestrator.OMP.MatchLimit,
+			Timeout:         cfg.Orchestrator.OMP.Timeout,
+		})
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,

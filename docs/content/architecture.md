@@ -173,10 +173,11 @@ writing and reaching outside the machine are not.
 ### The runner seam
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
-far side belongs to somebody else: in production a client adapter. Until the
-first adapter exists a local stand-in sits exactly where the adapter will,
-outside the core, chosen by the settings file — so the skeleton beats without
-pretending the far side is already built.
+far side belongs to somebody else: a client adapter. The one that ships drives
+`omp`, and it sits outside the core, chosen by the settings file. A local
+stand-in sits in the same place for a machine where no client is installed —
+one interface, several possible far sides, and swapping them changes nothing
+above the line.
 
 A runner that cannot reach a provider says so, and that is not a bug: it is a
 provider that is not reachable from here. The step fails as `unavailable`, the
@@ -207,6 +208,28 @@ message travels alongside it so a human can still search for it verbatim.
 `external_denied` is deliberately separate from `permission_denied`: reaching
 outside the machine is the one effect that no undo takes back, so it has to be
 visible on its own.
+
+### What that costs in practice: the omp adapter
+
+The first real adapter drives `omp grep`, a tool call rather than a model turn:
+deterministic, no tokens, and nothing to log into. Translating *out* is small —
+`match_case`, `regex` and `whole_word` are declared as intent and omp's search
+has no flag for any of them, so they are folded into the pattern it does read.
+
+Translating *back* is where an adapter earns its keep, and this one is a fair
+sample of what a CLI actually hands you:
+
+| What omp does | What the adapter does about it |
+| --- | --- |
+| Prints for a human; no machine format | Reads the rendered lines, anchored so a path holding a colon still comes apart correctly |
+| Never reports a column, which the capability requires | Finds the offset again in the line omp returned, with the pattern it sent |
+| Answers a pattern it cannot compile with a clean zero | Compiles the pattern first, so a typo is `invalid_input` and not a fact |
+| Treats `-l 0` as a small default, then calls the answer complete | Always states a ceiling, and reports a search that reached it as partial |
+| Narrows to nothing when `-g` is repeated | Sends one brace glob instead of several flags |
+| Prints paths relative to whatever it was pointed at | Rebases them onto the repository, so the caller can open what it is handed |
+
+None of that is policy, and none of it leaks upwards. The core never sees a
+line of omp's output.
 
 ## Effects
 

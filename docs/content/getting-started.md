@@ -24,6 +24,12 @@ its three candidate providers.
 ./bin/atenea status
 ```
 
+Dispatching real work needs the `omp` CLI on `PATH`: that is the client adapter
+the defaults attach. Without it Atenea still plans and chooses — the step fails
+as `unavailable`, says which binary it looked for, and the catalog marks that
+provider down. On a machine with no client installed, set `runner = "local"`
+for the stand-in that searches the disk directly.
+
 ## Write your own settings
 
 ```sh

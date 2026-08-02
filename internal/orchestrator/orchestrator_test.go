@@ -383,6 +383,51 @@ func TestWhatTheLookFoundBecomesADiscovery(t *testing.T) {
 	}
 }
 
+// Only the runner knows how it reached its answer, and some of that changes
+// what the answer means. A search stopped at a ceiling is not a search that
+// ran out of matches, so what the far side says has to survive the trip.
+func TestWhatTheFarSideReportsSurvivesTheTrip(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			out := hits("internal/auth/login.go")
+			out.Discoveries = append(out.Discoveries, contract.Discovery{
+				Level: contract.ContextRepository,
+				Note:  "the answer is partial",
+			})
+			return out, nil
+		},
+	}
+	agent, _ := build(t, runner, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	partial := 0
+	for _, found := range result.Discoveries {
+		if found.Note == "the answer is partial" {
+			partial++
+		}
+	}
+	if partial == 0 {
+		t.Fatalf("the runner's own discovery was dropped: %+v", result.Discoveries)
+	}
+	// Every step reported it, and one wall is one fact.
+	if partial != 1 {
+		t.Errorf("the same note was recorded %d times, want once", partial)
+	}
+	// It travels alongside what the orchestrator worked out, not instead.
+	summary := 0
+	for _, found := range result.Discoveries {
+		if strings.Contains(found.Note, "hit(s)") {
+			summary++
+		}
+	}
+	if summary == 0 {
+		t.Error("carrying the runner's note lost the orchestrator's own summary")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The permission traveling down
 // ---------------------------------------------------------------------------

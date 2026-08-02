@@ -19,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -63,16 +64,32 @@ type Orchestrator struct {
 	// Runner names who is behind the agent.
 	Runner string
 	Local  LocalRunner
+	OMP    OMPAdapter
 }
 
-// LocalRunner configures the stand-in that runs until the first client adapter
-// exists.
+// LocalRunner configures the stand-in that runs when no client adapter is
+// reachable on this machine.
 type LocalRunner struct {
 	// Implementations the stand-in answers for. Anything else is reported
 	// unavailable, which is the bin that drives fallback.
 	Implementations []string
 	// SkipDirs are directory names never descended into.
 	SkipDirs []string
+}
+
+// OMPAdapter configures the omp client adapter.
+type OMPAdapter struct {
+	// Binary is the omp executable. A bare name is looked up on PATH, which is
+	// the normal case; a path covers an install somewhere unusual.
+	Binary string
+	// Implementations the adapter answers for.
+	Implementations []string
+	// MatchLimit caps how many matches one search asks omp for. omp always
+	// caps, so the only choice is whether Atenea states the number or lets omp
+	// pick one quietly.
+	MatchLimit int
+	// Timeout caps one omp invocation.
+	Timeout time.Duration
 }
 
 // Security is the one place delicate files are declared.
@@ -83,8 +100,10 @@ type Security struct {
 	Sensitive []string
 }
 
-// RunnerLocal and RunnerNone are the values orchestrator.runner accepts.
+// RunnerOMP, RunnerLocal and RunnerNone are the values orchestrator.runner
+// accepts.
 const (
+	RunnerOMP   = "omp"
 	RunnerLocal = "local"
 	RunnerNone  = "none"
 )
@@ -179,11 +198,19 @@ type fileOrchestrator struct {
 	CheckpointDir string          `toml:"checkpoint_dir"`
 	Runner        string          `toml:"runner"`
 	Local         fileLocalRunner `toml:"local"`
+	OMP           fileOMPAdapter  `toml:"omp"`
 }
 
 type fileLocalRunner struct {
 	Implementations *[]string `toml:"implementations"`
 	SkipDirs        *[]string `toml:"skip_dirs"`
+}
+
+type fileOMPAdapter struct {
+	Binary          string    `toml:"binary"`
+	Implementations *[]string `toml:"implementations"`
+	MatchLimit      *int      `toml:"match_limit"`
+	Timeout         string    `toml:"timeout"`
 }
 
 // fileSecurity uses a pointer so an omitted list and an explicitly empty one
@@ -348,8 +375,10 @@ const (
 	maxMaxParallel     = 100
 )
 
-// defaultServedImplementations is what the stand-in answers for: the one
-// provider in the shipped catalog that needs no index and no language support.
+// defaultServedImplementations is what a runner answers for unless the
+// settings say otherwise: the one provider in the shipped catalog that needs
+// no index and no language support. Both the omp adapter and the stand-in
+// start there, because it is the same shape of search either way.
 var defaultServedImplementations = []string{"ripgrep"}
 
 // defaultSkipDirs keeps the stand-in out of the places a real search tool
@@ -375,9 +404,15 @@ var defaultSensitive = []string{
 func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	out := Orchestrator{
 		MaxParallel:   defaultMaxParallel,
-		Runner:        RunnerLocal,
+		Runner:        RunnerOMP,
 		CheckpointDir: checkpoint.DefaultDir(),
 		Local:         LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
+		OMP: OMPAdapter{
+			Binary:          omp.DefaultBinary,
+			Implementations: defaultServedImplementations,
+			MatchLimit:      omp.DefaultMatchLimit,
+			Timeout:         omp.DefaultTimeout,
+		},
 	}
 	if o.MaxParallel != nil {
 		if *o.MaxParallel < 0 || *o.MaxParallel > maxMaxParallel {
@@ -389,12 +424,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	}
 	switch o.Runner {
 	case "":
-	case RunnerLocal, RunnerNone:
+	case RunnerOMP, RunnerLocal, RunnerNone:
 		out.Runner = o.Runner
 	default:
 		return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.runner %q is not one of %s, %s",
-			source, o.Runner, RunnerLocal, RunnerNone)
+			"settings %s: orchestrator.runner %q is not one of %s, %s, %s",
+			source, o.Runner, RunnerOMP, RunnerLocal, RunnerNone)
 	}
 	if o.CheckpointDir != "" {
 		out.CheckpointDir = o.CheckpointDir
@@ -407,6 +442,45 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	}
 	if o.Local.SkipDirs != nil {
 		out.Local.SkipDirs = *o.Local.SkipDirs
+	}
+	adapter, err := o.OMP.build(source, out.OMP)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.OMP = adapter
+	return out, nil
+}
+
+func (o fileOMPAdapter) build(source string, out OMPAdapter) (OMPAdapter, error) {
+	if strings.TrimSpace(o.Binary) != "" {
+		out.Binary = strings.TrimSpace(o.Binary)
+	}
+	if o.Implementations != nil {
+		out.Implementations = *o.Implementations
+	}
+	if o.MatchLimit != nil {
+		if *o.MatchLimit <= 0 {
+			// Zero is the tempting way to write "no limit", and it is exactly
+			// the value omp reads as "use a small default and call the answer
+			// complete". Refusing it here is cheaper than explaining a
+			// silently short search later.
+			return OMPAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.omp.match_limit must be above 0, got %d",
+				source, *o.MatchLimit)
+		}
+		out.MatchLimit = *o.MatchLimit
+	}
+	if o.Timeout != "" {
+		timeout, err := time.ParseDuration(o.Timeout)
+		if err != nil {
+			return OMPAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.omp.timeout %q: %v", source, o.Timeout, err)
+		}
+		if timeout <= 0 {
+			return OMPAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.omp.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
 	}
 	return out, nil
 }

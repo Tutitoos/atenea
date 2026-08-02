@@ -1,10 +1,12 @@
-// Package local is the stand-in that lets the skeleton beat before the first
-// client adapter exists.
+// Package local is the stand-in far side, for a machine where no client is
+// installed.
 //
-// It sits exactly where the omp adapter will sit: outside the core, behind
+// It sits exactly where the omp adapter sits: outside the core, behind
 // contract.Runner, chosen by the settings file. The core still decides and
-// delegates; this package is one of the things it delegates to. When the real
-// adapter lands, this one is deleted and nothing above the interface moves.
+// delegates; this package is one of the things it can delegate to. It was
+// written to let the skeleton beat before the first adapter existed, and it
+// stays for the case that outlives that: contract.Runner has several possible
+// far sides, and a machine with no omp on it still needs one.
 //
 // Because it stands in for a tool rather than for a brain, it holds no policy:
 // it answers exactly one capability, refuses everything else into the common

@@ -227,8 +227,20 @@ func TestTheOrchestratorHasWorkingDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Runner != config.RunnerLocal {
-		t.Errorf("runner = %q, want the stand-in", cfg.Orchestrator.Runner)
+	if cfg.Orchestrator.Runner != config.RunnerOMP {
+		t.Errorf("runner = %q, want the adapter that ships", cfg.Orchestrator.Runner)
+	}
+	if cfg.Orchestrator.OMP.Binary == "" {
+		t.Error("the adapter has no command to run")
+	}
+	if len(cfg.Orchestrator.OMP.Implementations) == 0 {
+		t.Error("the adapter serves nothing, so nothing could ever be dispatched")
+	}
+	if cfg.Orchestrator.OMP.MatchLimit <= 0 {
+		t.Error("a ceiling of zero is the one omp reads as a small default")
+	}
+	if cfg.Orchestrator.OMP.Timeout <= 0 {
+		t.Error("without a timeout a stuck omp would never fall back")
 	}
 	if cfg.Orchestrator.MaxParallel <= 0 {
 		t.Errorf("max_parallel = %d, want a real ceiling by default", cfg.Orchestrator.MaxParallel)
@@ -324,11 +336,62 @@ func TestAZeroCeilingLiftsTheLimit(t *testing.T) {
 	}
 }
 
+func TestTheOMPBlockIsRead(t *testing.T) {
+	body := minimal + `
+[orchestrator]
+
+  [orchestrator.omp]
+  binary = "/opt/omp/bin/omp"
+  implementations = ["ripgrep", "serena.search"]
+  match_limit = 25
+  timeout = "90s"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	adapter := cfg.Orchestrator.OMP
+	if adapter.Binary != "/opt/omp/bin/omp" {
+		t.Errorf("binary = %q", adapter.Binary)
+	}
+	if len(adapter.Implementations) != 2 {
+		t.Errorf("implementations = %v", adapter.Implementations)
+	}
+	if adapter.MatchLimit != 25 {
+		t.Errorf("match_limit = %d", adapter.MatchLimit)
+	}
+	if adapter.Timeout != 90*time.Second {
+		t.Errorf("timeout = %s", adapter.Timeout)
+	}
+}
+
+// Zero reads like "no limit" and is the one value omp treats as "use a small
+// default and call the short answer complete", so it cannot be accepted here.
+func TestAnUnusableMatchCeilingIsRefused(t *testing.T) {
+	for _, limit := range []string{"0", "-1"} {
+		_, err := config.Load(write(t, minimal+"\n[orchestrator.omp]\nmatch_limit = "+limit+"\n"))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("match_limit = %s -> %v, want invalid_input", limit, got)
+		}
+	}
+}
+
+func TestAnUnusableAdapterTimeoutIsRefused(t *testing.T) {
+	for _, timeout := range []string{"never", "0s", "-5s"} {
+		_, err := config.Load(write(t, minimal+"\n[orchestrator.omp]\ntimeout = \""+timeout+"\"\n"))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("timeout = %q -> %v, want invalid_input", timeout, got)
+		}
+	}
+}
+
 func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
 	// The misspellings below are the subject of the test, not an accident.
 	for _, body := range []string{
 		"\n[orchestrator]\nmax_paralel = 2\n",            //nolint:misspell // deliberate typo
 		"\n[orchestrator.local]\nimplementaitons = []\n", //nolint:misspell // deliberate typo
+		"\n[orchestrator.omp]\nbinry = \"omp\"\n",
+		"\n[orchestrator.omp]\nmatch_limt = 5\n",
 		"\n[security]\nsensitiv = []\n",
 	} {
 		_, err := config.Load(write(t, minimal+body))
