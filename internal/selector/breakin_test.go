@@ -201,3 +201,158 @@ func TestOwingMeasurementsNeverRemovesAProvider(t *testing.T) {
 		t.Errorf("the funnel dropped %v; cost and break-in only order", choice.Dropped)
 	}
 }
+
+// The starvation this whole rule exists to break, arriving by the health door
+// instead of the cost one. "Alive" is a verdict; "unknown" is the absence of a
+// look, and if the absence loses to the verdict then the first provider to
+// succeed is the only one ever dispatched -- so nothing else is ever measured,
+// and the catalog freezes on whoever happened to answer first. Found on a real
+// machine: twelve calls in a row to the one provider with a record, and a
+// newly attached client that could never earn its first.
+func TestAnUnlookedAtProviderStillGetsItsTurnAgainstAnAliveOne(t *testing.T) {
+	decision := measuring(t, []contract.Implementation{
+		impl("ripgrep", health(contract.HealthAlive, 1),
+			measured(80*time.Microsecond, 0, 40)),
+		impl("claude.search", health(contract.HealthUnknown, 0),
+			estimated(2*time.Second, 900)),
+	})
+
+	if decision.Chosen.ID != "claude.search" {
+		t.Errorf("chosen %s: a provider nobody has looked at can never earn a look", decision.Chosen.ID)
+	}
+	// And the trace must name the stage that actually settled it. Saying
+	// "healthiest" here would send a reader hunting a health bug instead of
+	// reading a break-in turn.
+	if strings.Contains(decision.Reason, "healthiest") {
+		t.Errorf("reason = %q: a break-in turn was reported as a health decision", decision.Reason)
+	}
+	if !strings.Contains(decision.Reason, "break-in turn") {
+		t.Errorf("reason = %q, want the break-in turn named", decision.Reason)
+	}
+}
+
+// Overtaking a provider the record calls alive is the one ranking a reader
+// would not predict, so the trace says it in words rather than leaving it to
+// be inferred from two lines that each look right alone.
+func TestTheTraceAnnouncesOvertakingAnAliveProvider(t *testing.T) {
+	decision := measuring(t, []contract.Implementation{
+		impl("ripgrep", health(contract.HealthAlive, 1),
+			measured(80*time.Microsecond, 0, 40)),
+		impl("claude.search", health(contract.HealthUnknown, 0),
+			estimated(2*time.Second, 900)),
+	})
+
+	said := strings.Join(decision.Notices, " | ")
+	for _, want := range []string{"claude.search", "ripgrep", "alive"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("notices = %q, want %q named", said, want)
+		}
+	}
+}
+
+// The exception is for the absence of a look, not for a bad look. Degraded and
+// down are things somebody watched happen, and buying a measurement from a
+// provider known to be limping measures the limp -- see
+// TestHealthStillOutranksTheBreakInTurn for the alive-against-degraded half.
+func TestTheTurnDoesNotReachADegradedProvider(t *testing.T) {
+	decision := measuring(t, []contract.Implementation{
+		impl("ripgrep", health(contract.HealthUnknown, 0),
+			estimated(2*time.Second, 900)),
+		impl("serena.search", health(contract.HealthDegraded, 0.4),
+			estimated(80*time.Microsecond, 0)),
+	})
+
+	if decision.Chosen.ID != "ripgrep" {
+		t.Errorf("chosen %s, want the unlooked-at one: degraded is evidence, unknown is not",
+			decision.Chosen.ID)
+	}
+}
+
+// The exception expires with break-in. Once an implementation has earned its
+// samples, "unknown" stops meaning "not yet asked" and starts meaning "asked,
+// and the answer has gone quiet" -- which is genuinely worse than alive, and
+// ranks that way.
+func TestOnceMeasuredAnUnknownProviderRanksBelowAnAliveOne(t *testing.T) {
+	decision := measuring(t, []contract.Implementation{
+		impl("claude.search", health(contract.HealthUnknown, 0),
+			measured(80*time.Microsecond, 0, selector.BreakInSamples)),
+		impl("ripgrep", health(contract.HealthAlive, 1),
+			measured(2*time.Second, 900, selector.BreakInSamples)),
+	})
+
+	if decision.Chosen.ID != "ripgrep" {
+		t.Errorf("chosen %s, want ripgrep: past break-in, health decides again and the cheaper one lost",
+			decision.Chosen.ID)
+	}
+	if !strings.Contains(decision.Reason, "healthiest") {
+		t.Errorf("reason = %q, want health named", decision.Reason)
+	}
+}
+
+// With no base attached a turn buys nothing: the call it earns is written
+// nowhere, so the provider is no closer to being measured afterwards. The
+// exception is off with it, and the funnel goes back to trusting the only
+// evidence it has.
+func TestWithMeasuringOffTheAliveProviderKeepsThePlace(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("ripgrep", health(contract.HealthAlive, 1),
+				measured(80*time.Microsecond, 0, 40)),
+			impl("claude.search", health(contract.HealthUnknown, 0),
+				estimated(2*time.Second, 900)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+
+	if decision.Chosen.ID != "ripgrep" {
+		t.Errorf("chosen %s: with nothing recording, a turn earns nothing", decision.Chosen.ID)
+	}
+}
+
+// End to end from the state a fresh install is actually in: one provider with
+// a record, one just added. The new one has to reach its samples, and the
+// rotation still has to stop -- an exception that never expired would hand the
+// work back and forth forever.
+func TestAnAliveProviderAndANewOneBothConverge(t *testing.T) {
+	samples := map[string]int{"ripgrep": 40, "claude.search": 0}
+	states := map[string]contract.HealthState{
+		"ripgrep":       contract.HealthAlive,
+		"claude.search": contract.HealthUnknown,
+	}
+	spend := map[string]contract.Sample{
+		"ripgrep":       {Duration: 80 * time.Microsecond},
+		"claude.search": {Duration: 2 * time.Second, Tokens: 900},
+	}
+
+	var order []string
+	for range 6 {
+		candidates := make([]contract.Implementation, 0, 2)
+		for _, id := range []string{"ripgrep", "claude.search"} {
+			candidates = append(candidates, impl(id, health(states[id], 0),
+				estimated(spend[id].Duration, spend[id].Tokens),
+				measured(spend[id].Duration, spend[id].Tokens, samples[id])))
+		}
+		chosen := measuring(t, candidates).Chosen.ID
+		order = append(order, chosen)
+		samples[chosen]++
+		// A call that works is what makes a provider alive, which is exactly
+		// what the turn was for.
+		states[chosen] = contract.HealthAlive
+	}
+
+	if samples["claude.search"] < selector.BreakInSamples {
+		t.Errorf("claude.search ended on %d samples, never earned its %d: %v",
+			samples["claude.search"], selector.BreakInSamples, order)
+	}
+	// And then it stops: ripgrep is genuinely cheaper, so the tail is all its.
+	for _, id := range order[len(order)-2:] {
+		if id != "ripgrep" {
+			t.Errorf("the funnel never stopped rotating: %v", order)
+			break
+		}
+	}
+}

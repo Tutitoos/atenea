@@ -296,6 +296,16 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 	}
 	ranked := slices.Clone(survivors)
 	slices.SortFunc(ranked, rankWith(req.Measuring))
+	// A break-in turn that overtakes a provider the record calls alive is the
+	// one ranking a reader would not predict, so it is said out loud. It is
+	// also self-limiting: two calls and it stops happening.
+	if len(ranked) > 1 && req.Measuring && owesMore(ranked[0], ranked[1]) &&
+		ranked[0].Health.State != ranked[1].Health.State {
+		notices = append(notices, fmt.Sprintf(
+			"%s takes the break-in turn ahead of %s, which the record says is %s: "+
+				"an implementation nobody has measured cannot earn its numbers without being sent the work",
+			ranked[0].ID, ranked[1].ID, ranked[1].Health.State))
+	}
 	return ranked[0], reasonFor(ranked, req.Measuring), notices
 }
 
@@ -309,7 +319,7 @@ func reasonFor(ranked []contract.Implementation, measuring bool) string {
 		return "the only surviving implementation"
 	}
 	first, second := ranked[0], ranked[1]
-	if first.Health.State != second.Health.State || first.Health.Score != second.Health.Score {
+	if healthSettles(first, second, measuring) {
 		return "healthiest surviving implementation"
 	}
 	if measuring && owesMore(first, second) {
@@ -342,6 +352,54 @@ func owesMore(a, b contract.Implementation) bool {
 	return a.Cost.Samples < b.Cost.Samples
 }
 
+// settlingRank is the health order the funnel actually sorts on, and it
+// differs from the raw one in a single place: an implementation still owed
+// its break-in measurements ranks with the alive ones.
+//
+// "Unknown" is not a verdict, it is the absence of a look, and losing to a
+// verdict is how it stays that way forever. The first provider to succeed
+// becomes alive, outranks every unmeasured rival, and is therefore the only
+// one ever dispatched -- so nothing else is ever measured, and the catalog
+// freezes on whoever happened to answer first. That is the same starvation
+// the break-in turn exists to break, arriving by the health door instead of
+// the cost one, and it only became reachable when the record learned to
+// promote.
+//
+// Degraded and down keep their places. Those are real evidence, somebody
+// watched them happen, and a measurement bought from a provider known to be
+// limping is a measurement of the limp.
+func settlingRank(i contract.Implementation, measuring bool) int {
+	if measuring && i.Health.State == contract.HealthUnknown && inBreakIn(i) {
+		return contract.HealthAlive.Rank()
+	}
+	return i.Health.State.Rank()
+}
+
+// healthSettles reports whether the health stage alone separates these two.
+// The ranking and the trace ask this same question so they can never disagree:
+// a reason naming a different stage than the sort used would be a lie in the
+// one place a reader goes to check.
+//
+// Wherever the break-in exception is in play the answer is no, and that is the
+// whole subtlety here. The exception lifts an unlooked-at implementation to
+// the top bucket, so the ranks it produces stop being a health report: two
+// providers can rank apart while both read "unknown", and one the record
+// calls alive can come second. Whatever the funnel then did, health is not
+// what it did it on -- the turn is, and the trace has to say the turn.
+func healthSettles(a, b contract.Implementation, measuring bool) bool {
+	if settlingRank(a, measuring) != a.Health.State.Rank() ||
+		settlingRank(b, measuring) != b.Health.State.Rank() {
+		return false
+	}
+	if a.Health.State != b.Health.State {
+		return true
+	}
+	// Score compares two providers the record can actually put side by side.
+	// The 0 an unlooked-at provider carries is not a worse number than an
+	// alive provider's 0.9, it is the absence of one.
+	return a.Health.Score != b.Health.Score
+}
+
 // rankWith orders the survivors: health, then the break-in turn, then cost,
 // then id. It is a ranking and never a filter -- nobody leaves the funnel for
 // being expensive.
@@ -358,16 +416,22 @@ func owesMore(a, b contract.Implementation) bool {
 // It converges because each turn adds a sample to whoever had the fewest: two
 // providers at zero alternate until both hold BreakInSamples, and from then on
 // cost decides with real numbers on both sides and never rotates again.
+//
+// Health still comes first, with one exception carried by settlingRank: an
+// implementation nobody has looked at yet is not held below one somebody has,
+// or the turn could never reach it.
 func rankWith(measuring bool) func(a, b contract.Implementation) int {
 	return func(a, b contract.Implementation) int {
-		if d := a.Health.State.Rank() - b.Health.State.Rank(); d != 0 {
+		if d := settlingRank(a, measuring) - settlingRank(b, measuring); d != 0 {
 			return d
 		}
-		switch {
-		case a.Health.Score > b.Health.Score:
-			return -1
-		case a.Health.Score < b.Health.Score:
-			return 1
+		if a.Health.State == b.Health.State {
+			switch {
+			case a.Health.Score > b.Health.Score:
+				return -1
+			case a.Health.Score < b.Health.Score:
+				return 1
+			}
 		}
 		if measuring {
 			switch {

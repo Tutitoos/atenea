@@ -17,6 +17,24 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A newly attached provider can still earn its first measurements.** The
+  funnel ranks on health before it hands out break-in turns, and until the
+  record learned to promote, nothing running from a CLI ever reached `alive`:
+  everybody sat at `unknown`, health tied, and the rotation worked. Promotion
+  turned that into a trap. The first provider to succeed became alive,
+  outranked every unmeasured rival, and was from then on the only one ever
+  dispatched — so nothing else was ever measured and the catalog froze on
+  whoever happened to answer first. Found by attaching a second client to a
+  machine that had been running for a while: twelve calls in a row to the one
+  provider with a record, and a new one that could never earn its first.
+  `unknown` is not a verdict, it is the absence of a look, and it no longer
+  loses to one while break-in is open. Degraded and down keep their places:
+  those are things somebody watched happen. The trace was corrected with it —
+  it had been reporting these as `healthiest surviving implementation`, which
+  was wrong even between two providers that both read `unknown`, and it now
+  says which stage really chose and names the alive provider that was
+  overtaken.
+
 - **Successful calls count as evidence of health.** The record could only ever
   make a provider look worse. The rule was written against *silence* — nobody
   probed it, so nobody knows — and then applied to success, which is not the

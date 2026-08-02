@@ -163,9 +163,22 @@ trace says `estimated` out loud, so a guess is never read as an observation.
 Waiting for those measurements is not enough, because a provider the estimate
 ranks last never runs, and one that never runs is never measured. So while a
 base is attached and somebody still owes it numbers, the turn goes to whoever
-owes the most — ahead of cost, behind health. The trace names that outright:
-`break-in turn` means cost did not decide this one at all. Once everybody has
-paid, the rotation stops on its own and cost takes over for good.
+owes the most — ahead of cost. The trace names that outright: `break-in turn`
+means cost did not decide this one at all. Once everybody has paid, the
+rotation stops on its own and cost takes over for good.
+
+"Behind health" needs one qualification, and it is the difference between a
+verdict and the absence of one. Degraded and down come before the turn: those
+are things somebody watched happen, and a measurement bought from a provider
+known to be limping measures the limp. `unknown` is not a verdict — it means
+nobody has looked — and holding it behind one is how it stays that way. The
+first provider to succeed becomes alive, would outrank every unmeasured rival,
+and would therefore be the only one ever dispatched: nothing else is ever
+measured and the catalog freezes on whoever answered first. So an
+implementation still owed its break-in measurements ranks with the alive ones
+until it has them. Attach a new client to a machine that has been running for
+months and it gets its two calls; a provider the record caught failing does
+not.
 
 That is also why cost never filters. A provider dropped for being expensive
 could never earn the measurement that showed the estimate was wrong.
