@@ -256,6 +256,42 @@ It boots the catalog and waits. `Ctrl-C` or `SIGTERM` starts a clean stop: new
 work is refused immediately, and whatever is already running gets the margin set
 by `core.shutdown_grace`.
 
+## When Atenea itself falls over
+
+Providers fail all the time; that is a normal answer with a bin on it. Atenea
+breaking is the rare one, and it is written to a separate file the instant it
+happens — before the process is allowed to die.
+
+The status screen only mentions it when there is something to mention:
+
+```text
+atenea 0.1.0-dev  contract 1.1.0  AMBER
+funnel    constraints -> reach -> health -> cost (estimated until an implementation has been measured)
+incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
+```
+
+```sh
+./bin/atenea incidents          # print the new ones, whole, with stacks
+./bin/atenea incidents --all    # including the ones already marked read
+./bin/atenea incidents clear    # move the mark; nothing is deleted
+```
+
+```text
+2026-08-02 19:32:35  orchestrator.step  run=20260802T173235-8912fd  step=ask-current  capability=code.search  repository=current  fields=query
+    the runner reached a state it does not have a name for
+    goroutine 20 [running]:
+    ...
+```
+
+Reading changes nothing on disk, so two people can investigate the same crash
+and see the same file. `fields=query` is the payload's keys and never its
+values — a crash dump is the likeliest thing to end up pasted into a bug
+report.
+
+The notebook has no settings. One that you have to switch on before it works
+is one that is off on the day you need it. It lives beside the run receipts,
+at `$XDG_STATE_HOME/atenea/incidents.jsonl`.
+
 ## Exit codes
 
 A script has to be able to tell a broken settings file from a provider that is

@@ -23,6 +23,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -40,6 +41,7 @@ Commands:
   ask CAPABILITY         Dispatch one capability against one repository
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
+  incidents              Read the crash notebook; add 'clear' to mark it read
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
   version                Print the product and contract versions
@@ -51,6 +53,18 @@ Global flags:
 `
 
 func main() {
+	// The outermost net. A panic anywhere below here would otherwise print a
+	// stack to a terminal nobody was watching and take the evidence with it
+	// when the window closed. This runs before the settings are even read, so
+	// a crash while loading them is recorded too -- which is why the notebook
+	// takes its path from the environment and not from the file it is about
+	// to fail to parse.
+	//
+	// A notebook that cannot even be prepared is not worth refusing to start
+	// over: the command still works, it just has nowhere to fall.
+	if book, err := notebook.New(notebook.DefaultPath()); err == nil {
+		defer book.Catch(notebook.Incident{Op: "atenea.main", Version: buildinfo.Version})
+	}
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "atenea: %v\n", err)
 		os.Exit(exitCode(err))
@@ -122,6 +136,8 @@ func run(args []string, out io.Writer) error {
 		return cmdAsk(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
+	case "incidents":
+		return cmdIncidents(settingsPath, commandArgs, out)
 	case "config":
 		return cmdConfig(settingsPath, commandArgs, out)
 	case "help", "-h", "--help":
@@ -157,6 +173,7 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
 	fmt.Fprintf(out, "funnel    %s\n", status.Funnel)
+	printIncidentLine(out, status.Incidents)
 
 	agent := status.Orchestrator
 	fmt.Fprintf(out, "\norchestrator %s\n", strings.ToUpper(agent.Light.String()))
@@ -193,6 +210,100 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 			repo.ID, repo.Path, orDash(repo.Scale),
 			orDash(strings.Join(repo.Languages, ",")),
 			orDash(strings.Join(repo.Indexes, ",")))
+	}
+	return nil
+}
+
+// printIncidentLine is the fourth thing the short screen owes the design,
+// after the light, the providers and the work in flight.
+//
+// It prints nothing when there is nothing, which is the normal state and the
+// one that should cost no attention. A screen carrying a permanent "incidents
+// 0" trains the eye to skip the line it exists to catch.
+func printIncidentLine(out io.Writer, in core.IncidentStatus) {
+	if in.Unread == 0 && in.Unreadable == 0 {
+		return
+	}
+	line := fmt.Sprintf("incidents %d unread", in.Unread)
+	if !in.Latest.IsZero() {
+		line += fmt.Sprintf(", latest %s", in.Latest.Format("2006-01-02 15:04:05"))
+	}
+	if in.Unreadable > 0 {
+		line += fmt.Sprintf(", %d unreadable", in.Unreadable)
+	}
+	fmt.Fprintf(out, "%s  (atenea incidents)\n", line)
+}
+
+// cmdIncidents reads the crash notebook out, and with 'clear' marks it read.
+//
+// Reading is the default and it changes nothing on disk: the same command run
+// twice prints the same thing, and one person looking never alters what the
+// next person finds. Marking read is deliberately a separate word, because it
+// is the only destructive-looking act in the pair and it should have to be
+// typed.
+func cmdIncidents(settingsPath string, args []string, out io.Writer) error {
+	all := false
+	marking := false
+	for _, arg := range args {
+		switch arg {
+		case "clear":
+			marking = true
+		case "--all":
+			all = true
+		default:
+			return contract.Fail(contract.FailureInvalidInput,
+				"incidents takes 'clear' or --all, got %q", arg)
+		}
+	}
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	if marking {
+		cleared, err := atenea.ClearIncidents()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "marked %d incident(s) read\n", cleared)
+		return nil
+	}
+	book, err := atenea.Incidents()
+	if err != nil {
+		return err
+	}
+	show := book.New()
+	if all {
+		show = book.Incidents
+	}
+	if len(show) == 0 {
+		if len(book.Incidents) > 0 {
+			fmt.Fprintf(out, "nothing new; %d incident(s) already read (--all to see them)\n",
+				len(book.Incidents))
+			return nil
+		}
+		fmt.Fprintln(out, "the crash notebook is empty")
+		return nil
+	}
+	for i, in := range show {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, in.Line())
+		// The stack is why the entry exists, so a read prints it whole. This
+		// is the long height of the two the design asks for; the status line
+		// is the short one.
+		if in.Stack != "" {
+			for _, line := range strings.Split(strings.TrimRight(in.Stack, "\n"), "\n") {
+				fmt.Fprintf(out, "    %s\n", line)
+			}
+		}
+	}
+	if book.Unreadable > 0 {
+		fmt.Fprintf(out, "\n%d line(s) could not be read; the notebook was torn mid-entry\n",
+			book.Unreadable)
+	}
+	if !all && book.Unread > 0 {
+		fmt.Fprintf(out, "\n%d shown. 'atenea incidents clear' marks them read.\n", book.Unread)
 	}
 	return nil
 }

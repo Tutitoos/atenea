@@ -18,6 +18,9 @@ them in waves and reviews every answer. Three adapters ship: two client CLIs
 attempt is measured — time, tokens and peak memory, per capability and per
 implementation — into an embedded DuckDB base, and the funnel ranks on it:
 what a step cost on the way out is what decides who answers next time in.
+When Atenea itself breaks — a panic in a step, a background job failing where
+nobody was listening — the fault is on disk before the process dies, and
+`atenea incidents` reads it back.
 
 ## Why
 
@@ -103,6 +106,7 @@ internal/           the brain, not importable from outside
   config/              the single settings file
   core/                wiring, status and clean shutdown
   metrics/             the measurement base: DuckDB, batched, one writer
+  notebook/            the crash notebook: Atenea's own faults, synced on write
   orchestrator/        the agent: explore, split, dispatch, review
   procstat/            weighing a finished child process, per platform
   registry/            the Capability Registry

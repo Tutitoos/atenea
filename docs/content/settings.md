@@ -137,7 +137,19 @@ switched off in a place you can see. Off is spelled `enabled = false`.
 
 `buffer_limit` is the ceiling on how many measurements wait in memory while
 flushes are failing. Past it the oldest are dropped and counted, because the
-only thing worse than losing a measurement is not knowing that you did.
+only thing worse than losing a measurement is not knowing that you did — the
+count lands in the crash notebook, where `atenea incidents` will show it.
+
+## The crash notebook
+
+It has none, deliberately. A notebook you have to switch on before it works is
+one that is off on the day you need it, so there is no `[notebook]` table and
+no way to move it: it is always on, at `$XDG_STATE_HOME/atenea/incidents.jsonl`,
+beside the receipts and the base.
+
+Nothing about it is tunable because nothing about it should be traded away. It
+writes one line per fault and flushes before returning — a rhythm setting would
+only ever be used to make it lose the entry it exists to keep.
 
 ## Security
 

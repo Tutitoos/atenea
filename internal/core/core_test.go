@@ -125,6 +125,11 @@ scale = "small"
 
 func build(t *testing.T, body string) *core.Core {
 	t.Helper()
+	// Every artifact a core creates without being told where -- the run
+	// receipts, the measurement base, the crash notebook -- lands under the
+	// state root. A suite that did not move it would be writing into the home
+	// directory of whoever ran it.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	path := writeTemp(t, body)
 	cfg, err := config.Load(path)
 	if err != nil {

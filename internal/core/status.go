@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -46,6 +47,26 @@ type Status struct {
 	// Chats are the sessions open right now. Two clients at once is the whole
 	// point of the isolation, and an isolation nobody can see is a claim.
 	Chats []ChatStatus
+	// Incidents is what the crash notebook has that nobody has looked at. The
+	// design asks the short screen for four things and this is the fourth, so
+	// it sits beside the light rather than inside it: a fault Atenea already
+	// survived is not the same claim as a provider being down now.
+	Incidents IncidentStatus
+}
+
+// IncidentStatus is the crash notebook in one line.
+//
+// Unread is the number, and Latest is when the newest of them happened, which
+// is what tells "three from the upgrade last month" apart from "three in the
+// last minute". Unreadable counts lines the notebook could not parse; it is
+// reported rather than swallowed because a torn entry is itself an incident
+// nobody filed.
+type IncidentStatus struct {
+	Unread     int
+	Unreadable int
+	Latest     time.Time
+	// Path is where to go and look. A count with no address is a nag.
+	Path string
 }
 
 // CapabilityStatus is one capability and the providers behind it.
@@ -114,6 +135,39 @@ type OrchestratorStatus struct {
 // one is to be trusted, so nobody reads an estimate as a measurement.
 const funnelDescription = "constraints -> reach -> health -> cost (estimated until an implementation has been measured)"
 
+// incidents reads the crash notebook for the short screen.
+//
+// A notebook that cannot be read is reported as one unreadable entry rather
+// than as nothing. Silence here would be the worst possible answer: the whole
+// artifact exists so that a fault cannot pass unmentioned, and a status screen
+// saying "no incidents" because it could not open the file would be a lie told
+// by the very thing meant to prevent one.
+func (c *Core) incidents() IncidentStatus {
+	out := IncidentStatus{Path: c.notebook.Path()}
+	read, err := c.notebook.Read()
+	if err != nil {
+		out.Unreadable = 1
+		return out
+	}
+	out.Unread, out.Unreadable = read.Unread, read.Unreadable
+	if fresh := read.New(); len(fresh) > 0 {
+		out.Latest = fresh[len(fresh)-1].At
+	}
+	return out
+}
+
+// Incidents is the crash notebook, whole, for whoever wants to read it out.
+//
+// It changes nothing, and that is the contract the command depends on: two
+// people investigating the same crash must see the same file, and neither
+// should discover that the other's looking is why theirs is now marked.
+func (c *Core) Incidents() (notebook.Read, error) { return c.notebook.Read() }
+
+// ClearIncidents marks everything currently in the notebook as read and
+// reports how many that was. It is the only call that moves the mark, which
+// is why it is a separate verb everywhere it appears.
+func (c *Core) ClearIncidents() (int, error) { return c.notebook.Clear() }
+
 // Status builds the snapshot.
 func (c *Core) Status() Status {
 	status := Status{
@@ -125,6 +179,7 @@ func (c *Core) Status() Status {
 		Light:    LightGreen,
 		Funnel:   funnelDescription,
 	}
+	status.Incidents = c.incidents()
 
 	for _, capability := range c.catalog.Capabilities() {
 		entry := CapabilityStatus{

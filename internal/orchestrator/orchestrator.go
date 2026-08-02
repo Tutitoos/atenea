@@ -23,8 +23,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/metrics"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -127,6 +129,9 @@ type Config struct {
 	// funnel keeps ranking on the declared estimates, and break-in turns are
 	// off: nothing can be earned when nothing is written down.
 	Base Base
+	// Notebook is where a panic goes on its way out. Nil records nothing,
+	// which is what a hand-assembled test wants; the core always attaches one.
+	Notebook *notebook.Notebook
 	// MaxParallel caps how many steps of one wave run at a time. Zero means no
 	// ceiling. The ceiling belongs in the settings because the real limit is
 	// the machine, and the machine is not the same one everywhere.
@@ -143,6 +148,7 @@ type Agent struct {
 	checkpoints *checkpoint.Store
 	meter       Meter
 	base        Base
+	notebook    *notebook.Notebook
 	maxParallel int
 }
 
@@ -200,6 +206,7 @@ func New(cfg Config) (*Agent, error) {
 		checkpoints: store,
 		meter:       meter,
 		base:        cfg.Base,
+		notebook:    cfg.Notebook,
 		maxParallel: cfg.MaxParallel,
 	}, nil
 }
@@ -582,7 +589,7 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 			runnable = append(runnable, step)
 		}
-		done = append(done, a.runWave(ctx, runnable)...)
+		done = append(done, a.runWave(ctx, result.RunID, runnable)...)
 		slices.SortFunc(done, func(x, y StepResult) int { return strings.Compare(x.Step.ID, y.Step.ID) })
 
 		for _, step := range done {
@@ -630,7 +637,7 @@ func blockedBy(step contract.Step, failed map[string]struct{}) (string, bool) {
 }
 
 // runWave executes one wave and reviews each child as it finishes.
-func (a *Agent) runWave(ctx context.Context, wave []contract.Step) []StepResult {
+func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step) []StepResult {
 	out := make([]StepResult, len(wave))
 	limit := a.maxParallel
 	if limit <= 0 || limit > len(wave) {
@@ -644,6 +651,19 @@ func (a *Agent) runWave(ctx context.Context, wave []contract.Step) []StepResult 
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
+			// Registered last so it runs first. A panic in here would
+			// otherwise take the process down from a goroutine whose stack
+			// says nothing about which step was being run, on a machine where
+			// the operator sees only that Atenea stopped existing.
+			defer a.notebook.Catch(notebook.Incident{
+				Op:         "orchestrator.step",
+				RunID:      runID,
+				Step:       step.ID,
+				Capability: step.Capability,
+				Repository: step.Repository,
+				Fields:     notebook.FieldsOf(step.Payload),
+				Version:    buildinfo.Version,
+			})
 			out[i] = a.runStep(ctx, step)
 		}()
 	}

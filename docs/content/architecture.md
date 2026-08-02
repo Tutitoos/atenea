@@ -365,6 +365,71 @@ So a charge travels on the outcome as its own number, is totalled onto the
 receipt, and is filed on the paper copy — a receipt with no price on it is not
 a receipt. It appears on screen only when it is not zero.
 
+## The crash notebook
+
+The base above records what work cost. The notebook records what Atenea broke,
+and they are separate files on purpose: a measurement is a batch of ordinary
+facts about a normal day, and an internal fault is one rare fact that must be
+on disk before the process that noticed it is allowed to die.
+
+```text
+  measurements ---> [buffer] ---> every 30s ---> metrics.duckdb   (batched)
+  incidents    -------------------------------> incidents.jsonl   (synced, now)
+```
+
+One line of JSON per fault, appended and flushed before the call returns. The
+cost is real — a disk sync on a path that is meant to be rare — and it is the
+entire point: a notebook that batches loses the last entry in exactly the crash
+it exists to describe.
+
+### What counts as an incident
+
+Only Atenea's own faults. A provider that is down, a timeout, a rejected
+payload — those are ordinary answers with bins of their own, and filing them
+here would bury the rare entry under a thousand routine ones.
+
+| Written down | Not written down |
+| --- | --- |
+| A panic in a step, or in the wave that runs it | A far side returning `unavailable` |
+| A background flush or roll-up that failed | A capability the catalogue does not have |
+| Measurements dropped at the buffer ceiling | A step the reviewer rejected |
+
+The two panic sites are the two places a fault would otherwise vanish. A step
+runs in its own goroutine, so a panic there takes the whole process down past
+every caller that might have logged it; and `main` is where anything the step
+missed arrives. Both catch, write, and re-panic — the notebook makes the fall
+recoverable to *read*, never survivable.
+
+Background jobs are the opposite failure: nobody is waiting on their return
+value, so a flush failing every thirty seconds for an hour used to look exactly
+like a flush succeeding every thirty seconds for an hour. Now the first one
+writes an entry. The dropped-measurement count gets its own, because it is the
+more serious half: the job will try again, those rows are gone, and the base
+the funnel ranks on is short by exactly that much.
+
+### Names, never values
+
+An incident carries the shape of what was running — the step, the capability,
+the repository, the tool version, and the payload's **keys**. Never a value.
+
+This is the same rule the sensitive-path list follows, for the same reason: a
+crash dump is the likeliest artifact to be pasted into a bug report. `query`
+tells you which field was in play; the string somebody searched for tells you
+nothing you could not get by reproducing it, and it might be a token.
+
+### Unread, not unresolved
+
+The status screen shows a count and a date, and only when the count is not
+zero — a permanent `incidents 0` trains the eye to skip the one line it exists
+to catch. `atenea incidents` prints them whole, stacks included, and changes
+nothing: two people investigating the same crash see the same file. Moving the
+mark is a separate word, `atenea incidents clear`, and it marks read rather
+than deleting. The notebook is the record; the mark is just where you left off.
+
+A torn last line — the file's own crash, mid-write — is counted and announced
+rather than skipped. It is the one thing that would make the count quietly
+wrong.
+
 ## Adapters are dumb
 
 All the intelligence stays in the core. An adapter translates a request into

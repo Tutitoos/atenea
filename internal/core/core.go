@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
@@ -22,6 +23,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/metrics"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/registry"
 	"github.com/Tutitoos/atenea/internal/runner/local"
@@ -42,6 +44,9 @@ type Core struct {
 	// measurements is the baseline, and the core is its only writer. It is nil
 	// when the settings turned measuring off.
 	measurements *metrics.Store
+	// notebook is the crash notebook. Always present: it needs no settings and
+	// there is no state of the world in which not having one is better.
+	notebook *notebook.Notebook
 	// beats serves every background maintenance task in one lane, so the
 	// flush, the roll-up and whatever comes next cannot come due at the same
 	// second and fight over the same file.
@@ -120,7 +125,15 @@ func New(cfg config.Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, beats, err := buildMetrics(cfg.Metrics)
+	// The notebook comes before the store on purpose: everything from here on
+	// can fall over, and the point of the file is that the fall gets written
+	// down. It needs no settings of its own -- a crash notebook you have to
+	// configure before it works is one that is off when you need it.
+	book, err := notebook.New(notebook.DefaultPath())
+	if err != nil {
+		return nil, err
+	}
+	store, beats, err := buildMetrics(cfg.Metrics, book)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +165,7 @@ func New(cfg config.Config) (*Core, error) {
 		// leaves both off together -- a core that never learns is at least
 		// consistent about it.
 		Base:        base,
+		Notebook:    book,
 		MaxParallel: cfg.Orchestrator.MaxParallel,
 	})
 	if err != nil {
@@ -164,6 +178,7 @@ func New(cfg config.Config) (*Core, error) {
 		runners:      runners,
 		checkpoints:  checkpoints,
 		measurements: store,
+		notebook:     book,
 		beats:        beats,
 		agent:        agent,
 		sessions:     make(map[string]*Session),
@@ -176,7 +191,13 @@ func New(cfg config.Config) (*Core, error) {
 // The clock exists either way. A core with measuring switched off still has a
 // maintenance lane, it simply has nothing in it, and that keeps the shutdown
 // path from having to ask which kind of core it is stopping.
-func buildMetrics(cfg config.Metrics) (*metrics.Store, *clock.Clock, error) {
+//
+// Both jobs are wrapped so their failures reach the crash notebook. A job that
+// runs on a beat has nobody waiting on its return value -- that is the whole
+// point of a beat -- so until now a flush failing every thirty seconds for an
+// hour looked exactly like a flush succeeding every thirty seconds for an
+// hour.
+func buildMetrics(cfg config.Metrics, book *notebook.Notebook) (*metrics.Store, *clock.Clock, error) {
 	if !cfg.Enabled {
 		beats, err := clock.New()
 		return nil, beats, err
@@ -185,29 +206,81 @@ func buildMetrics(cfg config.Metrics) (*metrics.Store, *clock.Clock, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	watch := &maintenance{book: book, store: store}
 	beats, err := clock.New(
 		clock.Job{
 			Name:  jobFlush,
 			Every: cfg.Flush,
-			Run:   store.Flush,
+			Run:   watch.wrap(jobFlush, store.Flush),
 		},
 		clock.Job{
 			Name:  jobCompact,
 			Every: cfg.Compact,
-			Run: func(ctx context.Context) error {
+			Run: watch.wrap(jobCompact, func(ctx context.Context) error {
 				// Guarded by a mark on disk rather than by the beat alone.
 				// The beat only exists while a core is held up; most Atenea
 				// processes are a command that lives for a second, and the
 				// history still has to be kept in shape for them.
 				_, err := store.CompactIfDue(ctx, time.Now(), cfg.Compact)
 				return err
-			},
+			}),
 		},
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	return store, beats, nil
+}
+
+// maintenance turns a failed background job into an incident.
+//
+// It reports two different facts and keeps them apart. A job that failed is
+// recoverable: the rows are still in the buffer and the next beat will try
+// again. Measurements dropped at the buffer ceiling are not -- that is the
+// baseline being quietly falsified, and it is the one thing here worth waking
+// up for.
+type maintenance struct {
+	book  *notebook.Notebook
+	store *metrics.Store
+	// reported is the drop count already written down, so a ceiling that
+	// stays breached does not file the same incident on every beat.
+	reported atomic.Int64
+}
+
+func (m *maintenance) wrap(op string, run func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		err := run(ctx)
+		if err != nil {
+			_ = m.book.Record(notebook.Incident{
+				Op:      op,
+				Detail:  err.Error(),
+				Version: buildinfo.Version,
+			})
+		}
+		m.checkDrops()
+		return err
+	}
+}
+
+// checkDrops files an incident for measurements the store threw away.
+//
+// The count is cumulative and only ever grows, so the incident says how many
+// went since the last one rather than how many there have ever been: a
+// notebook read a week later should be able to say when the losses happened,
+// not just that they did.
+func (m *maintenance) checkDrops() {
+	dropped := int64(m.store.Dropped())
+	seen := m.reported.Swap(dropped)
+	if dropped <= seen {
+		return
+	}
+	_ = m.book.Record(notebook.Incident{
+		Op: "metrics.dropped",
+		Detail: fmt.Sprintf(
+			"%d measurements were dropped at the buffer ceiling and are gone; the baseline is short by that much",
+			dropped-seen),
+		Version: buildinfo.Version,
+	})
 }
 
 // buildRunners returns the far side of the dispatch seam. A core with no
