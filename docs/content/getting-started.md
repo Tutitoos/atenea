@@ -187,6 +187,12 @@ including the ones that failed. That base is what the funnel will rank on once
 it has real figures to prefer over the estimates in the settings file. Nothing
 has to be switched on for it, and `enabled = false` under `[metrics]` stops it.
 
+What a step *charged*, if anything did, is not in there. Money is never one of
+the axes the funnel ranks on, so it stays out of the base and goes on the
+receipt instead: a `charged` line on the summary when a run cost anything, the
+step that incurred it under `--trace`, and `spent_usd` on the run in
+`$XDG_STATE_HOME/atenea/runs`.
+
 ## Ask for one capability
 
 `task` is a commission: explore, split, dispatch. `ask` is the atom underneath

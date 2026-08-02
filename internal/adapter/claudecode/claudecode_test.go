@@ -316,7 +316,11 @@ func TestEveryFailureIsSortedIntoTheSharedBins(t *testing.T) {
 	}{
 		{"expired login", "Failed to authenticate: OAuth session expired", contract.FailureUnavailable},
 		{"never logged in", "You are not logged in", contract.FailureUnavailable},
-		{"spending ceiling", "Reached max budget of $0.25", contract.FailureTimeout},
+		// Money is a permission: the ceiling is one Atenea set and passed
+		// down, so running out of it is a refusal on this machine. The turn
+		// ceiling next to it is not -- Atenea never grants turns, so that one
+		// really is the far side giving up.
+		{"spending ceiling", "Reached max budget of $0.25", contract.FailurePermissionDenied},
 		{"turn ceiling", "Stopped: error_max_turns", contract.FailureTimeout},
 		{"refused an action", "Permission denied for tool Write", contract.FailurePermissionDenied},
 		{"missing target", "no such file or directory", contract.FailureNotFound},

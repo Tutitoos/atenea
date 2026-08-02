@@ -48,11 +48,16 @@ const DefaultBinary = "claude"
 // rather than thinking, and the timeout bin is what lets the core fall back.
 const DefaultTimeout = 5 * time.Minute
 
-// DefaultBudgetUSD caps what one commission may spend.
+// DefaultBudgetUSD caps what one invocation may spend.
 //
 // A model turn with no ceiling is a runaway, and unlike a tool call it costs
 // real money. The number is deliberately small: this adapter answers a flat
 // text search, and a search that needs more than this has gone wrong.
+//
+// One invocation, not one commission: a run that dispatches four steps to this
+// adapter may spend this four times over. A ceiling that belongs to the
+// commission has to live with the grant, not here -- see contract.Permission,
+// where the gap is written down.
 const DefaultBudgetUSD = 0.25
 
 // defaultContextLines matches the capability's declared semantics.
@@ -205,17 +210,21 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		Result:  result,
 		Verdict: contract.VerdictOK,
 		Spent:   spent,
+		// Money travels as a number of its own, never folded into the token
+		// count: the baseline ranks on tokens, and a dollar rounded into them
+		// would be a price list quietly poisoning a measurement.
+		SpentUSD: answer.TotalCostUSD,
 	}
 	if answer.TotalCostUSD > 0 {
-		// The measurement base has three axes -- time, tokens, memory -- and
-		// money is not one of them. Rounding dollars into the token count
-		// would poison the baseline the selector learns from, so the figure
-		// is reported as what it is: a fact about this run, in the one
-		// channel that carries facts.
+		// Reported against the ceiling rather than on its own, because the
+		// number that means something is the fraction of the grant it used. A
+		// call that spent nine tenths of what it was allowed answered this
+		// time and will not answer a slightly bigger question, and that is
+		// worth knowing before it fails rather than after.
 		outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
 			Level: contract.ContextRepository,
-			Note: fmt.Sprintf("claude code answered %s for $%.4f over %d turn(s)",
-				req.Repository.ID, answer.TotalCostUSD, answer.NumTurns),
+			Note: fmt.Sprintf("claude code answered %s for $%.4f of its $%.2f ceiling over %d turn(s)",
+				req.Repository.ID, answer.TotalCostUSD, r.budget, answer.NumTurns),
 		})
 	}
 	return outcome, nil
@@ -426,16 +435,27 @@ func failureFor(message string, runErr error) *contract.Failure {
 		// which is the bin that drives fallback to somebody who is.
 		return contract.Fail(contract.FailureUnavailable,
 			"claude code is not logged in on this machine").WithRaw(text)
+	case strings.Contains(lower, "budget"):
+		// Money is a permission, so running out of it is a refusal, not
+		// slowness. The ceiling is one Atenea set and passed down itself,
+		// which is exactly what this bin means: an action refused on this
+		// machine. Calling it a timeout said the provider was slow, sent the
+		// reader to look at latency, and hid the one fact that would have
+		// fixed it -- the grant was too small.
+		//
+		// Nothing about the fallback changes: no bin but `unavailable` marks
+		// a provider down, and a ceiling reached says nothing about health.
+		// It is checked before the generic refusal below so the reason names
+		// the ceiling rather than saying "refused the work".
+		return contract.Fail(contract.FailurePermissionDenied,
+			"claude code stopped at its spending ceiling").WithRaw(text)
 	case strings.Contains(lower, "permission"), strings.Contains(lower, "denied"):
 		return contract.Fail(contract.FailurePermissionDenied,
 			"claude code refused the work").WithRaw(text)
-	case strings.Contains(lower, "budget"):
-		// A ceiling reached is not a crash: the turn stopped early and the
-		// answer is not there. Timeout is the bin for "gave up before
-		// finishing", and it is the one that lets the core try somebody else.
-		return contract.Fail(contract.FailureTimeout,
-			"claude code stopped at its spending ceiling").WithRaw(text)
 	case strings.Contains(lower, "max turns"), strings.Contains(lower, "max_turns"):
+		// The turn ceiling stays a timeout, and the difference is who set it:
+		// Atenea never grants turns, so this is the far side giving up on its
+		// own rather than a grant of ours running out.
 		return contract.Fail(contract.FailureTimeout,
 			"claude code stopped at its turn ceiling").WithRaw(text)
 	case strings.Contains(lower, "timed out"), strings.Contains(lower, "timeout"):

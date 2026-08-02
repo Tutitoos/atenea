@@ -38,15 +38,20 @@ type Run struct {
 
 // StepState is one node of the plan as it stood when the dump was taken.
 type StepState struct {
-	ID             string    `json:"id"`
-	Capability     string    `json:"capability"`
-	Repository     string    `json:"repository"`
-	Implementation string    `json:"implementation,omitempty"`
-	Verdict        string    `json:"verdict"`
-	Review         string    `json:"review,omitempty"`
-	Failure        string    `json:"failure,omitempty"`
-	DurationMS     int64     `json:"duration_ms"`
-	ClosedAt       time.Time `json:"closed_at"`
+	ID             string `json:"id"`
+	Capability     string `json:"capability"`
+	Repository     string `json:"repository"`
+	Implementation string `json:"implementation,omitempty"`
+	Verdict        string `json:"verdict"`
+	Review         string `json:"review,omitempty"`
+	Failure        string `json:"failure,omitempty"`
+	DurationMS     int64  `json:"duration_ms"`
+	// SpentUSD is what this step was charged, when anything was. It is here
+	// and not in the measurement base on purpose: the base ranks providers
+	// and money must never rank, but a receipt with no price on it is not a
+	// receipt. Omitted when zero so free work does not carry a price tag.
+	SpentUSD float64   `json:"spent_usd,omitempty"`
+	ClosedAt time.Time `json:"closed_at"`
 }
 
 // DefaultDir is where runs are kept when the settings file says nothing.

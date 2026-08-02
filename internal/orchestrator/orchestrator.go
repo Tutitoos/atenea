@@ -224,7 +224,11 @@ type Result struct {
 	Discoveries []contract.Discovery
 	Verdict     contract.Verdict
 	Spent       contract.Sample
-	Matches     int
+	// SpentUSD is what the commission was charged, over every step. Reported,
+	// never ranked: see contract.Outcome.SpentUSD for why money is not one of
+	// the measured axes.
+	SpentUSD float64
+	Matches  int
 }
 
 // Phase is one measured stretch of the run.
@@ -298,6 +302,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	// a commission interrupted halfway is exactly the one worth reading back.
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
+		result.SpentUSD = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps)
 		result.Matches = countMatches(result.Steps)
 		// What the far side said for itself travels too. The summary the
@@ -410,6 +415,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	}
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
+		result.SpentUSD = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps)
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
@@ -827,6 +833,18 @@ func totalSpent(steps []StepResult) contract.Sample {
 	return spent
 }
 
+// totalUSD is what the commission was charged, summed over every step that
+// cost money. It is kept apart from totalSpent because money is not one of
+// the measured axes: it never reaches the baseline and it never ranks. It is
+// here so a human reading the receipt can see what an answer cost them.
+func totalUSD(steps []StepResult) float64 {
+	var usd float64
+	for _, step := range steps {
+		usd += step.Outcome.SpentUSD
+	}
+	return usd
+}
+
 // overallVerdict is the parent's word for the whole commission: one failed
 // step is a failed commission, because half-done work presented as done is
 // the thing reviewing exists to prevent.
@@ -852,6 +870,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Review:         step.Review.Parent.String(),
 		Failure:        step.Failure,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
+		SpentUSD:       step.Outcome.SpentUSD,
 		ClosedAt:       time.Now(),
 	}
 }

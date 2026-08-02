@@ -14,6 +14,23 @@ import (
 // permission when it splits the work, and the child simply obeys the stamp.
 // Letting each child decide would mean every agent interpreting the boundary
 // its own way, and one of them eventually reading it generously.
+//
+// # Money belongs here, and is not here yet
+//
+// A spending ceiling is a permission, not a cost: it is the user saying how
+// much a piece of work may draw, in the same breath as saying which effects it
+// may cause. Cost is what something turned out to be; a grant is what it was
+// allowed to be, decided before anything ran.
+//
+// Today the only ceiling is `budget_usd` on the Claude Code adapter, which
+// means each paid adapter would grow its own, none of them would add up, and a
+// commission could spend the same ceiling once per provider. Moving it here --
+// a grant attached to the commission, spent down as steps close, and refused
+// when it runs out -- is its own brick. It is not built.
+//
+// Until it is, a ceiling reached is reported as FailurePermissionDenied and
+// what was actually charged is reported on the receipt, so the gap is visible
+// rather than silent.
 type Permission struct {
 	// Task is the commission the permission came from, kept verbatim so an
 	// audit can see what was actually authorized.

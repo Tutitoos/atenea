@@ -216,4 +216,20 @@ type Outcome struct {
 	// string, so an upgrade starts a fresh baseline instead of dragging the
 	// old numbers along. Empty means the far side would not say.
 	ToolVersion string
+	// SpentUSD is what the far side actually charged for this call, or zero
+	// when nothing was charged or nobody said.
+	//
+	// It is deliberately not in Sample. Sample is the measurement base: three
+	// physical facts about a run -- time, tokens, memory -- that come out the
+	// same if you run the same work again. A dollar figure is a fact about a
+	// price list and an account, and it changes without anything in the
+	// repository changing. Filed as a measurement it would silently rewrite
+	// the meaning of every historical row the next time a price moved, and it
+	// would average across whoever's key happened to pay.
+	//
+	// So money never ranks. It is reported: summed onto the receipt, so a
+	// human can see what a commission cost. What money does govern is
+	// permission -- a ceiling on what one call may spend -- and that lives
+	// with the grant, not here.
+	SpentUSD float64
 }

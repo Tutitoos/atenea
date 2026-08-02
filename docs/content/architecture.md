@@ -321,6 +321,28 @@ still has to be kept in shape for them. The mark is written inside the same
 transaction that does the work, so two Ateneas starting together cannot both
 decide they are the one to do it.
 
+### Money is not one of the axes
+
+Some far sides charge. That number is reported, never ranked, and never
+reaches the base.
+
+Ranking on it would re-order every provider the day a price list changed, with
+nothing in the numbers to say why: the same call, the same speed, a different
+seat in the funnel. Worse, the base is indexed by capability, implementation
+and repository — not by which account paid — so two machines on different
+plans would average into a figure that describes neither. Duration, tokens and
+memory repeat: run the same work twice and the same numbers come back. A price
+is a fact about a contract, not about the work.
+
+Nor is it folded into the token count as a common currency. A cheap-per-token
+model that talks twice as much is genuinely a real trade-off, and pricing it
+away would hide exactly the case worth seeing. Tokens are what was used;
+dollars are what somebody was charged for using them.
+
+So a charge travels on the outcome as its own number, is totalled onto the
+receipt, and is filed on the paper copy — a receipt with no price on it is not
+a receipt. It appears on screen only when it is not zero.
+
 ## Adapters are dumb
 
 All the intelligence stays in the core. An adapter translates a request into
@@ -413,6 +435,28 @@ Every capability declares what it causes, in three groups: `read`, `write`,
 `external`. Writing breaks something of your own, at home, and can be undone.
 Reaching outside escapes the machine and cannot. Putting both in one bag would
 give the dangerous one the permissions of the harmless one.
+
+### Money is a permission, not a cost
+
+A spending ceiling belongs in this list, even though it is not written in it
+yet. Cost is what something turned out to be; a ceiling is what it was allowed
+to be, decided before anything ran — which makes it the same kind of thing as
+an effect the commission does or does not cover. So running out of it is
+`permission_denied`, not `timeout`: the provider was not slow, the grant was
+too small, and calling it slowness sends whoever reads the receipt to look at
+latency.
+
+Nothing about the fallback changes. Only `unavailable` marks a provider down,
+and a ceiling reached says nothing about health — the funnel is free to hand
+the next step to the same provider, which is right, because the next step may
+be one it can afford.
+
+Today the only ceiling is `budget_usd` on the Claude Code adapter, and it caps
+**one invocation**: a commission that dispatches four steps to it may spend it
+four times over. A grant that belongs to the commission has to live with the
+permission, spent down as steps close. That is its own brick and it is not
+built; until it is, what was actually charged is on the receipt, so the gap is
+visible rather than silent.
 
 ## Contract versioning
 

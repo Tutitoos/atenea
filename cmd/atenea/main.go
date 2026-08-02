@@ -571,6 +571,12 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		fmt.Fprintf(out, "  %-8s %d step(s), %s\n",
 			phase.Name, phase.Steps, phase.Spent.Duration.Round(time.Millisecond))
 	}
+	// Money is only mentioned when money changed hands. A "$0.0000" line on
+	// every run of a free tool would train the eye to skip the one line that
+	// matters on the run where it is not zero.
+	if result.SpentUSD > 0 {
+		fmt.Fprintf(out, "charged   $%.4f\n", result.SpentUSD)
+	}
 
 	if len(result.Discoveries) > 0 {
 		fmt.Fprintf(out, "\ndiscovered\n")
@@ -602,6 +608,13 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		fmt.Fprintf(out, "  %-20s %-8s %-24s %s\n",
 			step.Step.ID, step.Phase, orDash(step.Decision.Chosen.ID),
 			step.Spent.Duration.Round(time.Millisecond))
+		// The charge sits on its own line, and only on the steps that had
+		// one. Money is broken out per step rather than per phase because a
+		// phase tally says how much went, and this says who to go and look
+		// at. Phases stay a duration count.
+		if step.Outcome.SpentUSD > 0 {
+			fmt.Fprintf(out, "      charged  $%.4f\n", step.Outcome.SpentUSD)
+		}
 		fmt.Fprintf(out, "      review   child=%s parent=%s (%s)\n",
 			step.Review.Child, step.Review.Parent, step.Review.Reason)
 		if step.Review.Disagreed {

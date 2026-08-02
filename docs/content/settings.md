@@ -84,6 +84,16 @@ does not say so is a wrong answer.
 `budget_usd` cannot be `0` either, for the same reason and with worse
 consequences: a model turn with no ceiling is a runaway.
 
+It caps **one invocation**, not one commission: a task that dispatches four
+steps to Claude Code may spend it four times over. A grant that belongs to the
+whole commission is its own brick and is not built yet, so until it is, what
+each call actually charged is on the receipt — `charged` on the summary, and
+per step under `--trace`.
+
+Reaching the ceiling is reported as `permission_denied`, not as slowness: the
+far side was not slow, the grant was too small. It does not mark the provider
+down, so the next step can still go to it.
+
 An implementation no attached runner can execute is not removed from the
 catalog. It is dropped by the funnel's `reach` stage, which says so in the
 trace — `no attached runner serves it`, not `down`, because a provider nobody
