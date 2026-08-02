@@ -185,5 +185,13 @@ Cost was deliberately left out of the funnel until real measurements existed
   and a dirty tree says `modified`: `0.1.0+9b34dd0.modified` is not a release,
   whatever the number claims. Build metadata is ignored when versions are
   compared, which is the right meaning — it *is* 0.1.0, built from that tree.
+- **One binary ships: `linux-amd64`.** The measurement base is an embedded
+  DuckDB, which is a cgo dependency, so cross-compiling needs a C toolchain per
+  target and `CGO_ENABLED=0` fails outright rather than degrading. Rather than
+  publish a binary for a machine nobody has run Atenea on, the release carries
+  the platform its suite passed on. Everything else builds from source with
+  `go build ./cmd/atenea`, which is what the README documents anyway — and
+  `atenea service install` is implemented for `systemd --user` and says so
+  plainly everywhere else.
 
 [0.1.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.1.0

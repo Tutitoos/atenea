@@ -57,20 +57,28 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
-      - name: Build the artifacts
+      # The measurement base is an embedded DuckDB, which is a cgo dependency,
+      # so there is no free cross-compile: every target needs a C toolchain for
+      # that target. `CGO_ENABLED=0` does not degrade gracefully either -- the
+      # platform bindings are cgo-gated, so the build fails on undefined
+      # symbols rather than producing a slower binary.
+      #
+      # So the release carries the one platform whose suite just passed on this
+      # runner, and nothing else. A binary for a machine nobody has run Atenea
+      # on is a claim the project cannot back: `atenea service install` is
+      # implemented for systemd and says so everywhere else. Other platforms
+      # build from source, which is what the README documents anyway.
+      - name: Build the artifact
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os="${target%/*}"
-            arch="${target#*/}"
-            # Release artifacts are built from an unpacked tree with no VCS
-            # stamp of their own, so they report the bare number -- which is
-            # what a release should say.
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-              go build -trimpath -buildvcs=false -o "dist/atenea-${version}-${os}-${arch}" ./cmd/atenea
-          done
+          # Built from a tree with no VCS stamp, so it reports the bare number
+          # -- which is what a release should say.
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -buildvcs=false \
+            -o "dist/atenea-${version}-linux-amd64" ./cmd/atenea
+          ./dist/"atenea-${version}-linux-amd64" version
           cd dist && sha256sum atenea-* > SHA256SUMS
 
       - name: Publish
