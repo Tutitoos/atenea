@@ -36,7 +36,8 @@ No setup needed: with no settings file present, Atenea boots on its built-in
 defaults. `atenea config init` writes them out so you can edit them.
 
 `task` dispatches to `omp`, so it needs that CLI on `PATH`. Without it the step
-fails as `unavailable` and says so — nothing crashes. On a machine with no
+fails as `unavailable`, the report says which binary it looked for, and the
+command exits `6` — a commission that failed, not a crash. On a machine with no
 client installed, set `runner = "local"` for the stand-in that searches the
 disk directly.
 

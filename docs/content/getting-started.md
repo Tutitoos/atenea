@@ -146,7 +146,14 @@ simply down, so the failure bins map onto distinct codes.
 | `3` | `not_found` — unknown capability, repository, or nothing fits |
 | `4` | `unavailable` / `timeout` |
 | `5` | `permission_denied` / `external_denied` |
+| `6` | the commission ran and came back `failed` |
 | `1` | anything unsorted, which means a bug |
+
+`6` is a different axis from the rest. Nothing about the call was wrong and the
+report on stdout is complete — the work is what failed. It cannot borrow `1`,
+which means a bug, and it cannot borrow the bin of whichever step failed,
+because several steps can fail for different reasons in one run. The reason
+lives in the report; the exit code only says that there is one.
 
 ## Development
 

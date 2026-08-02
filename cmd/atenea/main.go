@@ -53,9 +53,22 @@ func main() {
 	}
 }
 
+// errCommissionFailed marks a run that was carried out cleanly and came back
+// with a failed verdict. The invocation was not broken -- the report on stdout
+// is the whole story, step by step -- but a script has to be able to tell a
+// commission that worked from one that did not, and the exit code is the only
+// channel it can read without parsing the screen.
+var errCommissionFailed = errors.New(
+	"the commission failed; the verdict above says which step and why")
+
 // exitCode maps the failure bins onto shell exit codes so a script can tell a
 // broken settings file from a provider that is simply down.
 func exitCode(err error) int {
+	// A verdict is a different axis from a failure bin: the work failed, the
+	// invocation did not. It cannot borrow 1, which means a bug.
+	if errors.Is(err, errCommissionFailed) {
+		return 6
+	}
 	switch contract.KindOf(err) {
 	case contract.FailureInvalidInput:
 		return 2
@@ -337,7 +350,17 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	if result != nil {
 		printResult(out, result, trace)
 	}
-	return runErr
+	if runErr != nil {
+		// A run that could not be carried out at all is the more specific
+		// answer, and it already carries the bin that says why.
+		return runErr
+	}
+	if result != nil && result.Verdict != contract.VerdictOK {
+		// Only "ok" leaves quietly. Anything else -- today "failed", tomorrow
+		// whatever else review learns to say -- has to reach the shell.
+		return errCommissionFailed
+	}
+	return nil
 }
 
 // repoList collects a repeated --repo flag.

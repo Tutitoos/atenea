@@ -430,6 +430,43 @@ func TestErrorsMapOntoDistinctExitCodes(t *testing.T) {
 	}
 }
 
+// A commission that was carried out and came back failed is not a broken
+// invocation: nothing about the call was wrong, and the report on stdout is
+// complete. But a script that cannot tell it from a commission that worked
+// would go on to use an answer nobody produced, so the verdict has to reach
+// the shell on the one channel a script reads without parsing.
+func TestAFailedVerdictLeavesThroughTheExitCode(t *testing.T) {
+	// A binary that cannot exist makes every step fail as unavailable, which
+	// needs no client installed and no repository on disk: the failure lands
+	// before either is reached.
+	path := filepath.Join(t.TempDir(), "atenea.toml")
+	body := settings + "\n[orchestrator.omp]\nbinary = \"atenea-no-such-client\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	out, err := exec(t, "--config", path, "task", "TODO")
+	if err == nil {
+		t.Fatal("a failed commission left as if it had worked")
+	}
+	if got := exitCode(err); got != 6 {
+		t.Errorf("exit code = %d, want 6 (err %v)", got, err)
+	}
+	// 1 means a bug and 2..5 are invocation failures. Borrowing any of them
+	// would tell a script the wrong thing about what went wrong.
+	if got := contract.KindOf(err); got != contract.FailureUnspecified {
+		t.Errorf("kind = %v: a verdict is not a failure bin", got)
+	}
+	// The exit code replaces nothing. Whoever is reading the screen still
+	// gets the whole report, which is where the reason actually lives.
+	if !strings.Contains(out, "verdict   failed") {
+		t.Errorf("the report was swallowed by the failure:\n%s", out)
+	}
+	if !strings.Contains(out, "run       ") {
+		t.Errorf("the run id is missing, so the receipt cannot be found:\n%s", out)
+	}
+}
+
 func TestBrokenSettingsFailLoudly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "atenea.toml")
 	if err := os.WriteFile(path, []byte("contract = \"1.0.0\"\nnonsense = true\n"), 0o600); err != nil {
