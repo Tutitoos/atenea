@@ -362,7 +362,10 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 	if !strings.Contains(status.Funnel, "cost") {
 		t.Errorf("the status must name every stage the funnel runs: %q", status.Funnel)
 	}
-	if !strings.Contains(status.Funnel, "estimated") {
+	// This core has an empty base, and the caption has to say so rather than
+	// describe the funnel in the abstract. What it must never do is stay the
+	// same sentence once real figures exist -- see TestTheFunnelLineFollowsTheBase.
+	if !strings.Contains(status.Funnel, "nothing measured yet") {
 		t.Errorf("the status must say how far the cost figure can be trusted: %q", status.Funnel)
 	}
 	if len(status.Capabilities) != 1 || len(status.Capabilities[0].Implementations) != 3 {

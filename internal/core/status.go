@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -180,9 +181,34 @@ type OrchestratorStatus struct {
 	Light       Light
 }
 
-// funnelDescription says out loud which filters are wired and how far the last
-// one is to be trusted, so nobody reads an estimate as a measurement.
-const funnelDescription = "constraints -> reach -> health -> cost (estimated until an implementation has been measured)"
+// funnelLine says out loud which filters are wired and, crucially, how far the
+// last one is to be trusted right now.
+//
+// It was a constant. A constant that says "estimated until an implementation
+// has been measured" reads as a report and is not one: it printed the same
+// sentence on a machine with an empty base and on a machine running entirely
+// on real figures, which is the exact confusion the sentence was written to
+// prevent. The stages are fixed, so they stay in the string; the trust is a
+// fact about today, so it is looked up.
+func funnelLine(measured, total int, measuring bool) string {
+	const stages = "constraints -> reach -> health -> cost"
+	switch {
+	case !measuring:
+		// Not silence. With no base the estimates are not a starting position
+		// that will be overtaken -- they are the permanent answer, and that is
+		// a bigger claim than any of the others here.
+		return stages + " (measuring is off: ranking on declared estimates for good)"
+	case total == 0:
+		return stages
+	case measured == 0:
+		return stages + " (nothing measured yet: ranking on declared estimates)"
+	case measured < total:
+		return fmt.Sprintf("%s (measured for %d of %d implementations, the rest on declared estimates)",
+			stages, measured, total)
+	default:
+		return stages + " (measured)"
+	}
+}
 
 // incidents reads the crash notebook for the short screen.
 //
@@ -248,6 +274,34 @@ func (c *Core) ClearMeasurements(filter metrics.Filter) (metrics.Cleared, error)
 	return c.measurements.Clear(context.Background(), filter)
 }
 
+// recordedHealth reads what the measurement base concluded about every
+// implementation, and how many of them it can price.
+//
+// It swallows its errors on purpose. This feeds the health screen, and a
+// health screen that refuses to draw because one of its inputs is unavailable
+// is the least useful possible response to something being wrong: the
+// catalog, the incidents, the lanes and the copies are all still readable and
+// are exactly what somebody is looking for at that moment. An unreadable base
+// costs the promotion -- providers stay at whatever the catalog declared,
+// which is where they were before any of this existed -- and the funnel line
+// then says nothing has been measured, which is the honest thing to say when
+// the numbers cannot be reached.
+func (c *Core) recordedHealth() (map[string]metrics.Verdict, int) {
+	if c.measurements == nil {
+		return nil, 0
+	}
+	ctx := context.Background()
+	verdicts, err := c.measurements.Health(ctx, time.Now().UTC())
+	if err != nil {
+		return nil, 0
+	}
+	priced, err := c.measurements.Measured(ctx)
+	if err != nil {
+		return verdicts, 0
+	}
+	return verdicts, len(priced)
+}
+
 // Status builds the snapshot.
 func (c *Core) Status() Status {
 	status := Status{
@@ -257,10 +311,15 @@ func (c *Core) Status() Status {
 		Uptime:   c.Uptime().Truncate(time.Second).String(),
 		Stopping: c.Stopping(),
 		Light:    LightGreen,
-		Funnel:   funnelDescription,
 	}
 	status.Incidents = c.incidents()
+	recorded, priced := c.recordedHealth()
+	// Naming the repository is worth a few characters on a workspace and is
+	// noise on a machine with one: "down" and "down on api" say the same thing
+	// when api is all there is.
+	located := len(c.catalog.Repositories()) > 1
 
+	total := 0
 	for _, capability := range c.catalog.Capabilities() {
 		entry := CapabilityStatus{
 			ID:      capability.ID,
@@ -276,6 +335,14 @@ func (c *Core) Status() Status {
 		}
 		usable := 0
 		for _, impl := range impls {
+			total++
+			if v, ok := recorded[impl.ID]; ok {
+				health := v.Health
+				if located && health.Reason != "" {
+					health.Reason = "on " + v.Repository + ": " + health.Reason
+				}
+				impl.Health = metrics.Reconcile(impl.Health, health)
+			}
 			light := lightFor(impl.Health.State)
 			if impl.Health.Usable() {
 				usable++
@@ -295,6 +362,7 @@ func (c *Core) Status() Status {
 		}
 		status.Capabilities = append(status.Capabilities, entry)
 	}
+	status.Funnel = funnelLine(priced, total, c.measurements != nil)
 
 	for _, repo := range c.catalog.Repositories() {
 		status.Repositories = append(status.Repositories, RepositoryStatus{
@@ -488,15 +556,25 @@ func (c *Core) serves(implementationID string) bool {
 	}
 	return false
 }
+
+// lightFor colors one provider.
+//
+// Down is amber, not red, and that is the documented meaning of the big light:
+// red is reserved for work that cannot be done. A provider the funnel dropped
+// is a provider whose work went to somebody else and got finished, which is
+// the system behaving exactly as designed -- the capability with nothing left
+// to answer it is the red case, and it is counted separately.
+//
+// This was unreachable until the record started marking providers down. From a
+// CLI nothing ever probed anything, so the state never arrived and the wrong
+// color never showed. On a machine with one provider permanently unusable --
+// a client nobody has logged into -- it would now mean a red light that is
+// always on, which is the same defect as an amber nobody can clear.
 func lightFor(state contract.HealthState) Light {
-	switch state {
-	case contract.HealthAlive:
+	if state == contract.HealthAlive {
 		return LightGreen
-	case contract.HealthDown:
-		return LightRed
-	default:
-		return LightAmber
 	}
+	return LightAmber
 }
 
 func worst(a, b Light) Light {

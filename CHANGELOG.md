@@ -17,6 +17,57 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **Successful calls count as evidence of health.** The record could only ever
+  make a provider look worse. The rule was written against *silence* — nobody
+  probed it, so nobody knows — and then applied to success, which is not the
+  same thing at all. The consequence was reported from real use: seven
+  successful calls in a row, zero failures, and the screen still said
+  `health=unknown` with an amber light that no amount of working could clear.
+
+  The bar for the record to promote is now *the last call here worked, and it
+  worked recently*. Recently is one hour: long enough that two commands ten
+  minutes apart do not disagree about whether the machine is well, short enough
+  that it cannot speak for a machine nobody has used today. Last, because a
+  failure with nothing after it means the newest thing anybody knows is that
+  this broke — not enough to condemn a provider, far too much to call it well,
+  so it reads unknown until something succeeds.
+
+  Promotion may only lift `unknown`. A `down` or `degraded` set by a live probe
+  stands, because a probe looked seconds ago and a file may predate the outage
+  entirely. Downwards the record still overrules everything, including a
+  declared `state = "alive"`. A promotion changes the state and does not invent
+  a score, so cost stays the tie-break between two working providers.
+
+- **The status screen reads the measurement base.** It walked the declarative
+  catalogue and never opened the base, so the one screen whose job is reporting
+  health was the only place that could not see the half of health that survives
+  a process. Both fixes were needed: either alone leaves the amber in place.
+
+  Where a provider has been tried on several repositories the screen shows the
+  worst state it reached, and names the repository — `down` and `down on
+  scripts` are different instructions. An unreadable base costs the promotion
+  and nothing else; the screen still draws, because a health screen that
+  refuses to render because one input is missing is the least useful possible
+  answer to something being wrong.
+
+- **The funnel caption is a report, not a constant.** It read `estimated until
+  an implementation has been measured` on an empty base and on a machine
+  running entirely on real figures — the exact confusion the sentence existed
+  to prevent. It now says which it is: `nothing measured yet`, `measured for 1
+  of 4 implementations, the rest on declared estimates`, `measured`, or
+  `measuring is off: ranking on declared estimates for good` when there is no
+  base at all. That last one is deliberately not the `yet` wording: `yet` is a
+  promise, and it should not be made for a base that is never coming.
+
+- **A dropped provider is amber, not red.** The documentation has always said
+  red is for work that cannot be done and that a provider being down is amber,
+  because the funnel hands its work to somebody else and the commission still
+  finishes. The code said otherwise, and nobody could tell: from a CLI nothing
+  ever probed anything, so no provider ever reached `down` and the wrong color
+  never showed. Making the record a health input turned it on — permanently, on
+  any machine with one client not logged in. Red is now what it claimed to be:
+  a capability with nothing left to answer it.
+
 - **A failure is no longer a price.** The cost base averaged every attempt
   together, so an implementation that refused instantly — not logged in, no
   index, no server — recorded a stream of very fast, very cheap calls, became

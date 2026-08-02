@@ -97,13 +97,47 @@ forgotten every fault before it. Without the second witness a provider that
 refuses every single call stays healthy forever, because the only thing that
 could mark it down evaporated when the last command exited.
 
-So a run of failures on disk is a health verdict too. Three in a row in the
-same bin is an outage and leaves the funnel; three in different bins is a
-provider in trouble with no single cause, which ranks last but stays. Both
-expire after a quiet window, because a provider health has dropped is a
-provider nothing calls, and nothing that is never called can ever prove it
-recovered. Neither verdict ever promotes: a streak can only make a candidate
-worse than the prober found it.
+So the record on disk is a health verdict too, and it answers in both
+directions.
+
+Downwards, a run of failures. Three in a row in the same bin is an outage and
+leaves the funnel; three in different bins is a provider in trouble with no
+single cause, which ranks last but stays. Both expire after five quiet minutes,
+because a provider health has dropped is a provider nothing calls, and nothing
+that is never called can ever prove it recovered.
+
+Upwards, a run of successes. The bar is *the last call here worked, and it
+worked recently* — both halves load-bearing. **Recently** is one hour: a
+success is a statement about the moment it happened, and an hour is long enough
+to cover a working session, so two commands ten minutes apart do not disagree
+about whether the machine is well, and short enough that it cannot speak for a
+machine nobody has used today. **Last**, because a failure with nothing after
+it means the newest thing anybody knows is that this broke. One fault is
+ordinary and does not condemn a provider, but it is far too much to call it
+well; the honest state is unknown, and the next successful call clears it.
+
+The first version of this rule only looked downwards, on the argument that
+silence is not evidence. That is true of silence and false of what it was
+applied to: a machine where everything succeeded reported `health=unknown`
+forever, the light never went green, and no amount of work could clear it. A
+run of successful calls is not silence. It is the most direct possible answer
+to the question the funnel is asking.
+
+The two directions are not symmetric in what they may overrule. Downwards the
+record beats anything, including a cheerful `state = "alive"` in the settings
+file: a streak of real failures on a real repository outranks an opinion.
+Upwards it may only lift `unknown`. A `down` or `degraded` was put there by
+something that looked more recently than a file can — a probe inside this
+process, seconds ago — and promoting over it would hide the outage the operator
+is standing in front of. `unknown` carries no claim at all, so there is nothing
+to overrule.
+
+A promotion changes the state and nothing else. It does not award a score:
+score breaks ties between two providers in the same state, and the tie-break
+that matters between two working providers is what they cost — a real number,
+measured on both. Inventing a full score for having worked would put every
+promoted provider above every other on a figure made up here, and cost would
+never be reached.
 
 **Stage 4.** A standing user rule wins outright — the user's word comes before
 Atenea's opinion. Otherwise the survivors are ranked by health state, then by

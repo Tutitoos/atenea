@@ -356,10 +356,40 @@ atenea incidents           # what went wrong, with paths
 atenea incidents clear     # says you have read them
 ```
 
-Clearing removes *that* reason for amber and no other. A fresh install stays
-amber until something has actually been measured, because `health=unknown` is
-not a claim that anything works — it is the funnel saying it is still guessing.
-That is the break-in mode, and it ends on its own after a run or two.
+Clearing removes *that* reason for amber and no other. A fresh install is amber
+because `health=unknown` is not a claim that anything works — it is Atenea
+saying nobody has looked yet. That is the break-in period, and the way out of
+it is work: the first successful call against a repository turns that provider
+green, and the screen says what it is claiming and when.
+
+```text
+  green  ripgrep  provider=ripgrep  health=alive  (last call here worked, 3m12s ago)
+```
+
+An hour after the last successful call it goes back to unknown. That is not a
+fault and nothing has broken — a success is a statement about the moment it
+happened, and a screen that stayed green overnight would be reporting last
+night. Amber here means *nobody has looked recently*, which on a machine you
+have not used today is the truth.
+
+A provider the record has caught failing says so instead, with the count, the
+bin and its own words:
+
+```text
+  amber  claude.search  provider=claude-code  health=down
+         (3 unavailable failures in a row, last one claude code is not logged in on this machine)
+```
+
+Amber, not red, even for a provider that is out. The funnel drops it and the
+work goes to whoever is left, which is the system doing its job; red is
+reserved for a capability with nothing able to answer it at all. A machine
+where one client is permanently unusable would otherwise show a red light that
+never goes off, which says as little as an amber nobody can clear.
+
+On a workspace the reason names the repository it came from, because "down" and
+"down on `scripts`" are different instructions. The state shown is the worst
+one the record found anywhere: a provider that is warm on one repository and
+dead on another is not well.
 
 The amber from a fault comes back the next time it happens. That is what makes
 *unread* the honest word for it.
@@ -425,7 +455,7 @@ The status screen only mentions it when there is something to mention:
 
 ```text
 atenea 0.1.0  contract 1.1.0  AMBER
-funnel    constraints -> reach -> health -> cost (estimated until an implementation has been measured)
+funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```
 

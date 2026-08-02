@@ -174,6 +174,15 @@ and break-in mode is off with it — there is no point handing a provider a turn
 to earn numbers nobody will record. A core with the base switched off works
 exactly as well on its first day and never gets better.
 
+It also costs the health screen half its evidence. A provider is marked alive
+by having worked recently and marked down by a run of failures, and both facts
+come out of this base — so with it off, every provider that nothing has probed
+in *this* process reads `health=unknown` forever. `atenea status` says which of
+the two it is showing, on the funnel line: `measuring is off: ranking on
+declared estimates for good`, rather than the `nothing measured yet` of a base
+that is simply empty. The word `yet` is a promise, and it should not be made on
+behalf of a base that is never coming.
+
 `path = ""` is not "nowhere", it is the default location, beside the run
 receipts and under the same state root: both are the same kind of thing, what
 Atenea remembers about work it has done.
