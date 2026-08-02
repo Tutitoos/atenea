@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
+	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/registry"
+	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -21,10 +24,13 @@ import (
 // Core is safe for concurrent use. Sessions are isolated per chat, but the
 // catalog underneath them is shared.
 type Core struct {
-	settings config.Config
-	catalog  *registry.Registry
-	chooser  *selector.Selector
-	started  time.Time
+	settings    config.Config
+	catalog     *registry.Registry
+	chooser     *selector.Selector
+	runner      contract.Runner
+	checkpoints *checkpoint.Store
+	agent       *orchestrator.Agent
+	started     time.Time
 
 	mu       sync.Mutex
 	stopping bool
@@ -56,12 +62,52 @@ func New(cfg config.Config) (*Core, error) {
 	if err := checkRules(catalog, chooser.Rules()); err != nil {
 		return nil, err
 	}
+	runner, err := buildRunner(cfg)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := checkpoint.New(cfg.Orchestrator.CheckpointDir)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:     catalog,
+		Chooser:     chooser,
+		Runner:      runner,
+		Checkpoints: checkpoints,
+		MaxParallel: cfg.Orchestrator.MaxParallel,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &Core{
-		settings: cfg,
-		catalog:  catalog,
-		chooser:  chooser,
-		started:  time.Now(),
+		settings:    cfg,
+		catalog:     catalog,
+		chooser:     chooser,
+		runner:      runner,
+		checkpoints: checkpoints,
+		agent:       agent,
+		started:     time.Now(),
 	}, nil
+}
+
+// buildRunner returns the far side of the dispatch seam. A core with no runner
+// is still a working core: it can plan and choose, it simply has nobody to
+// hand the work to, and the status screen says so out loud.
+func buildRunner(cfg config.Config) (contract.Runner, error) {
+	switch cfg.Orchestrator.Runner {
+	case config.RunnerNone:
+		return nil, nil
+	case config.RunnerLocal:
+		return local.New(local.Options{
+			Implementations: cfg.Orchestrator.Local.Implementations,
+			Sensitive:       cfg.Security.Sensitive,
+			SkipDirs:        cfg.Orchestrator.Local.SkipDirs,
+		})
+	default:
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: unknown runner %q", cfg.Source, cfg.Orchestrator.Runner)
+	}
 }
 
 // checkRules refuses a rule that points at something the catalog does not
@@ -120,6 +166,25 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 		Repository: repo,
 		Candidates: candidates,
 	})
+}
+
+// Agent exposes the orchestrator.
+func (c *Core) Agent() *orchestrator.Agent { return c.agent }
+
+// Checkpoints exposes the run store.
+func (c *Core) Checkpoints() *checkpoint.Store { return c.checkpoints }
+
+// Do hands a commission to the orchestrator.
+//
+// The core does not explore, split or dispatch: it registers the work so a
+// clean stop waits for it, and lets the agent get on with it. Deciding and
+// delegating is the whole job.
+func (c *Core) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Result, error) {
+	if err := c.enter(); err != nil {
+		return nil, err
+	}
+	defer c.inflight.Done()
+	return c.agent.Run(ctx, task)
 }
 
 // enter registers a unit of in-flight work, refusing it once a stop is under

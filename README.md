@@ -10,8 +10,10 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Status: alpha (`0.x.y`). The first brick is in place — the core, the Capability
-Registry and the funnel selector running on constraints and health.
+Status: alpha (`0.x.y`). The core, the Capability Registry and the funnel
+selector are in place, and so is the orchestrator: it takes one sentence, looks
+at the repositories in scope, splits the work into a graph of steps, dispatches
+them in waves and reviews every answer.
 
 ## Why
 
@@ -26,35 +28,48 @@ what it knows about the repository in front of it.
 go build -o bin/atenea ./cmd/atenea
 ./bin/atenea status
 ./bin/atenea select code.search --repo current
+./bin/atenea task "ValidateOutput"
 ```
 
 No setup needed: with no settings file present, Atenea boots on its built-in
 defaults. `atenea config init` writes them out so you can edit them.
 
 ```text
-capability  code.search
-repository  current
-chosen      ripgrep  (healthiest surviving implementation)
+run       20260802T003739-e22d82
+task      ValidateOutput
+verdict   ok
+matches   11
+spent     12ms over 2 step(s)
+  explore  1 step(s), 6ms
+  work     1 step(s), 5ms
 
-funnel
-  constraints  3 in -> 1 out: ripgrep
-      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none
-      dropped serena.search: needs an index from provider serena, repository has none
-  health       1 in -> 1 out: ripgrep
-  choice       1 in -> 1 out: ripgrep
+discovered
+  [repository] current: 11 hit(s) for "ValidateOutput", under internal, pkg
+
+run with --trace for the plan, the funnel and every review
 ```
 
-Every decision carries its trace. A choice nobody can explain is a choice nobody
-can trust.
+Look before you split: the light first pass finds *where* the commission lands,
+and the work that follows is narrowed to those areas. Every decision and every
+review carries its trace — a choice nobody can explain is a choice nobody can
+trust.
+
+(Run it against this repository and the numbers will differ: this README and
+the docs now quote the search term themselves. The README is a root file, and
+a hit with no directory above it cannot be narrowed away — so the work runs
+wide rather than quietly dropping it.)
 
 ## Layout
 
 ```text
 cmd/atenea/        entry point: the service and the operator commands
 internal/          the brain, not importable from outside
+  checkpoint/        run receipts on disk
   config/            the single settings file
   core/              wiring, status and clean shutdown
+  orchestrator/      the agent: explore, split, dispatch, review
   registry/          the Capability Registry
+  runner/local/      stand-in for the far side, until the first adapter exists
   selector/          the funnel
 pkg/contract/      the contract shared by the core and its adapters
 docs/              documentation sources, served by Hugo on GitHub Pages

@@ -19,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -36,6 +37,8 @@ type Config struct {
 	// Contract is the contract version the file targets.
 	Contract        contract.Version
 	Core            Core
+	Orchestrator    Orchestrator
+	Security        Security
 	Selector        selector.Config
 	Capabilities    []contract.Capability
 	Implementations []contract.Implementation
@@ -47,6 +50,44 @@ type Core struct {
 	// ShutdownGrace is how long a clean stop waits for in-flight work.
 	ShutdownGrace time.Duration
 }
+
+// Orchestrator holds the knobs of the agent that splits and hands out work.
+type Orchestrator struct {
+	// MaxParallel caps how many steps of one wave run at a time. Zero means no
+	// ceiling. The real limit is the machine, and the machine is not the same
+	// one everywhere, so it is declared rather than compiled in.
+	MaxParallel int
+	// CheckpointDir is where the paper copy of a run in flight is written. It
+	// is empty when checkpointing is off.
+	CheckpointDir string
+	// Runner names who is behind the agent.
+	Runner string
+	Local  LocalRunner
+}
+
+// LocalRunner configures the stand-in that runs until the first client adapter
+// exists.
+type LocalRunner struct {
+	// Implementations the stand-in answers for. Anything else is reported
+	// unavailable, which is the bin that drives fallback.
+	Implementations []string
+	// SkipDirs are directory names never descended into.
+	SkipDirs []string
+}
+
+// Security is the one place delicate files are declared.
+type Security struct {
+	// Sensitive holds the path patterns that carry secrets. Reading is free by
+	// default; these are the exception, and while exploring they are skipped in
+	// silence rather than turned into a question.
+	Sensitive []string
+}
+
+// RunnerLocal and RunnerNone are the values orchestrator.runner accepts.
+const (
+	RunnerLocal = "local"
+	RunnerNone  = "none"
+)
 
 // DefaultPath returns where Atenea looks for its settings when nothing else
 // says otherwise.
@@ -120,6 +161,8 @@ func WriteDefault(path string, force bool) error {
 type file struct {
 	Contract        string           `toml:"contract"`
 	Core            fileCore         `toml:"core"`
+	Orchestrator    fileOrchestrator `toml:"orchestrator"`
+	Security        fileSecurity     `toml:"security"`
 	Selector        fileSelector     `toml:"selector"`
 	Capabilities    []fileCapability `toml:"capability"`
 	Implementations []fileImpl       `toml:"implementation"`
@@ -128,6 +171,26 @@ type file struct {
 
 type fileCore struct {
 	ShutdownGrace string `toml:"shutdown_grace"`
+}
+
+type fileOrchestrator struct {
+	MaxParallel   *int            `toml:"max_parallel"`
+	Checkpoints   *bool           `toml:"checkpoints"`
+	CheckpointDir string          `toml:"checkpoint_dir"`
+	Runner        string          `toml:"runner"`
+	Local         fileLocalRunner `toml:"local"`
+}
+
+type fileLocalRunner struct {
+	Implementations *[]string `toml:"implementations"`
+	SkipDirs        *[]string `toml:"skip_dirs"`
+}
+
+// fileSecurity uses a pointer so an omitted list and an explicitly empty one
+// are different things. Leaving the block out must not quietly disarm the
+// guard; emptying it on purpose is the user's call to make.
+type fileSecurity struct {
+	Sensitive *[]string `toml:"sensitive"`
 }
 
 type fileSelector struct {
@@ -240,6 +303,10 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Core, err = decoded.Core.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
+		return Config{}, err
+	}
+	cfg.Security = decoded.Security.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 			Capability: rule.Capability,
@@ -272,6 +339,84 @@ func parse(raw []byte, source string) (Config, error) {
 }
 
 const defaultShutdownGrace = 10 * time.Second
+
+// The orchestrator defaults. Four steps at a time is a ceiling that keeps a
+// laptop responsive; conflict resolution put the real brake on total memory,
+// which belongs with the metrics base and is not wired yet.
+const (
+	defaultMaxParallel = 4
+	maxMaxParallel     = 100
+)
+
+// defaultServedImplementations is what the stand-in answers for: the one
+// provider in the shipped catalog that needs no index and no language support.
+var defaultServedImplementations = []string{"ripgrep"}
+
+// defaultSkipDirs keeps the stand-in out of the places a real search tool
+// skips by reading .gitignore, which this one does not do.
+var defaultSkipDirs = []string{".git", "node_modules", "vendor", "dist", "build", ".venv", "target"}
+
+// defaultSensitive is the list from the security design: the files that carry
+// secrets inside them. Reading is otherwise free.
+var defaultSensitive = []string{
+	".env",
+	".env.*",
+	".npmrc",
+	".netrc",
+	"*.pem",
+	"*.key",
+	"*.p12",
+	"id_rsa",
+	"id_ed25519",
+	"*credentials*.json",
+	"*service-account*.json",
+}
+
+func (o fileOrchestrator) build(source string) (Orchestrator, error) {
+	out := Orchestrator{
+		MaxParallel:   defaultMaxParallel,
+		Runner:        RunnerLocal,
+		CheckpointDir: checkpoint.DefaultDir(),
+		Local:         LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
+	}
+	if o.MaxParallel != nil {
+		if *o.MaxParallel < 0 || *o.MaxParallel > maxMaxParallel {
+			return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.max_parallel must be between 0 and %d, got %d",
+				source, maxMaxParallel, *o.MaxParallel)
+		}
+		out.MaxParallel = *o.MaxParallel
+	}
+	switch o.Runner {
+	case "":
+	case RunnerLocal, RunnerNone:
+		out.Runner = o.Runner
+	default:
+		return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.runner %q is not one of %s, %s",
+			source, o.Runner, RunnerLocal, RunnerNone)
+	}
+	if o.CheckpointDir != "" {
+		out.CheckpointDir = o.CheckpointDir
+	}
+	if o.Checkpoints != nil && !*o.Checkpoints {
+		out.CheckpointDir = ""
+	}
+	if o.Local.Implementations != nil {
+		out.Local.Implementations = *o.Local.Implementations
+	}
+	if o.Local.SkipDirs != nil {
+		out.Local.SkipDirs = *o.Local.SkipDirs
+	}
+	return out, nil
+}
+
+func (s fileSecurity) build() Security {
+	if s.Sensitive == nil {
+		return Security{Sensitive: defaultSensitive}
+	}
+	return Security{Sensitive: *s.Sensitive}
+}
 
 func (c fileCore) build(source string) (Core, error) {
 	out := Core{ShutdownGrace: defaultShutdownGrace}

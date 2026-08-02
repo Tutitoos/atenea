@@ -24,6 +24,14 @@ contract = "1.0.0"
 [core]
 shutdown_grace = "2s"
 
+# The stand-in reaches every provider in this catalog, so the overall light
+# answers the question this fixture is about -- health -- and not a separate
+# one about who is plugged in.
+[orchestrator]
+
+  [orchestrator.local]
+  implementations = ["ripgrep", "serena.search", "graph.search"]
+
 [[capability]]
 id = "code.search"
 version = "1.0.0"

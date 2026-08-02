@@ -1,6 +1,7 @@
 package core
 
 import (
+	"slices"
 	"time"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -39,6 +40,7 @@ type Status struct {
 	Stopping     bool
 	Light        Light
 	Funnel       string
+	Orchestrator OrchestratorStatus
 	Capabilities []CapabilityStatus
 	Repositories []RepositoryStatus
 }
@@ -66,6 +68,28 @@ type RepositoryStatus struct {
 	Scale     string
 	Languages []string
 	Indexes   []string
+}
+
+// OrchestratorStatus is the agent that does the work, at a glance: who it is,
+// what it may ask for, which context levels it is entitled to, and who is
+// actually behind it. An agent with nobody behind it can plan and choose but
+// cannot dispatch, and that has to be visible rather than inferred.
+type OrchestratorStatus struct {
+	Agent        string
+	Type         string
+	Capabilities []string
+	Context      []string
+	// Runner is the id of the far side, or empty when nothing is attached.
+	Runner string
+	// Serves lists the implementations the attached runner can execute.
+	Serves []string
+	// Unreachable lists registered implementations no attached runner can
+	// execute. They survive the funnel and then fail on dispatch, so naming
+	// them here is the difference between a puzzle and a fact.
+	Unreachable []string
+	MaxParallel int
+	Checkpoints string
+	Light       Light
 }
 
 // funnelDescription says out loud which filters are wired, so nobody reads a
@@ -128,7 +152,59 @@ func (c *Core) Status() Status {
 			Indexes:   repo.Indexes(),
 		})
 	}
+
+	status.Orchestrator = c.orchestratorStatus()
+	status.Light = worst(status.Light, status.Orchestrator.Light)
 	return status
+}
+
+// orchestratorStatus describes the agent and the far side behind it.
+func (c *Core) orchestratorStatus() OrchestratorStatus {
+	card := c.agent.Card()
+	out := OrchestratorStatus{
+		Agent:        card.ID,
+		Type:         card.Type.String(),
+		Capabilities: card.Capabilities,
+		MaxParallel:  c.agent.MaxParallel(),
+		Checkpoints:  c.checkpoints.Dir(),
+		Light:        LightGreen,
+	}
+	for _, level := range card.Context {
+		out.Context = append(out.Context, level.String())
+	}
+	if out.Checkpoints == "" {
+		out.Checkpoints = "off"
+	}
+	if c.runner == nil {
+		// Planning and choosing still work; dispatching does not. That is not
+		// broken, but it is not ready either.
+		out.Light = LightAmber
+		return out
+	}
+
+	out.Runner = c.runner.ID()
+	for _, capability := range c.catalog.Capabilities() {
+		impls, err := c.catalog.ImplementationsFor(capability.ID)
+		if err != nil {
+			continue
+		}
+		for _, impl := range impls {
+			if c.runner.Serves(impl.ID) {
+				out.Serves = append(out.Serves, impl.ID)
+			} else {
+				out.Unreachable = append(out.Unreachable, impl.ID)
+			}
+		}
+	}
+	slices.Sort(out.Serves)
+	slices.Sort(out.Unreachable)
+	if len(out.Serves) == 0 {
+		// Every provider in the catalog would fail on dispatch.
+		out.Light = LightRed
+	} else if len(out.Unreachable) > 0 {
+		out.Light = LightAmber
+	}
+	return out
 }
 
 func lightFor(state contract.HealthState) Light {

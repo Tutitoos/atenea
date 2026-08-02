@@ -9,12 +9,16 @@ weight: 2
      user
        |
        v
-   +---------------------------------------------+
+   +----------------------------------------------+
    |                  ATENEA                      |
    |                                              |
    |   Capability Registry  ->  Selector          |
    |   (what can be asked)      (who answers it)  |
-   +---------------------------------------------+
+   |             ^                    ^           |
+   |             |                    |           |
+   |        Orchestrator (agent): explores,       |
+   |        splits, dispatches, reviews           |
+   +----------------------------------------------+
        |                |                |
     adapter          adapter          adapter        <- dumb translators
        |                |                |
@@ -71,7 +75,7 @@ it, so two implementations of Serena share one warm index.
 
 **Stage 3 today.** A standing user rule wins outright. Otherwise the survivors
 are ranked by health state, then by health score, then by id — that last
-tie-break exists so the same catalogue always produces the same answer. A
+tie-break exists so the same catalog always produces the same answer. A
 selector that shuffled would make every measurement below it unreproducible.
 
 **Stage 3 tomorrow.** Cost slots in ahead of the health ranking, and the rule
@@ -99,11 +103,95 @@ Those are different problems and the caller reacts differently to each, so they
 are different bins. Retrying a provider that just blinked is the orchestrator's
 job; the selector reports cleanly and does not retry on its own.
 
-### When a user rule cannot be honoured
+### When a user rule cannot be honored
 
 The preferred implementation is scaffolding, not dogma. If it does not survive
 the funnel, Atenea moves on to the next best rather than stopping — but it says
 so. Changing the user's choice in silence would betray what they asked for.
+
+## The orchestrator
+
+The registry and the selector answer *who should do this*. Somebody still has
+to turn one sentence from the user into finished work, and that somebody is an
+**agent**, deliberately not part of the core. The core owns the catalog and the
+funnel and says who should act; the orchestrator is the one that acts.
+
+There is **one** agent contract, not two. An orchestrator and a specialist
+differ by a field, not by a type: two separate contracts would drift apart the
+first time one of them grew a field.
+
+### Look before you split
+
+```text
+   commission
+       |
+       v
+   [explore]   one light look per repository in scope
+       |          finds WHERE the commission lands
+       v
+   [split]     one step per repository, narrowed to those areas
+       |
+       v
+   [work]      dispatched in waves, reviewed as each child finishes
+```
+
+Splitting before looking would mean guessing the shape of a repository nobody
+has read. The look is a real step with a real cost: it is measured and shows up
+in the phase totals, because a task whose total leaves the look out reports a
+number that never happened.
+
+What the look learns becomes a **discovery**, filed at the level it belongs to.
+A fact about one repository is not a fact about the workspace.
+
+### Waves, not a queue
+
+The plan is a graph, not a list. Steps with no dependency between them form one
+wave and run at the same time, capped by a configurable ceiling so a laptop
+stays responsive. Sorting inside a wave is stable, which is what makes two runs
+of the same plan comparable.
+
+An edge means **after**. A step whose prerequisite did not pass review is
+**blocked**: never dispatched, but still on the record with the reason. Only
+that branch stops — work in another repository is none of its business.
+
+### A reviewer at every level
+
+Every child is judged by its parent as it finishes, and the parent's word is
+what goes on the record. A child that reports success with an answer that does
+not match the shape the capability promised has not succeeded, and the
+disagreement is written down with the child's one reply.
+
+Reviewing always, rather than only on failure, is the cheap option: the parent
+is already there.
+
+### The permission travels attached
+
+A commission carries what the user allowed, and every step inherits it. Nothing
+grants itself anything heavier on the way down. Reading is free by default;
+writing and reaching outside the machine are not.
+
+### The runner seam
+
+`contract.Runner` is where deciding ends and doing begins. Everything on the
+far side belongs to somebody else: in production a client adapter. Until the
+first adapter exists a local stand-in sits exactly where the adapter will,
+outside the core, chosen by the settings file — so the skeleton beats without
+pretending the far side is already built.
+
+A runner that cannot reach a provider says so, and that is not a bug: it is a
+provider that is not reachable from here. The step fails as `unavailable`, the
+catalog marks that provider down, and the next run picks somebody else. That
+loop is the fallback design working, not an error path.
+
+### The paper copy
+
+Memory is a whiteboard; disk is paper. A run is dumped when each step closes
+and again when the run itself closes — including when it was cut short, which
+is exactly the run worth reading back. The write goes to a temporary file and
+is renamed into place: a dump interrupted halfway would look like a valid
+record of a run that never happened that way.
+
+The dump is deliberately narrow. It is a receipt, not a transcript.
 
 ## Adapters are dumb
 
@@ -135,5 +223,5 @@ already a commitment and starts at `1.0.0`.
 
 An adapter lagging behind by a minor version keeps working — that is what lets
 adapters be updated after the core rather than in lockstep with it. An adapter
-running *ahead* of the core is refused, because the core cannot honour a field
+running *ahead* of the core is refused, because the core cannot honor a field
 it has never heard of.

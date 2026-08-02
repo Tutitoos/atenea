@@ -1,8 +1,8 @@
 # Atenea settings.
 #
-# One file, on purpose: ceilings, rhythms and the catalogue live here and
+# One file, on purpose: ceilings, rhythms and the catalog live here and
 # nowhere else. Nothing in this file is compiled into the binary -- Atenea is a
-# declarative engine, so changing behaviour means editing this, not the core.
+# declarative engine, so changing behavior means editing this, not the core.
 #
 # Conversation with the user is in Spanish; every technical artifact, this file
 # included, is in English.
@@ -13,6 +13,60 @@ contract = "1.0.0"
 [core]
 # How long a shutdown waits for in-flight work before walking away.
 shutdown_grace = "10s"
+
+[orchestrator]
+# The agent that receives a commission, explores the repositories in scope,
+# splits the work into a graph of steps and hands them out.
+#
+# How many steps of one wave run at a time. 0 lifts the ceiling. The real brake
+# is the memory of the machine, which arrives with the metrics base.
+max_parallel = 4
+
+# Whether the state of a run in flight is written to disk. Memory is a
+# whiteboard; disk is paper. The dump happens when a step closes and again when
+# the run closes, and at no other moment.
+checkpoints = true
+# Empty means $XDG_STATE_HOME/atenea/runs, or ~/.local/state/atenea/runs.
+checkpoint_dir = ""
+
+# Who actually executes a step: "local" or "none".
+#
+# Atenea decides and delegates, so execution always happens on the far side of
+# this line. In production that far side is a client adapter. Until the first
+# adapter exists, "local" is a stand-in that runs code.search against the disk
+# and is deleted the day the adapter lands. "none" leaves the core able to plan
+# and choose, but with nothing to dispatch to.
+runner = "local"
+
+  [orchestrator.local]
+  # Implementations the stand-in answers for. Anything else it is handed comes
+  # back as unavailable, which is the bin that drives fallback.
+  implementations = ["ripgrep"]
+  # Directories never descended into. A real search tool skips these by reading
+  # .gitignore; the stand-in does not read it, so it is told instead.
+  skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
+
+[security]
+# The files that carry secrets inside them. Reading is free by default, and
+# this list is the exception. While exploring, a match here is skipped in
+# silence: stopping to ask would break the flow, and writing the skip down
+# would cost more than ignoring it is worth.
+#
+# Deleting this block does NOT disarm the guard, it restores these defaults.
+# To have no sensitive files at all, write an explicit empty list.
+sensitive = [
+  ".env",
+  ".env.*",
+  ".npmrc",
+  ".netrc",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "id_rsa",
+  "id_ed25519",
+  "*credentials*.json",
+  "*service-account*.json",
+]
 
 # ---------------------------------------------------------------------------
 # Capabilities: the stable "what". Agnostic of any tool, by definition.

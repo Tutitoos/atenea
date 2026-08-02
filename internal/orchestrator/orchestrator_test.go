@@ -1,0 +1,776 @@
+package orchestrator_test
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/registry"
+	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+func codeSearch() contract.Capability {
+	return contract.Capability{
+		ID:      "code.search",
+		Version: contract.Version{Major: 1},
+		Summary: "Find literal text in a repository.",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "query", Type: contract.TypeString, Required: true},
+			{Name: "scope", Type: contract.TypeStringList},
+			{Name: "context_lines", Type: contract.TypeInt},
+		},
+		Outputs: []contract.Field{{
+			Name: "matches", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "path", Type: contract.TypeString, Required: true},
+			},
+		}},
+	}
+}
+
+// catalog holds one capability, two providers and two repositories, which is
+// the smallest shape where the funnel has a real decision to make.
+func catalog(t *testing.T) *registry.Registry {
+	t.Helper()
+	reg := registry.New()
+	if err := reg.AddCapability(codeSearch()); err != nil {
+		t.Fatalf("AddCapability: %v", err)
+	}
+	impls := []contract.Implementation{
+		{
+			ID: "ripgrep", Provider: "ripgrep", Capability: "code.search",
+			Health: contract.Health{State: contract.HealthAlive, Score: 0.8},
+		},
+		{
+			ID: "serena.search", Provider: "serena", Capability: "code.search",
+			Constraints: contract.Constraints{RequiresIndex: true},
+			Health:      contract.Health{State: contract.HealthAlive, Score: 1},
+		},
+	}
+	for _, impl := range impls {
+		if err := reg.AddImplementation(impl); err != nil {
+			t.Fatalf("AddImplementation: %v", err)
+		}
+	}
+	repos := []contract.Repository{
+		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, []string{"serena"}),
+		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, nil),
+	}
+	for _, repo := range repos {
+		if err := reg.AddRepository(repo); err != nil {
+			t.Fatalf("AddRepository: %v", err)
+		}
+	}
+	return reg
+}
+
+// fakeRunner stands in for the far side of the dispatch seam so the tests can
+// exercise the agent without touching a disk or a tool.
+type fakeRunner struct {
+	mu sync.Mutex
+	// seen records every request, in the order they arrived.
+	seen []contract.RunRequest
+	// answer decides what comes back for one step id.
+	answer func(req contract.RunRequest) (contract.Outcome, error)
+	// live and peak track how many steps overlap.
+	live, peak atomic.Int64
+	// serves limits which implementations this runner can execute.
+	serves []string
+	delay  time.Duration
+}
+
+func (f *fakeRunner) ID() string { return "fake" }
+
+func (f *fakeRunner) Serves(id string) bool {
+	if f.serves == nil {
+		return true
+	}
+	for _, served := range f.serves {
+		if served == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+	now := f.live.Add(1)
+	for {
+		peak := f.peak.Load()
+		if now <= peak || f.peak.CompareAndSwap(peak, now) {
+			break
+		}
+	}
+	defer f.live.Add(-1)
+
+	if !f.Serves(req.Implementation.ID) {
+		// A runner that cannot reach a provider says so, exactly as the
+		// contract requires. Faking that away would test a runner that cannot
+		// exist.
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"fake runner does not serve %s", req.Implementation.ID)
+	}
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return contract.Outcome{}, contract.Fail(contract.FailureTimeout, "canceled")
+		}
+	}
+
+	f.mu.Lock()
+	f.seen = append(f.seen, req)
+	f.mu.Unlock()
+
+	if f.answer != nil {
+		return f.answer(req)
+	}
+	return hits("cmd/main.go"), nil
+}
+
+func (f *fakeRunner) requests() []contract.RunRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]contract.RunRequest(nil), f.seen...)
+}
+
+func hits(paths ...string) contract.Outcome {
+	matches := make([]any, 0, len(paths))
+	for _, where := range paths {
+		matches = append(matches, map[string]any{"path": where})
+	}
+	return contract.Outcome{
+		Result:  map[string]any{"matches": matches},
+		Verdict: contract.VerdictOK,
+		Spent:   contract.Sample{Duration: time.Millisecond, Tokens: 10},
+	}
+}
+
+func build(t *testing.T, runner contract.Runner, maxParallel int, dir string) (*orchestrator.Agent, *registry.Registry) {
+	t.Helper()
+	reg := catalog(t)
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	store, err := checkpoint.New(dir)
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:     reg,
+		Chooser:     chooser,
+		Runner:      runner,
+		Checkpoints: store,
+		MaxParallel: maxParallel,
+	})
+	if err != nil {
+		t.Fatalf("orchestrator.New: %v", err)
+	}
+	return agent, reg
+}
+
+// ---------------------------------------------------------------------------
+// The card
+// ---------------------------------------------------------------------------
+
+func TestTheOrchestratorDeclaresItselfAsAnOrchestrator(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	card := agent.Card()
+	if err := card.Validate(); err != nil {
+		t.Fatalf("the agent's own card is invalid: %v", err)
+	}
+	if card.Type != contract.AgentOrchestrator {
+		t.Errorf("type = %v, want orchestrator", card.Type)
+	}
+	// It explores repositories and builds the map of who calls whom, and what
+	// it learns goes to the history, so it is entitled to all four levels.
+	for _, level := range []contract.ContextLevel{
+		contract.ContextRepository, contract.ContextWorkspace,
+		contract.ContextGlobal, contract.ContextHistory,
+	} {
+		if !card.Sees(level) {
+			t.Errorf("the orchestrator does not declare %v", level)
+		}
+	}
+}
+
+func TestTheCardHandedOutIsACopy(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	agent.Card().Capabilities[0] = "file.write"
+	if agent.Card().Capabilities[0] != "code.search" {
+		t.Fatal("Card handed out a pointer into the agent")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Explore, then split
+// ---------------------------------------------------------------------------
+
+func TestTheLookHappensBeforeTheSplit(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Phases) != 2 {
+		t.Fatalf("phases = %d, want explore then work", len(result.Phases))
+	}
+	if result.Phases[0].Name != orchestrator.PhaseExplore {
+		t.Errorf("first phase = %q, want %q", result.Phases[0].Name, orchestrator.PhaseExplore)
+	}
+	if result.Phases[1].Name != orchestrator.PhaseWork {
+		t.Errorf("second phase = %q, want %q", result.Phases[1].Name, orchestrator.PhaseWork)
+	}
+	// Every look closes before the first piece of work starts.
+	for i, step := range result.Steps {
+		if i < 2 && step.Phase != orchestrator.PhaseExplore {
+			t.Fatalf("step %d is %s, want a look first", i, step.Phase)
+		}
+		if i >= 2 && step.Phase != orchestrator.PhaseWork {
+			t.Fatalf("step %d is %s, want work after the looks", i, step.Phase)
+		}
+	}
+}
+
+// Exploring is not unbilled preparation: hiding what it cost would make every
+// task report a total that never happened.
+func TestExploringIsMeasuredLikeAnyOtherPhase(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	explore := result.Phases[0]
+	if explore.Steps != 2 {
+		t.Errorf("explore steps = %d, want one per repository", explore.Steps)
+	}
+	if explore.Spent.Duration <= 0 {
+		t.Error("the look cost time and the phase does not say so")
+	}
+	if result.Spent.Duration < explore.Spent.Duration {
+		t.Error("the total leaves the look out")
+	}
+}
+
+func TestOneWorkStepPerRepositoryInScope(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := map[string]bool{"search-api": false, "search-web": false}
+	for _, step := range result.Steps {
+		if step.Phase != orchestrator.PhaseWork {
+			continue
+		}
+		if _, expected := want[step.Step.ID]; !expected {
+			t.Fatalf("unexpected work step %s", step.Step.ID)
+		}
+		want[step.Step.ID] = true
+	}
+	for id, seen := range want {
+		if !seen {
+			t.Errorf("%s never ran", id)
+		}
+	}
+}
+
+func TestScopeNarrowsTheCommission(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{
+		Text:         "login",
+		Repositories: []string{"api"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, step := range result.Steps {
+		if step.Step.Repository != "api" {
+			t.Fatalf("%s ran against %s, which was out of scope", step.Step.ID, step.Step.Repository)
+		}
+	}
+}
+
+// The whole return on having looked: the work pass only walks the areas where
+// the commission actually landed.
+func TestTheLookNarrowsTheWorkThatFollows(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(req contract.RunRequest) (contract.Outcome, error) {
+			return hits("internal/auth/login.go", "internal/http/route.go", "cmd/main.go"), nil
+		},
+	}
+	agent, _ := build(t, runner, 0, "")
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var work contract.Step
+	for _, step := range result.Steps {
+		if step.Phase == orchestrator.PhaseWork {
+			work = step.Step
+		}
+	}
+	scope, ok := work.Payload["scope"].([]string)
+	if !ok {
+		t.Fatalf("the work step was not narrowed: %v", work.Payload)
+	}
+	if strings.Join(scope, ",") != "cmd,internal" {
+		t.Fatalf("scope = %v, want the top-level areas the look found", scope)
+	}
+	// The look itself asks for no context: it is finding out WHERE the
+	// commission lands, not reading it.
+	for _, req := range runner.requests() {
+		if lines, isSet := req.Payload["context_lines"]; isSet && lines != 0 {
+			t.Errorf("the look asked for %v context lines", lines)
+		}
+	}
+}
+
+// Narrowing must never silently drop a hit that sits at the repository root,
+// because a root file has no directory to narrow to.
+func TestAHitAtTheRootLeavesTheWorkUnnarrowed(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return hits("internal/auth.go", "README.md"), nil
+		},
+	}
+	agent, _ := build(t, runner, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, step := range result.Steps {
+		if step.Phase != orchestrator.PhaseWork {
+			continue
+		}
+		if _, narrowed := step.Step.Payload["scope"]; narrowed {
+			t.Fatalf("a root hit cannot be narrowed away: %v", step.Step.Payload)
+		}
+	}
+}
+
+func TestWhatTheLookFoundBecomesADiscovery(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Discoveries) != 2 {
+		t.Fatalf("discoveries = %d, want one per repository looked at", len(result.Discoveries))
+	}
+	for _, found := range result.Discoveries {
+		if found.Level != contract.ContextRepository {
+			t.Errorf("a fact about one repository was filed under %v", found.Level)
+		}
+		if !strings.Contains(found.Note, "login") {
+			t.Errorf("the note does not say what was looked for: %q", found.Note)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The permission traveling down
+// ---------------------------------------------------------------------------
+
+func TestEveryStepCarriesThePermissionItInherited(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "find every TODO"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	requests := runner.requests()
+	if len(requests) == 0 {
+		t.Fatal("nothing was dispatched")
+	}
+	for _, req := range requests {
+		if req.Permission.Task != "find every TODO" {
+			t.Errorf("a step carried %q instead of the commission", req.Permission.Task)
+		}
+		if !req.Permission.Allows(contract.EffectRead) {
+			t.Error("reading is free by default and was not granted")
+		}
+		// Nothing granted itself anything heavier on the way down.
+		if req.Permission.Allows(contract.EffectWrite) {
+			t.Error("a read-only commission acquired write on the way down")
+		}
+		if req.Permission.Allows(contract.EffectExternal) {
+			t.Error("a read-only commission acquired external on the way down")
+		}
+	}
+}
+
+func TestAHeavierCommissionPassesItsGrantDown(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+	_, err := agent.Run(t.Context(), orchestrator.Task{
+		Text:    "rewrite the login form",
+		Effects: []contract.Effect{contract.EffectWrite},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, req := range runner.requests() {
+		if !req.Permission.Allows(contract.EffectWrite) {
+			t.Fatal("the grant did not reach the child")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The review
+// ---------------------------------------------------------------------------
+
+func TestEveryChildIsReviewed(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Steps) != 4 {
+		t.Fatalf("steps = %d, want two looks and two searches", len(result.Steps))
+	}
+	for _, step := range result.Steps {
+		if step.Review.Parent == contract.VerdictUnspecified {
+			t.Errorf("%s finished without being reviewed", step.Step.ID)
+		}
+		if step.Review.Reason == "" {
+			t.Errorf("%s was judged without a reason on the record", step.Step.ID)
+		}
+	}
+}
+
+// The reviewer exists for exactly this: a child that reports success with an
+// answer nobody can read has not succeeded.
+func TestTheParentOverrulesAChildThatLiesAboutSucceeding(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return contract.Outcome{
+				// The capability promises `matches`, and this is not it.
+				Result:  map[string]any{"results": []any{}},
+				Verdict: contract.VerdictOK,
+			}, nil
+		},
+	}
+	agent, _ := build(t, runner, 0, "")
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	step := result.Steps[0]
+	if step.Review.Child != contract.VerdictOK {
+		t.Fatalf("the child claimed %v, want ok", step.Review.Child)
+	}
+	if step.Review.Parent != contract.VerdictFailed {
+		t.Fatalf("the parent accepted an unreadable answer: %v", step.Review.Parent)
+	}
+	if !step.Review.Disagreed {
+		t.Error("the disagreement was not recorded")
+	}
+	if step.Review.Reply == "" {
+		t.Error("the child's one reply has to be on the record, even when it is silence")
+	}
+	// The parent's word is what goes on the record for the whole commission.
+	if result.Verdict != contract.VerdictFailed {
+		t.Errorf("commission verdict = %v, want the parent's word", result.Verdict)
+	}
+}
+
+func TestAgreementIsNotRecordedAsADispute(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, step := range result.Steps {
+		if step.Review.Disagreed {
+			t.Errorf("%s agreed and was recorded as a dispute", step.Step.ID)
+		}
+		if step.Review.Reply != "" {
+			t.Errorf("%s agreed and got a reply anyway: %q", step.Step.ID, step.Review.Reply)
+		}
+	}
+	if result.Verdict != contract.VerdictOK {
+		t.Errorf("verdict = %v, want ok", result.Verdict)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Health, the funnel and failure
+// ---------------------------------------------------------------------------
+
+// Running a step is a probe, and a provider that reports itself unusable is
+// news the catalog needs: the funnel filters on health.
+func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
+	runner := &fakeRunner{
+		serves: []string{}, // serves nothing
+	}
+	agent, reg := build(t, runner, 0, "")
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Verdict != contract.VerdictFailed {
+		t.Fatalf("verdict = %v, want failed", result.Verdict)
+	}
+	chosen := result.Steps[0].Decision.Chosen.ID
+	impl, err := reg.Implementation(chosen)
+	if err != nil {
+		t.Fatalf("Implementation: %v", err)
+	}
+	if impl.Health.State != contract.HealthDown {
+		t.Fatalf("%s failed as unavailable and its health is still %v", chosen, impl.Health.State)
+	}
+	if impl.Health.Reason == "" {
+		t.Error("health went down without saying why")
+	}
+}
+
+// The funnel is asked per repository, so the same commission can be answered
+// by different providers in different units of work.
+func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	chosen := map[string]string{}
+	for _, step := range result.Steps {
+		chosen[step.Step.Repository] = step.Decision.Chosen.ID
+	}
+	// api has a warm Serena index and Serena scores higher; web has none, so
+	// Serena is dropped on constraints and ripgrep is left.
+	if chosen["api"] != "serena.search" {
+		t.Errorf("api chose %s, want serena.search", chosen["api"])
+	}
+	if chosen["web"] != "ripgrep" {
+		t.Errorf("web chose %s, want ripgrep", chosen["web"])
+	}
+}
+
+// An edge in the graph means "after". A look that failed leaves the work that
+// waited on it with nothing honest to stand on, so that branch is blocked --
+// never dispatched, but still on the record, because a step that silently
+// vanishes is worse than one that says why it did not run.
+func TestWorkIsBlockedWhenTheLookItWaitedOnFailed(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return contract.Outcome{}, contract.Fail(contract.FailureNotFound, "no such repository on disk")
+		},
+	}
+	agent, _ := build(t, runner, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	looks := 0
+	for _, step := range result.Steps {
+		if step.Phase == orchestrator.PhaseExplore {
+			looks++
+			continue
+		}
+		if step.Decision.Chosen.ID != "" {
+			t.Fatalf("%s was dispatched even though %v failed", step.Step.ID, step.Step.Needs)
+		}
+		if step.Review.Parent != contract.VerdictFailed {
+			t.Errorf("%s was blocked and not recorded as failed", step.Step.ID)
+		}
+		if !strings.Contains(step.Review.Reason, "blocked") {
+			t.Errorf("%s does not say it was blocked: %q", step.Step.ID, step.Review.Reason)
+		}
+	}
+	// Only the two looks reached the runner; neither search did.
+	if got := len(runner.requests()); got != looks {
+		t.Fatalf("%d requests reached the runner, want only the %d looks", got, looks)
+	}
+	if result.Verdict != contract.VerdictFailed {
+		t.Errorf("verdict = %v, want failed", result.Verdict)
+	}
+	if result.Steps[0].Failure == "" {
+		t.Error("the failure was not kept on the step")
+	}
+}
+
+func TestAnUnknownRepositoryIsRefusedBeforeAnythingRuns(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"ghost"}})
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", got)
+	}
+	if len(runner.requests()) != 0 {
+		t.Error("something was dispatched for a repository that does not exist")
+	}
+}
+
+func TestACommissionWithNoTextIsRefused(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "   "})
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+// An agent with nobody behind it can plan and choose; it cannot dispatch, and
+// saying so is better than failing halfway through.
+func TestWithNoRunnerNothingIsDispatched(t *testing.T) {
+	agent, _ := build(t, nil, 0, "")
+	_, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Waves and the ceiling
+// ---------------------------------------------------------------------------
+
+func TestStepsInOneWaveRunAtTheSameTime(t *testing.T) {
+	runner := &fakeRunner{delay: 30 * time.Millisecond}
+	agent, _ := build(t, runner, 0, "")
+	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if runner.peak.Load() < 2 {
+		t.Fatalf("peak overlap = %d, want the two repositories to run together", runner.peak.Load())
+	}
+}
+
+func TestTheCeilingLimitsHowManyRunAtOnce(t *testing.T) {
+	runner := &fakeRunner{delay: 20 * time.Millisecond}
+	agent, _ := build(t, runner, 1, "")
+	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := runner.peak.Load(); got != 1 {
+		t.Fatalf("peak overlap = %d, want the configured ceiling of 1", got)
+	}
+}
+
+func TestANegativeCeilingIsRefused(t *testing.T) {
+	reg := catalog(t)
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	_, err = orchestrator.New(orchestrator.Config{Catalog: reg, Chooser: chooser, MaxParallel: -1})
+	if err == nil {
+		t.Fatal("a negative ceiling has to be refused")
+	}
+}
+
+func TestWiringWithoutACatalogIsRefused(t *testing.T) {
+	if _, err := orchestrator.New(orchestrator.Config{}); err == nil {
+		t.Fatal("an agent with no catalog can never answer anything")
+	}
+}
+
+func TestCancellationStopsTheRun(t *testing.T) {
+	runner := &fakeRunner{delay: time.Second}
+	agent, _ := build(t, runner, 0, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	result, err := agent.Run(ctx, orchestrator.Task{Text: "login"})
+	if err == nil {
+		t.Fatal("a canceled commission has to stop")
+	}
+	if result == nil {
+		t.Fatal("a cut-short run still has to hand back what it got to")
+	}
+	if result.Verdict != contract.VerdictFailed {
+		t.Errorf("verdict = %v, want failed", result.Verdict)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The paper copy
+// ---------------------------------------------------------------------------
+
+func TestTheRunIsWrittenAsEachStepClosesAndWhenItCloses(t *testing.T) {
+	dir := t.TempDir()
+	agent, _ := build(t, &fakeRunner{}, 1, dir)
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	store, err := checkpoint.New(dir)
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	record, err := store.Load(result.RunID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !record.Closed {
+		t.Error("the run closed and the paper copy does not say so")
+	}
+	if record.Verdict != result.Verdict.String() {
+		t.Errorf("recorded verdict = %q, want %q", record.Verdict, result.Verdict)
+	}
+	if len(record.Steps) != len(result.Steps) {
+		t.Fatalf("recorded steps = %d, want %d", len(record.Steps), len(result.Steps))
+	}
+	for i, step := range record.Steps {
+		if step.ID != result.Steps[i].Step.ID {
+			t.Errorf("step %d recorded as %s, want %s", i, step.ID, result.Steps[i].Step.ID)
+		}
+		if step.Implementation == "" {
+			t.Errorf("%s was recorded without the implementation that ran it", step.ID)
+		}
+	}
+}
+
+// A commission cut short is exactly the one worth reading back, so the dump
+// has to happen on the way out too.
+func TestACutShortRunStillLeavesAPaperCopy(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return contract.Outcome{}, contract.Fail(contract.FailureNotFound, "gone")
+		},
+	}
+	agent, _ := build(t, runner, 0, dir)
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	store, _ := checkpoint.New(dir)
+	record, err := store.Load(result.RunID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if record.Verdict != contract.VerdictFailed.String() {
+		t.Errorf("recorded verdict = %q, want failed", record.Verdict)
+	}
+	if len(record.Steps) == 0 {
+		t.Error("the failed looks were not recorded")
+	}
+}
+
+func TestCheckpointingOffLeavesNothingBehind(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"}); err != nil {
+		t.Fatalf("a run with checkpointing off still has to work: %v", err)
+	}
+}

@@ -65,13 +65,66 @@ funnel
 Every decision carries its trace. A choice nobody can explain is a choice nobody
 can trust, and the trace is what later turns into the observability layer.
 
+## Hand it a commission
+
+`select` asks who *would* answer. `task` hands the whole job over: the
+orchestrator looks at every repository in scope, splits the work, dispatches it
+and reviews what comes back.
+
+```sh
+./bin/atenea task "ValidateOutput" --trace
+```
+
+```text
+run       20260802T003739-e22d82
+task      ValidateOutput
+verdict   ok
+matches   11
+spent     12ms over 2 step(s)
+  explore  1 step(s), 6ms
+  work     1 step(s), 5ms
+
+discovered
+  [repository] current: 11 hit(s) for "ValidateOutput", under internal, pkg
+
+plan
+  wave 1  explore-current
+  wave 2  search-current
+
+steps
+  explore-current      explore  ripgrep                  6ms
+      review   child=ok parent=ok (output matches the capability)
+      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none
+      dropped  serena.search: needs an index from provider serena, repository has none
+  search-current       work     ripgrep                  5ms
+      review   child=ok parent=ok (output matches the capability)
+      scope    internal, pkg
+      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none
+      dropped  serena.search: needs an index from provider serena, repository has none
+```
+
+Two heights, like the status screen: the summary always, the full trace only
+when asked for. Drop `--trace` and everything from `plan` down disappears.
+
+The look found hits under `internal` and `pkg` only, so the work that followed
+was narrowed to those two areas instead of walking the tree again.
+
+A hit sitting at the repository root is the one case that cannot be narrowed:
+there is no directory above it, so the work runs wide rather than quietly
+dropping it. That is easy to see for yourself — this page and the README now
+quote the search term, so running the example against Atenea's own repository
+reports more hits and no `scope` line.
+
+`--repo` narrows the commission; repeat it for several. Every run leaves a
+receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.
+
 ## Run it as a service
 
 ```sh
 ./bin/atenea run
 ```
 
-It boots the catalogue and waits. `Ctrl-C` or `SIGTERM` starts a clean stop: new
+It boots the catalog and waits. `Ctrl-C` or `SIGTERM` starts a clean stop: new
 work is refused immediately, and whatever is already running gets the margin set
 by `core.shutdown_grace`.
 

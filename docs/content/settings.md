@@ -5,12 +5,12 @@ weight: 3
 
 # Settings
 
-Atenea is a declarative engine. The catalogue of capabilities, the
+Atenea is a declarative engine. The catalog of capabilities, the
 implementations behind them, the repositories they run against and the user's
-selector rules all live in one TOML file. Changing behaviour means editing that
+selector rules all live in one TOML file. Changing behavior means editing that
 file, not the core.
 
-One file on purpose: ceilings, rhythms and catalogue in a single place, so
+One file on purpose: ceilings, rhythms and catalog in a single place, so
 nothing ends up baked into the code or scattered across three configs.
 
 Unknown keys are refused. A typo that is silently ignored is a setting the user
@@ -24,6 +24,53 @@ contract = "1.0.0"          # required: the contract version this file targets
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```
+
+## The orchestrator
+
+```toml
+[orchestrator]
+max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
+runner = "local"            # local | none
+checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
+
+  [orchestrator.local]
+  implementations = ["ripgrep"]        # what the stand-in can actually execute
+  skip_dirs = [".git", "node_modules"] # never walked
+```
+
+`max_parallel` is the real brake on total memory: four steps of one wave run at
+a time so a laptop stays responsive. `0` means no ceiling, which is a choice
+for a build machine, not a default.
+
+`runner = "none"` leaves the core able to plan and choose but unable to
+dispatch. That is a working core with nobody attached, and the status screen
+says so rather than failing halfway through a commission.
+
+The `[orchestrator.local]` block only matters while the stand-in is the runner.
+An implementation the stand-in cannot execute is not removed from the catalog:
+it survives the funnel, fails on dispatch as `unavailable`, and is marked down
+so the next run picks somebody else. The status screen lists those up front,
+under `no runner`.
+
+Setting `checkpoint_dir = ""` after an explicit path does not disable dumps; it
+falls back to the default location. To turn checkpointing off, point the
+orchestrator at no store at all — the directory is created on first write, so a
+core that never receives a commission leaves nothing behind.
+
+## Security
+
+```toml
+[security]
+sensitive = [".env", "*.pem", "*.key", "id_rsa", "*credentials*.json"]
+```
+
+A single list of paths and patterns governs what is never read, matched against
+both the file name and its repository-relative path. Sensitive files are
+skipped in silence: a search that reported "1 match in .env" would leak the
+very thing the list exists to protect.
+
+Declaring it in one place is the point. The moment the answer to "is this
+sensitive?" lives in several files, it starts differing between them.
 
 ## Capabilities
 
@@ -119,6 +166,6 @@ The most specific rule wins: one scoped to a repository beats a global one for
 the same capability. Two rules for the same capability and repository are
 refused rather than resolved by file order.
 
-A rule pointing at something the catalogue does not have stops the boot. A rule
+A rule pointing at something the catalog does not have stops the boot. A rule
 that quietly matches nothing is a preference the user believes is in force and
 is not.

@@ -16,10 +16,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -32,6 +34,7 @@ Usage:
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
   select CAPABILITY      Ask the funnel who should answer a capability
+  task "TEXT"            Hand a commission to the orchestrator
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
   config init            Write the built-in settings file to disk
@@ -97,6 +100,8 @@ func run(args []string, out io.Writer) error {
 		return cmdCatalog(settingsPath, out)
 	case "select":
 		return cmdSelect(settingsPath, commandArgs, out)
+	case "task":
+		return cmdTask(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
 	case "config":
@@ -134,6 +139,19 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
 	fmt.Fprintf(out, "funnel    %s\n", status.Funnel)
+
+	agent := status.Orchestrator
+	fmt.Fprintf(out, "\norchestrator %s\n", strings.ToUpper(agent.Light.String()))
+	fmt.Fprintf(out, "  agent      %s (%s)\n", agent.Agent, agent.Type)
+	fmt.Fprintf(out, "  asks for   %s\n", strings.Join(agent.Capabilities, ", "))
+	fmt.Fprintf(out, "  context    %s\n", strings.Join(agent.Context, ", "))
+	fmt.Fprintf(out, "  runner     %s\n", orDash(agent.Runner))
+	fmt.Fprintf(out, "  serves     %s\n", orDash(strings.Join(agent.Serves, ", ")))
+	if len(agent.Unreachable) > 0 {
+		fmt.Fprintf(out, "  no runner  %s\n", strings.Join(agent.Unreachable, ", "))
+	}
+	fmt.Fprintf(out, "  parallel   %s\n", ceiling(agent.MaxParallel))
+	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
 
 	fmt.Fprintf(out, "\ncapabilities\n")
 	for _, capability := range status.Capabilities {
@@ -281,6 +299,115 @@ func printDecision(out io.Writer, decision selector.Decision, selectErr error) {
 	}
 }
 
+// cmdTask hands a commission to the orchestrator and prints the answer at two
+// heights: the summary always, the trace only when asked for. Keeping the full
+// record and showing a short one is the same idea as the status screen.
+func cmdTask(settingsPath string, args []string, out io.Writer) error {
+	// The commission comes first and the flags after it. Go's flag package
+	// stops at the first positional argument, so accepting them in any order
+	// would mean hand-rolling the parser for no gain.
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			`task needs the commission first, e.g. atenea task "find every TODO" --trace`)
+	}
+	text, args := strings.TrimSpace(args[0]), args[1:]
+
+	var repositories repoList
+	var trace bool
+	flags := flag.NewFlagSet("task", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Var(&repositories, "repo", "repository to act on; repeat for several (default: all)")
+	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"unexpected argument %q after the commission; quote it if it is one commission",
+			flags.Arg(0))
+	}
+
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	result, runErr := atenea.Do(ctx, orchestrator.Task{Text: text, Repositories: repositories})
+	if result != nil {
+		printResult(out, result, trace)
+	}
+	return runErr
+}
+
+// repoList collects a repeated --repo flag.
+type repoList []string
+
+func (r *repoList) String() string     { return strings.Join(*r, ",") }
+func (r *repoList) Set(v string) error { *r = append(*r, v); return nil }
+
+func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
+	fmt.Fprintf(out, "run       %s\n", result.RunID)
+	fmt.Fprintf(out, "task      %s\n", result.Task)
+	fmt.Fprintf(out, "verdict   %s\n", result.Verdict)
+	fmt.Fprintf(out, "matches   %d\n", result.Matches)
+	fmt.Fprintf(out, "spent     %s over %d step(s)\n",
+		result.Spent.Duration.Round(time.Millisecond), len(result.Steps))
+	for _, phase := range result.Phases {
+		fmt.Fprintf(out, "  %-8s %d step(s), %s\n",
+			phase.Name, phase.Steps, phase.Spent.Duration.Round(time.Millisecond))
+	}
+
+	if len(result.Discoveries) > 0 {
+		fmt.Fprintf(out, "\ndiscovered\n")
+		for _, found := range result.Discoveries {
+			fmt.Fprintf(out, "  [%s] %s\n", found.Level, found.Note)
+		}
+	}
+
+	if !trace {
+		fmt.Fprintf(out, "\nrun with --trace for the plan, the funnel and every review\n")
+		return
+	}
+
+	fmt.Fprintf(out, "\nplan\n")
+	waves, err := result.Plan.Layers()
+	if err != nil {
+		fmt.Fprintf(out, "  (unplanned: %v)\n", err)
+	}
+	for i, wave := range waves {
+		names := make([]string, 0, len(wave))
+		for _, step := range wave {
+			names = append(names, step.ID)
+		}
+		fmt.Fprintf(out, "  wave %d  %s\n", i+1, strings.Join(names, ", "))
+	}
+
+	fmt.Fprintf(out, "\nsteps\n")
+	for _, step := range result.Steps {
+		fmt.Fprintf(out, "  %-20s %-8s %-24s %s\n",
+			step.Step.ID, step.Phase, orDash(step.Decision.Chosen.ID),
+			step.Spent.Duration.Round(time.Millisecond))
+		fmt.Fprintf(out, "      review   child=%s parent=%s (%s)\n",
+			step.Review.Child, step.Review.Parent, step.Review.Reason)
+		if step.Review.Disagreed {
+			fmt.Fprintf(out, "      disputed %s\n", step.Review.Reply)
+		}
+		if step.Failure != "" {
+			fmt.Fprintf(out, "      failed   %s\n", step.Failure)
+		}
+		if scope, ok := step.Step.Payload["scope"].([]string); ok && len(scope) > 0 {
+			fmt.Fprintf(out, "      scope    %s\n", strings.Join(scope, ", "))
+		}
+		for _, stage := range step.Decision.Stages {
+			for _, dropped := range stage.Dropped {
+				fmt.Fprintf(out, "      dropped  %s: %s\n", dropped.Implementation, dropped.Reason)
+			}
+		}
+	}
+}
+
 func cmdRun(settingsPath string, out io.Writer) error {
 	atenea, err := load(settingsPath)
 	if err != nil {
@@ -327,6 +454,14 @@ func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 	default:
 		return contract.Fail(contract.FailureInvalidInput, "unknown config subcommand %q", args[0])
 	}
+}
+
+// ceiling renders a limit where zero means there is none.
+func ceiling(value int) string {
+	if value <= 0 {
+		return "unlimited"
+	}
+	return fmt.Sprintf("%d step(s) at a time", value)
 }
 
 func orDash(value string) string {

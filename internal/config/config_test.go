@@ -215,3 +215,125 @@ func TestWriteDefaultRoundTrips(t *testing.T) {
 		t.Fatalf("implementations = %d", len(written.Implementations))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The orchestrator and security blocks
+// ---------------------------------------------------------------------------
+
+// A file that says nothing about the agent still has to boot into something
+// usable: a fresh install has no reason to know these knobs exist.
+func TestTheOrchestratorHasWorkingDefaults(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Runner != config.RunnerLocal {
+		t.Errorf("runner = %q, want the stand-in", cfg.Orchestrator.Runner)
+	}
+	if cfg.Orchestrator.MaxParallel <= 0 {
+		t.Errorf("max_parallel = %d, want a real ceiling by default", cfg.Orchestrator.MaxParallel)
+	}
+	if cfg.Orchestrator.CheckpointDir == "" {
+		t.Error("a fresh install writes its receipts somewhere")
+	}
+	if len(cfg.Orchestrator.Local.Implementations) == 0 {
+		t.Error("the stand-in serves nothing, so nothing could ever be dispatched")
+	}
+	if len(cfg.Orchestrator.Local.SkipDirs) == 0 {
+		t.Error("a walk with no skip list would descend into .git")
+	}
+	// Not declaring a secret is not the same as declaring there are none.
+	if len(cfg.Security.Sensitive) == 0 {
+		t.Error("a file that says nothing about secrets must still protect them")
+	}
+}
+
+func TestTheOrchestratorBlockIsRead(t *testing.T) {
+	body := minimal + `
+[orchestrator]
+max_parallel = 2
+runner = "none"
+checkpoint_dir = "/tmp/receipts"
+
+  [orchestrator.local]
+  implementations = ["ripgrep", "serena.search"]
+  skip_dirs = ["vendor"]
+
+[security]
+sensitive = ["*.pem"]
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.MaxParallel != 2 || cfg.Orchestrator.Runner != config.RunnerNone {
+		t.Errorf("orchestrator = %+v", cfg.Orchestrator)
+	}
+	if cfg.Orchestrator.CheckpointDir != "/tmp/receipts" {
+		t.Errorf("checkpoint_dir = %q", cfg.Orchestrator.CheckpointDir)
+	}
+	if len(cfg.Orchestrator.Local.Implementations) != 2 {
+		t.Errorf("implementations = %v", cfg.Orchestrator.Local.Implementations)
+	}
+	if len(cfg.Orchestrator.Local.SkipDirs) != 1 {
+		t.Errorf("skip_dirs = %v", cfg.Orchestrator.Local.SkipDirs)
+	}
+	// A declared list REPLACES the shipped one. Merging would make it
+	// impossible to ever narrow the guard, and silently widen what the user
+	// thought they had pinned down.
+	if len(cfg.Security.Sensitive) != 1 || cfg.Security.Sensitive[0] != "*.pem" {
+		t.Errorf("sensitive = %v, want exactly what the file declared", cfg.Security.Sensitive)
+	}
+}
+
+// An empty list is a deliberate statement -- "nothing here is secret" -- and
+// has to survive as one rather than being mistaken for an omission.
+func TestAnEmptySensitiveListDisarmsTheGuardOnPurpose(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[security]\nsensitive = []\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Security.Sensitive) != 0 {
+		t.Errorf("sensitive = %v, want the empty list the user asked for", cfg.Security.Sensitive)
+	}
+}
+
+func TestAnUnknownRunnerIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nrunner = \"magic\"\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+func TestANegativeCeilingIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nmax_parallel = -1\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+// Zero is not a typo for one: it is how an operator lifts the ceiling on a
+// machine that can take it.
+func TestAZeroCeilingLiftsTheLimit(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[orchestrator]\nmax_parallel = 0\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.MaxParallel != 0 {
+		t.Errorf("max_parallel = %d, want the uncapped 0", cfg.Orchestrator.MaxParallel)
+	}
+}
+
+func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
+	// The misspellings below are the subject of the test, not an accident.
+	for _, body := range []string{
+		"\n[orchestrator]\nmax_paralel = 2\n",            //nolint:misspell // deliberate typo
+		"\n[orchestrator.local]\nimplementaitons = []\n", //nolint:misspell // deliberate typo
+		"\n[security]\nsensitiv = []\n",
+	} {
+		_, err := config.Load(write(t, minimal+body))
+		if err == nil || !strings.Contains(err.Error(), "unknown key") {
+			t.Errorf("%q was accepted: %v", strings.TrimSpace(body), err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,179 @@ func TestStatusShowsEveryProviderWithItsLight(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output is missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End to end, against a real repository on disk
+// ---------------------------------------------------------------------------
+
+// realRepo lays down a small tree with the shape that matters: two areas that
+// hold the text, one that does not, and a credentials file that must never be
+// read no matter who asks.
+func realRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"internal/auth/login.go":  "package auth\n\n// TODO: rotate the session key\nfunc Login() {}\n",
+		"internal/http/route.go":  "package http\n\n// TODO: reject unknown verbs\nfunc Route() {}\n",
+		"cmd/server/main.go":      "package main\n\nfunc main() {}\n",
+		"docs/notes.md":           "nothing to do here\n",
+		".env":                    "TODO_SECRET=hunter2\n",
+		"node_modules/dep/pkg.go": "// TODO: this is vendored and must not count\n",
+	}
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return root
+}
+
+// freshInstall is the strongest end-to-end claim available: no settings file
+// at all, the shipped defaults, and a real repository under the working
+// directory that the default `current` entry points at. A hand-copied
+// catalog here would drift from what actually ships and quietly stop
+// testing it.
+func freshInstall(t *testing.T) (repo, runs string) {
+	t.Helper()
+	repo = realRepo(t)
+	state := t.TempDir()
+	t.Chdir(repo)
+	t.Setenv("XDG_STATE_HOME", state)
+	// Nothing may leak in from the machine running the suite.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ATENEA_CONFIG", "")
+	return repo, filepath.Join(state, "atenea", "runs")
+}
+
+// The one test that proves the skeleton beats: a commission enters the CLI,
+// the orchestrator looks at a real directory, narrows the work to what it
+// found, dispatches it, reviews the answers and leaves a paper copy.
+func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
+	freshInstall(t)
+
+	out, err := exec(t, "task", "TODO", "--trace")
+	if err != nil {
+		t.Fatalf("task: %v\n%s", err, out)
+	}
+
+	// The verdict, the phases and the funnel all reached the screen.
+	for _, want := range []string{
+		"verdict   ok",
+		"explore  1 step(s)",
+		"work     1 step(s)",
+		"wave 1  explore-current",
+		"wave 2  search-current",
+		"search-current       work     ripgrep",
+		"review   child=ok parent=ok (output matches the capability)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+
+	// The two providers that need a warm index are dropped on constraints, and
+	// the trace says why rather than leaving the choice unexplained.
+	if !strings.Contains(out, "needs an index") {
+		t.Errorf("the funnel did not explain its drops:\n%s", out)
+	}
+
+	// The look found the one area that holds the text and narrowed the work to
+	// it: docs and cmd were not searched again for nothing.
+	if !strings.Contains(out, "scope    internal") {
+		t.Errorf("the work was not narrowed to what the look found:\n%s", out)
+	}
+
+	// Two source files hold the text. The vendored copy and the credentials
+	// file are not among them.
+	if !strings.Contains(out, "matches   2") {
+		t.Errorf("want the two source hits and nothing else:\n%s", out)
+	}
+}
+
+// A commission is not allowed to read what the user did not offer, and the
+// answer has to say so out loud rather than quietly returning less.
+func TestTheCommissionNeverReadsASensitiveFile(t *testing.T) {
+	freshInstall(t)
+
+	out, err := exec(t, "task", "hunter2", "--trace")
+	if err != nil {
+		t.Fatalf("task: %v\n%s", err, out)
+	}
+	if strings.Contains(out, ".env") {
+		t.Errorf("a sensitive file reached the answer:\n%s", out)
+	}
+	if !strings.Contains(out, "matches   0") {
+		t.Errorf("the secret was found anyway:\n%s", out)
+	}
+}
+
+// The paper copy is the whole point of checkpointing: after the process is
+// gone, the run is still readable.
+func TestTheRunSurvivesOnDisk(t *testing.T) {
+	_, runs := freshInstall(t)
+
+	out, err := exec(t, "task", "TODO")
+	if err != nil {
+		t.Fatalf("task: %v\n%s", err, out)
+	}
+	entries, err := os.ReadDir(runs)
+	if err != nil {
+		t.Fatalf("the run directory was never created: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("run files = %d, want exactly the one run", len(entries))
+	}
+
+	body, err := os.ReadFile(filepath.Join(runs, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var record struct {
+		Task    string `json:"task"`
+		Closed  bool   `json:"closed"`
+		Verdict string `json:"verdict"`
+		Steps   []struct {
+			ID             string `json:"id"`
+			Implementation string `json:"implementation"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(body, &record); err != nil {
+		t.Fatalf("the paper copy is not readable JSON: %v", err)
+	}
+	if record.Task != "TODO" || !record.Closed || record.Verdict != "ok" {
+		t.Fatalf("record = %+v", record)
+	}
+	if len(record.Steps) != 2 {
+		t.Fatalf("recorded steps = %d, want the look and the search", len(record.Steps))
+	}
+	for _, step := range record.Steps {
+		if step.Implementation != "ripgrep" {
+			t.Errorf("%s recorded as run by %q", step.ID, step.Implementation)
+		}
+	}
+}
+
+// Asking for a repository that is not in the settings is a typo, and a typo
+// must not look like an empty answer.
+func TestTaskAgainstAnUnknownRepositoryFails(t *testing.T) {
+	freshInstall(t)
+	_, err := exec(t, "task", "TODO", "--repo", "ghost")
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", got)
+	}
+}
+
+func TestTaskWithoutACommissionIsRefused(t *testing.T) {
+	freshInstall(t)
+	_, err := exec(t, "task")
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
 	}
 }
 
