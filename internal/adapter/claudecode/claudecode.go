@@ -32,6 +32,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/procstat"
+	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -83,6 +85,9 @@ type Runner struct {
 	sensitive       []string
 	budget          float64
 	timeout         time.Duration
+	// version asks the binary who it is, once. A client that updates itself
+	// on a schedule is exactly the case a declared version cannot track.
+	version *toolversion.Probe
 }
 
 // New validates the options and returns the adapter.
@@ -122,6 +127,7 @@ func New(opts Options) (*Runner, error) {
 	if runner.timeout == 0 {
 		runner.timeout = DefaultTimeout
 	}
+	runner.version = toolversion.New(runner.binary, "--version")
 	return runner, nil
 }
 
@@ -142,7 +148,12 @@ func (r *Runner) Implementations() []string {
 
 // Run executes one step by handing it to Claude Code and reading the answer
 // back.
-func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+//
+// The version travels back on every path, including the failing ones: which
+// build produced a number is half the number's meaning, and an upgrade that
+// started failing is exactly the case with no outcome to carry it.
+func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
+	defer func() { out.ToolVersion = r.version.Version(ctx) }()
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -170,7 +181,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
 	}
 
-	answer, err := r.invoke(ctx, root, req, ask)
+	answer, peak, err := r.invoke(ctx, root, req, ask)
 	if err != nil {
 		return contract.Outcome{}, err
 	}
@@ -185,14 +196,22 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 			WithRaw(answer.Result)
 	}
 
-	spent := contract.Sample{Duration: time.Since(started), Tokens: answer.Usage.total()}
-	outcome := contract.Outcome{Result: result, Verdict: contract.VerdictOK, Spent: spent}
+	spent := contract.Sample{
+		Duration: time.Since(started),
+		Tokens:   answer.Usage.total(),
+		PeakRSS:  peak,
+	}
+	outcome := contract.Outcome{
+		Result:  result,
+		Verdict: contract.VerdictOK,
+		Spent:   spent,
+	}
 	if answer.TotalCostUSD > 0 {
-		// There is nowhere in contract.Sample for money yet -- the metrics base
-		// is a later brick -- and rounding dollars into the token count would
-		// poison the baseline the selector learns from. So it is reported as
-		// what it is: a fact about this run, in the one channel that carries
-		// facts.
+		// The measurement base has three axes -- time, tokens, memory -- and
+		// money is not one of them. Rounding dollars into the token count
+		// would poison the baseline the selector learns from, so the figure
+		// is reported as what it is: a fact about this run, in the one
+		// channel that carries facts.
 		outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
 			Level: contract.ContextRepository,
 			Note: fmt.Sprintf("claude code answered %s for $%.4f over %d turn(s)",
@@ -288,16 +307,20 @@ func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
 	}, nil
 }
 
-// invoke runs one turn and hands back the envelope.
-func (r *Runner) invoke(ctx context.Context, root string, req contract.RunRequest, ask search) (envelope, error) {
+// invoke runs one turn and hands back the envelope and what the child weighed.
+//
+// The weight comes back even when the turn failed. A model call that ran for
+// two minutes and then errored still occupied the machine for two minutes, and
+// a baseline that only counted the successes would rank it as cheap.
+func (r *Runner) invoke(ctx context.Context, root string, req contract.RunRequest, ask search) (envelope, int64, error) {
 	binary, err := exec.LookPath(r.binary)
 	if err != nil {
-		return envelope{}, contract.Fail(contract.FailureUnavailable,
+		return envelope{}, 0, contract.Fail(contract.FailureUnavailable,
 			"claude code is not installed: %q is not on PATH", r.binary)
 	}
 	argv, err := r.args(req, ask)
 	if err != nil {
-		return envelope{}, err
+		return envelope{}, 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
@@ -305,6 +328,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	cmd := exec.CommandContext(ctx, binary, argv...)
 	cmd.Dir = root
 	stdout, runErr := cmd.Output()
+	peak := procstat.PeakRSS(cmd.ProcessState)
 
 	var stderr string
 	var exit *exec.ExitError
@@ -312,7 +336,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		stderr = strings.TrimSpace(string(exit.Stderr))
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return envelope{}, contract.Fail(contract.FailureTimeout,
+		return envelope{}, peak, contract.Fail(contract.FailureTimeout,
 			"claude code took longer than %s", r.timeout).WithRaw(stderr)
 	}
 
@@ -322,14 +346,14 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		// plain text on stderr -- a rejected session id, a bad flag. There is
 		// no structure to sort, so the raw line travels for whoever debugs it.
 		if runErr != nil {
-			return envelope{}, failureFor(stderr, runErr)
+			return envelope{}, peak, failureFor(stderr, runErr)
 		}
-		return envelope{}, parseErr
+		return envelope{}, peak, parseErr
 	}
 	if out.IsError {
-		return envelope{}, failureFor(out.Result, runErr)
+		return envelope{}, peak, failureFor(out.Result, runErr)
 	}
-	return out, nil
+	return out, peak, nil
 }
 
 // envelope is the JSON one headless turn prints.

@@ -121,6 +121,10 @@ type Runner struct {
 	// of the connection state: two callers reusing an id would let a server
 	// answer one of them with the other's result.
 	nextID int
+	// version is what the server called itself when the session opened. It is
+	// guarded by mu with the rest of the connection state, and it is empty
+	// until the first handshake or if the server never introduced itself.
+	version string
 }
 
 // New validates the options and returns the adapter.
@@ -174,8 +178,24 @@ func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
+// serverVersion is what Serena called itself when the session opened.
+//
+// Unlike the CLI adapters this costs no extra process: the handshake that had
+// to happen anyway carries it. Empty means the session has not been opened yet
+// or the server did not introduce itself.
+func (r *Runner) serverVersion() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.version
+}
+
 // Run executes one step.
-func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+//
+// The version travels back on every path, including the failing ones. Here it
+// is whatever the handshake already learned: a session that never opened has
+// nothing to report, which is a fact rather than a gap.
+func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
+	defer func() { out.ToolVersion = r.serverVersion() }()
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -224,7 +244,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
-		Spent:   contract.Sample{Duration: time.Since(started)},
+		// No memory figure: Serena is a server in somebody else's container,
+		// so there is no child process here to weigh. Leaving it at zero is
+		// what tells the store to record the gap instead of a number.
+		Spent: contract.Sample{Duration: time.Since(started)},
 	}
 	// Two discoveries, because they are two different facts. The first is how
 	// the position the caller named became the name Serena answered about --

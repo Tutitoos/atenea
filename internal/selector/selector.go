@@ -3,9 +3,10 @@
 //
 // It is a funnel. Constraints say who CAN work here, health says who is
 // AVAILABLE right now, and the last stage picks among whoever is left. The
-// third filter -- cost -- is not wired yet: on a cold start there are no fresh
-// measurements to compare, so ranking by cost would mean ranking by guesswork.
-// It joins the funnel once the metrics base is feeding real numbers.
+// third filter -- cost -- is not wired yet. The measurement base now records
+// what every attempt costs, so the numbers exist; reading them back into the
+// ranking, with the break-in rule that keeps a guess from outranking a
+// measurement, is the step after this one.
 package selector
 
 import (

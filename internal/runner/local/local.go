@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -105,7 +106,12 @@ func (r *Runner) Sensitive() []string {
 }
 
 // Run executes one step.
-func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+//
+// The version travels back on every path, including the failing ones: the
+// stand-in is Atenea itself, so the answer is known before the walk starts and
+// there is no reason a failed search should file its numbers anonymously.
+func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
+	defer func() { out.ToolVersion = buildinfo.Version }()
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -137,7 +143,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		Verdict: contract.VerdictOK,
 		// Duration is a real measurement. Tokens are honestly zero: nothing
 		// here talks to a model, so inventing a figure would poison the very
-		// baseline the selector is meant to learn from.
+		// baseline the selector is meant to learn from. Memory is left
+		// unmeasured for a different reason -- there is no child process,
+		// this walk happens inside Atenea, and weighing the whole core would
+		// answer a question nobody asked.
 		Spent: contract.Sample{Duration: time.Since(started)},
 	}, nil
 }
@@ -182,6 +191,15 @@ func (r *Runner) search(ctx context.Context, req contract.RunRequest) ([]any, er
 }
 
 func (r *Runner) walk(ctx context.Context, root, start string, q query) ([]any, error) {
+	// The root is checked before the walk begins, and only the root. WalkDir
+	// hands a missing start to the callback below like any other unreadable
+	// entry, where it would be skipped and the search would answer "nothing
+	// found" for a repository it never opened. A zero that means "not
+	// searched" is worse than an error: it reads as a fast, cheap, successful
+	// call, and that is precisely what the measurement base would learn from.
+	if _, err := os.Stat(start); err != nil {
+		return nil, contract.Fail(contract.FailureNotFound, "cannot search %s: %v", start, err)
+	}
 	var matches []any
 	err := filepath.WalkDir(start, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

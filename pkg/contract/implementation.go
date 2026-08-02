@@ -72,9 +72,19 @@ type Constraints struct {
 }
 
 // Sample is one cost observation: what a call spent.
+//
+// Three legs, because two of them can hide the third: a tool that is quick and
+// quiet while paging a machine into swap is not cheap, it is only cheap on the
+// axes anyone bothered to look at.
 type Sample struct {
 	Duration time.Duration
 	Tokens   int
+	// PeakRSS is the high-water mark of resident memory, in bytes, of the
+	// process the far side ran in. Zero means nobody measured it rather than
+	// zero bytes: an adapter talking to a server over HTTP has no process of
+	// its own to weigh, and the design would rather record that gap than
+	// estimate over it.
+	PeakRSS int64
 }
 
 // Cost is block 3 of an Implementation.

@@ -495,3 +495,96 @@ func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The measurement base
+// ---------------------------------------------------------------------------
+
+// A fresh install measures. The baseline is what the funnel ranks on, so a
+// file that says nothing about metrics must still produce a working store.
+func TestTheMetricsBaseHasWorkingDefaults(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m := cfg.Metrics
+	if !m.Enabled {
+		t.Error("a fresh install is not measuring anything")
+	}
+	if m.Path == "" {
+		t.Error("the store has nowhere to live")
+	}
+	if m.Flush <= 0 || m.Compact <= 0 {
+		t.Errorf("the rhythms are not running: flush=%v compact=%v", m.Flush, m.Compact)
+	}
+	if m.BufferLimit <= 0 {
+		t.Errorf("buffer_limit = %d, want a real ceiling", m.BufferLimit)
+	}
+}
+
+func TestTheMetricsBlockIsRead(t *testing.T) {
+	body := minimal + `
+[metrics]
+path = "/tmp/atenea-test/base.duckdb"
+enabled = true
+flush = "10s"
+compact = "2h"
+buffer_limit = 25
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m := cfg.Metrics
+	if m.Path != "/tmp/atenea-test/base.duckdb" {
+		t.Errorf("path = %q", m.Path)
+	}
+	if m.Flush != 10*time.Second {
+		t.Errorf("flush = %v, want 10s", m.Flush)
+	}
+	if m.Compact != 2*time.Hour {
+		t.Errorf("compact = %v, want 2h", m.Compact)
+	}
+	if m.BufferLimit != 25 {
+		t.Errorf("buffer_limit = %d, want 25", m.BufferLimit)
+	}
+}
+
+// Switching measuring off is a real choice and has to survive as one: the core
+// still runs, it simply learns nothing.
+func TestMeasuringCanBeSwitchedOff(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[metrics]\nenabled = false\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Metrics.Enabled {
+		t.Fatal("enabled = false was ignored")
+	}
+}
+
+// A rhythm of zero is not "off", it is a beat that never lands or one that
+// never stops. Off is spelled `enabled = false`, in one place.
+func TestAnUnusableRhythmIsRefused(t *testing.T) {
+	for _, body := range []string{
+		"\n[metrics]\nflush = \"0s\"\n",
+		"\n[metrics]\nflush = \"-1s\"\n",
+		"\n[metrics]\nflush = \"soon\"\n",
+		"\n[metrics]\ncompact = \"0s\"\n",
+		"\n[metrics]\ncompact = \"-1h\"\n",
+		"\n[metrics]\nbuffer_limit = 0\n",
+		"\n[metrics]\nbuffer_limit = -5\n",
+	} {
+		_, err := config.Load(write(t, minimal+body))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("%q gave %v, want invalid_input", strings.TrimSpace(body), got)
+		}
+	}
+}
+
+func TestAnUnknownMetricsKeyIsRefused(t *testing.T) {
+	//nolint:misspell // the misspelling is the subject of the test
+	_, err := config.Load(write(t, minimal+"\n[metrics]\nbuffer_limt = 10\n"))
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("a typo in the metrics block was accepted: %v", err)
+	}
+}

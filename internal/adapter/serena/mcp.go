@@ -17,6 +17,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Tutitoos/atenea/internal/toolversion"
 )
 
 // rpcRequest is one JSON-RPC call. ID is omitted for notifications, which is
@@ -110,8 +112,21 @@ func (r *Runner) handshake(ctx context.Context) error {
 	if session == "" {
 		return fmt.Errorf("serena handshake returned no session id: %s", clip(text))
 	}
-	if _, err := decode(text); err != nil {
+	result, err := decode(text)
+	if err != nil {
 		return err
+	}
+	// The version rides in on the handshake Atenea already pays for, so
+	// filing measurements under the language server that actually produced
+	// them costs nothing extra. A server that does not introduce itself
+	// leaves it empty, which is a fact rather than a guess.
+	var hello struct {
+		ServerInfo struct {
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if json.Unmarshal(result, &hello) == nil {
+		r.version = toolversion.Clean(hello.ServerInfo.Version)
 	}
 	r.session = session
 	// The spec requires this notification before any tool call, and a server

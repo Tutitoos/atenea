@@ -14,7 +14,9 @@ Status: alpha (`0.x.y`). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
 them in waves and reviews every answer. Three adapters ship: two client CLIs
-(`omp`, Claude Code) for text search, and Serena over MCP for symbols.
+(`omp`, Claude Code) for text search, and Serena over MCP for symbols. Every
+attempt is measured — time, tokens and peak memory, per capability and per
+implementation — into an embedded DuckDB base that the funnel will rank on.
 
 ## Why
 
@@ -96,12 +98,16 @@ internal/           the brain, not importable from outside
   adapter/omp/         the client adapter: translates for the omp CLI
   adapter/serena/      the symbol adapter: MCP over HTTP, positions to names
   checkpoint/          run receipts on disk
+  clock/               the one lane every background rhythm runs in
   config/              the single settings file
   core/                wiring, status and clean shutdown
+  metrics/             the measurement base: DuckDB, batched, one writer
   orchestrator/        the agent: explore, split, dispatch, review
+  procstat/            weighing a finished child process, per platform
   registry/            the Capability Registry
   runner/local/        stand-in far side, for a machine with no client installed
   selector/            the funnel
+  toolversion/         asking a tool who it is, once per process
 pkg/contract/       the contract shared by the core and its adapters
 docs/               documentation sources, served by Hugo on GitHub Pages
 ```
@@ -126,7 +132,7 @@ Atenea leans on work other people did first. A thank-you, with a link to each:
 - [ToolHive](https://github.com/stacklok/toolhive) — isolation and lifecycle for shared MCP servers
 - [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) — browser diagnostics
 - [claude-mem](https://github.com/thedotmack/claude-mem) — persistent memory across sessions
-- [DuckDB](https://github.com/duckdb/duckdb) — the analytical store the metrics base will run on
+- [DuckDB](https://github.com/duckdb/duckdb) — the analytical store the measurement base runs on
 - [Hugo](https://github.com/gohugoio/hugo) and [hugo-book](https://github.com/alex-shpak/hugo-book) — these docs
 - [lefthook](https://github.com/evilmartians/lefthook) and [Air](https://github.com/air-verse/air) — the development loop
 

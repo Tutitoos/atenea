@@ -209,4 +209,11 @@ type Outcome struct {
 	Verdict     Verdict
 	Discoveries []Discovery
 	Spent       Sample
+	// ToolVersion is what the far side answered when asked who it is. The
+	// settings file also carries a version, but that one is a declaration and
+	// this one is a fact: the case worth catching is a tool upgraded on disk
+	// by someone who never opened the TOML. Measurements are filed under this
+	// string, so an upgrade starts a fresh baseline instead of dragging the
+	// old numbers along. Empty means the far side would not say.
+	ToolVersion string
 }

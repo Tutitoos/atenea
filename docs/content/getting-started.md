@@ -182,6 +182,11 @@ reports more hits and no `scope` line.
 `--repo` narrows the commission; repeat it for several. Every run leaves a
 receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.
 
+What each step cost lands beside it, in `metrics.duckdb`: one row per attempt,
+including the ones that failed. That base is what the funnel will rank on once
+it has real figures to prefer over the estimates in the settings file. Nothing
+has to be switched on for it, and `enabled = false` under `[metrics]` stops it.
+
 ## Ask for one capability
 
 `task` is a commission: explore, split, dispatch. `ask` is the atom underneath

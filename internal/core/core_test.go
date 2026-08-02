@@ -46,6 +46,34 @@ effects = ["read"]
   type = "string"
   required = true
 
+  # Declared so a real dispatch has something to answer with: the stand-in
+  # validates its own answer against this, and a capability with no shape
+  # refuses every result it is handed.
+  [[capability.output]]
+  name = "matches"
+  type = "record_list"
+  required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "column"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+
 [[implementation]]
 id = "ripgrep"
 provider = "ripgrep"

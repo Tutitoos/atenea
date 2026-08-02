@@ -409,6 +409,58 @@ func TestAnEffectOutsideTheCommissionIsRefused(t *testing.T) {
 	}
 }
 
+// A failed attempt is still a measurement, and a measurement filed with no
+// version cannot be told apart from the release before it. The case worth
+// catching -- an upgrade that started failing -- is exactly the one where
+// there is no successful outcome to carry the string.
+func TestAFailedRunStillReportsWhoFailed(t *testing.T) {
+	root := fixture(t)
+	req := request(t, root, map[string]any{"query": "login"})
+	req.Permission = contract.Permission{Task: "find login"} // nothing granted
+	outcome, err := newRunner(t).Run(t.Context(), req)
+	if err == nil {
+		t.Fatal("the refusal stopped happening; this test is about the refusal")
+	}
+	if outcome.ToolVersion == "" {
+		t.Error("a refused call was filed with no version at all")
+	}
+}
+
+// A repository whose path cannot be read was never searched, and answering
+// "nothing found" for it is a lie the measurement base would file as the
+// cheapest, fastest call there is. One unreadable directory inside a real tree
+// is still forgiven; the root is not.
+func TestARepositoryThatCannotBeReadIsNotAnEmptyResult(t *testing.T) {
+	req := request(t, filepath.Join(t.TempDir(), "nowhere"), map[string]any{"query": "login"})
+	_, err := newRunner(t).Run(t.Context(), req)
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", got)
+	}
+}
+
+// The forgiveness that stays: a directory inside the repository that cannot be
+// listed is skipped, and the rest of the search still answers.
+func TestAnUnreadableDirectoryInsideTheTreeIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("login\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	outcome, err := newRunner(t).Run(t.Context(), request(t, root, map[string]any{"query": "login"}))
+	if err != nil {
+		t.Fatalf("one unreadable directory sank the whole search: %v", err)
+	}
+	matches, _ := outcome.Result["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("%d matches, want the one outside the locked directory", len(matches))
+	}
+}
+
 func TestPayloadIsCheckedAgainstTheDeclaredInputs(t *testing.T) {
 	root := fixture(t)
 	cases := map[string]map[string]any{

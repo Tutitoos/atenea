@@ -95,6 +95,34 @@ falls back to the default location. To turn checkpointing off, point the
 orchestrator at no store at all — the directory is created on first write, so a
 core that never receives a commission leaves nothing behind.
 
+## The measurement base
+
+```toml
+[metrics]
+enabled = true              # off leaves a working core that never learns
+path = ""                   # "" -> $XDG_STATE_HOME/atenea/metrics.duckdb
+flush = "30s"               # how often the batch reaches disk
+compact = "1h"              # how often the retention ladder is walked
+buffer_limit = 10000        # measurements held in memory when flushes fail
+```
+
+What every attempt cost — time, tokens, memory — filed under the capability
+asked for and the implementation that answered. It is the fuel the funnel ranks
+on; until it has real figures the funnel uses the estimates written further
+down the file, which is guesswork wearing a decimal point.
+
+`path = ""` is not "nowhere", it is the default location, beside the run
+receipts and under the same state root: both are the same kind of thing, what
+Atenea remembers about work it has done.
+
+Neither rhythm can be set to zero. A beat of zero reads like "never", and a
+maintenance task that silently stops happening is worse than one that is
+switched off in a place you can see. Off is spelled `enabled = false`.
+
+`buffer_limit` is the ceiling on how many measurements wait in memory while
+flushes are failing. Past it the oldest are dropped and counted, because the
+only thing worse than losing a measurement is not knowing that you did.
+
 ## Security
 
 ```toml

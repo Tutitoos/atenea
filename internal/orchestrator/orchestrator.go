@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -44,6 +45,24 @@ type Catalog interface {
 type Chooser interface {
 	Select(req selector.Request) (selector.Decision, error)
 }
+
+// Meter is where a closed step reports what it cost.
+//
+// The orchestrator never writes a measurement, it only hands one upwards: the
+// core owns the store and is the single writer. Settle is the push to disk at
+// the two moments the batch must not be allowed to evaporate.
+type Meter interface {
+	Record(m metrics.Measurement)
+	Settle(ctx context.Context)
+}
+
+// unmetered is what an agent runs against when nobody is collecting. Measuring
+// is not what makes the work correct, so a core without a store still
+// dispatches; it simply learns nothing from it.
+type unmetered struct{}
+
+func (unmetered) Record(metrics.Measurement) {}
+func (unmetered) Settle(context.Context)     {}
 
 // Phase names, in the order they run.
 const (
@@ -86,6 +105,9 @@ type Config struct {
 	Chooser     Chooser
 	Runner      contract.Runner
 	Checkpoints *checkpoint.Store
+	// Meter collects what each step cost. Nil means nobody is collecting,
+	// which is a working core, just one that never learns.
+	Meter Meter
 	// MaxParallel caps how many steps of one wave run at a time. Zero means no
 	// ceiling. The ceiling belongs in the settings because the real limit is
 	// the machine, and the machine is not the same one everywhere.
@@ -100,6 +122,7 @@ type Agent struct {
 	chooser     Chooser
 	runner      contract.Runner
 	checkpoints *checkpoint.Store
+	meter       Meter
 	maxParallel int
 }
 
@@ -145,12 +168,17 @@ func New(cfg Config) (*Agent, error) {
 		}
 		store = disabled
 	}
+	meter := cfg.Meter
+	if meter == nil {
+		meter = unmetered{}
+	}
 	return &Agent{
 		card:        card.Clone(),
 		catalog:     cfg.Catalog,
 		chooser:     cfg.Chooser,
 		runner:      cfg.Runner,
 		checkpoints: store,
+		meter:       meter,
 		maxParallel: cfg.MaxParallel,
 	}, nil
 }
@@ -214,7 +242,12 @@ type StepResult struct {
 	Outcome  contract.Outcome
 	Review   Review
 	Failure  string
-	Spent    contract.Sample
+	// FailureKind is the shared bin the failure was sorted into, kept beside
+	// the text because the text is for a human and the bin is what can be
+	// counted. Turning the message back into a kind afterwards is not
+	// possible: err.Error() is one-way.
+	FailureKind contract.FailureKind
+	Spent       contract.Sample
 }
 
 // Review is the parent's audit of a child that just finished.
@@ -534,6 +567,13 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 			closed = append(closed, step)
 			result.Steps = append(result.Steps, step)
+			// Only an attempt that reached a provider is a measurement. A
+			// blocked step never ran: nobody was chosen, no time was spent,
+			// and filing it would put a row under an empty implementation
+			// that the selector would later read as a real average.
+			if step.Decision.Chosen.ID != "" {
+				a.meter.Record(measure(result.RunID, step))
+			}
 			record.Steps = append(record.Steps, snapshot(step))
 			record.Updated = time.Now()
 			// A step closing is one of the two moments the paper copy is
@@ -544,6 +584,11 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 		}
 	}
 	result.Phases = append(result.Phases, Phase{Name: phase, Steps: len(closed), Spent: phaseSpent})
+	// A phase closing is one of the two moments measurements are pushed to
+	// disk, the other being the process going down. Between them the batch
+	// lives in memory, which is the whole point of batching; these two are
+	// what stop a crash from taking the batch with it.
+	a.meter.Settle(ctx)
 	return closed, nil
 }
 
@@ -621,10 +666,13 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	started := time.Now()
 	outcome, runErr := a.runner.Run(ctx, request)
 	out.Outcome = outcome
+	// The core's clock is the one that counts. An adapter sees only its own
+	// call and would report the purer figure, but what decides between two
+	// implementations is the wait the caller actually sat through, round trip
+	// included. Tokens and memory still come from the far side, because they
+	// are the two things the core has no way to see.
 	out.Spent = outcome.Spent
-	if out.Spent.Duration == 0 {
-		out.Spent.Duration = time.Since(started)
-	}
+	out.Spent.Duration = time.Since(started)
 	if runErr != nil {
 		// A provider reporting itself unusable is news the catalog needs: the
 		// funnel filters on health, and health is owned by whoever probed last.
@@ -646,6 +694,7 @@ func (a *Agent) close(out StepResult, err error) StepResult {
 	child := out.Outcome.Verdict
 	if err != nil {
 		out.Failure = err.Error()
+		out.FailureKind = contract.KindOf(err)
 		child = contract.VerdictFailed
 	}
 
@@ -805,4 +854,32 @@ func snapshot(step StepResult) checkpoint.StepState {
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		ClosedAt:       time.Now(),
 	}
+}
+
+// measure turns a closed step into a row for the baseline.
+//
+// It is snapshot's twin and deliberately looks like it: one is the paper copy
+// a resumed run reads back, the other is the figure the selector will one day
+// rank on, and both are written at exactly the same moment for the same
+// reason. A step that failed is measured like any other -- the whole point of
+// recording the bin and the reason is that a provider which fails expensively
+// should stop looking cheap.
+func measure(runID string, step StepResult) metrics.Measurement {
+	m := metrics.Measurement{
+		At:             time.Now(),
+		RunID:          runID,
+		StepID:         step.Step.ID,
+		Capability:     step.Step.Capability,
+		Implementation: step.Decision.Chosen.ID,
+		Provider:       step.Decision.Chosen.Provider,
+		Repository:     step.Step.Repository,
+		ToolVersion:    step.Outcome.ToolVersion,
+		Spent:          step.Spent,
+		OK:             step.Review.Parent == contract.VerdictOK,
+		Failure:        step.Failure,
+	}
+	if step.Failure != "" {
+		m.FailureKind = step.FailureKind.String()
+	}
+	return m
 }

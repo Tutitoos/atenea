@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -29,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/procstat"
+	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -85,6 +88,24 @@ type Runner struct {
 	sensitive       []string
 	matchLimit      int
 	timeout         time.Duration
+	// version asks the binary who it is, once, so measurements are filed
+	// under the omp that actually produced them rather than the one somebody
+	// wrote in the settings file months ago.
+	version *toolversion.Probe
+}
+
+// meter accumulates what the child processes of one request cost.
+//
+// A single search can walk several roots, and each root is its own process. The
+// memory figure that means anything for the request as a whole is the largest
+// of them: two 40 MB processes one after the other did not need 80 MB, they
+// needed 40 twice.
+type meter struct{ peak int64 }
+
+func (m *meter) saw(state *os.ProcessState) {
+	if peak := procstat.PeakRSS(state); peak > m.peak {
+		m.peak = peak
+	}
 }
 
 // New validates the options and returns the adapter.
@@ -124,6 +145,7 @@ func New(opts Options) (*Runner, error) {
 	if runner.timeout == 0 {
 		runner.timeout = DefaultTimeout
 	}
+	runner.version = toolversion.New(runner.binary, "--version")
 	return runner, nil
 }
 
@@ -144,7 +166,13 @@ func (r *Runner) Implementations() []string {
 }
 
 // Run executes one step by handing it to omp and reading the answer back.
-func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+//
+// The version travels back on every path, including the failing ones. Which
+// build of a tool produced a number is half the number's meaning, and the case
+// worth catching -- an upgrade that started failing -- is exactly the one where
+// the call did not return an outcome to carry it.
+func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
+	defer func() { out.ToolVersion = r.version.Version(ctx) }()
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -178,8 +206,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 
 	var matches []any
 	truncated := false
+	weight := &meter{}
 	for _, target := range roots {
-		found, cut, runErr := r.searchOne(ctx, root, target, search)
+		found, cut, runErr := r.searchOne(ctx, root, target, search, weight)
 		if runErr != nil {
 			return contract.Outcome{}, runErr
 		}
@@ -197,10 +226,14 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
-		// Duration is a real measurement. Tokens are honestly zero: omp's
-		// search is a tool call, not a model turn, so inventing a figure would
-		// poison the very baseline the selector is meant to learn from.
-		Spent: contract.Sample{Duration: time.Since(started)},
+		// Duration and memory are real measurements. Tokens are honestly
+		// zero: omp's search is a tool call, not a model turn, so inventing a
+		// figure would poison the very baseline the selector is meant to
+		// learn from.
+		Spent: contract.Sample{
+			Duration: time.Since(started),
+			PeakRSS:  weight.peak,
+		},
 	}
 	if truncated {
 		// A partial answer that does not say so is a wrong answer. The core
@@ -348,8 +381,8 @@ func targets(root string, scope []string, repositoryID string) ([]string, error)
 
 // searchOne runs omp once and turns what came back into records shaped like
 // the capability's declared output.
-func (r *Runner) searchOne(ctx context.Context, root, target string, s search) ([]any, bool, error) {
-	stdout, err := r.invoke(ctx, root, s.args(target))
+func (r *Runner) searchOne(ctx context.Context, root, target string, s search, weight *meter) ([]any, bool, error) {
+	stdout, err := r.invoke(ctx, root, s.args(target), weight)
 	if err != nil {
 		return nil, false, err
 	}
@@ -383,7 +416,11 @@ func (r *Runner) searchOne(ctx context.Context, root, target string, s search) (
 
 // invoke runs one omp command and hands back its stdout, sorting every way the
 // process itself can fail into a bin.
-func (r *Runner) invoke(ctx context.Context, dir string, args []string) (string, error) {
+//
+// The child is weighed whichever way it ends. A search that timed out or blew
+// up still spent the memory it spent, and a baseline built only from the calls
+// that worked would flatter every tool that fails expensively.
+func (r *Runner) invoke(ctx context.Context, dir string, args []string, weight *meter) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
@@ -394,6 +431,7 @@ func (r *Runner) invoke(ctx context.Context, dir string, args []string) (string,
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	weight.saw(cmd.ProcessState)
 	switch {
 	case err == nil:
 		return stdout.String(), nil

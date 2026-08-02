@@ -106,6 +106,37 @@ runners = ["omp"]
   # .gitignore; the stand-in does not read it, so it is told instead.
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
+[metrics]
+# The measurement base: what every attempt cost, on three axes -- time, tokens
+# and memory -- filed under the capability asked for and the implementation
+# that answered. It is the fuel the funnel will rank on. Until it has real
+# figures the funnel ranks on the estimates written further down this file,
+# which is guesswork wearing a decimal point.
+#
+# Turning it off leaves a working core that never learns what anything costs.
+enabled = true
+# Empty means $XDG_STATE_HOME/atenea/metrics.duckdb, beside the run receipts.
+# One embedded file, written by the core and nobody else.
+path = ""
+
+# The two rhythms, both served by the one clock so they cannot collide.
+#
+# Writes are batched: a measurement waits in memory and reaches the disk on the
+# beat below. Two moments do not wait for it -- a phase closing and the process
+# going down -- so this is the rhythm between them, not the guarantee.
+flush = "30s"
+# How often the retention ladder is walked: attempts are folded into hours,
+# hours into days after a week, days into weeks after a month, weeks into
+# months after six. There is always fine detail about the recent past and only
+# shapes about the distant one.
+compact = "1h"
+
+# How many measurements may wait in memory when writes are failing -- another
+# Atenea holding the file, a full disk. Past the ceiling the oldest are dropped
+# and counted, because the only thing worse than losing a measurement is not
+# knowing that you did. Empty means 10000.
+# buffer_limit = 10000
+
 [security]
 # The files that carry secrets inside them. Reading is free by default, and
 # this list is the exception. While exploring, a match here is skipped in

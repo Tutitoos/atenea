@@ -246,6 +246,81 @@ record of a run that never happened that way.
 
 The dump is deliberately narrow. It is a receipt, not a transcript.
 
+## The measurement base
+
+The funnel ranks on cost, and until something measures it, cost is whatever
+somebody typed into the settings file. The base is where the real figures go:
+one row per attempt, filed under the capability that was asked for and the
+implementation that answered.
+
+```text
+  a step closes
+       |
+       v
+  [buffer]  in memory, a batch                 ← never blocks the work
+       |
+       +--- phase closes -----> flush
+       +--- every 30s --------> flush
+       +--- shutdown ---------> flush
+       |
+       v
+  measurement (one row per attempt)
+       |
+   hour -> day -> week -> month                ← the retention ladder
+```
+
+Three axes, because two of them can hide the third: time, tokens, and the peak
+resident memory of whatever ran. A tool that is quick and quiet while paging a
+machine into swap is not cheap, and nothing but the memory figure would say so.
+
+Failed attempts are recorded too, with their bin and the untranslated reason. A
+provider that fails expensively has to stop looking cheap, and a baseline built
+only from the calls that worked would rank it as the fastest thing available.
+
+What the far side answered when asked its version is filed with every row, so
+an upgrade starts a fresh baseline instead of averaging the new binary's
+numbers into the old one's. Durations are stored in microseconds: the band
+where the funnel has the most to decide is the cheap one, and in milliseconds
+every provider in that band records a zero and becomes indistinguishable.
+
+A step that never reached a provider is not measured. A blocked step spent
+nothing and nobody answered it; a row for it would sit under an empty
+implementation and be read later as a real average.
+
+### One writer, one file
+
+The store is an embedded DuckDB file, and the core is the only thing that
+writes to it. A second Atenea starting up does not corrupt it and does not fail:
+DuckDB allows one writer, and the store waits out the other's flush rather than
+giving up, which turns a crash into a queue.
+
+### Batching, and the two moments that do not wait
+
+Writing every measurement the instant it happens costs real time on the hot
+path of real work and buys nothing. So measurements are batched — and batching
+is only honest because of two moments that do not wait for the beat: a phase
+closing, and the process going down. Between them a crash can lose at most one
+phase's worth of numbers.
+
+A one-shot command never ticks at all. `atenea task` lives for a second, so the
+shutdown path is the only reason it measures anything.
+
+### The ladder
+
+Fine detail is worth keeping for a week, not forever. Attempts fold into hourly
+buckets, hours into days, days into weeks, weeks into months, each tier waiting
+longer than the one before. Folding is idempotent: an attempt carries a flag
+once it has been counted, so a pass that runs twice cannot count it twice.
+
+Only closed periods fold. An hour still in progress would be summarized halfway
+and then never revisited.
+
+Compaction is driven by a mark on disk rather than by the beat alone, because
+most Atenea processes are a command that lives for a second and the history
+still has to be kept in shape for them. The mark is written inside the same
+transaction that does the work, so two Ateneas starting together cannot both
+decide they are the one to do it.
+
 ## Adapters are dumb
 
 All the intelligence stays in the core. An adapter translates a request into

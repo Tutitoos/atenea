@@ -18,7 +18,9 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/registry"
 	"github.com/Tutitoos/atenea/internal/runner/local"
@@ -36,8 +38,16 @@ type Core struct {
 	// screen names each of them; the orchestrator behind them sees one seam.
 	runners     []contract.Runner
 	checkpoints *checkpoint.Store
-	agent       *orchestrator.Agent
-	started     time.Time
+	// measurements is the baseline, and the core is its only writer. It is nil
+	// when the settings turned measuring off.
+	measurements *metrics.Store
+	// beats serves every background maintenance task in one lane, so the
+	// flush, the roll-up and whatever comes next cannot come due at the same
+	// second and fight over the same file.
+	beats *clock.Clock
+	agent *orchestrator.Agent
+
+	started time.Time
 
 	mu sync.Mutex
 	// sessions is the live chat table. A plain map under the lock the core
@@ -47,6 +57,34 @@ type Core struct {
 	stopping bool
 	inflight sync.WaitGroup
 }
+
+// Job names for the maintenance lane. They are the handle Settle and the
+// shutdown path reach for, so they are constants rather than strings typed
+// twice.
+const (
+	jobFlush   = "metrics.flush"
+	jobCompact = "metrics.compact"
+)
+
+// meter is the orchestrator's end of the measurement seam.
+//
+// Recording is a memory append on the hot path of real work, so it goes
+// straight to the store's buffer. Settling is disk, so it goes through the
+// clock: the design puts every maintenance task in one lane, and a phase
+// closing is no exception just because something asked for it by hand.
+type meter struct {
+	store *metrics.Store
+	beats *clock.Clock
+}
+
+func (m meter) Record(x metrics.Measurement) { m.store.Record(x) }
+
+// Settle pushes the batch and swallows the error on purpose. A flush that
+// could not get the file keeps its rows and tries again on the next beat, so
+// there is nothing to lose and nothing a caller in the middle of a commission
+// could usefully do about it. What did not make it is visible on the status
+// screen instead.
+func (m meter) Settle(ctx context.Context) { _ = m.beats.Do(ctx, jobFlush) }
 
 // New builds a core from settings.
 func New(cfg config.Config) (*Core, error) {
@@ -81,26 +119,83 @@ func New(cfg config.Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	store, beats, err := buildMetrics(cfg.Metrics)
+	if err != nil {
+		return nil, err
+	}
+	var collector orchestrator.Meter
+	if store != nil {
+		collector = meter{store: store, beats: beats}
+		// The history is put in shape when the database is opened, through the
+		// same lane everything else uses. The mark on disk is what keeps this
+		// from happening on every command: most passes find nothing due and
+		// cost one look at one row. A pass that does fail is not fatal --
+		// nothing has been lost, the rows are all still there -- so the core
+		// comes up either way and the next one tries again.
+		_ = beats.Do(context.Background(), jobCompact)
+	}
 	agent, err := orchestrator.New(orchestrator.Config{
 		Catalog:     catalog,
 		Chooser:     chooser,
 		Runner:      attach(runners),
 		Checkpoints: checkpoints,
+		Meter:       collector,
 		MaxParallel: cfg.Orchestrator.MaxParallel,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &Core{
-		settings:    cfg,
-		catalog:     catalog,
-		chooser:     chooser,
-		runners:     runners,
-		checkpoints: checkpoints,
-		agent:       agent,
-		sessions:    make(map[string]*Session),
-		started:     time.Now(),
+		settings:     cfg,
+		catalog:      catalog,
+		chooser:      chooser,
+		runners:      runners,
+		checkpoints:  checkpoints,
+		measurements: store,
+		beats:        beats,
+		agent:        agent,
+		sessions:     make(map[string]*Session),
+		started:      time.Now(),
 	}, nil
+}
+
+// buildMetrics opens the baseline and registers the two jobs that maintain it.
+//
+// The clock exists either way. A core with measuring switched off still has a
+// maintenance lane, it simply has nothing in it, and that keeps the shutdown
+// path from having to ask which kind of core it is stopping.
+func buildMetrics(cfg config.Metrics) (*metrics.Store, *clock.Clock, error) {
+	if !cfg.Enabled {
+		beats, err := clock.New()
+		return nil, beats, err
+	}
+	store, err := metrics.Open(cfg.Path, metrics.Options{BufferLimit: cfg.BufferLimit})
+	if err != nil {
+		return nil, nil, err
+	}
+	beats, err := clock.New(
+		clock.Job{
+			Name:  jobFlush,
+			Every: cfg.Flush,
+			Run:   store.Flush,
+		},
+		clock.Job{
+			Name:  jobCompact,
+			Every: cfg.Compact,
+			Run: func(ctx context.Context) error {
+				// Guarded by a mark on disk rather than by the beat alone.
+				// The beat only exists while a core is held up; most Atenea
+				// processes are a command that lives for a second, and the
+				// history still has to be kept in shape for them.
+				_, err := store.CompactIfDue(ctx, time.Now(), cfg.Compact)
+				return err
+			},
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, beats, nil
 }
 
 // buildRunners returns the far side of the dispatch seam. A core with no
@@ -360,6 +455,10 @@ func (c *Core) enter() error {
 // This is the service entry point; there is nothing to serve until the first
 // adapter exists, so for now it is the lifecycle and nothing more.
 func (c *Core) Run(ctx context.Context) error {
+	// The rhythms only exist while something is holding the core up. A CLI
+	// command lives for a second and settles its batch on the way out; a
+	// service lives for days and needs the beat.
+	c.beats.Start(ctx)
 	<-ctx.Done()
 	return c.Shutdown()
 }
@@ -389,13 +488,30 @@ func (c *Core) Shutdown() error {
 		c.mu.Lock()
 		clear(c.sessions)
 		c.mu.Unlock()
-		return nil
+		return c.settle()
 	case <-time.After(c.settings.Core.ShutdownGrace):
 		// The table is left alone on purpose: work is still running, so the
 		// chats behind it are still real and saying otherwise would hide it.
+		// The batch is still written: measurements of work that did finish are
+		// not the thing to throw away because something else overran.
+		_ = c.settle()
 		return contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)
 	}
+}
+
+// settle stops the rhythms and writes whatever is still in memory.
+//
+// This is the second of the two safety nets around batching, and the last
+// chance the batch gets. Unlike the one at a phase close, its error is
+// returned: nothing comes after it, so a caller that ignored it would be
+// throwing away the only report that measurements were lost.
+func (c *Core) settle() error {
+	c.beats.Stop()
+	if c.measurements == nil {
+		return nil
+	}
+	return c.measurements.Close()
 }
 
 // Stopping reports whether a shutdown has begun.

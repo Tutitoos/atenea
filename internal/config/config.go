@@ -23,6 +23,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -41,6 +42,7 @@ type Config struct {
 	Contract        contract.Version
 	Core            Core
 	Orchestrator    Orchestrator
+	Metrics         Metrics
 	Security        Security
 	Selector        selector.Config
 	Capabilities    []contract.Capability
@@ -52,6 +54,31 @@ type Config struct {
 type Core struct {
 	// ShutdownGrace is how long a clean stop waits for in-flight work.
 	ShutdownGrace time.Duration
+}
+
+// Metrics holds the measurement store and the rhythms that maintain it.
+//
+// The rhythms live here rather than in Go because the design keeps one clock
+// for all of them: retuning a beat is meant to be a line in this file, not a
+// rebuild, and having them side by side is what makes it obvious when two are
+// set to collide.
+type Metrics struct {
+	// Path is the database file. Empty means metrics.DefaultPath.
+	Path string
+	// Enabled is false when the user has turned measuring off. A core that is
+	// not measuring still works; it simply never learns what anything costs.
+	Enabled bool
+	// Flush is how often the buffered batch is pushed to disk on its own.
+	// A phase closing and the process going down push it regardless: this is
+	// the rhythm between those two, not the guarantee.
+	Flush time.Duration
+	// Compact is how often the retention ladder is walked.
+	Compact time.Duration
+	// BufferLimit caps how many measurements wait in memory when flushes are
+	// failing. It is never zero once a file has been read: an omitted key
+	// takes the store's own ceiling here, so the value downstream is always
+	// the one the status screen shows.
+	BufferLimit int
 }
 
 // Orchestrator holds the knobs of the agent that splits and hands out work.
@@ -223,6 +250,7 @@ type file struct {
 	Contract        string           `toml:"contract"`
 	Core            fileCore         `toml:"core"`
 	Orchestrator    fileOrchestrator `toml:"orchestrator"`
+	Metrics         fileMetrics      `toml:"metrics"`
 	Security        fileSecurity     `toml:"security"`
 	Selector        fileSelector     `toml:"selector"`
 	Capabilities    []fileCapability `toml:"capability"`
@@ -232,6 +260,14 @@ type file struct {
 
 type fileCore struct {
 	ShutdownGrace string `toml:"shutdown_grace"`
+}
+
+type fileMetrics struct {
+	Path        string `toml:"path"`
+	Enabled     *bool  `toml:"enabled"`
+	Flush       string `toml:"flush"`
+	Compact     string `toml:"compact"`
+	BufferLimit *int   `toml:"buffer_limit"`
 }
 
 type fileOrchestrator struct {
@@ -393,6 +429,9 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
+		return Config{}, err
+	}
 	cfg.Security = decoded.Security.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
@@ -428,8 +467,9 @@ func parse(raw []byte, source string) (Config, error) {
 const defaultShutdownGrace = 10 * time.Second
 
 // The orchestrator defaults. Four steps at a time is a ceiling that keeps a
-// laptop responsive; conflict resolution put the real brake on total memory,
-// which belongs with the metrics base and is not wired yet.
+// laptop responsive; conflict resolution put the real brake on total memory.
+// The measurement base now records what each step's far side weighed, so the
+// figures exist; deciding the ceiling from them is still a fixed number here.
 const (
 	defaultMaxParallel = 4
 	maxMaxParallel     = 100
@@ -582,6 +622,69 @@ func (o fileOMPAdapter) build(source string, out OMPAdapter) (OMPAdapter, error)
 				"settings %s: orchestrator.omp.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
+	}
+	return out, nil
+}
+
+// The metric rhythms. Flushing every half minute keeps the window of work at
+// risk from a hard kill small without turning the batch back into a write per
+// call; compacting hourly matches the finest tier the ladder keeps, so a pass
+// never has more than one closed hour to fold.
+const (
+	defaultMetricsFlush   = 30 * time.Second
+	defaultMetricsCompact = time.Hour
+)
+
+func (m fileMetrics) build(source string) (Metrics, error) {
+	out := Metrics{
+		Path:    metrics.DefaultPath(),
+		Enabled: true,
+		Flush:   defaultMetricsFlush,
+		Compact: defaultMetricsCompact,
+		// Taken from the store rather than restated here: a settings file that
+		// says nothing and a store opened with nothing have to agree, and two
+		// numbers that must match are one number.
+		BufferLimit: metrics.DefaultBufferLimit,
+	}
+	if strings.TrimSpace(m.Path) != "" {
+		out.Path = strings.TrimSpace(m.Path)
+	}
+	if m.Enabled != nil {
+		out.Enabled = *m.Enabled
+	}
+	for _, beat := range []struct {
+		key   string
+		raw   string
+		field *time.Duration
+	}{
+		{"flush", m.Flush, &out.Flush},
+		{"compact", m.Compact, &out.Compact},
+	} {
+		if beat.raw == "" {
+			continue
+		}
+		every, err := time.ParseDuration(beat.raw)
+		if err != nil {
+			return Metrics{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: metrics.%s %q: %v", source, beat.key, beat.raw, err)
+		}
+		if every <= 0 {
+			// Zero reads like "never", and a rhythm that never fires is a
+			// maintenance task that silently stops happening. Turning the
+			// store off is what `enabled = false` is for, and it says so.
+			return Metrics{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: metrics.%s must be above 0, got %s; use enabled = false to stop measuring",
+				source, beat.key, every)
+		}
+		*beat.field = every
+	}
+	if m.BufferLimit != nil {
+		if *m.BufferLimit <= 0 {
+			return Metrics{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: metrics.buffer_limit must be above 0, got %d",
+				source, *m.BufferLimit)
+		}
+		out.BufferLimit = *m.BufferLimit
 	}
 	return out, nil
 }
