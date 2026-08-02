@@ -31,10 +31,16 @@ what it knows about the repository in front of it.
 
 ## Where the project stands
 
-Alpha, version `0.x.y`. The core, the Capability Registry and the funnel run on
-all four stages. Three adapters ship: `omp` and Claude Code answer text search
-by driving a CLI, and Serena answers the three symbol capabilities by speaking
-MCP over HTTP.
+**These pages describe Atenea `0.1.0`**, the first tagged release, speaking
+contract `1.1.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
+goes stable; the contract adapters compile against is already a commitment. The
+[changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
+landed.
+
+The core, the Capability Registry and the funnel run on all four stages. Three
+adapters ship: `omp` and Claude Code answer text search by driving a CLI, and
+Serena answers the three symbol capabilities by speaking MCP over HTTP. It
+installs as a background service that keeps its own history in shape.
 
 Cost ranks the survivors rather than filtering them, and it says which figure
 it used. Until an implementation has been measured a couple of times, that

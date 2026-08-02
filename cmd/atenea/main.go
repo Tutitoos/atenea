@@ -68,7 +68,7 @@ func main() {
 	// A notebook that cannot even be prepared is not worth refusing to start
 	// over: the command still works, it just has nowhere to fall.
 	if book, err := notebook.New(notebook.DefaultPath()); err == nil {
-		defer book.Catch(notebook.Incident{Op: "atenea.main", Version: buildinfo.Version})
+		defer book.Catch(notebook.Incident{Op: "atenea.main", Version: buildinfo.Full()})
 	}
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "atenea: %v\n", err)
@@ -164,7 +164,7 @@ func load(settingsPath string) (*core.Core, error) {
 }
 
 func cmdVersion(out io.Writer) error {
-	fmt.Fprintf(out, "atenea   %s\n", buildinfo.Version)
+	fmt.Fprintf(out, "atenea   %s\n", buildinfo.Full())
 	fmt.Fprintf(out, "contract %s\n", contract.Current)
 	return nil
 }

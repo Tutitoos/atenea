@@ -1,0 +1,106 @@
+# A release is a tag, and the one thing a tag can silently get wrong is being a
+# different number from the binary it names. Nothing else in the build catches
+# that: the code compiles, the tests pass, and the artifact ships announcing a
+# version nobody released.
+#
+# So the tag is checked against the binary before anything is published, by
+# asking the binary rather than by reading the source -- the same question an
+# operator asks, answered the same way.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version test compares the tag to what the working tree says, so
+          # the tag has to be here. A shallow checkout arrives without it.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: The tag must be the version the binary reports
+        run: |
+          set -eu
+          want="${GITHUB_REF_NAME#v}"
+          go build -o /tmp/atenea ./cmd/atenea
+          # Build metadata after the + says which tree this came from; the
+          # release number is what has to match.
+          got="$(/tmp/atenea version | awk '/^atenea/ {print $2}' | cut -d+ -f1)"
+          if [ "$want" != "$got" ]; then
+            echo "tag ${GITHUB_REF_NAME} claims ${want}, the binary reports ${got}"
+            echo "bump internal/buildinfo.Version, or tag the version that is there"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} == binary ${got}"
+
+      - name: The changelog must have this release in it
+        run: |
+          set -eu
+          want="${GITHUB_REF_NAME#v}"
+          grep -q "^## \[${want}\]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no '## [${want}]' section"
+            exit 1
+          }
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Build the artifacts
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            # Release artifacts are built from an unpacked tree with no VCS
+            # stamp of their own, so they report the bare number -- which is
+            # what a release should say.
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -buildvcs=false -o "dist/atenea-${version}-${os}-${arch}" ./cmd/atenea
+          done
+          cd dist && sha256sum atenea-* > SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          # The notes come out of the changelog rather than being written
+          # twice. The section runs from this version's heading to the next
+          # one -- or, for the oldest section in the file, to the link
+          # definitions that collect at the bottom.
+          awk -v v="## [${version}]" '
+            $0 ~ "^## \\[" { if (found) exit; if (index($0, v) == 1) { found = 1; next } }
+            found && $0 ~ "^\\[.*\\]: http" { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          test -s /tmp/notes.md || { echo "no notes extracted for ${version}"; exit 1; }
+
+          # Alpha ships as a pre-release. 0.x.y is not a stable promise and
+          # GitHub should not offer it as "latest" to somebody who never read
+          # the version number.
+          prerelease=""
+          case "${version}" in
+            0.*) prerelease="--prerelease" ;;
+          esac
+
+          # shellcheck disable=SC2086 # prerelease is one flag or nothing
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Atenea ${version}" \
+            --notes-file /tmp/notes.md \
+            ${prerelease} \
+            dist/*

@@ -243,7 +243,7 @@ func (m *maintenance) wrap(op string, run func(context.Context) error) func(cont
 			_ = m.book.Record(notebook.Incident{
 				Op:      op,
 				Detail:  err.Error(),
-				Version: buildinfo.Version,
+				Version: buildinfo.Full(),
 			})
 		}
 		m.checkDrops()
@@ -268,7 +268,7 @@ func (m *maintenance) checkDrops() {
 		Detail: fmt.Sprintf(
 			"%d measurements were dropped at the buffer ceiling and are gone; the baseline is short by that much",
 			dropped-seen),
-		Version: buildinfo.Version,
+		Version: buildinfo.Full(),
 	})
 }
 
@@ -625,4 +625,4 @@ func (c *Core) Stopping() bool {
 func (c *Core) Uptime() time.Duration { return time.Since(c.started) }
 
 // Version of the running binary.
-func (c *Core) Version() string { return buildinfo.Version }
+func (c *Core) Version() string { return buildinfo.Full() }

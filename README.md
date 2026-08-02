@@ -10,7 +10,9 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Status: alpha (`0.x.y`). The core, the Capability Registry and the funnel
+Version `0.1.0`, speaking contract `1.1.0` — the first tagged release, and
+alpha: `0.x.y` until it goes stable. What landed is in the
+[changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
 them in waves and reviews every answer. Three adapters ship: two client CLIs
