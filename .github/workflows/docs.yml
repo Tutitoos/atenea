@@ -39,8 +39,14 @@ jobs:
           tar -xzf hugo.tar.gz hugo
           sudo install hugo /usr/local/bin/hugo
 
+      # enablement turns Pages on through the API on the first run. Without it
+      # the deploy fails until somebody clicks through the repository settings,
+      # which is a setup step that lives nowhere and nobody remembers. The
+      # `pages: write` permission above is what makes it possible.
       - uses: actions/configure-pages@v5
         id: pages
+        with:
+          enablement: true
 
       - name: Build
         working-directory: docs
