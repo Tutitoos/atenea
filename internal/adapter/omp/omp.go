@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/procstat"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -426,6 +427,10 @@ func (r *Runner) invoke(ctx context.Context, dir string, args []string, weight *
 
 	cmd := exec.CommandContext(ctx, r.binary, args...)
 	cmd.Dir = dir
+	// omp shells out in turn, so the same rule applies as anywhere else: kill
+	// the tree, and do not sit on the pipes waiting for a survivor to close
+	// the copy of stdout it inherited.
+	procgroup.Contain(cmd)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -435,12 +440,8 @@ func (r *Runner) invoke(ctx context.Context, dir string, args []string, weight *
 	switch {
 	case err == nil:
 		return stdout.String(), nil
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return "", contract.Fail(contract.FailureTimeout,
-			"omp took longer than %s", r.timeout).WithRaw(stderr.String())
-	case errors.Is(ctx.Err(), context.Canceled):
-		return "", contract.Fail(contract.FailureTimeout,
-			"omp was stopped before it answered").WithRaw(stderr.String())
+	case ctx.Err() != nil:
+		return "", contract.Stopped(ctx.Err(), "omp", r.timeout).WithRaw(stderr.String())
 	case errors.Is(err, exec.ErrNotFound):
 		return "", contract.Fail(contract.FailureUnavailable,
 			"omp is not installed: %q is not on PATH", r.binary).WithRaw(err.Error())

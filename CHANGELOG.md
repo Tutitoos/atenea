@@ -17,6 +17,41 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **Stopping a run is no longer filed as a provider running out of time.** The
+  two look identical where they are caught — the work did not finish and the
+  context is dead — so the whole class was binned as `timeout`. Pressing
+  ctrl-c two seconds into a call therefore printed `claude code took longer
+  than 5m0s`: a ceiling nobody reached, quoted at somebody who had waited two
+  seconds. It also collected a fault against that provider, dropped its health
+  towards `down`, and moved the funnel's ranking on the strength of a decision
+  the provider had no part in. There is now a `canceled` bin, decided from
+  `context.Cause` rather than from the mere absence of a result, and a
+  canceled call is not a measurement: nothing about it reaches the base, the
+  health verdict or the ranking.
+
+- **A canceled call comes back when it is canceled.** Killing the process
+  Atenea started left its grandchildren alive holding the copy of stdout they
+  had inherited, so the read went on waiting for a pipe nobody would close:
+  measured at twenty-seven seconds for a client whose helper slept twenty-five,
+  and unbounded for a helper that never exits. The child now gets its own
+  process group and the group is killed; a helper that escapes with `setsid`
+  is covered by a deadline on the wait itself. Canceling a call that spawns a
+  daemonizing helper went from thirty seconds to under a tenth of one.
+
+- **The measurements a stopped run had already earned survive it.** The flush
+  at a phase close inherited the caller's context, so ctrl-c canceled the
+  write as well as the work: every measurement in the batch was lost and an
+  incident was filed saying `metrics: open …: context canceled`, which is how
+  six identical incidents came to be sitting in the notebook. The flush now
+  runs on a context detached from the caller, because work that was paid for
+  before the interruption is still work that happened.
+
+- **`130` on ctrl-c.** A stopped run used to exit `4`, the bin a script retries
+  on. Nothing is wrong with a run somebody stopped, and a script must not
+  retry it: it exits `128 + SIGINT` like the shell's own convention, and the
+  screen says `canceled: stopped before it finished` instead of naming a limit
+  that was never reached.
+
 - **A newly attached provider can still earn its first measurements.** The
   funnel ranks on health before it hands out break-in turns, and until the
   record learned to promote, nothing running from a CLI ever reached `alive`:
@@ -130,7 +165,7 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   sit together because the gap between them is the diagnosis.
 - **`atenea metrics clear`** forgets it, narrowed by `--capability`,
   `--implementation` or `--repository`. The base is the only thing here that
-  decides behaviour and cannot be edited by hand — true by construction, and
+  decides behavior and cannot be edited by hand — true by construction, and
   still true long after the machine it describes has been fixed. Clearing all
   of it needs `--all` on top of the word: it is the one act that destroys
   something nothing can rebuild. Attempts and folded buckets go together, since

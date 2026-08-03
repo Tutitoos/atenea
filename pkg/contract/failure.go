@@ -1,8 +1,10 @@
 package contract
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // FailureKind is one of the few common bins that every adapter maps its own CLI
@@ -44,6 +46,17 @@ const (
 
 	// FailureTimeout covers a provider that took too long.
 	FailureTimeout
+
+	// FailureCanceled covers a call stopped from this side: the user pressed
+	// ctrl-c, or a caller dropped the context.
+	//
+	// It is the one bin that says nothing about the provider, and every
+	// consumer has to treat it that way. It is not evidence of a fault, so it
+	// never reaches the health record. It is not a measurement of what a tool
+	// costs, so it never reaches the base -- the clock was timing how long
+	// somebody waited before changing their mind, and a provider interrupted
+	// at two seconds is not a provider that took five minutes.
+	FailureCanceled
 )
 
 var failureNames = map[FailureKind]string{
@@ -54,6 +67,7 @@ var failureNames = map[FailureKind]string{
 	FailureExternalDenied:   "external_denied",
 	FailureUnavailable:      "unavailable",
 	FailureTimeout:          "timeout",
+	FailureCanceled:         "canceled",
 }
 
 func (k FailureKind) String() string {
@@ -99,4 +113,34 @@ func KindOf(err error) FailureKind {
 		return f.Kind
 	}
 	return FailureUnspecified
+}
+
+// StopKind sorts a context error into its bin.
+//
+// The two cases look identical at the call site -- the work did not finish and
+// ctx.Err() is non-nil -- and they mean opposite things: a deadline is
+// something running out of the time it was given, a cancellation is somebody
+// changing their mind. Filing the second as the first is how a user who
+// pressed ctrl-c after two seconds gets told a provider took five minutes, and
+// how that provider collects a fault it did not earn.
+//
+// The distinction survives a derived context with its own timeout on it: when
+// that deadline fires the error is DeadlineExceeded, and when the caller above
+// goes away it is Canceled.
+func StopKind(ctxErr error) FailureKind {
+	if errors.Is(ctxErr, context.Canceled) {
+		return FailureCanceled
+	}
+	return FailureTimeout
+}
+
+// Stopped is StopKind with the sentence an adapter should say beside it. The
+// core has its own wording and uses StopKind directly: a run is not a
+// provider, and telling a user their run "was stopped before it answered"
+// would be Atenea talking about itself in the third person.
+func Stopped(ctxErr error, provider string, limit time.Duration) *Failure {
+	if StopKind(ctxErr) == FailureCanceled {
+		return Fail(FailureCanceled, "%s was stopped before it answered", provider)
+	}
+	return Fail(FailureTimeout, "%s took longer than %s", provider, limit)
 }

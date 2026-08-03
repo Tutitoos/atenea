@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Tutitoos/atenea/internal/procgroup"
 )
 
 // DefaultTimeout caps the probe. Announcing a version is the cheapest thing a
@@ -72,7 +74,13 @@ func (p *Probe) ask(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, p.binary, p.args...).Output()
+	cmd := exec.CommandContext(ctx, p.binary, p.args...)
+	// The deadline above is only a promise if the wait can be ended. A client
+	// that starts helpers of its own leaves them holding the pipe, and Output
+	// would sit here for as long as the longest one lives -- turning a probe
+	// with a short ceiling into the slowest thing in a dispatch.
+	procgroup.Contain(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

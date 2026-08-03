@@ -89,7 +89,7 @@ func TestTheProbeOnlyAsksOnce(t *testing.T) {
 // An already-dead context must not stop the probe. A dispatch whose deadline
 // has nearly run out still has a version worth filing, and the probe carries
 // its own clock precisely so the caller's does not reach it.
-func TestACancelledCallerStillGetsAVersion(t *testing.T) {
+func TestACanceledCallerStillGetsAVersion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	p := toolversion.New("go", "version")

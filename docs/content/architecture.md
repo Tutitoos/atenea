@@ -360,7 +360,7 @@ ignored a base full of rows.
 
 ### Forgetting
 
-The base is the only thing in Atenea that decides behaviour and cannot be
+The base is the only thing in Atenea that decides behavior and cannot be
 edited. A settings file is text; health repairs itself the moment a provider
 answers. A baseline is neither: it is true by construction and stays true long
 after the machine it describes has been fixed. An afternoon of misconfiguration
@@ -613,12 +613,24 @@ The far side may be a CLI or a server; the seam does not care.
 The return path is the treacherous one, because every CLI phrases failure
 differently. Each adapter sorts its own errors into a handful of shared bins:
 `invalid_input`, `not_found`, `permission_denied`, `external_denied`,
-`unavailable`, `timeout`. Atenea only ever sees the bin, and the untranslated
-message travels alongside it so a human can still search for it verbatim.
+`unavailable`, `timeout`, `canceled`. Atenea only ever sees the bin, and the
+untranslated message travels alongside it so a human can still search for it
+verbatim.
 
 `external_denied` is deliberately separate from `permission_denied`: reaching
 outside the machine is the one effect that no undo takes back, so it has to be
 visible on its own.
+
+`canceled` is separate from `timeout` for the same kind of reason, and the
+two look identical at the call site: the work did not finish, and the context
+is dead. They mean opposite things. A timeout is a fact about a provider —
+it was given a limit and went past it, and it earns a fault for that. A
+cancellation is a fact about the person at the keyboard, who pressed ctrl-c
+after two seconds and is owed no verdict about anybody's speed. Filing the
+second as the first is how a provider collects a fault for a decision that was
+never its own, and how a screen ends up quoting a five-minute ceiling to
+somebody who waited two seconds. Nothing a user stopped reaches health, the
+measurement base, or the ranking that decides who runs next time.
 
 ### What that costs in practice: the omp adapter
 
@@ -656,6 +668,15 @@ model turn, so the same capability needs a different kind of care at both ends.
 | Is slow by nature | Gets a timeout an order of magnitude past omp's, because a model that is thinking is not a model that is stuck |
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
 | Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill |
+| Reloads every customization on a fresh session, and every commission is one | Passes `--safe-mode`, which is worth about 17,000 tokens a call on the machine this was measured on: five of the nine MCP servers a normal chat connects carry 68,754 characters of tool schema between them, before a hook or a `CLAUDE.md` is counted |
+| Spawns helpers of its own — MCP servers, language servers, hooks | Puts the child in its own process group and kills the group, because a grandchild holding the inherited pipe keeps the call open long after the process Atenea started is dead |
+
+That second row is not a theoretical worry, and one part of it survives even a
+group kill: a helper that calls `setsid` leaves the group before the group is
+killed, and no signal Atenea sends can reach it. Only closing the pipes from
+this side ends the wait, which is why there is a deadline on the wait as well
+as a kill on the tree. Both halves are load-bearing; removing either one puts
+a canceled call back to waiting out a helper nobody can see.
 
 ### What that costs in practice: the Serena adapter
 

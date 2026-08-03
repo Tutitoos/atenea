@@ -430,7 +430,7 @@ so nothing could ever prove it recovered; after five quiet minutes the streak
 stops counting and the next call goes through. The older failures stay on
 record, so a relapse costs one call and a recovery costs one call.
 
-The base is the only thing here that decides behaviour and cannot be edited by
+The base is the only thing here that decides behavior and cannot be edited by
 hand. It is true by construction — those calls really did fail — and it stays
 true long after the machine it describes has been fixed. So it can be forgotten,
 narrowly:
@@ -494,13 +494,23 @@ simply down, so the failure bins map onto distinct codes.
 | `4` | `unavailable` / `timeout` |
 | `5` | `permission_denied` / `external_denied` |
 | `6` | the commission ran and came back `failed` |
+| `130` | you stopped it — `128 + SIGINT`, which is the number a shell reports for ctrl-c on its own |
 | `1` | anything unsorted, which means a bug |
 
 `6` is a different axis from the rest. Nothing about the call was wrong and the
 report on stdout is complete — the work is what failed. It cannot borrow `1`,
-which means a bug, and it cannot borrow the bin of whichever step failed,
+which means a bug, and it cannot be folded into the bins above it either,
 because several steps can fail for different reasons in one run. The reason
 lives in the report; the exit code only says that there is one.
+
+`130` is its own axis too, and the reason it is not `4` is worth a line. A
+script that retries on a timeout must not retry this one: nothing is wrong,
+somebody asked for it to stop. What Atenea does on the way out is finish the
+sentence honestly — it kills the whole process group it started, so a client
+that spawned helpers of its own does not go on holding the terminal; it writes
+the measurements the run had already earned, because that work was paid for;
+and it records nothing about the call that was interrupted, because nobody
+learned anything about how fast that provider is.
 
 ## Development
 

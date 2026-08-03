@@ -102,6 +102,13 @@ func newSearch(t *testing.T, payload map[string]any) search {
 // Atenea is the single source of truth for what a capability means. A
 // CLAUDE.md in the repository being searched must not be able to change it,
 // and a headless turn has nobody to answer a permission prompt.
+//
+// --safe-mode also pays for itself. Every commission is a fresh session, and
+// a session with customisations on loads them all again: measured on this
+// machine at 68,754 characters of MCP tool schemas alone -- roughly 17,000
+// tokens -- across five of the nine servers a normal chat connects, before a
+// hook, a skill or a CLAUDE.md is counted. `claude --safe-mode mcp list`
+// answers "No MCP servers configured", so a dispatch carries none of it.
 func TestTheTurnIsPinnedDownBeforeItStarts(t *testing.T) {
 	runner := newTestRunner(t)
 	req := request(t, map[string]any{"query": "needle"})

@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/procstat"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -291,7 +292,7 @@ func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
 		"--json-schema", schema,
 		// The catalog, the rules and the permissions live in Atenea. A
 		// CLAUDE.md in the repository under search must not be able to change
-		// what a capability means, so every customisation the client would
+		// what a capability means, so every customization the client would
 		// otherwise load is off. Auth and the built-in tools still work, which
 		// is what keeps the OAuth session -- and the design's no-API-keys
 		// rule -- intact.
@@ -333,6 +334,12 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, argv...)
 	cmd.Dir = root
+	// A model turn spawns a tree -- tool subprocesses, and whatever the client
+	// starts for itself. Without this, canceling leaves them running and
+	// blocks here until the longest-lived one exits, which is how a ctrl-c at
+	// two seconds turned into a twenty-seven second wait and a twenty-seven
+	// second row in the base.
+	procgroup.Contain(cmd)
 	stdout, runErr := cmd.Output()
 	peak := procstat.PeakRSS(cmd.ProcessState)
 
@@ -342,8 +349,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		stderr = strings.TrimSpace(string(exit.Stderr))
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return envelope{}, peak, contract.Fail(contract.FailureTimeout,
-			"claude code took longer than %s", r.timeout).WithRaw(stderr)
+		return envelope{}, peak, contract.Stopped(ctxErr, "claude code", r.timeout).WithRaw(stderr)
 	}
 
 	out, parseErr := parse(stdout)

@@ -19,6 +19,11 @@ type tally struct {
 	mu      sync.Mutex
 	rows    []metrics.Measurement
 	settled int
+	// stillborn counts flushes handed a context that was already dead. The
+	// real store opens its database with the context it is given, so one of
+	// these reaches no disk at all: counting the calls alone would let a
+	// flush that could never work pass for a flush.
+	stillborn int
 }
 
 func (t *tally) Record(m metrics.Measurement) {
@@ -27,16 +32,25 @@ func (t *tally) Record(m metrics.Measurement) {
 	t.rows = append(t.rows, m)
 }
 
-func (t *tally) Settle(context.Context) {
+func (t *tally) Settle(ctx context.Context) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.settled++
+	if ctx.Err() != nil {
+		t.stillborn++
+	}
 }
 
 func (t *tally) taken() ([]metrics.Measurement, int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]metrics.Measurement(nil), t.rows...), t.settled
+}
+
+func (t *tally) doomed() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stillborn
 }
 
 func metered(t *testing.T, runner contract.Runner) (*orchestrator.Agent, *tally) {

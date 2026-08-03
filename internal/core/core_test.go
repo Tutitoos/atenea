@@ -334,7 +334,7 @@ func TestShutdownRefusesNewWorkAndWaitsForInFlight(t *testing.T) {
 	}
 }
 
-func TestRunStopsWhenTheContextIsCancelled(t *testing.T) {
+func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
 	atenea := build(t, catalog)
 	ctx, cancel := context.WithCancel(context.Background())
 

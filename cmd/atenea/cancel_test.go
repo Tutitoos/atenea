@@ -1,0 +1,174 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// A run the user stopped is not a failed commission, and the difference has to
+// reach the shell. 6 means "the work was carried out and came back failed",
+// which a script is entitled to retry or report; 130 is the number a shell
+// reports for ctrl-c on its own, and nothing about it is worth retrying.
+func TestStoppingARunLeavesThroughItsOwnExitCode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := &orchestrator.Result{Verdict: contract.VerdictFailed}
+
+	err := commissionError(ctx, result, nil)
+
+	if got := contract.KindOf(err); got != contract.FailureCanceled {
+		t.Fatalf("kind = %v, want canceled", got)
+	}
+	if got := exitCode(err); got != 130 {
+		t.Errorf("exit code = %d, want 130", got)
+	}
+	if errors.Is(err, errCommissionFailed) {
+		t.Error("a stopped run was reported as a failed commission")
+	}
+}
+
+// The check has to come first, because a stopped run leaves a failed verdict
+// behind it as a matter of course. Reading the verdict before the context is
+// how the interruption gets reported as a finding about the work.
+func TestAStoppedRunIsNotReadAsAVerdict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := commissionError(ctx, &orchestrator.Result{Verdict: contract.VerdictFailed},
+		contract.Fail(contract.FailureUnavailable, "claude code is not logged in"))
+
+	if got := contract.KindOf(err); got != contract.FailureCanceled {
+		t.Errorf("kind = %v, want canceled: the run was interrupted, not unavailable", got)
+	}
+}
+
+// And the boundary in the other direction: a run that finished before the
+// signal arrived did finish. Reporting it as canceled would throw away an
+// answer somebody already paid for.
+func TestARunThatFinishedIsNotCanceledByALateSignal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := commissionError(ctx, &orchestrator.Result{Verdict: contract.VerdictOK}, nil)
+
+	if err != nil {
+		t.Errorf("err = %v, want nil: the work was done before the signal", err)
+	}
+}
+
+// A commission nobody stopped keeps every code it had. This is the guard on
+// the change itself: the new branch must be reachable only by a cancellation.
+func TestTheOrdinaryExitCodesAreUnchanged(t *testing.T) {
+	cases := []struct {
+		name   string
+		result *orchestrator.Result
+		runErr error
+		want   int
+	}{
+		{"a failed verdict", &orchestrator.Result{Verdict: contract.VerdictFailed}, nil, 6},
+		{"a provider that is down", nil,
+			contract.Fail(contract.FailureUnavailable, "down"), 4},
+		{"a provider that really did time out", nil,
+			contract.Fail(contract.FailureTimeout, "claude code took longer than 5m0s"), 4},
+		{"a broken settings file", nil,
+			contract.Fail(contract.FailureInvalidInput, "line 12"), 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := commissionError(context.Background(), tc.result, tc.runErr)
+			if got := exitCode(err); got != tc.want {
+				t.Errorf("exit code = %d, want %d (err %v)", got, tc.want, err)
+			}
+		})
+	}
+}
+
+// End to end through a real signal: a client that hangs, a real SIGINT, and a
+// screen that has to say what happened without inventing a ceiling nobody
+// reached. This is the report as it was filed -- ctrl-c after two seconds,
+// "claude code took longer than 5m0s".
+//
+// It re-executes the test binary because run() installs its own signal
+// handler, which is the thing under test: a context injected from a test
+// would exercise everything except the wiring that goes wrong.
+func TestTheScreenSaysCanceledAndNotTimeout(t *testing.T) {
+	if os.Getenv(interruptEnv) != "" {
+		hangUntilInterrupted()
+		return
+	}
+
+	child := osexec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.timeout=60s")
+	child.Env = append(os.Environ(), interruptEnv+"="+t.TempDir())
+	var screen strings.Builder
+	child.Stdout, child.Stderr = &screen, &screen
+	if err := child.Start(); err != nil {
+		t.Fatalf("starting the other Atenea: %v", err)
+	}
+
+	// Two seconds, exactly as reported.
+	time.Sleep(2 * time.Second)
+	if err := child.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("signaling: %v", err)
+	}
+	started := time.Now()
+	waitErr := child.Wait()
+	stopped := time.Since(started)
+
+	out := screen.String()
+	// The half that hid the other: before the fix this returned when the
+	// grandchild did, twenty-five seconds after the signal.
+	if limit := 10 * time.Second; stopped > limit {
+		t.Errorf("stopping took %v after the signal, want under %v:\n%s",
+			stopped.Truncate(time.Millisecond), limit, out)
+	}
+	if waitErr == nil {
+		t.Fatalf("an interrupted run left as if it had worked:\n%s", out)
+	}
+	if strings.Contains(out, "longer than") {
+		t.Errorf("the screen quoted a ceiling nobody reached:\n%s", out)
+	}
+	if !strings.Contains(out, "canceled") {
+		t.Errorf("the screen never says what happened:\n%s", out)
+	}
+}
+
+const interruptEnv = "ATENEA_CLI_INTERRUPT_CHILD"
+
+// hangUntilInterrupted is the child half: a real invocation against a client
+// that spawns a helper and does not come back, left to be interrupted.
+func hangUntilInterrupted() {
+	dir := os.Getenv(interruptEnv)
+	client := filepath.Join(dir, "slow-omp")
+	// The grandchild is deliberate: it inherits the pipe, which is what used
+	// to keep the call waiting long after the signal.
+	script := "#!/bin/sh\ncase \"$1\" in --version) echo 'omp 9.9.9'; exit 0;; esac\nsleep 25 &\nwait\n"
+	if err := os.WriteFile(client, []byte(script), 0o700); err != nil {
+		panic(err)
+	}
+	// The fixture's repository is a path nobody has, and a step that cannot
+	// find its repository fails before anything is spawned -- which would
+	// make this test pass for the wrong reason, in a millisecond.
+	path := filepath.Join(dir, "atenea.toml")
+	body := strings.Replace(settings, `path = "/srv/api"`, `path = "`+dir+`"`, 1) +
+		"\n[orchestrator.omp]\nbinary = \"" + client + "\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		panic(err)
+	}
+
+	err := run([]string{"--config", path, "ask", "code.search",
+		"--repo", "api", "--set", "query=TODO"}, os.Stdout)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "atenea: %v\n", err)
+		os.Exit(exitCode(err))
+	}
+}

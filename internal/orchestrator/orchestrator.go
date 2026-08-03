@@ -606,9 +606,21 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 
 	phaseSpent := contract.Sample{}
 	closed := make([]StepResult, 0, len(plan.Steps)-len(finished))
+	// The batch lands however this phase ends, not only when it ends well.
+	// This is the safety net under batching, and the exits that are not the
+	// happy path are exactly the ones it exists for: the caller going away,
+	// and a checkpoint that could not be written. Detached from the caller
+	// for the same reason -- inheriting a cancellation meant the flush failed
+	// with "context canceled", filed an incident saying so, and dropped every
+	// measurement the run had already earned.
+	defer a.meter.Settle(context.WithoutCancel(ctx))
 	for _, wave := range waves {
 		if err := ctx.Err(); err != nil {
-			return closed, contract.Fail(contract.FailureTimeout, "run %s stopped: %v", result.RunID, err)
+			// Not a timeout unless it really was one. A run the user stopped
+			// is not a run that ran out of time, and the bin is what a script
+			// reads.
+			return closed, contract.Fail(contract.StopKind(err),
+				"run %s stopped: %v", result.RunID, err)
 		}
 
 		// An edge means "after", so a step whose prerequisite did not pass
@@ -643,7 +655,14 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			// blocked step never ran: nobody was chosen, no time was spent,
 			// and filing it would put a row under an empty implementation
 			// that the selector would later read as a real average.
-			if step.Decision.Chosen.ID != "" {
+			//
+			// A canceled step is the other kind of non-measurement, and the
+			// more dangerous one because it does have numbers attached. They
+			// are numbers about the user: how long somebody waited before
+			// changing their mind, and a failure nobody's provider committed.
+			// Filed, they would price a tool by the patience of whoever ran
+			// it and mark it down for being interrupted.
+			if step.Decision.Chosen.ID != "" && step.FailureKind != contract.FailureCanceled {
 				a.meter.Record(measure(result.RunID, step))
 			}
 			record.Steps = append(record.Steps, snapshot(step))
@@ -659,8 +678,8 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 	// A phase closing is one of the two moments measurements are pushed to
 	// disk, the other being the process going down. Between them the batch
 	// lives in memory, which is the whole point of batching; these two are
-	// what stop a crash from taking the batch with it.
-	a.meter.Settle(ctx)
+	// what stop a crash from taking the batch with it. The push itself is the
+	// deferred Settle above, which covers this exit and every other one.
 	return closed, nil
 }
 

@@ -103,6 +103,11 @@ func exitCode(err error) int {
 		return 3
 	case contract.FailureUnavailable, contract.FailureTimeout:
 		return 4
+	case contract.FailureCanceled:
+		// 128 + SIGINT, which is the number a shell reports for ctrl-c on its
+		// own. A script that retries on 4 must not retry this one: nothing is
+		// wrong, somebody asked for it to stop.
+		return 130
 	case contract.FailurePermissionDenied, contract.FailureExternalDenied:
 		return 5
 	default:
@@ -649,6 +654,22 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	if result != nil {
 		printResult(out, result, trace)
 	}
+	return commissionError(ctx, result, runErr)
+}
+
+// commissionError turns what came back into the invocation's error.
+//
+// A run the user stopped is not a failed commission, and the difference is
+// worth a bin of its own on the way out: nobody's work went wrong, so it must
+// not land in the code a script retries on, and the report must not say the
+// provider did something. The check comes first because a canceled run also
+// leaves a failed verdict behind it, and that verdict is a consequence of the
+// interruption rather than a finding about anything.
+func commissionError(ctx context.Context, result *orchestrator.Result, runErr error) error {
+	worked := result != nil && result.Verdict == contract.VerdictOK
+	if !worked && errors.Is(ctx.Err(), context.Canceled) {
+		return contract.Fail(contract.FailureCanceled, "stopped before it finished")
+	}
 	if runErr != nil {
 		// A run that could not be carried out at all is the more specific
 		// answer, and it already carries the bin that says why.
@@ -728,13 +749,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		printResult(out, result, trace)
 		printAnswer(out, result)
 	}
-	if runErr != nil {
-		return runErr
-	}
-	if result != nil && result.Verdict != contract.VerdictOK {
-		return errCommissionFailed
-	}
-	return nil
+	return commissionError(ctx, result, runErr)
 }
 
 // printAnswer shows what came back. A commission reports how many matches it

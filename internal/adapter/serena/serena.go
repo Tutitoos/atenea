@@ -234,7 +234,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	r.mu.Unlock()
 
 	if runErr != nil {
-		return contract.Outcome{}, failureFor(runErr, call)
+		return contract.Outcome{}, r.failureFor(runErr, call)
 	}
 
 	result, err := shape(kind, records, req.Capability)
@@ -583,7 +583,7 @@ func shape(k kind, found []location, capability contract.Capability) (map[string
 // The bins are the whole point of an adapter: whatever wording the far side
 // invents, the core only ever sees one of six, with the untranslated text
 // traveling beside it for whoever debugs later.
-func failureFor(err error, ctx context.Context) *contract.Failure {
+func (r *Runner) failureFor(err error, ctx context.Context) *contract.Failure {
 	// A failure the adapter already binned travels as it is: re-reading its
 	// text would be the adapter guessing about its own error.
 	var known *contract.Failure
@@ -593,8 +593,7 @@ func failureFor(err error, ctx context.Context) *contract.Failure {
 	text := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(text)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Fail(contract.FailureTimeout,
-			"serena took longer than allowed").WithRaw(text)
+		return contract.Stopped(ctxErr, "serena", r.timeout).WithRaw(text)
 	}
 	switch {
 	case strings.Contains(lower, "language server"),
