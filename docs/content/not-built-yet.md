@@ -1,0 +1,128 @@
+---
+title: What is not built yet
+weight: 6
+---
+
+# What is not built yet
+
+The design was written before the code, in twenty-eight sheets, and it ordered the
+work as nine bricks laid one at a time — core first, then the registry and the
+funnel, then the orchestrator, then one adapter, then a second, then the remaining
+capabilities, then the measurement base, then cost.
+
+**All nine are laid.** What follows is what the design asked for and the code does
+not do yet, in the order the design itself put them. Each entry says how you would
+know it was finished, because "done" is the word this page exists to be careful
+with.
+
+## The next brick
+
+**Make a `symbol.*` capability answer once.** It is the last unfinished piece of
+the main order — brick 7 — and it is not a code change. Everything on Atenea's
+side works: the adapter activates the project, turns a file/line/column into the
+name path Serena speaks, and sorts the failure into the right bin. The round trip
+has still never produced an answer, because the Serena container has no Go
+toolchain, so its Go language server cannot start:
+
+```text
+go: Go is not installed. Please install Go from https://golang.org/doc/install
+```
+
+That is Serena's image, not this repository. Until it is fixed, three of Atenea's
+four capabilities have never returned a result, and the adapter's 1,320 lines are
+tested only against its own stubs.
+
+**Done when:** `atenea ask symbol.definition --repo current --set file=... --set
+line=... --set column=...` prints a location, and `atenea metrics` shows a priced
+sample for `serena.definition`.
+
+## Only one capability has ever answered
+
+`code.search` works, over three providers. The other three are declared, wired,
+and unproven — see above.
+
+A fourth implementation, `codebase-memory.search`, is declared in the catalogue
+with **no adapter behind it at all**. It shows up on every status screen under
+`no runner` and always will. It is either a brick nobody has laid or an entry that
+should be deleted; leaving it as a permanent amber line is the one thing it should
+not be.
+
+**Done when:** the catalogue declares nothing that cannot be reached, or the
+adapter exists.
+
+## Nothing resumes
+
+The design (backlog P1, *Workflows*) asks for resumable long plans: *"reanudación
+tras fallo sin repetir trabajo"*. Half of it is built and the half that is built is
+the hard half. Every run writes a receipt carrying its plan, every step's state,
+which implementation answered and what it cost. The code comments call it *"the
+paper copy a resumed run reads back"*.
+
+Nothing reads it back. `checkpoint.Store.Load` and `.List` have no caller outside
+the tests, and there is no `atenea resume`. A commission that dies three phases in
+is re-done from the beginning, paying again for every step that already succeeded.
+
+This is the cheapest real brick left: the data is already on disk, in the right
+shape, with the step states already recorded.
+
+**Done when:** a run killed mid-plan can be continued from its receipt, and the
+steps that already succeeded are not dispatched a second time.
+
+## One agent does everything
+
+The contract has two agent families — `AgentOrchestrator` and `AgentSpecialist` —
+with authority, visible context levels and capability lists per card. The
+vocabulary is complete and validated.
+
+Nothing ever constructs a specialist. One agent explores, splits, dispatches and
+reviews, so the backlog's *"autoridad, contexto, límites y handoff"* is a shape
+with nothing in it. There is no handoff because there is nobody to hand off to.
+
+**Done when:** a commission is carried out by more than one agent, each seeing only
+the context its card declares, and the trace shows the handoff.
+
+## History is declared and never loaded
+
+`ContextHistory` — *"what happened in earlier sessions: user decisions and facts
+Atenea discovered, little and good, loaded lazily"* — is in the contract, and the
+orchestrator's card declares that it sees it.
+
+Discoveries are produced, reported on the result and written to the receipt. None
+are ever read into a later commission. Every run starts knowing nothing about any
+run before it, so the lazy loading the design describes has no loader.
+
+**Done when:** a second commission against the same repository starts from what
+the first one found.
+
+## Permissions cover three effects, and never ask
+
+The design (backlog P2, *Seguridad*) names five kinds of effect —
+read / write / process / network / device — and asks that dangerous actions
+require a policy and a confirmation.
+
+The contract has three: `read`, `write`, `external`. Spawning a process is not an
+effect of its own, though it is the one Atenea does most; nor is touching a device.
+And there is no confirmation anywhere: an effect is either granted in the settings
+file or refused, and nothing is ever asked. The design's *"acciones peligrosas
+requieren política"* is satisfied; *"y confirmaciones"* is not.
+
+**Done when:** a write outside a granted path stops and asks, rather than being
+refused up front or allowed silently.
+
+## OpenCode, still parked
+
+The design parked the third adapter deliberately: *"cuando el sistema esté rodado.
+No entra en el orden principal, pero queda como paso propio del plan para no
+olvidarlo."* This entry is the not-forgetting. Codex remains out.
+
+**Done when:** the same capability answers through omp, Claude Code and OpenCode.
+
+## What is not missing
+
+Worth writing down, so none of it gets re-litigated: the funnel (constraints →
+reach → health → cost, with the break-in rotation and its ceiling), the hybrid
+cost with per-version baselines, the six shared failure bins, the cancellation
+path down to process groups and inherited pipes, the measurement base with its
+rollups and retention, the crash notebook, the receipts, and the service wiring.
+Those are laid, measured, and defended by tests that have been mutated to check
+they fail when they should.

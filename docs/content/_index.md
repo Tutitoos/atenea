@@ -39,8 +39,10 @@ landed.
 
 The core, the Capability Registry and the funnel run on all four stages. Three
 adapters ship: `omp` and Claude Code answer text search by driving a CLI, and
-Serena answers the three symbol capabilities by speaking MCP over HTTP. It
-installs as a background service that keeps its own history in shape.
+Serena speaks MCP over HTTP for the three symbol capabilities — built and tested,
+but not yet proven against a live language server, which is the first thing
+[What is not built yet]({{< relref "not-built-yet" >}}) is about. It installs as a
+background service that keeps its own history in shape.
 
 Cost ranks the survivors rather than filtering them, and it says which figure
 it used. Until an implementation has been measured a couple of times, that
@@ -52,6 +54,8 @@ rewritten when they do.
 ## Read next
 
 - [Getting started]({{< relref "getting-started" >}})
+- [Day to day]({{< relref "day-to-day" >}}) — the four commands worth remembering
 - [Architecture]({{< relref "architecture" >}})
 - [Settings]({{< relref "settings" >}})
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
+- [What is not built yet]({{< relref "not-built-yet" >}}) — and what the next brick is
