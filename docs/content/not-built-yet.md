@@ -15,47 +15,51 @@ not do yet, in the order the design itself put them. Each entry says how you wou
 know it was finished, because "done" is the word this page exists to be careful
 with.
 
-## The next brick
+## Symbol capabilities, half-answered
 
-**Make a `symbol.*` capability answer once.** It is the last unfinished piece of
-the main order — brick 7 — and it is not a code change. Everything on Atenea's
-side works: the adapter activates the project, turns a file/line/column into the
-name path Serena speaks, and sorts the failure into the right bin. The round trip
-has still never produced an answer, because the Serena container has no Go
-toolchain, so its Go language server cannot start:
+Brick 7 is closed: it took wiring a bare-process Serena with a real Go
+toolchain behind it, not a code change, exactly as expected. `serena.definition`
+and `serena.references` both answer for real now, against this repository:
 
 ```text
-go: Go is not installed. Please install Go from https://golang.org/doc/install
+$ atenea ask symbol.definition --repo current \
+    --set file=internal/core/status.go --set line=356 --set column=19
+verdict   ok
+answer
+  location
+    line     580
+    path     internal/core/status.go
 ```
 
-That is Serena's image, not this repository. Until it is fixed, three of Atenea's
-four capabilities have never returned a result, and the adapter's 1,320 lines are
-tested only against its own stubs.
+`atenea metrics` shows a priced sample for `serena.definition`: two calls,
+120ms average, both correct. `symbol.references` found all six real call sites
+of the symbol it was asked about, in the same repository, in one call.
 
-**Done when:** `atenea ask symbol.definition --repo current --set file=... --set
-line=... --set column=...` prints a location, and `atenea metrics` shows a priced
-sample for `serena.definition`.
+`symbol.implementations` still does not answer, and that is not the same gap
+as before. It fails clean, into `unavailable`, in about two seconds and with
+nothing in the log — Go's language server not answering the
+`textDocument/implementation` request the way Serena's tool expects, which the
+funnel correctly bins as a provider limit rather than a broken commission. The
+funnel and the failure bins did their job; nobody has looked yet at whether
+this is fixable on Serena's side, worth a fallback, or a permanent gap in the
+catalogue's honesty about what `serena.implementations` can promise.
 
-## Only one capability has ever answered
-
-`code.search` works, over three providers. The other three are declared, wired,
-and unproven — see above.
-
-A fourth implementation, `codebase-memory.search`, is declared in the catalogue
-with **no adapter behind it at all**. It shows up on every status screen under
-`no runner` and always will. It is either a brick nobody has laid or an entry that
-should be deleted; leaving it as a permanent amber line is the one thing it should
-not be.
+`code.search` still works, over three providers. `codebase-memory.search` is
+still declared in the catalogue with **no adapter behind it at all** — it shows
+up on every status screen under `no runner` and always will. It is either a
+brick nobody has laid or an entry that should be deleted; leaving it as a
+permanent amber line is the one thing it should not be.
 
 **Done when:** the catalogue declares nothing that cannot be reached, or the
 adapter exists.
 
-## Nothing resumes
+## The next brick
 
-The design (backlog P1, *Workflows*) asks for resumable long plans: *"reanudación
-tras fallo sin repetir trabajo"*. Half of it is built and the half that is built is
-the hard half. Every run writes a receipt carrying its plan, every step's state,
-which implementation answered and what it cost. The code comments call it *"the
+**Teach `atenea resume` to read the receipt back.** The design (backlog P1,
+*Workflows*) asks for resumable long plans: *"reanudación tras fallo sin
+repetir trabajo"*. Half of it is built and the half that is built is the hard
+half. Every run writes a receipt carrying its plan, every step's state, which
+implementation answered and what it cost. The code comments call it *"the
 paper copy a resumed run reads back"*.
 
 Nothing reads it back. `checkpoint.Store.Load` and `.List` have no caller outside

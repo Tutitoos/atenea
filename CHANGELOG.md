@@ -246,6 +246,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - `.serena/` is ignored. Serena writes a project config into whatever
   repository it is pointed at, describing one machine and belonging to nobody
   else.
+- **`symbol.definition` and `symbol.references` have answered for the first
+  time.** Not a code change: every line of the adapter, the funnel and the
+  failure bins was already there. What was missing was a Serena with a Go
+  toolchain behind it — the shipped container never had one. Run against a
+  bare-process Serena instead, `symbol.definition` resolved a real call site
+  to its real declaration in this repository, and `symbol.references` found
+  all six real call sites of a symbol in one pass. `symbol.implementations`
+  still does not: it now fails clean into `unavailable` — Go's language
+  server not answering the `textDocument/implementation` request Serena's
+  tool sends — rather than never being reachable at all. Detail and evidence
+  in `docs/content/not-built-yet.md`.
 
 ## [0.1.0] - 2026-08-02
 
