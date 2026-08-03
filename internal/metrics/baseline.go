@@ -631,6 +631,14 @@ func Apply(base map[string]Baseline, candidates []contract.Implementation, now t
 		}
 		candidates[i].Cost.Measured = b.Spent
 		candidates[i].Cost.Samples = b.Successes
+		// Attempts travels beside the samples because the funnel cannot tell a
+		// provider on its first outing from one that has been given chances and
+		// returned nothing otherwise -- both sit at zero samples, and the
+		// rotation that promotes unmeasured providers would keep paying for the
+		// second one forever. It is also what makes the notice below true:
+		// before this was wired, "ranks on its declared estimate" was a
+		// sentence the ranking did not honor.
+		candidates[i].Cost.Attempts = b.Attempts
 		candidates[i].Cost.ToolVersion = b.ToolVersion
 		if health, said := b.Health(now); said {
 			candidates[i].Health = Reconcile(candidates[i].Health, health)

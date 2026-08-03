@@ -17,6 +17,42 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A spending ceiling of Atenea's own is no longer read as the client being
+  broken.** A turn stopped at its `--max-budget-usd` prints no `result` field
+  whatsoever — the reason is in `errors` and `terminal_reason` — so the adapter
+  read past it, fell back to the child's `exit status 1`, which names nothing,
+  and landed in the catch-all: `unavailable: claude code did not answer`. That
+  is the one bin that marks a provider **down**, so a grant of ours being too
+  small took a perfectly healthy client out of the funnel and read on screen as
+  a client that had stopped working. The reason is now read from whichever
+  field carries one, and the ceiling bins as `permission_denied`, which is what
+  it is: a refusal made on this machine.
+
+- **A turn that charged money and then failed no longer reports spending
+  nothing.** The adapter returned an empty outcome beside the error, so
+  everything the far side had already said about the attempt went in the bin
+  with it. Measured on a real call: 78 seconds and $0.354 charged, filed as
+  `spent_usd` empty. Three things were broken at once — the measurement base
+  learned the failure was free, the receipt lost the charge, and because the
+  core spends its purse down by what comes back, one commission could charge
+  past its whole grant without the arithmetic noticing. The weight is now read
+  before the verdict and reported whichever the verdict is. A refusal issued
+  before the process is spawned still weighs nothing, because it cost nothing.
+
+- **The break-in rotation no longer rewards a provider for failing.** Only a
+  call that works leaves a measurement, so a provider that cannot answer stays
+  at zero samples permanently — and the rotation hands the turn to whoever owes
+  the base the most. Measured: `claude.search` lost seven straight commissions
+  against a repository where `ripgrep` held fourteen clean measurements
+  averaging 959ms, and the funnel picked it again for the eighth, at about a
+  minute and thirty cents a go. Failing was what kept it winning. The rotation
+  is now credit: four attempts with no measurement to show and the provider
+  ranks on its declared estimate like anybody else — ranked lower, never
+  filtered out, so it stays reachable and can earn its first number the moment
+  it works. `Cost.Attempts` carries the count the funnel needs to tell a first
+  outing from a record of nothing but failure, which also makes the notice
+  `atenea select` already printed true for the first time.
+
 - **A run you stopped no longer reads as a failed one.** Getting the failure
   bin right left the report itself unchanged, and the report is what a reader
   sees first: `verdict failed`, then `review child=failed parent=failed`, then
@@ -169,6 +205,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   failure on every run; with health now reading the record, enough of those
   made the funnel refuse a working provider on a developer's box and nowhere
   else. The fixture pins its own base.
+
+### Changed
+
+- **The Claude Code timeout is 90 seconds, not five minutes.** Measured: two
+  real searches made 8 and 9 turns in 55s and 66s — about seven seconds a turn
+  — and *both* were ended by the money ceiling rather than by time. Five
+  minutes was a leash nothing on a paid provider could ever reach, while being
+  far longer than anybody waiting at a prompt will sit through. The two
+  ceilings do not overlap and neither replaces the other: money stops a client
+  working too expensively, time stops one that is not working at all, and a
+  client wedged on a lock spends nothing at all.
 
 ### Added
 

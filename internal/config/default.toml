@@ -90,9 +90,19 @@ runners = ["omp"]
   # permission, and permissions are granted per commission.
   #
   # How long one call may take. A model turn is slower than a tool call by
-  # nature, so this sits far above omp's ceiling; past it the turn is stuck
-  # rather than thinking, and the timeout bin is what lets the core fall back.
-  timeout = "5m"
+  # nature, so this sits above omp's ceiling; past it the turn is stuck rather
+  # than thinking, and the timeout bin is what lets the core fall back.
+  #
+  # Ninety seconds, not the five minutes this used to be. Measured: two real
+  # searches against a mid-sized repository made 8 and 9 turns in 55s and 66s
+  # -- about seven seconds a turn -- and BOTH were ended by budget_usd, not by
+  # time. Five minutes was a leash nothing ever reached, and far longer than
+  # anybody waiting at a prompt will sit through. This is ~13 turns of room.
+  #
+  # It does not overlap with budget_usd: money stops a client working too
+  # expensively, this stops one that is not working at all. A client wedged on
+  # a lock spends nothing, so no grant will ever end it.
+  timeout = "90s"
 
   [orchestrator.serena]
   # Where Serena is listening. It runs as an MCP server behind a local proxy

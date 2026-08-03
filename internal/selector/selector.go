@@ -270,9 +270,31 @@ func filterHealth(candidates []contract.Implementation) ([]contract.Implementati
 // single call can be a cold cache.
 const BreakInSamples = 2
 
+// BreakInAttempts is how many dispatches a provider may be handed on the
+// strength of owing the base numbers before that credit runs out.
+//
+// It is not the same quantity as BreakInSamples even though the two happen to
+// be near each other: samples are what the base wants, attempts are what the
+// rotation is willing to pay for them. Four is two rounds of the rotation --
+// enough that a cold cache, a transient outage or one bad grant does not spend
+// the credit, and few enough that a provider which simply cannot answer here
+// stops being promoted before it has cost much.
+const BreakInAttempts = 4
+
 // inBreakIn reports whether an implementation still owes the base measurements
-// before its own numbers can be believed.
+// AND still has rotation credit to be handed a dispatch for them.
+//
+// The second half is what stops the rotation rewarding failure. A provider that
+// cannot succeed never leaves zero samples, so the first half alone is true
+// forever: it would be promoted above a rival with a long clean record on every
+// single dispatch, and each promotion pays for a failure. Once its attempts are
+// barren the credit is spent and it ranks on its declared estimate like anybody
+// else -- ranked lower, never filtered out, so a provider that comes back to
+// life is still reachable and can still earn its first real number.
 func inBreakIn(impl contract.Implementation) bool {
+	if impl.Cost.Barren(BreakInAttempts) {
+		return false
+	}
 	return !impl.Cost.HasMeasurements(BreakInSamples)
 }
 
@@ -330,6 +352,16 @@ func reasonFor(ranked []contract.Implementation, measuring bool) string {
 		return fmt.Sprintf("break-in turn: %s has %d of %d measurements, not a cost decision",
 			first.ID, first.Cost.Samples, BreakInSamples)
 	}
+	// The rotation having been cut off reads on screen exactly like the
+	// rotation never having applied -- same provider, ranked below the same
+	// rival -- and the two mean opposite things. One is a proven provider
+	// winning on merit; the other is a provider that was given chances, spent
+	// real money on every one and returned nothing. Only the second is worth
+	// somebody's attention, so only the second says so.
+	if barren := barrenAmong(ranked); barren != "" {
+		return fmt.Sprintf("%s ranks on its estimate: %s had %d attempts and no measurement to show",
+			first.ID, barren, attemptsOf(ranked, barren))
+	}
 	if cheaper(first, second) {
 		if first.Cost.HasMeasurements(BreakInSamples) && second.Cost.HasMeasurements(BreakInSamples) {
 			return "cheapest of the healthy ones (measured)"
@@ -339,6 +371,29 @@ func reasonFor(ranked []contract.Implementation, measuring bool) string {
 	// Neither is cheaper on both axes, so Atenea has no basis to prefer one.
 	// Saying so is the point: this is where a user rule belongs.
 	return "no cheaper option among equals, settled by id"
+}
+
+// barrenAmong names the first implementation whose rotation credit was spent
+// for nothing, or empty when none was. Only the losers are considered: the
+// winner is being dispatched, so whatever its record it is about to add to it.
+func barrenAmong(ranked []contract.Implementation) string {
+	for _, impl := range ranked[1:] {
+		if impl.Cost.Barren(BreakInAttempts) {
+			return impl.ID
+		}
+	}
+	return ""
+}
+
+// attemptsOf reads back how many dispatches an id was given, so the sentence
+// can carry the number rather than the reader having to go and find it.
+func attemptsOf(ranked []contract.Implementation, id string) int {
+	for _, impl := range ranked {
+		if impl.ID == id {
+			return impl.Cost.Attempts
+		}
+	}
+	return 0
 }
 
 // owesMore reports whether a should go first because it owes the base more

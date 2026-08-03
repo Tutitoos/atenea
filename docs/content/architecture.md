@@ -180,6 +180,29 @@ until it has them. Attach a new client to a machine that has been running for
 months and it gets its two calls; a provider the record caught failing does
 not.
 
+The rotation is credit, not a subscription, and that took a measurement on a
+real machine to notice. A dispatch handed to an unmeasured provider is buying
+the base a number — but only a call that *works* leaves one, so a provider that
+cannot answer here stays at zero samples permanently, and "whoever owes the
+most" hands it every single dispatch forever. Failing is what keeps it winning.
+Measured: `claude.search` lost seven straight commissions against a repository
+where `ripgrep` held fourteen clean measurements averaging 959ms, and the
+funnel picked it again for the eighth. Each of those seven cost about a minute
+and thirty real cents.
+
+So the credit runs out. Four attempts with nothing to show for any of them and
+the provider ranks on its declared estimate like anybody else — ranked lower,
+never filtered out, so it stays reachable and can still earn its first number
+the moment it works again. Four is two rounds of the rotation: enough that a
+cold cache, a passing outage or one stingy grant does not spend the credit.
+Partway through still counts as going: a provider holding one of the two
+samples it owes is being measured successfully and keeps its turn.
+
+Attempts and samples are therefore both on the record, and the gap between them
+is the diagnosis. `atenea select` prints it without spending anything:
+`claude.search: 7 attempts here, none of them successful, so it has no measured
+cost and ranks on its declared estimate`.
+
 That is also why cost never filters. A provider dropped for being expensive
 could never earn the measurement that showed the estimate was wrong.
 
@@ -682,9 +705,11 @@ model turn, so the same capability needs a different kind of care at both ends.
 | Answers in prose unless told otherwise | Turns the capability's declared output shape into a JSON Schema and holds the turn to it |
 | May report a file the commission excluded | Re-checks every path against the request before returning, because a prompt is an instruction and not a guard |
 | Costs real money per call | Holds the turn to the share the commission granted it, and refuses before spawning when that share is zero |
-| Is slow by nature | Gets a timeout an order of magnitude past omp's, because a model that is thinking is not a model that is stuck |
+| Is slow by nature | Gets a timeout above omp's, because a model that is thinking is not a model that is stuck — 90s, measured: two real searches made 8 and 9 turns in 55s and 66s, and both were ended by the grant rather than by time |
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
-| Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill |
+| Reports a failure with no `result` field at all | Reads the reason from whichever field has one — `result`, then `errors`, then `terminal_reason`, then the subtype last |
+| Stops at a spending ceiling that Atenea itself set | Bins it as `permission_denied`, not `unavailable`: the grant was too small, the provider is fine, and `unavailable` would take a working client out of the funnel |
+| Charges for a session even when the answer is unusable | Reports what it spent whatever the verdict, so a failed turn still shows up in the bill, in the baseline's worst case, and against the commission's purse |
 | Reloads every customization on a fresh session, and every commission is one | Passes `--safe-mode`, which is worth about 17,000 tokens a call on the machine this was measured on: five of the nine MCP servers a normal chat connects carry 68,754 characters of tool schema between them, before a hook or a `CLAUDE.md` is counted |
 | Spawns helpers of its own — MCP servers, language servers, hooks | Puts the child in its own process group and kills the group, because a grandchild holding the inherited pipe keeps the call open long after the process Atenea started is dead |
 

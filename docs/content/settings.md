@@ -82,7 +82,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   binary = "claude"                    # bare name is looked up on PATH
   implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
   # no ceiling here: what a call may spend arrives with the commission
-  timeout = "5m"                       # a model turn is slower than a tool call
+  timeout = "90s"                      # ~13 model turns; the grant bites first
 
   [orchestrator.serena]
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
@@ -173,6 +173,15 @@ nothing is ever read back: the funnel keeps ranking on those estimates forever,
 and break-in mode is off with it — there is no point handing a provider a turn
 to earn numbers nobody will record. A core with the base switched off works
 exactly as well on its first day and never gets better.
+
+With the base on, the turn it hands out is credit rather than a standing
+entitlement, because only a call that *works* leaves a measurement. A provider
+that cannot answer here would otherwise sit at zero samples forever and be
+handed every dispatch on the strength of it. Four attempts with nothing to show
+for any of them and it ranks on its declared estimate instead — ranked lower,
+never dropped, so it can still earn its first number the day it starts working.
+`atenea select` shows the gap for free: `7 attempts here, none of them
+successful`.
 
 It also costs the health screen half its evidence. A provider is marked alive
 by having worked recently and marked down by a run of failures, and both facts

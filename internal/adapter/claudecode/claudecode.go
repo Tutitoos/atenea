@@ -45,9 +45,22 @@ const CodeSearch = "code.search"
 const DefaultBinary = "claude"
 
 // DefaultTimeout caps one invocation. A model turn is slower than a tool call
-// by nature, so this is far above omp's ceiling; past it the turn is stuck
+// by nature, so this sits above omp's ceiling; past it the turn is stuck
 // rather than thinking, and the timeout bin is what lets the core fall back.
-const DefaultTimeout = 5 * time.Minute
+//
+// Measured, which is why it is not the five minutes it used to be: two real
+// `code.search` turns against this repository made 8 and 9 turns in 55s and
+// 66s, about seven seconds a turn, and both were ended by the money ceiling
+// rather than by time. Five minutes was a leash no dispatch had ever reached
+// -- unreachable on a paid provider, because the grant always bites first --
+// while being far longer than anybody waiting at a prompt will sit through.
+// Ninety seconds is roughly thirteen turns of headroom.
+//
+// The two ceilings are not redundant and neither replaces the other: money
+// stops a client that is working too expensively, and this stops one that is
+// not working at all. A client wedged on a lock or a dead socket spends
+// nothing, so no grant will ever end it.
+const DefaultTimeout = 90 * time.Second
 
 // defaultContextLines matches the capability's declared semantics.
 const defaultContextLines = 2
@@ -180,34 +193,41 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	}
 
 	answer, peak, err := r.invoke(ctx, root, req, ask)
-	if err != nil {
-		return contract.Outcome{}, err
-	}
-
-	result, err := r.readAnswer(answer, req, ask)
-	if err != nil {
-		return contract.Outcome{}, err
-	}
-	if err := req.Capability.ValidateOutput(result); err != nil {
-		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
-			"claude code answered a shape this capability does not accept: %v", err).
-			WithRaw(answer.Result)
-	}
-
-	spent := contract.Sample{
-		Duration: time.Since(started),
-		Tokens:   answer.Usage.total(),
-		PeakRSS:  peak,
-	}
-	outcome := contract.Outcome{
-		Result:  result,
-		Verdict: contract.VerdictOK,
-		Spent:   spent,
+	// The weight is read before the verdict, and read the same way whichever
+	// the verdict turns out to be. A turn that ran for a minute and then died
+	// at its spending ceiling occupied the machine for that minute and charged
+	// for it; reporting a zero would leave the time off the baseline's worst
+	// case, the money off the receipt, and -- because the core spends its
+	// purse down by what comes back -- would let one commission charge past
+	// its grant without anything noticing.
+	weighed := contract.Outcome{
+		Spent: contract.Sample{
+			Duration: time.Since(started),
+			Tokens:   answer.Usage.total(),
+			PeakRSS:  peak,
+		},
 		// Money travels as a number of its own, never folded into the token
 		// count: the baseline ranks on tokens, and a dollar rounded into them
 		// would be a price list quietly poisoning a measurement.
 		SpentUSD: answer.TotalCostUSD,
 	}
+	if err != nil {
+		return weighed, err
+	}
+
+	result, err := r.readAnswer(answer, req, ask)
+	if err != nil {
+		return weighed, err
+	}
+	if err := req.Capability.ValidateOutput(result); err != nil {
+		return weighed, contract.Fail(contract.FailureUnavailable,
+			"claude code answered a shape this capability does not accept: %v", err).
+			WithRaw(answer.Result)
+	}
+
+	outcome := weighed
+	outcome.Result = result
+	outcome.Verdict = contract.VerdictOK
 	if answer.TotalCostUSD > 0 {
 		// Reported against the ceiling rather than on its own, because the
 		// number that means something is the fraction of the grant it used. A
@@ -363,7 +383,11 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return envelope{}, peak, parseErr
 	}
 	if out.IsError {
-		return envelope{}, peak, failureFor(out.Result, runErr)
+		// The envelope travels with the error on purpose. A turn that ran for
+		// a minute and then died at its ceiling occupied the machine for that
+		// minute and charged for it, and its usage is right here: returning an
+		// empty one puts that time and that money on nobody's bill.
+		return out, peak, failureFor(out.reason(), runErr)
 	}
 	return out, peak, nil
 }
@@ -374,10 +398,24 @@ type envelope struct {
 	// a turn that failed to authenticate still reported subtype "success", so
 	// reading the subtype instead would call an error a result.
 	IsError bool `json:"is_error"`
-	// Subtype names how the turn ended when it ended cleanly.
+	// Subtype names how the turn ended. Measured: an authentication failure
+	// reports "success" here, so it can never be the first field consulted.
 	Subtype string `json:"subtype"`
-	// Result is the text answer, and on a failure the message.
+	// Result is the text answer, and on a failure the message -- when there is
+	// one at all.
 	Result string `json:"result"`
+	// TerminalReason and Errors are where the reason lives when the turn died
+	// without producing a result.
+	//
+	// Measured on a real turn stopped at its spending ceiling: no `result`
+	// field is printed whatsoever, while `errors` says "Reached maximum budget
+	// ($0.25)", `terminal_reason` says "budget_exhausted" and `subtype` says
+	// "error_max_budget_usd". Reading only `result` left this adapter holding
+	// the child's exit status, which names nothing, so a ceiling of ours that
+	// was too small was filed as the provider being unreachable -- the one bin
+	// that marks a provider down and takes it out of the funnel.
+	TerminalReason string   `json:"terminal_reason"`
+	Errors         []string `json:"errors"`
 	// StructuredOutput is where --json-schema puts the answer.
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	Usage            usage           `json:"usage"`
@@ -386,6 +424,28 @@ type envelope struct {
 	// PermissionDenials lists what the turn was refused. A non-empty list is
 	// the permission bin regardless of how the turn ended.
 	PermissionDenials []json.RawMessage `json:"permission_denials"`
+}
+
+// reason is the best sentence the far side gave for a failure.
+//
+// The order is measured rather than preferred. `result` carries the message
+// when the turn produced one; `errors` and `terminal_reason` carry it when the
+// turn died before producing anything; `subtype` comes last because it reports
+// "success" on turns that failed, which is the trap the IsError field exists
+// to sidestep. Empty is a real answer here -- it means the far side said
+// nothing about its own failure, and the caller falls back to the exit status.
+func (e envelope) reason() string {
+	for _, candidate := range []string{
+		e.Result,
+		strings.Join(e.Errors, "; "),
+		e.TerminalReason,
+		e.Subtype,
+	} {
+		if text := strings.TrimSpace(candidate); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 type usage struct {

@@ -144,6 +144,19 @@ func TestAProviderThatOnlyRefusesHasNoPrice(t *testing.T) {
 		t.Errorf("samples = %d, want 0: a record of pure failure passed for a measurement",
 			candidates[0].Cost.Samples)
 	}
+	// And the count of what it cost to learn that, because the funnel cannot
+	// act on the notice above without it. Zero here reads as a provider on its
+	// first outing, which is what the break-in rotation promotes -- so a record
+	// of pure failure would keep winning dispatches on the strength of having
+	// no measurements, and every win would add another failure to the record.
+	if candidates[0].Cost.Attempts != claude.Attempts {
+		t.Errorf("attempts = %d, want %d: the funnel cannot tell a first outing "+
+			"from a record of nothing but failure",
+			candidates[0].Cost.Attempts, claude.Attempts)
+	}
+	if !candidates[0].Cost.Barren(1) {
+		t.Error("a record of twelve failures did not read as barren")
+	}
 	if got := candidates[0].Cost.Effective(1); got.Duration != 3*time.Second {
 		t.Errorf("effective = %v, want the declared 3s estimate", got.Duration)
 	}

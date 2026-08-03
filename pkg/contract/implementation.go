@@ -97,8 +97,19 @@ type Cost struct {
 	Estimated Sample
 	// Measured is the rolling average of real calls.
 	Measured Sample
-	// Samples counts the measurements behind Measured.
+	// Samples counts the measurements behind Measured. Only calls that WORKED
+	// leave a sample: a failure is an attempt with no price.
 	Samples int
+	// Attempts counts every dispatch, priced or not, and exists so the funnel
+	// can tell a provider on its first outing from one that has been given
+	// chances and produced nothing.
+	//
+	// Without it the two are indistinguishable -- both sit at zero samples --
+	// and the break-in rotation, which promotes whoever owes the base numbers,
+	// rewards a provider for failing. Measured: seven straight failures at
+	// roughly a minute and thirty cents each, each one leaving the count at
+	// zero, each one therefore winning the next dispatch.
+	Attempts int
 	// ToolVersion is the provider version those measurements belong to. When the
 	// tool is upgraded the old baseline is set aside rather than averaged in:
 	// otherwise the slow numbers of the old version drag the average down and
@@ -112,6 +123,24 @@ func (c Cost) HasMeasurements(atLeast int) bool {
 		atLeast = 1
 	}
 	return c.Samples >= atLeast
+}
+
+// Barren reports whether this implementation has been given at least atLeast
+// dispatches and has no measurement to show for any of them.
+//
+// It is the difference between a provider on its first outing and one whose
+// turn has been paid for and delivered nothing. Both read as zero samples,
+// which is why the funnel needs this to tell them apart: the rotation that
+// promotes unmeasured providers is buying measurements, and a purchase that
+// has failed atLeast times over is not going to complete on the next one.
+//
+// Partway through counts as still going: an implementation holding some of the
+// samples it owes is being measured successfully and has not gone barren.
+func (c Cost) Barren(atLeast int) bool {
+	if atLeast < 1 {
+		atLeast = 1
+	}
+	return c.Samples == 0 && c.Attempts >= atLeast
 }
 
 // Effective returns the cost figure to reason with: the measurement when there

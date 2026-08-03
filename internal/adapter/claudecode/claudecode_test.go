@@ -332,7 +332,14 @@ func TestEveryFailureIsSortedIntoTheSharedBins(t *testing.T) {
 		// down, so running out of it is a refusal on this machine. The turn
 		// ceiling next to it is not -- Atenea never grants turns, so that one
 		// really is the far side giving up.
-		{"spending ceiling", "Reached max budget of $0.25", contract.FailurePermissionDenied},
+		//
+		// All three ceiling strings are copied from a real envelope, because
+		// the invented one that used to be here ("Reached max budget of
+		// $0.25") was never a string the binary puts anywhere this adapter
+		// looks. It passed while the live path was broken.
+		{"spending ceiling", "Reached maximum budget ($0.25)", contract.FailurePermissionDenied},
+		{"ceiling as a terminal reason", "budget_exhausted", contract.FailurePermissionDenied},
+		{"ceiling as a subtype", "error_max_budget_usd", contract.FailurePermissionDenied},
 		{"turn ceiling", "Stopped: error_max_turns", contract.FailureTimeout},
 		{"refused an action", "Permission denied for tool Write", contract.FailurePermissionDenied},
 		{"missing target", "no such file or directory", contract.FailureNotFound},
