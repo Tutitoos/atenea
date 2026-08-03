@@ -32,7 +32,7 @@ what it knows about the repository in front of it.
 ## Where the project stands
 
 **These pages describe Atenea `0.1.0`**, the first tagged release, speaking
-contract `1.1.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
+contract `1.2.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
 goes stable; the contract adapters compile against is already a commitment. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.

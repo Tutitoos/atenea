@@ -17,6 +17,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A run you stopped no longer reads as a failed one.** Getting the failure
+  bin right left the report itself unchanged, and the report is what a reader
+  sees first: `verdict failed`, then `review child=failed parent=failed`, then
+  `failed canceled: claude code was stopped before it answered` — three lines
+  blaming the work for a decision the reader made. Worse, the middle one is a
+  review of an answer that never arrived. There is now a `canceled` verdict,
+  and a step nobody let finish is not reviewed at all: no output came back, so
+  neither the child nor the parent has anything to have an opinion about. A
+  real fault still outranks a cancellation, so a genuine failure is never
+  buried behind an interruption, and a cancellation outranks success, so a
+  half-run plan never reports that it worked. Contract `1.2.0`, additive:
+  adapters built against `1.1.0` compile unchanged and never have to send it.
+
 - **Stopping a run is no longer filed as a provider running out of time.** The
   two look identical where they are caught — the work did not finish and the
   context is dead — so the whole class was binned as `timeout`. Pressing

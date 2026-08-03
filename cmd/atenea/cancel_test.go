@@ -19,12 +19,15 @@ import (
 // reach the shell. 6 means "the work was carried out and came back failed",
 // which a script is entitled to retry or report; 130 is the number a shell
 // reports for ctrl-c on its own, and nothing about it is worth retrying.
+//
+// The context here is alive on purpose. This is the core's own answer arriving
+// by itself: the orchestrator folded the steps and said canceled, and that
+// word has to be enough. A caller can stop a run through a context this
+// function never sees.
 func TestStoppingARunLeavesThroughItsOwnExitCode(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	result := &orchestrator.Result{Verdict: contract.VerdictFailed}
+	result := &orchestrator.Result{Verdict: contract.VerdictCanceled}
 
-	err := commissionError(ctx, result, nil)
+	err := commissionError(context.Background(), result, nil)
 
 	if got := contract.KindOf(err); got != contract.FailureCanceled {
 		t.Fatalf("kind = %v, want canceled", got)
@@ -37,9 +40,12 @@ func TestStoppingARunLeavesThroughItsOwnExitCode(t *testing.T) {
 	}
 }
 
-// The check has to come first, because a stopped run leaves a failed verdict
-// behind it as a matter of course. Reading the verdict before the context is
-// how the interruption gets reported as a finding about the work.
+// The other witness, and it stands alone. This is the CLI's own knowledge:
+// the signal arrived here, whatever the report says. A run can be cut down
+// before the orchestrator gets as far as folding its steps into a verdict, so
+// a dead context outranks a report that still reads `failed` — and it outranks
+// the run error too, which is why a provider being down does not get the blame
+// for an interruption that landed first.
 func TestAStoppedRunIsNotReadAsAVerdict(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -140,6 +146,21 @@ func TestTheScreenSaysCanceledAndNotTimeout(t *testing.T) {
 	if !strings.Contains(out, "canceled") {
 		t.Errorf("the screen never says what happened:\n%s", out)
 	}
+	// The other half of the same misattribution, and the one a reader sees
+	// first. The bins were right while every line above them still said
+	// `failed`: the run's verdict, the step's review, and the step's own
+	// result. Nothing failed, and a reader sent looking for a fault wastes
+	// the trip.
+	if !strings.Contains(out, "verdict   canceled") {
+		t.Errorf("the verdict does not say what happened:\n%s", out)
+	}
+	if strings.Contains(out, "failed") {
+		t.Errorf("the screen still blames the work for the interruption:\n%s", out)
+	}
+	// And no review of something that never came back.
+	if strings.Contains(out, "review") {
+		t.Errorf("a step nobody let finish was reviewed anyway:\n%s", out)
+	}
 }
 
 const interruptEnv = "ATENEA_CLI_INTERRUPT_CHILD"
@@ -165,8 +186,10 @@ func hangUntilInterrupted() {
 		panic(err)
 	}
 
+	// --trace on purpose: the review and the step's own result only print
+	// there, and they are half of what this test is about.
 	err := run([]string{"--config", path, "ask", "code.search",
-		"--repo", "api", "--set", "query=TODO"}, os.Stdout)
+		"--repo", "api", "--set", "query=TODO", "--trace"}, os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stdout, "atenea: %v\n", err)
 		os.Exit(exitCode(err))

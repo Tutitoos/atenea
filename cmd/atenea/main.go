@@ -666,6 +666,13 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 // leaves a failed verdict behind it, and that verdict is a consequence of the
 // interruption rather than a finding about anything.
 func commissionError(ctx context.Context, result *orchestrator.Result, runErr error) error {
+	// A verdict of canceled is not a failed commission, and the difference has
+	// to survive all the way to the shell: nothing about the work went wrong.
+	// This reads the verdict rather than only the context, because a caller
+	// can stop a run through a context of its own that never reaches here.
+	if result != nil && result.Verdict == contract.VerdictCanceled {
+		return contract.Fail(contract.FailureCanceled, "stopped before it finished")
+	}
 	worked := result != nil && result.Verdict == contract.VerdictOK
 	if !worked && errors.Is(ctx.Err(), context.Canceled) {
 		return contract.Fail(contract.FailureCanceled, "stopped before it finished")
@@ -926,13 +933,25 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		if step.Outcome.SpentUSD > 0 {
 			fmt.Fprintf(out, "      charged  $%.4f\n", step.Outcome.SpentUSD)
 		}
-		fmt.Fprintf(out, "      review   child=%s parent=%s (%s)\n",
-			step.Review.Child, step.Review.Parent, step.Review.Reason)
-		if step.Review.Disagreed {
-			fmt.Fprintf(out, "      disputed %s\n", step.Review.Reply)
-		}
-		if step.Failure != "" {
-			fmt.Fprintf(out, "      failed   %s\n", step.Failure)
+		// A step that was stopped gets one line where three would go. There
+		// was no review to report -- printing child and parent verdicts here
+		// would dress two opinions nobody holds as findings -- and "failed"
+		// would be the screen blaming the work for the reader's own decision.
+		// What the funnel did still prints below: that part happened.
+		if step.FailureKind == contract.FailureCanceled {
+			// The message already opens with the bin, and the label is the bin:
+			// printed as they come, the word arrives twice.
+			fmt.Fprintf(out, "      canceled %s\n",
+				strings.TrimPrefix(step.Failure, contract.FailureCanceled.String()+": "))
+		} else {
+			fmt.Fprintf(out, "      review   child=%s parent=%s (%s)\n",
+				step.Review.Child, step.Review.Parent, step.Review.Reason)
+			if step.Review.Disagreed {
+				fmt.Fprintf(out, "      disputed %s\n", step.Review.Reply)
+			}
+			if step.Failure != "" {
+				fmt.Fprintf(out, "      failed   %s\n", step.Failure)
+			}
 		}
 		if scope, ok := step.Step.Payload["scope"].([]string); ok && len(scope) > 0 {
 			fmt.Fprintf(out, "      scope    %s\n", strings.Join(scope, ", "))

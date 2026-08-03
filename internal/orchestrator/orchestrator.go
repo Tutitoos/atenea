@@ -358,7 +358,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
 		result.SpentUSD = totalUSD(result.Steps)
-		result.Verdict = overallVerdict(result.Steps)
+		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		// What the far side said for itself travels too. The summary the
 		// orchestrator writes below is what it worked out by looking; this is
@@ -481,7 +481,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
 		result.SpentUSD = totalUSD(result.Steps)
-		result.Verdict = overallVerdict(result.Steps)
+		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
 		record.Closed = true
@@ -843,6 +843,18 @@ func (a *Agent) close(out StepResult, err error) StepResult {
 		out.FailureKind = contract.KindOf(err)
 		child = contract.VerdictFailed
 	}
+	// A step nobody let finish is not reviewed, because there is nothing to
+	// review: no output came back, so neither the child nor the parent has
+	// seen anything to have an opinion about. Calling that a failed review
+	// invents two opinions and blames the work for the interruption.
+	if out.FailureKind == contract.FailureCanceled {
+		out.Review = Review{
+			Child:  contract.VerdictCanceled,
+			Parent: contract.VerdictCanceled,
+			Reason: "stopped before there was anything to review",
+		}
+		return out
+	}
 
 	parent, reason := a.judge(out, err)
 	out.Review = Review{Child: child, Parent: parent, Reason: reason}
@@ -988,14 +1000,33 @@ func totalUSD(steps []StepResult) float64 {
 // overallVerdict is the parent's word for the whole commission: one failed
 // step is a failed commission, because half-done work presented as done is
 // the thing reviewing exists to prevent.
-func overallVerdict(steps []StepResult) contract.Verdict {
-	if len(steps) == 0 {
-		return contract.VerdictFailed
-	}
+//
+// The precedence between the other two is not symmetric, and both directions
+// matter. A real failure outranks a cancellation: if one step failed on its
+// own and a later one was stopped, the run failed, and saying "canceled" would
+// bury a fault behind the interruption. A cancellation outranks success for
+// the opposite reason: a run somebody stopped has not been shown to work,
+// whatever the steps that did finish managed to do, so calling it "ok" would
+// promise a plan was carried out when part of it never ran.
+func overallVerdict(steps []StepResult, stopped error) contract.Verdict {
+	canceled := stopped != nil
 	for _, step := range steps {
-		if step.Review.Parent != contract.VerdictOK {
+		switch step.Review.Parent {
+		case contract.VerdictOK:
+		case contract.VerdictCanceled:
+			canceled = true
+		default:
 			return contract.VerdictFailed
 		}
+	}
+	if canceled {
+		return contract.VerdictCanceled
+	}
+	if len(steps) == 0 {
+		// Nothing ran and nobody stopped it. That is a bug rather than a
+		// verdict -- a plan with no steps should never have been dispatched --
+		// and it must not read as success.
+		return contract.VerdictFailed
 	}
 	return contract.VerdictOK
 }

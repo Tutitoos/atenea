@@ -25,7 +25,11 @@ type Version struct {
 // in alpha (0.x.y) while the format adapters compile against is already a
 // commitment. Major bumps break adapters; minor bumps add fields without
 // breaking them; patch is cosmetic.
-var Current = Version{Major: 1, Minor: 1, Patch: 0}
+//
+// 1.2.0 added the `canceled` failure bin and the `canceled` verdict. Both are
+// additive: a core can now say a thing it could not say before, and an adapter
+// built against 1.1.0 goes on compiling and never has to send either.
+var Current = Version{Major: 1, Minor: 2, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

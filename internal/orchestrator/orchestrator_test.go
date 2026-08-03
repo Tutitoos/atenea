@@ -131,7 +131,11 @@ func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract
 		select {
 		case <-time.After(f.delay):
 		case <-ctx.Done():
-			return contract.Outcome{}, contract.Fail(contract.FailureTimeout, "canceled")
+			// What every real adapter does, and the reason it matters here: a
+			// double that binned both context errors as `timeout` would model
+			// the defect instead of the contract, and every test built on it
+			// would agree that stopping a run is a provider running slow.
+			return contract.Outcome{}, contract.Stopped(ctx.Err(), "fake runner", f.delay)
 		}
 	}
 
@@ -753,6 +757,9 @@ func TestWiringWithoutACatalogIsRefused(t *testing.T) {
 	}
 }
 
+// A cancellation stops the run, hands back what it got to, and says so. The
+// verdict used to be `failed` here, which was this defect written down as a
+// test: nothing failed, and a reader sent looking for a fault finds none.
 func TestCancellationStopsTheRun(t *testing.T) {
 	runner := &fakeRunner{delay: time.Second}
 	agent, _ := build(t, runner, 0, "")
@@ -766,8 +773,12 @@ func TestCancellationStopsTheRun(t *testing.T) {
 	if result == nil {
 		t.Fatal("a cut-short run still has to hand back what it got to")
 	}
-	if result.Verdict != contract.VerdictFailed {
-		t.Errorf("verdict = %v, want failed", result.Verdict)
+	if result.Verdict != contract.VerdictCanceled {
+		t.Errorf("verdict = %v, want canceled", result.Verdict)
+	}
+	// And it must not read as success either: part of the plan never ran.
+	if result.Verdict == contract.VerdictOK {
+		t.Error("a run that was stopped cannot report that it worked")
 	}
 }
 

@@ -173,12 +173,23 @@ const (
 	VerdictUnspecified Verdict = iota
 	VerdictOK
 	VerdictFailed
+
+	// VerdictCanceled is what a step that nobody let finish gets, and it is
+	// not a judgement at all -- it is the absence of one.
+	//
+	// Failed is a claim about the work. Reviewing something that never came
+	// back and calling it failed makes that claim on no evidence, and blames
+	// the work for a decision the person at the keyboard made. The two have
+	// to be different words on the screen, because a reader acts on them
+	// differently: one is worth investigating and the other is not.
+	VerdictCanceled
 )
 
 var verdictNames = map[Verdict]string{
 	VerdictUnspecified: "unjudged",
 	VerdictOK:          "ok",
 	VerdictFailed:      "failed",
+	VerdictCanceled:    "canceled",
 }
 
 func (v Verdict) String() string {

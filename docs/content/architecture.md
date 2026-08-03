@@ -632,6 +632,23 @@ never its own, and how a screen ends up quoting a five-minute ceiling to
 somebody who waited two seconds. Nothing a user stopped reaches health, the
 measurement base, or the ranking that decides who runs next time.
 
+The same misattribution has a second half, one layer up, and it is the half a
+reader sees first. Getting the bin right left the report itself still saying
+`failed` in three places: the run's verdict, the step's review, and the step's
+own result line. So there is a `canceled` verdict as well, and a step nobody
+let finish is **not reviewed at all** — because there is nothing to review.
+No output came back, so neither the child nor the parent has seen anything to
+have an opinion about, and printing two verdicts there dresses opinions nobody
+holds as findings.
+
+The precedence between the three is not symmetric, and both directions matter.
+A real fault outranks a cancellation: if one step failed on its own and a later
+one was stopped, the run failed, because saying `canceled` would bury the fault
+behind the interruption. A cancellation outranks success for the opposite
+reason: a run somebody stopped has not been shown to work, whatever the steps
+that did finish managed to do, so `ok` would promise a plan was carried out
+when part of it never ran.
+
 ### What that costs in practice: the omp adapter
 
 The first real adapter drives `omp grep`, a tool call rather than a model turn:
