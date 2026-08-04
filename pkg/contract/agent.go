@@ -254,4 +254,14 @@ type Outcome struct {
 	// permission -- a ceiling on what one call may spend -- and that lives
 	// with the grant, not here.
 	SpentUSD float64
+	// Notices are caveats about this Outcome that do not rise to a failure --
+	// reasons the Result may still be right but should not be taken as the
+	// last word (an adapter saying "the index may be stale", say). They
+	// differ from a Discovery in destination and shelf life: a Discovery is a
+	// fact about the repository worth paying to remember, a Notice is a doubt
+	// about this one answer, read once by whoever asked and not carried into
+	// history. Empty means this adapter had nothing to add, not that
+	// freshness (or anything else a Notice might cover) was checked and
+	// confirmed clean -- most capabilities carry no such check at all.
+	Notices []string
 }

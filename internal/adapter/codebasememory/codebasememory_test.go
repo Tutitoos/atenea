@@ -436,6 +436,109 @@ func TestGitReportsAMissingRepositoryAsInvalidInput(t *testing.T) {
 	}
 }
 
+// --- freshnessNotice ------------------------------------------------------
+
+func TestFreshnessNoticeIsEmptyWhenTheIndexMatchesAndTheTreeIsClean(t *testing.T) {
+	root := initGitRepo(t)
+	path := fakeCodebaseMemory(t, map[string]string{
+		"index_status": `{"git":{"is_git":true,"head_sha":"abc111","base_sha":"abc111"}}`,
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := runner.freshnessNotice(context.Background(), root); got != "" {
+		t.Errorf("freshnessNotice = %q, want empty: HEAD matches the index and the tree is clean", got)
+	}
+}
+
+func TestFreshnessNoticeFlagsAMovedHead(t *testing.T) {
+	root := initGitRepo(t)
+	path := fakeCodebaseMemory(t, map[string]string{
+		"index_status": `{"git":{"is_git":true,"head_sha":"abc111","base_sha":"def222"}}`,
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := runner.freshnessNotice(context.Background(), root)
+	if !strings.Contains(got, "HEAD has moved") {
+		t.Errorf("freshnessNotice = %q, want it to mention HEAD having moved", got)
+	}
+	if strings.Contains(got, "uncommitted") {
+		t.Errorf("freshnessNotice = %q, the tree is clean, this must not mention it", got)
+	}
+}
+
+func TestFreshnessNoticeFlagsADirtyTree(t *testing.T) {
+	root := initGitRepo(t)
+	writeFile(t, root, "untracked.go", "package x\n")
+	path := fakeCodebaseMemory(t, map[string]string{
+		"index_status": `{"git":{"is_git":true,"head_sha":"abc111","base_sha":"abc111"}}`,
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := runner.freshnessNotice(context.Background(), root)
+	if !strings.Contains(got, "uncommitted changes") {
+		t.Errorf("freshnessNotice = %q, want it to mention the uncommitted file", got)
+	}
+	if strings.Contains(got, "HEAD has moved") {
+		t.Errorf("freshnessNotice = %q, HEAD did not move, this must not claim it did", got)
+	}
+}
+
+func TestFreshnessNoticeFlagsBothAtOnce(t *testing.T) {
+	root := initGitRepo(t)
+	writeFile(t, root, "untracked.go", "package x\n")
+	path := fakeCodebaseMemory(t, map[string]string{
+		"index_status": `{"git":{"is_git":true,"head_sha":"abc111","base_sha":"def222"}}`,
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := runner.freshnessNotice(context.Background(), root)
+	if !strings.Contains(got, "HEAD has moved") || !strings.Contains(got, "uncommitted changes") {
+		t.Errorf("freshnessNotice = %q, want both the moved HEAD and the dirty tree named", got)
+	}
+}
+
+// A freshness check that cannot get an answer is not a reason to invent one.
+// index_status erroring is treated exactly like index_status saying nothing
+// was wrong: both report no notice, because a caller cannot act on the
+// difference between "checked and clean" and "could not check".
+func TestFreshnessNoticeIsEmptyWhenIndexStatusFails(t *testing.T) {
+	root := initGitRepo(t)
+	path := fakeCodebaseMemory(t, map[string]string{
+		"query_graph": `{"total":0,"columns":[],"rows":[]}`, // anything but index_status
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := runner.freshnessNotice(context.Background(), root); got != "" {
+		t.Errorf("freshnessNotice = %q, want empty when index_status itself errors", got)
+	}
+}
+
+// A repository with nothing to compare against -- not a git repository at
+// all -- has no basis for a staleness claim either way.
+func TestFreshnessNoticeIsEmptyForANonGitRepository(t *testing.T) {
+	root := t.TempDir()
+	path := fakeCodebaseMemory(t, map[string]string{
+		"index_status": `{"git":{"is_git":false,"head_sha":"","base_sha":""}}`,
+	})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := runner.freshnessNotice(context.Background(), root); got != "" {
+		t.Errorf("freshnessNotice = %q, want empty: nothing here is a git repository", got)
+	}
+}
+
 // --- helpers ------------------------------------------------------------
 
 func newTestRunner(t *testing.T) *Runner {

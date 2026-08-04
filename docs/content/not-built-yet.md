@@ -65,6 +65,14 @@ answer
   changed_files [...]
 ```
 
+Both also attach a `notice` when what they answered from might already be
+behind: HEAD has moved since the index was built, the working tree has
+uncommitted changes, or both. It is a caveat, not a refusal -- the check is
+best-effort (an `index_status` call plus a `git status --porcelain`, real
+work either of which failing is not reason enough to withhold an answer that
+already succeeded) and it shows beside the answer whether or not `--trace`
+is passed, not only in the trace.
+
 Both implementations declare `requires_index = true` and a `min_scale =
 "medium"` floor: unlike Serena, this provider only ever answers from an
 index built ahead of time, so a repository nothing has indexed, or one too

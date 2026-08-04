@@ -454,7 +454,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.1.0  contract 1.2.0  AMBER
+atenea 0.1.0  contract 1.3.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

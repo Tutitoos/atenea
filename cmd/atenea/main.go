@@ -800,7 +800,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	})
 	if result != nil {
 		printResult(out, result, trace)
-		printAnswer(out, result)
+		printAnswer(out, result, trace)
 	}
 	return commissionError(ctx, result, runErr)
 }
@@ -894,13 +894,23 @@ func cmdResumeList(settingsPath string, out io.Writer) error {
 // found because that is all a caller can act on across several repositories;
 // one capability against one repository has an actual answer, and hiding it
 // behind a run receipt would make the verb useless.
-func printAnswer(out io.Writer, result *orchestrator.Result) {
+func printAnswer(out io.Writer, result *orchestrator.Result, trace bool) {
 	if len(result.Steps) != 1 {
 		return
 	}
 	step := result.Steps[0]
 	if step.Review.Parent != contract.VerdictOK {
 		return
+	}
+	// Under --trace this step's notices already printed once, inside the
+	// per-step loop above; saying them again here would be the same caveat
+	// twice on one screen. Without --trace that loop never ran, and this is
+	// the only place left to say it -- right beside the answer it qualifies,
+	// not behind a flag most callers of a plain `ask` will never pass.
+	if !trace {
+		for _, notice := range step.Outcome.Notices {
+			fmt.Fprintf(out, "\nnotice   %s\n", notice)
+		}
 	}
 	fmt.Fprintf(out, "\nanswer\n")
 	for _, name := range slices.Sorted(maps.Keys(step.Outcome.Result)) {
@@ -1083,6 +1093,9 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 			if step.Failure != "" {
 				fmt.Fprintf(out, "      failed   %s\n", step.Failure)
 			}
+		}
+		for _, notice := range step.Outcome.Notices {
+			fmt.Fprintf(out, "      notice   %s\n", notice)
 		}
 		if scope := scopeOf(step.Step.Payload); len(scope) > 0 {
 			fmt.Fprintf(out, "      scope    %s\n", strings.Join(scope, ", "))

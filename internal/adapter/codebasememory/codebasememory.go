@@ -220,13 +220,22 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	}
 	switch req.Capability.ID {
 	case CapabilitySymbolCalls:
-		return r.runSymbolCalls(ctx, req, root)
+		out, err = r.runSymbolCalls(ctx, req, root)
 	case CapabilityCodeImpact:
-		return r.runCodeImpact(ctx, req, root)
+		out, err = r.runCodeImpact(ctx, req, root)
 	default:
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
 			"codebase-memory adapter has no implementation of %s", req.Capability.ID)
 	}
+	// A caveat rides along with a successful answer; it never replaces one.
+	// The check is best-effort by design (see freshnessNotice), so nothing
+	// here can turn a working call into a failed one.
+	if err == nil {
+		if notice := r.freshnessNotice(ctx, root); notice != "" {
+			out.Notices = append(out.Notices, notice)
+		}
+	}
+	return out, err
 }
 
 // invoke runs one codebase-memory-mcp CLI tool and hands back its raw JSON
@@ -303,6 +312,86 @@ func (r *Runner) git(ctx context.Context, root string, args []string, weight *me
 	}
 	return "", contract.Fail(contract.FailureUnavailable,
 		"git could not be started: %v", err).WithRaw(stderr.String())
+}
+
+// --- freshness -------------------------------------------------------------
+
+// freshnessTimeout caps the two extra calls a freshness check spends beyond
+// the answer it is checking on. It is its own ceiling, deliberately far
+// below r.timeout: a check that could run as long as the timeout it borrows
+// would let a hung freshness probe turn an already-computed, otherwise-fast
+// answer into a call that waits for nothing. Measured against this
+// repository, index_status and git status --porcelain together cost about
+// 18ms combined (three runs, both warm) -- cheaper than the 27ms a
+// symbol.calls answer itself took and the 92ms a code.impact answer took,
+// but still a second and third subprocess launched on every single call
+// that succeeds, paid unconditionally because there is no cheaper moment to
+// pay it in. Five seconds is generous headroom for a slower machine or a
+// cold DuckDB page cache, not a claim that 18ms is what every machine will
+// see.
+const freshnessTimeout = 5 * time.Second
+
+// indexStatusResponse is index_status's answer, narrowed to the one thing a
+// freshness check needs: whether the graph's own idea of HEAD still matches
+// the repository's.
+type indexStatusResponse struct {
+	Git struct {
+		IsGit   bool   `json:"is_git"`
+		HeadSHA string `json:"head_sha"`
+		BaseSHA string `json:"base_sha"`
+	} `json:"git"`
+}
+
+// freshnessNotice is a best-effort look at whether the graph codebase-memory
+// answered from might already be behind root: HEAD may have moved since the
+// index was built, or the working tree may hold changes nobody has indexed
+// yet. Either is a fact the graph itself cannot know -- it only ever reports
+// what it was told to remember -- and the two calls this asks are cheap
+// enough that this adapter can afford to ask on every call instead of
+// staying silent.
+//
+// The check can itself fail -- no git repository, index_status erroring, a
+// slow disk blowing the short timeout above -- and none of that is reason to
+// refuse an answer that already succeeded. A failed check reports nothing,
+// the same as a check that ran and found nothing wrong: "inconclusive" and
+// "clean" are not distinguished here, on purpose, because a caller cannot act
+// on that difference and a warning this adapter cannot stand behind is worse
+// than none.
+//
+// Its own subprocess cost is charged to a throwaway meter, never the caller's
+// -- the answer's own Spent.PeakRSS must keep meaning what it has always
+// meant, what answering the capability cost, not what answering it plus
+// double-checking it cost.
+func (r *Runner) freshnessNotice(ctx context.Context, root string) string {
+	ctx, cancel := context.WithTimeout(ctx, freshnessTimeout)
+	defer cancel()
+	discard := &meter{}
+
+	headMoved := false
+	if raw, err := r.invoke(ctx, "index_status", map[string]any{"project": root}, discard); err == nil {
+		var status indexStatusResponse
+		if json.Unmarshal(raw, &status) == nil && status.Git.IsGit {
+			head := strings.TrimSpace(status.Git.HeadSHA)
+			base := strings.TrimSpace(status.Git.BaseSHA)
+			headMoved = head != "" && base != "" && head != base
+		}
+	}
+
+	dirty := false
+	if out, err := r.git(ctx, root, []string{"status", "--porcelain"}, discard); err == nil {
+		dirty = strings.TrimSpace(out) != ""
+	}
+
+	switch {
+	case headMoved && dirty:
+		return "index may be stale: HEAD has moved and the working tree has uncommitted changes since it was built"
+	case headMoved:
+		return "index may be stale: HEAD has moved since it was built"
+	case dirty:
+		return "index may be stale: the working tree has uncommitted changes since it was built"
+	default:
+		return ""
+	}
 }
 
 // cliError is the one shape codebase-memory-mcp's own errors take: a JSON

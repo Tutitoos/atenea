@@ -339,6 +339,34 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   symbol.calls` before a single implementation was ever consulted. The card
   now names both.
 
+- **`symbol.calls` and `code.impact` now say when their own answer might
+  already be behind.** Both walk a call graph `codebase-memory-mcp` built at
+  some point in the past, and nothing forces a rebuild before the next
+  question: a commit lands, a file changes on disk, and the graph never
+  hears about either — there is no watcher, no hook, nothing that reindexes
+  on its own. Every call now asks two cheap questions before answering —
+  `index_status` for whether HEAD has moved since the index was built, `git
+  status --porcelain` for whether the working tree holds changes nobody has
+  indexed — and attaches a plain-text notice when either is true. Measured
+  against this repository with both conditions live at once: `index_status`
+  and `git status --porcelain` together cost 18ms, cheaper than the 27ms
+  `symbol.calls` itself took and the 92ms `code.impact` took, but real cost
+  paid on every single successful call, unconditionally, because there is
+  no cheaper moment to pay it in. The check is best-effort by design: it
+  cannot refuse an answer that already succeeded, and a check that itself
+  fails — no git repository, `index_status` erroring — reports nothing,
+  indistinguishable from a check that ran and found nothing wrong, because a
+  caller cannot act on that difference either way. Contract `1.3.0`:
+  `Outcome.Notices` is additive, the same shape as `1.2.0`'s `canceled` bin
+  — an adapter built against `1.2.0` never populates it and goes on
+  compiling.
+
+  `atenea ask` shows it beside the answer whether or not `--trace` is
+  passed — the common case is a plain `ask`, and a caveat about the very
+  data on screen must not hide behind a flag most callers never reach for.
+  Under `--trace` it is shown once, in the per-step trace alongside the
+  review it qualifies, not said twice.
+
 ### Documentation
 
 - The settings file **replaces** the built-in defaults rather than patching
