@@ -19,14 +19,9 @@ func orchestratorCard() contract.Agent {
 	}
 }
 
-func TestAgentCardAcceptsBothFamilies(t *testing.T) {
-	// One contract covers both families; the field is what tells them apart.
-	for _, kind := range []contract.AgentType{contract.AgentOrchestrator, contract.AgentSpecialist} {
-		card := orchestratorCard()
-		card.Type = kind
-		if err := card.Validate(); err != nil {
-			t.Fatalf("%s: %v", kind, err)
-		}
+func TestAgentCardValidates(t *testing.T) {
+	if err := orchestratorCard().Validate(); err != nil {
+		t.Fatalf("orchestrator card: %v", err)
 	}
 }
 
@@ -96,7 +91,7 @@ func TestAgentCloneDoesNotShareSlices(t *testing.T) {
 }
 
 func TestAgentTypeRoundTrip(t *testing.T) {
-	for _, name := range []string{"orchestrator", "specialist"} {
+	for _, name := range []string{"orchestrator"} {
 		parsed, err := contract.ParseAgentType(name)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)

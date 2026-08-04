@@ -236,9 +236,13 @@ to turn one sentence from the user into finished work, and that somebody is an
 **agent**, deliberately not part of the core. The core owns the catalog and the
 funnel and says who should act; the orchestrator is the one that acts.
 
-There is **one** agent contract, not two. An orchestrator and a specialist
-differ by a field, not by a type: two separate contracts would drift apart the
-first time one of them grew a field.
+There is **one** agent contract, and today exactly one kind of agent: the
+orchestrator. A specialist that would only execute, never decide, was drawn
+up early in the design and never built — once "tools do not decide" landed,
+there was nothing left for it to do that the orchestrator's own dispatch does
+not already do in one call and one review. The contract still takes a second
+kind as a field, not a fork, so nothing here forecloses one if a real need
+ever shows up.
 
 ### One capability, directly
 

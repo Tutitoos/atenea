@@ -5,29 +5,30 @@ import (
 	"strings"
 )
 
-// AgentType tells the orchestrator apart from the specialists.
+// AgentType names the kind of agent a card describes. Orchestrator is the
+// only kind that exists: it explores, splits a commission and hands out the
+// pieces, deciding everything a run needs decided.
 //
-// There is ONE agent contract, not two. A field says which family an agent
-// belongs to and the boxes that do not apply to it stay empty. Two separate
-// contracts would drift apart the first time one of them grew a field, and
-// sharing the shape costs nothing: the contract is the mold, not the content.
+// A specialist that would only execute, never decide, was drawn up early in
+// the design and dropped once "tools do not decide" landed: every dispatch
+// the orchestrator makes already ends in one implementation call and one
+// review, which is all a specialist would ever have done. The type stays an
+// enum so a real second kind, if one is ever needed, slots in as a value
+// here -- a field, not a fork, so two agent contracts never drift apart.
 type AgentType uint8
 
-// The two families of agent.
+// The one kind of agent that exists today.
 const (
 	// AgentUnspecified is the zero value and is never valid on a real agent.
 	AgentUnspecified AgentType = iota
 	// AgentOrchestrator explores, splits the commission and hands out the
 	// pieces. It decides; it does not do the work itself.
 	AgentOrchestrator
-	// AgentSpecialist runs one concrete thing: search, write code, audit.
-	AgentSpecialist
 )
 
 var agentTypeNames = map[AgentType]string{
 	AgentUnspecified:  "",
 	AgentOrchestrator: "orchestrator",
-	AgentSpecialist:   "specialist",
 }
 
 func (t AgentType) String() string {

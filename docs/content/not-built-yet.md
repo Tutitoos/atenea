@@ -90,16 +90,23 @@ adapter exists.
 
 ## One agent does everything
 
-The contract has two agent families — `AgentOrchestrator` and `AgentSpecialist` —
-with authority, visible context levels and capability lists per card. The
-vocabulary is complete and validated.
+The contract drew up two agent families early on: `AgentOrchestrator` and a
+specialist that would only execute, never decide. Only the orchestrator was
+ever built, and `AgentSpecialist` is now deleted rather than finished.
 
-Nothing ever constructs a specialist. One agent explores, splits, dispatches and
-reviews, so the backlog's *"autoridad, contexto, límites y handoff"* is a shape
-with nothing in it. There is no handoff because there is nobody to hand off to.
+It is not a gap waiting its turn. The reason to want several orchestrators
+in the first place was context economy — *"cada uno ve solo lo que necesita
+y ahorras tokens"* — but the orchestrator that got built spends no tokens of
+its own to economize: it is a deterministic dispatcher, not a model burning
+context on its own reasoning, and every adapter that does spend tokens
+already starts a fresh process per call. "Tools do not decide" closed the
+rest of the case — a specialist would only ever have made one implementation
+call and reviewed one outcome, which is exactly what the orchestrator's own
+dispatch already does. There was nothing left for a second agent to be the
+one to do.
 
-**Done when:** a commission is carried out by more than one agent, each seeing only
-the context its card declares, and the trace shows the handoff.
+This stays one agent, honestly, until a capability shows up whose dispatch
+genuinely needs a decision the orchestrator's own loop does not already make.
 
 ## History is declared and never loaded
 
