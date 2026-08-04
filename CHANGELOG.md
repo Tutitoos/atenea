@@ -15,6 +15,8 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-04
+
 ### Fixed
 
 - **A step `resume` correctly skips redispatching no longer comes back
@@ -238,6 +240,25 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   `Needs`-based inference, which was never the right question for a shape
   that has nothing to split.
 
+- **Resuming a commission before it ever split could deny the redone look
+  the read every commission gets for free.** The never-split resume path
+  rebuilt the permission for the redone explore step straight from the
+  checkpoint's own `Effects` field — `contract.Permission{Task:
+  record.Task, Effects: record.Effects}` — but that field is documented to
+  hold only what a commission asked for *beyond* reading, the same
+  convention `Run` and `Ask` both follow by adding the free read at
+  construction time and never storing it back. A commission that never
+  asked for anything heavier than reading — the ordinary case — checkpoints
+  with `Effects` empty, so resuming it before splitting ran rebuilt a
+  permission with no effects at all, and any adapter enforcing
+  `Permission.Allows` would have refused the redone step `permission_denied`
+  for reading a repository, something no fresh commission is ever refused
+  for. Covered by `TestResumeRedoesExploreWhenSplittingNeverRan`, which
+  asserts the redone step's permission allows `EffectRead` from a checkpoint
+  recorded with no `Effects` at all. The redone look now starts from the
+  same layers a fresh commission does — read, the standing grant, then the
+  record's own effects — before `--allow` adds one more.
+
 ### Changed
 
 - **The Claude Code timeout is 90 seconds, not five minutes.** Measured: two
@@ -366,6 +387,36 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   data on screen must not hide behind a flag most callers never reach for.
   Under `--trace` it is shown once, in the per-step trace alongside the
   review it qualifies, not said twice.
+
+- **`code.search` declares that answering it spawns a process, and every
+  real implementation always did.** `Effect` gains a fourth value,
+  `process`, orthogonal to `read`/`write`/`external`: not what a capability
+  changes, but whether answering it runs a binary Atenea does not fully
+  control the internals of. `ripgrep` and the local stand-in are both a
+  binary invoked through `exec.CommandContext`, so refusing this effect by
+  default would not make the spawn auditable, it would make the one P0
+  capability unusable out of the box. It is granted by a new standing layer
+  instead of by every caller by hand: `[orchestrator] effects = ["process"]`
+  in the settings file is a grant every commission and question receive on
+  top of the free read, the same way `budget_usd` already stands behind
+  every commission's spending, and the shipped `default.toml` turns it on
+  so a fresh install works unchanged. An operator who wants every caller to
+  ask for it explicitly can delete the line; nothing about `code.search`
+  requires it beyond what it already declared.
+
+  A one-off order beats the standing grant: `--allow EFFECT` on `atenea
+  task`, `atenea ask` and `atenea resume` adds to what a single commission
+  carries, repeatable for several, refused with `invalid_input` at the flag
+  for a name this build does not recognize rather than reaching a step and
+  failing there for a reason nobody can trace back to the typo. `resume`'s
+  `--allow` only ever adds: unlike `--budget`, which replaces what remains
+  of the original grant, an effect already held is never worth losing by
+  accident — `Permission.Grant` composes read, the standing grant, what the
+  commission or step already carried, and `--allow`, in that order, keeping
+  each effect once regardless of how many layers named it. Contract
+  `1.4.0`, additive: `Effect` was already an open `uint8`, not a set an
+  adapter built against `1.3.0` could exhaust, so it goes on compiling and
+  simply never sees the new value.
 
 ### Documentation
 
@@ -574,4 +625,5 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.2.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.1.0

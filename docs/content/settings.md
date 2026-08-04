@@ -65,7 +65,8 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
-runners = ["omp"]           # any of omp, claudecode, serena, local; [] dispatches nowhere
+effects = ["process"]       # granted standing to every commission and question
+runners = ["omp"]           # any of omp, claudecode, serena, codebasememory, local; [] dispatches nowhere
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.omp]
@@ -88,6 +89,11 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
   implementations = ["serena.definition", "serena.references", "serena.implementations"]
   timeout = "90s"                      # a language server indexing cold is slow, not stuck
+
+  [orchestrator.codebasememory]
+  binary = "codebase-memory-mcp"       # bare name is looked up on PATH
+  implementations = ["codebase-memory.calls", "codebase-memory.impact"]
+  timeout = "90s"                      # opening an index cold is slow, not stuck
 ```
 
 `max_parallel` is the real brake on total memory: four steps of one wave run at
@@ -99,7 +105,9 @@ can be attached at once. `omp` is the client adapter that ships attached.
 `claudecode` drives the Claude Code CLI and is off by default, because it is
 the only far side that costs money per call. `serena` is not a CLI at all: it
 is an MCP server, which is why its block takes a URL instead of a binary, and
-it answers the three symbol capabilities rather than a text search. `local` is
+it answers the three symbol capabilities rather than a text search.
+`codebasememory` is a CLI again, like `omp`, but answers from a call graph it
+keeps on disk instead of searching or parsing anything live. `local` is
 a stand-in that searches the disk directly, for a machine with no client
 installed. An empty list leaves the core able to plan and choose but unable to
 dispatch — a working core with nobody attached, and the status screen says so
@@ -140,6 +148,21 @@ One order beats the standing grant, in both directions: `atenea task "..."
 Running out is reported as `permission_denied`, not as slowness: the far side
 was not slow, the grant was spent. It does not mark the provider down, so the
 next step can still go to it — and a step that costs nothing still runs.
+
+`effects` is granted the same way, standing to every commission and question
+this core dispatches, on top of the read that is always free. It exists
+because not every effect is a per-request choice: `code.search`'s only
+implementations today are both a binary, so requiring every caller to grant
+`process` by hand on every single call would just move the same yes to one
+place instead of saying it once, here. The shipped default turns it on for
+exactly that reason — refusing it by default would not make the spawn
+auditable, it would make the one P0 capability unusable out of the box.
+
+One order beats the standing grant here too: `atenea task "..." --allow
+write` grants one more effect to that one commission, repeatable for
+several. Unlike `--budget` on a resume, which replaces what remains of the
+grant, `--allow` only ever adds — an effect already held is never worth
+losing by accident.
 
 An implementation no attached runner can execute is not removed from the
 catalog. It is dropped by the funnel's `reach` stage, which says so in the
@@ -280,7 +303,7 @@ id = "code.search"          # dotted lowercase
 version = "1.0.0"
 summary = "Find literal text in a repository."
 semantics = "Flat text search. Options are stated as intent, never as an order."
-effects = ["read"]          # read | write | external
+effects = ["read", "process"]  # read | write | external | process
 
   [[capability.input]]
   name = "query"            # lowercase snake_case

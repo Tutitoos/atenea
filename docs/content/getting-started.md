@@ -86,6 +86,28 @@ indexed_by = ["serena"]
 Miss either and the funnel drops it at `reach` or `constraints` and says which
 — a provider nobody wired up is not a provider that is broken.
 
+### Attaching codebase-memory
+
+`codebase-memory` answers `symbol.calls` and `code.impact` by walking a call
+graph it keeps on disk instead of parsing anything live — the one thing
+neither a grep nor a language server has. It is a CLI like `omp`, so the
+setting is a binary name, not a URL:
+
+```toml
+[orchestrator]
+runners = ["omp", "codebasememory"]
+
+  [orchestrator.codebasememory]
+  binary = "codebase-memory-mcp"
+```
+
+Both implementations declare `requires_index = true` and a `min_scale =
+"medium"` floor: unlike Serena, this provider only ever answers from an
+index built ahead of time, so a repository nothing has indexed, or one too
+small to have declared its scale, is refused rather than sent to a provider
+with nothing on disk to answer from — the funnel drops it at `constraints`
+or `reach` and says which, the same as any other unattached provider.
+
 ## Write your own settings
 
 ```sh
@@ -454,7 +476,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.1.0  contract 1.3.0  AMBER
+atenea 0.1.0  contract 1.4.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

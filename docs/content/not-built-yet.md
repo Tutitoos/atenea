@@ -123,20 +123,41 @@ the one that finished a minute earlier.
 **Done when:** a second commission against the same repository starts from what
 the first one found.
 
-## Permissions cover three effects, and never ask
+## Permissions cover four effects, and never ask
 
 The design (backlog P2, *Seguridad*) names five kinds of effect —
 read / write / process / network / device — and asks that dangerous actions
 require a policy and a confirmation.
 
-The contract has three: `read`, `write`, `external`. Spawning a process is not an
-effect of its own, though it is the one Atenea does most; nor is touching a device.
-And there is no confirmation anywhere: an effect is either granted in the settings
-file or refused, and nothing is ever asked. The design's *"acciones peligrosas
-requieren política"* is satisfied; *"y confirmaciones"* is not.
+The contract has four: `read`, `write`, `external`, `process`. That is a
+closed count, not four-of-five-so-far. `network` was never a fifth group of
+its own — `external` already names it, "leaves the machine: network,
+external services," from the design's own three-way split, closed before
+this backlog list was ever written. `process` was the real gap:
+`code.search`'s own adapters made it impossible to ignore, since every
+implementation of it spawns a binary to answer at all, and a permission
+model that could not name that was checking three quarters of what the one
+P0 capability actually does. It closed in `1.4.0`.
 
-**Done when:** a write outside a granted path stops and asks, rather than being
-refused up front or allowed silently.
+`device` is not a gap waiting its turn. Nothing in Atenea's own catalog is
+device-shaped: no capability declares it, no adapter could cause it, and no
+design decision ever closed it into the contract the way read, write and
+external were — it lived only in this backlog's own five-item wishlist,
+written before the three-way split that actually shipped. The one plausible
+source of a real need, an MCP tool for driving a mobile device, is scoped to
+a different project's tooling, not a settled requirement inside this
+catalog. `ParseEffect("device")` is refused on purpose, and two tests exist
+to keep it that way — this stays four, honestly, until something in
+Atenea's own catalog genuinely needs a fifth.
+
+There is still no confirmation anywhere: an effect is either granted —
+standing, in the settings file, or one call at a time with `--allow` — or
+refused, and nothing is ever asked. The design's *"acciones peligrosas
+requieren política"* is satisfied for every effect the contract actually
+has; *"y confirmaciones"* is not, for any of them.
+
+**Done when:** a write outside a granted path stops and asks, rather than
+being refused up front or allowed silently.
 
 ## OpenCode, still parked
 

@@ -40,6 +40,9 @@ has the full table.
 
 `--budget USD` funds one commission above whatever the settings file grants. Money
 is a permission here: a step with none refuses before spawning anything.
+`--allow EFFECT` grants one more beyond what the settings file already stands
+behind, repeatable for several — most commissions never need it, since
+`code.search` already ships pre-granted the one thing it actually causes.
 
 To dispatch a single capability instead of a whole commission, `atenea ask` takes
 one by name — `atenea ask code.search --repo current --set query=TODO`. Useful for
@@ -116,4 +119,6 @@ One step, not two: the first had already closed before the crash and is read
 off the receipt rather than paid for again. Resuming a run with nothing left
 to do is a clean no-op — `spent 0s over 0 step(s)`, same verdict as before —
 not a second billed attempt. `--budget USD` replaces what remains of the
-original grant, in case the ceiling was the reason it stopped.
+original grant, in case the ceiling was the reason it stopped; `--allow`
+instead adds to what the commission already carries, since an effect already
+held should never be lost by resuming.

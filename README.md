@@ -10,7 +10,7 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `0.1.0`, speaking contract `1.3.0` — the first tagged release, and
+Version `0.1.0`, speaking contract `1.4.0` — the first tagged release, and
 alpha: `0.x.y` until it goes stable. What landed is in the
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
@@ -61,6 +61,12 @@ per call, so four steps share one quarter rather than spending four. `--budget`
 funds one commission above it. A commission that runs out gets
 `permission_denied` on the paid steps and keeps going through whoever charges
 nothing.
+
+Effects work the same way: `code.search` causes `read` and `process` at once,
+because every implementation of it is a binary. `[orchestrator] effects =
+["process"]` grants that standing to every commission and question, on by
+default so the P0 capability works out of the box; `--allow EFFECT` grants
+one more to a single commission.
 
 Symbols are the second family of capabilities: `symbol.definition`,
 `symbol.references` and `symbol.implementations`. They are answered by Serena,
@@ -136,21 +142,22 @@ background
 ```text
 cmd/atenea/         entry point: the service and the operator commands
 internal/           the brain, not importable from outside
-  adapter/claudecode/  the client adapter: translates for the Claude Code CLI
-  adapter/omp/         the client adapter: translates for the omp CLI
-  adapter/serena/      the symbol adapter: MCP over HTTP, positions to names
-  checkpoint/          run receipts on disk
-  clock/               the one lane every background rhythm runs in
-  config/              the single settings file
-  core/                wiring, status and clean shutdown
-  metrics/             the measurement base: DuckDB, batched, one writer
-  notebook/            the crash notebook: Atenea's own faults, synced on write
-  orchestrator/        the agent: explore, split, dispatch, review
-  procstat/            weighing a finished child process, per platform
-  registry/            the Capability Registry
-  runner/local/        stand-in far side, for a machine with no client installed
-  selector/            the funnel
-  toolversion/         asking a tool who it is, once per process
+  adapter/claudecode/      the client adapter: translates for the Claude Code CLI
+  adapter/codebasememory/  the call-graph adapter: symbol.calls and code.impact from its own index
+  adapter/omp/             the client adapter: translates for the omp CLI
+  adapter/serena/          the symbol adapter: MCP over HTTP, positions to names
+  checkpoint/              run receipts on disk
+  clock/                   the one lane every background rhythm runs in
+  config/                  the single settings file
+  core/                    wiring, status and clean shutdown
+  metrics/                 the measurement base: DuckDB, batched, one writer
+  notebook/                the crash notebook: Atenea's own faults, synced on write
+  orchestrator/            the agent: explore, split, dispatch, review
+  procstat/                weighing a finished child process, per platform
+  registry/                the Capability Registry
+  runner/local/            stand-in far side, for a machine with no client installed
+  selector/                the funnel
+  toolversion/             asking a tool who it is, once per process
 pkg/contract/       the contract shared by the core and its adapters
 docs/               documentation sources, served by Hugo on GitHub Pages
 ```

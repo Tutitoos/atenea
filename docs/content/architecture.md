@@ -308,9 +308,10 @@ writing and reaching outside the machine are not.
 ### The runner seam
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
-far side belongs to somebody else: an adapter. Three ship — one drives `omp`,
-one drives the Claude Code CLI, one speaks MCP to Serena — and a local stand-in
-sits in the same place for a machine where nothing is installed. One interface,
+far side belongs to somebody else: an adapter. Four ship — one drives `omp`,
+one drives the Claude Code CLI, one speaks MCP to Serena, one walks a call
+graph codebase-memory keeps on disk — and a local stand-in sits in the same
+place for a machine where nothing is installed. One interface,
 several possible far sides, and swapping them changes nothing above the line.
 
 Several can be attached at once. Each declares the implementations it answers
@@ -748,17 +749,65 @@ files in silence because a missed hit costs nothing; a caller pointing at one
 exact position inside one is refused out loud, because "nothing here" would be
 a lie.
 
-All three adapters translate into the same six failure bins and the same output
+### What that costs in practice: the codebase-memory adapter
+
+The fourth far side is a second CLI, but not one built for a human like omp:
+it already speaks JSON on both sides, a request out on stdin and an answer
+back on stdout, one process per call with nothing kept running between them.
+A failure comes back the same way, as JSON on stderr with an `error` field
+rather than a distinct exit path of its own.
+
+| What codebase-memory-mcp does | What the adapter does about it |
+| --- | --- |
+| Speaks JSON already, on both stdin and stdout | Nothing to parse from a rendered format — the request goes out, the answer comes back, one process per call |
+| Reports failure as JSON on stderr, not a distinct channel | Reads stderr's `error` field the same way stdout's answer is read, and sorts it into the same six bins as any other far side |
+| Encodes every column the same way, so a number that started life as an integer property can come back as a quoted string rather than a bare one | Accepts both shapes reading a line number out of a graph row, instead of trusting the query to always agree with itself |
+| Can only ever answer from a graph it built ahead of time, which may already be behind the working tree | Attaches a best-effort `notice` — an `index_status` call plus `git status --porcelain`, together cheaper than the answer they are checking — when HEAD has moved or the tree holds changes the graph never saw; a failed check reports nothing rather than refusing an answer that already succeeded |
+
+It answers two capabilities neither omp nor Serena can: `symbol.calls` walks
+the call graph codebase-memory already built from the repository, and
+`code.impact` asks that same graph what a git diff reaches. Both need a call
+graph, which is the one thing neither a grep nor a language server keeps.
+`code.search` already has three cheaper or equally-capable providers, so this
+adapter does not claim it — a fourth identical answer would only give the
+funnel one more thing to rank.
+
+All four adapters translate into the same six failure bins and the same output
 shape. That is the whole point of the seam: the funnel above them ranks a tool
 call against a model turn against a language server without knowing that any of
 them exists.
 
 ## Effects
 
-Every capability declares what it causes, in three groups: `read`, `write`,
-`external`. Writing breaks something of your own, at home, and can be undone.
-Reaching outside escapes the machine and cannot. Putting both in one bag would
-give the dangerous one the permissions of the harmless one.
+Every capability declares what it causes, in four groups: `read`, `write`,
+`external`, `process`. Writing breaks something of your own, at home, and can
+be undone. Reaching outside escapes the machine and cannot. Process is a
+fourth, orthogonal axis: not what a capability changes, but whether
+answering it means running a binary Atenea does not fully control the
+internals of. It composes with the other three rather than replacing any of
+them — `code.search` causes read *and* process at once, because every
+implementation of it, a client CLI or the disk-searching stand-in alike, is
+a binary, not a library.
+
+### The standing grant
+
+A capability declaring an effect is not the same as a commission being
+allowed to trigger it. `Permission` is what travels with a request and is
+checked at dispatch, and it is built in layers: the read every commission
+gets for free, then whatever `[orchestrator] effects` in the settings file
+grants standing to every commission and question, then whatever the caller
+asked for on that one call, then whatever `--allow` adds on a resume. Each
+layer only ever adds — `Permission.Grant` keeps every effect once no matter
+how many layers named it, and nothing later in the chain can take an earlier
+grant away.
+
+The standing grant exists because not every effect is a per-request choice.
+`code.search`'s only implementations today are both a binary, so requiring
+every caller to name `process` on every single call would just move the same
+yes to one place instead of saying it once, in a file an operator can read,
+edit or remove — the same shape `budget_usd` already has for money. It ships
+turned on in the default settings: refusing it by default would not make the
+spawn auditable, it would make the one P0 capability unusable out of the box.
 
 ### Money is a permission, not a cost
 

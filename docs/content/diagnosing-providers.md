@@ -28,11 +28,12 @@ and broken are different findings, and only the second is worth debugging.
 
 ```text
 serves     ripgrep
-no runner  claude.search, codebase-memory.search, serena.definition,
-           serena.implementations, serena.references, serena.search
+no runner  claude.search, codebase-memory.calls, codebase-memory.impact,
+           codebase-memory.search, serena.definition, serena.implementations,
+           serena.references, serena.search
 ```
 
-That is the stock catalogue: seven implementations declared, one reachable,
+That is the stock catalogue: nine implementations declared, one reachable,
 because `runners = ["omp"]` attaches a single adapter. Attaching Serena — the
 configuration this write-up is about — makes it four:
 
