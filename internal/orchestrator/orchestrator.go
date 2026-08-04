@@ -957,7 +957,6 @@ func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step,
 	for i, step := range wave {
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			// Registered last so it runs first. A panic in here would
@@ -983,6 +982,13 @@ func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step,
 			// refusal spends nothing and a free provider spends nothing, so
 			// the money simply stays for whoever comes next.
 			purse.spend(out[i].Outcome.SpentUSD)
+			// Only a step that returned -- not one mid-panic and about to
+			// take the process with it -- may tell the wave it is done.
+			// A deferred Done would run during the panic's own unwind,
+			// before Catch's re-thrown panic actually lands, letting
+			// runWave's caller read a zero-value result and race an exit
+			// that is supposed to have already happened.
+			wg.Done()
 		}()
 	}
 	wg.Wait()
