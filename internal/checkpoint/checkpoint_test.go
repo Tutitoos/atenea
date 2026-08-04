@@ -37,6 +37,9 @@ func run(id string) checkpoint.Run {
 			Verdict:        "ok",
 			Review:         "ok",
 			DurationMS:     12,
+			Discoveries: []contract.Discovery{
+				{Level: contract.ContextRepository, Note: "api: 3 hit(s) for \"find every TODO\""},
+			},
 		}},
 	}
 }
@@ -65,6 +68,9 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	}
 	if read.Steps[0].Implementation != "ripgrep" {
 		t.Error("which implementation ran is exactly what a resumed run needs")
+	}
+	if len(read.Steps[0].Discoveries) != 1 || read.Steps[0].Discoveries[0].Note != "api: 3 hit(s) for \"find every TODO\"" {
+		t.Errorf("discoveries did not survive the round trip: %+v", read.Steps[0].Discoveries)
 	}
 	// The rest is what a resumed run rebuilds its exploration and its grant
 	// from, and what it dispatches straight out of without replanning.

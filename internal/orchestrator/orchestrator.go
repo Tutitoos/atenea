@@ -582,6 +582,11 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	purse := newGrant(budgetUSD)
 
 	result = &Result{RunID: record.ID, Task: record.Task, Plan: record.Plan}
+	// Captured before anything below can add to record.Steps, so this is
+	// exactly what passed review in an earlier process: the steps this
+	// attempt will never redispatch, and whose only surviving discoveries
+	// are on the receipt rather than in memory.
+	priorOK := record.OK()
 	// The receipt may already read closed -- a clean failure closes it
 	// exactly like success does, and a crash may not have gotten that far.
 	// Either way this attempt reopens it: if it is interrupted too, the
@@ -594,6 +599,7 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 		result.Verdict = resumeVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
+		result.Discoveries = append(result.Discoveries, discoveriesFromReceipt(record.Steps, priorOK)...)
 		record.Closed = true
 		record.Verdict = result.Verdict.String()
 		record.Updated = time.Now()
@@ -1200,6 +1206,33 @@ func reported(steps []StepResult) []contract.Discovery {
 	return out
 }
 
+// discoveriesFromReceipt recovers what steps closed in an earlier process
+// found. They are never redispatched on resume, so reported -- which only
+// looks at result.Steps -- cannot see them; this reads the same facts back
+// from the receipt instead, the one place they survived the process that
+// discovered them.
+func discoveriesFromReceipt(steps []checkpoint.StepState, ids []string) []contract.Discovery {
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	var out []contract.Discovery
+	seen := make(map[string]struct{})
+	for _, step := range steps {
+		if _, ok := want[step.ID]; !ok {
+			continue
+		}
+		for _, discovery := range step.Discoveries {
+			if _, dup := seen[discovery.Note]; dup {
+				continue
+			}
+			seen[discovery.Note] = struct{}{}
+			out = append(out, discovery)
+		}
+	}
+	return out
+}
+
 func matchCount(result map[string]any) int {
 	raw, _ := result["matches"].([]any)
 	return len(raw)
@@ -1293,6 +1326,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Verdict:        step.Review.Child.String(),
 		Review:         step.Review.Parent.String(),
 		Failure:        step.Failure,
+		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
 		ClosedAt:       time.Now(),

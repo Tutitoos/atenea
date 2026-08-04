@@ -81,7 +81,14 @@ type StepState struct {
 	Verdict        string `json:"verdict"`
 	Review         string `json:"review,omitempty"`
 	Failure        string `json:"failure,omitempty"`
-	DurationMS     int64  `json:"duration_ms"`
+	// Discoveries is what the far side reported finding, carried over from
+	// contract.Outcome. A step that already passed review is never
+	// redispatched on resume, so this is the only copy of what it found that
+	// survives the process that ran it -- without it, a crash between two
+	// steps would cost the discoveries of every step that had already
+	// closed, not just the ones still to come.
+	Discoveries []contract.Discovery `json:"discoveries,omitempty"`
+	DurationMS  int64                `json:"duration_ms"`
 	// SpentUSD is what this step was charged, when anything was. It is here
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a

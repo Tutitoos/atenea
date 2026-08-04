@@ -1014,7 +1014,11 @@ func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{
 		answer: func(contract.RunRequest) (contract.Outcome, error) {
-			return hits("internal/auth/login.go"), nil
+			out := hits("internal/auth/login.go")
+			out.Discoveries = append(out.Discoveries, contract.Discovery{
+				Level: contract.ContextRepository, Note: "search-api: found it fresh",
+			})
+			return out, nil
 		},
 	}
 	agent, _ := build(t, runner, 0, dir)
@@ -1040,6 +1044,9 @@ func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
 			// search-api never closed -- the process died mid-work.
 			ID: "explore-api", Capability: "code.search", Repository: "api",
 			Implementation: "ripgrep", Verdict: "ok", Review: "ok",
+			Discoveries: []contract.Discovery{
+				{Level: contract.ContextRepository, Note: "explore-api: already found this before the crash"},
+			},
 		}},
 	}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -1057,6 +1064,19 @@ func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
 	}
 	if len(result.Steps) != 1 || result.Steps[0].Step.ID != "search-api" {
 		t.Fatalf("steps = %+v, want only the redispatched search-api", result.Steps)
+	}
+	// explore-api was never redispatched, so its discovery can only have
+	// reached the result by being read back off the receipt.
+	var notes []string
+	for _, d := range result.Discoveries {
+		notes = append(notes, d.Note)
+	}
+	joined := strings.Join(notes, "\n")
+	if !strings.Contains(joined, "explore-api: already found this before the crash") {
+		t.Errorf("discoveries = %v, want explore-api's recovered from the receipt", notes)
+	}
+	if !strings.Contains(joined, "search-api: found it fresh") {
+		t.Errorf("discoveries = %v, want search-api's from this dispatch", notes)
 	}
 
 	updated, err := store.Load(runID)
@@ -1116,6 +1136,67 @@ func TestResumeOnAClosedRunWithNothingLeftIsANoOp(t *testing.T) {
 	}
 	if result.Verdict != contract.VerdictOK {
 		t.Fatalf("verdict = %v, want ok", result.Verdict)
+	}
+}
+
+// Nothing is redispatched here -- every step is already OK -- so this is the
+// purest form of the gap: if discoveries did not survive on the receipt,
+// there would be nothing anywhere left to report them from.
+func TestResumeRecoversDiscoveriesFromStepsClosedInAnEarlierProcess(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, dir)
+	store, err := checkpoint.New(dir)
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+
+	permission := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
+	runID := checkpoint.NewID(time.Now())
+	if err := store.Save(checkpoint.Run{
+		ID: runID, Kind: checkpoint.KindTask, Task: "login",
+		Repositories: []string{"api"}, BudgetUSD: 1,
+		ContractVersion: contract.Current.String(), Started: time.Now(),
+		Closed: true, Verdict: "ok",
+		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
+			{ID: "explore-api", Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "login"}, Permission: permission},
+			{ID: "search-api", Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
+				Permission: permission},
+		}},
+		Steps: []checkpoint.StepState{
+			{ID: "explore-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok",
+				Discoveries: []contract.Discovery{
+					{Level: contract.ContextRepository, Note: "explore-api: 4 hit(s)"},
+				}},
+			{ID: "search-api", Capability: "code.search", Repository: "api", Verdict: "ok", Review: "ok",
+				Discoveries: []contract.Discovery{
+					{Level: contract.ContextRepository, Note: "search-api: answered for free"},
+				}},
+		},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	result, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if len(runner.requests()) != 0 {
+		t.Fatalf("requests = %d, want 0 -- nothing was left to do", len(runner.requests()))
+	}
+	if len(result.Discoveries) != 2 {
+		t.Fatalf("discoveries = %d, want both steps' -- nothing ran, so both can only have come off the receipt: %+v",
+			len(result.Discoveries), result.Discoveries)
+	}
+	var notes []string
+	for _, d := range result.Discoveries {
+		notes = append(notes, d.Note)
+	}
+	joined := strings.Join(notes, "\n")
+	if !strings.Contains(joined, "explore-api: 4 hit(s)") || !strings.Contains(joined, "search-api: answered for free") {
+		t.Errorf("discoveries = %v, want both steps' recovered from the receipt", notes)
 	}
 }
 

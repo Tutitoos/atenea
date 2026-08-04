@@ -17,6 +17,22 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A step `resume` correctly skips redispatching no longer comes back
+  silent.** `alreadyOK` steps are never rerun -- that is the entire point of
+  resuming instead of replanning -- but what they had found was never written
+  anywhere durable: `Outcome.Discoveries` lived only in the process's memory,
+  and a step this attempt never dispatches has no fresh `StepResult` to carry
+  it. A crash between two waves therefore cost every discovery the closed
+  wave had made, permanently, with nothing in the resumed run's own output to
+  say so. Verified against a receipt with two steps already closed and
+  reviewed `ok`, each carrying a discovery: resuming it dispatched nothing
+  (`spent 0s over 0 step(s)`, the same no-op shape as a fully closed run) and
+  printed both discoveries verbatim, sourced from the receipt rather than a
+  rerun. `checkpoint.StepState` now keeps `discoveries` alongside the fields
+  it already carried for exactly this reason; `Resume` reads it back for
+  every step this attempt does not touch and folds it in beside whatever the
+  steps it does redispatch report fresh.
+
 - **A spending ceiling of Atenea's own is no longer read as the client being
   broken.** A turn stopped at its `--max-budget-usd` prints no `result` field
   whatsoever — the reason is in `errors` and `terminal_reason` — so the adapter

@@ -72,9 +72,18 @@ the context its card declares, and the trace shows the handoff.
 Atenea discovered, little and good, loaded lazily"* — is in the contract, and the
 orchestrator's card declares that it sees it.
 
-Discoveries are produced, reported on the result and written to the receipt. None
-are ever read into a later commission. Every run starts knowing nothing about any
-run before it, so the lazy loading the design describes has no loader.
+Discoveries are produced, reported on the result, and now survive within the
+commission that made them: a step `resume` correctly skips redispatching used
+to come back silent, because `Outcome.Discoveries` lived only in that
+process's memory and a step never rerun has no fresh `StepResult` to carry
+it. The receipt now keeps each step's discoveries, so a crash between two
+waves no longer costs the closed wave what it had already found. That is the
+whole of the fix: one commission's own discoveries surviving one commission's
+own crash. A *later* commission is still blind to it -- none of a finished
+run's discoveries are ever read back in when the next one starts, so the lazy
+loading the design describes still has no loader. Every run against a
+repository still starts knowing nothing about any run before it, including
+the one that finished a minute earlier.
 
 **Done when:** a second commission against the same repository starts from what
 the first one found.
