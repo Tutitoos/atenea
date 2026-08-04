@@ -171,6 +171,12 @@ func run(args []string, out io.Writer) error {
 	}
 }
 
+// load reads the settings file and builds a Core. Every caller must
+// eventually stop what it built: a command that only reads status today
+// might still launch a managed process to answer honestly -- Serena on
+// first use, if the settings file opted it in -- and a bare return would
+// leak it as an orphan the moment this process exits. defer Shutdown right
+// after checking the error, the same as any other acquired resource.
 func load(settingsPath string) (*core.Core, error) {
 	cfg, err := config.Load(settingsPath)
 	if err != nil {
@@ -190,6 +196,7 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	status := atenea.Status()
 
 	fmt.Fprintf(out, "atenea %s  contract %s  %s\n",
@@ -215,6 +222,7 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
 
 	printBackground(out, status)
+	printProcesses(out, status)
 
 	fmt.Fprintf(out, "\ncapabilities\n")
 	for _, capability := range status.Capabilities {
@@ -283,6 +291,33 @@ func printBackground(out io.Writer, status core.Status) {
 	fmt.Fprintln(out, line)
 }
 
+// printProcesses is the section for whatever Atenea itself launched and is
+// watching. It stays out of the way entirely when nothing is managed, which
+// is the common case: a header over an empty list would be noise on every
+// single status call for a setup that never opted in.
+func printProcesses(out io.Writer, status core.Status) {
+	if len(status.Processes) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nprocesses\n")
+	for _, p := range status.Processes {
+		pid := "-"
+		if p.PID != 0 {
+			pid = strconv.Itoa(p.PID)
+		}
+		up := "-"
+		if !p.Started.IsZero() {
+			up = time.Since(p.Started).Truncate(time.Second).String()
+		}
+		line := fmt.Sprintf("  %-6s %-10s state=%-11s endpoint=%-34s pid=%-8s up=%-10s restarts=%d",
+			p.Light, p.ID, p.State, p.Endpoint, pid, up, p.Restarts)
+		if p.LastReason != "" {
+			line += "  (" + p.LastReason + ")"
+		}
+		fmt.Fprintln(out, line)
+	}
+}
+
 // rhythm drops the zero tail Go prints on round durations: "6h", not "6h0m0s".
 // Trimming the text would be the obvious way and the wrong one -- it turns
 // "30s" into "3".
@@ -342,6 +377,7 @@ func cmdIncidents(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	if marking {
 		cleared, err := atenea.ClearIncidents()
 		if err != nil {
@@ -424,6 +460,7 @@ func cmdMetrics(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	if clearing {
 		return clearMetrics(atenea, filter, *all, out)
 	}
@@ -501,6 +538,7 @@ func cmdCatalog(settingsPath string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	registry := atenea.Registry()
 	for _, capability := range registry.Capabilities() {
 		fmt.Fprintf(out, "capability %s %s\n", capability.ID, capability.Version)
@@ -577,6 +615,7 @@ func cmdSelect(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	if repository == "" {
 		repos := atenea.Registry().Repositories()
 		if len(repos) != 1 {
@@ -650,6 +689,7 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -728,6 +768,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	capability, err := atenea.Registry().Capability(capabilityID)
 	if err != nil {
 		return err
@@ -810,6 +851,7 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -828,6 +870,7 @@ func cmdResumeList(settingsPath string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = atenea.Shutdown() }()
 	if !atenea.Checkpoints().Enabled() {
 		fmt.Fprintln(out, "checkpointing is off; there is nothing on disk to resume")
 		return nil

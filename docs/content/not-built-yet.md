@@ -23,11 +23,11 @@ and `serena.references` both answer for real now, against this repository:
 
 ```text
 $ atenea ask symbol.definition --repo current \
-    --set file=internal/core/status.go --set line=356 --set column=19
+    --set file=internal/core/status.go --set line=389 --set column=19
 verdict   ok
 answer
   location
-    line     580
+    line     644
     path     internal/core/status.go
 ```
 

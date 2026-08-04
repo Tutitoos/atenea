@@ -268,6 +268,37 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   fact, so it keeps its counts and contributes nothing to cost — the tempting
   repair, keeping the count and zeroing the sum, would invent an average of
   zero and re-create the bug.
+- **Atenea can launch and supervise an MCP server itself**, as a bare
+  process, instead of always assuming one is already running behind a
+  fixed endpoint. `[orchestrator.serena.process]` names a `command` and
+  `args` (`{{port}}` is replaced with the chosen port before every spawn);
+  Atenea spawns it in its own process group, waits on the same MCP wire it
+  serves on for the `initialize` handshake to answer, and restarts it up
+  to `restart_limit` times (default 2, "a couple of times" in the design's
+  own words) with `restart_delay` (default 2s) between attempts if it
+  crashes -- the same break-in posture this design already applies to
+  providers. `lifecycle = "persistent"` starts it with Atenea and keeps it
+  running; `"on_demand"` starts it on first use and an idle reaper stops
+  it after `idle_timeout` (default 5m) with nothing in flight, gated by an
+  in-flight refcount so a call already running is never stopped out from
+  under itself. A crash only spends a fresh restart budget once the
+  server has stayed ready for `stable_after` (default 30s): without that
+  window a server that flickers ready and dies resets its own attempt
+  count on every brief success and retries forever -- a real infinite
+  crash loop, found and fixed by this package's own tests before it ever
+  shipped. Every managed process gets SIGTERM, a grace window (default
+  5s), then SIGKILL if it is still not gone, both from the idle reaper and
+  from `atenea`'s own shutdown.
+
+  `atenea status` gained a `processes` section: state, PID, port, uptime,
+  restart count and last failure reason for every server Atenea itself
+  launched, printing nothing at all for a setup that never opted in. A
+  restarting or down process turns the big light amber, the same as a
+  down provider elsewhere on the screen. Verified end to end against the
+  real `serena` binary on this machine -- no ToolHive, no manually-started
+  proxy: `atenea ask symbol.definition` spawned it, waited for it to
+  answer ready, resolved a real symbol in 1.3s, and left no child process
+  running after the command exited.
 
 ### Documentation
 
@@ -279,6 +310,10 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - `.serena/` is ignored. Serena writes a project config into whatever
   repository it is pointed at, describing one machine and belonging to nobody
   else.
+- The shipped `default.toml` documents `[orchestrator.serena.process]`
+  commented out and inactive: supervision is opt-in, and a machine that
+  already points Serena's `endpoint` at ToolHive or a hand-started proxy
+  sees no change at all.
 - **`symbol.definition` and `symbol.references` have answered for the first
   time.** Not a code change: every line of the adapter, the funnel and the
   failure bins was already there. What was missing was a Serena with a Go

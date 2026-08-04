@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -700,4 +701,158 @@ func hostOf(raw string) (string, error) {
 		return "", err
 	}
 	return parsed.Hostname(), nil
+}
+
+// ---------------------------------------------------------------------------
+// Serena as a managed process
+// ---------------------------------------------------------------------------
+
+// A file that says nothing about orchestrator.serena.process must leave
+// Serena exactly as unmanaged as it has always been: reached over Endpoint,
+// started by whatever started it.
+func TestSerenaProcessIsNilByDefault(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Serena.Process != nil {
+		t.Errorf("Process = %+v, want nil when the file never mentions it", cfg.Orchestrator.Serena.Process)
+	}
+}
+
+func TestTheSerenaProcessBlockIsRead(t *testing.T) {
+	body := minimal + `
+[orchestrator.serena.process]
+command = "serena"
+args = ["start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"]
+env = ["SERENA_LOG_LEVEL=INFO"]
+lifecycle = "on_demand"
+port = 9121
+restart_limit = 5
+restart_delay = "2s"
+stable_after = "45s"
+ready_timeout = "20s"
+idle_timeout = "10m"
+stop_grace = "15s"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := cfg.Orchestrator.Serena.Process
+	if got == nil {
+		t.Fatal("Process = nil, want the table the file declared")
+	}
+	want := config.ManagedProcess{
+		Command:      "serena",
+		Args:         []string{"start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"},
+		Env:          []string{"SERENA_LOG_LEVEL=INFO"},
+		Lifecycle:    supervisor.OnDemand,
+		Port:         9121,
+		RestartLimit: 5,
+		RestartDelay: 2 * time.Second,
+		StableAfter:  45 * time.Second,
+		ReadyTimeout: 20 * time.Second,
+		IdleTimeout:  10 * time.Minute,
+		StopGrace:    15 * time.Second,
+	}
+	if got.Command != want.Command ||
+		!slices.Equal(got.Args, want.Args) ||
+		!slices.Equal(got.Env, want.Env) ||
+		got.Lifecycle != want.Lifecycle ||
+		got.Port != want.Port ||
+		got.RestartLimit != want.RestartLimit ||
+		got.RestartDelay != want.RestartDelay ||
+		got.StableAfter != want.StableAfter ||
+		got.ReadyTimeout != want.ReadyTimeout ||
+		got.IdleTimeout != want.IdleTimeout ||
+		got.StopGrace != want.StopGrace {
+		t.Errorf("Process = %+v, want %+v", got, want)
+	}
+}
+
+// The recovery knobs are the supervisor package's to default, not config's:
+// a Spec built from a Process that never mentioned them must arrive at
+// supervisor.Spec.withDefaults still zero, so there is exactly one place
+// those numbers are decided rather than two that could drift apart.
+func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
+	body := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := cfg.Orchestrator.Serena.Process
+	if got == nil {
+		t.Fatal("Process = nil, want the table the file declared")
+	}
+	if got.Port != 0 || got.RestartLimit != 0 || got.RestartDelay != 0 ||
+		got.StableAfter != 0 || got.ReadyTimeout != 0 || got.IdleTimeout != 0 || got.StopGrace != 0 {
+		t.Errorf("Process = %+v, want every unset knob left at zero for the supervisor to default", got)
+	}
+}
+
+// A process table present without a command is an operator who opted in and
+// then left out the one thing that makes the opt-in mean anything -- not the
+// same as never having written the table at all.
+func TestSerenaProcessRequiresACommand(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator.serena.process]\nlifecycle = \"on_demand\"\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("KindOf = %v, want invalid_input", got)
+	}
+	if !strings.Contains(err.Error(), "process.command") {
+		t.Errorf("error %q does not name the missing field", err.Error())
+	}
+}
+
+// Persistent and on_demand are two genuinely different behaviors -- always
+// warm, or stopped when idle -- and there is no default to guess between
+// them: a Process with Command set and Lifecycle empty or unrecognized must
+// be refused rather than silently picking one.
+func TestSerenaProcessLifecycleMustBeValid(t *testing.T) {
+	for _, body := range []string{
+		"\n[orchestrator.serena.process]\ncommand = \"serena\"\n",
+		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"\"\n",
+		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"always\"\n",
+		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"Persistent\"\n",
+	} {
+		_, err := config.Load(write(t, minimal+body))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("%q gave %v, want invalid_input", strings.TrimSpace(body), got)
+		}
+	}
+}
+
+func TestSerenaProcessNumbersAreValidated(t *testing.T) {
+	const header = "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\n"
+	for _, body := range []string{
+		header + "port = -1\n",
+		header + "port = 70000\n",
+		header + "restart_limit = -1\n",
+		header + "restart_delay = \"soon\"\n",
+		header + "restart_delay = \"0s\"\n",
+		header + "restart_delay = \"-1s\"\n",
+		header + "stable_after = \"0s\"\n",
+		header + "ready_timeout = \"0s\"\n",
+		header + "idle_timeout = \"0s\"\n",
+		header + "stop_grace = \"0s\"\n",
+	} {
+		_, err := config.Load(write(t, minimal+body))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("%q gave %v, want invalid_input", strings.TrimSpace(body), got)
+		}
+	}
+}
+
+// A zero port is not an omission here -- it is the explicit "ask the OS for
+// a free one" that most of these should use -- so it must be accepted even
+// though every other number in this block treats zero as unset.
+func TestSerenaProcessPortZeroIsAccepted(t *testing.T) {
+	body := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\nport = 0\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Serena.Process.Port != 0 {
+		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Serena.Process.Port)
+	}
 }

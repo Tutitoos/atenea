@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -61,6 +62,10 @@ type Status struct {
 	// thirty seconds for an hour looks exactly like a flush succeeding every
 	// thirty seconds for an hour to anyone not reading the notebook.
 	Maintenance []MaintenanceStatus
+	// Processes is every MCP server Atenea itself launched and is watching,
+	// as this process's own Supervisor sees it right now. Empty when the
+	// settings file manages nothing, which is not a degraded state.
+	Processes []ProcessStatus
 	// Backups is what protects the history, and whether it is actually
 	// happening. A copy nobody can see the state of is a copy nobody trusts.
 	Backups BackupStatus
@@ -81,6 +86,34 @@ type MaintenanceStatus struct {
 	// text, not a boolean: "database is locked" and "no space left on device"
 	// send whoever is reading to two different places.
 	Failure string
+}
+
+// ProcessStatus is one MCP server Atenea itself launched and is watching,
+// for the status screen.
+//
+// This is what the Supervisor this process built knows right now, not a
+// fact backed by disk the way Maintenance and Backups are: there is no PID
+// file, on purpose (see internal/supervisor). A short-lived command like
+// `atenea status` reports its own view honestly -- on_demand shows stopped
+// until something in the same process asks for it, and persistent shows
+// stopped until Run has warmed it up. That view is exactly right for a
+// long-running `atenea run`; for a one-shot command it says what it saw,
+// which is nothing yet, and says so rather than guessing at a service it
+// cannot see.
+type ProcessStatus struct {
+	ID    string
+	Light Light
+	// State is the supervisor's own word for where the process is:
+	// stopped, starting, ready, restarting or down.
+	State    string
+	Endpoint string
+	PID      int
+	Port     int
+	Started  time.Time
+	Restarts int
+	// LastReason is what the most recent failed attempt said, empty when
+	// the server has never failed to start or stay up.
+	LastReason string
 }
 
 // BackupStatus is the history's insurance in one line.
@@ -404,6 +437,11 @@ func (c *Core) Status() Status {
 			status.Light = worst(status.Light, LightAmber)
 		}
 	}
+
+	status.Processes = c.processStatus()
+	for _, p := range status.Processes {
+		status.Light = worst(status.Light, p.Light)
+	}
 	status.Backups = c.backups()
 	status.Backups.Stale = status.Backups.stale()
 	if status.Backups.Stale {
@@ -470,6 +508,32 @@ func (c *Core) backups() BackupStatus {
 	out.Count = len(taken)
 	if len(taken) > 0 {
 		out.Latest = taken[0].At
+	}
+	return out
+}
+
+// processStatus reports every MCP server Atenea itself launched, live. A
+// core with nothing managed reports none, the same way maintenance and
+// backups report their own kind of nothing when the settings turned them
+// off.
+func (c *Core) processStatus() []ProcessStatus {
+	if c.processes == nil {
+		return nil
+	}
+	live := c.processes.Status()
+	out := make([]ProcessStatus, 0, len(live))
+	for _, p := range live {
+		out = append(out, ProcessStatus{
+			ID:         p.ID,
+			Light:      processLight(p.State),
+			State:      p.State.String(),
+			Endpoint:   p.Endpoint,
+			PID:        p.PID,
+			Port:       p.Port,
+			Started:    p.Started,
+			Restarts:   p.Restarts,
+			LastReason: p.LastReason,
+		})
 	}
 	return out
 }
@@ -582,4 +646,23 @@ func worst(a, b Light) Light {
 		return b
 	}
 	return a
+}
+
+// processLight colors one managed process.
+//
+// Stopped is green, not amber: an on_demand server with nothing asked of it
+// yet is idle by design, the same restraint BackupStatus.stale applies to a
+// fresh install with no copy yet. Starting is green for the same reason --
+// WarmUp deliberately does not wait, so the first status read after Run
+// begins would otherwise flap amber on every clean boot. Restarting and down
+// are the two states that actually say something is wrong, and they get the
+// same amber a down provider gets elsewhere on this screen: red stays for a
+// capability nothing can answer, not for one server behind it.
+func processLight(state supervisor.State) Light {
+	switch state {
+	case supervisor.StateRestarting, supervisor.StateDown:
+		return LightAmber
+	default:
+		return LightGreen
+	}
 }

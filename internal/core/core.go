@@ -30,6 +30,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/registry"
 	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -63,7 +64,12 @@ type Core struct {
 	// flush, the roll-up and whatever comes next cannot come due at the same
 	// second and fight over the same file.
 	beats *clock.Clock
-	agent *orchestrator.Agent
+	// processes is every MCP server Atenea launches and watches on its own
+	// behalf. nil when the settings file managed nothing, which is not a
+	// degraded state: every adapter still works exactly as it did before
+	// this existed, reached at whatever Endpoint it was given.
+	processes *supervisor.Supervisor
+	agent     *orchestrator.Agent
 
 	started time.Time
 
@@ -130,7 +136,7 @@ func New(cfg config.Config) (*Core, error) {
 	if err := checkRules(catalog, chooser.Rules()); err != nil {
 		return nil, err
 	}
-	runners, err := buildRunners(cfg)
+	runners, procs, err := buildRunners(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -215,6 +221,7 @@ func New(cfg config.Config) (*Core, error) {
 		copies:       copies,
 		recovered:    found,
 		beats:        beats,
+		processes:    procs,
 		agent:        agent,
 		sessions:     make(map[string]*Session),
 		started:      time.Now(),
@@ -280,22 +287,26 @@ func (m *maintenance) checkDrops() {
 // than one can be live at a time because omp and Claude Code are both
 // first-class clients, and the funnel picks an implementation without caring
 // who ends up running it.
-func buildRunners(cfg config.Config) ([]contract.Runner, error) {
+func buildRunners(cfg config.Config) ([]contract.Runner, *supervisor.Supervisor, error) {
+	procs, err := buildSupervisor(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
 	out := make([]contract.Runner, 0, len(cfg.Orchestrator.Runners))
 	for _, name := range cfg.Orchestrator.Runners {
-		runner, err := buildRunner(name, cfg)
+		runner, err := buildRunner(name, cfg, procs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, runner)
 	}
 	if err := checkReach(cfg.Source, out); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, procs, nil
 }
 
-func buildRunner(name string, cfg config.Config) (contract.Runner, error) {
+func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
 	switch name {
 	case config.RunnerOMP:
 		return omp.New(omp.Options{
@@ -313,12 +324,7 @@ func buildRunner(name string, cfg config.Config) (contract.Runner, error) {
 			Timeout:         cfg.Orchestrator.ClaudeCode.Timeout,
 		})
 	case config.RunnerSerena:
-		return serena.New(serena.Options{
-			Endpoint:        cfg.Orchestrator.Serena.Endpoint,
-			Implementations: cfg.Orchestrator.Serena.Implementations,
-			Sensitive:       cfg.Security.Sensitive,
-			Timeout:         cfg.Orchestrator.Serena.Timeout,
-		})
+		return buildSerenaRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -329,6 +335,35 @@ func buildRunner(name string, cfg config.Config) (contract.Runner, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: unknown runner %q", cfg.Source, name)
 	}
+}
+
+// buildSerenaRunner builds the Serena adapter. Unmanaged, it is reached at
+// whatever Endpoint the settings file declared, unchanged from before
+// Process existed. Managed, the real far side is whatever port the
+// supervisor actually chose -- never the settings file's Endpoint, which a
+// managed process does not need and might not even agree with -- and every
+// call is guarded so the process is running before the adapter ever sees it.
+func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	endpoint := cfg.Orchestrator.Serena.Endpoint
+	if cfg.Orchestrator.Serena.Process != nil {
+		var err error
+		if endpoint, err = procs.Endpoint(config.RunnerSerena); err != nil {
+			return nil, err
+		}
+	}
+	runner, err := serena.New(serena.Options{
+		Endpoint:        endpoint,
+		Implementations: cfg.Orchestrator.Serena.Implementations,
+		Sensitive:       cfg.Security.Sensitive,
+		Timeout:         cfg.Orchestrator.Serena.Timeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Orchestrator.Serena.Process == nil {
+		return runner, nil
+	}
+	return guardedRunner{Runner: runner, procs: procs, id: config.RunnerSerena}, nil
 }
 
 // checkReach refuses two live adapters that both claim the same
@@ -567,6 +602,17 @@ func (c *Core) Run(ctx context.Context) error {
 	// command lives for a second and settles its batch on the way out; a
 	// service lives for days and needs the beat.
 	c.beats.Start(ctx)
+	if c.processes != nil {
+		// WarmUp only touches Persistent servers and does not wait for any
+		// of them, so a slow one never holds up the rest of Run starting.
+		// Start begins the idle reaper for OnDemand servers. Neither call
+		// cares which kind, if either, the settings file actually declared
+		// -- both methods already treat "nothing of that kind is registered"
+		// as nothing to do; the guard here is only for a Supervisor that
+		// does not exist at all, which nil means when nothing was managed.
+		c.processes.WarmUp(ctx)
+		c.processes.Start(ctx)
+	}
 	<-ctx.Done()
 	return c.Shutdown()
 }
@@ -596,12 +642,14 @@ func (c *Core) Shutdown() error {
 		c.mu.Lock()
 		clear(c.sessions)
 		c.mu.Unlock()
+		c.stopProcesses()
 		return c.settle()
 	case <-time.After(c.settings.Core.ShutdownGrace):
 		// The table is left alone on purpose: work is still running, so the
 		// chats behind it are still real and saying otherwise would hide it.
 		// The batch is still written: measurements of work that did finish are
 		// not the thing to throw away because something else overran.
+		c.stopProcesses()
 		_ = c.settle()
 		return contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)

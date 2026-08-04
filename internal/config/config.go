@@ -26,6 +26,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -172,6 +173,42 @@ type ClaudeCodeAdapter struct {
 	Timeout time.Duration
 }
 
+// ManagedProcess declares that Atenea should launch this server itself and
+// keep it alive, rather than assuming something else already started it at a
+// fixed Endpoint. Present only when the settings file opts in; nil leaves the
+// previous behavior untouched -- an externally managed server, taken on faith
+// at whatever Endpoint says.
+//
+// The shape mirrors supervisor.Spec closely on purpose: this is that Spec as
+// far as the settings file is allowed to state it, before the core fills in
+// the ID and the pieces only it knows.
+type ManagedProcess struct {
+	// Command and Args launch the server. A bare Command is looked up on
+	// PATH. An element of Args equal to "{{port}}" is replaced with the
+	// chosen port before every spawn.
+	Command string
+	Args    []string
+	// Env adds "KEY=VALUE" entries to the inherited environment, rather than
+	// replacing it.
+	Env []string
+	// Lifecycle decides who may stop the server once it is up: see
+	// supervisor.Persistent and supervisor.OnDemand.
+	Lifecycle supervisor.Lifecycle
+	// Port fixes the port the server listens on. Zero asks the OS for a free
+	// one, the safer default for anything that does not need a stable
+	// address on this machine.
+	Port int
+	// RestartLimit, RestartDelay, StableAfter, ReadyTimeout, IdleTimeout and
+	// StopGrace tune the crash-recovery behavior. Zero takes the supervisor
+	// package's own default for each.
+	RestartLimit int
+	RestartDelay time.Duration
+	StableAfter  time.Duration
+	ReadyTimeout time.Duration
+	IdleTimeout  time.Duration
+	StopGrace    time.Duration
+}
+
 // SerenaAdapter configures the Serena adapter.
 //
 // Serena is the first far side that is not a CLI: it is an MCP server behind a
@@ -179,13 +216,19 @@ type ClaudeCodeAdapter struct {
 // does not care whether its provider is a command or a server, which is the
 // point of having the seam at all.
 type SerenaAdapter struct {
-	// Endpoint is where the MCP server is listening.
+	// Endpoint is where the MCP server is listening. Ignored once Process is
+	// set: a managed server's real endpoint is whatever port the supervisor
+	// actually chose, never this one.
 	Endpoint string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one call. A language server indexing a cold repository is
 	// slow long before it is stuck.
 	Timeout time.Duration
+	// Process is set when Atenea should launch and supervise Serena itself.
+	// nil means Serena is assumed already running at Endpoint, unchanged
+	// from before this existed.
+	Process *ManagedProcess
 }
 
 // Security is the one place delicate files are declared.
@@ -331,9 +374,29 @@ type fileClaudeCodeAdapter struct {
 }
 
 type fileSerenaAdapter struct {
-	Endpoint        string    `toml:"endpoint"`
-	Implementations *[]string `toml:"implementations"`
-	Timeout         string    `toml:"timeout"`
+	Endpoint        string              `toml:"endpoint"`
+	Implementations *[]string           `toml:"implementations"`
+	Timeout         string              `toml:"timeout"`
+	Process         *fileManagedProcess `toml:"process"`
+}
+
+// fileManagedProcess uses a pointer on the field above so an omitted
+// [orchestrator.serena.process] table and a present-but-empty one are
+// different: the first leaves Process nil (unmanaged, unchanged behavior),
+// the second is a user who opted in without a command, which is an error
+// worth naming rather than silently doing nothing.
+type fileManagedProcess struct {
+	Command      string   `toml:"command"`
+	Args         []string `toml:"args"`
+	Env          []string `toml:"env"`
+	Lifecycle    string   `toml:"lifecycle"`
+	Port         *int     `toml:"port"`
+	RestartLimit *int     `toml:"restart_limit"`
+	RestartDelay string   `toml:"restart_delay"`
+	StableAfter  string   `toml:"stable_after"`
+	ReadyTimeout string   `toml:"ready_timeout"`
+	IdleTimeout  string   `toml:"idle_timeout"`
+	StopGrace    string   `toml:"stop_grace"`
 }
 
 // fileSecurity uses a pointer so an omitted list and an explicitly empty one
@@ -829,6 +892,73 @@ func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapte
 				"settings %s: orchestrator.serena.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
+	}
+	if s.Process != nil {
+		process, err := s.Process.build(source)
+		if err != nil {
+			return SerenaAdapter{}, err
+		}
+		out.Process = &process
+	}
+	return out, nil
+}
+
+func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
+	if strings.TrimSpace(p.Command) == "" {
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.command is required once the process table is present", source)
+	}
+	out := ManagedProcess{
+		Command: strings.TrimSpace(p.Command),
+		Args:    append([]string(nil), p.Args...),
+		Env:     append([]string(nil), p.Env...),
+	}
+	switch supervisor.Lifecycle(p.Lifecycle) {
+	case supervisor.Persistent, supervisor.OnDemand:
+		out.Lifecycle = supervisor.Lifecycle(p.Lifecycle)
+	default:
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.lifecycle must be %q or %q, got %q",
+			source, supervisor.Persistent, supervisor.OnDemand, p.Lifecycle)
+	}
+	if p.Port != nil {
+		if *p.Port < 0 || *p.Port > 65535 {
+			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.process.port must be between 0 and 65535, got %d", source, *p.Port)
+		}
+		out.Port = *p.Port
+	}
+	if p.RestartLimit != nil {
+		if *p.RestartLimit < 0 {
+			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.process.restart_limit must not be negative, got %d", source, *p.RestartLimit)
+		}
+		out.RestartLimit = *p.RestartLimit
+	}
+	for _, d := range []struct {
+		key   string
+		raw   string
+		field *time.Duration
+	}{
+		{"restart_delay", p.RestartDelay, &out.RestartDelay},
+		{"stable_after", p.StableAfter, &out.StableAfter},
+		{"ready_timeout", p.ReadyTimeout, &out.ReadyTimeout},
+		{"idle_timeout", p.IdleTimeout, &out.IdleTimeout},
+		{"stop_grace", p.StopGrace, &out.StopGrace},
+	} {
+		if d.raw == "" {
+			continue
+		}
+		dur, err := time.ParseDuration(d.raw)
+		if err != nil {
+			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.process.%s %q: %v", source, d.key, d.raw, err)
+		}
+		if dur <= 0 {
+			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.serena.process.%s must be above 0, got %s", source, d.key, dur)
+		}
+		*d.field = dur
 	}
 	return out, nil
 }

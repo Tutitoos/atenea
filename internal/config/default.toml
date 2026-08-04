@@ -128,6 +128,33 @@ runners = ["omp"]
   # ceiling and well below a model turn's.
   timeout = "90s"
 
+  # [orchestrator.serena.process]
+  # Uncomment to have Atenea launch and supervise Serena itself as a bare
+  # process instead of assuming it is already running at endpoint above --
+  # no ToolHive, no container, no proxy started by hand. Atenea starts it,
+  # watches it over the same MCP wire it serves on, and restarts it a
+  # bounded number of times if it crashes, exactly like the break-in
+  # rotation this design already applies to providers.
+  #
+  # command = "serena"
+  # args = ["start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"]
+  # {{port}} is replaced with the chosen port before every spawn.
+  #
+  # "persistent" warms it up with Atenea and keeps it running throughout;
+  # "on_demand" starts it on first use and stops it once nothing has asked
+  # for it in a while. There is no default -- pick the one that matches how
+  # steadily this machine actually uses Serena.
+  # lifecycle = "on_demand"
+  #
+  # Port 0 (the default, and generally the right choice) asks the OS for a
+  # free one; a fixed number is only worth pinning if something else on this
+  # machine needs to find Serena at a stable address.
+  # port = 0
+  #
+  # The rest tune crash recovery and all take the supervisor package's own
+  # defaults when left out: restart_limit, restart_delay, stable_after,
+  # ready_timeout, idle_timeout, stop_grace.
+
   [orchestrator.local]
   # Implementations the stand-in answers for.
   implementations = ["ripgrep"]
