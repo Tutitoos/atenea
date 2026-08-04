@@ -44,6 +44,33 @@ funnel and the failure bins did their job; nobody has looked yet at whether
 this is fixable on Serena's side, worth a fallback, or a permanent gap in the
 catalogue's honesty about what `serena.implementations` can promise.
 
+A fourth adapter answers now too: `codebase-memory`, walking the call graph
+`codebase-memory-mcp` keeps on disk instead of parsing anything live.
+`symbol.calls` and `code.impact` both work end to end, against this
+repository:
+
+```text
+$ atenea ask symbol.calls --repo current --set direction=both \
+    --set file=cmd/atenea/main.go --set line=815 --set column=6
+verdict   ok
+answer
+  calls (47)
+    ...
+
+$ atenea ask code.impact --repo current --set baseline=HEAD
+verdict   ok
+answer
+  affected_symbols (11)
+    ...
+  changed_files [...]
+```
+
+Both implementations declare `requires_index = true` and a `min_scale =
+"medium"` floor: unlike Serena, this provider only ever answers from an
+index built ahead of time, so a repository nothing has indexed, or one too
+small to have declared the scale, is refused rather than sent to a provider
+with nothing on disk to answer from.
+
 `code.search` still works, over three providers. `codebase-memory.search` is
 still declared in the catalogue with **no adapter behind it at all** — it shows
 up on every status screen under `no runner` and always will. It is either a

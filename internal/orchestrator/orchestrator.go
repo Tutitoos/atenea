@@ -103,15 +103,18 @@ const (
 // how the orchestrator explores a repository and how it splits the work.
 const searchCapability = "code.search"
 
-// The symbol capabilities. The orchestrator does not plan a commission around
-// them -- it plans around a text search, which is brick 4's shape and stays --
-// but it declares them because declaring is what makes a step askable at all.
-// A capability the card does not name cannot be dispatched even when the
-// catalog, the funnel and a runner are all ready for it.
+// The symbol capabilities, plus the two that read the call graph itself. The
+// orchestrator does not plan a commission around any of them -- it plans
+// around a text search, which is brick 4's shape and stays -- but it declares
+// them because declaring is what makes a step askable at all. A capability
+// the card does not name cannot be dispatched even when the catalog, the
+// funnel and a runner are all ready for it.
 const (
 	definitionCapability      = "symbol.definition"
 	referencesCapability      = "symbol.references"
 	implementationsCapability = "symbol.implementations"
+	callsCapability           = "symbol.calls"
+	impactCapability          = "code.impact"
 )
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
@@ -171,6 +174,8 @@ var card = contract.Agent{
 		definitionCapability,
 		referencesCapability,
 		implementationsCapability,
+		callsCapability,
+		impactCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,

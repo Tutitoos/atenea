@@ -155,6 +155,22 @@ runners = ["omp"]
   # defaults when left out: restart_limit, restart_delay, stable_after,
   # ready_timeout, idle_timeout, stop_grace.
 
+  [orchestrator.codebasememory]
+  # The codebase-memory-mcp executable. A bare name is looked up on PATH.
+  binary = "codebase-memory-mcp"
+  # Implementations the adapter answers for. codebase-memory.search below is
+  # deliberately NOT here: that catalog entry stays an unimplemented
+  # possibility, on purpose, until something actually claims code.search from
+  # this graph. This adapter is wired for the two capabilities that read the
+  # call graph itself -- symbol.calls and code.impact -- and claiming a text
+  # search it has no code path for would make the funnel promise an answer
+  # nobody can give.
+  implementations = ["codebase-memory.calls", "codebase-memory.impact"]
+  # How long one codebase-memory-mcp or git invocation may take. It sits at
+  # Serena's own ceiling: both open an index before they can answer, and a
+  # cold one is slow long before it is stuck.
+  timeout = "90s"
+
   [orchestrator.local]
   # Implementations the stand-in answers for.
   implementations = ["ripgrep"]
@@ -902,6 +918,44 @@ capability = "symbol.implementations"
   [implementation.cost]
   estimated_duration = "1.5s"
   estimated_tokens = 1200
+
+# codebase-memory answers both of these from the same call graph
+# codebase-memory.search above would open, if anything ever claimed it -- no
+# second index, no second provider concept, just two more questions the one
+# graph can answer.
+
+[[implementation]]
+id = "codebase-memory.calls"
+provider = "codebase-memory"
+capability = "symbol.calls"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+  min_scale = "medium"    # the graph only pays for itself on a big repository
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "900ms"
+  estimated_tokens = 600
+
+[[implementation]]
+id = "codebase-memory.impact"
+provider = "codebase-memory"
+capability = "code.impact"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+  min_scale = "medium"
+  max_scale = ""
+
+  [implementation.cost]
+  # Dearer than a single call-graph walk: one git diff plus one graph walk
+  # per directly changed symbol, so cost scales with how much a commission
+  # actually touched instead of staying flat like the others.
+  estimated_duration = "2.5s"
+  estimated_tokens = 1500
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

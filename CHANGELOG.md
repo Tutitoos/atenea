@@ -316,6 +316,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   answer ready, resolved a real symbol in 1.3s, and left no child process
   running after the command exited.
 
+- **`symbol.calls` and `code.impact` answer for the first time, through a
+  fourth adapter: `codebase-memory`.** Both walk the call graph
+  `codebase-memory-mcp` keeps on disk rather than parsing anything live,
+  which is also why both implementations declare `requires_index = true`
+  and a `min_scale = "medium"` floor — unlike Serena, which reads a file the
+  moment it is asked, this provider only ever answers from an index built
+  ahead of time, and a repository nothing has indexed, or one too small to
+  have declared the scale, is refused rather than handed to a provider with
+  nothing to answer from. `code.impact`'s half of the work is a real `git
+  diff --unified=0` against the caller's baseline, parsed into per-file
+  hunks and walked forward into the symbols the current tree's own lines
+  now sit inside — never the baseline's, which would name a symbol the
+  change may have already deleted. Verified against this repository: two
+  hops out from `cmdResume` in both directions returned 47 real calls in
+  27ms; the blast radius of the working tree against `HEAD` returned 11
+  affected symbols across the 5 files actually different from it, in 92ms.
+  Getting `atenea ask` to reach either one surfaced a real gap predating
+  this adapter: the orchestrator's own agent card — the one authority check
+  every `ask` passes through — had never declared either capability, so
+  both were refused `invalid_input: agent orchestrator may not ask for
+  symbol.calls` before a single implementation was ever consulted. The card
+  now names both.
+
 ### Documentation
 
 - The settings file **replaces** the built-in defaults rather than patching

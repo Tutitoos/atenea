@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
+	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/backup"
@@ -322,6 +323,13 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			Implementations: cfg.Orchestrator.ClaudeCode.Implementations,
 			Sensitive:       cfg.Security.Sensitive,
 			Timeout:         cfg.Orchestrator.ClaudeCode.Timeout,
+		})
+	case config.RunnerCodebaseMemory:
+		return codebasememory.New(codebasememory.Options{
+			Binary:          cfg.Orchestrator.CodebaseMemory.Binary,
+			Implementations: cfg.Orchestrator.CodebaseMemory.Implementations,
+			Sensitive:       cfg.Security.Sensitive,
+			Timeout:         cfg.Orchestrator.CodebaseMemory.Timeout,
 		})
 	case config.RunnerSerena:
 		return buildSerenaRunner(cfg, procs)

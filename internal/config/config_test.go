@@ -68,6 +68,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	slices.Sort(shipped)
 	want := []string{
 		"claude.search",
+		"codebase-memory.calls",
+		"codebase-memory.impact",
 		"codebase-memory.search",
 		"ripgrep",
 		"serena.definition",
