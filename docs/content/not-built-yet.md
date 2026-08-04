@@ -172,7 +172,23 @@ The design parked the third adapter deliberately: *"cuando el sistema esté roda
 No entra en el orden principal, pero queda como paso propio del plan para no
 olvidarlo."* This entry is the not-forgetting. Codex remains out.
 
-**Done when:** the same capability answers through omp, Claude Code and OpenCode.
+It is not redundant the way the specialist was — `omp` and `claudecode`
+already cover the two real approaches to `code.search`, literal text and a
+model turn, but neither can be pointed at a free or local model. `omp` is a
+fixed process Atenea cannot steer from the outside; `claudecode` always
+bills Anthropic. Cost will not surface the difference on its own:
+`Cost.Sample` measures duration, tokens and peak memory, never dollars, so a
+local model would not win the funnel's ranking just for being free — on a
+normal machine it likely loses on duration and memory both. The one place it
+would earn its keep is the gap that opens once `budget_usd` runs dry
+mid-commission: paid providers refuse from there on and whoever charges
+nothing keeps working, and today that leaves `code.search` with nothing
+semantic left standing, only literal grep.
+
+**Done when:** a local model is wired as a real implementation, and a real
+commission has hit its `budget_usd` ceiling with `claude.search` still
+having work left to do — both at once, not either alone, and not "the
+system feels settled."
 
 ## What is not missing
 
