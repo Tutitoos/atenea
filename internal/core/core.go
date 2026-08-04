@@ -535,6 +535,17 @@ func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (*orchestrator.
 	return c.agent.Ask(ctx, q)
 }
 
+// Resume picks an interrupted or failed commission back up on the
+// operator's own behalf, with the same in-flight bookkeeping Do and Ask
+// get: a clean stop waits for it too.
+func (c *Core) Resume(ctx context.Context, runID string, opts orchestrator.ResumeOptions) (*orchestrator.Result, error) {
+	if err := c.enter(); err != nil {
+		return nil, err
+	}
+	defer c.inflight.Done()
+	return c.agent.Resume(ctx, runID, opts)
+}
+
 // enter registers a unit of in-flight work, refusing it once a stop is under
 // way. Taking the count under the same lock that flips the flag is what makes
 // the clean stop actually clean: no work can slip in behind it.

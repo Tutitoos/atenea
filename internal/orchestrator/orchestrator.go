@@ -344,12 +344,15 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	// The grant is opened once, here, and spent down by every wave. It is the
 	// commission that holds it -- not the step, not the adapter -- which is
 	// what makes four steps cost one ceiling instead of four.
-	purse := newGrant(cmp.Or(task.BudgetUSD, a.budget))
+	budgetUSD := cmp.Or(task.BudgetUSD, a.budget)
+	purse := newGrant(budgetUSD)
 
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
 	record := checkpoint.Run{
-		ID: result.RunID, Session: task.Session, Task: task.Text, Started: started,
+		ID: result.RunID, Kind: checkpoint.KindTask, Session: task.Session, Task: task.Text,
+		Started: started, Repositories: task.Repositories, Effects: task.Effects,
+		BudgetUSD: budgetUSD, ContractVersion: contract.Current.String(),
 	}
 
 	// The run closing is the second of the two moments the paper copy is
@@ -390,8 +393,9 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		return result, err
 	}
 	result.Plan = plan
+	record.Plan = plan
 
-	explored, err := a.dispatch(ctx, plan, PhaseExplore, result, &record, purse)
+	explored, err := a.dispatch(ctx, plan, PhaseExplore, result, &record, purse, nil)
 	if err != nil {
 		return result, err
 	}
@@ -403,8 +407,9 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		return result, err
 	}
 	result.Plan = plan
+	record.Plan = plan
 
-	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse)
+	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse, nil)
 	return result, err
 }
 
@@ -473,10 +478,13 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	// user sentence here. Saying what was actually asked beats leaving it
 	// blank or inventing prose nobody typed.
 	text := capabilityID + " in " + repositories[0].ID
+	budgetUSD := cmp.Or(q.BudgetUSD, a.budget)
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: text}
 	record := checkpoint.Run{
-		ID: result.RunID, Session: q.Session, Task: text, Started: started,
+		ID: result.RunID, Kind: checkpoint.KindAsk, Session: q.Session, Task: text,
+		Started: started, Repositories: []string{repositories[0].ID}, Effects: q.Effects,
+		BudgetUSD: budgetUSD, ContractVersion: contract.Current.String(),
 	}
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
@@ -506,10 +514,196 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		return result, err
 	}
 	result.Plan = plan
+	record.Plan = plan
 
-	_, err = a.dispatch(ctx, plan, PhaseAsk, result, &record,
-		newGrant(cmp.Or(q.BudgetUSD, a.budget)))
+	_, err = a.dispatch(ctx, plan, PhaseAsk, result, &record, newGrant(budgetUSD), nil)
 	return result, err
+}
+
+// ResumeOptions narrows how a resumed commission continues.
+type ResumeOptions struct {
+	// BudgetUSD, when set, replaces what remains of the original grant
+	// instead of adding to it -- the same rule --budget already follows on a
+	// fresh commission.
+	BudgetUSD float64
+}
+
+// Resume picks an interrupted or failed commission back up.
+//
+// A step that already passed review is left alone: it is never
+// redispatched, re-measured or re-charged, because it already was when it
+// first closed. Everything else -- failed, canceled, or never reached at
+// all -- is retried exactly as if it were being asked for the first time.
+//
+// The one thing Resume cannot recover is the shape a splitting decision was
+// based on. If the process went away before exploring finished, what it
+// found only ever lived in that process's memory, and there is nothing
+// honest to split on without it. Resume redoes exploring whole in that case
+// rather than guess: exploring is one wave, one step per repository, and
+// usually free, so redoing it is cheap where guessing would be wrong. Once
+// splitting already ran, the plan on the receipt already carries every
+// step's payload, and none of it is recomputed here.
+func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (result *Result, err error) {
+	if opts.BudgetUSD < 0 || math.IsNaN(opts.BudgetUSD) {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"resume: budget must not be negative, got %v", opts.BudgetUSD)
+	}
+	if a.runner == nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"no runner is attached, so nothing can be dispatched")
+	}
+	if !a.checkpoints.Enabled() {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"checkpointing is off, so there is nothing on file to resume")
+	}
+
+	// Locked before anything else is even read: two attempts racing the same
+	// receipt would each see the same steps missing and each redispatch
+	// them, and neither side could tell from its own view that this had
+	// happened.
+	release, err := a.checkpoints.Lock(runID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	record, err := a.checkpoints.Load(runID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.checkResumable(record); err != nil {
+		return nil, err
+	}
+
+	budgetUSD := record.BudgetUSD - chargedSoFar(record.Steps)
+	if opts.BudgetUSD > 0 {
+		budgetUSD = opts.BudgetUSD
+	}
+	purse := newGrant(budgetUSD)
+
+	result = &Result{RunID: record.ID, Task: record.Task, Plan: record.Plan}
+	// The receipt may already read closed -- a clean failure closes it
+	// exactly like success does, and a crash may not have gotten that far.
+	// Either way this attempt reopens it: if it is interrupted too, the
+	// receipt has to say so rather than keep repeating the previous
+	// attempt's word.
+	record.Closed = false
+	defer func() {
+		result.Spent = totalSpent(result.Steps)
+		result.SpentUSD = totalUSD(result.Steps)
+		result.Verdict = resumeVerdict(result.Steps, ctx.Err())
+		result.Matches = countMatches(result.Steps)
+		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
+		record.Closed = true
+		record.Verdict = result.Verdict.String()
+		record.Updated = time.Now()
+		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
+			err = saveErr
+		}
+	}()
+
+	// A single ask has one step and no split to redo: dispatch it exactly as
+	// it was dispatched the first time, and let alreadyOK decide whether
+	// there is anything left to do at all.
+	if record.Kind == checkpoint.KindAsk {
+		_, err = a.dispatch(ctx, record.Plan, PhaseAsk, result, &record, purse, record.OK())
+		return result, err
+	}
+
+	// Splitting never ran: redo the look whole rather than trust a shape
+	// nothing left on file can justify.
+	if !hasWork(record.Plan) {
+		repositories, repoErr := a.resolveRepositories(record.Repositories)
+		if repoErr != nil {
+			return result, repoErr
+		}
+		permission := contract.Permission{Task: record.Task, Effects: record.Effects}
+
+		explorePlan := contract.Plan{Task: record.Task}
+		for _, repo := range repositories {
+			payload := map[string]any{"query": record.Task}
+			a.hint(payload, "context_lines", probeContextLines)
+			explorePlan.Steps = append(explorePlan.Steps, contract.Step{
+				ID:         "explore-" + repo.ID,
+				Capability: searchCapability,
+				Repository: repo.ID,
+				Payload:    payload,
+				Permission: permission,
+			})
+		}
+		if err := explorePlan.Validate(); err != nil {
+			return result, err
+		}
+		result.Plan = explorePlan
+		record.Plan = explorePlan
+
+		explored, exploreErr := a.dispatch(ctx, explorePlan, PhaseExplore, result, &record, purse, nil)
+		if exploreErr != nil {
+			return result, exploreErr
+		}
+		result.Discoveries = discoveriesFrom(explored)
+
+		plan, appendErr := explorePlan.Append(a.split(permission, repositories, explored)...)
+		if appendErr != nil {
+			return result, appendErr
+		}
+		result.Plan = plan
+		record.Plan = plan
+
+		_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, purse, nil)
+		return result, err
+	}
+
+	// Splitting already ran, so the plan on file already carries every
+	// step's payload. The look is dispatched first and on its own, the same
+	// way it would be inside Run, so a step still waiting on it sees it
+	// finished rather than dangling once the second call reads the graph.
+	alreadyOK := record.OK()
+	explorePlan := contract.Plan{Task: record.Plan.Task}
+	for _, step := range record.Plan.Steps {
+		if len(step.Needs) == 0 {
+			explorePlan.Steps = append(explorePlan.Steps, step)
+		}
+	}
+	if err := explorePlan.Validate(); err != nil {
+		return result, err
+	}
+	explored, exploreErr := a.dispatch(ctx, explorePlan, PhaseExplore, result, &record, purse, onlyIn(explorePlan, alreadyOK))
+	if exploreErr != nil {
+		return result, exploreErr
+	}
+	result.Discoveries = discoveriesFrom(explored)
+
+	_, err = a.dispatch(ctx, record.Plan, PhaseWork, result, &record, purse, alreadyOK)
+	return result, err
+}
+
+// checkResumable gates a receipt before anything is touched: a contract
+// version this core no longer understands, or a repository or capability the
+// catalog no longer has, is refused whole, rather than discovered halfway
+// through dispatching with some steps already redone and others not.
+func (a *Agent) checkResumable(record checkpoint.Run) error {
+	if record.ContractVersion == "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"run %s predates resume support and cannot be resumed", record.ID)
+	}
+	peer, err := contract.ParseVersion(record.ContractVersion)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "run %s: %v", record.ID, err)
+	}
+	if !contract.Current.Supports(peer) {
+		return contract.Fail(contract.FailureInvalidInput,
+			"run %s: contract %s is not supported by this core (%s)", record.ID, peer, contract.Current)
+	}
+	for _, step := range record.Plan.Steps {
+		if _, err := a.catalog.Capability(step.Capability); err != nil {
+			return err
+		}
+		if _, err := a.catalog.Repository(step.Repository); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) resolveRepositories(wanted []string) ([]contract.Repository, error) {
@@ -589,9 +783,12 @@ func (a *Agent) hint(payload map[string]any, field string, value any) {
 //
 // The steps already closed are handed to the plan as finished, so a work step
 // waiting on a look that happened in the previous phase is ready rather than
-// dangling.
-func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, result *Result, record *checkpoint.Run, purse *grant) ([]StepResult, error) {
-	finished := make([]string, 0, len(result.Steps))
+// dangling. alreadyOK adds to that the same way for steps closed in an
+// earlier process: a resumed run has no Decision or Outcome to show for
+// them, only the id and the fact that it passed review once, so they are
+// kept out of result.Steps rather than represented there with blanks.
+func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, result *Result, record *checkpoint.Run, purse *grant, alreadyOK []string) ([]StepResult, error) {
+	finished := make([]string, 0, len(result.Steps)+len(alreadyOK))
 	failed := make(map[string]struct{})
 	for _, step := range result.Steps {
 		finished = append(finished, step.Step.ID)
@@ -599,6 +796,7 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			failed[step.Step.ID] = struct{}{}
 		}
 	}
+	finished = append(finished, alreadyOK...)
 	waves, err := plan.LayersAfter(finished)
 	if err != nil {
 		return nil, err
@@ -921,6 +1119,47 @@ func topLevelAreas(result map[string]any) []string {
 	return areas
 }
 
+// hasWork reports whether plan already carries the split-up commission, not
+// only the look that came before it.
+func hasWork(plan contract.Plan) bool {
+	for _, step := range plan.Steps {
+		if len(step.Needs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// chargedSoFar sums what a receipt's steps were actually charged. Every
+// entry on file, including a failed retry, represents a dispatch that really
+// happened and really spent whatever it reports -- summing them is what
+// tells a resume how much of the original grant is left to work with.
+func chargedSoFar(steps []checkpoint.StepState) float64 {
+	var usd float64
+	for _, step := range steps {
+		usd += step.SpentUSD
+	}
+	return usd
+}
+
+// onlyIn filters ids down to the ones that name a step of plan. alreadyOK
+// carries every id a receipt closed with, but a sub-plan dispatched on its
+// own only recognizes the ids that are actually its own steps -- anything
+// else is a step LayersAfter has never heard of.
+func onlyIn(plan contract.Plan, ids []string) []string {
+	known := make(map[string]struct{}, len(plan.Steps))
+	for _, step := range plan.Steps {
+		known[step.ID] = struct{}{}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := known[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // discoveriesFrom turns what the look saw into facts worth keeping, so the
 // next commission does not pay to learn the same thing twice.
 func discoveriesFrom(explored []StepResult) []contract.Discovery {
@@ -1029,6 +1268,20 @@ func overallVerdict(steps []StepResult, stopped error) contract.Verdict {
 		return contract.VerdictFailed
 	}
 	return contract.VerdictOK
+}
+
+// resumeVerdict is overallVerdict adjusted for one case only Resume can
+// reach: a call that redispatched nothing at all. For Run and Ask that is a
+// bug -- a plan with no steps should never have been dispatched -- but a
+// resumed commission reaches it legitimately whenever every step was
+// already on file with review ok and dispatch had nothing left to
+// schedule. Nothing new ran and nobody stopped it is not a bug here; it is
+// the receipt already saying done.
+func resumeVerdict(steps []StepResult, stopped error) contract.Verdict {
+	if len(steps) == 0 && stopped == nil {
+		return contract.VerdictOK
+	}
+	return overallVerdict(steps, stopped)
 }
 
 func snapshot(step StepResult) checkpoint.StepState {

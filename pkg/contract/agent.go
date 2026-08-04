@@ -199,6 +199,17 @@ func (v Verdict) String() string {
 	return "unknown"
 }
 
+// ParseVerdict reads a verdict name, the same way a receipt's Review field
+// was written by String().
+func ParseVerdict(s string) (Verdict, error) {
+	for value, name := range verdictNames {
+		if name == strings.ToLower(strings.TrimSpace(s)) {
+			return value, nil
+		}
+	}
+	return VerdictUnspecified, Fail(FailureInvalidInput, "unknown verdict %q", s)
+}
+
 // Discovery is something an agent learned on the way that outlives the task.
 //
 // It is filed under the context level it belongs to, so the same fact does not

@@ -42,6 +42,9 @@ Commands:
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
   ask CAPABILITY         Dispatch one capability against one repository
+  resume RUN_ID          Pick an interrupted or failed commission back up;
+                         --budget USD replaces what remains of the grant.
+                         resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
   run                    Run as a service until interrupted
   service install        Install atenea as a background service that starts
@@ -148,6 +151,8 @@ func run(args []string, out io.Writer) error {
 		return cmdTask(settingsPath, commandArgs, out)
 	case "ask":
 		return cmdAsk(settingsPath, commandArgs, out)
+	case "resume":
+		return cmdResume(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
 	case "service":
@@ -759,6 +764,89 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	return commissionError(ctx, result, runErr)
 }
 
+// cmdResume picks an interrupted or failed commission back up, or with
+// --list shows which receipts still have work to continue instead of
+// resuming any of them.
+//
+// --list is peeled off before the flag set sees anything, the same way
+// 'metrics clear' peels its own leading word: that path takes no run id, so
+// there is no positional argument on it for flag.Parse to trip over.
+func cmdResume(settingsPath string, args []string, out io.Writer) error {
+	listing := false
+	if len(args) > 0 && args[0] == "--list" {
+		listing, args = true, args[1:]
+	}
+	if listing {
+		if len(args) != 0 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"--list takes no run id; it lists every run still worth resuming")
+		}
+		return cmdResumeList(settingsPath, out)
+	}
+
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"resume needs a run id, e.g. atenea resume 20260803T125305-92dc90; "+
+				"atenea resume --list shows the candidates")
+	}
+	runID, args := strings.TrimSpace(args[0]), args[1:]
+
+	var trace bool
+	var budget float64
+	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Float64Var(&budget, "budget", 0,
+		"replace what remains of the grant instead of adding to it (default: what is left)")
+	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"unexpected argument %q after the run id", flags.Arg(0))
+	}
+
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget})
+	if result != nil {
+		printResult(out, result, trace)
+	}
+	return commissionError(ctx, result, runErr)
+}
+
+// cmdResumeList shows every run still worth resuming, oldest first. It
+// dispatches nothing and costs nothing to run: Candidates only reads
+// receipts already on disk.
+func cmdResumeList(settingsPath string, out io.Writer) error {
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	if !atenea.Checkpoints().Enabled() {
+		fmt.Fprintln(out, "checkpointing is off; there is nothing on disk to resume")
+		return nil
+	}
+	candidates, err := atenea.Checkpoints().Candidates()
+	if err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		fmt.Fprintln(out, "nothing to resume")
+		return nil
+	}
+	for _, c := range candidates {
+		fmt.Fprintf(out, "%-28s %-8s %2d step(s) remaining  %s\n",
+			c.ID, orDash(c.Verdict), c.Remaining, oneLine(c.Task))
+	}
+	return nil
+}
+
 // printAnswer shows what came back. A commission reports how many matches it
 // found because that is all a caller can act on across several repositories;
 // one capability against one repository has an actual answer, and hiding it
@@ -953,7 +1041,7 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 				fmt.Fprintf(out, "      failed   %s\n", step.Failure)
 			}
 		}
-		if scope, ok := step.Step.Payload["scope"].([]string); ok && len(scope) > 0 {
+		if scope := scopeOf(step.Step.Payload); len(scope) > 0 {
 			fmt.Fprintf(out, "      scope    %s\n", strings.Join(scope, ", "))
 		}
 		for _, stage := range step.Decision.Stages {
@@ -961,6 +1049,29 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 				fmt.Fprintf(out, "      dropped  %s: %s\n", dropped.Implementation, dropped.Reason)
 			}
 		}
+	}
+}
+
+// scopeOf reads the "scope" payload field regardless of how it got there. A
+// step just dispatched in this process carries a real []string, put there by
+// hint(); a step read back off a receipt decodes the same field as []any,
+// because encoding/json never rebuilds a concrete element type for a
+// map[string]any -- every array becomes a slice of interfaces, whatever was
+// written into it. Printing a trace for a resumed run means reading either.
+func scopeOf(payload map[string]any) []string {
+	switch v := payload["scope"].(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

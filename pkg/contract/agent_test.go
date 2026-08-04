@@ -141,3 +141,18 @@ func TestVerdictNames(t *testing.T) {
 		}
 	}
 }
+
+func TestVerdictRoundTrip(t *testing.T) {
+	for _, name := range []string{"ok", "failed", "canceled"} {
+		parsed, err := contract.ParseVerdict(name)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		if parsed.String() != name {
+			t.Fatalf("round trip: %q -> %v -> %q", name, parsed, parsed.String())
+		}
+	}
+	if _, err := contract.ParseVerdict("passed"); err == nil {
+		t.Fatal("an unknown verdict has to be refused")
+	}
+}

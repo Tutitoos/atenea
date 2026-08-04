@@ -206,6 +206,22 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   made the funnel refuse a working provider on a developer's box and nowhere
   else. The fixture pins its own base.
 
+- **`atenea resume --list` no longer offers a closed `ask` as still worth
+  continuing.** `Remaining()` decided "nothing left" from whether any step
+  declared `Needs`, and a single `ask` step never does — it has no split to
+  wait on. So a receipt closed with `verdict ok` kept reporting its one step
+  as remaining, forever: `resume --list` advertised it, and resuming it did
+  nothing (`Resume`'s own `KindAsk` branch already asks the receipt itself
+  whether the step is `OK`, and correctly no-ops), so the listing and the
+  command it was advertising a candidate for disagreed about the same file.
+  Measured against a real receipt in this repository:
+  `20260804T120304-44df2e` (`code.search in docs-tmp`, closed, reviewed
+  `ok`) listed `1 step(s) remaining` before the fix and is gone from the
+  listing after it. `Remaining()` now checks `Kind` the same way `Resume`
+  already does: an `ask` is done once its one step is `OK`, full stop — no
+  `Needs`-based inference, which was never the right question for a shape
+  that has nothing to split.
+
 ### Changed
 
 - **The Claude Code timeout is 90 seconds, not five minutes.** Measured: two
@@ -219,6 +235,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`atenea resume RUN_ID`** picks an interrupted or failed commission back up
+  from its own receipt, dispatching only the steps that never closed rather
+  than redoing the whole plan. Measured on this repository: a two-step
+  commission (`explore-current` then `search-current`) killed right after the
+  first step closed came back through `resume` having redispatched only the
+  second — 1.033s of real work, the explore step untouched, `closed_at`
+  unchanged — and finished `verdict ok` with a receipt no different from one
+  that had never stopped. Resuming a run that is already fully closed
+  redispatches nothing at all: `spent 0s over 0 step(s)`, same verdict, a
+  clean no-op rather than a second billed attempt. `--budget USD` replaces
+  what remains of the original grant, in case the first attempt's ceiling was
+  the reason it stopped. A receipt written against a repository that no
+  longer exists, or against a contract version this build no longer speaks,
+  is refused rather than guessed at.
+- **`atenea resume --list`** shows every receipt still worth continuing —
+  oldest first, with how many steps are left and the verdict so far — instead
+  of a person having to open run files by hand to find out what died.
 - **`atenea metrics`** prints what the base measured, per capability,
   implementation and repository: attempts, failures, how many were priced, the
   average of the calls that worked and the worst single call. The three counts

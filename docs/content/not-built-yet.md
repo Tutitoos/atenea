@@ -53,25 +53,6 @@ permanent amber line is the one thing it should not be.
 **Done when:** the catalogue declares nothing that cannot be reached, or the
 adapter exists.
 
-## The next brick
-
-**Teach `atenea resume` to read the receipt back.** The design (backlog P1,
-*Workflows*) asks for resumable long plans: *"reanudación tras fallo sin
-repetir trabajo"*. Half of it is built and the half that is built is the hard
-half. Every run writes a receipt carrying its plan, every step's state, which
-implementation answered and what it cost. The code comments call it *"the
-paper copy a resumed run reads back"*.
-
-Nothing reads it back. `checkpoint.Store.Load` and `.List` have no caller outside
-the tests, and there is no `atenea resume`. A commission that dies three phases in
-is re-done from the beginning, paying again for every step that already succeeded.
-
-This is the cheapest real brick left: the data is already on disk, in the right
-shape, with the step states already recorded.
-
-**Done when:** a run killed mid-plan can be continued from its receipt, and the
-steps that already succeeded are not dispatched a second time.
-
 ## One agent does everything
 
 The contract has two agent families — `AgentOrchestrator` and `AgentSpecialist` —
@@ -127,6 +108,8 @@ Worth writing down, so none of it gets re-litigated: the funnel (constraints →
 reach → health → cost, with the break-in rotation and its ceiling), the hybrid
 cost with per-version baselines, the six shared failure bins, the cancellation
 path down to process groups and inherited pipes, the measurement base with its
-rollups and retention, the crash notebook, the receipts, and the service wiring.
+rollups and retention, the crash notebook, the receipts, resumable runs
+(`atenea resume`, reading a receipt back rather than paying twice for a step
+that already succeeded), and the service wiring.
 Those are laid, measured, and defended by tests that have been mutated to check
 they fail when they should.

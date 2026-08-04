@@ -12,10 +12,23 @@ import (
 )
 
 func run(id string) checkpoint.Run {
+	task := "find every TODO"
 	return checkpoint.Run{
-		ID:      id,
-		Task:    "find every TODO",
-		Started: time.Now(),
+		ID:              id,
+		Kind:            checkpoint.KindTask,
+		Task:            task,
+		Repositories:    []string{"api"},
+		Effects:         []contract.Effect{contract.EffectWrite},
+		BudgetUSD:       0.5,
+		ContractVersion: contract.Current.String(),
+		Started:         time.Now(),
+		Plan: contract.Plan{Task: task, Steps: []contract.Step{{
+			ID:         "explore-api",
+			Capability: "code.search",
+			Repository: "api",
+			Payload:    map[string]any{"query": task},
+			Permission: contract.Permission{Task: task, Effects: []contract.Effect{contract.EffectRead}},
+		}}},
 		Steps: []checkpoint.StepState{{
 			ID:             "explore-api",
 			Capability:     "code.search",
@@ -44,11 +57,34 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	if read.Task != original.Task {
 		t.Errorf("task = %q, want %q", read.Task, original.Task)
 	}
+	if read.Kind != checkpoint.KindTask {
+		t.Errorf("kind = %q, want %q", read.Kind, checkpoint.KindTask)
+	}
 	if len(read.Steps) != 1 || read.Steps[0].ID != "explore-api" {
 		t.Fatalf("steps did not survive the round trip: %v", read.Steps)
 	}
 	if read.Steps[0].Implementation != "ripgrep" {
 		t.Error("which implementation ran is exactly what a resumed run needs")
+	}
+	// The rest is what a resumed run rebuilds its exploration and its grant
+	// from, and what it dispatches straight out of without replanning.
+	if len(read.Repositories) != 1 || read.Repositories[0] != "api" {
+		t.Errorf("repositories = %v, want [api]", read.Repositories)
+	}
+	if len(read.Effects) != 1 || read.Effects[0] != contract.EffectWrite {
+		t.Errorf("effects = %v, want [write]", read.Effects)
+	}
+	if read.BudgetUSD != original.BudgetUSD {
+		t.Errorf("budget_usd = %v, want %v", read.BudgetUSD, original.BudgetUSD)
+	}
+	if read.ContractVersion != contract.Current.String() {
+		t.Errorf("contract_version = %q, want %q", read.ContractVersion, contract.Current.String())
+	}
+	if len(read.Plan.Steps) != 1 || read.Plan.Steps[0].ID != "explore-api" {
+		t.Fatalf("plan did not survive the round trip: %v", read.Plan)
+	}
+	if read.Plan.Steps[0].Permission.Effects[0] != contract.EffectRead {
+		t.Errorf("plan step permission = %v, want read", read.Plan.Steps[0].Permission)
 	}
 }
 

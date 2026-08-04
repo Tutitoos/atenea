@@ -25,17 +25,52 @@ import (
 // Run is the paper copy of one commission in flight.
 type Run struct {
 	ID string `json:"id"`
+	// Kind tells a task-shaped commission apart from a single ask: the two
+	// resume differently, one through explore-then-split and the other as
+	// one step, and there is nothing else on a receipt that says which it
+	// was. "task" and "ask" are the only values.
+	Kind string `json:"kind"`
 	// Session is the chat this run belongs to, when one owns it. History is
 	// common property across chats; knowing whose it was is what keeps it
 	// readable rather than a pile.
-	Session string      `json:"session,omitempty"`
-	Task    string      `json:"task"`
-	Started time.Time   `json:"started"`
-	Updated time.Time   `json:"updated"`
-	Closed  bool        `json:"closed"`
-	Verdict string      `json:"verdict"`
-	Steps   []StepState `json:"steps"`
+	Session string `json:"session,omitempty"`
+	Task    string `json:"task"`
+	// Repositories is the commission's own narrowing, kept so a resumed run
+	// can rebuild the exploration it lost rather than guessing at it from
+	// the catalog as it stands today. Empty means every repository, exactly
+	// as it does on the commission itself.
+	Repositories []string `json:"repositories,omitempty"`
+	// Effects the commission authorized beyond reading. Kept for the same
+	// reason as Repositories: rebuilding a step's permission on resume has
+	// to match what was actually granted, not what a fresh commission would
+	// default to.
+	Effects []contract.Effect `json:"effects,omitempty"`
+	// BudgetUSD is the grant this commission opened with, not what is left
+	// of it. What remains is this minus what the steps on file were
+	// charged, so this number plus the receipt is the whole story.
+	BudgetUSD float64 `json:"budget_usd"`
+	// ContractVersion is stamped once, when the run opens. Resuming checks
+	// it the same way a peer adapter is checked: the core continuing this
+	// receipt has to still understand the shape the one that opened it used.
+	ContractVersion string    `json:"contract_version,omitempty"`
+	Started         time.Time `json:"started"`
+	Updated         time.Time `json:"updated"`
+	Closed          bool      `json:"closed"`
+	Verdict         string    `json:"verdict"`
+	// Plan is the graph as currently known. A resumed run dispatches
+	// straight from this instead of replanning: once a step's payload is
+	// computed it is fixed here, because recomputing it would mean reading
+	// what a step this plan depends on discovered, and that answer only
+	// lives in memory for as long as the process that found it stays up.
+	Plan  contract.Plan `json:"plan"`
+	Steps []StepState   `json:"steps"`
 }
+
+// The two values Kind takes.
+const (
+	KindTask = "task"
+	KindAsk  = "ask"
+)
 
 // StepState is one node of the plan as it stood when the dump was taken.
 type StepState struct {

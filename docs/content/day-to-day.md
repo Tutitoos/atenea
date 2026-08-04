@@ -6,7 +6,7 @@ weight: 2
 # Day to day
 
 Atenea runs as a background service, installed once with `atenea service install`
-and started with the machine. Nothing here starts or stops it. These are the four
+and started with the machine. Nothing here starts or stops it. These are the five
 commands worth remembering; `atenea` on its own prints the rest.
 
 | | When |
@@ -15,6 +15,7 @@ commands worth remembering; `atenea` on its own prints the rest.
 | `atenea status` | When you want to know if anything is wrong |
 | `--trace` | When an answer looks wrong and you want to see who was picked |
 | `atenea incidents` | After a crash, or when the light is amber and you do not know why |
+| `atenea resume RUN_ID` | After a crash, to pick a commission back up without paying twice |
 
 ## `atenea task "TEXT"`
 
@@ -88,3 +89,31 @@ report lands here, and it survives a kill.
 the same story and worth a look once in a while: attempts, failures, how many
 were priced, and the worst single call per provider. The gap between attempts and
 failures is usually the diagnosis.
+
+## `atenea resume RUN_ID`
+
+For when `task` was interrupted or the process died mid-plan. `--list` shows
+what is still worth continuing — every receipt with steps left, oldest first:
+
+```text
+$ atenea resume --list
+20260804T114108-a4974e       -         1 step(s) remaining  find every TODO comment
+```
+
+Resuming reads the receipt back and dispatches only the steps that never
+closed; whatever already succeeded is not repeated:
+
+```text
+$ atenea resume 20260804T114108-a4974e
+run       20260804T114108-a4974e
+verdict   ok
+spent     1.033s over 1 step(s)
+  explore  0 step(s), 0s
+  work     1 step(s), 1.033s
+```
+
+One step, not two: the first had already closed before the crash and is read
+off the receipt rather than paid for again. Resuming a run with nothing left
+to do is a clean no-op — `spent 0s over 0 step(s)`, same verdict as before —
+not a second billed attempt. `--budget USD` replaces what remains of the
+original grant, in case the ceiling was the reason it stopped.
