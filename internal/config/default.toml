@@ -36,6 +36,16 @@ max_parallel = 4
 # refuse and whoever charges nothing keeps working.
 budget_usd = 0.25
 
+# Granted, standing, to every commission and question this core dispatches --
+# on top of the read that is always free. Shipped ON, not off: code.search's
+# only implementations today (ripgrep, and the local stand-in) are both a
+# binary, not a library, so refusing process by default would not make
+# spawning one auditable, it would make the P0 capability unusable out of
+# the box. What this buys is what budget_usd already buys for money: the
+# grant is a line in a file the operator can read, edit or remove, not a
+# yes wired silently into the binary.
+effects = ["process"]
+
 # Whether the state of a run in flight is written to disk. Memory is a
 # whiteboard; disk is paper. The dump happens when a step closes and again when
 # the run closes, and at no other moment.
@@ -269,7 +279,7 @@ INTENT, never as a technical order, so the capability is not married to any one 
 engine. Snippets carry two lines of context above and below unless the caller \
 asks for more.\
 """
-effects = ["read"]
+effects = ["read", "process"]
 
   [[capability.input]]
   name = "query"

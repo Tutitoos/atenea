@@ -35,7 +35,13 @@ type Version struct {
 // failing it. Additive the same way: an adapter built against 1.2.0 never
 // populates it, and a core speaking 1.3.0 reads a zero value as "nothing to
 // add," never as a claim that nothing needed adding.
-var Current = Version{Major: 1, Minor: 3, Patch: 0}
+//
+// 1.4.0 added the `process` effect and `Permission.Grant`. Additive again: a
+// capability that always spawned a binary always did so before this, just
+// without a name for it; a core speaking 1.4.0 grants it the same way it
+// already granted read, and an adapter built against 1.3.0 goes on compiling
+// because Effect was already an open uint8, not a closed set it exhausted.
+var Current = Version{Major: 1, Minor: 4, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

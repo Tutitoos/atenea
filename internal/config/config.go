@@ -119,6 +119,14 @@ type Orchestrator struct {
 	// ceiling could only ever cap one invocation, so a run of four steps spent
 	// it four times and no adapter could see the others doing the same.
 	BudgetUSD float64
+	// StandingEffects are granted to every commission and question this core
+	// dispatches, on top of the read that is always free. It exists beside
+	// the per-commission Effects on Task and Question because some effects
+	// -- process, today -- are not a choice made per request: every real
+	// implementation of code.search spawns a binary to answer at all, so
+	// requiring it to be asked for on every single call would just move the
+	// same yes to every caller instead of saying it once, here.
+	StandingEffects []contract.Effect
 	// CheckpointDir is where the paper copy of a run in flight is written. It
 	// is empty when checkpointing is off.
 	CheckpointDir string
@@ -361,8 +369,12 @@ type fileBackup struct {
 }
 
 type fileOrchestrator struct {
-	MaxParallel   *int     `toml:"max_parallel"`
-	BudgetUSD     *float64 `toml:"budget_usd"`
+	MaxParallel *int     `toml:"max_parallel"`
+	BudgetUSD   *float64 `toml:"budget_usd"`
+	// Effects are granted standing, to every commission and question, on
+	// top of the read that is always free. Nil means none, which is the
+	// correct zero: no effect has ever needed one to be free by default.
+	Effects       []string `toml:"effects"`
 	Checkpoints   *bool    `toml:"checkpoints"`
 	CheckpointDir string   `toml:"checkpoint_dir"`
 	// Runners uses a pointer so an omitted list and an explicitly empty one
@@ -685,6 +697,18 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 				source, *o.BudgetUSD)
 		}
 		out.BudgetUSD = *o.BudgetUSD
+	}
+	if len(o.Effects) > 0 {
+		effects := make([]contract.Effect, 0, len(o.Effects))
+		for _, name := range o.Effects {
+			effect, err := contract.ParseEffect(name)
+			if err != nil {
+				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+					"settings %s: orchestrator.effects: %v", source, err)
+			}
+			effects = append(effects, effect)
+		}
+		out.StandingEffects = effects
 	}
 	if o.Runners != nil {
 		seen := make(map[string]struct{}, len(*o.Runners))

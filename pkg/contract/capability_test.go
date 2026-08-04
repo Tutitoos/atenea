@@ -171,6 +171,12 @@ func TestParseEffectAndFieldType(t *testing.T) {
 	if e, err := contract.ParseEffect("external"); err != nil || e != contract.EffectExternal {
 		t.Fatalf("ParseEffect = %v, %v", e, err)
 	}
+	if e, err := contract.ParseEffect("process"); err != nil || e != contract.EffectProcess {
+		t.Fatalf("ParseEffect = %v, %v", e, err)
+	}
+	if got := contract.EffectProcess.String(); got != "process" {
+		t.Fatalf("String = %q, want process", got)
+	}
 	if _, err := contract.ParseEffect("device"); err == nil {
 		t.Fatal("unknown effect should fail")
 	}

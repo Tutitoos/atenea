@@ -145,21 +145,27 @@ type Config struct {
 	// say for itself. Zero means no paid provider can run, which is what a
 	// machine with none attached wants anyway.
 	BudgetUSD float64
+	// StandingEffects are granted to every commission and question this
+	// agent dispatches, on top of the read that is always free. It is set
+	// once, from the settings file, not per call: see config.Orchestrator
+	// for why some effects are not a per-request choice.
+	StandingEffects []contract.Effect
 }
 
 // Agent is the orchestrator. It is safe for concurrent use: two chats can be
 // running commissions at the same time against the same catalog.
 type Agent struct {
-	card        contract.Agent
-	catalog     Catalog
-	chooser     Chooser
-	runner      contract.Runner
-	checkpoints *checkpoint.Store
-	meter       Meter
-	base        Base
-	notebook    *notebook.Notebook
-	maxParallel int
-	budget      float64
+	card            contract.Agent
+	catalog         Catalog
+	chooser         Chooser
+	runner          contract.Runner
+	checkpoints     *checkpoint.Store
+	meter           Meter
+	base            Base
+	notebook        *notebook.Notebook
+	maxParallel     int
+	budget          float64
+	standingEffects []contract.Effect
 }
 
 // card is what the orchestrator declares about itself. Declaring a context
@@ -215,16 +221,17 @@ func New(cfg Config) (*Agent, error) {
 		meter = unmetered{}
 	}
 	return &Agent{
-		card:        card.Clone(),
-		catalog:     cfg.Catalog,
-		chooser:     cfg.Chooser,
-		runner:      cfg.Runner,
-		checkpoints: store,
-		meter:       meter,
-		base:        cfg.Base,
-		notebook:    cfg.Notebook,
-		maxParallel: cfg.MaxParallel,
-		budget:      cfg.BudgetUSD,
+		card:            card.Clone(),
+		catalog:         cfg.Catalog,
+		chooser:         cfg.Chooser,
+		runner:          cfg.Runner,
+		checkpoints:     store,
+		meter:           meter,
+		base:            cfg.Base,
+		notebook:        cfg.Notebook,
+		maxParallel:     cfg.MaxParallel,
+		budget:          cfg.BudgetUSD,
+		standingEffects: slices.Clone(cfg.StandingEffects),
 	}, nil
 }
 
@@ -340,12 +347,13 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	if repoErr != nil {
 		return nil, repoErr
 	}
+	// Reading is free by default. The standing grant adds whatever the
+	// settings file pre-authorized for every commission; the commission's
+	// own Effects adds whatever this one asked for on top of that.
 	permission := contract.Permission{
-		Task: task.Text,
-		// Reading is free by default. Anything heavier has to be granted by the
-		// commission itself, which is what the caller passes in.
-		Effects: append([]contract.Effect{contract.EffectRead}, task.Effects...),
-	}
+		Task:    task.Text,
+		Effects: []contract.Effect{contract.EffectRead},
+	}.Grant(a.standingEffects).Grant(task.Effects)
 	// The grant is opened once, here, and spent down by every wave. It is the
 	// commission that holds it -- not the step, not the adapter -- which is
 	// what makes four steps cost one ceiling instead of four.
@@ -510,10 +518,12 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		Capability: capabilityID,
 		Repository: repositories[0].ID,
 		Payload:    q.Payload,
+		// Same layering as Run: read, then the standing grant, then whatever
+		// this question asked for on top of that.
 		Permission: contract.Permission{
 			Task:    text,
-			Effects: append([]contract.Effect{contract.EffectRead}, q.Effects...),
-		},
+			Effects: []contract.Effect{contract.EffectRead},
+		}.Grant(a.standingEffects).Grant(q.Effects),
 	}}}
 	if err := plan.Validate(); err != nil {
 		return result, err
@@ -531,6 +541,12 @@ type ResumeOptions struct {
 	// instead of adding to it -- the same rule --budget already follows on a
 	// fresh commission.
 	BudgetUSD float64
+	// Effects adds to what the commission already carries, on top of read,
+	// the standing grant and whatever it already held -- it never replaces
+	// any of them. Unlike BudgetUSD above, an effect already granted is
+	// never worth losing by accident: --allow answers "what else may this
+	// do now", not "forget what it already could".
+	Effects []contract.Effect
 }
 
 // Resume picks an interrupted or failed commission back up.
@@ -578,6 +594,17 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	}
 	if err := a.checkResumable(record); err != nil {
 		return nil, err
+	}
+
+	// A step already on the plan keeps its own stamped permission, but the
+	// standing grant and --allow apply the same way a fresh commission
+	// would use them: added on top of what the step already carried, never
+	// dropped. Harmless when splitting never ran too -- that branch below
+	// discards record.Plan.Steps and rebuilds its own permission from
+	// record.Effects instead.
+	for i := range record.Plan.Steps {
+		record.Plan.Steps[i].Permission = record.Plan.Steps[i].Permission.
+			Grant(a.standingEffects).Grant(opts.Effects)
 	}
 
 	budgetUSD := record.BudgetUSD - chargedSoFar(record.Steps)
@@ -628,7 +655,15 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 		if repoErr != nil {
 			return result, repoErr
 		}
-		permission := contract.Permission{Task: record.Task, Effects: record.Effects}
+		// record.Effects never included the implicit read -- Run and Ask
+		// both start every permission from it and never store it back, so
+		// rebuilding from record.Effects alone would silently drop it here.
+		// Same layering as a fresh commission otherwise: standing grant,
+		// then whatever the original commission held, then --allow.
+		permission := contract.Permission{
+			Task:    record.Task,
+			Effects: []contract.Effect{contract.EffectRead},
+		}.Grant(a.standingEffects).Grant(record.Effects).Grant(opts.Effects)
 
 		explorePlan := contract.Plan{Task: record.Task}
 		for _, repo := range repositories {

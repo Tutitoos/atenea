@@ -203,10 +203,11 @@ func New(cfg config.Config) (*Core, error) {
 		// on the way out is what the funnel ranks on next time in. A nil store
 		// leaves both off together -- a core that never learns is at least
 		// consistent about it.
-		Base:        base,
-		Notebook:    book,
-		MaxParallel: cfg.Orchestrator.MaxParallel,
-		BudgetUSD:   cfg.Orchestrator.BudgetUSD,
+		Base:            base,
+		Notebook:        book,
+		MaxParallel:     cfg.Orchestrator.MaxParallel,
+		BudgetUSD:       cfg.Orchestrator.BudgetUSD,
+		StandingEffects: cfg.Orchestrator.StandingEffects,
 	})
 	if err != nil {
 		return nil, err

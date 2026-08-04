@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +36,48 @@ func TestPermissionCoversOnlyWhatWasAuthorised(t *testing.T) {
 	}
 	if permission.Allows(contract.EffectExternal) {
 		t.Fatal("reaching outside was never granted")
+	}
+}
+
+// Grant is how a permission grows in layers: read, then whatever the
+// standing grant adds, then whatever the caller asked for on top of that.
+func TestGrantAddsWithoutDroppingWhatWasAlreadyHeld(t *testing.T) {
+	base := readOnly("find every TODO")
+	granted := base.Grant([]contract.Effect{contract.EffectProcess})
+	if !granted.Allows(contract.EffectRead) || !granted.Allows(contract.EffectProcess) {
+		t.Fatalf("effects = %v, want read and process", granted.Effects)
+	}
+	// Grant returns a copy: the layer it was called on is untouched.
+	if base.Allows(contract.EffectProcess) {
+		t.Fatal("Grant mutated the permission it was called on")
+	}
+}
+
+// The same effect can arrive from two layers -- the standing grant and
+// --allow both naming process, say -- and must still be held once.
+func TestGrantKeepsEachEffectOnce(t *testing.T) {
+	base := readOnly("find every TODO").Grant([]contract.Effect{contract.EffectProcess})
+	granted := base.Grant([]contract.Effect{contract.EffectProcess, contract.EffectRead})
+	want := []contract.Effect{contract.EffectRead, contract.EffectProcess}
+	if !slices.Equal(granted.Effects, want) {
+		t.Fatalf("effects = %v, want %v", granted.Effects, want)
+	}
+}
+
+// Two steps granted from the same base permission must not see each other's
+// later grant, and the base itself must not acquire either child's.
+func TestGrantDoesNotAliasTheOriginalSlice(t *testing.T) {
+	base := readOnly("find every TODO")
+	loose := base.Grant([]contract.Effect{contract.EffectExternal})
+	tight := base.Grant([]contract.Effect{contract.EffectWrite})
+	if !loose.Allows(contract.EffectExternal) {
+		t.Error("the granted permission lost its own grant")
+	}
+	if tight.Allows(contract.EffectExternal) {
+		t.Error("a permission acquired the reach granted to the one next to it")
+	}
+	if base.Allows(contract.EffectExternal) || base.Allows(contract.EffectWrite) {
+		t.Error("the base permission acquired effects granted to its own children")
 	}
 }
 

@@ -498,6 +498,60 @@ func TestAHeavierCommissionPassesItsGrantDown(t *testing.T) {
 	}
 }
 
+// The standing grant is the settings file's own layer, added beneath
+// whatever a commission or question asks for on its own -- Run and Ask both
+// carry it down the same way they already carry the free read.
+func TestStandingEffectsReachEveryDispatch(t *testing.T) {
+	runner := &fakeRunner{}
+	reg := catalog(t)
+	for _, capability := range reg.Capabilities() {
+		impls, err := reg.ImplementationsFor(capability.ID)
+		if err != nil {
+			t.Fatalf("ImplementationsFor: %v", err)
+		}
+		for _, impl := range impls {
+			runner.serves = append(runner.serves, impl.ID)
+		}
+	}
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	store, err := checkpoint.New("")
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:         reg,
+		Chooser:         chooser,
+		Runner:          runner,
+		Checkpoints:     store,
+		StandingEffects: []contract.Effect{contract.EffectProcess},
+	})
+	if err != nil {
+		t.Fatalf("orchestrator.New: %v", err)
+	}
+
+	if _, err := agent.Run(t.Context(), orchestrator.Task{Text: "find every TODO"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search", Repository: "api", Payload: map[string]any{"query": "login"},
+	}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	for _, req := range runner.requests() {
+		if !req.Permission.Allows(contract.EffectProcess) {
+			t.Errorf("%s did not carry the standing grant", req.Capability.ID)
+		}
+		// Neither the commission nor the question asked for anything beyond
+		// the standing grant, so nothing heavier should have arrived either.
+		if req.Permission.Allows(contract.EffectWrite) {
+			t.Error("a step acquired write, which nothing granted it")
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The review
 // ---------------------------------------------------------------------------
@@ -995,6 +1049,15 @@ func TestResumeRedoesExploreWhenSplittingNeverRan(t *testing.T) {
 	if len(runner.requests()) != 2 {
 		t.Fatalf("requests = %d, want 2 -- the look is redone, not trusted from the receipt", len(runner.requests()))
 	}
+	// Regression: the checkpoint record above never sets Effects, exactly as
+	// checkpoint.Run.Effects is documented to hold only what a commission
+	// authorized BEYOND reading. Rebuilding the permission from that field
+	// alone, with nothing prepended, would silently drop the free read, and
+	// every real adapter would refuse the redone look with permission
+	// denied -- read has to be added back here the same way Run adds it.
+	if !runner.requests()[0].Permission.Allows(contract.EffectRead) {
+		t.Fatal("the redone look was not granted the read every commission gets for free")
+	}
 	if result.Verdict != contract.VerdictOK {
 		t.Fatalf("verdict = %v, want ok", result.Verdict)
 	}
@@ -1003,6 +1066,77 @@ func TestResumeRedoesExploreWhenSplittingNeverRan(t *testing.T) {
 	}
 	if len(result.Steps) != 2 {
 		t.Fatalf("steps = %d, want 2 -- both the redone look and the work it enabled", len(result.Steps))
+	}
+}
+
+// Every layer a resumed commission can carry effects from -- the free read,
+// the standing grant, what the original commission held, and what --allow
+// adds now -- has to reach the redone look, not just some of them.
+func TestResumeComposesEveryEffectLayerOnTheRedoneExplore(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return hits("internal/auth/login.go"), nil
+		},
+	}
+	reg := catalog(t)
+	for _, capability := range reg.Capabilities() {
+		impls, err := reg.ImplementationsFor(capability.ID)
+		if err != nil {
+			t.Fatalf("ImplementationsFor: %v", err)
+		}
+		for _, impl := range impls {
+			runner.serves = append(runner.serves, impl.ID)
+		}
+	}
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	store, err := checkpoint.New(dir)
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:         reg,
+		Chooser:         chooser,
+		Runner:          runner,
+		Checkpoints:     store,
+		StandingEffects: []contract.Effect{contract.EffectProcess},
+	})
+	if err != nil {
+		t.Fatalf("orchestrator.New: %v", err)
+	}
+
+	runID := checkpoint.NewID(time.Now())
+	if err := store.Save(checkpoint.Run{
+		ID: runID, Kind: checkpoint.KindTask, Task: "login",
+		Repositories: []string{"api"}, BudgetUSD: 1,
+		Effects:         []contract.Effect{contract.EffectWrite},
+		ContractVersion: contract.Current.String(), Started: time.Now(),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{
+		Effects: []contract.Effect{contract.EffectExternal},
+	}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	requests := runner.requests()
+	if len(requests) == 0 {
+		t.Fatal("nothing was dispatched")
+	}
+	permission := requests[0].Permission
+	for _, want := range []contract.Effect{
+		contract.EffectRead,     // free by default
+		contract.EffectProcess,  // the standing grant
+		contract.EffectWrite,    // what the original commission held
+		contract.EffectExternal, // what --allow added on this resume
+	} {
+		if !permission.Allows(want) {
+			t.Errorf("redone look permission = %v, missing %s", permission.Effects, want)
+		}
 	}
 }
 
@@ -1088,6 +1222,84 @@ func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
 	}
 	if !updated.Closed || updated.Verdict != "ok" {
 		t.Fatalf("closed = %v verdict = %q, want closed ok", updated.Closed, updated.Verdict)
+	}
+}
+
+// A step already on a split plan keeps its own stamped permission, but the
+// standing grant and --allow still have to reach it when it is retried --
+// the same way they reach a redone look, just through the other branch.
+func TestResumeGrantsStandingAndAllowToARetriedSplitStep(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return hits("internal/auth/login.go"), nil
+		},
+	}
+	reg := catalog(t)
+	for _, capability := range reg.Capabilities() {
+		impls, err := reg.ImplementationsFor(capability.ID)
+		if err != nil {
+			t.Fatalf("ImplementationsFor: %v", err)
+		}
+		for _, impl := range impls {
+			runner.serves = append(runner.serves, impl.ID)
+		}
+	}
+	chooser, err := selector.New(selector.Config{})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	store, err := checkpoint.New(dir)
+	if err != nil {
+		t.Fatalf("checkpoint.New: %v", err)
+	}
+	agent, err := orchestrator.New(orchestrator.Config{
+		Catalog:         reg,
+		Chooser:         chooser,
+		Runner:          runner,
+		Checkpoints:     store,
+		StandingEffects: []contract.Effect{contract.EffectProcess},
+	})
+	if err != nil {
+		t.Fatalf("orchestrator.New: %v", err)
+	}
+
+	original := contract.Permission{Task: "login", Effects: []contract.Effect{contract.EffectRead}}
+	runID := checkpoint.NewID(time.Now())
+	if err := store.Save(checkpoint.Run{
+		ID: runID, Kind: checkpoint.KindTask, Task: "login",
+		Repositories: []string{"api"}, BudgetUSD: 1,
+		ContractVersion: contract.Current.String(), Started: time.Now(),
+		Plan: contract.Plan{Task: "login", Steps: []contract.Step{
+			{ID: "explore-api", Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "login"}, Permission: original},
+			{ID: "search-api", Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "login"}, Needs: []string{"explore-api"},
+				Permission: original},
+		}},
+		Steps: []checkpoint.StepState{{
+			// search-api never closed -- the process died mid-work.
+			ID: "explore-api", Capability: "code.search", Repository: "api",
+			Implementation: "ripgrep", Verdict: "ok", Review: "ok",
+		}},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := agent.Resume(t.Context(), runID, orchestrator.ResumeOptions{
+		Effects: []contract.Effect{contract.EffectWrite},
+	}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	requests := runner.requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 -- only search-api needed retrying", len(requests))
+	}
+	permission := requests[0].Permission
+	for _, want := range []contract.Effect{contract.EffectRead, contract.EffectProcess, contract.EffectWrite} {
+		if !permission.Allows(want) {
+			t.Errorf("retried step permission = %v, missing %s", permission.Effects, want)
+		}
 	}
 }
 

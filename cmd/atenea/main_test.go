@@ -394,6 +394,29 @@ func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
 	}
 }
 
+// An unknown effect name must be refused at the flag, not silently dropped
+// or forwarded to a step that then fails for a reason nobody can trace back
+// to the typo.
+func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
+	freshInstall(t)
+	if _, err := exec(t, "task", "TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Errorf("--allow ghost was filed as %v", contract.KindOf(err))
+	}
+	if _, err := exec(t, "ask", "code.search", "--repo", "current",
+		"--set", "query=TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Errorf("ask --allow ghost was filed as %v", contract.KindOf(err))
+	}
+}
+
+// The flag has to reach the run, not just parse: a name this build
+// recognizes must not be refused for a reason unrelated to permission.
+func TestTheCommandLineAllowFlagReachesTheRun(t *testing.T) {
+	freshInstall(t)
+	if _, err := exec(t, "task", "TODO", "--allow", "write"); err != nil {
+		t.Fatalf("a commission granted write was refused: %v", err)
+	}
+}
+
 // The trace is the deliverable, not a debug extra: a decision nobody can
 // explain is a decision nobody can trust.
 func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {

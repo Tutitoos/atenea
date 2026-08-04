@@ -669,11 +669,13 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	text, args := strings.TrimSpace(args[0]), args[1:]
 
 	var repositories repoList
+	var allow effectList
 	var trace bool
 	var budget float64
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&repositories, "repo", "repository to act on; repeat for several (default: all)")
+	flags.Var(&allow, "allow", "effect beyond reading to grant this commission; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this commission may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	if err := flags.Parse(args); err != nil {
@@ -683,6 +685,10 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"unexpected argument %q after the commission; quote it if it is one commission",
 			flags.Arg(0))
+	}
+	effects, err := allow.effects()
+	if err != nil {
+		return err
 	}
 
 	atenea, err := load(settingsPath)
@@ -694,7 +700,7 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	defer stop()
 
 	result, runErr := atenea.Do(ctx, orchestrator.Task{
-		Text: text, Repositories: repositories, BudgetUSD: budget,
+		Text: text, Repositories: repositories, Effects: effects, BudgetUSD: budget,
 	})
 	if result != nil {
 		printResult(out, result, trace)
@@ -747,6 +753,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	capabilityID, args := strings.TrimSpace(args[0]), args[1:]
 
 	var fields fieldList
+	var allow effectList
 	var repository string
 	var trace bool
 	var budget float64
@@ -754,6 +761,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository to ask about (required when several are registered)")
 	flags.Var(&fields, "set", "payload field as name=value; repeat for several")
+	flags.Var(&allow, "allow", "effect beyond reading to grant this question; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	if err := flags.Parse(args); err != nil {
@@ -762,6 +770,10 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput,
 			"unexpected argument %q after the capability", flags.Arg(0))
+	}
+	effects, err := allow.effects()
+	if err != nil {
+		return err
 	}
 
 	atenea, err := load(settingsPath)
@@ -796,6 +808,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		Capability: capabilityID,
 		Repository: repository,
 		Payload:    payload,
+		Effects:    effects,
 		BudgetUSD:  budget,
 	})
 	if result != nil {
@@ -832,12 +845,14 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 	}
 	runID, args := strings.TrimSpace(args[0]), args[1:]
 
+	var allow effectList
 	var trace bool
 	var budget float64
 	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Float64Var(&budget, "budget", 0,
 		"replace what remains of the grant instead of adding to it (default: what is left)")
+	flags.Var(&allow, "allow", "effect to add beyond what the commission already carries; repeat for several (default: none)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
@@ -845,6 +860,10 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput,
 			"unexpected argument %q after the run id", flags.Arg(0))
+	}
+	effects, err := allow.effects()
+	if err != nil {
+		return err
 	}
 
 	atenea, err := load(settingsPath)
@@ -855,7 +874,7 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget})
+	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget, Effects: effects})
 	if result != nil {
 		printResult(out, result, trace)
 	}
@@ -1011,6 +1030,30 @@ type repoList []string
 
 func (r *repoList) String() string     { return strings.Join(*r, ",") }
 func (r *repoList) Set(v string) error { *r = append(*r, v); return nil }
+
+// effectList collects a repeated --allow flag naming effects beyond reading,
+// which is always free and never needs to be named.
+type effectList []string
+
+func (e *effectList) String() string     { return strings.Join(*e, ",") }
+func (e *effectList) Set(v string) error { *e = append(*e, v); return nil }
+
+// effects parses every collected name against the contract's enum, failing
+// on the first one this build does not recognize.
+func (e effectList) effects() ([]contract.Effect, error) {
+	if len(e) == 0 {
+		return nil, nil
+	}
+	out := make([]contract.Effect, 0, len(e))
+	for _, name := range e {
+		effect, err := contract.ParseEffect(name)
+		if err != nil {
+			return nil, contract.Fail(contract.FailureInvalidInput, "--allow: %v", err)
+		}
+		out = append(out, effect)
+	}
+	return out, nil
+}
 
 func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 	fmt.Fprintf(out, "run       %s\n", result.RunID)

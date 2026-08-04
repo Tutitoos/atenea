@@ -10,10 +10,16 @@ import (
 
 // Effect is an observable consequence of running a capability.
 //
-// There are three groups on purpose. Writing breaks something of your own, at
-// home, and can be undone. Reaching outside escapes the machine and no undo
-// takes it back. Putting both in the same bag would give the dangerous one the
-// permissions of the harmless one.
+// Read, write and external are three groups on purpose. Writing breaks
+// something of your own, at home, and can be undone. Reaching outside escapes
+// the machine and no undo takes it back. Putting both in the same bag would
+// give the dangerous one the permissions of the harmless one.
+//
+// Process is a fourth, orthogonal axis: not what a capability changes, but
+// whether answering it means running a binary Atenea does not fully control
+// the internals of. It composes with the other three rather than replacing
+// any of them -- code.search causes read AND process at once, because
+// ripgrep is both.
 type Effect uint8
 
 const (
@@ -23,6 +29,10 @@ const (
 	EffectWrite
 	// EffectExternal leaves the machine: network, external services.
 	EffectExternal
+	// EffectProcess spawns an OS process to answer. ripgrep via omp, the
+	// claude CLI, and git for code.impact all cause it, each alongside
+	// whichever of the other three effects that same call also causes.
+	EffectProcess
 )
 
 var (
@@ -30,11 +40,13 @@ var (
 		EffectRead:     "read",
 		EffectWrite:    "write",
 		EffectExternal: "external",
+		EffectProcess:  "process",
 	}
 	effectByName = map[string]Effect{
 		"read":     EffectRead,
 		"write":    EffectWrite,
 		"external": EffectExternal,
+		"process":  EffectProcess,
 	}
 )
 
@@ -50,7 +62,7 @@ func ParseEffect(s string) (Effect, error) {
 	if e, ok := effectByName[s]; ok {
 		return e, nil
 	}
-	return 0, fmt.Errorf("unknown effect %q: want read, write or external", s)
+	return 0, fmt.Errorf("unknown effect %q: want read, write, external or process", s)
 }
 
 // FieldType is the type of a single input or output field. The set is

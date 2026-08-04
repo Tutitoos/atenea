@@ -40,11 +40,17 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
 
-	// The symbol three are read-only like the search: none of them may ship
-	// declaring an effect that lets a provider write.
+	// The symbol capabilities and code.impact are read-only providers: none
+	// of them may ship declaring an effect that lets a provider write. Only
+	// code.search also spawns a process to answer -- every implementation
+	// behind it, ripgrep or the local stand-in, is a binary, not a library.
 	for _, capability := range cfg.Capabilities {
-		if len(capability.Effects) != 1 || capability.Effects[0] != contract.EffectRead {
-			t.Errorf("%s effects = %v, want read", capability.ID, capability.Effects)
+		want := []contract.Effect{contract.EffectRead}
+		if capability.ID == "code.search" {
+			want = append(want, contract.EffectProcess)
+		}
+		if !slices.Equal(capability.Effects, want) {
+			t.Errorf("%s effects = %v, want %v", capability.ID, capability.Effects, want)
 		}
 	}
 
@@ -442,6 +448,43 @@ func TestAZeroBudgetIsRefused(t *testing.T) {
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 			t.Fatalf("budget_usd = %s: kind = %v, want invalid_input", value, got)
 		}
+	}
+}
+
+// The standing grant is read the same way the budget ceiling is: from the
+// orchestrator's own block, added to every commission and question this
+// core dispatches from here on.
+func TestStandingEffectsAreRead(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[orchestrator]\neffects = [\"process\", \"write\"]\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []contract.Effect{contract.EffectProcess, contract.EffectWrite}
+	if !slices.Equal(cfg.Orchestrator.StandingEffects, want) {
+		t.Errorf("effects = %v, want %v", cfg.Orchestrator.StandingEffects, want)
+	}
+}
+
+// Omitting the block is the common case and must not read as a typo further
+// down: no standing grant beyond the read every commission already has for
+// free.
+func TestNoStandingEffectsIsTheZeroValue(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Orchestrator.StandingEffects) != 0 {
+		t.Errorf("effects = %v, want none", cfg.Orchestrator.StandingEffects)
+	}
+}
+
+func TestAnUnknownStandingEffectIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\neffects = [\"ghost\"]\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+	if !strings.Contains(err.Error(), "orchestrator.effects") {
+		t.Errorf("the error does not name the key that rejected it: %v", err)
 	}
 }
 
