@@ -351,7 +351,8 @@ func (r *Runner) runCodeImpact(ctx context.Context, req contract.RunRequest, roo
 	var recs []record
 	seedFiles := seedFileIndex(seeds, symbols)
 	for qn, hit := range hits {
-		file, line, kind, hasKind := hit.filePath, hit.line, hit.kind, hit.kind != ""
+		var file string
+		line, kind, hasKind := hit.line, hit.kind, hit.kind != ""
 		if !hit.hasLocation {
 			loc, ok := locations[qn]
 			if !ok {

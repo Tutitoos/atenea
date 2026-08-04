@@ -327,6 +327,7 @@ func (s *Supervisor) Acquire(id string) {
 	}
 }
 
+// Release matches a prior Acquire, once the caller's work with id is done.
 func (s *Supervisor) Release(id string) {
 	if p, err := s.find(id); err == nil {
 		p.release()

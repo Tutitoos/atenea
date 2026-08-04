@@ -187,7 +187,7 @@ func TestFailureForSortsCodebaseMemoryErrorsIntoBins(t *testing.T) {
 			want:   contract.FailureInvalidInput,
 		},
 		{
-			name:   "an unrecognised message defaults to unavailable",
+			name:   "an unrecognized message defaults to unavailable",
 			stderr: `{"error":"panic: runtime error: index out of range"}`,
 			want:   contract.FailureUnavailable,
 		},
@@ -234,7 +234,7 @@ func TestGitFailureForSortsGitErrorsIntoBins(t *testing.T) {
 		{"bad revision", "fatal: bad revision 'nowhere~1'", contract.FailureInvalidInput},
 		{"ambiguous argument", "fatal: ambiguous argument 'HEAD~999': unknown revision or path not in the working tree.", contract.FailureInvalidInput},
 		{"not a git repository at all", "fatal: not a git repository (or any of the parent directories): .git", contract.FailureInvalidInput},
-		{"an unrecognised git failure defaults to unavailable", "fatal: unable to read tree", contract.FailureUnavailable},
+		{"an unrecognized git failure defaults to unavailable", "fatal: unable to read tree", contract.FailureUnavailable},
 		{"empty stderr does not crash the classifier", "", contract.FailureUnavailable},
 	}
 	for _, tc := range cases {
@@ -312,12 +312,21 @@ func TestRunRejectsAnImplementationItDoesNotServe(t *testing.T) {
 	}
 }
 
+func TestRunRejectsAnImplementationItDoesNotServeForCodeImpact(t *testing.T) {
+	payload := map[string]any{"baseline": "HEAD~1", "scope": []string{"internal"}, "depth": 2}
+	req := request(t, codeImpactCapability(), "unknown.impl", payload)
+	_, err := newTestRunner(t).Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable (err = %v)", got, err)
+	}
+}
+
 func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
-	cap := symbolCallsCapability()
-	cap.ID = "code.search"
-	cap.Inputs = []contract.Field{{Name: "query", Type: contract.TypeString, Required: true}}
+	capability := symbolCallsCapability()
+	capability.ID = "code.search"
+	capability.Inputs = []contract.Field{{Name: "query", Type: contract.TypeString, Required: true}}
 	req := contract.RunRequest{
-		Capability:     cap,
+		Capability:     capability,
 		Implementation: contract.Implementation{ID: "codebase-memory.search", Provider: "codebase-memory", Capability: "code.search"},
 		Repository:     contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, nil),
 		Payload:        map[string]any{"query": "x"},
