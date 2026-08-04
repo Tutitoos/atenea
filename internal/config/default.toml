@@ -562,6 +562,217 @@ effects = ["read"]
     required = false
     summary = "The line at the implementation, present only when it was asked for."
 
+[[capability]]
+id = "symbol.calls"
+version = "1.0.0"
+summary = "From a symbol, walk the call graph in a chosen direction."
+semantics = """
+Where a symbol sits on the CALL graph, not everywhere it is mentioned -- that is \
+symbol.references's question, and a call is one narrow kind of mention among the \
+many it does not separate out. Position and the name hint are inherited from the \
+same family. Direction is not guessed: incoming and outgoing are different \
+questions with different answers, so the caller states which one, or both. Depth \
+bounds how far the walk goes, small by default, because a workspace of many \
+repositories turns an unbounded walk into hundreds of hits before anyone asked \
+for that many. Unlike a reference, a call names a DIFFERENT symbol -- the one \
+calling in, or the one being called out to -- so every result carries its own \
+name and its own distance from the symbol asked about, not only where it sits.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File holding the symbol, relative to the repository root."
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+  summary = "Line where the symbol appears, starting at 1."
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+  summary = "Column where the symbol starts on that line, starting at 1."
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
+
+  [[capability.input]]
+  name = "direction"
+  type = "string"
+  required = true
+  summary = "Which way to walk: \"incoming\" (who calls this), \"outgoing\" (what this calls), or \"both\"."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Paths to look in. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+  summary = "How many hops to follow. Small by default, on purpose."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: return the line at each call, not only where it is."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "How much to return around each call. Small by default, on purpose."
+
+  [[capability.output]]
+  name = "calls"
+  type = "record_list"
+  required = true
+  summary = "Every call found, nearest hop first."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the call, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line of the call, starting at 1."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The name of the symbol found at this hop."
+
+    [[capability.output.field]]
+    name = "direction"
+    type = "string"
+    required = true
+    summary = "Whether this result was found walking \"incoming\" or \"outgoing\" from the symbol asked about."
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+    summary = "How many hops from the symbol asked about, starting at 1."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The line at the call, present only when it was asked for."
+
+[[capability]]
+id = "code.impact"
+version = "1.0.0"
+summary = "From a change, find what it reaches."
+semantics = """
+What a change reaches, not merely what it touched -- touched is the easy half, \
+the list of files different from the baseline, and it comes back too because the \
+graph answer is unreadable without it. The hard half is everything that calls \
+into what changed and would feel it: this is symbol.calls, asked once for every \
+symbol the change actually touched instead of once by hand for each. A directly \
+changed symbol is simply the zero-distance entry -- no separate flag marks it, \
+because depth already says so. baseline names the far side of the comparison as \
+intent, a point in the repository's history to measure the current state \
+against, the same reason code.search's options are intent and not one version \
+control system's own syntax. depth bounds the walk the same way and for the same \
+reason as its sibling's.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "baseline"
+  type = "string"
+  required = true
+  summary = "A point in the repository's history to compare the current state against."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Paths to narrow which changed files count. Empty means every file the baseline changed."
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+  summary = "How many hops of the call graph to follow out from each changed symbol. Small by default, on purpose."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: return the line at each affected symbol, not only where it is."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "How much to return around each affected symbol. Small by default, on purpose."
+
+  [[capability.output]]
+  name = "changed_files"
+  type = "string_list"
+  required = true
+  summary = "Every file different from the baseline, relative to the repository root."
+
+  [[capability.output]]
+  name = "affected_symbols"
+  type = "record_list"
+  required = true
+  summary = "Every symbol the change reaches, nearest first."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the symbol, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the symbol starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The symbol's name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = false
+    summary = "The provider's own name for what kind of symbol this is (function, struct, route, ...), when it reports one."
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+    summary = "How many hops from a directly changed symbol, starting at 0 for the changed symbol itself."
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+    summary = "The line at the symbol, present only when it was asked for."
+
 # ---------------------------------------------------------------------------
 # Implementations: the "who and how". Four blocks each -- capability,
 # constraints, cost and health.

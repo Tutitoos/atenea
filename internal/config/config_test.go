@@ -35,7 +35,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.search", "symbol.definition", "symbol.implementations", "symbol.references"}
+	wantIDs := []string{"code.impact", "code.search", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.references"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
