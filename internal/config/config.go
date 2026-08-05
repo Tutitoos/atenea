@@ -486,6 +486,7 @@ type fileImpl struct {
 type fileConstraints struct {
 	Languages     []string `toml:"languages"`
 	RequiresIndex bool     `toml:"requires_index"`
+	RequiresVCS   bool     `toml:"requires_vcs"`
 	MinScale      string   `toml:"min_scale"`
 	MaxScale      string   `toml:"max_scale"`
 }
@@ -510,6 +511,7 @@ type fileRepository struct {
 	Path      string   `toml:"path"`
 	Languages []string `toml:"languages"`
 	Scale     string   `toml:"scale"`
+	VCS       string   `toml:"vcs"`
 	IndexedBy []string `toml:"indexed_by"`
 }
 
@@ -1177,6 +1179,7 @@ func (i fileImpl) build(source string) (contract.Implementation, error) {
 		Constraints: contract.Constraints{
 			Languages:     languages,
 			RequiresIndex: i.Constraints.RequiresIndex,
+			RequiresVCS:   i.Constraints.RequiresVCS,
 			MinScale:      minScale,
 			MaxScale:      maxScale,
 		},
@@ -1203,7 +1206,12 @@ func (r fileRepository) build(source string) (contract.Repository, error) {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: repository %s: scale: %v", source, r.ID, err)
 	}
-	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, r.IndexedBy)
+	vcs, err := contract.ParseVCS(r.VCS)
+	if err != nil {
+		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: repository %s: vcs: %v", source, r.ID, err)
+	}
+	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, vcs, r.IndexedBy)
 	if err := out.Validate(); err != nil {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)

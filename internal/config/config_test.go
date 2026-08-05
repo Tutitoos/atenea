@@ -86,6 +86,14 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	if !slices.Equal(shipped, want) {
 		t.Fatalf("implementations = %v, want %v", shipped, want)
 	}
+	// code.impact walks a git diff against a baseline: the one implementation
+	// behind it has nothing to measure against without a repository under
+	// version control.
+	for _, impl := range cfg.Implementations {
+		if impl.ID == "codebase-memory.impact" && !impl.Constraints.RequiresVCS {
+			t.Errorf("codebase-memory.impact ships with requires_vcs=false, want true")
+		}
+	}
 	// Nothing has been probed on a cold start, and pretending otherwise would
 	// let the funnel trust a provider that may not even be installed.
 	for _, impl := range cfg.Implementations {
@@ -136,6 +144,7 @@ id = "api"
 path = "/srv/api"
 languages = ["go"]
 scale = "small"
+vcs = "present"
 `
 
 func TestLoadReadsAFile(t *testing.T) {
@@ -149,6 +158,9 @@ func TestLoadReadsAFile(t *testing.T) {
 	}
 	if len(cfg.Repositories) != 1 || cfg.Repositories[0].ID != "api" {
 		t.Fatalf("repositories = %+v", cfg.Repositories)
+	}
+	if cfg.Repositories[0].VCS != contract.VCSPresent {
+		t.Errorf("VCS = %v, want present", cfg.Repositories[0].VCS)
 	}
 }
 
@@ -184,6 +196,7 @@ func TestBrokenCatalogueEntriesAreRefused(t *testing.T) {
 		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["device"]`, 1),
 		"unknown type":     strings.Replace(minimal, `type = "string"`, `type = "float"`, 1),
 		"unknown scale":    strings.Replace(minimal, `scale = "small"`, `scale = "huge"`, 1),
+		"unknown vcs":      strings.Replace(minimal, `vcs = "present"`, `vcs = "sideways"`, 1),
 		"bad duration":     minimal + "\n[implementation.cost]\nestimated_duration = \"soon\"\n",
 		"negative tokens":  minimal + "\n[implementation.cost]\nestimated_tokens = -1\n",
 		"unknown health":   minimal + "\n[implementation.health]\nstate = \"sick\"\n",

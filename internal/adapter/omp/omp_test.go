@@ -639,7 +639,7 @@ func requestAt(t *testing.T, root string, payload map[string]any) contract.RunRe
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: contract.Implementation{ID: "ripgrep", Provider: "ripgrep", Capability: "code.search"},
-		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, nil),
+		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		Payload:        payload,
 		Permission:     contract.Permission{Task: "find login", Effects: []contract.Effect{contract.EffectRead}},
 	}

@@ -957,6 +957,7 @@ capability = "code.impact"
   [implementation.constraints]
   languages = []
   requires_index = true
+  requires_vcs = true     # walks a git diff against baseline; needs a repository under version control
   min_scale = "medium"
   max_scale = ""
 
@@ -976,6 +977,7 @@ id = "current"
 path = "."
 languages = ["go"]
 scale = "small"
+vcs = ""                  # unknown until declared; unspecified never disqualifies (pkg/contract/implementation.go)
 indexed_by = []           # providers holding a ready index for this repository
 
 # ---------------------------------------------------------------------------

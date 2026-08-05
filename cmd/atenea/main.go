@@ -245,8 +245,8 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 
 	fmt.Fprintf(out, "\nrepositories\n")
 	for _, repo := range status.Repositories {
-		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s languages=%s  indexes=%s\n",
-			repo.ID, repo.Path, orDash(repo.Scale),
+		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s vcs=%-8s languages=%s  indexes=%s\n",
+			repo.ID, repo.Path, orDash(repo.Scale), orDash(repo.VCS),
 			orDash(strings.Join(repo.Languages, ",")),
 			orDash(strings.Join(repo.Indexes, ",")))
 	}
@@ -561,9 +561,10 @@ func cmdCatalog(settingsPath string, out io.Writer) error {
 		fmt.Fprintf(out, "  implementations\n")
 		for _, impl := range impls {
 			fmt.Fprintf(out, "    %s (provider %s)\n", impl.ID, impl.Provider)
-			fmt.Fprintf(out, "      constraints  languages=%s index=%v scale=%s..%s\n",
+			fmt.Fprintf(out, "      constraints  languages=%s index=%v vcs=%v scale=%s..%s\n",
 				orDash(strings.Join(impl.Constraints.Languages, ",")),
 				impl.Constraints.RequiresIndex,
+				impl.Constraints.RequiresVCS,
 				orDash(impl.Constraints.MinScale.String()),
 				orDash(impl.Constraints.MaxScale.String()))
 			fmt.Fprintf(out, "      cost         estimated=%s/%dtok measured=%d sample(s)\n",

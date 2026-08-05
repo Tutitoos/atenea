@@ -68,7 +68,7 @@ func newTestRunner(t *testing.T) *Runner {
 
 func request(t *testing.T, payload map[string]any, effects ...contract.Effect) contract.RunRequest {
 	t.Helper()
-	repo := contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, nil)
+	repo := contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: implementation(),

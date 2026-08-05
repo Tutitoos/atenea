@@ -238,6 +238,9 @@ func fits(impl contract.Implementation, repo contract.Repository) (string, bool)
 	if c.RequiresIndex && !repo.IndexedBy(impl.Provider) {
 		return fmt.Sprintf("needs an index from provider %s, repository has none", impl.Provider), false
 	}
+	if c.RequiresVCS && repo.VCS == contract.VCSAbsent {
+		return "needs version control at the repository root, repository has none", false
+	}
 	// An unclassified repository never disqualifies anyone: an unknown size is
 	// not a proven mismatch.
 	if repo.Scale != contract.ScaleUnspecified {

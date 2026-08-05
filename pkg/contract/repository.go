@@ -18,18 +18,23 @@ type Repository struct {
 	// Languages present in the repository, lowercase.
 	Languages []string
 	Scale     Scale
+	// VCS says whether the repository sits under version control, as far as
+	// anyone has declared. VCSUnspecified never disqualifies a provider that
+	// requires it -- see selector.fits.
+	VCS VCS
 	// indexes holds the providers that have a ready index for this repository.
 	indexes map[string]struct{}
 }
 
 // NewRepository builds a repository descriptor. indexedBy lists the providers
 // holding a ready index for it.
-func NewRepository(id, path string, languages []string, scale Scale, indexedBy []string) Repository {
+func NewRepository(id, path string, languages []string, scale Scale, vcs VCS, indexedBy []string) Repository {
 	repo := Repository{
 		ID:        id,
 		Path:      path,
 		Languages: make([]string, 0, len(languages)),
 		Scale:     scale,
+		VCS:       vcs,
 		indexes:   make(map[string]struct{}, len(indexedBy)),
 	}
 	for _, lang := range languages {

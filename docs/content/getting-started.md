@@ -108,6 +108,13 @@ small to have declared its scale, is refused rather than sent to a provider
 with nothing on disk to answer from — the funnel drops it at `constraints`
 or `reach` and says which, the same as any other unattached provider.
 
+`code.impact` alone also declares `requires_vcs = true`: it measures against a
+point in the repository's history, and there is none to measure against on a
+directory with no version control at its root. A repository nobody has said
+either way about is not refused for it — only one explicitly declared
+`vcs = "absent"` is, the same up-front, no-dispatch drop as the index case
+above instead of a git failure surfacing mid-call.
+
 ## Write your own settings
 
 ```sh
@@ -476,7 +483,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.2.0  contract 1.5.0  AMBER
+atenea 0.2.0  contract 1.6.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

@@ -50,7 +50,16 @@ type Version struct {
 // adapter opts into, an adapter built against 1.4.0 that never makes it
 // leaves `Raw` at its zero value, and a core speaking 1.5.0 reads that as
 // nothing more to show, never as a missing answer.
-var Current = Version{Major: 1, Minor: 5, Patch: 0}
+//
+// 1.6.0 added `Constraints.RequiresVCS` and `Repository.VCS`. A repository
+// nobody has said either way about reads as VCSUnspecified, which never
+// disqualifies -- the same reading Scale already gave an unclassified
+// repository, kept for the same reason: a fact retrofitted onto a provider
+// that already worked must not silently drop every repository that has not
+// yet declared it. An adapter built against 1.5.0 goes on compiling because
+// it never reads either field; the funnel is what acts on them, not the far
+// side of Run.
+var Current = Version{Major: 1, Minor: 6, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

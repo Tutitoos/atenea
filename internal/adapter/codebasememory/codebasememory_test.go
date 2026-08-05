@@ -328,7 +328,7 @@ func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 	req := contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: "codebase-memory.search", Provider: "codebase-memory", Capability: "code.search"},
-		Repository:     contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, nil),
+		Repository:     contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		Payload:        map[string]any{"query": "x"},
 		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
 	}
@@ -639,7 +639,7 @@ func requestAt(t *testing.T, root string, capability contract.Capability, implem
 	return contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: implementationID, Provider: "codebase-memory", Capability: capability.ID},
-		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, nil),
+		Repository:     contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		Payload:        payload,
 		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
 	}

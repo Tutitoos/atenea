@@ -57,6 +57,21 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   whoever debugs after, and a client built against `1.4.0` goes on compiling
   and simply never sends it. Contract `1.5.0`.
 
+- **`code.impact` failing at dispatch time on a repository with no version
+  control is now a constraint the funnel checks up front, the same way a
+  missing index already was.** Its one implementation walks a git diff
+  against a baseline, so a directory with no `.git` at its root always failed
+  there -- correctly classified, but only after a real subprocess had already
+  spawned, with nothing in `atenea status` or a funnel trace warning it would.
+  `Constraints.RequiresVCS` and `Repository.VCS` name the fact the same way
+  `RequiresIndex`/`IndexedBy` already do, and the funnel drops a candidate
+  that needs one and does not have it at `constraints`, before reach or
+  health, with a reason that says so. Unspecified is not the same as
+  confirmed absent: a repository nobody has declared either way about is
+  never disqualified, the same reading an unclassified `Scale` already gets,
+  so retrofitting this onto a provider that already worked does not silently
+  drop every repository that has not yet said `vcs = "absent"` or
+  `vcs = "present"`. Contract `1.6.0`.
 
 ## [0.2.0] - 2026-08-04
 

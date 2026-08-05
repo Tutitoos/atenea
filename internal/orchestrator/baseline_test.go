@@ -75,7 +75,7 @@ func twins(t *testing.T) *registry.Registry {
 			t.Fatalf("AddImplementation: %v", err)
 		}
 	}
-	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, nil)
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	if err := reg.AddRepository(repo); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}

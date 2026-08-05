@@ -69,7 +69,7 @@ func TestDuplicatesAreRefused(t *testing.T) {
 	if err := reg.AddImplementation(impl("ripgrep", "ripgrep")); err == nil {
 		t.Error("duplicate implementation should fail")
 	}
-	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, nil)
+	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	if err := reg.AddRepository(repo); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}

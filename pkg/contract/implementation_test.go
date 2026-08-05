@@ -112,6 +112,21 @@ func TestParseScaleAndHealthState(t *testing.T) {
 	}
 }
 
+func TestParseVCS(t *testing.T) {
+	if v, err := contract.ParseVCS(""); err != nil || v != contract.VCSUnspecified {
+		t.Fatalf("empty vcs = %v, %v", v, err)
+	}
+	if v, err := contract.ParseVCS("present"); err != nil || v != contract.VCSPresent {
+		t.Fatalf("present = %v, %v", v, err)
+	}
+	if v, err := contract.ParseVCS("absent"); err != nil || v != contract.VCSAbsent {
+		t.Fatalf("absent = %v, %v", v, err)
+	}
+	if _, err := contract.ParseVCS("maybe"); err == nil {
+		t.Fatal("unknown vcs should fail")
+	}
+}
+
 func TestImplementationCloneDoesNotShareLanguages(t *testing.T) {
 	original := ripgrep()
 	original.Constraints.Languages = []string{"go"}

@@ -53,6 +53,50 @@ func ParseScale(s string) (Scale, error) {
 	return 0, fmt.Errorf("unknown scale %q: want small, medium or large", s)
 }
 
+// VCS says whether a repository sits under version control, as far as anyone
+// has declared. Coarse on purpose, the same reason Scale is: the point is to
+// catch a provider that would fail on the filesystem before it is asked, not
+// to name which system.
+type VCS uint8
+
+// The states a repository's version control can be found in.
+const (
+	// VCSUnspecified means nobody has said either way. It never disqualifies
+	// an implementation: an unmeasured fact is not a proven mismatch, the
+	// same reading Scale gives an unclassified repository.
+	VCSUnspecified VCS = iota
+	VCSPresent
+	VCSAbsent
+)
+
+var (
+	vcsNames = map[VCS]string{
+		VCSUnspecified: "",
+		VCSPresent:     "present",
+		VCSAbsent:      "absent",
+	}
+	vcsByName = map[string]VCS{
+		"":        VCSUnspecified,
+		"present": VCSPresent,
+		"absent":  VCSAbsent,
+	}
+)
+
+func (v VCS) String() string {
+	if name, ok := vcsNames[v]; ok {
+		return name
+	}
+	return fmt.Sprintf("vcs(%d)", uint8(v))
+}
+
+// ParseVCS reads a vcs state name. The empty string is unspecified.
+func ParseVCS(s string) (VCS, error) {
+	if v, ok := vcsByName[s]; ok {
+		return v, nil
+	}
+	return 0, fmt.Errorf("unknown vcs %q: want present or absent", s)
+}
+
 // Constraints is block 2 of an Implementation: what has to be true before this
 // provider can work at all.
 //
@@ -65,6 +109,10 @@ type Constraints struct {
 	// RequiresIndex means the provider is useless until the repository has been
 	// indexed by its provider.
 	RequiresIndex bool
+	// RequiresVCS means the provider needs the repository to sit under version
+	// control -- it measures against a point in history, and there is none
+	// without one.
+	RequiresVCS bool
 	// MinScale and MaxScale bracket the repository sizes this provider is worth
 	// using on. ScaleUnspecified on either end means unbounded.
 	MinScale Scale

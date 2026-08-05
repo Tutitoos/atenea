@@ -95,7 +95,7 @@ func request(t *testing.T, root string, payload map[string]any) contract.RunRequ
 	return contract.RunRequest{
 		Capability:     codeSearch(),
 		Implementation: ripgrep(),
-		Repository:     contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, nil),
+		Repository:     contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		Payload:        payload,
 		Permission:     contract.Permission{Task: "find login", Effects: []contract.Effect{contract.EffectRead}},
 	}

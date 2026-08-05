@@ -173,6 +173,7 @@ type RepositoryStatus struct {
 	ID        string
 	Path      string
 	Scale     string
+	VCS       string
 	Languages []string
 	Indexes   []string
 }
@@ -402,6 +403,7 @@ func (c *Core) Status() Status {
 			ID:        repo.ID,
 			Path:      repo.Path,
 			Scale:     repo.Scale.String(),
+			VCS:       repo.VCS.String(),
 			Languages: repo.Languages,
 			Indexes:   repo.Indexes(),
 		})

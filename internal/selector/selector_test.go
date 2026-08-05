@@ -20,6 +20,10 @@ func needsIndex() implOption {
 	return func(i *contract.Implementation) { i.Constraints.RequiresIndex = true }
 }
 
+func needsVCS() implOption {
+	return func(i *contract.Implementation) { i.Constraints.RequiresVCS = true }
+}
+
 func scaleRange(lo, hi contract.Scale) implOption {
 	return func(i *contract.Implementation) {
 		i.Constraints.MinScale, i.Constraints.MaxScale = lo, hi
@@ -64,7 +68,7 @@ func impl(id string, opts ...implOption) contract.Implementation {
 }
 
 func smallGoRepo(indexes ...string) contract.Repository {
-	return contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, indexes)
+	return contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, indexes)
 }
 
 // funnel wraps the selector so the cases that are not about reach do not have
@@ -157,7 +161,7 @@ func TestIndexConstraintIsSatisfiedByTheProviderIndex(t *testing.T) {
 // An unclassified repository is not a proven mismatch. Dropping candidates for
 // a size nobody has measured would silently empty the funnel.
 func TestUnspecifiedScaleNeverDisqualifies(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleUnspecified, nil)
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleUnspecified, contract.VCSUnspecified, nil)
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: repo,
@@ -169,6 +173,50 @@ func TestUnspecifiedScaleNeverDisqualifies(t *testing.T) {
 		t.Fatalf("Select: %v", err)
 	}
 	if decision.Chosen.ID != "graph.search" {
+		t.Fatalf("chosen = %s", decision.Chosen.ID)
+	}
+}
+
+// A capability that measures against a point in history has nothing to
+// measure against without one: an implementation that requires version
+// control must be dropped, cleanly, before it ever reaches the provider.
+func TestNoVCSDisqualifiesAnImplementationThatRequiresIt(t *testing.T) {
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSAbsent, nil)
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: repo,
+		Candidates: []contract.Implementation{
+			impl("ripgrep"),
+			impl("codebase-memory.impact", needsVCS()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	constraints := stage(t, decision, selector.StageConstraints)
+	if !slices.Equal(constraints.Out, []string{"ripgrep"}) {
+		t.Fatalf("survivors = %v, want only ripgrep", constraints.Out)
+	}
+	reason := constraints.Dropped[0].Reason
+	if !strings.Contains(reason, "version control") {
+		t.Errorf("reason = %q, want it to mention version control", reason)
+	}
+}
+
+// Undeclared is not the same as confirmed absent: a repository nobody has
+// said either way about must not lose access to every provider that needs
+// version control the moment the constraint starts existing.
+func TestUnspecifiedVCSNeverDisqualifies(t *testing.T) {
+	repo := contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: repo,
+		Candidates: []contract.Implementation{impl("codebase-memory.impact", needsVCS())},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "codebase-memory.impact" {
 		t.Fatalf("chosen = %s", decision.Chosen.ID)
 	}
 }

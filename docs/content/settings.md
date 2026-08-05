@@ -337,6 +337,7 @@ capability = "code.search"
   [implementation.constraints]
   languages = ["go", "typescript"]   # empty means language-agnostic
   requires_index = true
+  requires_vcs = false               # needs the repository under version control (e.g. a git diff against a baseline)
   min_scale = ""                     # "", small, medium, large
   max_scale = ""
 
@@ -369,12 +370,13 @@ id = "api"
 path = "/srv/api"
 languages = ["go"]
 scale = "small"             # "", small, medium, large
+vcs = "present"             # "", present, absent -- whether the root sits under version control
 indexed_by = ["serena"]     # providers with a ready index HERE
 ```
 
-An unclassified `scale` never disqualifies anyone: an unknown size is not a
-proven mismatch, and dropping candidates over it would silently empty the
-funnel.
+An unclassified `scale` or an unspecified `vcs` never disqualifies anyone: an
+unknown fact is not a proven mismatch, and dropping candidates over it would
+silently empty the funnel.
 
 ## Selector rules
 

@@ -205,7 +205,7 @@ func repo(t *testing.T, files map[string]string) contract.Repository {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	return contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, nil)
+	return contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
 }
 
 func newRunner(t *testing.T, endpoint string) *Runner {
@@ -473,15 +473,6 @@ func TestNoReferencesIsAnAnswer(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Security and the bins
-// ---------------------------------------------------------------------------
-
-// This is the only adapter that opens a file to do its job, so the sensitive
-// list is not advisory here. Exploring skips these in silence because a missed
-// hit costs nothing; a caller pointing at one exact position is refused out
-// loud, because "nothing here" would be a lie.
-
 // Measured against a live server: find_implementations answers zero hits
 // with "[]", not the "{}" find_referencing_symbols uses. Both are Serena
 // saying nothing matched, and both have to read the same way -- a symbol
@@ -515,7 +506,6 @@ func TestNoImplementationsIsAnAnswer(t *testing.T) {
 // list is not advisory here. Exploring skips these in silence because a missed
 // hit costs nothing; a caller pointing at one exact position is refused out
 // loud, because "nothing here" would be a lie.
-
 func TestASecretFileIsRefusedRatherThanRead(t *testing.T) {
 	s, endpoint := newStub(t)
 	runner := newRunner(t, endpoint)

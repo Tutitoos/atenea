@@ -64,8 +64,8 @@ func catalog(t *testing.T) *registry.Registry {
 		}
 	}
 	repos := []contract.Repository{
-		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, []string{"serena"}),
-		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, nil),
+		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"serena"}),
+		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 	}
 	for _, repo := range repos {
 		if err := reg.AddRepository(repo); err != nil {
@@ -670,9 +670,6 @@ func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 	}
 }
 
-// The funnel is asked per repository, so the same commission can be answered
-// by different providers in different units of work.
-
 // The generic bin an unrecognized provider error falls into used to say
 // nothing but its own catch-all sentence, on the step and on the catalog
 // mark it left behind for the next call. Both are where a human actually
@@ -706,7 +703,6 @@ func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
 
 // The funnel is asked per repository, so the same commission can be answered
 // by different providers in different units of work.
-
 func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")
