@@ -42,7 +42,8 @@ adapters ship: `omp` and Claude Code answer text search by driving a CLI,
 `codebase-memory` walks the call graph it keeps on disk for `symbol.calls` and
 `code.impact`, and Serena speaks MCP over HTTP for the three symbol
 capabilities — proven against a live language server on this repository for
-`symbol.definition` and `symbol.references`. `symbol.implementations` is the
+`symbol.definition` and `symbol.references`, resolving across files, not only
+within the one a caller happened to be looking at. `symbol.implementations` is the
 one capability that still does not answer: Serena reaches for it but Go's
 language server refuses the request Serena's tool expects, which is the first
 thing [What is not built yet]({{< relref "not-built-yet" >}}) is about. It

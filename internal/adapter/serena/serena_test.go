@@ -244,6 +244,11 @@ const symbolAnswer = `[{"name_path":"Shape/area","kind":"Method","relative_path"
 const referenceAnswer = `{"main.go":{"Function":[{"name_path":"twice","body_location":{"start_line":6,"end_line":8},` +
 	`"content_around_reference":"...   7:func twice() int {\n  >   8:\treturn area() * 2\n...   9:}"}]}}`
 
+// find_declaration answers with one object, not a list -- the same shape
+// symbolAnswer's single entry has, since both come off the same symbol_dict
+// on Serena's side.
+const declarationAnswer = `{"name_path":"Shape/area","kind":"Method","relative_path":"pkg/shapes.go","body_location":{"start_line":1,"end_line":2}}`
+
 // ---------------------------------------------------------------------------
 // The translation: position in, name out
 // ---------------------------------------------------------------------------
@@ -253,7 +258,7 @@ const referenceAnswer = `{"main.go":{"Function":[{"name_path":"twice","body_loca
 // symbol. Something has to read the word under the cursor, and it is here.
 func TestThePositionBecomesTheNameSerenaIsAsked(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 
 	_, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
@@ -263,15 +268,16 @@ func TestThePositionBecomesTheNameSerenaIsAsked(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	call, ok := s.called("find_symbol")
+	call, ok := s.called("find_declaration")
 	if !ok {
-		t.Fatalf("find_symbol was never called; tools = %v", s.toolNames())
-	}
-	if got := call.Args["name_path_pattern"]; got != "area" {
-		t.Errorf("name_path_pattern = %v, want the word under the cursor", got)
+		t.Fatalf("find_declaration was never called; tools = %v", s.toolNames())
 	}
 	if got := call.Args["relative_path"]; got != "pkg/shapes.go" {
 		t.Errorf("relative_path = %v", got)
+	}
+	regex, _ := call.Args["regex"].(string)
+	if !strings.Contains(regex, "(area)") {
+		t.Errorf("regex = %q, want the word under the cursor captured on its own", regex)
 	}
 }
 
@@ -280,7 +286,7 @@ func TestThePositionBecomesTheNameSerenaIsAsked(t *testing.T) {
 // and get a confident answer about the wrong one.
 func TestThePositionBeatsTheHint(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 
 	outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
@@ -291,9 +297,9 @@ func TestThePositionBeatsTheHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	call, _ := s.called("find_symbol")
-	if got := call.Args["name_path_pattern"]; got != "area" {
-		t.Fatalf("name_path_pattern = %v, want the file to win over the hint", got)
+	call, _ := s.called("find_declaration")
+	if regex, _ := call.Args["regex"].(string); !strings.Contains(regex, "(area)") {
+		t.Fatalf("regex = %q, want the file to win over the hint", regex)
 	}
 	// And the disagreement is said out loud, because a caller who believes
 	// their own hint needs to know it was overruled.
@@ -328,7 +334,7 @@ func TestAPositionOnNothingIsABadRequest(t *testing.T) {
 // conversion has exactly one place to be wrong, so it gets its own test.
 func TestSerenaLinesArriveOneBased(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 
 	outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
@@ -356,7 +362,7 @@ func TestSerenaLinesArriveOneBased(t *testing.T) {
 // caller at a definition nobody asked about.
 func TestAReferenceIsTheReferringLineNotItsFunction(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_referencing_symbols"] = referenceAnswer
 	runner := newRunner(t, endpoint)
 
@@ -386,7 +392,7 @@ func TestAReferenceIsTheReferringLineNotItsFunction(t *testing.T) {
 // different question. The adapter narrows rather than leaking the gap.
 func TestScopeIsEnforcedHereBecauseSerenaCannot(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_referencing_symbols"] = `{"main.go":{"Function":[{"name_path":"a","body_location":{"start_line":0}}]},` +
 		`"pkg/other.go":{"Function":[{"name_path":"b","body_location":{"start_line":4}}]}}`
 	runner := newRunner(t, endpoint)
@@ -434,6 +440,12 @@ func TestTheSameQuestionAnswersInTheSameOrder(t *testing.T) {
 
 // A definition is one place by declaration. Serena can match a pattern more
 // than once, and handing the extras back would fail the schema at the door.
+//
+// find_declaration never returns more than one candidate -- ambiguity is
+// exactly what it exists to remove -- so this deliberately leaves it
+// unconfigured. The stub's default "[]" fails to unmarshal into the single
+// object parseSymbol expects, which sends symbolAt to its same-file fallback
+// on purpose: the one path that can still receive more than one candidate.
 func TestADefinitionIsOnePlace(t *testing.T) {
 	s, endpoint := newStub(t)
 	s.answers["find_symbol"] = `[{"name_path":"area","relative_path":"a.go","body_location":{"start_line":0,"end_line":1}},` +
@@ -455,7 +467,7 @@ func TestADefinitionIsOnePlace(t *testing.T) {
 // one would make the funnel retry a provider that already answered correctly.
 func TestNoReferencesIsAnAnswer(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_referencing_symbols"] = "{}"
 	runner := newRunner(t, endpoint)
 
@@ -480,7 +492,7 @@ func TestNoReferencesIsAnAnswer(t *testing.T) {
 // references.
 func TestNoImplementationsIsAnAnswer(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_implementations"] = "[]"
 	runner := newRunner(t, endpoint)
 
@@ -508,7 +520,7 @@ func TestNoImplementationsIsAnAnswer(t *testing.T) {
 // several structs implementing it.
 func TestAnImplementationIsReadAsASymbolNotAReference(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_implementations"] = `[` +
 		`{"name_path":"Shape","kind":"Struct","relative_path":"pkg/square.go","body_location":{"start_line":2,"end_line":6}},` +
 		`{"name_path":"Shape","kind":"Struct","relative_path":"pkg/circle.go","body_location":{"start_line":4,"end_line":9}}` +
@@ -557,8 +569,8 @@ func TestAnImplementationIsReadAsASymbolNotAReference(t *testing.T) {
 func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
 	defaultStub, defaultURL := newStub(t)
 	repoStub, repoURL := newStub(t)
-	repoStub.answers["find_symbol"] = symbolAnswer
-	defaultStub.answers["find_symbol"] = symbolAnswer
+	repoStub.answers["find_declaration"] = declarationAnswer
+	defaultStub.answers["find_declaration"] = declarationAnswer
 
 	runner := newRunner(t, defaultURL)
 	r := repo(t, map[string]string{
@@ -577,7 +589,7 @@ func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
 	if _, ok := repoStub.called("activate_project"); !ok {
 		t.Fatal("repo endpoint was never asked to activate")
 	}
-	if _, ok := repoStub.called("find_symbol"); !ok {
+	if _, ok := repoStub.called("find_declaration"); !ok {
 		t.Fatal("repo endpoint was never asked for the symbol")
 	}
 }
@@ -588,8 +600,8 @@ func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
 func TestDistinctEndpointsKeepDistinctSessions(t *testing.T) {
 	a, aURL := newStub(t)
 	b, bURL := newStub(t)
-	a.answers["find_symbol"] = symbolAnswer
-	b.answers["find_symbol"] = symbolAnswer
+	a.answers["find_declaration"] = declarationAnswer
+	b.answers["find_declaration"] = declarationAnswer
 
 	runner := newRunner(t, aURL)
 	ra := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
@@ -624,7 +636,7 @@ func TestDistinctEndpointsKeepDistinctSessions(t *testing.T) {
 // silently slow in the trace.
 func TestARetargetLeavesADiscoveryNote(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 
 	r1 := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
@@ -663,7 +675,7 @@ func TestARetargetLeavesADiscoveryNote(t *testing.T) {
 // tear down. Naming it as one would cry wolf on every cold start.
 func TestFirstActivationIsNotARetargetNote(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 
 	out, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
@@ -683,7 +695,7 @@ func TestFirstActivationIsNotARetargetNote(t *testing.T) {
 // path is the whole point of caching active on the conn.
 func TestSameRepositoryDoesNotRetarget(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	runner := newRunner(t, endpoint)
 	r := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
 
@@ -762,7 +774,7 @@ func TestAPathThatLeavesTheRepositoryIsRefused(t *testing.T) {
 // implementation outright.
 func TestALanguageServerThatCannotAnswerIsUnavailable(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.errors["find_implementations"] = "Error executing tool find_implementations: SolidLSPException: " +
 		"Unhandled method textDocument/implementation (-32601)"
 	runner := newRunner(t, endpoint)
@@ -826,7 +838,7 @@ func TestAnImplementationItDoesNotServeIsRefused(t *testing.T) {
 // the walk is what hangs on a monorepo.
 func TestTheProjectIsActivatedOnceNotPerCall(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_declaration"] = declarationAnswer
 	s.answers["find_referencing_symbols"] = referenceAnswer
 	runner := newRunner(t, endpoint)
 	r := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
@@ -845,5 +857,123 @@ func TestTheProjectIsActivatedOnceNotPerCall(t *testing.T) {
 	}
 	if activations != 1 {
 		t.Errorf("activate_project ran %d time(s) across three calls, want 1", activations)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The primary lookup: find_declaration, and its same-file fallback
+// ---------------------------------------------------------------------------
+
+// The case find_declaration exists for, and the one the friction report
+// measured failing 12 times out of 18 real calls against this repository:
+// the query position sits on a call site, and the declaration lives in a
+// different file entirely. The old same-file find_symbol search could never
+// answer this -- it only ever looked inside the query's own file.
+func TestADefinitionInAnotherFileIsFound(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_declaration"] = `{"name_path":"ValidateInput","kind":"Method",` +
+		`"relative_path":"pkg/contract/capability.go","body_location":{"start_line":10,"end_line":12}}`
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
+		"cmd/main.go": "package main\n\nimport \"pkg/contract\"\n\nfunc run() { contract.ValidateInput(nil) }\n",
+	}), map[string]any{"file": "cmd/main.go", "line": 5, "column": 23})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	location, ok := outcome.Result["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v, want a location record", outcome.Result)
+	}
+	if location["path"] != "pkg/contract/capability.go" {
+		t.Errorf("path = %v, want the declaring file, not the query's own %q", location["path"], "cmd/main.go")
+	}
+}
+
+// find_declaration can fail for reasons that are not the capability's own
+// failure: a regex that does not match its file exactly once, or a position
+// the language server resolves nothing for. Either one falls back to the
+// same-file search this adapter always used, rather than surfacing as
+// unavailable or not_found on its own. Both error texts are measured, off
+// the live server.
+func TestDeclarationLookupFailuresFallBackToTheSameFileSearch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"ambiguous regex", "Error executing tool find_declaration: ValueError: Match must be unique; found 2 matches for regex: (return) checkPayload"},
+		{"nothing resolved", "Error executing tool find_declaration: ValueError: No symbol declaration found at the location of the regex match."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, endpoint := newStub(t)
+			s.errors["find_declaration"] = tc.text
+			s.answers["find_symbol"] = symbolAnswer
+			runner := newRunner(t, endpoint)
+
+			outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
+				"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+			}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if _, ok := s.called("find_symbol"); !ok {
+				t.Fatal("find_declaration's failure did not fall back to find_symbol")
+			}
+			if _, ok := outcome.Result["location"].(map[string]any); !ok {
+				t.Fatalf("result = %#v, want the fallback's answer", outcome.Result)
+			}
+		})
+	}
+}
+
+// find_referencing_symbols has to be asked about the file where the symbol
+// is actually DECLARED, which declarationAt may now have resolved to a
+// different file than the one the caller pointed at. Asking about the
+// query's own file instead would send Serena looking for a symbol that is
+// not there, even though the declaration -- and every reference to it --
+// both genuinely exist.
+func TestReferencesAreAskedAboutTheDeclaringFileNotTheQueryFile(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_declaration"] = `{"name_path":"ValidateInput","kind":"Method",` +
+		`"relative_path":"pkg/contract/capability.go","body_location":{"start_line":10,"end_line":12}}`
+	s.answers["find_referencing_symbols"] = referenceAnswer
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityReferences, repo(t, map[string]string{
+		"cmd/main.go": "package main\n\nimport \"pkg/contract\"\n\nfunc run() { contract.ValidateInput(nil) }\n",
+	}), map[string]any{"file": "cmd/main.go", "line": 5, "column": 23})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	call, ok := s.called("find_referencing_symbols")
+	if !ok {
+		t.Fatal("find_referencing_symbols was never called")
+	}
+	if got := call.Args["relative_path"]; got != "pkg/contract/capability.go" {
+		t.Errorf("relative_path = %v, want the declaring file, not %q", got, "cmd/main.go")
+	}
+}
+
+// find_implementations is asked about the same declaring file as
+// find_referencing_symbols, and for the same reason.
+func TestImplementationsAreAskedAboutTheDeclaringFileNotTheQueryFile(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_declaration"] = `{"name_path":"ValidateInput","kind":"Method",` +
+		`"relative_path":"pkg/contract/capability.go","body_location":{"start_line":10,"end_line":12}}`
+	s.answers["find_implementations"] = "[]"
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityImplementations, repo(t, map[string]string{
+		"cmd/main.go": "package main\n\nimport \"pkg/contract\"\n\nfunc run() { contract.ValidateInput(nil) }\n",
+	}), map[string]any{"file": "cmd/main.go", "line": 5, "column": 23})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	call, ok := s.called("find_implementations")
+	if !ok {
+		t.Fatal("find_implementations was never called")
+	}
+	if got := call.Args["relative_path"]; got != "pkg/contract/capability.go" {
+		t.Errorf("relative_path = %v, want the declaring file, not %q", got, "cmd/main.go")
 	}
 }

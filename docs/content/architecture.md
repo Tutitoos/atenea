@@ -748,7 +748,7 @@ file, line, column — because that is what an editor has. Serena's API names a
 | What Serena does | What the adapter does about it |
 | --- | --- |
 | Takes a name path, never a position | Reads the one line the caller pointed at and takes the word under the cursor, then asks about that name |
-| Its symbol overview carries no line numbers, and a wildcard search times out on a real repository | Neither is used; the file is read directly, which is one line instead of a project walk |
+| Its symbol overview carries no line numbers, and a wildcard `find_symbol` search times out on a real repository | Neither backs resolution: `find_declaration` anchors a regex to the position instead — one LSP request, not a project walk — and its failure alone is what falls back to reading the file directly |
 | Numbers lines from 0 | Converts once, on the way out, in a function with a name so the off-by-one has one place to be wrong |
 | Answers references in a different shape from symbols, with the referring line marked in a rendered block | Parses that block, because the entry's own location is the *enclosing function* — the wrong answer to the question asked |
 | Keys references by path, and a map has no order | Sorts, so two identical commissions cannot answer the same thing shuffled |

@@ -19,21 +19,33 @@ with.
 
 Brick 7 is closed: it took wiring a bare-process Serena with a real Go
 toolchain behind it, not a code change, exactly as expected. `serena.definition`
-and `serena.references` both answer for real now, against this repository:
+and `serena.references` both answer for real now, against this repository --
+across files, which is the case that matters most: this repository's own
+production metrics showed 12 of 18 real `symbol.definition` calls failing,
+because the declaration almost always lives in a different file from the one
+the caller was looking at, and the same-file search never looked further than
+that file. `symbolAt` now asks Serena's `find_declaration` first -- one LSP
+request anchored to the exact position, resolved wherever the declaration
+actually lives -- and only falls back to the old same-file search when
+`find_declaration` itself cannot answer: an ambiguous regex match, or a
+position the language server resolves nothing for.
 
 ```text
 $ atenea ask symbol.definition --repo current \
-    --set file=internal/core/status.go --set line=389 --set column=19
+    --set file=cmd/atenea/main.go --set line=940 --set column=23
 verdict   ok
 answer
   location
-    line     644
-    path     internal/core/status.go
+    line     215
+    path     pkg/contract/capability.go
 ```
 
-`atenea metrics` shows a priced sample for `serena.definition`: two calls,
-120ms average, both correct. `symbol.references` found all six real call sites
-of the symbol it was asked about, in the same repository, in one call.
+The call above crosses from `cmd/atenea/main.go` into
+`pkg/contract/capability.go` -- exactly the shape of question the same-file
+search could never answer. `symbol.references` follows the same fix: it now
+asks about the file the declaration actually lives in, not the file the
+caller happened to be looking at, so a symbol used far from its declaration
+still gets every call site back.
 
 `symbol.implementations` still does not answer, and that is not the same gap
 as before. It fails clean, into `unavailable`, in about two seconds and with

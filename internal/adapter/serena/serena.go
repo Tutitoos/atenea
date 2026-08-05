@@ -13,11 +13,15 @@
 //
 // The first is coordinates. Atenea names a symbol by POSITION -- file, line,
 // column -- because a workspace of forty repositories holds the same name many
-// times over. Serena names a symbol by NAME PATH and does not accept a
-// position at all. So the adapter converts, and it does so by asking Serena
-// for the symbol map of that one file and finding which symbol covers the
-// position. It never parses code itself: an adapter that started reading
-// syntax would be a second brain, and there is only supposed to be one.
+// times over. Serena mostly names a symbol by NAME PATH instead, and the one
+// tool that does take a position (find_declaration) takes it wrapped in a
+// regex, not as a line and column. So the adapter converts either way: its
+// first choice asks Serena to resolve the position directly, in one call,
+// wherever the declaration turns out to live; failing that, it falls back to
+// asking for the symbol map of the query's own file and finding which symbol
+// covers the position. It never parses code itself: an adapter that started
+// reading syntax would be a second brain, and there is only supposed to be
+// one.
 //
 // The second is that each Serena process holds ONE active project at a time.
 // Atenea dispatches waves of up to four steps across several repositories, so
@@ -466,7 +470,7 @@ func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a as
 		notes = append(notes, fmt.Sprintf(
 			"serena retargeted %s from %s to %s", c.endpoint, previous, root))
 	}
-	found, note, err := r.symbolAt(ctx, c, a)
+	found, note, err := r.symbolAt(ctx, c, root, a)
 	if err != nil {
 		return nil, notes, err
 	}
@@ -475,10 +479,10 @@ func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a as
 	case kindDefinition:
 		return locationsFrom([]symbol{found}, a), notes, nil
 	case kindReferences:
-		out, err := r.referencing(ctx, c, a, found.NamePath)
+		out, err := r.referencing(ctx, c, a, found)
 		return out, notes, err
 	default:
-		out, err := r.findImplementations(ctx, c, a, found.NamePath)
+		out, err := r.findImplementations(ctx, c, a, found)
 		return out, notes, err
 	}
 }
@@ -505,16 +509,32 @@ func (r *Runner) activate(ctx context.Context, c *conn, root string) (retargeted
 // symbolAt turns the position the capability speaks into the symbol Serena
 // speaks about.
 //
-// One call does it: Serena's symbol search takes a bare leaf name and answers
-// with every name path that ends in it, each with its range. The position then
-// picks among them, which is exactly the job the design gave it. The overview
-// tool cannot do this -- it reports names with no line numbers -- and the
-// wildcard search times out on a real repository. Both measured, not assumed.
+// declarationAt tries first: one language-server request, position in and
+// declaring symbol out, wherever that declaration actually lives. Measured
+// against this repository: 0.04-0.19s whether the position sits on the
+// declaration itself or on a call site in a different file, against 1.05s
+// for a wildcard find_symbol search on the same query -- and the wildcard
+// answer would still only be a name, not the guarantee that the position
+// actually names it. That guarantee, and the cross-file reach, is why this
+// goes first rather than staying the fallback.
+//
+// Serena's symbol search is the fallback, unchanged from before: it takes a
+// bare leaf name and answers with every name path that ends in it, each with
+// its range, and the position picks among them. It only ever finds a
+// declaration that shares the query's own file, but it is what runs when
+// declarationAt cannot answer -- an ambiguous regex, a position naming
+// nothing resolvable, or a language server that does not implement the
+// request. The overview tool was never an option for either path -- it
+// reports names with no line numbers -- and that, like the wildcard cost
+// above, was measured, not assumed.
 //
 // The returned note is not decoration: the caller named a position and gets an
 // answer about a name, so the trace has to say which name that was, or the
 // answer cannot be checked against the question.
-func (r *Runner) symbolAt(ctx context.Context, c *conn, a ask) (symbol, string, error) {
+func (r *Runner) symbolAt(ctx context.Context, c *conn, root string, a ask) (symbol, string, error) {
+	if found, ok := r.declarationAt(ctx, c, root, a); ok {
+		return found, definitionNote(a, found), nil
+	}
 	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
 		"name_path_pattern": a.identifier,
 		"relative_path":     a.file,
@@ -531,6 +551,44 @@ func (r *Runner) symbolAt(ctx context.Context, c *conn, a ask) (symbol, string, 
 	if err != nil {
 		return symbol{}, "", err
 	}
+	return found, definitionNote(a, found), nil
+}
+
+// declarationAt asks Serena's own "go to definition" directly: one request,
+// answered from the language server's index rather than a name search, so it
+// costs the same whether the declaration sits in the query's file or a
+// different one.
+//
+// find_declaration's own interface has no line-and-column parameter, only a
+// regex that must match the query's file exactly once -- declarationRegex
+// anchors it to the caller's own source line to make that hold. The second
+// return is false for anything that stops this from answering: a regex that
+// is not unique, a position the language server cannot resolve, or a
+// language server that does not implement the request at all. None of those
+// are reported to the caller as a failure of their own -- symbolAt's
+// same-file fallback answers instead, exactly as it always did.
+func (r *Runner) declarationAt(ctx context.Context, c *conn, root string, a ask) (symbol, bool) {
+	regex, err := declarationRegex(r, root, a)
+	if err != nil {
+		return symbol{}, false
+	}
+	raw, err := r.call(ctx, c, "find_declaration", map[string]any{
+		"relative_path": a.file,
+		"regex":         regex,
+	})
+	if err != nil {
+		return symbol{}, false
+	}
+	found, err := parseSymbol(raw)
+	if err != nil {
+		return symbol{}, false
+	}
+	return found, true
+}
+
+// definitionNote records which name the position actually resolved to, the
+// same way regardless of which of symbolAt's two lookups found it.
+func definitionNote(a ask, found symbol) string {
 	note := fmt.Sprintf("position %s:%d:%d names %q, which is symbol %s",
 		a.file, a.line, a.column, a.identifier, found.NamePath)
 	// The payload's name is declared a hint, so a mismatch is reported and not
@@ -539,7 +597,7 @@ func (r *Runner) symbolAt(ctx context.Context, c *conn, a ask) (symbol, string, 
 	if a.name != "" && a.name != a.identifier {
 		note += fmt.Sprintf(" (the hint said %q; the position wins)", a.name)
 	}
-	return found, note, nil
+	return note
 }
 
 // referencing asks who uses the symbol.
@@ -547,10 +605,18 @@ func (r *Runner) symbolAt(ctx context.Context, c *conn, a ask) (symbol, string, 
 // The answer comes back in a different shape from a symbol search -- path,
 // then kind, then entries -- which is why it has a parser of its own rather
 // than a flag on the first one.
-func (r *Runner) referencing(ctx context.Context, c *conn, a ask, namePath string) ([]location, error) {
+//
+// relative_path names the file where target is DECLARED, which symbolAt may
+// now have resolved to a file other than the one the caller pointed at. The
+// search itself is not restricted to that file -- Serena uses it only to
+// locate target before asking the language server for every reference to it,
+// project-wide -- but it does have to be the right file, or that first,
+// cheap lookup finds nothing to search from. Measured: given the correct
+// file, one call found references in two different files at once.
+func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol) ([]location, error) {
 	raw, err := r.call(ctx, c, "find_referencing_symbols", map[string]any{
-		"name_path":     namePath,
-		"relative_path": a.file,
+		"name_path":     target.NamePath,
+		"relative_path": target.Path,
 	})
 	if err != nil {
 		return nil, err
@@ -567,10 +633,10 @@ func (r *Runner) referencing(ctx context.Context, c *conn, a ask, namePath strin
 // Not every language server implements this request, and the ones that do not
 // say so plainly. That is a provider that cannot answer here, not a broken
 // commission, so the bin is unavailable and the funnel falls back.
-func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, namePath string) ([]location, error) {
+func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, target symbol) ([]location, error) {
 	raw, err := r.call(ctx, c, "find_implementations", map[string]any{
-		"name_path":     namePath,
-		"relative_path": a.file,
+		"name_path":     target.NamePath,
+		"relative_path": target.Path,
 	})
 	if err != nil {
 		return nil, err

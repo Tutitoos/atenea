@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -64,6 +65,20 @@ func parseSymbols(text string) ([]symbol, error) {
 	var out []symbol
 	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
 		return nil, fmt.Errorf("serena sent a symbol list nobody can read: %s", clip(trimmed))
+	}
+	return out, nil
+}
+
+// parseSymbol reads a find_declaration answer: one symbol object, not an
+// array. The object has the same shape as one entry of parseSymbols' array --
+// both come off the same symbol_dict on Serena's side -- so a query for
+// "what is this again" always ends up shaped the same way no matter which
+// tool answered it.
+func parseSymbol(text string) (symbol, error) {
+	trimmed := strings.TrimSpace(text)
+	var out symbol
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return symbol{}, fmt.Errorf("serena sent a definition nobody can read: %s", clip(trimmed))
 	}
 	return out, nil
 }
@@ -224,20 +239,18 @@ func pick(candidates []symbol, a ask) (symbol, error) {
 		a.file, a.line, a.column, a.identifier, strings.Join(names, ", "))
 }
 
-// identifierAt reads the one word the caller pointed at.
+// readLineAt reads the exact 1-based line the caller pointed at, with the
+// same sensitivity and containment checks every read in this adapter uses.
+// identifierAt and declarationRegex both need this line for different
+// reasons -- one to find the word sitting on it, the other to anchor that
+// word inside a regex Serena can match uniquely -- so the read has one place
+// to be correct rather than two.
 //
-// This is the only place any adapter touches the filesystem, and it is the
-// smallest thing that could work: one line, one word, no syntax. Serena names
-// symbols and Atenea names positions, and something has to know which word
-// sits at a position. Asking Serena is not an option -- its symbol overview
-// carries no line numbers, and its wildcard search times out on a real
-// repository. Both were measured, not assumed.
-//
-// The read stays inside the repository. That is not politeness: a step carries
-// permission for the unit of work it was commissioned against, and a path that
-// climbs out of it -- with .., with an absolute path, or through a symlink --
-// is reading something nobody authorized.
-func identifierAt(r *Runner, root string, a ask) (string, error) {
+// The read stays inside the repository. That is not politeness: a step
+// carries permission for the unit of work it was commissioned against, and a
+// path that climbs out of it -- with .., with an absolute path, or through a
+// symlink -- is reading something nobody authorized.
+func readLineAt(r *Runner, root string, a ask) (string, error) {
 	if r.isSensitive(a.file) {
 		// Exploring skips these in silence because a skipped hit costs
 		// nothing. This is not exploring: a caller asked about one exact
@@ -246,11 +259,11 @@ func identifierAt(r *Runner, root string, a ask) (string, error) {
 		return "", contract.Fail(contract.FailurePermissionDenied,
 			"%s carries secrets and is not read", a.file)
 	}
-	path, err := within(root, a.file)
+	resolved, err := within(root, a.file)
 	if err != nil {
 		return "", err
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", contract.Fail(contract.FailureNotFound,
@@ -265,10 +278,9 @@ func identifierAt(r *Runner, root string, a ask) (string, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	for n := 1; scanner.Scan(); n++ {
-		if n != a.line {
-			continue
+		if n == a.line {
+			return scanner.Text(), nil
 		}
-		return wordAt(scanner.Text(), a.column, a)
 	}
 	if err := scanner.Err(); err != nil {
 		return "", contract.Fail(contract.FailureUnavailable,
@@ -276,6 +288,24 @@ func identifierAt(r *Runner, root string, a ask) (string, error) {
 	}
 	return "", contract.Fail(contract.FailureInvalidInput,
 		"%s has fewer than %d line(s)", a.file, a.line)
+}
+
+// identifierAt reads the one word the caller pointed at.
+//
+// This is the only place any adapter touches the filesystem, and it is the
+// smallest thing that could work: one line, one word, no syntax. Serena names
+// symbols and Atenea names positions, and something has to know which word
+// sits at a position. Asking Serena is not an option -- its symbol overview
+// carries no line numbers, its wildcard search times out on a real
+// repository, and its position-based lookup (declarationRegex's job, below)
+// needs the word already in hand before it can ask about it. All three were
+// measured, not assumed.
+func identifierAt(r *Runner, root string, a ask) (string, error) {
+	line, err := readLineAt(r, root, a)
+	if err != nil {
+		return "", err
+	}
+	return wordAt(line, a.column, a)
 }
 
 // isSensitive matches the patterns against both the bare file name and the
@@ -339,32 +369,43 @@ func contained(root, path, name string) error {
 	return nil
 }
 
-// wordAt extracts the identifier sitting at a 1-based column.
+// wordBounds finds the rune range of the identifier sitting at a 1-based
+// column. wordAt and declarationRegex both need this: one to extract the
+// word, the other to anchor it inside its own line.
 //
 // Identifier here means what every language this provider supports agrees on:
 // letters, digits and underscore. It is lexical on purpose. An adapter that
 // started deciding what is a type and what is a variable would be a second
 // brain, and there is only supposed to be one.
-func wordAt(line string, column int, a ask) (string, error) {
-	runes := []rune(line)
+func wordBounds(line string, column int, a ask) (runes []rune, start, end int, err error) {
+	runes = []rune(line)
 	index := column - 1
 	if index >= len(runes) {
-		return "", contract.Fail(contract.FailureInvalidInput,
+		return nil, 0, 0, contract.Fail(contract.FailureInvalidInput,
 			"%s:%d has %d column(s), so column %d is past its end",
 			a.file, a.line, len(runes), column)
 	}
 	if !isWord(runes[index]) {
-		return "", contract.Fail(contract.FailureInvalidInput,
+		return nil, 0, 0, contract.Fail(contract.FailureInvalidInput,
 			"%s:%d:%d is %q, which is not part of a name",
 			a.file, a.line, column, string(runes[index]))
 	}
-	start := index
+	start = index
 	for start > 0 && isWord(runes[start-1]) {
 		start--
 	}
-	end := index
+	end = index
 	for end+1 < len(runes) && isWord(runes[end+1]) {
 		end++
+	}
+	return runes, start, end, nil
+}
+
+// wordAt extracts the identifier sitting at a 1-based column.
+func wordAt(line string, column int, a ask) (string, error) {
+	runes, start, end, err := wordBounds(line, column, a)
+	if err != nil {
+		return "", err
 	}
 	return string(runes[start : end+1]), nil
 }
@@ -375,4 +416,30 @@ func isWord(r rune) bool {
 		(r >= 'A' && r <= 'Z') ||
 		(r >= '0' && r <= '9') ||
 		r > 127 // identifiers are not ASCII-only in Go, Python or TypeScript
+}
+
+// declarationRegex builds the one-group pattern find_declaration's own
+// interface requires in place of a line and column: the word at a.column,
+// escaped, with the rest of its own line escaped around it.
+//
+// That line is what stands in for uniqueness -- Serena requires the regex to
+// match its file exactly once, and the bare identifier alone would not (same-
+// named symbols in one file are exactly the case find_declaration exists to
+// disambiguate), but a whole line of real source rarely repeats itself
+// verbatim anywhere else in the same file. When it does, or the position
+// names nothing at all, the caller falls back to the same-file symbol search
+// this adapter always used.
+func declarationRegex(r *Runner, root string, a ask) (string, error) {
+	line, err := readLineAt(r, root, a)
+	if err != nil {
+		return "", err
+	}
+	runes, start, end, err := wordBounds(line, a.column, a)
+	if err != nil {
+		return "", err
+	}
+	before := regexp.QuoteMeta(string(runes[:start]))
+	word := regexp.QuoteMeta(string(runes[start : end+1]))
+	after := regexp.QuoteMeta(string(runes[end+1:]))
+	return before + "(" + word + ")" + after, nil
 }

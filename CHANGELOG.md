@@ -17,6 +17,32 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`symbol.definition`/`symbol.references`/`symbol.implementations` could
+  only ever find an answer inside the file the caller happened to be
+  pointing at.** `symbolAt` resolved a position by reading that one file and
+  asking Serena's `find_symbol` to match the word under the cursor against
+  it -- which works when the declaration happens to live in the same file
+  as the call site, and answers nothing when it does not. Most real calls
+  do not: this repository's own production metrics showed 12 of 18 real
+  `symbol.definition` calls failing for exactly that reason. `symbolAt` now
+  asks Serena's `find_declaration` first -- one LSP request anchored to the
+  exact position with a regex built from the surrounding line, resolved
+  wherever the declaration actually lives -- and falls back to the old
+  same-file search only when `find_declaration` itself cannot answer: an
+  ambiguous regex match, or a position the language server resolves
+  nothing for. `referencing` and `findImplementations` now ask about the
+  file the resolved declaration lives in, not the file the query named, so
+  a symbol used far from its own declaration still gets every reference
+  and implementation back instead of an empty answer from the wrong file.
+  Verified against the compiled binary and a live language server on this
+  repository:
+  `ask symbol.definition --repo current --set file=cmd/atenea/main.go --set line=940 --set column=23`
+  now resolves
+  `capability.ValidateInput`'s call site to its declaration in
+  `pkg/contract/capability.go:215`, and `symbol.references` on the same
+  position finds all 7 real call sites across 3 files, where both
+  previously answered from `cmd/atenea/main.go` alone or not at all.
+
 - **`atenea ask`/`atenea task` could dispatch a step with a payload missing
   a required field, and only the chosen implementation would ever notice.**
   `runStep` already ran pricing and the funnel's selection before building
