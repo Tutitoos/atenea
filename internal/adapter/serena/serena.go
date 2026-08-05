@@ -575,15 +575,17 @@ func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, namePa
 	if err != nil {
 		return nil, err
 	}
-	// Serena answers this one in the reference shape when it has hits, and
-	// with "{}" or "[]" when it has none (measured: find_implementations
-	// uses the array). Asking something concrete for its implementations is
-	// a legitimate empty answer, not a failure.
-	found, err := parseReferences(raw)
+	// find_implementations answers in find_symbol's shape, not
+	// find_referencing_symbols's: a flat array of symbols, one per
+	// implementation, not entries nested path -> kind. "[]" for zero hits
+	// unmarshals through parseSymbols untouched, so the empty answer needs
+	// no special case here -- asking something concrete for its
+	// implementations is a legitimate empty answer, not a failure.
+	found, err := parseSymbols(raw)
 	if err != nil {
 		return nil, err
 	}
-	return withinScope(found, a.scope), nil
+	return withinScope(locationsFrom(found, a), a.scope), nil
 }
 
 // withinScope enforces the scope the caller declared.

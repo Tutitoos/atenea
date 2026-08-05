@@ -28,7 +28,8 @@ import (
 // word under a cursor.
 const maxLineBytes = 1 << 20
 
-// symbol is one entry of a find_symbol answer, in Serena's words.
+// symbol is one entry of a find_symbol or find_implementations answer, in
+// Serena's words -- both come back as the same flat array.
 type symbol struct {
 	NamePath string `json:"name_path"`
 	Kind     string `json:"kind"`
@@ -53,7 +54,8 @@ func (s symbol) covers(line int) bool {
 		line <= toContractLine(s.Location.EndLine)
 }
 
-// parseSymbols reads a find_symbol answer: a JSON array of symbols.
+// parseSymbols reads a find_symbol or find_implementations answer: a JSON
+// array of symbols.
 func parseSymbols(text string) ([]symbol, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -76,10 +78,9 @@ func parseSymbols(text string) ([]symbol, error) {
 // what gets parsed out.
 func parseReferences(text string) ([]location, error) {
 	trimmed := strings.TrimSpace(text)
-	// Measured live: find_implementations answers zero hits with "[]", not
-	// the "{}" the reference shape would predict. Both mean the same thing
-	// -- nothing nested inside -- so both are the legitimate empty answer,
-	// not a shape this adapter failed to read.
+	// find_referencing_symbols answers zero hits with "{}"; "" and "[]" are
+	// accepted too so an empty answer is never mistaken for a shape this
+	// adapter failed to read.
 	if trimmed == "" || trimmed == "{}" || trimmed == "[]" {
 		return nil, nil
 	}

@@ -13,6 +13,29 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **`symbol.implementations` could only ever answer when the answer was
+  empty.** The `0.3.0` fix below made `parseReferences` treat
+  `find_implementations`'s `[]` the same as `find_referencing_symbols`'s
+  `{}`, but `findImplementations` still called `parseReferences` for
+  everything -- and that function only ever understood the OTHER shape:
+  entries nested path -> kind, which is `find_referencing_symbols`'s shape,
+  not `find_implementations`'s. A real `find_implementations` answer comes
+  back in `find_symbol`'s shape instead, a flat array, so every call with a
+  genuine hit still failed with `unavailable: serena did not answer` while
+  `Raw` showed Serena's correct, parseable answer sitting right there. Found
+  asking about `contract.Runner` in this repository, which has five real
+  implementations. The only test ever written for `find_implementations` fed
+  it `"[]"` -- legal JSON either way, so it exercised the empty branch and
+  proved nothing about the one that returns data. `findImplementations` now
+  parses with `parseSymbols`, `find_symbol`'s own reader, instead of
+  `parseReferences`; a new test feeds it a real two-hit answer across two
+  files. Verified live: `symbol.implementations` on `contract.Runner` now
+  returns 10 locations across 5 adapters and their test doubles.
+
 ## [0.3.0] - 2026-08-05
 
 ### Fixed

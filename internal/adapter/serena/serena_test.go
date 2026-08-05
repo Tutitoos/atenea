@@ -498,6 +498,55 @@ func TestNoImplementationsIsAnAnswer(t *testing.T) {
 	}
 }
 
+// The regression this guards against: findImplementations reused
+// parseReferences, built for find_referencing_symbols's path -> kind ->
+// entries shape. find_implementations actually answers in find_symbol's
+// shape -- a flat array -- so every call with a real hit failed with
+// "serena sent references nobody can read", while TestNoImplementationsIsAnAnswer
+// kept passing throughout, because "[]" parses cleanly either way. Measured
+// live against contract.Runner in this repository, which really does have
+// several structs implementing it.
+func TestAnImplementationIsReadAsASymbolNotAReference(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_implementations"] = `[` +
+		`{"name_path":"Shape","kind":"Struct","relative_path":"pkg/square.go","body_location":{"start_line":2,"end_line":6}},` +
+		`{"name_path":"Shape","kind":"Struct","relative_path":"pkg/circle.go","body_location":{"start_line":4,"end_line":9}}` +
+		`]`
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityImplementations, repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcome.Verdict != contract.VerdictOK {
+		t.Fatalf("verdict = %v, want ok", outcome.Verdict)
+	}
+	locations, _ := outcome.Result["locations"].([]any)
+	if len(locations) != 2 {
+		t.Fatalf("locations = %#v, want 2", locations)
+	}
+	// start_line is 0-based, 2 and 4 in the answer above, so 3 and 5.
+	want := []struct {
+		path string
+		line int
+	}{
+		{"pkg/square.go", 3},
+		{"pkg/circle.go", 5},
+	}
+	for i, w := range want {
+		got := locations[i].(map[string]any)
+		if got["path"] != w.path {
+			t.Errorf("locations[%d].path = %v, want %q", i, got["path"], w.path)
+		}
+		if got["line"] != w.line {
+			t.Errorf("locations[%d].line = %v, want %d", i, got["line"], w.line)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Per-repo endpoints and the retarget note
 // ---------------------------------------------------------------------------
