@@ -89,6 +89,28 @@ func (r Repository) Indexes() []string {
 	return out
 }
 
+// SetIndexed returns a copy of the repository with one provider's index
+// readiness corrected.
+//
+// indexed_by, as the settings file declares it, is a starting point the
+// operator typed by hand; a detector that has actually asked the provider is
+// evidence, and evidence wins. This is the one place a repository's declared
+// shape changes while Atenea runs, the same exception SetHealth already is
+// for an implementation's health.
+func (r Repository) SetIndexed(provider string, ready bool) Repository {
+	out := r.Clone()
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if out.indexes == nil {
+		out.indexes = make(map[string]struct{}, 1)
+	}
+	if ready {
+		out.indexes[provider] = struct{}{}
+	} else {
+		delete(out.indexes, provider)
+	}
+	return out
+}
+
 // SpeaksAny reports whether the repository contains any of the given languages.
 // An empty list means the caller is language-agnostic, which always matches.
 func (r Repository) SpeaksAny(languages []string) bool {

@@ -76,3 +76,24 @@ func TestRepositoryCloneDoesNotShareState(t *testing.T) {
 		t.Fatal("clone shared the language slice")
 	}
 }
+
+// SetIndexed is a repository's one exception to an otherwise declarative
+// shape: indexed_by starts as an operator's guess and a real probe corrects
+// it, the same way SetHealth corrects an implementation.
+func TestRepositorySetIndexedCorrectsBelief(t *testing.T) {
+	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	if repo.IndexedBy("codebase-memory") {
+		t.Fatal("nothing declared indexed yet")
+	}
+	found := repo.SetIndexed("Codebase-Memory", true)
+	if !found.IndexedBy("codebase-memory") {
+		t.Error("SetIndexed(true) should mark the provider indexed, case-insensitively")
+	}
+	if repo.IndexedBy("codebase-memory") {
+		t.Error("SetIndexed must return a copy, not mutate the receiver")
+	}
+	cleared := found.SetIndexed("codebase-memory", false)
+	if cleared.IndexedBy("codebase-memory") {
+		t.Error("SetIndexed(false) should clear the provider")
+	}
+}

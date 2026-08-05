@@ -548,6 +548,82 @@ func TestFreshnessNoticeIsEmptyForANonGitRepository(t *testing.T) {
 	}
 }
 
+// --- index detection ----------------------------------------------------
+
+func TestProbeIndexReportsReadyOnSuccess(t *testing.T) {
+	path := fakeCodebaseMemory(t, map[string]string{"index_status": `{"status":"ready"}`})
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ready, hint, err := runner.ProbeIndex(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ProbeIndex: %v", err)
+	}
+	if !ready {
+		t.Errorf("ready = false, hint = %q", hint)
+	}
+	if hint != "" {
+		t.Errorf("hint = %q, want empty on success", hint)
+	}
+}
+
+// A repository codebase-memory-mcp has never seen is not ProbeIndex failing
+// -- it is the answer. failureFor's own classification, not a caller
+// re-reading Run's error, is what tells "no index" apart from "no
+// codebase-memory-mcp" here.
+func TestProbeIndexReportsNotReadyForAnUnindexedProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codebase-memory-mcp")
+	script := "#!/bin/sh\ncat >/dev/null\necho '{\"error\":\"project not found: /repo\"}' >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the fake binary: %v", err)
+	}
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ready, hint, err := runner.ProbeIndex(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ProbeIndex returned an error instead of a negative answer: %v", err)
+	}
+	if ready {
+		t.Fatal("ready = true for a project index_status never found")
+	}
+	if !strings.Contains(hint, "not found") {
+		t.Errorf("hint = %q, want it to carry the classified message", hint)
+	}
+}
+
+// Anything else -- a permission problem, a broken binary -- is not an
+// answer ProbeIndex can give on the provider's behalf: it has to come back
+// as an error, the same way invoke's other callers see it.
+func TestProbeIndexReturnsTheErrorForAnythingElse(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codebase-memory-mcp")
+	script := "#!/bin/sh\ncat >/dev/null\necho '{\"error\":\"permission denied: /repo\"}' >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the fake binary: %v", err)
+	}
+	runner, err := New(Options{Binary: path, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ready, hint, err := runner.ProbeIndex(context.Background(), "/repo")
+	if ready || hint != "" {
+		t.Fatalf("ready = %v, hint = %q, want the zero value alongside an error", ready, hint)
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission denied (err = %v)", got, err)
+	}
+}
+
 // --- helpers ------------------------------------------------------------
 
 func newTestRunner(t *testing.T) *Runner {

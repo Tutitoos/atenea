@@ -89,8 +89,9 @@ Miss either and the funnel drops it at `reach` or `constraints` and says which
 ### Attaching codebase-memory
 
 `codebase-memory` answers `symbol.calls` and `code.impact` by walking a call
-graph it keeps on disk instead of parsing anything live — the one thing
-neither a grep nor a language server has. It is a CLI like `omp`, so the
+graph it keeps on disk instead of parsing anything live, and `repository.index`
+builds that graph in the first place — the one thing neither a grep nor a
+language server has. It is a CLI like `omp`, so the
 setting is a binary name, not a URL:
 
 ```toml
@@ -114,6 +115,17 @@ directory with no version control at its root. A repository nobody has said
 either way about is not refused for it — only one explicitly declared
 `vcs = "absent"` is, the same up-front, no-dispatch drop as the index case
 above instead of a git failure surfacing mid-call.
+
+Either belief can go stale independently of anything breaking: an index
+built after the settings file already named the repository leaves
+`indexed_by` still reading "none" for a real one, and the funnel has no way
+to tell the difference from the outside. `atenea detect --repo current` asks
+every attached provider that can answer and corrects the belief for the
+rest of that process's run — nothing on disk changes, so a later invocation
+starts again from what the file declares, the same as health already does.
+A repository truly untouched needs `atenea ask repository.index --repo
+current` instead, which spawns the build itself: `write` and `process`
+effects, the one action detecting is built to never take on its own.
 
 ## Write your own settings
 
@@ -147,8 +159,8 @@ chosen      ripgrep  (cheapest of the healthy ones (estimated))
 
 funnel
   constraints  4 in -> 2 out: claude.search, ripgrep
-      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none
-      dropped serena.search: needs an index from provider serena, repository has none
+      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
   reach        2 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep
@@ -195,13 +207,13 @@ plan
 steps
   explore-current      explore  ripgrep                  6ms
       review   child=ok parent=ok (output matches the capability)
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none
-      dropped  serena.search: needs an index from provider serena, repository has none
+      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
   search-current       work     ripgrep                  5ms
       review   child=ok parent=ok (output matches the capability)
       scope    internal, pkg
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none
-      dropped  serena.search: needs an index from provider serena, repository has none
+      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
 ```
 
 Two heights, like the status screen: the summary always, the full trace only
@@ -488,7 +500,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.3.0  contract 1.7.0  AMBER
+atenea 0.4.0  contract 1.8.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

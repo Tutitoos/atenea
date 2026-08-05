@@ -20,6 +20,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -171,4 +172,29 @@ func jsonStepOf(step orchestrator.StepResult) jsonStep {
 		}
 	}
 	return js
+}
+
+type jsonIndexReport struct {
+	Repository string `json:"repository"`
+	Provider   string `json:"provider"`
+	Ready      bool   `json:"ready"`
+	Hint       string `json:"hint,omitempty"`
+	Err        string `json:"error,omitempty"`
+}
+
+// printIndexReportsJSON is the machine-readable twin of printIndexReports.
+func printIndexReportsJSON(out io.Writer, reports []core.IndexReport) {
+	js := make([]jsonIndexReport, len(reports))
+	for i, report := range reports {
+		js[i] = jsonIndexReport{
+			Repository: report.Repository,
+			Provider:   report.Provider,
+			Ready:      report.Ready,
+			Hint:       report.Hint,
+			Err:        report.Err,
+		}
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(js)
 }

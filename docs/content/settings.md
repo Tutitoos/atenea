@@ -383,6 +383,19 @@ the previous call was on a different project; a set URL keeps that repository
 on its own warm Serena process so alternating repos does not tear language
 servers down.
 
+`indexed_by` is a starting point the operator typed by hand, not a live
+fact -- a settings file does not watch the disk, so it can drift the moment
+an index is built or lost after the file was last edited. `atenea detect
+[--repo ID]` asks every attached provider that can answer whether it
+already holds a ready index and corrects the belief in memory for the rest
+of that process's run, the same one-place-a-catalog-entry-changes-while-
+running exception `SetHealth` already is for a provider's health -- it
+writes nothing back to this file, so a later invocation starts again from
+what is declared here. When a provider genuinely has nothing to detect,
+`atenea ask repository.index --repo ID` builds one instead: `write` and
+`process` effects, gated the same as any other capability that touches the
+machine rather than only answering from it.
+
 ## Selector rules
 
 ```toml

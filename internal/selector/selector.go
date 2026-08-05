@@ -236,7 +236,10 @@ func fits(impl contract.Implementation, repo contract.Repository) (string, bool)
 			list(c.Languages), list(repo.Languages)), false
 	}
 	if c.RequiresIndex && !repo.IndexedBy(impl.Provider) {
-		return fmt.Sprintf("needs an index from provider %s, repository has none", impl.Provider), false
+		return fmt.Sprintf(
+			"needs an index from provider %s, repository has none -- "+
+				"atenea detect looks for one, atenea ask repository.index --repo %s builds one",
+			impl.Provider, repo.ID), false
 	}
 	if c.RequiresVCS && repo.VCS == contract.VCSAbsent {
 		return "needs version control at the repository root, repository has none", false

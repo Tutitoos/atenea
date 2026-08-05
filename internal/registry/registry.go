@@ -248,3 +248,21 @@ func (r *Registry) SetHealth(implementationID string, health contract.Health) er
 	r.implementers[implementationID] = impl
 	return nil
 }
+
+// SetIndexed corrects one repository's belief about whether a provider has a
+// ready index for it.
+//
+// Like SetHealth, this is one of the few places a catalog entry changes
+// while Atenea runs: indexed_by is what the settings file declared as a
+// starting point, and from here on whoever actually probes the provider owns
+// the value.
+func (r *Registry) SetIndexed(repositoryID, provider string, ready bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	repo, ok := r.repositories[repositoryID]
+	if !ok {
+		return contract.Fail(contract.FailureNotFound, "unknown repository %s", repositoryID)
+	}
+	r.repositories[repositoryID] = repo.SetIndexed(provider, ready)
+	return nil
+}

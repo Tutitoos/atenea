@@ -15,6 +15,8 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-05
+
 ### Fixed
 
 - **`symbol.definition`/`symbol.references`/`symbol.implementations` could
@@ -106,7 +108,8 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   parses with `parseSymbols`, `find_symbol`'s own reader, instead of
   `parseReferences`; a new test feeds it a real two-hit answer across two
   files. Verified live: `symbol.implementations` on `contract.Runner` now
-  returns 10 locations across 5 adapters and their test doubles.
+  returns 12 locations across every real and test implementation of the
+  interface in this repository, instead of failing on all of them.
 
 - **A provider that had never once worked here could not be marked down.** The
   failure streak's bin count was taken over the whole run since the last
@@ -168,6 +171,66 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   shape, one step earlier, as every recorded case on this machine that died
   outright mid-search. Printed under the step in `--trace` output; most
   calls trip neither check.
+
+- **A repository's `indexed_by` could be silently wrong, in either
+  direction, with nothing in Atenea to catch it.** The settings file states
+  it by hand, as a starting point, and nothing ever went back to check it
+  against the provider it names -- verified on this repository itself:
+  `indexed_by = ["serena"]` for `current` while `codebase-memory-mcp`
+  already held a real, ready index for the exact same path. `symbol.calls`
+  and `code.impact` each have exactly one implementation, both
+  `codebase-memory`'s and both `requires_index = true` with no fallback, so
+  the stale belief did not degrade either capability against this
+  repository -- it made both completely unusable, `not_found` on every
+  call, for a reason nothing on the status screen or in a funnel trace
+  explained beyond "repository has none."
+
+  `contract.IndexProber` is a new, optional interface a runner implements
+  when it can answer "do you already have one" without being asked to
+  build it: `codebase-memory` answers by calling `index_status`, the same
+  tool its freshness check already calls for its own reasons; Serena
+  explicitly does not implement it, because `activate_project` succeeds
+  silently on an empty project and cannot tell "indexed" from "nothing
+  here yet." `Registry.SetIndexed`/`Repository.SetIndexed` correct the
+  belief in memory, the same one-place-a-catalog-entry-changes-while-
+  running exception `SetHealth` already is -- not written back to the
+  settings file, so a later process starts again from what the file
+  declares, exactly like health. `Core.DetectIndexes` sweeps every
+  attached prober against one repository or every registered one, and
+  `atenea detect [--repo ID] [--json]` is the CLI hook, on demand rather
+  than on every startup: a probe is a subprocess call per repository per
+  provider, and paying that unconditionally would tax the common case
+  (everything already correct) for the sake of the uncommon one this
+  exists to catch.
+
+  Detecting only ever reads. A repository truly nothing has indexed needs
+  an actual build, which is the second, deliberately separate half:
+  `repository.index` (effects `write` + `process`, a `mode` input of
+  `"fast"`/`"moderate"`/`"full"` defaulting to `"moderate"`) drives
+  `codebase-memory-mcp`'s own `index_repository` tool and reports back
+  `status`/`nodes`/`edges`. The constraints-stage drop reason for a
+  missing index now names both:
+  `needs an index from provider %s, repository has none -- atenea detect
+  looks for one, atenea ask repository.index --repo %s builds one`.
+
+  Two capabilities instead of one implicit mechanism is a deliberate
+  reversal of the earliest sketch of this idea, worth recording: the
+  original design imagined the selector itself noticing a missing index
+  and building one silently, inside the funnel, as part of answering a
+  normal question. That collides with the effects contract built since --
+  the selector is a pure decision funnel with zero I/O of its own, and no
+  permission is ever granted implicitly mid-flight; every `write`+
+  `process` action needs an explicit grant, the same rule that makes
+  `repository.index` its own capability rather than a mode of any read
+  one. The sketch and the effects model it predates are not compatible,
+  and the model that was actually built and defended wins. Verified
+  against the compiled binary and this repository's own settings file:
+  `select symbol.calls --repo current` dropped `codebase-memory.calls` for
+  "no index" and answered `not_found`; `detect --repo current` reported
+  `codebase-memory ready`; correcting `indexed_by` to include
+  `codebase-memory` by hand afterward cleared that drop, leaving only the
+  pre-existing, unrelated `min_scale = "medium"` floor this small
+  repository was always going to hit. Contract `1.8.0`.
 
 ## [0.3.0] - 2026-08-05
 
@@ -852,6 +915,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.4.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.1.0

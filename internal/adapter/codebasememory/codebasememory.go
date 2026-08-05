@@ -52,11 +52,13 @@ import (
 // capability is the "what" and an implementation is the "who": another
 // provider may answer either capability tomorrow.
 const (
-	CapabilitySymbolCalls = "symbol.calls"
-	CapabilityCodeImpact  = "code.impact"
+	CapabilitySymbolCalls     = "symbol.calls"
+	CapabilityCodeImpact      = "code.impact"
+	CapabilityRepositoryIndex = "repository.index"
 
 	ImplCalls  = "codebase-memory.calls"
 	ImplImpact = "codebase-memory.impact"
+	ImplIndex  = "codebase-memory.index"
 )
 
 // DefaultBinary is the command looked up on PATH when the settings name none.
@@ -89,7 +91,7 @@ const maxImpactSeeds = 50
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplCalls, ImplImpact}
+	return []string{ImplCalls, ImplImpact, ImplIndex}
 }
 
 // Options configure the adapter. Everything here is declared in the settings
@@ -223,6 +225,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		out, err = r.runSymbolCalls(ctx, req, root)
 	case CapabilityCodeImpact:
 		out, err = r.runCodeImpact(ctx, req, root)
+	case CapabilityRepositoryIndex:
+		out, err = r.runRepositoryIndex(ctx, req, root)
 	default:
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
 			"codebase-memory adapter has no implementation of %s", req.Capability.ID)
@@ -391,6 +395,34 @@ func (r *Runner) freshnessNotice(ctx context.Context, root string) string {
 		return "index may be stale: the working tree has uncommitted changes since it was built"
 	default:
 		return ""
+	}
+}
+
+// --- index detection ---------------------------------------------------
+
+// ProbeIndex asks codebase-memory-mcp whether root already has a ready
+// index, without asking it to build one. It is index_status called for its
+// own sake rather than as freshnessNotice's aside: the two share a call
+// because they share a question, "does the graph already know this
+// repository", asked from two different callers for two different reasons.
+//
+// index_status failing with "project not found" is not this call failing --
+// it is the answer, and failureFor already sorts that message into
+// FailureUnavailable so it can be told apart here from everything else that
+// bin also covers (a missing binary, a crashed one): only this call's own
+// classification, not a caller re-reading Run's error, can tell "no index"
+// apart from "no codebase-memory-mcp" -- so the hint carries the
+// classified message forward for whoever asked to read.
+func (r *Runner) ProbeIndex(ctx context.Context, root string) (bool, string, error) {
+	discard := &meter{}
+	_, err := r.invoke(ctx, "index_status", map[string]any{"project": root}, discard)
+	switch {
+	case err == nil:
+		return true, "", nil
+	case contract.KindOf(err) == contract.FailureUnavailable:
+		return false, err.Error(), nil
+	default:
+		return false, "", err
 	}
 }
 

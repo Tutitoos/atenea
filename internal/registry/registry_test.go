@@ -146,6 +146,29 @@ func TestSetHealthReplacesTheBlock(t *testing.T) {
 	}
 }
 
+// SetIndexed is the repository's equivalent of SetHealth: indexed_by starts
+// as the settings file's declared guess, and a real probe corrects it.
+func TestSetIndexedCorrectsRepository(t *testing.T) {
+	reg := registry.New()
+	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	if err := reg.AddRepository(repo); err != nil {
+		t.Fatalf("AddRepository: %v", err)
+	}
+	if err := reg.SetIndexed("web", "codebase-memory", true); err != nil {
+		t.Fatalf("SetIndexed: %v", err)
+	}
+	got, err := reg.Repository("web")
+	if err != nil {
+		t.Fatalf("Repository: %v", err)
+	}
+	if !got.IndexedBy("codebase-memory") {
+		t.Fatal("SetIndexed(true) did not stick")
+	}
+	if err := reg.SetIndexed("nope", "codebase-memory", true); contract.KindOf(err) != contract.FailureNotFound {
+		t.Errorf("unknown repository: kind = %v", contract.KindOf(err))
+	}
+}
+
 // The catalog is shared between every open chat, so handing a caller a
 // pointer into it would let one session corrupt another.
 func TestReadsAreDefensiveCopies(t *testing.T) {

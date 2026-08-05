@@ -31,23 +31,22 @@ what it knows about the repository in front of it.
 
 ## Where the project stands
 
-**These pages describe Atenea `0.3.0`**, speaking
-contract `1.7.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
+**These pages describe Atenea `0.4.0`**, speaking
+contract `1.8.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
 goes stable; the contract adapters compile against is already a commitment. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.
 
 The core, the Capability Registry and the funnel run on all four stages. Four
 adapters ship: `omp` and Claude Code answer text search by driving a CLI,
-`codebase-memory` walks the call graph it keeps on disk for `symbol.calls` and
-`code.impact`, and Serena speaks MCP over HTTP for the three symbol
-capabilities — proven against a live language server on this repository for
-`symbol.definition` and `symbol.references`, resolving across files, not only
-within the one a caller happened to be looking at. `symbol.implementations` is the
-one capability that still does not answer: Serena reaches for it but Go's
-language server refuses the request Serena's tool expects, which is the first
-thing [What is not built yet]({{< relref "not-built-yet" >}}) is about. It
-installs as a background service that keeps its own history in shape.
+`codebase-memory` walks the call graph it keeps on disk for `symbol.calls`,
+`code.impact` and `repository.index`, and Serena speaks MCP over HTTP for
+all three symbol capabilities. It installs as a background service that
+keeps its own history in shape, proven now against a live language server
+on this repository: `symbol.definition` and `symbol.references` resolve
+across files, not only within the one a caller happened to be looking at,
+and `symbol.implementations` answers for real too, not only the empty
+result an earlier bug let through.
 
 Cost ranks the survivors rather than filtering them, and it says which figure
 it used. Until an implementation has been measured a couple of times, that

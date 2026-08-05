@@ -66,7 +66,18 @@ type Version struct {
 // without tearing each other down. Additive: an adapter built against 1.6.0
 // never reads the field; a core speaking 1.7.0 that sees it empty does what
 // it always did.
-var Current = Version{Major: 1, Minor: 7, Patch: 0}
+//
+// 1.8.0 added the `IndexProber` interface and `Repository.SetIndexed`. A
+// repository's declared `indexed_by` is a starting point typed by hand, and
+// nothing before this checked it against the provider it names; IndexProber
+// is a runner's optional way to answer "do you already have one" without
+// being asked to build it, and SetIndexed is where the answer corrects the
+// belief -- in memory only, the same exception SetHealth already is for an
+// implementation's own liveness. Additive: implementing IndexProber is
+// optional, so an adapter built against 1.7.0 goes on compiling and simply
+// never answers the probe; nothing about the shape of a request or an
+// outcome changed underneath it.
+var Current = Version{Major: 1, Minor: 8, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

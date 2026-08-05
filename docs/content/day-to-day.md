@@ -72,7 +72,7 @@ charged, and — the useful half — who was dropped and why.
 steps
   ask-current          ask      ripgrep                  1.015s
       review   child=ok parent=ok (output matches the capability)
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none
+      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
 ```
 
 If you only want to know *who would be picked* without spending anything,

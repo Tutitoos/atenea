@@ -19,7 +19,7 @@ import (
 // build that forgets does not fail -- it ships claiming to be whatever the
 // source said, which is the one error nobody notices. Here the source is the
 // only answer, and the release workflow refuses a tag that disagrees with it.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // Full is Version plus what this particular build knows about where it came
 // from, as SemVer build metadata.

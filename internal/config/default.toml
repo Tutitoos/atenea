@@ -172,10 +172,10 @@ runners = ["omp"]
   # deliberately NOT here: that catalog entry stays an unimplemented
   # possibility, on purpose, until something actually claims code.search from
   # this graph. This adapter is wired for the two capabilities that read the
-  # call graph itself -- symbol.calls and code.impact -- and claiming a text
-  # search it has no code path for would make the funnel promise an answer
-  # nobody can give.
-  implementations = ["codebase-memory.calls", "codebase-memory.impact"]
+  # call graph itself -- symbol.calls and code.impact -- and for the one that
+  # writes what they read: repository.index. Claiming a text search it has no
+  # code path for would make the funnel promise an answer nobody can give.
+  implementations = ["codebase-memory.calls", "codebase-memory.impact", "codebase-memory.index"]
   # How long one codebase-memory-mcp or git invocation may take. It sits at
   # Serena's own ceiling: both open an index before they can answer, and a
   # cold one is slow long before it is stuck.
@@ -799,6 +799,51 @@ effects = ["read"]
     required = false
     summary = "The line at the symbol, present only when it was asked for."
 
+[[capability]]
+id = "repository.index"
+version = "1.0.0"
+summary = "Build or refresh a provider's index for a repository."
+semantics = """
+Detection reads a provider's own claim about a repository; this capability \
+is what gives it a claim to read. A repository nothing has ever indexed \
+answers detection truthfully as "not ready" forever, because looking harder \
+never builds what was never there -- something has to actually run the \
+tool that walks the repository and writes the graph, and that is this. \
+\
+It is deliberately its own capability and not a mode of any read one: \
+building writes to disk and spawns a process that can run for minutes on a \
+large repository, which is exactly the action detection itself must never \
+take silently on a caller's behalf. mode is intent, not a provider's own \
+vocabulary -- how thorough the build should be, coarse enough that a \
+provider without the concept can simply ignore it -- the same reasoning \
+code.search's own options already follow.\
+"""
+effects = ["write", "process"]
+
+  [[capability.input]]
+  name = "mode"
+  type = "string"
+  required = false
+  summary = "How thorough the index should be: \"fast\", \"moderate\" or \"full\" (default: the provider's own)."
+
+  [[capability.output]]
+  name = "status"
+  type = "string"
+  required = true
+  summary = "What the provider reports when indexing finishes, in its own words."
+
+  [[capability.output]]
+  name = "nodes"
+  type = "int"
+  required = true
+  summary = "How many graph nodes the index now holds."
+
+  [[capability.output]]
+  name = "edges"
+  type = "int"
+  required = true
+  summary = "How many graph edges the index now holds."
+
 # ---------------------------------------------------------------------------
 # Implementations: the "who and how". Four blocks each -- capability,
 # constraints, cost and health.
@@ -967,6 +1012,32 @@ capability = "code.impact"
   # actually touched instead of staying flat like the others.
   estimated_duration = "2.5s"
   estimated_tokens = 1500
+
+[[implementation]]
+id = "codebase-memory.index"
+provider = "codebase-memory"
+capability = "repository.index"
+
+  # Unrestricted on purpose, unlike its read-only siblings above: a small
+  # repository the funnel would never pick this implementation for on a
+  # *read* still has to be reachable for an explicit *build* -- that is the
+  # whole path out of the false negative detection alone cannot fix.
+  [implementation.constraints]
+  languages = []
+  requires_index = false  # this is how one gets built
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # A whole-repository walk, not one query against a graph already built --
+  # measured at 0.5s / 2294 nodes on this repository's own source, cold
+  # cache. Above codebase-memory.impact's own ceiling on purpose: this is
+  # the expensive one, and mode="full" on a much larger repository would
+  # spend more still.
+  estimated_duration = "3s"
+  # The answer is three scalars, not a list -- the one implementation here
+  # whose token cost barely depends on repository size at all.
+  estimated_tokens = 60
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

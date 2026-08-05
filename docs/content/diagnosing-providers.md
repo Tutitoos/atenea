@@ -29,11 +29,11 @@ and broken are different findings, and only the second is worth debugging.
 ```text
 serves     ripgrep
 no runner  claude.search, codebase-memory.calls, codebase-memory.impact,
-           codebase-memory.search, serena.definition, serena.implementations,
-           serena.references, serena.search
+           codebase-memory.index, codebase-memory.search, serena.definition,
+           serena.implementations, serena.references, serena.search
 ```
 
-That is the stock catalogue: nine implementations declared, one reachable,
+That is the stock catalogue: ten implementations declared, one reachable,
 because `runners = ["omp"]` attaches a single adapter. Attaching Serena — the
 configuration this write-up is about — makes it four:
 
@@ -161,8 +161,8 @@ chosen      ripgrep  (the only surviving implementation)
 
 funnel
   constraints  4 in -> 2 out: claude.search, ripgrep
-      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none
-      dropped serena.search: needs an index from provider serena, repository has none
+      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
   reach        2 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep

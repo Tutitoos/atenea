@@ -204,6 +204,15 @@ func (r *Runner) connFor(repo contract.Repository) *conn {
 // ID names the runner on the status screen.
 func (r *Runner) ID() string { return "serena" }
 
+// This runner does not implement contract.IndexProber, on purpose rather
+// than by omission: activate_project succeeds silently on a path with
+// nothing indexed yet (it opens an empty project rather than erring), so it
+// cannot serve as a readiness check, and there is no cheaper call that
+// answers "is this repository's index actually warm" the way index_status
+// answers it for codebase-memory. Detection skips a runner with nothing to
+// probe rather than guess; indexed_by for serena stays exactly what the
+// settings file declares until a real probe exists to correct it.
+
 // Implementations lists every implementation this runner declares itself the
 // far side of.
 func (r *Runner) Implementations() []string { return slices.Clone(r.implementations) }

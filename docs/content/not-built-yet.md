@@ -15,87 +15,24 @@ not do yet, in the order the design itself put them. Each entry says how you wou
 know it was finished, because "done" is the word this page exists to be careful
 with.
 
-## Symbol capabilities, half-answered
+## `codebase-memory.search`, a brick nobody has laid
 
-Brick 7 is closed: it took wiring a bare-process Serena with a real Go
-toolchain behind it, not a code change, exactly as expected. `serena.definition`
-and `serena.references` both answer for real now, against this repository --
-across files, which is the case that matters most: this repository's own
-production metrics showed 12 of 18 real `symbol.definition` calls failing,
-because the declaration almost always lives in a different file from the one
-the caller was looking at, and the same-file search never looked further than
-that file. `symbolAt` now asks Serena's `find_declaration` first -- one LSP
-request anchored to the exact position, resolved wherever the declaration
-actually lives -- and only falls back to the old same-file search when
-`find_declaration` itself cannot answer: an ambiguous regex match, or a
-position the language server resolves nothing for.
+`code.search` declares four implementations in the shipped catalogue —
+`ripgrep`, `serena.search`, `codebase-memory.search` and `claude.search` —
+and two of them have never had an adapter behind them. `serena.search`
+stays unclaimed on purpose: Serena is wired for the symbol family, and a
+text search it has no code for would make the funnel promise an answer
+nobody can give. `codebase-memory` answers three capabilities now —
+`symbol.calls`, `code.impact` and `repository.index` — for the same
+reason it stays away from `code.search`: three cheaper or
+equally-capable providers already exist for it, and a fourth identical
+answer would only give the funnel one more thing to rank.
 
-```text
-$ atenea ask symbol.definition --repo current \
-    --set file=cmd/atenea/main.go --set line=940 --set column=23
-verdict   ok
-answer
-  location
-    line     215
-    path     pkg/contract/capability.go
-```
-
-The call above crosses from `cmd/atenea/main.go` into
-`pkg/contract/capability.go` -- exactly the shape of question the same-file
-search could never answer. `symbol.references` follows the same fix: it now
-asks about the file the declaration actually lives in, not the file the
-caller happened to be looking at, so a symbol used far from its declaration
-still gets every call site back.
-
-`symbol.implementations` still does not answer, and that is not the same gap
-as before. It fails clean, into `unavailable`, in about two seconds and with
-nothing in the log — Go's language server not answering the
-`textDocument/implementation` request the way Serena's tool expects, which the
-funnel correctly bins as a provider limit rather than a broken commission. The
-funnel and the failure bins did their job; nobody has looked yet at whether
-this is fixable on Serena's side, worth a fallback, or a permanent gap in the
-catalogue's honesty about what `serena.implementations` can promise.
-
-A fourth adapter answers now too: `codebase-memory`, walking the call graph
-`codebase-memory-mcp` keeps on disk instead of parsing anything live.
-`symbol.calls` and `code.impact` both work end to end, against this
-repository:
-
-```text
-$ atenea ask symbol.calls --repo current --set direction=both \
-    --set file=cmd/atenea/main.go --set line=815 --set column=6
-verdict   ok
-answer
-  calls (47)
-    ...
-
-$ atenea ask code.impact --repo current --set baseline=HEAD
-verdict   ok
-answer
-  affected_symbols (11)
-    ...
-  changed_files [...]
-```
-
-Both also attach a `notice` when what they answered from might already be
-behind: HEAD has moved since the index was built, the working tree has
-uncommitted changes, or both. It is a caveat, not a refusal -- the check is
-best-effort (an `index_status` call plus a `git status --porcelain`, real
-work either of which failing is not reason enough to withhold an answer that
-already succeeded) and it shows beside the answer whether or not `--trace`
-is passed, not only in the trace.
-
-Both implementations declare `requires_index = true` and a `min_scale =
-"medium"` floor: unlike Serena, this provider only ever answers from an
-index built ahead of time, so a repository nothing has indexed, or one too
-small to have declared the scale, is refused rather than sent to a provider
-with nothing on disk to answer from.
-
-`code.search` still works, over three providers. `codebase-memory.search` is
-still declared in the catalogue with **no adapter behind it at all** — it shows
-up on every status screen under `no runner` and always will. It is either a
-brick nobody has laid or an entry that should be deleted; leaving it as a
-permanent amber line is the one thing it should not be.
+`codebase-memory.search` is the one of the four nothing explains. It
+shows up on every status screen under `no runner` and always will, until
+this closes. It is either a brick nobody has laid or an entry that should
+be deleted; leaving it as a permanent amber line is the one thing it
+should not be.
 
 **Done when:** the catalogue declares nothing that cannot be reached, or the
 adapter exists.
@@ -210,6 +147,10 @@ cost with per-version baselines, the six shared failure bins, the cancellation
 path down to process groups and inherited pipes, the measurement base with its
 rollups and retention, the crash notebook, the receipts, resumable runs
 (`atenea resume`, reading a receipt back rather than paying twice for a step
-that already succeeded), and the service wiring.
+that already succeeded), the service wiring, and all three symbol
+capabilities — `symbol.definition`, `symbol.references` and
+`symbol.implementations` — each answering for real against this
+repository, not only the empty or same-file answers earlier bugs let
+through.
 Those are laid, measured, and defended by tests that have been mutated to check
 they fail when they should.

@@ -35,7 +35,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.impact", "code.search", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.references"}
+	wantIDs := []string{"code.impact", "code.search", "repository.index", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.references"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -44,10 +44,18 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	// of them may ship declaring an effect that lets a provider write. Only
 	// code.search also spawns a process to answer -- every implementation
 	// behind it, ripgrep or the local stand-in, is a binary, not a library.
+	// repository.index is the one deliberate exception: building an index is
+	// exactly the write detection itself must never make, and the tool that
+	// makes it is a process too.
 	for _, capability := range cfg.Capabilities {
-		want := []contract.Effect{contract.EffectRead}
-		if capability.ID == "code.search" {
-			want = append(want, contract.EffectProcess)
+		var want []contract.Effect
+		switch capability.ID {
+		case "repository.index":
+			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
+		case "code.search":
+			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
+		default:
+			want = []contract.Effect{contract.EffectRead}
 		}
 		if !slices.Equal(capability.Effects, want) {
 			t.Errorf("%s effects = %v, want %v", capability.ID, capability.Effects, want)
@@ -76,6 +84,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"claude.search",
 		"codebase-memory.calls",
 		"codebase-memory.impact",
+		"codebase-memory.index",
 		"codebase-memory.search",
 		"ripgrep",
 		"serena.definition",

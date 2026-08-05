@@ -142,6 +142,37 @@ func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
 	}
 }
 
+// The drop reason for a missing index used to be a dead end. Now it names
+// the two commands that resolve it: detect corrects a stale belief, ask
+// repository.index builds a missing one.
+func TestMissingIndexReasonNamesTheFix(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("ripgrep"),
+			impl("serena.search", provider("serena"), needsIndex()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	constraints := stage(t, decision, selector.StageConstraints)
+	drops := map[string]string{}
+	for _, drop := range constraints.Dropped {
+		drops[drop.Implementation] = drop.Reason
+	}
+	reason, ok := drops["serena.search"]
+	if !ok {
+		t.Fatalf("serena.search was not dropped: %+v", constraints.Dropped)
+	}
+	for _, want := range []string{"atenea detect", "atenea ask repository.index --repo api"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("reason %q does not mention %q", reason, want)
+		}
+	}
+}
+
 // A warm index belongs to the provider, so an implementation whose provider is
 // already indexed here must survive.
 func TestIndexConstraintIsSatisfiedByTheProviderIndex(t *testing.T) {

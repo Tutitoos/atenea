@@ -117,6 +117,14 @@ const (
 	impactCapability          = "code.impact"
 )
 
+// repositoryIndexCapability builds what detection can only ever read.
+// Unlike its neighbors above it is never planned into a commission either --
+// asking by default for write and process is exactly the standing grant a
+// read-only exploration must not carry -- but it still has to be named here
+// for the same reason they are: a capability the card does not name cannot
+// be asked for even when everything below it is ready to answer.
+const repositoryIndexCapability = "repository.index"
+
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
 const probeContextLines = 0
@@ -182,6 +190,7 @@ var card = contract.Agent{
 		implementationsCapability,
 		callsCapability,
 		impactCapability,
+		repositoryIndexCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,

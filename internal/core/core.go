@@ -590,6 +590,90 @@ func (c *Core) Resume(ctx context.Context, runID string, opts orchestrator.Resum
 	return c.agent.Resume(ctx, runID, opts)
 }
 
+// IndexReport is one repository/provider pairing's index-detection result.
+type IndexReport struct {
+	Repository string
+	Provider   string
+	Ready      bool
+	// Hint explains a false Ready in words a user can act on. Empty when
+	// Ready is true.
+	Hint string
+	// Err is the probe's own failure, in its own words. Empty when the
+	// probe ran to completion, whatever it found -- a wire-friendly string
+	// rather than an error, the same reason Health.Reason and Drop.Reason
+	// already are.
+	Err string
+}
+
+// DetectIndexes asks every attached runner that can say whether it already
+// holds a ready index, for the given repository or every registered one when
+// repositoryID is empty, and corrects the catalog's own belief -- indexed_by,
+// as the settings file declared it -- with whatever it finds.
+//
+// This is the read half of the pair repository.index is the write half of:
+// detection only ever asks, it never builds, and SetIndexed is the same
+// in-memory correction SetHealth already makes for a provider's own
+// liveness, on the same reasoning. It runs on demand rather than on every
+// startup because a probe is itself a subprocess call per repository per
+// provider, and paying that unconditionally would tax the common case --
+// everything already wired correctly -- for the sake of the uncommon one
+// this exists to catch.
+//
+// Not every runner can answer this. One that cannot is left out of the
+// report entirely rather than reported as a failure, the same reasoning
+// IndexProber being optional documents at its own declaration.
+func (c *Core) DetectIndexes(ctx context.Context, repositoryID string) ([]IndexReport, error) {
+	if err := c.enter(); err != nil {
+		return nil, err
+	}
+	defer c.inflight.Done()
+
+	var repos []contract.Repository
+	if repositoryID == "" {
+		repos = c.catalog.Repositories()
+	} else {
+		repo, err := c.catalog.Repository(repositoryID)
+		if err != nil {
+			return nil, err
+		}
+		repos = []contract.Repository{repo}
+	}
+
+	var reports []IndexReport
+	for _, runner := range c.runners {
+		prober, ok := runner.(contract.IndexProber)
+		if !ok {
+			continue
+		}
+		for _, repo := range repos {
+			if ctx.Err() != nil {
+				return reports, ctx.Err()
+			}
+			ready, hint, err := prober.ProbeIndex(ctx, repo.Path)
+			var errText string
+			if err != nil {
+				errText = err.Error()
+			} else if setErr := c.catalog.SetIndexed(repo.ID, runner.ID(), ready); setErr != nil {
+				errText = setErr.Error()
+			}
+			reports = append(reports, IndexReport{
+				Repository: repo.ID,
+				Provider:   runner.ID(),
+				Ready:      ready,
+				Hint:       hint,
+				Err:        errText,
+			})
+		}
+	}
+	slices.SortFunc(reports, func(a, b IndexReport) int {
+		if d := strings.Compare(a.Repository, b.Repository); d != 0 {
+			return d
+		}
+		return strings.Compare(a.Provider, b.Provider)
+	})
+	return reports, nil
+}
+
 // enter registers a unit of in-flight work, refusing it once a stop is under
 // way. Taking the count under the same lock that flips the flag is what makes
 // the clean stop actually clean: no work can slip in behind it.

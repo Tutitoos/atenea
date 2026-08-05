@@ -46,6 +46,8 @@ Commands:
                          --budget USD replaces what remains of the grant.
                          resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
+  detect [--repo ID]     Ask attached providers whether they already hold a
+                         ready index; corrects indexed_by in memory when they do
   run                    Run as a service until interrupted
   service install        Install atenea as a background service that starts
                          with the system; 'uninstall' undoes it, 'status'
@@ -82,6 +84,17 @@ Short health screen: one light for Atenea, one per provider it talks to.
 	"catalog": `Usage: atenea catalog
 
 List every capability, its providers, and every registered repository.
+`,
+	"detect": `Usage: atenea detect [flags]
+
+Ask every attached provider that can tell whether it already holds a ready
+index, and correct indexed_by in memory with whatever it finds. Read-only
+about the repository -- it asks, it never builds; atenea ask repository.index
+builds one.
+
+Flags:
+  --repo ID   repository to check (default: every repository registered)
+  --json      print the result as json instead of prose
 `,
 	"select": `Usage: atenea select CAPABILITY [flags]
 
@@ -268,6 +281,8 @@ func run(args []string, out io.Writer) error {
 		return cmdStatus(settingsPath, out)
 	case "catalog":
 		return cmdCatalog(settingsPath, out)
+	case "detect":
+		return cmdDetect(settingsPath, commandArgs, out)
 	case "select":
 		return cmdSelect(settingsPath, commandArgs, out)
 	case "task":
@@ -716,6 +731,60 @@ func printFields(out io.Writer, indent string, fields []contract.Field) {
 		fmt.Fprintf(out, "%s%-16s %-12s %-8s %s\n", indent, field.Name, field.Type, required, field.Summary)
 		if len(field.Fields) > 0 {
 			printFields(out, indent+"  ", field.Fields)
+		}
+	}
+}
+
+// cmdDetect asks every attached provider that can tell whether it already
+// holds a ready index, and corrects indexed_by in memory with whatever it
+// finds. Unlike select and ask it defaults to every repository rather than
+// requiring one: sweeping the whole catalog is the common case, a single
+// dispatch target is not.
+func cmdDetect(settingsPath string, args []string, out io.Writer) error {
+	var repository string
+	var jsonOut bool
+	flags := flag.NewFlagSet("detect", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&repository, "repo", "", "repository to check (default: every repository registered)")
+	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+
+	atenea, err := load(settingsPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = atenea.Shutdown() }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	reports, err := atenea.DetectIndexes(ctx, repository)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		printIndexReportsJSON(out, reports)
+		return nil
+	}
+	printIndexReports(out, reports)
+	return nil
+}
+
+func printIndexReports(out io.Writer, reports []core.IndexReport) {
+	if len(reports) == 0 {
+		fmt.Fprintln(out, "no attached provider can report index readiness")
+		return
+	}
+	for _, report := range reports {
+		switch {
+		case report.Err != "":
+			fmt.Fprintf(out, "%-12s %-16s could not tell: %s\n", report.Repository, report.Provider, report.Err)
+		case report.Ready:
+			fmt.Fprintf(out, "%-12s %-16s ready\n", report.Repository, report.Provider)
+		default:
+			fmt.Fprintf(out, "%-12s %-16s not ready: %s\n", report.Repository, report.Provider, orDash(report.Hint))
 		}
 	}
 }

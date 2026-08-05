@@ -32,6 +32,29 @@ type Runner interface {
 	Run(ctx context.Context, req RunRequest) (Outcome, error)
 }
 
+// IndexProber is implemented by a runner that can say whether it already
+// holds a ready index for a repository, without being asked to build one.
+//
+// It is optional, not part of Runner itself: not every provider has index
+// state to report. A capability answered correctly today does not prove an
+// index backed the answer, and only the provider's own process knows which
+// it was -- this is the one seam that can ask it directly rather than infer
+// it from the outside. A runner that implements it is one detection can
+// correct indexed_by against; one that does not is simply left out of the
+// sweep, the same as health once was before anything probed it.
+type IndexProber interface {
+	// ProbeIndex reports whether root already has a ready index this runner
+	// can answer from.
+	//
+	// hint explains a false ready in words a user can act on -- it is
+	// empty exactly when ready is true. err is reserved for the probe
+	// itself failing to reach a verdict at all (a crashed binary, a
+	// canceled context): the caller must not touch indexed_by on a
+	// non-nil err, because "could not tell" and "confirmed absent" would
+	// otherwise correct the catalog on a guess.
+	ProbeIndex(ctx context.Context, root string) (ready bool, hint string, err error)
+}
+
 // RunRequest is everything the far side needs and nothing it does not.
 //
 // It carries the capability rather than just its id because the far side has
