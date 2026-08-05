@@ -107,6 +107,92 @@ func TestFailuresWithNoSingleCauseDegradeRatherThanDrop(t *testing.T) {
 	}
 }
 
+// The bug this exists for, measured on a real machine before it was fixed.
+//
+// `claude.search` had never once succeeded on this repository, so the run
+// since the last success was its ENTIRE history: five `unavailable` failures
+// from the days it was not logged in, then three `permission_denied` ones
+// after that was fixed and its real ceiling started biting. Counting bins
+// over the whole run found two, blanked the Kind, and reported a merely
+// degraded provider -- so a cause that had been fixed days earlier was
+// masking the one failing every call today, and it could never stop masking
+// it: a provider that has never succeeded here never earns a clean slate to
+// start a fresh run from.
+func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC()
+	for i := range 5 {
+		s.Record(broke(now.Add(time.Duration(i)*time.Second), "claude.search",
+			"unavailable", "unavailable: claude code is not logged in on this machine"))
+	}
+	for i := range 3 {
+		s.Record(broke(now.Add(time.Duration(5+i)*time.Second), "claude.search",
+			"permission_denied", "permission_denied: claude code stopped at its spending ceiling"))
+	}
+
+	fault := faultOf(t, s, "claude.search")
+	if fault.Streak != 8 {
+		t.Fatalf("streak = %d, want 8: the whole run since the last success", fault.Streak)
+	}
+	if fault.SameKindStreak != 3 {
+		t.Fatalf("same-kind streak = %d, want 3: only the newest run shares a bin",
+			fault.SameKindStreak)
+	}
+	if fault.Kind != "permission_denied" {
+		t.Errorf("kind = %q, want permission_denied: three in a row at the newest end is nameable",
+			fault.Kind)
+	}
+	health, hurt := fault.Health(now.Add(8 * time.Second))
+	if !hurt {
+		t.Fatal("eight failures in a row did not reach health at all")
+	}
+	if health.State != contract.HealthDown {
+		t.Errorf("state = %v, want down: an old fixed cause masked today's real one",
+			health.State)
+	}
+	if health.Usable() {
+		t.Error("a provider failing every call the same way was left in the funnel")
+	}
+	// The count in the sentence is the run that earned the verdict, not the
+	// whole history: claiming eight permission_denied failures when three of
+	// them were that bin would be evidence nobody could check.
+	if !strings.Contains(health.Reason, "3 permission_denied failures in a row") {
+		t.Errorf("reason = %q, want the same-kind count, not the whole streak", health.Reason)
+	}
+}
+
+// The other side of the same line, so the fix above cannot become "any bin
+// repeated twice at the end is an outage". A tail shorter than FaultStreak is
+// still a provider breaking differently, and the funnel would rather rank a
+// flaky provider last than have nothing to call.
+func TestAShortSameKindTailIsStillNotAnOutage(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC()
+	s.Record(broke(now, "serena.search", "timeout", "timeout: took too long"))
+	s.Record(broke(now.Add(time.Second), "serena.search", "invalid_input", "invalid_input: bad path"))
+	s.Record(broke(now.Add(2*time.Second), "serena.search", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(3*time.Second), "serena.search", "unavailable", "unavailable: no server"))
+
+	fault := faultOf(t, s, "serena.search")
+	if fault.Streak != 4 {
+		t.Fatalf("streak = %d, want 4", fault.Streak)
+	}
+	if fault.SameKindStreak != 2 {
+		t.Fatalf("same-kind streak = %d, want 2: the tail stops at the invalid_input",
+			fault.SameKindStreak)
+	}
+	if fault.Kind != "" {
+		t.Errorf("kind = %q, want empty: two in a row does not name an outage", fault.Kind)
+	}
+	health, hurt := fault.Health(now.Add(4 * time.Second))
+	if !hurt || health.State != contract.HealthDegraded {
+		t.Errorf("state = %v (reached=%v), want degraded", health.State, hurt)
+	}
+	if !health.Usable() {
+		t.Error("a provider with no single fault was dropped from the funnel")
+	}
+}
+
 // A streak is the run at the newest end of the record. One call that works
 // ends it, which is the only way a provider ever comes back on its own.
 func TestASuccessEndsTheStreak(t *testing.T) {

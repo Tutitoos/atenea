@@ -59,7 +59,7 @@ func TestAFailureWithNothingAfterItBlocksThePromotion(t *testing.T) {
 	b := Baseline{
 		Successes: 9, Attempts: 10, Failures: 1,
 		Success: now.Add(-2 * time.Minute),
-		Fault:   Fault{Streak: 1, Kind: "timeout", Reason: "timeout: took too long", Latest: now},
+		Fault:   Fault{Streak: 1, SameKindStreak: 1, Kind: "timeout", Reason: "timeout: took too long", Latest: now},
 	}
 
 	health, said := b.Health(now)
@@ -79,7 +79,7 @@ func TestALapsedStreakDoesNotBecomeHealthByWaiting(t *testing.T) {
 		Successes: 5, Attempts: 8, Failures: 3,
 		Success: now.Add(-30 * time.Minute),
 		Fault: Fault{
-			Streak: 3, Kind: "unavailable", Reason: "unavailable: down",
+			Streak: 3, SameKindStreak: 3, Kind: "unavailable", Reason: "unavailable: down",
 			Latest: now.Add(-20 * time.Minute),
 		},
 	}
@@ -96,7 +96,7 @@ func TestAStreakStillOutranksADeclaredAlive(t *testing.T) {
 	now := time.Now().UTC()
 	base := map[string]Baseline{"serena.search": {
 		Attempts: 3, Failures: 3,
-		Fault: Fault{Streak: 3, Kind: "unavailable", Reason: "unavailable: no server", Latest: now},
+		Fault: Fault{Streak: 3, SameKindStreak: 3, Kind: "unavailable", Reason: "unavailable: no server", Latest: now},
 	}}
 	candidates := []contract.Implementation{{
 		ID:     "serena.search",

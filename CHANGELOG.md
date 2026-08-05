@@ -36,6 +36,27 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   files. Verified live: `symbol.implementations` on `contract.Runner` now
   returns 10 locations across 5 adapters and their test doubles.
 
+- **A provider that had never once worked here could not be marked down.** The
+  failure streak's bin count was taken over the whole run since the last
+  success -- and for a provider with no success on record, that run is its
+  entire history. Any variety in it at all left more than one bin, which
+  blanked the shared `Kind` and downgraded the verdict from `down` to merely
+  `degraded`, so the provider stayed in the funnel however consistently it
+  was failing right now. Worse, it could never recover from that: the only
+  thing that starts a fresh run is a success, which is exactly what a broken
+  provider does not have. Measured on this machine: `claude.search` on this
+  repository, 8 attempts, 0 successes -- five `unavailable` from the days it
+  was not logged in, then three `permission_denied` from its real spending
+  ceiling. A cause fixed two days earlier was masking the one failing every
+  call. The streak is now read from the newest failure backwards and stops at
+  the first attempt that broke differently: three of one bin at the newest end
+  is an outage even when older, unrelated failures sit behind it. `Streak`
+  still carries the whole run, so the degraded sentence is unchanged; the
+  outage sentence names the run that actually earned the verdict rather than
+  the whole history. Verified against that live record: `3 permission_denied
+  failures in a row`, `down`, dropped from the funnel. The docs described this
+  behaviour correctly all along -- only the code disagreed.
+
 ## [0.3.0] - 2026-08-05
 
 ### Fixed

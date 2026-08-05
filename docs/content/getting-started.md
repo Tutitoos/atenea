@@ -454,6 +454,11 @@ the provider actually said. Three in a row in *different* bins is a provider in
 trouble with no single cause, so it is marked degraded and ranks last rather
 than being dropped — the funnel would rather use a flaky provider than none.
 
+*In a row* counts back from the newest failure and stops at the first one that
+broke differently. So a provider with a long record of assorted trouble, now
+failing every call the same way, is down on today's reason — the older, often
+already-fixed causes further back do not dilute it.
+
 Both verdicts expire. A provider dropped by health is a provider nothing calls,
 so nothing could ever prove it recovered; after five quiet minutes the streak
 stops counting and the next call goes through. The older failures stay on

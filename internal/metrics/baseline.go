@@ -54,10 +54,17 @@ const SuccessWindow = time.Hour
 type Fault struct {
 	// Streak is how many attempts in a row failed.
 	Streak int
-	// Kind is the failure bin shared by all of them, and empty when they do
-	// not share one. One bin repeated is an outage with a name; a scatter of
-	// different bins is a provider in trouble without a diagnosis, and the two
-	// deserve different answers.
+	// SameKindStreak is how many of the newest attempts, counted from the
+	// newest backward, share the newest one's bin. It stops at the first
+	// attempt that broke differently, so a provider that has been failing
+	// the same way lately is not diluted by how it failed months ago. Always
+	// between 1 and Streak inclusive whenever Streak > 0.
+	SameKindStreak int
+	// Kind is the failure bin shared by the newest SameKindStreak attempts,
+	// and empty when that run is shorter than FaultStreak. One bin repeated
+	// at the newest end is an outage with a name; anything shorter is a
+	// provider breaking differently right now, even when older attempts
+	// further back happened to share a cause too.
 	Kind string
 	// Reason is the untranslated message of the newest failure, for whoever
 	// has to read it.
@@ -78,6 +85,13 @@ type Fault struct {
 // the funnel over. A run of mixed bins is a provider that keeps breaking
 // differently every time, which is a real finding but not a single fault, so
 // it ranks below the healthy ones instead of being dropped.
+//
+// "The same bin" is judged on the newest FaultStreak failures, not on the
+// whole run since the last success. A provider with weeks of assorted
+// trouble behind it and three fresh identical failures in front of that is
+// an outage today -- pooling the entire history would let a cause fixed
+// last month mask this week's real one forever, because a provider that has
+// never once succeeded here never earns a clean slate to measure from.
 func (f Fault) Health(now time.Time) (contract.Health, bool) {
 	if f.Streak < FaultStreak || now.Sub(f.Latest) > FaultWindow {
 		return contract.Health{}, false
@@ -86,7 +100,7 @@ func (f Fault) Health(now time.Time) (contract.Health, bool) {
 	if f.Kind != "" {
 		h.State = contract.HealthDown
 		h.Reason = fmt.Sprintf("%d %s failures in a row, last one %s",
-			f.Streak, f.Kind, said(f.Kind, f.Reason))
+			f.SameKindStreak, f.Kind, said(f.Kind, f.Reason))
 		return h, true
 	}
 	h.State = contract.HealthDegraded
@@ -275,12 +289,19 @@ const recencyTemplate = `WITH recent AS (
 ), ends AS (
 	SELECT capability, repository, implementation,
 	       coalesce(min(rn) FILTER (WHERE ok), 999999999) AS first_ok,
-	       max(happened_at) FILTER (WHERE ok) AS last_ok
+	       max(happened_at) FILTER (WHERE ok) AS last_ok,
+	       arg_min(failure_kind, rn) AS newest_kind
 	FROM recent
 	GROUP BY 1, 2, 3
 ), run AS (
+	-- break_at marks the first row, counting from the newest end (ascending
+	-- rn), whose bin differs from the newest attempt's own bin. Rows
+	-- strictly before it are the unbroken same-kind tail same_kind_streak
+	-- below counts -- deliberately not the whole run, so a cause fixed weeks
+	-- ago cannot mask three fresh identical failures today.
 	SELECT r.capability, r.repository, r.implementation,
-	       r.failure_kind, r.failure, r.raw, r.happened_at, r.rn
+	       r.failure_kind, r.failure, r.raw, r.happened_at, r.rn,
+	       CASE WHEN r.failure_kind != e.newest_kind THEN r.rn END AS break_at
 	FROM recent r JOIN ends e
 	  ON e.capability = r.capability AND e.repository = r.repository
 	 AND e.implementation = r.implementation
@@ -288,7 +309,7 @@ const recencyTemplate = `WITH recent AS (
 )
 SELECT e.capability, e.repository, e.implementation,
        count(run.rn) AS streak,
-       count(DISTINCT run.failure_kind) AS bins,
+       coalesce(min(run.break_at), count(run.rn) + 1) - 1 AS same_kind_streak,
        arg_min(run.failure_kind, run.rn) AS kind,
        arg_min(run.failure, run.rn) AS reason,
        arg_min(run.raw, run.rn) AS raw,
@@ -400,14 +421,14 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 	var out []recencyRow
 	for rows.Next() {
 		var r recencyRow
-		var streak, bins int64
+		var streak, sameKindStreak int64
 		var kind, reason, raw *string
 		var latest, lastOK *time.Time
 		if err := rows.Scan(&r.Capability, &r.Repository, &r.ID,
-			&streak, &bins, &kind, &reason, &raw, &latest, &lastOK); err != nil {
+			&streak, &sameKindStreak, &kind, &reason, &raw, &latest, &lastOK); err != nil {
 			return nil, fmt.Errorf("metrics: recency: %w", err)
 		}
-		r.Baseline.Fault = Fault{Streak: int(streak)}
+		r.Baseline.Fault = Fault{Streak: int(streak), SameKindStreak: int(sameKindStreak)}
 		if reason != nil {
 			r.Baseline.Fault.Reason = *reason
 		}
@@ -417,10 +438,10 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 		if latest != nil {
 			r.Baseline.Fault.Latest = *latest
 		}
-		// One bin repeated is an outage that can be named. Several bins is a
-		// provider breaking differently every time, and naming one of them
-		// would be picking a favorite out of a bag.
-		if bins == 1 && kind != nil {
+		// A same-kind tail reaching FaultStreak is an outage that can be
+		// named. A shorter one is a provider breaking differently right now,
+		// and naming one bin out of that mix would be picking a favorite.
+		if sameKindStreak >= FaultStreak && kind != nil {
 			r.Baseline.Fault.Kind = *kind
 		}
 		if lastOK != nil {

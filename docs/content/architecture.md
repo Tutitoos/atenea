@@ -106,6 +106,15 @@ single cause, which ranks last but stays. Both expire after five quiet minutes,
 because a provider health has dropped is a provider nothing calls, and nothing
 that is never called can ever prove it recovered.
 
+*In a row* is measured from the newest failure backwards, and it stops at the
+first attempt that broke differently — not over the whole run since the last
+success. The difference only shows on a provider with a long unbroken record,
+and there it is the whole verdict: one that spent a week unreachable, was
+fixed, and now refuses every call for a new reason is down today, not merely
+flaky. Pooling the run would let the fixed cause mask the live one forever,
+because a provider that has never once succeeded here never earns a clean
+slate to start a fresh run from.
+
 Upwards, a run of successes. The bar is *the last call here worked, and it
 worked recently* — both halves load-bearing. **Recently** is one hour: a
 success is a statement about the moment it happened, and an hour is long enough
