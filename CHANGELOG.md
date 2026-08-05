@@ -13,7 +13,7 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.3.0] - 2026-08-05
 
 ### Fixed
 
@@ -696,5 +696,6 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.3.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.1.0
