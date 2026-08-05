@@ -245,10 +245,14 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 
 	fmt.Fprintf(out, "\nrepositories\n")
 	for _, repo := range status.Repositories {
-		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s vcs=%-8s languages=%s  indexes=%s\n",
+		fmt.Fprintf(out, "  %-16s %-28s scale=%-8s vcs=%-8s languages=%s  indexes=%s",
 			repo.ID, repo.Path, orDash(repo.Scale), orDash(repo.VCS),
 			orDash(strings.Join(repo.Languages, ",")),
 			orDash(strings.Join(repo.Indexes, ",")))
+		if repo.SerenaEndpoint != "" {
+			fmt.Fprintf(out, "  serena=%s", repo.SerenaEndpoint)
+		}
+		fmt.Fprintln(out)
 	}
 	return nil
 }

@@ -54,13 +54,13 @@ type toolResult struct {
 	IsError bool `json:"isError"`
 }
 
-// call runs one tool and returns its text. It assumes the lock is held: every
-// exchange with Serena is serialized, including the handshake.
-func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (string, error) {
-	if err := r.handshake(ctx); err != nil {
+// call runs one tool on c and returns its text. It assumes c.mu is held: every
+// exchange with Serena is serialized per endpoint, including the handshake.
+func (r *Runner) call(ctx context.Context, c *conn, tool string, args map[string]any) (string, error) {
+	if err := r.handshake(ctx, c); err != nil {
 		return "", err
 	}
-	raw, err := r.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	raw, err := r.rpc(ctx, c, "tools/call", map[string]any{"name": tool, "arguments": args})
 	if err != nil {
 		return "", err
 	}
@@ -92,12 +92,12 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 	return body, nil
 }
 
-// handshake establishes the MCP session, once. A session that has gone away is
-// not repaired here: the call fails, the catalog marks the provider down, and
-// the next run establishes a new one. Reconnecting in silence would hide a
-// server that is flapping.
-func (r *Runner) handshake(ctx context.Context) error {
-	if r.session != "" {
+// handshake establishes the MCP session on c, once. A session that has gone
+// away is not repaired here: the call fails, the catalog marks the provider
+// down, and the next run establishes a new one. Reconnecting in silence would
+// hide a server that is flapping.
+func (r *Runner) handshake(ctx context.Context, c *conn) error {
+	if c.session != "" {
 		return nil
 	}
 	body, err := json.Marshal(rpcRequest{
@@ -113,7 +113,7 @@ func (r *Runner) handshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	session, text, err := r.post(ctx, body, "")
+	session, text, err := r.post(ctx, c, body, "")
 	if err != nil {
 		return err
 	}
@@ -134,48 +134,48 @@ func (r *Runner) handshake(ctx context.Context) error {
 		} `json:"serverInfo"`
 	}
 	if json.Unmarshal(result, &hello) == nil {
-		r.version = toolversion.Clean(hello.ServerInfo.Version)
+		c.version = toolversion.Clean(hello.ServerInfo.Version)
 	}
-	r.session = session
+	c.session = session
 	// The spec requires this notification before any tool call, and a server
 	// that never receives it is entitled to refuse everything afterwards.
 	note, err := json.Marshal(rpcRequest{Version: "2.0", Method: "notifications/initialized"})
 	if err != nil {
 		return err
 	}
-	if _, _, err := r.post(ctx, note, session); err != nil {
-		r.session = ""
+	if _, _, err := r.post(ctx, c, note, session); err != nil {
+		c.session = ""
 		return err
 	}
 	return nil
 }
 
-// rpc sends one request on the established session.
-func (r *Runner) rpc(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	r.nextID++
-	body, err := json.Marshal(rpcRequest{Version: "2.0", ID: r.nextID, Method: method, Params: params})
+// rpc sends one request on c's established session.
+func (r *Runner) rpc(ctx context.Context, c *conn, method string, params any) (json.RawMessage, error) {
+	c.nextID++
+	body, err := json.Marshal(rpcRequest{Version: "2.0", ID: c.nextID, Method: method, Params: params})
 	if err != nil {
 		return nil, err
 	}
-	_, text, err := r.post(ctx, body, r.session)
+	_, text, err := r.post(ctx, c, body, c.session)
 	if err != nil {
 		// A dead session must not be reused: dropping it here is what lets the
 		// next commission start clean instead of failing forever.
-		r.session = ""
-		r.active = ""
+		c.session = ""
+		c.active = ""
 		return nil, err
 	}
 	return decode(text)
 }
 
-// post sends one message and returns the session id the server stamped on the
-// answer, if any, plus the body.
+// post sends one message to c's endpoint and returns the session id the server
+// stamped on the answer, if any, plus the body.
 //
 // It returns the header rather than the response on purpose: the body is read
 // and closed here, so handing back a *http.Response would be handing back a
 // reader that is already spent and a trap for whoever reads this next.
-func (r *Runner) post(ctx context.Context, body []byte, session string) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
+func (r *Runner) post(ctx context.Context, c *conn, body []byte, session string) (string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", "", err
 	}

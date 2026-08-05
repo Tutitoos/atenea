@@ -499,6 +499,174 @@ func TestNoImplementationsIsAnAnswer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Per-repo endpoints and the retarget note
+// ---------------------------------------------------------------------------
+
+// A repository that names its own Serena URL must hit that URL, not the
+// adapter default. Otherwise the dedicated warm unit is dead weight and the
+// default endpoint still pays the retarget tax.
+func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
+	defaultStub, defaultURL := newStub(t)
+	repoStub, repoURL := newStub(t)
+	repoStub.answers["find_symbol"] = symbolAnswer
+	defaultStub.answers["find_symbol"] = symbolAnswer
+
+	runner := newRunner(t, defaultURL)
+	r := repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	})
+	r.SerenaEndpoint = repoURL
+
+	if _, err := run(t, runner, CapabilityDefinition, r, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(defaultStub.toolNames()) != 0 {
+		t.Errorf("default endpoint was contacted: %v", defaultStub.toolNames())
+	}
+	if _, ok := repoStub.called("activate_project"); !ok {
+		t.Fatal("repo endpoint was never asked to activate")
+	}
+	if _, ok := repoStub.called("find_symbol"); !ok {
+		t.Fatal("repo endpoint was never asked for the symbol")
+	}
+}
+
+// Two repositories on two endpoints must not share a session: a handshake on
+// one is meaningless to the other, and locking them together would serialize
+// work that two warm processes can do in parallel.
+func TestDistinctEndpointsKeepDistinctSessions(t *testing.T) {
+	a, aURL := newStub(t)
+	b, bURL := newStub(t)
+	a.answers["find_symbol"] = symbolAnswer
+	b.answers["find_symbol"] = symbolAnswer
+
+	runner := newRunner(t, aURL)
+	ra := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
+	// leave ra on the default (aURL)
+	rb := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
+	rb.SerenaEndpoint = bURL
+
+	if _, err := run(t, runner, CapabilityDefinition, ra, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("ra: %v", err)
+	}
+	if _, err := run(t, runner, CapabilityDefinition, rb, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("rb: %v", err)
+	}
+	if len(a.toolNames()) == 0 || len(b.toolNames()) == 0 {
+		t.Fatalf("both endpoints must have been used; a=%v b=%v", a.toolNames(), b.toolNames())
+	}
+	// Two conns in the map.
+	runner.connsMu.Lock()
+	n := len(runner.conns)
+	runner.connsMu.Unlock()
+	if n != 2 {
+		t.Fatalf("conns = %d, want 2", n)
+	}
+}
+
+// A real project switch on a shared endpoint is the slow multi-repo tax. The
+// discovery list has to say so, or a commission that alternates repos looks
+// silently slow in the trace.
+func TestARetargetLeavesADiscoveryNote(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = symbolAnswer
+	runner := newRunner(t, endpoint)
+
+	r1 := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
+	r2 := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
+	// Distinct absolute paths so activate sees a switch.
+	if r1.Path == r2.Path {
+		t.Fatal("test setup produced identical roots")
+	}
+
+	if _, err := run(t, runner, CapabilityDefinition, r1, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	out, err := run(t, runner, CapabilityDefinition, r2, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	var found bool
+	for _, d := range out.Discoveries {
+		if strings.Contains(d.Note, "serena retargeted") &&
+			strings.Contains(d.Note, r1.Path) &&
+			strings.Contains(d.Note, r2.Path) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("discoveries = %#v, want a retarget note naming both roots", out.Discoveries)
+	}
+}
+
+// The first activation on an endpoint is not a retarget: there was nothing to
+// tear down. Naming it as one would cry wolf on every cold start.
+func TestFirstActivationIsNotARetargetNote(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = symbolAnswer
+	runner := newRunner(t, endpoint)
+
+	out, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, d := range out.Discoveries {
+		if strings.Contains(d.Note, "serena retargeted") {
+			t.Fatalf("first call carried a retarget note: %q", d.Note)
+		}
+	}
+}
+
+// Staying on the same repository must not claim a retarget either: the skip
+// path is the whole point of caching active on the conn.
+func TestSameRepositoryDoesNotRetarget(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = symbolAnswer
+	runner := newRunner(t, endpoint)
+	r := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
+
+	if _, err := run(t, runner, CapabilityDefinition, r, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	out, err := run(t, runner, CapabilityDefinition, r, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	// Second call should not have re-issued activate_project.
+	var activates int
+	for _, name := range s.toolNames() {
+		if name == "activate_project" {
+			activates++
+		}
+	}
+	if activates != 1 {
+		t.Errorf("activate_project called %d times, want 1", activates)
+	}
+	for _, d := range out.Discoveries {
+		if strings.Contains(d.Note, "serena retargeted") {
+			t.Fatalf("same-repo call carried a retarget note: %q", d.Note)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Security and the bins
 // ---------------------------------------------------------------------------
 

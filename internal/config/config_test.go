@@ -164,6 +164,72 @@ func TestLoadReadsAFile(t *testing.T) {
 	}
 }
 
+// A repository can pin its own Serena so the adapter never retargets the
+// default endpoint for it. Empty stays empty: that is the "fall back and
+// retarget" path, not a missing value.
+func TestLoadReadsSerenaEndpoint(t *testing.T) {
+	body := `
+contract = "1.0.0"
+
+[[capability]]
+id = "code.search"
+version = "1.0.0"
+summary = "Find text."
+effects = ["read"]
+
+  [[capability.input]]
+  name = "query"
+  type = "string"
+  required = true
+
+[[implementation]]
+id = "ripgrep"
+provider = "ripgrep"
+capability = "code.search"
+
+[[repository]]
+id = "api"
+path = "/srv/api"
+languages = ["go"]
+
+[[repository]]
+id = "web"
+path = "/srv/web"
+languages = ["typescript"]
+serena_endpoint = "http://127.0.0.1:9121/mcp"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Repositories) != 2 {
+		t.Fatalf("repositories = %d, want 2", len(cfg.Repositories))
+	}
+	var web *contract.Repository
+	for i := range cfg.Repositories {
+		if cfg.Repositories[i].ID == "web" {
+			web = &cfg.Repositories[i]
+		}
+		if cfg.Repositories[i].ID == "api" && cfg.Repositories[i].SerenaEndpoint != "" {
+			t.Errorf("api serena_endpoint = %q, want empty", cfg.Repositories[i].SerenaEndpoint)
+		}
+	}
+	if web == nil {
+		t.Fatal("web repository missing")
+	}
+	if web.SerenaEndpoint != "http://127.0.0.1:9121/mcp" {
+		t.Errorf("web serena_endpoint = %q", web.SerenaEndpoint)
+	}
+}
+
+func TestBrokenSerenaEndpointIsRefused(t *testing.T) {
+	bad := strings.Replace(minimal, "vcs = \"present\"\n", "vcs = \"present\"\nserena_endpoint = \"localhost:9121\"\n", 1)
+	_, err := config.Load(write(t, bad))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err=%v)", got, err)
+	}
+}
+
 // A typo that is silently ignored is a setting the user believes is in force
 // and is not.
 func TestUnknownKeysAreRefused(t *testing.T) {

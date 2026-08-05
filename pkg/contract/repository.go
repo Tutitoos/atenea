@@ -22,6 +22,13 @@ type Repository struct {
 	// anyone has declared. VCSUnspecified never disqualifies a provider that
 	// requires it -- see selector.fits.
 	VCS VCS
+	// SerenaEndpoint is an optional MCP URL for the Serena instance that
+	// already holds this repository warm. Empty means the adapter's default
+	// endpoint, which retargets via activate_project and pays the language
+	// server restart. A dedicated URL is how a multi-repo machine keeps two
+	// projects hot without tearing one down to serve the other.
+	SerenaEndpoint string
+
 	// indexes holds the providers that have a ready index for this repository.
 	indexes map[string]struct{}
 }
@@ -54,6 +61,13 @@ func (r Repository) Validate() error {
 	if strings.TrimSpace(r.Path) == "" {
 		return Fail(FailureInvalidInput, "repository %s: path is required", r.ID)
 	}
+	if ep := strings.TrimSpace(r.SerenaEndpoint); ep != "" {
+		if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
+			return Fail(FailureInvalidInput,
+				"repository %s: serena_endpoint %q must be an http or https URL", r.ID, r.SerenaEndpoint)
+		}
+	}
+
 	for _, lang := range r.Languages {
 		if lang == "" {
 			return Fail(FailureInvalidInput, "repository %s: empty language entry", r.ID)

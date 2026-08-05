@@ -73,6 +73,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   drop every repository that has not yet said `vcs = "absent"` or
   `vcs = "present"`. Contract `1.6.0`.
 
+- **A repository can pin its own Serena endpoint so two projects stay warm
+  without tearing each other down.** One Serena process holds one active
+  project; switching pays a full language-server restart (measured ~0.3 s into
+  a Go repo, ~1–2.5 s into a Rust/TS one, and throws away multi-gigabyte
+  rust-analyzer state). `Repository.SerenaEndpoint` is an optional MCP URL:
+  empty keeps today's single-default behaviour (adapter endpoint +
+  `activate_project` retarget); a set URL routes that repository to its own
+  process. The adapter keeps one MCP session per distinct URL, locked
+  independently, so two endpoints answer in parallel. A real retarget on a
+  shared endpoint now leaves a discovery note
+  (`serena retargeted <url> from <old> to <new>`) on the step, so a slow
+  multi-repo run is no longer silently slow in the trace. Contract `1.7.0`.
+
 ## [0.2.0] - 2026-08-04
 
 ### Fixed

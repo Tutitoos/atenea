@@ -19,12 +19,15 @@
 // position. It never parses code itself: an adapter that started reading
 // syntax would be a second brain, and there is only supposed to be one.
 //
-// The second is that Serena holds ONE active project at a time. Atenea
-// dispatches waves of up to four steps across several repositories, so two
-// symbol steps in flight would silently retarget each other. Every call
-// therefore runs under one lock and re-activates its repository first. That
-// makes symbol work serial, which is honest: it is what a single shared
-// language server can actually deliver, and the declared cost says so.
+// The second is that each Serena process holds ONE active project at a time.
+// Atenea dispatches waves of up to four steps across several repositories, so
+// two symbol steps against the same endpoint would silently retarget each
+// other. Every call therefore runs under one lock per endpoint and
+// re-activates its repository first. A repository may name its own Serena
+// endpoint so two projects stay warm on two processes instead of thrashing
+// one; empty falls back to the adapter default and pays the retarget. That
+// makes symbol work serial per endpoint, which is honest: it is what a single
+// shared language server can actually deliver, and the declared cost says so.
 package serena
 
 import (
@@ -84,7 +87,8 @@ func DefaultImplementations() []string {
 
 // Options configure the adapter.
 type Options struct {
-	// Endpoint is the MCP server URL.
+	// Endpoint is the default MCP server URL. Used for every repository that
+	// does not name its own SerenaEndpoint.
 	Endpoint string
 	// Implementations the adapter answers for.
 	Implementations []string
@@ -94,37 +98,45 @@ type Options struct {
 	Sensitive []string
 	// Timeout caps one call.
 	Timeout time.Duration
-	// HTTP is the client used to reach the endpoint. Zero uses a default one.
+	// HTTP is the client used to reach every endpoint. Zero uses a default one.
 	// Tests point this at a stub server; nothing else should need it.
 	HTTP *http.Client
 }
 
+// conn is one live MCP session against one Serena URL. Session state cannot
+// be shared across URLs: a handshake on :40010 is meaningless to :9121, and
+// an active project on one is invisible to the other.
+type conn struct {
+	endpoint string
+
+	// mu serializes every exchange on this endpoint. See the package comment:
+	// one active project at a time means one caller at a time per URL.
+	mu sync.Mutex
+	// session is the MCP session id, established lazily on the first call and
+	// reused. It is guarded by mu like everything else here.
+	session string
+	// active is the project path this Serena is currently pointed at, so a run
+	// of steps against one repository does not re-activate it every time.
+	active string
+	// nextID numbers the JSON-RPC requests on this session.
+	nextID int
+	// version is what the server called itself when the session opened.
+	version string
+}
+
 // Runner is the Serena far side of contract.Runner.
 type Runner struct {
-	endpoint        string
+	defaultEndpoint string
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
 	http            *http.Client
 
-	// mu serializes every exchange with Serena. See the package comment: one
-	// active project at a time means one caller at a time, and a lock is the
-	// honest way to say that rather than hoping waves never overlap.
-	mu sync.Mutex
-	// session is the MCP session id, established lazily on the first call and
-	// reused. It is guarded by mu like everything else here.
-	session string
-	// active is the project path Serena is currently pointed at, so a run of
-	// steps against one repository does not re-activate it every time.
-	active string
-	// nextID numbers the JSON-RPC requests. It is guarded by mu, like the rest
-	// of the connection state: two callers reusing an id would let a server
-	// answer one of them with the other's result.
-	nextID int
-	// version is what the server called itself when the session opened. It is
-	// guarded by mu with the rest of the connection state, and it is empty
-	// until the first handshake or if the server never introduced itself.
-	version string
+	// conns holds one session per distinct endpoint URL. Guarded by connsMu
+	// only for map insert/lookup; each conn.mu guards that session's wire
+	// state, so two repositories on two endpoints run in parallel.
+	connsMu sync.Mutex
+	conns   map[string]*conn
 }
 
 // New validates the options and returns the adapter.
@@ -158,12 +170,31 @@ func New(opts Options) (*Runner, error) {
 		client = &http.Client{}
 	}
 	return &Runner{
-		endpoint:        endpoint,
+		defaultEndpoint: endpoint,
 		implementations: impls,
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
 		http:            client,
+		conns:           make(map[string]*conn),
 	}, nil
+}
+
+// connFor returns the session state for the endpoint this repository should
+// hit. A repository that names its own SerenaEndpoint gets that URL; everyone
+// else shares the adapter default. Distinct URLs never share a conn.
+func (r *Runner) connFor(repo contract.Repository) *conn {
+	endpoint := strings.TrimSpace(repo.SerenaEndpoint)
+	if endpoint == "" {
+		endpoint = r.defaultEndpoint
+	}
+	r.connsMu.Lock()
+	defer r.connsMu.Unlock()
+	if c, ok := r.conns[endpoint]; ok {
+		return c
+	}
+	c := &conn{endpoint: endpoint}
+	r.conns[endpoint] = c
+	return c
 }
 
 // ID names the runner on the status screen.
@@ -178,24 +209,30 @@ func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
-// serverVersion is what Serena called itself when the session opened.
-//
-// Unlike the CLI adapters this costs no extra process: the handshake that had
-// to happen anyway carries it. Empty means the session has not been opened yet
-// or the server did not introduce itself.
+// serverVersion is what the default endpoint called itself, if a session has
+// opened there. Prefer the per-call ToolVersion taken from the conn that
+// actually answered; this is only a fallback for callers that have not run.
 func (r *Runner) serverVersion() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.version
+	r.connsMu.Lock()
+	c := r.conns[r.defaultEndpoint]
+	r.connsMu.Unlock()
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.version
 }
 
 // Run executes one step.
 //
 // The version travels back on every path, including the failing ones. Here it
-// is whatever the handshake already learned: a session that never opened has
-// nothing to report, which is a fact rather than a gap.
+// is whatever the handshake already learned on the endpoint this repository
+// uses: a session that never opened has nothing to report, which is a fact
+// rather than a gap.
 func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
-	defer func() { out.ToolVersion = r.serverVersion() }()
+	var toolVersion string
+	defer func() { out.ToolVersion = toolVersion }()
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -226,12 +263,15 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
 	}
 
-	// One lock around the whole exchange, not around each round trip: the
-	// project activation and the calls that depend on it have to be one
-	// indivisible unit, or a second caller would retarget Serena between them.
-	r.mu.Lock()
-	records, note, runErr := r.resolve(call, root, kind, ask)
-	r.mu.Unlock()
+	c := r.connFor(req.Repository)
+	// One lock around the whole exchange on this endpoint, not around each
+	// round trip: the project activation and the calls that depend on it have
+	// to be one indivisible unit, or a second caller on the same URL would
+	// retarget Serena between them. Distinct endpoints take distinct locks.
+	c.mu.Lock()
+	records, notes, runErr := r.resolve(call, c, root, kind, ask)
+	toolVersion = c.version
+	c.mu.Unlock()
 
 	if runErr != nil {
 		return contract.Outcome{}, r.failureFor(runErr, call)
@@ -244,22 +284,26 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
-		// No memory figure: Serena is a server in somebody else's container,
+		// No memory figure: Serena is a server in somebody else's process,
 		// so there is no child process here to weigh. Leaving it at zero is
 		// what tells the store to record the gap instead of a number.
 		Spent: contract.Sample{Duration: time.Since(started)},
 	}
-	// Two discoveries, because they are two different facts. The first is how
-	// the position the caller named became the name Serena answered about --
-	// without it the answer cannot be checked against the question. The second
-	// is what came back.
-	outcome.Discoveries = append(outcome.Discoveries,
-		contract.Discovery{Level: contract.ContextRepository, Note: note},
-		contract.Discovery{
-			Level: contract.ContextRepository,
-			Note: fmt.Sprintf("serena answered %s for %s with %d location(s)",
-				req.Capability.ID, req.Repository.ID, len(records)),
-		})
+	// Discoveries carry the facts a human needs after the fact: which name the
+	// position became, whether this call paid a project retarget (the slow
+	// multi-repo tax), and how many locations came back.
+	for _, note := range notes {
+		if note == "" {
+			continue
+		}
+		outcome.Discoveries = append(outcome.Discoveries,
+			contract.Discovery{Level: contract.ContextRepository, Note: note})
+	}
+	outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
+		Level: contract.ContextRepository,
+		Note: fmt.Sprintf("serena answered %s for %s with %d location(s)",
+			req.Capability.ID, req.Repository.ID, len(records)),
+	})
 	return outcome, nil
 }
 
@@ -400,48 +444,62 @@ type location struct {
 	Snippet string
 }
 
-// resolve runs the exchange. It assumes the lock is held.
-func (r *Runner) resolve(ctx context.Context, root string, k kind, a ask) ([]location, string, error) {
+// resolve runs the exchange. It assumes c.mu is held.
+func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a ask) ([]location, []string, error) {
 	// The word under the cursor comes from the file, before Serena is asked
 	// anything: a position that names nothing is a bad request, and finding
 	// that out costs one line read rather than a project activation.
 	identifier, err := identifierAt(r, root, a)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	a.identifier = identifier
-	if err := r.activate(ctx, root); err != nil {
-		return nil, "", err
-	}
-	found, note, err := r.symbolAt(ctx, a)
+	retargeted, previous, err := r.activate(ctx, c, root)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
+	var notes []string
+	if retargeted {
+		// A real project switch on this endpoint: the previous language servers
+		// were torn down and the new ones started. Naming it here is what keeps
+		// a slow multi-repo run from looking silently slow in the trace.
+		notes = append(notes, fmt.Sprintf(
+			"serena retargeted %s from %s to %s", c.endpoint, previous, root))
+	}
+	found, note, err := r.symbolAt(ctx, c, a)
+	if err != nil {
+		return nil, notes, err
+	}
+	notes = append(notes, note)
 	switch k {
 	case kindDefinition:
-		return locationsFrom([]symbol{found}, a), note, nil
+		return locationsFrom([]symbol{found}, a), notes, nil
 	case kindReferences:
-		out, err := r.referencing(ctx, a, found.NamePath)
-		return out, note, err
+		out, err := r.referencing(ctx, c, a, found.NamePath)
+		return out, notes, err
 	default:
-		out, err := r.findImplementations(ctx, a, found.NamePath)
-		return out, note, err
+		out, err := r.findImplementations(ctx, c, a, found.NamePath)
+		return out, notes, err
 	}
 }
 
-// activate points Serena at the repository. Serena holds one project at a
-// time, so this is state and not a parameter, and re-pointing it is only
-// skipped when it is already where it needs to be.
-func (r *Runner) activate(ctx context.Context, root string) error {
-	if r.active == root {
-		return nil
+// activate points this endpoint's Serena at the repository. Serena holds one
+// project at a time per process, so this is state and not a parameter, and
+// re-pointing it is only skipped when it is already where it needs to be.
+// retargeted is true only when a different project was active before — the
+// case that tears language servers down. A first activation (previous empty)
+// is not a retarget.
+func (r *Runner) activate(ctx context.Context, c *conn, root string) (retargeted bool, previous string, err error) {
+	if c.active == root {
+		return false, "", nil
 	}
-	if _, err := r.call(ctx, "activate_project", map[string]any{"project": root}); err != nil {
-		r.active = ""
-		return err
+	previous = c.active
+	if _, err := r.call(ctx, c, "activate_project", map[string]any{"project": root}); err != nil {
+		c.active = ""
+		return false, previous, err
 	}
-	r.active = root
-	return nil
+	c.active = root
+	return previous != "", previous, nil
 }
 
 // symbolAt turns the position the capability speaks into the symbol Serena
@@ -456,8 +514,8 @@ func (r *Runner) activate(ctx context.Context, root string) error {
 // The returned note is not decoration: the caller named a position and gets an
 // answer about a name, so the trace has to say which name that was, or the
 // answer cannot be checked against the question.
-func (r *Runner) symbolAt(ctx context.Context, a ask) (symbol, string, error) {
-	raw, err := r.call(ctx, "find_symbol", map[string]any{
+func (r *Runner) symbolAt(ctx context.Context, c *conn, a ask) (symbol, string, error) {
+	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
 		"name_path_pattern": a.identifier,
 		"relative_path":     a.file,
 		"include_body":      a.snippet,
@@ -489,8 +547,8 @@ func (r *Runner) symbolAt(ctx context.Context, a ask) (symbol, string, error) {
 // The answer comes back in a different shape from a symbol search -- path,
 // then kind, then entries -- which is why it has a parser of its own rather
 // than a flag on the first one.
-func (r *Runner) referencing(ctx context.Context, a ask, namePath string) ([]location, error) {
-	raw, err := r.call(ctx, "find_referencing_symbols", map[string]any{
+func (r *Runner) referencing(ctx context.Context, c *conn, a ask, namePath string) ([]location, error) {
+	raw, err := r.call(ctx, c, "find_referencing_symbols", map[string]any{
 		"name_path":     namePath,
 		"relative_path": a.file,
 	})
@@ -509,8 +567,8 @@ func (r *Runner) referencing(ctx context.Context, a ask, namePath string) ([]loc
 // Not every language server implements this request, and the ones that do not
 // say so plainly. That is a provider that cannot answer here, not a broken
 // commission, so the bin is unavailable and the funnel falls back.
-func (r *Runner) findImplementations(ctx context.Context, a ask, namePath string) ([]location, error) {
-	raw, err := r.call(ctx, "find_implementations", map[string]any{
+func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, namePath string) ([]location, error) {
+	raw, err := r.call(ctx, c, "find_implementations", map[string]any{
 		"name_path":     namePath,
 		"relative_path": a.file,
 	})

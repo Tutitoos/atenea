@@ -507,12 +507,13 @@ type fileHealth struct {
 }
 
 type fileRepository struct {
-	ID        string   `toml:"id"`
-	Path      string   `toml:"path"`
-	Languages []string `toml:"languages"`
-	Scale     string   `toml:"scale"`
-	VCS       string   `toml:"vcs"`
-	IndexedBy []string `toml:"indexed_by"`
+	ID             string   `toml:"id"`
+	Path           string   `toml:"path"`
+	Languages      []string `toml:"languages"`
+	Scale          string   `toml:"scale"`
+	VCS            string   `toml:"vcs"`
+	IndexedBy      []string `toml:"indexed_by"`
+	SerenaEndpoint string   `toml:"serena_endpoint"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,6 +1213,7 @@ func (r fileRepository) build(source string) (contract.Repository, error) {
 			"settings %s: repository %s: vcs: %v", source, r.ID, err)
 	}
 	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, vcs, r.IndexedBy)
+	out.SerenaEndpoint = strings.TrimSpace(r.SerenaEndpoint)
 	if err := out.Validate(); err != nil {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)

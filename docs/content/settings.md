@@ -372,11 +372,16 @@ languages = ["go"]
 scale = "small"             # "", small, medium, large
 vcs = "present"             # "", present, absent -- whether the root sits under version control
 indexed_by = ["serena"]     # providers with a ready index HERE
+serena_endpoint = ""        # optional: pin this repo to its own Serena URL
 ```
 
 An unclassified `scale` or an unspecified `vcs` never disqualifies anyone: an
 unknown fact is not a proven mismatch, and dropping candidates over it would
-silently empty the funnel.
+silently empty the funnel. `serena_endpoint` empty means the adapter's default
+(`[orchestrator.serena].endpoint`) and a retarget via `activate_project` when
+the previous call was on a different project; a set URL keeps that repository
+on its own warm Serena process so alternating repos does not tear language
+servers down.
 
 ## Selector rules
 

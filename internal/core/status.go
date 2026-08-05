@@ -170,12 +170,13 @@ type ImplementationStatus struct {
 
 // RepositoryStatus is one unit of work.
 type RepositoryStatus struct {
-	ID        string
-	Path      string
-	Scale     string
-	VCS       string
-	Languages []string
-	Indexes   []string
+	ID             string
+	Path           string
+	Scale          string
+	VCS            string
+	Languages      []string
+	Indexes        []string
+	SerenaEndpoint string
 }
 
 // ChatStatus is one open session: who it belongs to, what it may authorize
@@ -400,12 +401,13 @@ func (c *Core) Status() Status {
 
 	for _, repo := range c.catalog.Repositories() {
 		status.Repositories = append(status.Repositories, RepositoryStatus{
-			ID:        repo.ID,
-			Path:      repo.Path,
-			Scale:     repo.Scale.String(),
-			VCS:       repo.VCS.String(),
-			Languages: repo.Languages,
-			Indexes:   repo.Indexes(),
+			ID:             repo.ID,
+			Path:           repo.Path,
+			Scale:          repo.Scale.String(),
+			VCS:            repo.VCS.String(),
+			Languages:      repo.Languages,
+			Indexes:        repo.Indexes(),
+			SerenaEndpoint: repo.SerenaEndpoint,
 		})
 	}
 

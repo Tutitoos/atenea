@@ -979,6 +979,8 @@ languages = ["go"]
 scale = "small"
 vcs = ""                  # unknown until declared; unspecified never disqualifies (pkg/contract/implementation.go)
 indexed_by = []           # providers holding a ready index for this repository
+# serena_endpoint = ""    # optional: pin this repo to its own Serena URL (e.g. http://127.0.0.1:9121/mcp).
+#                         # empty falls back to [orchestrator.serena].endpoint and retargets via activate_project.
 
 # ---------------------------------------------------------------------------
 # Selector rules: the user's word, above any automatic ranking.

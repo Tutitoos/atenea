@@ -55,6 +55,17 @@ func TestRepositoryValidate(t *testing.T) {
 	if err := contract.NewRepository("web", "  ", nil, contract.ScaleSmall, contract.VCSUnspecified, nil).Validate(); err == nil {
 		t.Error("empty path should fail")
 	}
+	bad := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	bad.SerenaEndpoint = "not-a-url"
+	if err := bad.Validate(); err == nil {
+		t.Error("non-http serena_endpoint should fail")
+	}
+	ok := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	ok.SerenaEndpoint = "http://127.0.0.1:9121/mcp"
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid serena_endpoint rejected: %v", err)
+	}
+
 }
 
 func TestRepositoryCloneDoesNotShareState(t *testing.T) {

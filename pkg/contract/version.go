@@ -59,7 +59,14 @@ type Version struct {
 // yet declared it. An adapter built against 1.5.0 goes on compiling because
 // it never reads either field; the funnel is what acts on them, not the far
 // side of Run.
-var Current = Version{Major: 1, Minor: 6, Patch: 0}
+//
+// 1.7.0 added `Repository.SerenaEndpoint`. Empty keeps today's single-URL
+// behaviour (the adapter default, retarget via activate_project). A set URL
+// pins that repository to its own Serena process so two projects stay warm
+// without tearing each other down. Additive: an adapter built against 1.6.0
+// never reads the field; a core speaking 1.7.0 that sees it empty does what
+// it always did.
+var Current = Version{Major: 1, Minor: 7, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {
