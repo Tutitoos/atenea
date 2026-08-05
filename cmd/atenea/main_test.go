@@ -123,6 +123,66 @@ func TestNoArgumentsPrintsUsage(t *testing.T) {
 	}
 }
 
+// Every subcommand answers --help/-h the same way run's own dispatch does,
+// which is the whole point of routing it there instead of leaving each
+// command to notice the flag on its own. None of these need a settings file:
+// help is answered before load ever runs.
+func TestEverySubcommandHasHelp(t *testing.T) {
+	for command, want := range commandHelp {
+		t.Run(command, func(t *testing.T) {
+			out, err := exec(t, command, "--help")
+			if err != nil {
+				t.Fatalf("%s --help: %v", command, err)
+			}
+			if out != want {
+				t.Errorf("%s --help =\n%s\nwant\n%s", command, out, want)
+			}
+		})
+	}
+}
+
+// Several subcommands read a positional argument before their own flags do
+// -- "-h" landing there would otherwise be swallowed as the capability id or
+// commission text rather than recognized as a request for help.
+func TestHelpWinsEvenWhereAPositionalArgumentComesFirst(t *testing.T) {
+	for _, command := range []string{"ask", "select", "task", "resume"} {
+		t.Run(command, func(t *testing.T) {
+			out, err := exec(t, command, "-h")
+			if err != nil {
+				t.Fatalf("%s -h: %v", command, err)
+			}
+			if !strings.HasPrefix(out, "Usage: atenea "+command) {
+				t.Errorf("%s -h out = %q, want its own usage", command, out)
+			}
+		})
+	}
+}
+
+// Help wins wherever it lands in the argument list, not only as the first
+// token: a run that would have spent something must not start just because
+// --help came after the flags that would have paid for it.
+func TestHelpWinsEvenTrailingAfterRealFlags(t *testing.T) {
+	out, err := exec(t, "ask", "code.search", "--repo", "current", "--set", "query=TODO", "-h")
+	if err != nil {
+		t.Fatalf("ask ... -h: %v", err)
+	}
+	if !strings.HasPrefix(out, "Usage: atenea ask") {
+		t.Errorf("out = %q, want ask usage", out)
+	}
+}
+
+// An unknown command asking for help is still an unknown command: the help
+// map only intercepts names dispatch actually recognizes.
+func TestHelpOnAnUnknownCommandStillErrors(t *testing.T) {
+	_, err := exec(t, "bogus", "--help")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := exitCode(err); got != 2 {
+		t.Fatalf("exit code = %d, want 2 (err %v)", got, err)
+	}
+}
+
 func TestStatusShowsEveryProviderWithItsLight(t *testing.T) {
 	out, err := exec(t, "--config", settingsFile(t), "status")
 	if err != nil {
@@ -512,6 +572,41 @@ func TestErrorsMapOntoDistinctExitCodes(t *testing.T) {
 				t.Fatalf("exit code = %d, want %d (err %v)", got, tc.code, err)
 			}
 		})
+	}
+}
+
+// A missing required field is caught before anything is spent: the funnel
+// never runs, and the exit code says so -- 2, the same bin as any other
+// malformed invocation, not 6 (a commission that was dispatched and failed).
+func TestAMissingRequiredFieldNeverDispatches(t *testing.T) {
+	out, err := exec(t, "--config", settingsFile(t), "ask", "code.search", "--repo", "api")
+	if err == nil {
+		t.Fatalf("expected an error, out:\n%s", out)
+	}
+	if got := exitCode(err); got != 2 {
+		t.Fatalf("exit code = %d, want 2 (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), `"query" is required`) {
+		t.Errorf("err = %v, want it to name the missing field", err)
+	}
+	// Never dispatched: no run receipt, because there was no run.
+	if out != "" {
+		t.Errorf("a pre-flight rejection printed a receipt:\n%s", out)
+	}
+}
+
+// The exact repro from the friction report: type "code.serach" for
+// "code.search" and the CLI names the near miss instead of a flat refusal.
+func TestATypodCapabilitySuggestsTheRealOne(t *testing.T) {
+	_, err := exec(t, "--config", settingsFile(t), "ask", "code.serach", "--repo", "api", "--set", "query=TODO")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if got := exitCode(err); got != 3 {
+		t.Fatalf("exit code = %d, want 3 (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "did you mean code.search?") {
+		t.Errorf("err = %v, want a suggestion", err)
 	}
 }
 

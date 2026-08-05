@@ -90,16 +90,71 @@ func (r *Registry) AddRepository(repo contract.Repository) error {
 	return nil
 }
 
-// Capability looks one up by id.
+// Capability looks one up by id. An unknown id that comes close to a real
+// one names the near miss: a suggestion costs nothing to offer and saves
+// whoever typed it a second round trip to find the same typo.
 func (r *Registry) Capability(id string) (contract.Capability, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	capability, ok := r.capabilities[id]
 	if !ok {
+		if near, found := r.closestCapability(id); found {
+			return contract.Capability{}, contract.Fail(contract.FailureNotFound,
+				"unknown capability %s; did you mean %s?", id, near)
+		}
 		return contract.Capability{}, contract.Fail(contract.FailureNotFound,
 			"unknown capability %s", id)
 	}
 	return capability.Clone(), nil
+}
+
+// maxSuggestDistance is how many single-character edits still reads as a
+// typo of the same word rather than a different one -- code.serach to
+// code.search is 2. Measured against the shipped catalog, no two real
+// capability ids are anywhere near this close to each other, so this never
+// fires between two names that both happen to exist.
+const maxSuggestDistance = 3
+
+// closestCapability finds the registered id nearest to id by edit distance.
+// Called with the read lock already held. Past maxSuggestDistance a
+// suggestion is a guess dressed as help, and worse than saying nothing.
+func (r *Registry) closestCapability(id string) (string, bool) {
+	best, bestDist := "", maxSuggestDistance+1
+	for candidate := range r.capabilities {
+		if dist := levenshtein(id, candidate); dist < bestDist {
+			best, bestDist = candidate, dist
+		}
+	}
+	return best, bestDist <= maxSuggestDistance
+}
+
+// levenshtein is the fewest single-character insertions, deletions or
+// substitutions that turn a into b.
+func levenshtein(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		curr[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 1
+			if ar[i-1] == br[j-1] {
+				cost = 0
+			}
+			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(br)]
 }
 
 // Capabilities lists every capability, sorted by id.

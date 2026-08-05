@@ -64,6 +64,125 @@ Global flags:
                          defaults.
 `
 
+// commandHelp holds one usage message per subcommand, shown for
+// "atenea <command> --help" or "-h" wherever it appears in that command's
+// own arguments. Centralizing the check ahead of dispatch is what makes it
+// reach every command uniformly: several read a positional argument before
+// their flags even see anything -- "atenea ask -h" would otherwise be
+// swallowed as the capability id, not recognized as a request for help.
+var commandHelp = map[string]string{
+	"version": `Usage: atenea version
+
+Print the product and contract versions.
+`,
+	"status": `Usage: atenea status
+
+Short health screen: one light for Atenea, one per provider it talks to.
+`,
+	"catalog": `Usage: atenea catalog
+
+List every capability, its providers, and every registered repository.
+`,
+	"select": `Usage: atenea select CAPABILITY [flags]
+
+Ask the funnel who would answer a capability, without spending anything.
+
+Flags:
+  --repo ID   repository id (defaults to the only one registered)
+`,
+	"task": `Usage: atenea task "TEXT" [flags]
+
+Hand a commission to the orchestrator in the user's own words.
+
+Flags:
+  --repo ID       repository to act on; repeat for several (default: all)
+  --allow EFFECT  effect beyond reading to grant this commission; repeat for
+                  several (default: none)
+  --budget USD    what this commission may spend (default: the settings file)
+  --trace         print the plan, the funnel and every review
+  --json          print the result as json instead of prose (always
+                  complete, ignores --trace)
+`,
+	"ask": `Usage: atenea ask CAPABILITY [flags]
+
+Dispatch one capability against one repository.
+
+Flags:
+  --repo ID       repository to ask about (required when several are
+                  registered)
+  --set NAME=VAL  payload field; repeat for several
+  --allow EFFECT  effect beyond reading to grant this question; repeat for
+                  several (default: none)
+  --budget USD    what this question may spend (default: the settings file)
+  --trace         print the plan, the funnel and every review
+  --json          print the result as json instead of prose (always
+                  complete, ignores --trace)
+`,
+	"resume": `Usage: atenea resume RUN_ID [flags]
+       atenea resume --list
+
+Pick an interrupted or failed commission back up. --list shows every run
+still worth resuming instead of resuming any of them.
+
+Flags:
+  --budget USD    replace what remains of the grant instead of adding to it
+                  (default: what is left)
+  --allow EFFECT  effect to add beyond what the commission already carries;
+                  repeat for several (default: none)
+  --trace         print the plan, the funnel and every review
+  --json          print the result as json instead of prose (always
+                  complete, ignores --trace)
+`,
+	"run": `Usage: atenea run
+
+Run as a service until interrupted (Ctrl-C or SIGTERM).
+`,
+	"service": `Usage: atenea service install
+       atenea service uninstall
+       atenea service status
+
+Install atenea as a background service that starts with the system;
+'uninstall' undoes it, 'status' says where it stands.
+`,
+	"incidents": `Usage: atenea incidents [clear] [--all]
+
+Read the crash notebook. With no arguments, shows what has not been read
+yet. --all shows the whole notebook, read or not. 'clear' marks the shown
+entries read.
+`,
+	"metrics": `Usage: atenea metrics [clear] [flags]
+
+What the base measured, per capability and provider. 'clear' empties it
+instead of reading it.
+
+Flags:
+  --capability ID       narrow to one capability
+  --implementation ID   narrow to one implementation
+  --repository ID       narrow to one repository
+  --all                 with clear: confirm emptying the whole base
+`,
+	"config": `Usage: atenea config init [--force]
+       atenea config path
+
+'init' writes the built-in settings file to disk; --force overwrites one
+that already exists. 'path' prints where settings are read from.
+`,
+}
+
+// helpRequested reports whether -h or --help appears anywhere in args. Most
+// subcommands read a positional argument before their own flags, so relying
+// on flag.FlagSet's own -h/--help handling would only catch part of
+// "atenea <command> --help"; scanning the whole slice catches all of it,
+// regardless of where the flag landed.
+func helpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	// The outermost net. A panic anywhere below here would otherwise print a
 	// stack to a terminal nobody was watching and take the evidence with it
@@ -138,6 +257,10 @@ func run(args []string, out io.Writer) error {
 	}
 
 	command, commandArgs := rest[0], rest[1:]
+	if help, ok := commandHelp[command]; ok && helpRequested(commandArgs) {
+		fmt.Fprint(out, help)
+		return nil
+	}
 	switch command {
 	case "version":
 		return cmdVersion(out)
@@ -682,6 +805,7 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	var repositories repoList
 	var allow effectList
 	var trace bool
+	var jsonOut bool
 	var budget float64
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -689,6 +813,7 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	flags.Var(&allow, "allow", "effect beyond reading to grant this commission; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this commission may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -714,7 +839,11 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 		Text: text, Repositories: repositories, Effects: effects, BudgetUSD: budget,
 	})
 	if result != nil {
-		printResult(out, result, trace)
+		if jsonOut {
+			printResultJSON(out, result)
+		} else {
+			printResult(out, result, trace)
+		}
 	}
 	return commissionError(ctx, result, runErr)
 }
@@ -767,6 +896,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	var allow effectList
 	var repository string
 	var trace bool
+	var jsonOut bool
 	var budget float64
 	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -775,6 +905,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	flags.Var(&allow, "allow", "effect beyond reading to grant this question; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -803,6 +934,12 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A missing required field is caught here, before anything is spent: the
+	// alternative is finding out from whichever implementation the funnel
+	// picked, after it already ran.
+	if err := capability.ValidateInput(payload); err != nil {
+		return err
+	}
 	if repository == "" {
 		repos := atenea.Registry().Repositories()
 		if len(repos) != 1 {
@@ -823,8 +960,12 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		BudgetUSD:  budget,
 	})
 	if result != nil {
-		printResult(out, result, trace)
-		printAnswer(out, result, trace)
+		if jsonOut {
+			printResultJSON(out, result)
+		} else {
+			printResult(out, result, trace)
+			printAnswer(out, result, trace)
+		}
 	}
 	return commissionError(ctx, result, runErr)
 }
@@ -858,6 +999,7 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 
 	var allow effectList
 	var trace bool
+	var jsonOut bool
 	var budget float64
 	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -865,6 +1007,7 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 		"replace what remains of the grant instead of adding to it (default: what is left)")
 	flags.Var(&allow, "allow", "effect to add beyond what the commission already carries; repeat for several (default: none)")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
+	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -887,7 +1030,11 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 
 	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget, Effects: effects})
 	if result != nil {
-		printResult(out, result, trace)
+		if jsonOut {
+			printResultJSON(out, result)
+		} else {
+			printResult(out, result, trace)
+		}
 	}
 	return commissionError(ctx, result, runErr)
 }

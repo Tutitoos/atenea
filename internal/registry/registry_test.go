@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/registry"
@@ -91,6 +92,32 @@ func TestUnknownLookupsAreNotFound(t *testing.T) {
 	}
 	if _, err := reg.ImplementationsFor("code.impact"); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("ImplementationsFor: kind = %v", contract.KindOf(err))
+	}
+}
+
+// A typo close enough to a real id is named in the error, so the second
+// attempt does not have to be another guess.
+func TestUnknownCapabilitySuggestsTheClosestMatch(t *testing.T) {
+	reg := seeded(t)
+	_, err := reg.Capability("code.serach")
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "did you mean code.search?") {
+		t.Errorf("err = %v, want a suggestion", err)
+	}
+}
+
+// Past a real typo's reach a suggestion is a guess dressed as help. An
+// unrelated id gets the plain refusal, nothing invented to fill the gap.
+func TestUnknownCapabilityFarFromAnythingSuggestsNothing(t *testing.T) {
+	reg := seeded(t)
+	_, err := reg.Capability("totally.unrelated")
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", contract.KindOf(err))
+	}
+	if strings.Contains(err.Error(), "did you mean") {
+		t.Errorf("err = %v, want no suggestion for an unrelated id", err)
 	}
 }
 

@@ -1032,6 +1032,39 @@ func TestAskIsItsOwnPhaseOnTheReceipt(t *testing.T) {
 	}
 }
 
+// A payload missing a required field is a fact the request already carries;
+// the funnel's own work -- pricing candidates, choosing among them -- must
+// not be spent finding that out, and the runner must never be asked at all.
+func TestAskRejectsAMissingRequiredFieldBeforeDispatch(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, _ := build(t, runner, 0, "")
+
+	result, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search",
+		Repository: "api",
+		Payload:    map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result.Verdict != contract.VerdictFailed {
+		t.Fatalf("verdict = %v, want failed", result.Verdict)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("steps = %+v, want 1", result.Steps)
+	}
+	step := result.Steps[0]
+	if step.FailureKind != contract.FailureInvalidInput {
+		t.Errorf("failure kind = %v, want invalid_input", step.FailureKind)
+	}
+	if !strings.Contains(step.Failure, `"query" is required`) {
+		t.Errorf("failure = %q, want it to name the missing field", step.Failure)
+	}
+	if got := runner.requests(); len(got) != 0 {
+		t.Errorf("runner saw %d request(s), want 0 -- dispatched before validating", len(got))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Resume
 // ---------------------------------------------------------------------------

@@ -17,6 +17,52 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`atenea ask`/`atenea task` could dispatch a step with a payload missing
+  a required field, and only the chosen implementation would ever notice.**
+  `runStep` already ran pricing and the funnel's selection before building
+  the request, then handed it straight to `a.runner.Run`.
+  `RunRequest.Validate`, which checks exactly this, existed already and was
+  called defensively by some adapters -- but only after the orchestrator had
+  picked an implementation and invoked it. `cmdAsk` had the same gap one
+  layer up: it built the payload and dispatched without ever calling
+  `capability.ValidateInput`, the method the capability contract already
+  exposes for this. Both call sites now validate before the runner is ever
+  invoked -- `cmdAsk` before the request leaves the CLI, `runStep` right
+  before `runner.Run` so the same guarantee holds for `atenea task` and any
+  future caller that reaches the funnel directly. Verified against the
+  compiled binary: `ask code.search --repo current` with no `--set query`
+  now exits `2` (`invalid_input`) with no run receipt printed, where it
+  previously reached the runner.
+
+- **An unknown capability id got the same flat `unknown capability %s`
+  whether it was a real typo or something that never existed.**
+  `atenea ask code.serach` (one transposed letter) and
+  `atenea ask nonsense.capability` read identically on the way out, so the
+  only way back from a typo was guessing again or running `atenea catalog`
+  to read the real list. `Registry.Capability` now measures the
+  Levenshtein distance from the id that was not found to every id that is
+  registered, and names the nearest one when it is within 3 edits -- close
+  enough to read as the same word misspelled, not a different capability.
+  Past that distance nothing is suggested; a guess dressed as help is worse
+  than the plain refusal. Verified against the compiled binary:
+  `ask code.serach` now answers
+  `unknown capability code.serach; did you mean code.search?`.
+
+- **No subcommand answered `--help` or `-h`.** Every subcommand's own
+  `flag.FlagSet` had its output routed to `io.Discard` -- so the CLI's own
+  `invalid_input` wrapping, not Go's default flag-error text, is what a bad
+  flag prints -- which silenced `flag.ErrHelp`'s usage text along with
+  everything else. Worse, four commands (`ask`, `select`, `task`, `resume`)
+  read a positional argument before their flag set ever saw anything, so
+  `-h` in that position was consumed as the capability id or commission
+  text instead of being recognized as a flag at all. `run` now checks every
+  subcommand's own arguments for `-h`/`--help` before dispatching, and
+  answers from a per-command usage message when it finds one -- ahead of
+  any positional-argument parsing, any flag set, and any settings file
+  load, so help never depends on a working config existing. Verified
+  against the compiled binary across all twelve subcommands, including
+  `ask -h` and `select -h` with no other arguments.
+
 - **`symbol.implementations` could only ever answer when the answer was
   empty.** The `0.3.0` fix below made `parseReferences` treat
   `find_implementations`'s `[]` the same as `find_referencing_symbols`'s
@@ -58,6 +104,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   behaviour correctly all along -- only the code disagreed.
 
 ### Added
+
+- **`--json` on `task`, `ask` and `resume` prints the full result as
+  structured JSON instead of prose, for a caller that wants to parse it
+  rather than read it.** `printResult`/`printAnswer` render for an eye --
+  columns, indentation, a line omitted because a human already knows what
+  zero would have meant -- so `printResultJSON` is a second, parallel
+  renderer over the same `orchestrator.Result` rather than a mode bolted
+  onto the first. It always prints the complete receipt and ignores
+  `--trace`: there is no eye to spare on the wire, so the plan and every
+  step are on it every time, not only when asked for. Unit-tested against a
+  synthetic result and round-tripped through the real binary end to end.
 
 - **A step's receipt now says how far a charge ran past its own grant, and
   the CLI trace prints it.** Money is a permission, but a far side's own

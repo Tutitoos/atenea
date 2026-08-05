@@ -1041,6 +1041,12 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		Payload:        step.Payload,
 		Permission:     step.Permission,
 	}
+	// A payload missing a required field is a fact the request itself already
+	// carries; catching it here means the funnel's own work above -- pricing
+	// candidates, choosing among them -- was not spent finding out.
+	if err := request.Validate(); err != nil {
+		return a.close(out, err)
+	}
 	started := time.Now()
 	outcome, runErr := a.runner.Run(ctx, request)
 	out.Outcome = outcome
