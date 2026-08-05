@@ -63,3 +63,4 @@ rewritten when they do.
 - [Settings]({{< relref "settings" >}})
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
 - [What is not built yet]({{< relref "not-built-yet" >}}) — and what the next brick is
+- [Open questions]({{< relref "open-questions" >}}) — what dogfooding turned up, not yet decided
