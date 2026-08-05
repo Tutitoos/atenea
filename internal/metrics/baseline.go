@@ -62,6 +62,11 @@ type Fault struct {
 	// Reason is the untranslated message of the newest failure, for whoever
 	// has to read it.
 	Reason string
+	// Raw is the newest failure's own provider text, beneath Reason the same
+	// way it sits beneath a live Failure. A streak long enough to trip the
+	// funnel is exactly the streak an operator has no fresh call left to
+	// inspect -- the record is the only place this evidence still exists.
+	Raw string
 	// Latest is when that newest failure happened.
 	Latest time.Time
 }
@@ -77,7 +82,7 @@ func (f Fault) Health(now time.Time) (contract.Health, bool) {
 	if f.Streak < FaultStreak || now.Sub(f.Latest) > FaultWindow {
 		return contract.Health{}, false
 	}
-	h := contract.Health{ObservedAt: f.Latest}
+	h := contract.Health{ObservedAt: f.Latest, Raw: f.Raw}
 	if f.Kind != "" {
 		h.State = contract.HealthDown
 		h.Reason = fmt.Sprintf("%d %s failures in a row, last one %s",
@@ -261,7 +266,7 @@ QUALIFY row_number() OVER (
 // warm on one repository and dead on another, and merging them would report a
 // state that is true nowhere.
 const recencyTemplate = `WITH recent AS (
-	SELECT capability, repository, implementation, ok, failure_kind, failure, happened_at,
+	SELECT capability, repository, implementation, ok, failure_kind, failure, raw, happened_at,
 	       row_number() OVER (
 	           PARTITION BY capability, repository, implementation ORDER BY happened_at DESC
 	       ) AS rn
@@ -275,7 +280,7 @@ const recencyTemplate = `WITH recent AS (
 	GROUP BY 1, 2, 3
 ), run AS (
 	SELECT r.capability, r.repository, r.implementation,
-	       r.failure_kind, r.failure, r.happened_at, r.rn
+	       r.failure_kind, r.failure, r.raw, r.happened_at, r.rn
 	FROM recent r JOIN ends e
 	  ON e.capability = r.capability AND e.repository = r.repository
 	 AND e.implementation = r.implementation
@@ -286,6 +291,7 @@ SELECT e.capability, e.repository, e.implementation,
        count(DISTINCT run.failure_kind) AS bins,
        arg_min(run.failure_kind, run.rn) AS kind,
        arg_min(run.failure, run.rn) AS reason,
+       arg_min(run.raw, run.rn) AS raw,
        max(run.happened_at) AS latest,
        any_value(e.last_ok) AS last_ok
 FROM ends e LEFT JOIN run
@@ -395,15 +401,18 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 	for rows.Next() {
 		var r recencyRow
 		var streak, bins int64
-		var kind, reason *string
+		var kind, reason, raw *string
 		var latest, lastOK *time.Time
 		if err := rows.Scan(&r.Capability, &r.Repository, &r.ID,
-			&streak, &bins, &kind, &reason, &latest, &lastOK); err != nil {
+			&streak, &bins, &kind, &reason, &raw, &latest, &lastOK); err != nil {
 			return nil, fmt.Errorf("metrics: recency: %w", err)
 		}
 		r.Baseline.Fault = Fault{Streak: int(streak)}
 		if reason != nil {
 			r.Baseline.Fault.Reason = *reason
+		}
+		if raw != nil {
+			r.Baseline.Fault.Raw = *raw
 		}
 		if latest != nil {
 			r.Baseline.Fault.Latest = *latest

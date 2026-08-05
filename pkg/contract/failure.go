@@ -115,6 +115,24 @@ func KindOf(err error) FailureKind {
 	return FailureUnspecified
 }
 
+// RawOf recovers the untranslated provider text behind an arbitrary error, or
+// the empty string when there is none -- either because the core raised the
+// error itself, or because whatever adapter raised it never attached one.
+//
+// It exists for the same reason KindOf does: everything downstream of an
+// adapter call works with a plain error, and this is the one place that
+// reaches back into the concrete type to recover what a human needs. Every
+// caller that keeps a failure around for later -- a step result, a
+// measurement, a checkpoint -- calls this once here rather than each
+// learning to type-assert its own copy.
+func RawOf(err error) string {
+	var f *Failure
+	if errors.As(err, &f) {
+		return f.Raw
+	}
+	return ""
+}
+
 // StopKind sorts a context error into its bin.
 //
 // The two cases look identical at the call site -- the work did not finish and

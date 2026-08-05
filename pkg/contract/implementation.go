@@ -224,8 +224,14 @@ type Health struct {
 	State HealthState
 	// Score is 0..1 within the state. It breaks ties between two providers that
 	// are both alive or both degraded.
-	Score      float64
-	Reason     string
+	Score  float64
+	Reason string
+	// Raw is the untranslated provider text behind Reason, when the record
+	// that produced this Health kept one. It travels with the state rather
+	// than living only on the attempt that caused it, because a provider the
+	// funnel is refusing right now is exactly the one whose evidence a human
+	// most needs without having to go dispatch a fresh failing call to see it.
+	Raw        string
 	ObservedAt time.Time
 }
 

@@ -517,9 +517,10 @@ func (r *Runner) findImplementations(ctx context.Context, a ask, namePath string
 	if err != nil {
 		return nil, err
 	}
-	// Serena answers this one in the reference shape when it has hits and with
-	// an empty object when it has none. Asking something concrete for its
-	// implementations is a legitimate empty answer, not a failure.
+	// Serena answers this one in the reference shape when it has hits, and
+	// with "{}" or "[]" when it has none (measured: find_implementations
+	// uses the array). Asking something concrete for its implementations is
+	// a legitimate empty answer, not a failure.
 	found, err := parseReferences(raw)
 	if err != nil {
 		return nil, err

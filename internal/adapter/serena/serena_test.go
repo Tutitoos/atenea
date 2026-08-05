@@ -481,6 +481,41 @@ func TestNoReferencesIsAnAnswer(t *testing.T) {
 // list is not advisory here. Exploring skips these in silence because a missed
 // hit costs nothing; a caller pointing at one exact position is refused out
 // loud, because "nothing here" would be a lie.
+
+// Measured against a live server: find_implementations answers zero hits
+// with "[]", not the "{}" find_referencing_symbols uses. Both are Serena
+// saying nothing matched, and both have to read the same way -- a symbol
+// with no implementations is exactly as much an answer as one with no
+// references.
+func TestNoImplementationsIsAnAnswer(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = symbolAnswer
+	s.answers["find_implementations"] = "[]"
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityImplementations, repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcome.Verdict != contract.VerdictOK {
+		t.Errorf("verdict = %v, want ok", outcome.Verdict)
+	}
+	if locations, _ := outcome.Result["locations"].([]any); len(locations) != 0 {
+		t.Errorf("locations = %#v, want empty", locations)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Security and the bins
+// ---------------------------------------------------------------------------
+
+// This is the only adapter that opens a file to do its job, so the sensitive
+// list is not advisory here. Exploring skips these in silence because a missed
+// hit costs nothing; a caller pointing at one exact position is refused out
+// loud, because "nothing here" would be a lie.
+
 func TestASecretFileIsRefusedRatherThanRead(t *testing.T) {
 	s, endpoint := newStub(t)
 	runner := newRunner(t, endpoint)

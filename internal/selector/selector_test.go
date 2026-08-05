@@ -32,6 +32,12 @@ func health(state contract.HealthState, score float64) implOption {
 	}
 }
 
+func healthDown(reason, raw string) implOption {
+	return func(i *contract.Implementation) {
+		i.Health = contract.Health{State: contract.HealthDown, Reason: reason, Raw: raw}
+	}
+}
+
 func provider(name string) implOption {
 	return func(i *contract.Implementation) { i.Provider = name }
 }
@@ -188,6 +194,35 @@ func TestHealthDropsOnlyWhatIsDown(t *testing.T) {
 	}
 	if decision.Chosen.ID != "degraded.search" {
 		t.Fatalf("chosen = %s, want the degraded one over the unprobed one", decision.Chosen.ID)
+	}
+}
+
+// A down implementation is dropped without dispatch, which means the drop
+// line is the only place its evidence can still show up: whatever raw text
+// the record kept has to ride along on the Drop, not just the reason built
+// from it.
+func TestHealthDropCarriesTheRawText(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("down.search", healthDown("3 unavailable failures in a row", "connection refused")),
+			impl("degraded.search", health(contract.HealthDegraded, 0.4)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	healthStage := stage(t, decision, selector.StageHealth)
+	if len(healthStage.Dropped) != 1 {
+		t.Fatalf("dropped = %d, want exactly the down implementation", len(healthStage.Dropped))
+	}
+	dropped := healthStage.Dropped[0]
+	if dropped.Reason != "3 unavailable failures in a row" {
+		t.Errorf("reason = %q", dropped.Reason)
+	}
+	if dropped.Raw != "connection refused" {
+		t.Errorf("raw = %q, want the provider's own text to survive onto the drop", dropped.Raw)
 	}
 }
 

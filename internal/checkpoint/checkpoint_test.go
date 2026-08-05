@@ -94,6 +94,39 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	}
 }
 
+// A resumed run's failure display reads Failure and Raw off the dumped
+// StepState (see cmd/atenea/main.go's cmdResume), so both have to survive the
+// same disk round trip as everything else on the step.
+func TestRoundTripKeepsTheFailureAndItsRawText(t *testing.T) {
+	store, err := checkpoint.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	failed := run("20260802T130000-def456")
+	failed.Closed = true
+	failed.Verdict = "failed"
+	failed.Steps[0].Verdict = "failed"
+	failed.Steps[0].Review = ""
+	failed.Steps[0].Failure = "serena did not answer"
+	failed.Steps[0].Raw = "no symbol matching 'Frame/consistent' found"
+	if err := store.Save(failed); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	read, err := store.Load(failed.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(read.Steps) != 1 {
+		t.Fatalf("steps did not survive the round trip: %v", read.Steps)
+	}
+	if read.Steps[0].Failure != "serena did not answer" {
+		t.Errorf("failure = %q, want the summarized reason", read.Steps[0].Failure)
+	}
+	if read.Steps[0].Raw != "no symbol matching 'Frame/consistent' found" {
+		t.Errorf("raw = %q, want the provider's own text", read.Steps[0].Raw)
+	}
+}
+
 // A dump replaces the previous one: the paper copy is the current state, not
 // an append-only log.
 func TestSaveReplacesTheEarlierDump(t *testing.T) {

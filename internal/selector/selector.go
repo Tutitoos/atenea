@@ -116,6 +116,13 @@ type Request struct {
 type Drop struct {
 	Implementation string
 	Reason         string
+	// Raw is the provider's own text behind Reason, when the record that
+	// produced this drop kept one. Most drops come from the core's own
+	// bookkeeping -- a language it does not speak, an index it lacks -- and
+	// have nothing to add here. A health drop is the exception: the reason is
+	// Atenea's summary of somebody else's failure, and this is that failure's
+	// own words.
+	Raw string
 }
 
 // Stage is one step of the funnel, kept so every decision can be explained
@@ -253,7 +260,9 @@ func filterHealth(candidates []contract.Implementation) ([]contract.Implementati
 			if reason == "" {
 				reason = "reported down"
 			}
-			stage.Dropped = append(stage.Dropped, Drop{Implementation: impl.ID, Reason: reason})
+			stage.Dropped = append(stage.Dropped, Drop{
+				Implementation: impl.ID, Reason: reason, Raw: impl.Health.Raw,
+			})
 			continue
 		}
 		kept = append(kept, impl)

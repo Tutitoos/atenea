@@ -132,6 +132,7 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	bad.OK = false
 	bad.FailureKind = "timeout"
 	bad.Failure = "provider took too long"
+	bad.Raw = "rg: operation timed out after 30s"
 	s.Record(bad)
 	if err := s.Flush(context.Background()); err != nil {
 		t.Fatalf("flush: %v", err)
@@ -142,14 +143,17 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer db.Close()
-	var kind, reason string
+	var kind, reason, raw string
 	var ok bool
-	row := db.QueryRow("SELECT ok, failure_kind, failure FROM measurement")
-	if err := row.Scan(&ok, &kind, &reason); err != nil {
+	row := db.QueryRow("SELECT ok, failure_kind, failure, raw FROM measurement")
+	if err := row.Scan(&ok, &kind, &reason, &raw); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
 	if ok || kind != "timeout" || reason != "provider took too long" {
 		t.Fatalf("stored ok=%v kind=%q reason=%q", ok, kind, reason)
+	}
+	if raw != "rg: operation timed out after 30s" {
+		t.Fatalf("stored raw = %q, want the provider's own text", raw)
 	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))

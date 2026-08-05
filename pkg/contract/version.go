@@ -41,7 +41,16 @@ type Version struct {
 // without a name for it; a core speaking 1.4.0 grants it the same way it
 // already granted read, and an adapter built against 1.3.0 goes on compiling
 // because Effect was already an open uint8, not a closed set it exhausted.
-var Current = Version{Major: 1, Minor: 4, Patch: 0}
+//
+// 1.5.0 added `Raw` to `Failure` and `Health`. A generic-bin failure had
+// always carried the provider's own untranslated text as far as the error
+// value that produced it, and no further -- every adapter already computed
+// it, in the one string every classifier trims down to a message and
+// discards. Additive the same way as the rest: `Fail`/`WithRaw` is a call an
+// adapter opts into, an adapter built against 1.4.0 that never makes it
+// leaves `Raw` at its zero value, and a core speaking 1.5.0 reads that as
+// nothing more to show, never as a missing answer.
+var Current = Version{Major: 1, Minor: 5, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

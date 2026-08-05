@@ -50,3 +50,28 @@ func TestWithRawKeepsTheOriginalMessage(t *testing.T) {
 		t.Fatalf("Error() = %q", withRaw.Error())
 	}
 }
+
+// RawOf recovers the same evidence WithRaw attached, through a wrapped error
+// exactly like KindOf does -- the two are read together at the one place
+// that turns a failure into a step result, and must agree on what "sorted"
+// means.
+func TestRawOfRecoversWrappedRawText(t *testing.T) {
+	err := fmt.Errorf("while selecting: %w",
+		contract.Fail(contract.FailureUnavailable, "serena is down").
+			WithRaw("connection refused"))
+	if got := contract.RawOf(err); got != "connection refused" {
+		t.Fatalf("RawOf = %q, want %q", got, "connection refused")
+	}
+}
+
+// A failure raised without WithRaw has nothing to recover, and an error the
+// core never raised at all -- same case KindOf reports as unspecified -- has
+// nothing either. Both must answer "", not panic and not fabricate text.
+func TestRawOfWithNoRawTextIsEmpty(t *testing.T) {
+	if got := contract.RawOf(contract.Fail(contract.FailureTimeout, "slow")); got != "" {
+		t.Fatalf("RawOf = %q, want empty", got)
+	}
+	if got := contract.RawOf(errors.New("boom")); got != "" {
+		t.Fatalf("RawOf = %q, want empty", got)
+	}
+}

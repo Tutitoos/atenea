@@ -15,6 +15,49 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A symbol with zero implementations reported the provider as down instead
+  of answering.** `find_implementations` answers no hits with a bare `[]`;
+  `parseReferences` only ever recognized `{}`, the shape
+  `find_referencing_symbols` uses for the same case, so unmarshaling `[]`
+  into its object-shaped target failed every time and the call surfaced as
+  `unavailable: serena did not answer`. That is the one bin that marks a
+  provider down, so asking about a real symbol that genuinely implements
+  nothing took Serena out of the funnel for the rest of the fault window on
+  a correct answer. Root-caused with the raw capture below: the failure's
+  `Raw` read `serena sent references nobody can read: []`, which is the
+  provider answering exactly as designed. `parseReferences` now treats `[]`
+  the same as `{}`. Verified against the live repository that reported it:
+  `symbol.implementations` on a method with no implementers now returns
+  `verdict ok` with zero locations instead of failing.
+
+- **A provider that fails without saying why no longer discards the only
+  evidence of it.** `Runner.call` built the failure text from the MCP tool
+  result's own content, so an answer with `isError: true` and nothing in
+  `content` trimmed down to an empty string -- worse than no evidence, since
+  it reads exactly like a call that ran and had nothing to add rather than
+  one that failed silently. It now falls back to the raw response frame when
+  the structured content is empty, so there is always something to show.
+
+### Added
+
+- **A generic-bin failure now carries the provider's own words, not just
+  Atenea's one-line summary of them.** Every adapter already computed this
+  text on the way to picking a bin -- the untranslated error a regex match
+  failed to place -- and discarded it once the bin was chosen. `Raw` on
+  `Failure` carries it out. From there it rides the same path the failure
+  itself takes: onto the dropped candidate in a funnel trace, onto the step
+  in a commission's trace and receipt, onto the measurement a failed attempt
+  writes to the base, and onto the health mark a provider that reported
+  itself down leaves for the next call -- each one a `raw` line beside the
+  summary it belongs to, printed only when there is one. Nothing upstream of
+  an adapter has to change to get it: the six failure bins were always the
+  full story the core needed to decide with, `Raw` is additional evidence for
+  whoever debugs after, and a client built against `1.4.0` goes on compiling
+  and simply never sends it. Contract `1.5.0`.
+
+
 ## [0.2.0] - 2026-08-04
 
 ### Fixed

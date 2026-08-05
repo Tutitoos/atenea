@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,33 @@ func TestARunOfOneFailureBinIsAnOutage(t *testing.T) {
 	}
 	if !strings.Contains(health.Reason, "not logged in") {
 		t.Errorf("reason %q does not carry what the provider actually said", health.Reason)
+	}
+}
+
+// The bug this one exists for: a streak trips the breaker and the funnel
+// stops dispatching, so there is no fresh call left anywhere to inspect --
+// the newest attempt's raw provider text is the only copy of the evidence,
+// and it lives here or nowhere.
+func TestHealthCarriesTheNewestRawText(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC()
+	for i := range 3 {
+		m := broke(now.Add(time.Duration(i)*time.Second), "serena.implementations",
+			"unavailable", "serena did not answer")
+		m.Raw = fmt.Sprintf("attempt %d: no symbol matching found", i)
+		s.Record(m)
+	}
+
+	fault := faultOf(t, s, "serena.implementations")
+	if fault.Raw != "attempt 2: no symbol matching found" {
+		t.Fatalf("fault.Raw = %q, want the newest attempt's text", fault.Raw)
+	}
+	health, hurt := fault.Health(now.Add(time.Second))
+	if !hurt {
+		t.Fatal("three identical failures did not reach health at all")
+	}
+	if health.Raw != "attempt 2: no symbol matching found" {
+		t.Errorf("health.Raw = %q, want it carried over from the fault", health.Raw)
 	}
 }
 

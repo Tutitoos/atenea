@@ -237,6 +237,9 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 				line += "  (" + impl.Health.Reason + ")"
 			}
 			fmt.Fprintln(out, line)
+			if impl.Health.Raw != "" {
+				fmt.Fprintf(out, "             raw: %s\n", clip(oneLine(impl.Health.Raw)))
+			}
 		}
 	}
 
@@ -651,6 +654,9 @@ func printDecision(out io.Writer, decision selector.Decision, selectErr error) {
 			stage.Name, len(stage.In), len(stage.Out), orDash(strings.Join(stage.Out, ", ")))
 		for _, dropped := range stage.Dropped {
 			fmt.Fprintf(out, "      dropped %s: %s\n", dropped.Implementation, dropped.Reason)
+			if dropped.Raw != "" {
+				fmt.Fprintf(out, "              raw: %s\n", oneLine(dropped.Raw))
+			}
 		}
 	}
 }
@@ -1136,6 +1142,9 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 			if step.Failure != "" {
 				fmt.Fprintf(out, "      failed   %s\n", step.Failure)
 			}
+			if step.Raw != "" {
+				fmt.Fprintf(out, "      raw      %s\n", oneLine(step.Raw))
+			}
 		}
 		for _, notice := range step.Outcome.Notices {
 			fmt.Fprintf(out, "      notice   %s\n", notice)
@@ -1146,6 +1155,9 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		for _, stage := range step.Decision.Stages {
 			for _, dropped := range stage.Dropped {
 				fmt.Fprintf(out, "      dropped  %s: %s\n", dropped.Implementation, dropped.Reason)
+				if dropped.Raw != "" {
+					fmt.Fprintf(out, "               raw: %s\n", oneLine(dropped.Raw))
+				}
 			}
 		}
 	}
@@ -1367,4 +1379,15 @@ func yesNo(value bool) string {
 
 func oneLine(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+// clip keeps a status line readable when the provider text behind it runs
+// long. The full text is never lost -- it is on the receipt, and --trace
+// prints it whole -- this only keeps the short screen short.
+func clip(s string) string {
+	const limit = 160
+	if len(s) > limit {
+		return s[:limit] + "..."
+	}
+	return s
 }

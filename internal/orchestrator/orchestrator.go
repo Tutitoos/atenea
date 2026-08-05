@@ -307,7 +307,11 @@ type StepResult struct {
 	// counted. Turning the message back into a kind afterwards is not
 	// possible: err.Error() is one-way.
 	FailureKind contract.FailureKind
-	Spent       contract.Sample
+	// Raw is the provider's own text behind Failure, when whatever adapter
+	// raised it kept one. Empty on success, and empty on a failure the core
+	// raised itself with nothing to quote.
+	Raw   string
+	Spent contract.Sample
 }
 
 // Review is the parent's audit of a child that just finished.
@@ -1055,6 +1059,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 			_ = a.catalog.SetHealth(decision.Chosen.ID, contract.Health{
 				State:      contract.HealthDown,
 				Reason:     runErr.Error(),
+				Raw:        contract.RawOf(runErr),
 				ObservedAt: time.Now(),
 			})
 		}
@@ -1091,6 +1096,7 @@ func (a *Agent) close(out StepResult, err error) StepResult {
 	if err != nil {
 		out.Failure = err.Error()
 		out.FailureKind = contract.KindOf(err)
+		out.Raw = contract.RawOf(err)
 		child = contract.VerdictFailed
 	}
 	// A step nobody let finish is not reviewed, because there is nothing to
@@ -1372,6 +1378,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Verdict:        step.Review.Child.String(),
 		Review:         step.Review.Parent.String(),
 		Failure:        step.Failure,
+		Raw:            step.Raw,
 		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
@@ -1400,6 +1407,7 @@ func measure(runID string, step StepResult) metrics.Measurement {
 		Spent:          step.Spent,
 		OK:             step.Review.Parent == contract.VerdictOK,
 		Failure:        step.Failure,
+		Raw:            step.Raw,
 	}
 	if step.Failure != "" {
 		m.FailureKind = step.FailureKind.String()

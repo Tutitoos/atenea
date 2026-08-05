@@ -113,6 +113,11 @@ type Measurement struct {
 	// empty on success.
 	FailureKind string
 	Failure     string
+	// Raw is the provider's own text behind Failure, kept verbatim so a
+	// human can search for it later instead of re-triggering the same
+	// failure just to see what it actually said. Empty on success, and empty
+	// on a failure the core raised itself with nothing to quote.
+	Raw string
 }
 
 // DefaultPath is where the database lives when the settings file says nothing.
@@ -224,8 +229,8 @@ func (s *Store) Written() int {
 const insertMeasurement = `INSERT INTO measurement
 	(happened_at, run_id, step_id, capability, implementation, provider,
 	 repository, tool_version, duration_us, tokens, peak_rss_bytes,
-	 ok, failure_kind, failure)
-	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	 ok, failure_kind, failure, raw)
+	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // Flush writes the buffered batch. An empty buffer is not an error and does not
 // touch the disk.
@@ -286,7 +291,7 @@ func (s *Store) write(ctx context.Context, batch []Measurement) error {
 			m.At.UTC(), m.RunID, m.StepID, m.Capability, m.Implementation,
 			m.Provider, m.Repository, m.ToolVersion,
 			m.Spent.Duration.Microseconds(), int64(m.Spent.Tokens), rss,
-			m.OK, m.FailureKind, m.Failure)
+			m.OK, m.FailureKind, m.Failure, m.Raw)
 		if err != nil {
 			return fmt.Errorf("metrics: insert: %w", err)
 		}

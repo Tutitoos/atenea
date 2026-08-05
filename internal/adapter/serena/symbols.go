@@ -76,7 +76,11 @@ func parseSymbols(text string) ([]symbol, error) {
 // what gets parsed out.
 func parseReferences(text string) ([]location, error) {
 	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || trimmed == "{}" {
+	// Measured live: find_implementations answers zero hits with "[]", not
+	// the "{}" the reference shape would predict. Both mean the same thing
+	// -- nothing nested inside -- so both are the legitimate empty answer,
+	// not a shape this adapter failed to read.
+	if trimmed == "" || trimmed == "{}" || trimmed == "[]" {
 		return nil, nil
 	}
 	var byPath map[string]map[string][]struct {

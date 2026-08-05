@@ -672,6 +672,41 @@ func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 
 // The funnel is asked per repository, so the same commission can be answered
 // by different providers in different units of work.
+
+// The generic bin an unrecognized provider error falls into used to say
+// nothing but its own catch-all sentence, on the step and on the catalog
+// mark it left behind for the next call. Both are where a human actually
+// looks after a failure, so both have to carry the provider's own words, not
+// just Atenea's summary of them.
+func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
+	runner := &fakeRunner{
+		answer: func(contract.RunRequest) (contract.Outcome, error) {
+			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+				"serena did not answer").WithRaw("no symbol matching 'Frame/consistent' found")
+		},
+	}
+	agent, reg := build(t, runner, 0, "")
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Steps[0].Raw != "no symbol matching 'Frame/consistent' found" {
+		t.Errorf("step.Raw = %q, want the provider's own text", result.Steps[0].Raw)
+	}
+	chosen := result.Steps[0].Decision.Chosen.ID
+	impl, err := reg.Implementation(chosen)
+	if err != nil {
+		t.Fatalf("Implementation: %v", err)
+	}
+	if impl.Health.Raw != "no symbol matching 'Frame/consistent' found" {
+		t.Errorf("health.Raw = %q, want it on the mark the next call will read", impl.Health.Raw)
+	}
+}
+
+// The funnel is asked per repository, so the same commission can be answered
+// by different providers in different units of work.
+
 func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
 	runner := &fakeRunner{}
 	agent, _ := build(t, runner, 0, "")

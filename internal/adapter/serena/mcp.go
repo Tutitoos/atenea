@@ -79,6 +79,14 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 		// The text is the far side's own words about what went wrong, so it
 		// goes back untouched for failureFor to bin. Rewording it here would
 		// destroy the only evidence a human has.
+		if body == "" {
+			// isError with nothing in content is a server that flagged a
+			// failure and then said nothing about it. An error built from
+			// that would trim down to "", which is worse than no evidence:
+			// it looks like the call answered instead of the call failing
+			// silently. The raw frame is the only text left to show.
+			return "", fmt.Errorf("serena %s reported an error with no message: %s", tool, clip(string(raw)))
+		}
 		return "", fmt.Errorf("%s", strings.TrimSpace(body))
 	}
 	return body, nil

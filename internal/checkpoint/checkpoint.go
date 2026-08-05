@@ -81,6 +81,10 @@ type StepState struct {
 	Verdict        string `json:"verdict"`
 	Review         string `json:"review,omitempty"`
 	Failure        string `json:"failure,omitempty"`
+	// Raw is the provider's own text behind Failure, kept for the same
+	// reason Failure itself is: a receipt that summarizes what happened
+	// without keeping the evidence is not a receipt a human can act on.
+	Raw string `json:"raw,omitempty"`
 	// Discoveries is what the far side reported finding, carried over from
 	// contract.Outcome. A step that already passed review is never
 	// redispatched on resume, so this is the only copy of what it found that
