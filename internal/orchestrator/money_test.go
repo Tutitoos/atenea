@@ -109,6 +109,46 @@ func TestThePriceIsFiledOnThePaperCopy(t *testing.T) {
 	}
 }
 
+// The same paper copy that carries what was spent has to carry how far past
+// its granted share that spend went, or an audit has to re-derive the one
+// number that says a far side's own ceiling let a turn finish after the
+// budget for it was already gone.
+func TestTheOverspendIsFiledOnThePaperCopyToo(t *testing.T) {
+	dir := t.TempDir()
+	agent, _ := build(t, &fakeRunner{answer: charging(0.30)}, 0, dir)
+
+	// Ask is one capability answered as one step, so the whole $0.25 grant
+	// is this one step's share -- the plan a Task would build spans more
+	// than one step and would divide the grant before the overspend could
+	// be pinned to a single, known number.
+	result, err := agent.Ask(context.Background(), orchestrator.Question{
+		Capability: "code.search", Repository: "api",
+		Payload: map[string]any{"query": "TODO"}, BudgetUSD: 0.25,
+	})
+	if err != nil {
+		t.Fatalf("ask: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, result.RunID+".json"))
+	if err != nil {
+		t.Fatalf("reading the receipt: %v", err)
+	}
+	var run checkpoint.Run
+	if err := json.Unmarshal(raw, &run); err != nil {
+		t.Fatalf("receipt is not readable: %v", err)
+	}
+	if len(run.Steps) != 1 {
+		t.Fatalf("%d step(s) on the receipt, want exactly 1", len(run.Steps))
+	}
+	step := run.Steps[0]
+	if step.SpentUSD != 0.30 {
+		t.Errorf("step %s was filed at $%v, want $0.30", step.ID, step.SpentUSD)
+	}
+	if diff := step.OverspendUSD - 0.05; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("step %s overspend = $%v, want $0.05", step.ID, step.OverspendUSD)
+	}
+}
+
 // Free work carries no price tag. A receipt where every step reads "$0" is a
 // receipt nobody reads, and the omitted key is what keeps the one run that did
 // cost money legible among the ones that did not.

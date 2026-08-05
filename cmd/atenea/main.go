@@ -1128,6 +1128,13 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		if step.Outcome.SpentUSD > 0 {
 			fmt.Fprintf(out, "      charged  $%.4f\n", step.Outcome.SpentUSD)
 		}
+		// A charge past the share is a different fact from the charge
+		// itself: the money was spent regardless, but this line is the one
+		// that says the far side's own ceiling let a turn finish after the
+		// budget for it was already gone.
+		if over := orchestrator.Overspend(step); over > 0 {
+			fmt.Fprintf(out, "      overspent $%.4f\n", over)
+		}
 		// A step that was stopped gets one line where three would go. There
 		// was no review to report -- printing child and parent verdicts here
 		// would dress two opinions nobody holds as findings -- and "failed"

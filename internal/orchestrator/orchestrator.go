@@ -1369,6 +1369,22 @@ func resumeVerdict(steps []StepResult, stopped error) contract.Verdict {
 	return overallVerdict(steps, stopped)
 }
 
+// Overspend is how far a step's charge ran past the share it was granted,
+// zero when it stayed inside it. A far side's own spending ceiling is
+// checked between complete turns, not inside one, so a single expensive
+// turn can still finish after the money for it had already run out --
+// grant.spend already contains that when it happens, clamping the purse at
+// zero rather than going into debt, but containing the damage is not the
+// same as saying it happened. This is the number that says so, on the same
+// receipt as the charge itself.
+func Overspend(step StepResult) float64 {
+	over := step.Outcome.SpentUSD - step.Step.Permission.BudgetUSD
+	if over < 0 {
+		return 0
+	}
+	return over
+}
+
 func snapshot(step StepResult) checkpoint.StepState {
 	return checkpoint.StepState{
 		ID:             step.Step.ID,
@@ -1382,6 +1398,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
+		OverspendUSD:   Overspend(step),
 		ClosedAt:       time.Now(),
 	}
 }

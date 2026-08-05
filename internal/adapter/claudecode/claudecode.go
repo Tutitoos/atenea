@@ -240,7 +240,50 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 				req.Repository.ID, answer.TotalCostUSD, req.Permission.BudgetUSD, answer.NumTurns),
 		})
 	}
+	if notices := completenessDoubt(answer, req.Permission.BudgetUSD); len(notices) > 0 {
+		outcome.Notices = append(outcome.Notices, notices...)
+	}
 	return outcome, nil
+}
+
+// nearCeilingFraction is how much of its grant a turn may spend before a
+// clean answer is flagged rather than trusted outright. Chosen, not measured:
+// every recorded case this close to a ceiling died outright (see
+// ceiling_test.go, weight_test.go), so there is no successful call yet to
+// calibrate against. 80% leaves room for an answer that is simply thorough
+// and expensive, while still catching one that came home a grep short.
+const nearCeilingFraction = 0.8
+
+// completenessDoubt names concrete reasons a successful answer might still
+// be short of the "every match" the contract promises. It is deliberately
+// narrow -- most calls trip neither check -- because a notice on every
+// answer trains the reader to skip the line that matters.
+func completenessDoubt(answer envelope, budgetUSD float64) []string {
+	var out []string
+	if answer.NumTurns <= 1 {
+		// A tool call always costs a turn of its own to read the result
+		// back: the completion that calls Grep cannot also be the one that
+		// reports what it found, because the tool has not run yet when that
+		// completion is written. A one-turn answer therefore never saw a
+		// tool result, despite the prompt saying "use your Grep tool" and
+		// "do not invent" a match -- it answered from whatever the model
+		// already believed, not from a search that ran.
+		out = append(out, "answered in a single turn, with no tool result read back -- "+
+			"the prompt requires a grep before an answer, so this one may not have run")
+	}
+	if budgetUSD > 0 && answer.TotalCostUSD/budgetUSD >= nearCeilingFraction {
+		// Measured: the runs that died outright spent past their ceiling
+		// while still mid-search, 8-9 turns in, cut off by the money rather
+		// than by finishing. A successful call that spent most of the same
+		// grant without dying is the same shape one step earlier -- close
+		// enough to the edge that stopping deliberately, one grep short, is
+		// at least as likely an explanation as finishing cleanly.
+		out = append(out, fmt.Sprintf(
+			"spent $%.4f of its $%.2f ceiling (%.0f%%) -- close enough to the edge "+
+				"that it may have stopped searching rather than finished",
+			answer.TotalCostUSD, budgetUSD, 100*answer.TotalCostUSD/budgetUSD))
+	}
+	return out
 }
 
 // search is one payload read once.

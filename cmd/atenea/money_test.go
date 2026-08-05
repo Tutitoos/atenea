@@ -13,7 +13,7 @@ import (
 // receipt is one closed commission, priced or free, with nothing else in it.
 func receipt(usd float64) *orchestrator.Result {
 	step := orchestrator.StepResult{
-		Step:    contract.Step{ID: "search-current", Capability: "code.search", Repository: "current"},
+		Step:    contract.Step{ID: "search-current", Capability: "code.search", Repository: "current", Permission: contract.Permission{BudgetUSD: usd}},
 		Phase:   orchestrator.PhaseWork,
 		Spent:   contract.Sample{Duration: 2 * time.Second, Tokens: 160},
 		Outcome: contract.Outcome{Verdict: contract.VerdictOK, SpentUSD: usd},
@@ -69,5 +69,32 @@ func TestTheTraceNamesTheStepThatPaid(t *testing.T) {
 	// Once as the run total, once against the step that incurred it.
 	if got := strings.Count(body, "0.0234"); got != 2 {
 		t.Errorf("the charge appears %d time(s), want 2 (total and step):\n%s", got, body)
+	}
+}
+
+// A step that ran past its share says so beside what it cost. The charge
+// alone does not distinguish a call that stayed inside its grant from one
+// whose far side let it run over -- only this line does.
+func TestTheTraceNamesTheOverspendToo(t *testing.T) {
+	over := receipt(0.30)
+	over.Steps[0].Step.Permission.BudgetUSD = 0.25
+
+	var out bytes.Buffer
+	printResult(&out, over, true)
+
+	body := out.String()
+	if !strings.Contains(body, "overspent $0.0500") {
+		t.Errorf("the trace does not name the overspend:\n%s", body)
+	}
+}
+
+// A step that stayed inside its share says nothing extra. The line only
+// exists for the run where it is not zero, same reasoning as "charged".
+func TestAStepWithinItsShareMentionsNoOverspend(t *testing.T) {
+	var out bytes.Buffer
+	printResult(&out, receipt(0.0234), true)
+
+	if strings.Contains(out.String(), "overspent") {
+		t.Errorf("a step within its share printed an overspend:\n%s", out.String())
 	}
 }

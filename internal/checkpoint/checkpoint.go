@@ -97,8 +97,14 @@ type StepState struct {
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a
 	// receipt. Omitted when zero so free work does not carry a price tag.
-	SpentUSD float64   `json:"spent_usd,omitempty"`
-	ClosedAt time.Time `json:"closed_at"`
+	SpentUSD float64 `json:"spent_usd,omitempty"`
+	// OverspendUSD is how far this step's charge ran past the share it was
+	// granted, when it ran past it at all. Omitted when it stayed inside its
+	// share, which is the ordinary case: a receipt with every step reading
+	// "$0 over" would be a receipt nobody reads, same reasoning as SpentUSD
+	// above.
+	OverspendUSD float64   `json:"overspend_usd,omitempty"`
+	ClosedAt     time.Time `json:"closed_at"`
 }
 
 // DefaultDir is where runs are kept when the settings file says nothing.

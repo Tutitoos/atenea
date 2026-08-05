@@ -57,6 +57,35 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   failures in a row`, `down`, dropped from the funnel. The docs described this
   behaviour correctly all along -- only the code disagreed.
 
+### Added
+
+- **A step's receipt now says how far a charge ran past its own grant, and
+  the CLI trace prints it.** Money is a permission, but a far side's own
+  spending ceiling is checked between complete turns, not inside one: a
+  single expensive turn can still finish after the budget for it was already
+  gone. `grant.spend` already clamps the purse at zero when that happens, so
+  the commission's books stay honest -- but a clamped purse does not say the
+  overspend occurred. `orchestrator.Overspend` reports the gap between a
+  step's `SpentUSD` and its granted `Permission.BudgetUSD`; persisted on the
+  checkpoint as `overspend_usd` (omitted when zero, same convention as
+  `spent_usd`) and printed as `overspent $X.XXXX` beside the existing
+  `charged` line whenever it is non-zero.
+
+- **A successful `claude.search` answer can now carry a doubt about its own
+  completeness.** Investigated whether Atenea could enforce a hard spending
+  guarantee on a paid provider mid-call: the Claude Code CLI reports cost as
+  one blob after a turn closes, with no incremental figure to check against
+  mid-turn, so a real guarantee is not achievable at the current adapter
+  boundary, only after-the-fact detection. Two honest signals stand in for
+  it, each appending a `contract.Outcome` `Notice` rather than failing the
+  call outright: an answer with `num_turns <= 1` never read a tool result
+  back (the completion that calls a tool cannot also be the one reporting
+  what it found, so the prompt's own "grep before you answer" cannot have
+  run), and an answer that spent 80% or more of its ceiling is the same
+  shape, one step earlier, as every recorded case on this machine that died
+  outright mid-search. Printed under the step in `--trace` output; most
+  calls trip neither check.
+
 ## [0.3.0] - 2026-08-05
 
 ### Fixed
