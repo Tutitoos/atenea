@@ -45,6 +45,17 @@ jobs:
           fi
           echo "tag ${GITHUB_REF_NAME} == binary ${got}"
 
+      - name: Lint must be clean (the same gate CI runs on main)
+        run: |
+          set -eu
+          # The same linter, the same version, the same configuration file CI
+          # gates on -- so the question being answered here is exactly the one
+          # CI would have answered if the tag had been a main push. Three
+          # releases were cut on top of a red pipeline because nobody asked
+          # this question at tag time.
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          "$(go env GOPATH)/bin/golangci-lint" run
+
       - name: The changelog must have this release in it
         run: |
           set -eu
