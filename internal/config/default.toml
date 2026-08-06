@@ -1,8 +1,14 @@
 # Atenea settings.
 #
 # One file, on purpose: ceilings, rhythms and the catalog live here and
-# nowhere else. Nothing in this file is compiled into the binary -- Atenea is a
-# declarative engine, so changing behavior means editing this, not the core.
+# nowhere else. Atenea is a declarative engine, so changing behavior means
+# editing this file, not the core.
+#
+# This copy is embedded in the binary and runs when no file exists on disk. A
+# file of your own replaces the catalog outright but overrides the knobs key by
+# key -- a knob you delete falls back to a compiled default instead of
+# disappearing, and a list you delete is not the same as a list you empty. See
+# docs/content/settings.md.
 #
 # Conversation with the user is in Spanish; every technical artifact, this file
 # included, is in English.

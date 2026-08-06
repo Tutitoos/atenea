@@ -13,6 +13,37 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **The settings page claimed a value you leave out is absent; for everything
+  outside the catalog it falls back to a compiled default.** The catalog blocks
+  really are replaced outright — that part was right, and the page's own
+  empty-catalog example still holds. But `[core]`, `[orchestrator]`,
+  `[metrics]`, `[backup]` and the adapter blocks under them are applied key by
+  key: the very file the page prints as "knows nothing" runs with `parallel 4`,
+  `metrics.flush 30s`, `metrics.compact 1h`, `backup 6h` and `5 of 5 kept`,
+  none of which it declares. Two consequences went with it, both measured
+  against the binary rather than reasoned about: an omitted list is not an
+  empty one (drop `implementations` from `[orchestrator.serena]` and all four
+  symbol capabilities are still served; write `[]` and none are), and `effects`
+  is the deliberate exception, because a grant nobody wrote down is a grant
+  nobody made. `default.toml`'s own header carried a sharper version of the
+  same error — "nothing in this file is compiled into the binary", said by the
+  file that is embedded in it.
+- **A test now holds the shipped file and the compiled fallbacks to saying the
+  same thing.** That agreement is what makes the difference invisible today and
+  what a future edit could quietly break on one side only, leaving a partial
+  file that still works and no longer means what the file it was copied from
+  meant.
+- **`golangci-lint` had been red since v0.3.0 and three releases were cut on
+  top of it.** An unused `serverVersion` on the Serena runner, orphaned when
+  per-call `ToolVersion` replaced it, and one `behaviour` in a contract
+  comment. Neither changes behaviour; the streak is the finding. `lefthook.yml`
+  already runs the linter pre-commit — it has never been installed on the
+  machine cutting the releases, so CI was the only gate and nobody read it.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added

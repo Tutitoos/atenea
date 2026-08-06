@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -164,6 +165,55 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		if impl.Cost.Estimated.Duration <= 0 || impl.Cost.Estimated.Tokens <= 0 {
 			t.Errorf("%s ships without a cost estimate: %+v", impl.ID, impl.Cost.Estimated)
 		}
+	}
+}
+
+// The settings page tells a user that a knob they leave out falls back to a
+// compiled constant, and that today those constants say the same thing the
+// shipped file says. Both halves have to stay true: the first is what the code
+// does, the second is a promise that only holds until somebody edits one side
+// of the pair. A drift here is silent -- a partial file keeps working, it just
+// stops meaning what the file it was copied from meant.
+func TestShippedKnobsAgreeWithTheCompiledFallbacks(t *testing.T) {
+	shipped, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	// minimal declares a catalog and nothing else: no [core], [orchestrator],
+	// [metrics], [backup] or [security]. What comes back for those is purely
+	// what the binary falls back to.
+	fallback, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !reflect.DeepEqual(shipped.Core, fallback.Core) {
+		t.Errorf("[core] shipped %+v, fallback %+v", shipped.Core, fallback.Core)
+	}
+	if !reflect.DeepEqual(shipped.Metrics, fallback.Metrics) {
+		t.Errorf("[metrics] shipped %+v, fallback %+v", shipped.Metrics, fallback.Metrics)
+	}
+	if !reflect.DeepEqual(shipped.Backup, fallback.Backup) {
+		t.Errorf("[backup] shipped %+v, fallback %+v", shipped.Backup, fallback.Backup)
+	}
+	if !reflect.DeepEqual(shipped.Security, fallback.Security) {
+		t.Errorf("[security] shipped %+v, fallback %+v", shipped.Security, fallback.Security)
+	}
+
+	// Standing effects are the documented exception, and the reason this test
+	// compares the rest field by field instead of the whole struct: a grant
+	// nobody wrote down is a grant nobody made, so an omitted `effects` key is
+	// none rather than the shipped list.
+	if len(fallback.Orchestrator.StandingEffects) != 0 {
+		t.Errorf("omitting effects granted %v, want none", fallback.Orchestrator.StandingEffects)
+	}
+	if len(shipped.Orchestrator.StandingEffects) == 0 {
+		t.Error("the shipped file grants no standing effect; the settings page says it ships one")
+	}
+	shippedOrchestrator, fallbackOrchestrator := shipped.Orchestrator, fallback.Orchestrator
+	shippedOrchestrator.StandingEffects, fallbackOrchestrator.StandingEffects = nil, nil
+	if !reflect.DeepEqual(shippedOrchestrator, fallbackOrchestrator) {
+		t.Errorf("[orchestrator] shipped %+v, fallback %+v", shippedOrchestrator, fallbackOrchestrator)
 	}
 }
 

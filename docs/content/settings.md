@@ -16,15 +16,16 @@ nothing ends up baked into the code or scattered across three configs.
 Unknown keys are refused. A typo that is silently ignored is a setting the user
 believes is in force and is not.
 
-## The file replaces the defaults, it does not patch them
+## What the file replaces, and what it only overrides
 
 Atenea ships a full settings file compiled into the binary, and that is what
 runs when no file exists on disk. The moment a file does exist it is used
-*instead* — not merged on top. There is no layering: a setting you leave out is
-not inherited from the built-in copy, it is absent.
+instead. What *instead* means depends on which part of the file you are looking
+at, and the difference is the thing to know before you delete a line.
 
-That matters most for the catalog, because the catalog is the largest thing in
-the file and the easiest to forget. A settings file containing only
+**The catalog is replaced.** The `[[capability]]`, `[[implementation]]`,
+`[[repository]]` and `[[selector.rule]]` blocks are not merged with the shipped
+ones: what your file lists is the whole list. A settings file containing only
 
 ```toml
 contract = "1.0.0"
@@ -38,17 +39,50 @@ all. It boots, `atenea status` shows the orchestrator red and `serves -`, and
 every command answers `unknown capability`. Nothing is hidden and nothing
 crashed; you asked for an empty catalog and got one.
 
-So the way to change one setting is to start from the whole file:
+**The knobs are overridden.** The ceilings and rhythms — `[core]`,
+`[orchestrator]`, `[metrics]`, `[backup]`, and the adapter blocks under them —
+are applied key by key on top of a compiled default. The file above sets no
+step ceiling and no rhythm at all, yet that same `atenea status` prints
+`parallel 4`, `metrics.flush 30s`, `metrics.compact 1h`, `backup 6h` and
+`5 of 5 kept`. None of that is in the file; all of it is in force.
+
+So a knob you leave out is not absent, it is whatever the binary falls back to.
+Today those constants say exactly what the shipped file says — a test holds
+them to it — which is what makes the difference easy to miss. It stops being
+invisible on the upgrade that changes one.
+
+**A list you leave out is not an empty list.** `runners`, `skip_dirs`,
+`sensitive` and every adapter's `implementations` tell an omitted list apart
+from an explicitly empty one, deliberately:
+
+| Written | Means |
+| --- | --- |
+| nothing | the built-in list stands |
+| `[]` | genuinely nothing: dispatch nowhere, skip no directory, treat no file as sensitive |
+
+Strip `implementations` out of `[orchestrator.serena]` and Serena still answers
+for all four symbol capabilities. Write `implementations = []` in the same
+place and it answers for none, while every other key in the block keeps working.
+
+`effects` is the one list that does not play by this rule, because a grant
+nobody wrote down is a grant nobody made. Leave it out and you have none, not
+the shipped `["process"]` — and since every implementation of `code.search` is
+a binary, a file that omits it answers `permission_denied: code.search causes
+process, which the commission does not cover`.
+
+So the way to change one setting is still to start from the whole file:
 
 ```sh
 atenea config init          # writes the built-in file, catalog and all
 atenea config path          # says where that is
 ```
 
-then edit it. Merging was considered and refused: a half-file whose meaning
-depends on what a particular binary happened to ship is a file nobody can read
-on its own, and an upgrade that changed a default would silently change a
-machine whose settings file never moved.
+then edit it. A full file states every value where you can read it, which is
+the only version of this that survives an upgrade. Merging the catalog was
+considered and refused: a half-file whose meaning depends on what a particular
+binary happened to ship is a file nobody can read on its own. The knobs that do
+fall back are precisely where that objection still bites, which is the argument
+for pinning them rather than trusting them.
 
 ## Skeleton
 
