@@ -61,7 +61,7 @@ type Version struct {
 // side of Run.
 //
 // 1.7.0 added `Repository.SerenaEndpoint`. Empty keeps today's single-URL
-// behaviour (the adapter default, retarget via activate_project). A set URL
+// behavior (the adapter default, retarget via activate_project). A set URL
 // pins that repository to its own Serena process so two projects stay warm
 // without tearing each other down. Additive: an adapter built against 1.6.0
 // never reads the field; a core speaking 1.7.0 that sees it empty does what

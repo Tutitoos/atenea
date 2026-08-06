@@ -235,21 +235,6 @@ func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
-// serverVersion is what the default endpoint called itself, if a session has
-// opened there. Prefer the per-call ToolVersion taken from the conn that
-// actually answered; this is only a fallback for callers that have not run.
-func (r *Runner) serverVersion() string {
-	r.connsMu.Lock()
-	c := r.conns[r.defaultEndpoint]
-	r.connsMu.Unlock()
-	if c == nil {
-		return ""
-	}
-	c.wireMu.Lock()
-	defer c.wireMu.Unlock()
-	return c.version
-}
-
 // Run executes one step.
 //
 // The version travels back on every path, including the failing ones. Here it
