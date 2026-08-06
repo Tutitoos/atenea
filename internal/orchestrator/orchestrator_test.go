@@ -1004,6 +1004,40 @@ func TestAskRefusesWhatTheCardDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// symbol.overview is the newest capability the card lists, and the
+// mechanism the test above refuses code.rewrite with is exactly what has to
+// let this one through instead. The fixture registry never stocks it, so
+// the ask still fails -- but failing at "unknown capability" rather than
+// "may not ask for" is what proves the card gate, not the registry, is what
+// changed.
+func TestAskSymbolOverviewPassesTheCardGate(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{}, 0, "")
+	if !agent.Card().CanAsk("symbol.overview") {
+		t.Fatal("the card does not declare symbol.overview")
+	}
+
+	result, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "symbol.overview",
+		Repository: "api",
+		Payload:    map[string]any{"file": "main.go"},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result.Verdict != contract.VerdictFailed {
+		t.Fatalf("verdict = %v, want failed: the fixture registry does not stock this capability", result.Verdict)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("steps = %+v, want exactly one", result.Steps)
+	}
+	if strings.Contains(result.Steps[0].Failure, "may not ask for") {
+		t.Fatalf("failure = %q, the card gate rejected it; want it past the gate and failing on the registry instead", result.Steps[0].Failure)
+	}
+	if !strings.Contains(result.Steps[0].Failure, "unknown capability") {
+		t.Fatalf("failure = %q, want it to fail because the fixture registry does not stock symbol.overview", result.Steps[0].Failure)
+	}
+}
+
 // The receipt says what happened, and what happened was an ask. Borrowing
 // "explore" would make a run claim it looked around when it did not.
 func TestAskIsItsOwnPhaseOnTheReceipt(t *testing.T) {

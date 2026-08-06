@@ -38,6 +38,12 @@ type stub struct {
 	// errors maps a tool name to an MCP error text, which is what Serena
 	// sends when the tool itself failed rather than the transport.
 	errors map[string]string
+	// dynamic overrides answers/errors when set, keyed by tool name, letting
+	// a test answer differently depending on the arguments. symbol.overview
+	// calls find_symbol once per name in one commission, and each call needs
+	// its own answer to exercise locateAll's fan-out honestly, rather than
+	// one canned string standing in for every one of them.
+	dynamic map[string]func(args map[string]any) (text string, isError bool)
 	// noSession drops the session header, which is how a broken proxy looks.
 	noSession bool
 }
@@ -85,7 +91,13 @@ func (s *stub) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params, &params)
 		s.mu.Lock()
 		s.calls = append(s.calls, stubCall{Tool: params.Name, Args: params.Args})
-		text, isError := s.errors[params.Name], true
+		var text string
+		var isError bool
+		if fn, ok := s.dynamic[params.Name]; ok {
+			text, isError = fn(params.Args)
+		} else {
+			text, isError = s.errors[params.Name], true
+		}
 		if text == "" {
 			text, isError = s.answers[params.Name], false
 			if text == "" {
@@ -116,6 +128,22 @@ func (s *stub) called(tool string) (stubCall, bool) {
 	return stubCall{}, false
 }
 
+// calledWith finds the first recorded call to tool whose argument named key
+// equals value. Plain called is not enough once a tool is called more than
+// once in one commission -- symbol.overview fans find_symbol out
+// concurrently, so "the first call to find_symbol" is not a useful thing to
+// assert on; which one asked about a specific name is.
+func (s *stub) calledWith(tool, key string, value any) (map[string]any, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, call := range s.calls {
+		if call.Tool == tool && call.Args[key] == value {
+			return call.Args, true
+		}
+	}
+	return nil, false
+}
+
 func (s *stub) toolNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,7 +154,7 @@ func (s *stub) toolNames() []string {
 	return out
 }
 
-// The three capabilities, mirroring what default.toml ships. The adapter has
+// The four capabilities, mirroring what default.toml ships. The adapter has
 // to produce something that passes the declared schema, not something that
 // merely looks right, so the shapes are copied rather than simplified.
 func definitionCapability() contract.Capability {
@@ -176,11 +204,38 @@ func listCapability(id string) contract.Capability {
 	}
 }
 
-func capabilityFor(id string) contract.Capability {
-	if id == CapabilityDefinition {
-		return definitionCapability()
+func overviewCapability() contract.Capability {
+	return contract.Capability{
+		ID: CapabilityOverview, Version: contract.Version{Major: 1},
+		Summary: "What a file declares, without knowing any of it by name first.",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "file", Type: contract.TypeString, Required: true},
+			{Name: "depth", Type: contract.TypeInt},
+		},
+		Outputs: []contract.Field{{
+			Name: "symbols", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "kind", Type: contract.TypeString, Required: true},
+				{Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "column", Type: contract.TypeInt, Required: true},
+				{Name: "end_line", Type: contract.TypeInt},
+				{Name: "parent", Type: contract.TypeString},
+			},
+		}},
 	}
-	return listCapability(id)
+}
+
+func capabilityFor(id string) contract.Capability {
+	switch id {
+	case CapabilityDefinition:
+		return definitionCapability()
+	case CapabilityOverview:
+		return overviewCapability()
+	default:
+		return listCapability(id)
+	}
 }
 
 func implFor(capabilityID string) contract.Implementation {
@@ -975,5 +1030,350 @@ func TestImplementationsAreAskedAboutTheDeclaringFileNotTheQueryFile(t *testing.
 	}
 	if got := call.Args["relative_path"]; got != "pkg/contract/capability.go" {
 		t.Errorf("relative_path = %v, want the declaring file, not %q", got, "cmd/main.go")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// symbol.overview: the entry move, name in, names out
+// ---------------------------------------------------------------------------
+
+// The whole reason this capability exists: no position, no name hint,
+// nothing but a file, and every name it declares comes back with a real
+// line and column -- neither of which get_symbols_overview or find_symbol
+// ever reports on their own; this adapter recovers both.
+func TestOverviewFlatListsEveryTopLevelSymbol(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["get_symbols_overview"] = `{"Function": ["area"], "Struct": ["Shape"]}`
+	s.dynamic = map[string]func(map[string]any) (string, bool){
+		"find_symbol": func(args map[string]any) (string, bool) {
+			switch args["name_path_pattern"] {
+			case "Shape":
+				return `[{"name_path":"Shape","kind":"Struct","relative_path":"pkg/shapes.go",` +
+					`"body_location":{"start_line":0,"end_line":0}}]`, false
+			case "area":
+				return `[{"name_path":"area","kind":"Function","relative_path":"pkg/shapes.go",` +
+					`"body_location":{"start_line":2,"end_line":2}}]`, false
+			}
+			return "[]", false
+		},
+	}
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		"pkg/shapes.go": "type Shape struct{}\n\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	overviewCall, ok := s.called("get_symbols_overview")
+	if !ok {
+		t.Fatal("get_symbols_overview was never called")
+	}
+	if got := overviewCall.Args["relative_path"]; got != "pkg/shapes.go" {
+		t.Errorf("relative_path = %v, want pkg/shapes.go", got)
+	}
+	if got, ok := overviewCall.Args["depth"].(float64); !ok || got != 0 {
+		t.Errorf("depth = %v, want 0 (the default)", overviewCall.Args["depth"])
+	}
+
+	symbols, ok := outcome.Result["symbols"].([]any)
+	if !ok || len(symbols) != 2 {
+		t.Fatalf("symbols = %#v, want 2 entries", outcome.Result["symbols"])
+	}
+	// Sorted by line: Shape (line 1) before area (line 3), even though
+	// get_symbols_overview reported them the other way round, grouped by
+	// kind rather than by position.
+	first := symbols[0].(map[string]any)
+	if first["name"] != "Shape" || first["kind"] != "Struct" || first["line"] != 1 || first["column"] != 6 {
+		t.Errorf("symbols[0] = %+v, want Shape at 1:6", first)
+	}
+	if _, has := first["parent"]; has {
+		t.Errorf("symbols[0] carries a parent: %+v, want top-level", first)
+	}
+	second := symbols[1].(map[string]any)
+	if second["name"] != "area" || second["kind"] != "Function" || second["line"] != 3 || second["column"] != 6 {
+		t.Errorf("symbols[1] = %+v, want area at 3:6", second)
+	}
+}
+
+// Depth is Serena's own doing -- it decides how far to nest before the
+// answer reaches this adapter -- but unwrapping a struct's fields correctly
+// still depends on this adapter: the qualified query path find_symbol needs
+// to reach a field unambiguously, and the parent name the output owes the
+// caller for every symbol nested under one.
+func TestOverviewDepthDescendsIntoNestedSymbols(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["get_symbols_overview"] = `{"Struct": [{"Shape": {"Field": ["Width", "Height"]}}]}`
+	s.dynamic = map[string]func(map[string]any) (string, bool){
+		"find_symbol": func(args map[string]any) (string, bool) {
+			switch args["name_path_pattern"] {
+			case "Shape":
+				return `[{"name_path":"Shape","kind":"Struct","relative_path":"pkg/shapes.go",` +
+					`"body_location":{"start_line":0,"end_line":3}}]`, false
+			case "Shape/Width":
+				return `[{"name_path":"Shape/Width","kind":"Field","relative_path":"pkg/shapes.go",` +
+					`"body_location":{"start_line":1,"end_line":1}}]`, false
+			case "Shape/Height":
+				return `[{"name_path":"Shape/Height","kind":"Field","relative_path":"pkg/shapes.go",` +
+					`"body_location":{"start_line":2,"end_line":2}}]`, false
+			}
+			return "[]", false
+		},
+	}
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		"pkg/shapes.go": "type Shape struct {\n\tWidth int\n\tHeight int\n}\n",
+	}), map[string]any{"file": "pkg/shapes.go", "depth": 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	overviewCall, ok := s.called("get_symbols_overview")
+	if !ok {
+		t.Fatal("get_symbols_overview was never called")
+	}
+	if got, ok := overviewCall.Args["depth"].(float64); !ok || got != 1 {
+		t.Errorf("depth = %v, want 1", overviewCall.Args["depth"])
+	}
+	fieldCall, ok := s.calledWith("find_symbol", "name_path_pattern", "Shape/Width")
+	if !ok {
+		t.Fatalf("find_symbol was never asked for the qualified path Shape/Width; calls = %v", s.toolNames())
+	}
+	if got := fieldCall["relative_path"]; got != "pkg/shapes.go" {
+		t.Errorf("relative_path = %v", got)
+	}
+
+	symbols, ok := outcome.Result["symbols"].([]any)
+	if !ok || len(symbols) != 3 {
+		t.Fatalf("symbols = %#v, want 3 entries", outcome.Result["symbols"])
+	}
+	shape := symbols[0].(map[string]any)
+	if shape["name"] != "Shape" || shape["line"] != 1 || shape["end_line"] != 4 {
+		t.Errorf("symbols[0] = %+v, want Shape at line 1, end_line 4 (multi-line body)", shape)
+	}
+	if _, has := shape["parent"]; has {
+		t.Errorf("Shape carries a parent: %+v, want top-level", shape)
+	}
+	width := symbols[1].(map[string]any)
+	if width["name"] != "Width" || width["parent"] != "Shape" || width["line"] != 2 || width["column"] != 2 {
+		t.Errorf("symbols[1] = %+v, want Width at 2:2, parent Shape", width)
+	}
+	if _, has := width["end_line"]; has {
+		t.Errorf("Width (single-line) carries end_line: %+v", width)
+	}
+	height := symbols[2].(map[string]any)
+	if height["name"] != "Height" || height["parent"] != "Shape" || height["line"] != 3 {
+		t.Errorf("symbols[2] = %+v, want Height at line 3, parent Shape", height)
+	}
+}
+
+// get_symbols_overview and find_symbol already agreed a name is unique
+// before this adapter is involved; if find_symbol still turns up more than
+// one match for the qualified path, that disagreement is reported rather
+// than resolved by guessing the first one.
+func TestOverviewAmbiguousMatchIsRefused(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["get_symbols_overview"] = `{"Function": ["run"]}`
+	s.answers["find_symbol"] = `[{"name_path":"run","kind":"Function","relative_path":"pkg/shapes.go",` +
+		`"body_location":{"start_line":0,"end_line":0}},` +
+		`{"name_path":"run","kind":"Function","relative_path":"pkg/shapes.go",` +
+		`"body_location":{"start_line":2,"end_line":2}}]`
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		"pkg/shapes.go": "func run() {}\n\nfunc run() {}\n",
+	}), map[string]any{"file": "pkg/shapes.go"})
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input; err = %v", contract.KindOf(err), err)
+	}
+}
+
+// get_symbols_overview named it; find_symbol, asked right after, cannot find
+// it. Two different tools disagreeing about the same file is not this
+// adapter's to paper over by silently dropping the name.
+func TestOverviewNotFoundWhenFindSymbolCannotLocateAnOverviewName(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["get_symbols_overview"] = `{"Function": ["ghost"]}`
+	s.answers["find_symbol"] = "[]"
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n",
+	}), map[string]any{"file": "pkg/shapes.go"})
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found; err = %v", contract.KindOf(err), err)
+	}
+}
+
+// Unlike the other three capabilities, symbol.overview has no position to
+// read locally before calling Serena -- the file itself is the whole ask --
+// so the sensitivity check has to stand on its own, before the first call,
+// rather than arrive for free from identifierAt reading the file first.
+func TestOverviewSensitiveFileIsRefusedRatherThanRead(t *testing.T) {
+	s, endpoint := newStub(t)
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		".env": "TOKEN=hunter2\n",
+	}), map[string]any{"file": ".env"})
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied; err = %v", contract.KindOf(err), err)
+	}
+	if len(s.toolNames()) != 0 {
+		t.Errorf("serena was asked about a secret file: %v", s.toolNames())
+	}
+}
+
+// Same containment rule as every other capability, checked the same way:
+// before the file's path is handed to a second process, not after.
+func TestOverviewPathThatLeavesTheRepositoryIsRefused(t *testing.T) {
+	s, endpoint := newStub(t)
+	runner := newRunner(t, endpoint)
+
+	_, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+		"a/keep.go": "package a\n",
+	}), map[string]any{"file": "../escape.go"})
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied; err = %v", contract.KindOf(err), err)
+	}
+	if len(s.toolNames()) != 0 {
+		t.Errorf("serena was asked about a path outside the repository: %v", s.toolNames())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseOverviewNames: the JSON walker, isolated from the wire
+// ---------------------------------------------------------------------------
+
+func TestParseOverviewNamesEmptyAnswerIsNoNames(t *testing.T) {
+	for _, text := range []string{"", "   ", "{}"} {
+		got, err := parseOverviewNames(text)
+		if err != nil {
+			t.Fatalf("parseOverviewNames(%q): %v", text, err)
+		}
+		if got != nil {
+			t.Errorf("parseOverviewNames(%q) = %#v, want nil", text, got)
+		}
+	}
+}
+
+// Kind keys come back from a Go map, so they are sorted for determinism.
+// Names inside one kind's array are not: that order is find_symbols_overview's
+// own declaration order, and reordering it would be inventing information.
+func TestParseOverviewNamesFlatSortsByKindThenPreservesArrayOrder(t *testing.T) {
+	text := `{"Struct":["Z"],"Function":["b","a"]}`
+	got, err := parseOverviewNames(text)
+	if err != nil {
+		t.Fatalf("parseOverviewNames: %v", err)
+	}
+	want := []string{"b", "a", "Z"}
+	if len(got) != len(want) {
+		t.Fatalf("names = %#v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i].name != w {
+			t.Fatalf("names = %v, want %v (Function sorts before Struct; b,a keeps array order)",
+				namesOf(got), want)
+		}
+	}
+	for _, n := range got {
+		if n.parent != "" {
+			t.Errorf("%s: parent = %q, want empty at top level", n.name, n.parent)
+		}
+		if n.queryPath != n.name {
+			t.Errorf("%s: queryPath = %q, want the bare name at top level", n.name, n.queryPath)
+		}
+	}
+}
+
+// A nested entry emits itself, then its children, in the same slash-jointed
+// path syntax find_symbol's own name_path_pattern requires.
+func TestParseOverviewNamesNestedBuildsParentAndSlashJoinedPath(t *testing.T) {
+	text := `{"Struct":[{"Shape":{"Method":["Area"],"Field":["Width","Height"]}}]}`
+	got, err := parseOverviewNames(text)
+	if err != nil {
+		t.Fatalf("parseOverviewNames: %v", err)
+	}
+	type entry struct{ name, parent, queryPath string }
+	want := []entry{
+		{"Shape", "", "Shape"},
+		{"Width", "Shape", "Shape/Width"},
+		{"Height", "Shape", "Shape/Height"},
+		{"Area", "Shape", "Shape/Area"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("names = %#v, want %d entries: %v", got, len(want), want)
+	}
+	for i, w := range want {
+		if got[i].name != w.name || got[i].parent != w.parent || got[i].queryPath != w.queryPath {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+func TestParseOverviewNamesMalformedJSONIsAnError(t *testing.T) {
+	if _, err := parseOverviewNames("not json"); err == nil {
+		t.Fatal("parseOverviewNames(garbage) = nil error, want one")
+	}
+}
+
+// walkOverviewGroup's nesting shape is always one key, the name, mapped to
+// its children. Two keys in one entry is not a shape this adapter invented
+// a meaning for, so it is refused rather than guessed at.
+func TestParseOverviewNamesEntryThatIsNeitherBareNorSingleKeyIsAnError(t *testing.T) {
+	text := `{"Struct":[{"A":[],"B":[]}]}`
+	if _, err := parseOverviewNames(text); err == nil {
+		t.Fatal("parseOverviewNames(two-key entry) = nil error, want one")
+	}
+}
+
+func namesOf(got []overviewName) []string {
+	out := make([]string, len(got))
+	for i, n := range got {
+		out[i] = n.name
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// columnOf: the reverse word lookup, isolated from the wire
+// ---------------------------------------------------------------------------
+
+func TestColumnOfFindsFirstWholeWordMatch(t *testing.T) {
+	col, ok := columnOf("width := width", "width")
+	if !ok || col != 1 {
+		t.Fatalf("columnOf = (%d, %v), want (1, true) for the first occurrence", col, ok)
+	}
+}
+
+// Width inside MaxWidth is not a word of its own: the character right
+// before it is a word character too, so the match is rejected rather than
+// pointing find_declaration at the middle of a different identifier.
+func TestColumnOfRejectsPartialWordMatches(t *testing.T) {
+	if col, ok := columnOf("MaxWidth int", "Width"); ok {
+		t.Fatalf("columnOf = (%d, true), want no match: Width is inside MaxWidth", col)
+	}
+}
+
+// "café " is 5 runes but 6 bytes -- é is two UTF-8 bytes -- so a scan
+// indexing by byte instead of by rune would misplace every column after it.
+func TestColumnOfCountsRunesNotBytes(t *testing.T) {
+	col, ok := columnOf("café Width", "Width")
+	if !ok || col != 6 {
+		t.Fatalf("columnOf = (%d, %v), want (6, true) counting runes, not bytes", col, ok)
+	}
+}
+
+func TestColumnOfEmptyNameNeverMatches(t *testing.T) {
+	if _, ok := columnOf("anything at all", ""); ok {
+		t.Fatal("columnOf with an empty name matched, want false always")
+	}
+}
+
+func TestColumnOfNoMatchReturnsFalse(t *testing.T) {
+	if _, ok := columnOf("package pkg", "Width"); ok {
+		t.Fatal("columnOf matched a name absent from the line, want false")
 	}
 }

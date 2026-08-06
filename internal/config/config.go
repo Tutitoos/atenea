@@ -475,12 +475,13 @@ type fileField struct {
 }
 
 type fileImpl struct {
-	ID          string          `toml:"id"`
-	Provider    string          `toml:"provider"`
-	Capability  string          `toml:"capability"`
-	Constraints fileConstraints `toml:"constraints"`
-	Cost        fileCost        `toml:"cost"`
-	Health      fileHealth      `toml:"health"`
+	ID             string          `toml:"id"`
+	Provider       string          `toml:"provider"`
+	Capability     string          `toml:"capability"`
+	ScopeGuarantee string          `toml:"scope_guarantee"`
+	Constraints    fileConstraints `toml:"constraints"`
+	Cost           fileCost        `toml:"cost"`
+	Health         fileHealth      `toml:"health"`
 }
 
 type fileConstraints struct {
@@ -1148,6 +1149,10 @@ func (i fileImpl) build(source string) (contract.Implementation, error) {
 	if err != nil {
 		return fail("max_scale: %v", err)
 	}
+	scopeGuarantee, err := contract.ParseScopeGuarantee(i.ScopeGuarantee)
+	if err != nil {
+		return fail("scope_guarantee: %v", err)
+	}
 	var estimated contract.Sample
 	if i.Cost.EstimatedDuration != "" {
 		duration, err := time.ParseDuration(i.Cost.EstimatedDuration)
@@ -1174,9 +1179,10 @@ func (i fileImpl) build(source string) (contract.Implementation, error) {
 	}
 
 	out := contract.Implementation{
-		ID:         i.ID,
-		Provider:   i.Provider,
-		Capability: i.Capability,
+		ID:             i.ID,
+		Provider:       i.Provider,
+		Capability:     i.Capability,
+		ScopeGuarantee: scopeGuarantee,
 		Constraints: contract.Constraints{
 			Languages:     languages,
 			RequiresIndex: i.Constraints.RequiresIndex,

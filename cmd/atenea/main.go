@@ -712,6 +712,7 @@ func cmdCatalog(settingsPath string, out io.Writer) error {
 			fmt.Fprintf(out, "      cost         estimated=%s/%dtok measured=%d sample(s)\n",
 				impl.Cost.Estimated.Duration, impl.Cost.Estimated.Tokens, impl.Cost.Samples)
 			fmt.Fprintf(out, "      health       %s\n", impl.Health.State)
+			fmt.Fprintf(out, "      scope        %s\n", orDash(impl.ScopeGuarantee.String()))
 		}
 		fmt.Fprintln(out)
 	}

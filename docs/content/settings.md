@@ -87,12 +87,12 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.serena]
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
-  implementations = ["serena.definition", "serena.references", "serena.implementations"]
+  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview"]
   timeout = "90s"                      # a language server indexing cold is slow, not stuck
 
   [orchestrator.codebasememory]
   binary = "codebase-memory-mcp"       # bare name is looked up on PATH
-  implementations = ["codebase-memory.calls", "codebase-memory.impact"]
+  implementations = ["codebase-memory.calls", "codebase-memory.impact", "codebase-memory.index"]
   timeout = "90s"                      # opening an index cold is slow, not stuck
 ```
 
@@ -105,7 +105,7 @@ can be attached at once. `omp` is the client adapter that ships attached.
 `claudecode` drives the Claude Code CLI and is off by default, because it is
 the only far side that costs money per call. `serena` is not a CLI at all: it
 is an MCP server, which is why its block takes a URL instead of a binary, and
-it answers the three symbol capabilities rather than a text search.
+it answers the four symbol capabilities rather than a text search.
 `codebasememory` is a CLI again, like `omp`, but answers from a call graph it
 keeps on disk instead of searching or parsing anything live. `local` is
 a stand-in that searches the disk directly, for a machine with no client
@@ -333,6 +333,7 @@ The set is small on purpose — a contract has to be checkable, not expressive.
 id = "serena.search"
 provider = "serena"         # who owns the index; several implementations may share one
 capability = "code.search"
+scope_guarantee = ""        # "", filtered, confined -- see below
 
   [implementation.constraints]
   languages = ["go", "typescript"]   # empty means language-agnostic
@@ -351,6 +352,20 @@ capability = "code.search"
   score = 0.0                        # 0..1, breaks ties inside one state
   reason = ""
 ```
+
+`scope_guarantee` declares how strongly this implementation keeps a call inside
+the `scope` it was asked to search. Two mechanisms answer honestly and a caller
+deserves to know which one it got:
+
+| Value | Means |
+| --- | --- |
+| `confined` | The provider physically cannot see outside scope. `ripgrep` ships this: `targets()` refuses any path that leaves the requested scope before the search ever runs. |
+| `filtered` | The provider may read anywhere, but every returned match is checked afterwards and anything outside is dropped and reported through a `Notice`. `claude.search` ships this: a model is asked nicely, then verified. |
+| `""` | Nobody has declared anything. Read as the weakest claim, never as `confined` — the same convention `min_scale` and `vcs` use for a fact nobody has stated. |
+
+It is disclosure, not selection: the funnel never ranks on it and it never
+disqualifies a candidate. `atenea catalog` prints it per implementation so the
+promise is queryable rather than assumed.
 
 Two things are **not** declarable, deliberately:
 

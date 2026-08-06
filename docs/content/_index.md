@@ -31,8 +31,8 @@ what it knows about the repository in front of it.
 
 ## Where the project stands
 
-**These pages describe Atenea `0.4.0`**, speaking
-contract `1.8.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
+**These pages describe Atenea `0.5.0`**, speaking
+contract `1.9.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
 goes stable; the contract adapters compile against is already a commitment. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.
@@ -41,12 +41,14 @@ The core, the Capability Registry and the funnel run on all four stages. Four
 adapters ship: `omp` and Claude Code answer text search by driving a CLI,
 `codebase-memory` walks the call graph it keeps on disk for `symbol.calls`,
 `code.impact` and `repository.index`, and Serena speaks MCP over HTTP for
-all three symbol capabilities. It installs as a background service that
+all four symbol capabilities. It installs as a background service that
 keeps its own history in shape, proven now against a live language server
 on this repository: `symbol.definition` and `symbol.references` resolve
 across files, not only within the one a caller happened to be looking at,
-and `symbol.implementations` answers for real too, not only the empty
-result an earlier bug let through.
+`symbol.implementations` answers for real too, not only the empty
+result an earlier bug let through, and `symbol.overview` lists what a file
+declares before anything in it is known by name — the question the other
+three all assume has already been answered.
 
 Cost ranks the survivors rather than filtering them, and it says which figure
 it used. Until an implementation has been measured a couple of times, that

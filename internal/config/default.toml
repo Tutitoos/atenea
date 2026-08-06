@@ -132,7 +132,7 @@ runners = ["omp"]
   # here: this adapter is wired for the symbol capabilities, and claiming a
   # text search it has no code for would make the funnel promise an answer
   # nobody can give.
-  implementations = ["serena.definition", "serena.references", "serena.implementations"]
+  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview"]
   # How long one call may take. A language server that has to index a cold
   # repository is slow long before it is stuck, so this sits above omp's
   # ceiling and well below a model turn's.
@@ -589,6 +589,77 @@ effects = ["read"]
     summary = "The line at the implementation, present only when it was asked for."
 
 [[capability]]
+id = "symbol.overview"
+version = "1.0.0"
+summary = "What a file declares, without knowing any of it by name first."
+semantics = """
+The entry move into an unfamiliar file: every symbol it declares, before \
+anything in it can be asked about by name or position. Every other symbol.* \
+capability needs one of those handed to it; this is the one that hands it \
+back. Depth controls how far to descend into nested symbols -- a struct's \
+fields, for languages that have them -- with 0, the default, listing only \
+what the file declares at its own top level. Line and column both come back, \
+and both are real positions, not a hint: line is what the provider reports, \
+column is recovered by finding the symbol's own name as a whole word on that \
+line, because no provider behind this capability ever reports one itself.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File to list, relative to the repository root."
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+  summary = "How many levels of nesting to descend into (a struct's fields, for example). 0 by default."
+
+  [[capability.output]]
+  name = "symbols"
+  type = "record_list"
+  required = true
+  summary = "Every symbol the file declares, in the order the provider found them."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The symbol's own name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "The provider's own name for what kind of symbol this is (function, struct, method, ...)."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the symbol starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "column"
+    type = "int"
+    required = true
+    summary = "Column where the symbol's name starts on that line, starting at 1."
+
+    [[capability.output.field]]
+    name = "end_line"
+    type = "int"
+    required = false
+    summary = "Line where the symbol's body ends, starting at 1. Absent for a symbol that fits on one line, where it would only repeat line."
+
+    [[capability.output.field]]
+    name = "parent"
+    type = "string"
+    required = false
+    summary = "Name of the enclosing symbol, when this one is nested (depth > 0)."
+
+[[capability]]
 id = "symbol.calls"
 version = "1.0.0"
 summary = "From a symbol, walk the call graph in a chosen direction."
@@ -857,6 +928,7 @@ effects = ["write", "process"]
 id = "ripgrep"
 provider = "ripgrep"
 capability = "code.search"
+scope_guarantee = "confined"   # targets() refuses any path outside scope before ripgrep ever runs
 
   [implementation.constraints]
   languages = []          # agnostic: it does not parse anything
@@ -902,6 +974,7 @@ capability = "code.search"
 id = "claude.search"
 provider = "claude-code"
 capability = "code.search"
+scope_guarantee = "filtered"   # the model is only asked nicely; every returned match is checked against scope afterward and dropped if it strays
 
   [implementation.constraints]
   languages = []          # a model reads whatever it is shown
@@ -973,6 +1046,34 @@ capability = "symbol.implementations"
   [implementation.cost]
   estimated_duration = "1.5s"
   estimated_tokens = 1200
+
+[[implementation]]
+id = "serena.overview"
+provider = "serena"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One overview call plus one find_symbol per name it reports, capped at 16
+  # in flight together. Measured against this repository's own largest file
+  # at nested depth (91 symbols): 392-630ms across eighteen live runs in two
+  # independent sessions, returning ~6.5-7.5KB depending on JSON spacing
+  # (~1700-1900 tokens); the estimate below rounds to the top of both ranges
+  # rather than the middle, because a funnel that under-promises cost picks
+  # this over a cheaper provider it should have lost to. Explicitly checked
+  # for the cold tax other implementations on this page only guess at: two
+  # serena.service restarts, each followed immediately by a call against the
+  # same file, showed no measurable gap against calls already warm (514ms
+  # and 502ms cold, inside the ordinary spread) -- for a repository this
+  # size, get_symbols_overview and find_symbol are cheap enough that
+  # gopls's own indexing is not the bottleneck this estimate needs to cover.
+  estimated_duration = "700ms"
+  estimated_tokens = 1900
 
 # codebase-memory answers both of these from the same call graph
 # codebase-memory.search above would open, if anything ever claimed it -- no

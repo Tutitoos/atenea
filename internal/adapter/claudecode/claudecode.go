@@ -215,7 +215,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		return weighed, err
 	}
 
-	result, err := r.readAnswer(answer, req, ask)
+	result, scopeNotices, err := r.readAnswer(answer, req, ask)
 	if err != nil {
 		return weighed, err
 	}
@@ -242,6 +242,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	}
 	if notices := completenessDoubt(answer, req.Permission.BudgetUSD); len(notices) > 0 {
 		outcome.Notices = append(outcome.Notices, notices...)
+	}
+	if len(scopeNotices) > 0 {
+		outcome.Notices = append(outcome.Notices, scopeNotices...)
 	}
 	return outcome, nil
 }
@@ -737,67 +740,84 @@ func oneLine(value string) string { return strings.Join(strings.Fields(value), "
 // it was told not to open, or a path outside the repository it was pointed at.
 // Trusting the instruction alone would make the security design advisory, so
 // what comes back is checked again here, where the answer can still be refused.
-func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (map[string]any, error) {
+func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (map[string]any, []string, error) {
 	if len(out.PermissionDenials) > 0 {
-		return nil, contract.Fail(contract.FailurePermissionDenied,
+		return nil, nil, contract.Fail(contract.FailurePermissionDenied,
 			"claude code was refused %d action(s) it needed", len(out.PermissionDenials)).
 			WithRaw(out.Result)
 	}
 	if len(out.StructuredOutput) == 0 {
 		// The turn ended without the shape it was asked for. That is not a
 		// search with no matches -- it is a search that did not happen.
-		return nil, contract.Fail(contract.FailureUnavailable,
+		return nil, nil, contract.Fail(contract.FailureUnavailable,
 			"claude code answered without the structure it was asked for").
 			WithRaw(out.Result)
 	}
 	var answer map[string]any
 	if err := json.Unmarshal(out.StructuredOutput, &answer); err != nil {
-		return nil, contract.Fail(contract.FailureUnavailable,
+		return nil, nil, contract.Fail(contract.FailureUnavailable,
 			"claude code's structured answer is not an object").
 			WithRaw(string(out.StructuredOutput))
 	}
 
 	raw, _ := answer["matches"].([]any)
 	matches := make([]any, 0, len(raw))
+	droppedOutOfScope := 0
 	for _, item := range raw {
 		record, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		hit, keep := r.cleanHit(record, req.Repository.ID, ask)
+		hit, keep, outOfScope := r.cleanHit(record, req.Repository.ID, ask)
+		if outOfScope {
+			droppedOutOfScope++
+			continue
+		}
 		if !keep {
 			continue
 		}
 		matches = append(matches, hit)
 	}
-	return map[string]any{"matches": matches}, nil
+	var notices []string
+	if droppedOutOfScope > 0 {
+		notices = append(notices, fmt.Sprintf(
+			"%d match(es) fell outside the requested scope and were dropped", droppedOutOfScope))
+	}
+	return map[string]any{"matches": matches}, notices, nil
 }
 
 // cleanHit checks one reported match and normalises it, or drops it.
 //
-// Dropping is silent on purpose, exactly as it is for a sensitive file in the
-// other adapter: a search that reported "1 match in .env" would leak the very
-// thing the list exists to protect, and one that stopped to ask would break
-// the flow over a file the user never wanted looked at.
-func (r *Runner) cleanHit(record map[string]any, repositoryID string, ask search) (map[string]any, bool) {
+// Repository containment, sensitivity and file type drop silently, the same
+// way omp drops them: a search that reported "1 match in .env" would leak
+// the very thing the list exists to protect, and one that stopped to ask
+// would break the flow over a file the user never wanted looked at. Scope is
+// different in kind, not degree -- it is a request-shaping constraint, not a
+// secret, so a match that fell outside it is worth telling the caller about
+// rather than hiding. The caller finds out through the outOfScope return and
+// an aggregate Notice on the Outcome, never a Notice per hit.
+func (r *Runner) cleanHit(record map[string]any, repositoryID string, ask search) (hit map[string]any, keep bool, outOfScope bool) {
 	name, _ := record["path"].(string)
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, false
+		return nil, false, false
 	}
 	relative, inside := insideRepository(name)
 	if !inside {
-		return nil, false
+		return nil, false, false
+	}
+	if !inScope(relative, ask.scope) {
+		return nil, false, true
 	}
 	if r.isSensitive(relative) {
-		return nil, false
+		return nil, false, false
 	}
 	if len(ask.fileTypes) > 0 && !wantedType(relative, ask.fileTypes) {
-		return nil, false
+		return nil, false, false
 	}
 	line, ok := positive(record["line"])
 	if !ok {
-		return nil, false
+		return nil, false, false
 	}
 	column, ok := positive(record["column"])
 	if !ok {
@@ -811,7 +831,7 @@ func (r *Runner) cleanHit(record map[string]any, repositoryID string, ask search
 	if snippet, ok := record["snippet"].(string); ok {
 		out["snippet"] = snippet
 	}
-	return out, true
+	return out, true, false
 }
 
 // insideRepository reports the repository-relative path of a reported hit, or
@@ -851,6 +871,25 @@ func wantedType(relative string, types []string) bool {
 	ext := strings.TrimPrefix(strings.ToLower(path.Ext(relative)), ".")
 	for _, want := range types {
 		if strings.EqualFold(ext, strings.TrimPrefix(want, ".")) {
+			return true
+		}
+	}
+	return false
+}
+
+// inScope reports whether relative sits under one of the requested scope
+// paths. An empty scope means the whole repository was in play, the same
+// reading omp gives an empty scope when it builds its own search targets;
+// "." means the same thing spelled out. A scope entry only matches a proper
+// path prefix -- "internal/adapter" must never also match
+// "internal/adapter2" -- the same boundary targets() draws with filepath.Rel.
+func inScope(relative string, scope []string) bool {
+	if len(scope) == 0 {
+		return true
+	}
+	for _, entry := range scope {
+		clean := strings.TrimPrefix(path.Clean(filepath.ToSlash(entry)), "./")
+		if clean == "." || relative == clean || strings.HasPrefix(relative, clean+"/") {
 			return true
 		}
 	}

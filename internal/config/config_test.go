@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
+	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -35,7 +37,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.impact", "code.search", "repository.index", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.references"}
+	wantIDs := []string{"code.impact", "code.search", "repository.index", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.overview", "symbol.references"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -89,6 +91,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",
+		"serena.overview",
 		"serena.references",
 		"serena.search",
 	}
@@ -101,6 +104,50 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	for _, impl := range cfg.Implementations {
 		if impl.ID == "codebase-memory.impact" && !impl.Constraints.RequiresVCS {
 			t.Errorf("codebase-memory.impact ships with requires_vcs=false, want true")
+		}
+	}
+	// ripgrep confines what it reads by construction; claude-code only
+	// verifies its answer afterward. Collapsing that difference into a bare
+	// bool would be the same "advisory implies enforced" ambiguity this field
+	// exists to remove.
+	for _, impl := range cfg.Implementations {
+		switch impl.ID {
+		case "ripgrep":
+			if impl.ScopeGuarantee != contract.ScopeConfined {
+				t.Errorf("ripgrep ships with scope_guarantee=%s, want confined", impl.ScopeGuarantee)
+			}
+		case "claude.search":
+			if impl.ScopeGuarantee != contract.ScopeFiltered {
+				t.Errorf("claude.search ships with scope_guarantee=%s, want filtered", impl.ScopeGuarantee)
+			}
+		case "serena.search", "codebase-memory.search":
+			if impl.ScopeGuarantee != contract.ScopeUnspecified {
+				t.Errorf("%s ships with scope_guarantee=%s, want unspecified: no adapter answers it yet",
+					impl.ID, impl.ScopeGuarantee)
+			}
+		}
+	}
+	// A capability is only reachable if the runner that owns its provider is
+	// told to serve it. That wiring lives in the settings file while the code
+	// behind it lives in the adapter, so the two drift silently: shipping
+	// symbol.overview without adding serena.overview here left the whole
+	// capability answering "no runner" on a fresh install, and every other
+	// test still passed. Each adapter publishes what it actually has code
+	// for; the shipped whitelist has to be exactly that.
+	for _, tc := range []struct {
+		runner  string
+		shipped []string
+		want    []string
+	}{
+		{config.RunnerSerena, cfg.Orchestrator.Serena.Implementations, serena.DefaultImplementations()},
+		{config.RunnerCodebaseMemory, cfg.Orchestrator.CodebaseMemory.Implementations, codebasememory.DefaultImplementations()},
+	} {
+		got, want := slices.Clone(tc.shipped), slices.Clone(tc.want)
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s ships implementations %v, want %v: the settings whitelist and the adapter's own code disagree",
+				tc.runner, got, want)
 		}
 	}
 	// Nothing has been probed on a cold start, and pretending otherwise would

@@ -19,10 +19,10 @@ weight: 3
    |        Orchestrator (agent): explores,       |
    |        splits, dispatches, reviews           |
    +----------------------------------------------+
-       |                |                |
-    adapter          adapter          adapter        <- dumb translators
-       |                |                |
-      omp          Claude Code       OpenCode
+       |            |            |            |
+    adapter      adapter      adapter      adapter     <- dumb translators
+       |            |            |            |
+      omp      Claude Code    Serena   codebase-memory
 ```
 
 ## Capability vs implementation
@@ -37,9 +37,16 @@ Everything that varies by tool lives here, in four blocks.
 | Block | Holds |
 | --- | --- |
 | **1. Capability** | Which capability this answers. |
-| **2. Constraints** | Languages, whether an index is required, and the repository sizes it is worth using on. |
-| **3. Cost** | Time and tokens. Hybrid: an estimate to begin with, real measurements the moment there are enough. |
-| **4. Health** | Alive, degraded or down, plus a comparable score. The block that enables fallback. |
+| **2. Constraints** | Languages, whether an index is required, whether the repository must sit under version control, and the repository sizes it is worth using on. |
+| **3. Cost** | Time, tokens and peak memory. Hybrid: an estimate to begin with, real measurements the moment there are enough. |
+| **4. Health** | Alive, degraded, down, or unknown before anything has probed it, plus a comparable score. The block that enables fallback. |
+
+A fifth fact rides alongside these four but does not join them: **scope
+guarantee**, whether a provider can promise a returned match never left the
+scope it was asked to search. It never disqualifies a candidate and the
+funnel never ranks on it, so it stays out of the table above — a disclosed
+property of the answer a caller gets once an implementation has already been
+picked, not a fifth block.
 
 The constraints belong to the implementation, never to the capability. A
 capability that grew a language restriction would stop being swappable, and
@@ -648,9 +655,11 @@ its far side's shape and translates the answer back, and that is all it does.
 The far side may be a CLI or a server; the seam does not care.
 
 The return path is the treacherous one, because every CLI phrases failure
-differently. Each adapter sorts its own errors into a handful of shared bins:
+differently. Each adapter sorts its own errors into six shared bins:
 `invalid_input`, `not_found`, `permission_denied`, `external_denied`,
-`unavailable`, `timeout`, `canceled`. Atenea only ever sees the bin, and the
+`unavailable` and `timeout`. A seventh, `canceled`, is never translated from
+anything a provider said — it comes from this side, when the user pressed
+ctrl-c or a caller dropped the context. Atenea only ever sees the bin, and the
 untranslated message travels alongside it so a human can still search for it
 verbatim.
 
@@ -718,6 +727,7 @@ model turn, so the same capability needs a different kind of care at both ends.
 | --- | --- |
 | Answers in prose unless told otherwise | Turns the capability's declared output shape into a JSON Schema and holds the turn to it |
 | May report a file the commission excluded | Re-checks every path against the request before returning, because a prompt is an instruction and not a guard |
+| May report a match outside the `scope` the caller asked for | Drops it in `cleanHit`, right where containment and sensitivity are already checked, and reports the count once as an aggregate `Notice` — scope is a request-shaping constraint, not a secret, so a drop is worth saying out loud rather than hiding |
 | Costs real money per call | Holds the turn to the share the commission granted it, and refuses before spawning when that share is zero |
 | Is slow by nature | Gets a timeout above omp's, because a model that is thinking is not a model that is stuck — 90s, measured: two real searches made 8 and 9 turns in 55s and 66s, and both were ended by the grant rather than by time |
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |
@@ -755,6 +765,7 @@ file, line, column — because that is what an editor has. Serena's API names a
 | Has no scope parameter for references | Narrows here, because a caller that asked about one directory and got the repository was answered a different question |
 | Holds one active project at a time | Serializes every exchange and activates once, since a second caller could otherwise retarget the server mid-answer |
 | Refuses requests its language server does not implement | Bins that as `unavailable`, so the funnel falls back to somebody who can |
+| Reports a file's symbols as bare names with no positions, and its `find_symbol` matcher is not anchored to the depth the overview asked about — Go methods come back receiver-less, so unrelated types' `String()` all collide | Fans `find_symbol` out one call per name, bounded at 16 in flight, then narrows to a candidate whose own `name_path` exactly echoes the one asked for; when none does, the match is genuinely ambiguous and is reported as `invalid_input` rather than a false `not_found` |
 
 This is also the only adapter that opens a file to do its job, which makes the
 sensitive-path list load-bearing rather than advisory. Exploring skips those

@@ -30,12 +30,13 @@ and broken are different findings, and only the second is worth debugging.
 serves     ripgrep
 no runner  claude.search, codebase-memory.calls, codebase-memory.impact,
            codebase-memory.index, codebase-memory.search, serena.definition,
-           serena.implementations, serena.references, serena.search
+           serena.implementations, serena.overview, serena.references,
+           serena.search
 ```
 
-That is the stock catalogue: ten implementations declared, one reachable,
+That is the stock catalogue: eleven implementations declared, one reachable,
 because `runners = ["omp"]` attaches a single adapter. Attaching Serena — the
-configuration this write-up is about — makes it four:
+configuration this write-up is about — makes it five:
 
 | Capability | Reachable with Serena attached | Over |
 | --- | --- | --- |
@@ -43,6 +44,7 @@ configuration this write-up is about — makes it four:
 | `symbol.definition` | `serena.definition` | **local HTTP** |
 | `symbol.references` | `serena.references` | **local HTTP** |
 | `symbol.implementations` | `serena.implementations` | **local HTTP** |
+| `symbol.overview` | `serena.overview` | **local HTTP** |
 
 Note what the catalogue does *not* buy you here. `code.search` declares four
 implementations, but three of them have no adapter — `serena.search` is
@@ -56,7 +58,7 @@ Now break that transport.
 `code.search` never touched it. `ripgrep` answers, commissions finish, and
 nothing is reported — correctly, because nothing failed.
 
-The three symbol capabilities lose their only implementation at the same
+The four symbol capabilities lose their only implementation at the same
 instant. No survivor, so they fail out loud, every time.
 
 The operator sees: *symbols are broken, search is fine.* The only name attached

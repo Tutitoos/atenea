@@ -286,12 +286,70 @@ type Health struct {
 // Usable reports whether the funnel keeps this provider.
 func (h Health) Usable() bool { return h.State != HealthDown }
 
+// ScopeGuarantee says how strongly an implementation keeps a call inside the
+// scope it was asked to search. Two different mechanisms can both end up
+// answering honestly, and callers deserve to know which one they got:
+// confinement never lets the tool see outside scope in the first place;
+// filtering lets it look anywhere and then checks every hit before it is
+// returned. Both leave the caller with an answer that is actually inside
+// scope -- what differs is what happened along the way, which only matters
+// if something outside scope was sensitive for reasons scope itself does not
+// encode (an agentic reader forming an opinion from what it saw, say). The
+// empty value means nobody has declared anything: the honest reading is the
+// weakest one, not the strongest, the same convention Scale and VCS use.
+type ScopeGuarantee uint8
+
+const (
+	// ScopeUnspecified means this implementation has not declared how it
+	// treats scope. Never read silence as ScopeConfined.
+	ScopeUnspecified ScopeGuarantee = iota
+	// ScopeFiltered means the provider may read outside the requested scope,
+	// but every returned match is checked against it afterwards; anything
+	// outside is dropped and reported through a Notice on the Outcome.
+	ScopeFiltered
+	// ScopeConfined means the provider is physically restricted to the
+	// requested scope. It cannot see, let alone report, anything outside it.
+	ScopeConfined
+)
+
+var (
+	scopeGuaranteeNames = map[ScopeGuarantee]string{
+		ScopeUnspecified: "",
+		ScopeFiltered:    "filtered",
+		ScopeConfined:    "confined",
+	}
+	scopeGuaranteeByName = map[string]ScopeGuarantee{
+		"":         ScopeUnspecified,
+		"filtered": ScopeFiltered,
+		"confined": ScopeConfined,
+	}
+)
+
+func (s ScopeGuarantee) String() string {
+	if name, ok := scopeGuaranteeNames[s]; ok {
+		return name
+	}
+	return fmt.Sprintf("scope(%d)", uint8(s))
+}
+
+// ParseScopeGuarantee reads a scope-guarantee name. The empty string is
+// unspecified, the same convention Scale and VCS use.
+func ParseScopeGuarantee(s string) (ScopeGuarantee, error) {
+	if v, ok := scopeGuaranteeByName[s]; ok {
+		return v, nil
+	}
+	return 0, fmt.Errorf("unknown scope guarantee %q: want filtered or confined", s)
+}
+
 // Implementation is the "who and how" behind a capability: ripgrep, Serena, a
 // language server.
 //
 // Four blocks: the capability it answers, its constraints, its cost and its
 // health. Those are exactly the facts Atenea needs to pick one when several
-// would do.
+// would do. ScopeGuarantee sits outside that system on purpose -- it never
+// disqualifies a candidate and the funnel does not rank on it, so it is not
+// a fifth block, only a disclosed property of the answer a caller gets once
+// this implementation has already been picked.
 type Implementation struct {
 	ID string
 	// Provider is the tool behind this implementation. Several implementations
@@ -303,6 +361,11 @@ type Implementation struct {
 	Constraints Constraints
 	Cost        Cost
 	Health      Health
+	// ScopeGuarantee declares how this implementation treats a capability's
+	// scope input, when it has one. Zero value for a capability that has no
+	// scope input at all, and that absence is not a lie: there is nothing to
+	// guarantee.
+	ScopeGuarantee ScopeGuarantee
 }
 
 var slugID = regexp.MustCompile(`^[a-z][a-z0-9]*([._-][a-z0-9]+)*$`)

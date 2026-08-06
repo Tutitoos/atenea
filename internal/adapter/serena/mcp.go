@@ -97,7 +97,10 @@ func (r *Runner) call(ctx context.Context, c *conn, tool string, args map[string
 // down, and the next run establishes a new one. Reconnecting in silence would
 // hide a server that is flapping.
 func (r *Runner) handshake(ctx context.Context, c *conn) error {
-	if c.session != "" {
+	c.wireMu.Lock()
+	established := c.session != ""
+	c.wireMu.Unlock()
+	if established {
 		return nil
 	}
 	body, err := json.Marshal(rpcRequest{
@@ -133,10 +136,12 @@ func (r *Runner) handshake(ctx context.Context, c *conn) error {
 			Version string `json:"version"`
 		} `json:"serverInfo"`
 	}
+	c.wireMu.Lock()
 	if json.Unmarshal(result, &hello) == nil {
 		c.version = toolversion.Clean(hello.ServerInfo.Version)
 	}
 	c.session = session
+	c.wireMu.Unlock()
 	// The spec requires this notification before any tool call, and a server
 	// that never receives it is entitled to refuse everything afterwards.
 	note, err := json.Marshal(rpcRequest{Version: "2.0", Method: "notifications/initialized"})
@@ -144,7 +149,9 @@ func (r *Runner) handshake(ctx context.Context, c *conn) error {
 		return err
 	}
 	if _, _, err := r.post(ctx, c, note, session); err != nil {
+		c.wireMu.Lock()
 		c.session = ""
+		c.wireMu.Unlock()
 		return err
 	}
 	return nil
@@ -152,17 +159,23 @@ func (r *Runner) handshake(ctx context.Context, c *conn) error {
 
 // rpc sends one request on c's established session.
 func (r *Runner) rpc(ctx context.Context, c *conn, method string, params any) (json.RawMessage, error) {
+	c.wireMu.Lock()
 	c.nextID++
-	body, err := json.Marshal(rpcRequest{Version: "2.0", ID: c.nextID, Method: method, Params: params})
+	id := c.nextID
+	session := c.session
+	c.wireMu.Unlock()
+	body, err := json.Marshal(rpcRequest{Version: "2.0", ID: id, Method: method, Params: params})
 	if err != nil {
 		return nil, err
 	}
-	_, text, err := r.post(ctx, c, body, c.session)
+	_, text, err := r.post(ctx, c, body, session)
 	if err != nil {
 		// A dead session must not be reused: dropping it here is what lets the
 		// next commission start clean instead of failing forever.
+		c.wireMu.Lock()
 		c.session = ""
 		c.active = ""
+		c.wireMu.Unlock()
 		return nil, err
 	}
 	return decode(text)

@@ -58,9 +58,9 @@ will hand it the work outright when you want it.
 
 ### Attaching Serena for symbols
 
-Serena answers `symbol.definition`, `symbol.references` and
-`symbol.implementations`. It is not a CLI: it runs as an MCP server behind a
-local proxy, so the setting is a URL rather than a binary.
+Serena answers `symbol.definition`, `symbol.references`,
+`symbol.implementations` and `symbol.overview`. It is not a CLI: it runs as an
+MCP server behind a local proxy, so the setting is a URL rather than a binary.
 
 ```toml
 [orchestrator]
@@ -500,8 +500,8 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.4.0  contract 1.8.0  AMBER
-funnel    constraints -> reach -> health -> cost (measured for 1 of 4 implementations, the rest on declared estimates)
+atenea 0.5.0  contract 1.9.0  AMBER
+funnel    constraints -> reach -> health -> cost (measured for 1 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```
 

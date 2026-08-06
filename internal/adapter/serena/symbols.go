@@ -83,6 +83,114 @@ func parseSymbol(text string) (symbol, error) {
 	return out, nil
 }
 
+// overviewName is one name Serena's get_symbols_overview reported, before any
+// location is known -- that tool never returns one, by design (its own
+// docstring calls it the first move into an unfamiliar file, not a lookup).
+// Serena groups names by kind and nests a symbol's own children -- a
+// struct's fields, say -- under it instead of beside it, keyed only by name.
+// parseOverviewNames flattens both facts into what every name needs to go
+// find itself: what to hand find_symbol, and which name (if any) it sits
+// inside of.
+//
+// Kind is deliberately not one of these fields. find_symbol reports its own
+// kind for whatever name it actually locates, from the same vocabulary
+// (verified live: both call it "Struct" for the same symbol) -- trusting
+// that answer over an earlier, separate one about the same name is the more
+// honest source once both exist, so locateOne reads kind from there instead.
+type overviewName struct {
+	name      string
+	parent    string
+	queryPath string
+}
+
+// parseOverviewNames reads a get_symbols_overview answer: one object keyed
+// by kind, each value a mix of bare names -- nothing to descend into -- and
+// single-key objects, where the key is the name and the value is that name's
+// own children, grouped by kind exactly like the top level. How deep that
+// nesting goes is the depth argument's doing, decided before this is called;
+// parsing only has to unwrap however deep the answer actually came back.
+func parseOverviewNames(text string) ([]overviewName, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || trimmed == "{}" {
+		return nil, nil
+	}
+	var grouped map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &grouped); err != nil {
+		return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", clip(trimmed))
+	}
+	// A Go map has no order, and two identical commissions returning the
+	// same names shuffled would make every diff of two runs noise -- same
+	// reasoning as parseReferences' own sort, below.
+	kinds := make([]string, 0, len(grouped))
+	for k := range grouped {
+		kinds = append(kinds, k)
+	}
+	slices.Sort(kinds)
+	var out []overviewName
+	for _, k := range kinds {
+		names, err := walkOverviewGroup(grouped[k], "", "")
+		if err != nil {
+			return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", clip(trimmed))
+		}
+		out = append(out, names...)
+	}
+	return out, nil
+}
+
+// walkOverviewGroup reads one kind's array and recurses into whichever
+// entries carry children. Order within one kind's array is a JSON array's,
+// preserved by encoding/json -- unlike the kind keys above, this one is
+// worth keeping: it is declaration order inside that kind.
+func walkOverviewGroup(raw json.RawMessage, parent, parentPath string) ([]overviewName, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	var out []overviewName
+	for _, item := range items {
+		var bare string
+		if err := json.Unmarshal(item, &bare); err == nil {
+			out = append(out, overviewName{name: bare, parent: parent, queryPath: qualify(parentPath, bare)})
+			continue
+		}
+		var withChildren map[string]json.RawMessage
+		if err := json.Unmarshal(item, &withChildren); err != nil || len(withChildren) != 1 {
+			return nil, fmt.Errorf("unreadable overview entry: %s", clip(string(item)))
+		}
+		for name, children := range withChildren {
+			childPath := qualify(parentPath, name)
+			out = append(out, overviewName{name: name, parent: parent, queryPath: childPath})
+			var childGroups map[string]json.RawMessage
+			if err := json.Unmarshal(children, &childGroups); err != nil {
+				return nil, err
+			}
+			childKinds := make([]string, 0, len(childGroups))
+			for ck := range childGroups {
+				childKinds = append(childKinds, ck)
+			}
+			slices.Sort(childKinds)
+			for _, ck := range childKinds {
+				nested, err := walkOverviewGroup(childGroups[ck], name, childPath)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, nested...)
+			}
+		}
+	}
+	return out, nil
+}
+
+// qualify builds the name_path_pattern find_symbol needs to reach a nested
+// name unambiguously -- "Options/Endpoint", not "Endpoint" -- matching the
+// slash-jointed path syntax the tool's own schema documents.
+func qualify(parentPath, name string) string {
+	if parentPath == "" {
+		return name
+	}
+	return parentPath + "/" + name
+}
+
 // parseReferences reads a find_referencing_symbols answer, which is a
 // different shape from find_symbol's on purpose: path -> kind -> entries.
 //
@@ -241,53 +349,57 @@ func pick(candidates []symbol, a ask) (symbol, error) {
 
 // readLineAt reads the exact 1-based line the caller pointed at, with the
 // same sensitivity and containment checks every read in this adapter uses.
-// identifierAt and declarationRegex both need this line for different
-// reasons -- one to find the word sitting on it, the other to anchor that
-// word inside a regex Serena can match uniquely -- so the read has one place
-// to be correct rather than two.
+// identifierAt, declarationRegex and columnOf all need this line for
+// different reasons -- two to find the word sitting on a known column, the
+// third to find which column an already-known word sits at -- so the read
+// has one place to be correct rather than three.
+//
+// file and line travel as plain values rather than an ask: columnOf's caller
+// has a name from Serena's own overview, not a position, so there is no ask
+// to hand in.
 //
 // The read stays inside the repository. That is not politeness: a step
 // carries permission for the unit of work it was commissioned against, and a
 // path that climbs out of it -- with .., with an absolute path, or through a
 // symlink -- is reading something nobody authorized.
-func readLineAt(r *Runner, root string, a ask) (string, error) {
-	if r.isSensitive(a.file) {
+func readLineAt(r *Runner, root, file string, line int) (string, error) {
+	if r.isSensitive(file) {
 		// Exploring skips these in silence because a skipped hit costs
 		// nothing. This is not exploring: a caller asked about one exact
 		// position, and answering "nothing found" would be a lie. It is
 		// refused out loud instead.
 		return "", contract.Fail(contract.FailurePermissionDenied,
-			"%s carries secrets and is not read", a.file)
+			"%s carries secrets and is not read", file)
 	}
-	resolved, err := within(root, a.file)
+	resolved, err := within(root, file)
 	if err != nil {
 		return "", err
 	}
-	file, err := os.Open(resolved)
+	f, err := os.Open(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", contract.Fail(contract.FailureNotFound,
-				"%s is not in this repository", a.file)
+				"%s is not in this repository", file)
 		}
 		return "", contract.Fail(contract.FailureUnavailable,
-			"cannot read %s: %v", a.file, err)
+			"cannot read %s: %v", file, err)
 	}
 	// Nothing was written, so a failed close has nothing to report.
-	defer func() { _ = file.Close() }()
+	defer func() { _ = f.Close() }()
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	for n := 1; scanner.Scan(); n++ {
-		if n == a.line {
+		if n == line {
 			return scanner.Text(), nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", contract.Fail(contract.FailureUnavailable,
-			"cannot read %s: %v", a.file, err)
+			"cannot read %s: %v", file, err)
 	}
 	return "", contract.Fail(contract.FailureInvalidInput,
-		"%s has fewer than %d line(s)", a.file, a.line)
+		"%s has fewer than %d line(s)", file, line)
 }
 
 // identifierAt reads the one word the caller pointed at.
@@ -301,7 +413,7 @@ func readLineAt(r *Runner, root string, a ask) (string, error) {
 // needs the word already in hand before it can ask about it. All three were
 // measured, not assumed.
 func identifierAt(r *Runner, root string, a ask) (string, error) {
-	line, err := readLineAt(r, root, a)
+	line, err := readLineAt(r, root, a.file, a.line)
 	if err != nil {
 		return "", err
 	}
@@ -418,6 +530,39 @@ func isWord(r rune) bool {
 		r > 127 // identifiers are not ASCII-only in Go, Python or TypeScript
 }
 
+// columnOf finds the 1-based column where name sits as a whole word on line
+// -- the same lexical rule wordBounds enforces in the other direction,
+// applied in reverse: a known name, on an already-known line, instead of a
+// known column on a known line. It is the direction identifierAt never
+// needed, because every other symbol.* capability starts from a position;
+// this is the one capability that starts from a name instead.
+//
+// It returns the first whole-word match. That is deliberately not
+// disambiguated further: Serena's own overview and find_symbol already
+// agreed this line is where the name lives, so a second occurrence later on
+// the same line -- a field used in its own default expression, say -- is not
+// the one being pointed at.
+func columnOf(line, name string) (int, bool) {
+	if name == "" {
+		return 0, false
+	}
+	runes := []rune(line)
+	target := []rune(name)
+	for start := 0; start+len(target) <= len(runes); start++ {
+		if start > 0 && isWord(runes[start-1]) {
+			continue
+		}
+		end := start + len(target)
+		if end < len(runes) && isWord(runes[end]) {
+			continue
+		}
+		if string(runes[start:end]) == name {
+			return start + 1, true
+		}
+	}
+	return 0, false
+}
+
 // declarationRegex builds the one-group pattern find_declaration's own
 // interface requires in place of a line and column: the word at a.column,
 // escaped, with the rest of its own line escaped around it.
@@ -430,7 +575,7 @@ func isWord(r rune) bool {
 // names nothing at all, the caller falls back to the same-file symbol search
 // this adapter always used.
 func declarationRegex(r *Runner, root string, a ask) (string, error) {
-	line, err := readLineAt(r, root, a)
+	line, err := readLineAt(r, root, a.file, a.line)
 	if err != nil {
 		return "", err
 	}

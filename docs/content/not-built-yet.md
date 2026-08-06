@@ -147,10 +147,11 @@ cost with per-version baselines, the six shared failure bins, the cancellation
 path down to process groups and inherited pipes, the measurement base with its
 rollups and retention, the crash notebook, the receipts, resumable runs
 (`atenea resume`, reading a receipt back rather than paying twice for a step
-that already succeeded), the service wiring, and all three symbol
-capabilities — `symbol.definition`, `symbol.references` and
-`symbol.implementations` — each answering for real against this
-repository, not only the empty or same-file answers earlier bugs let
-through.
+that already succeeded), the service wiring, and all four symbol
+capabilities — `symbol.definition`, `symbol.references`,
+`symbol.implementations` and `symbol.overview` — each answering for real
+against this repository: the first three past the empty or same-file
+answers earlier bugs let through, the fourth past the cross-type
+ambiguity its own live verification against this repository found.
 Those are laid, measured, and defended by tests that have been mutated to check
 they fail when they should.

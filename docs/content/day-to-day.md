@@ -53,9 +53,11 @@ checking a provider; `task` is the everyday one.
 One screen. The first light is Atenea as a whole, then one per provider.
 
 ```text
-code.search              [read]
+code.search              [read process]
     amber  claude.search            provider=claude-code        health=unknown
+    amber  codebase-memory.search   provider=codebase-memory    health=unknown
     amber  ripgrep                  provider=ripgrep            health=unknown
+    amber  serena.search            provider=serena             health=unknown
 ```
 
 `amber` means nobody has measured that provider yet, which is not the same as
@@ -85,7 +87,8 @@ The crash notebook. Anything that went wrong badly enough not to fit in a normal
 report lands here, and it survives a kill.
 
 ```text
-2026-08-03 02:05:00 metrics.flush  metrics: open .../metrics.duckdb: context canceled
+2026-08-03 02:05:00  metrics.flush
+    metrics: open .../metrics.duckdb: context canceled
 ```
 
 `atenea incidents clear` marks them read. `atenea metrics` is the other half of
@@ -109,7 +112,9 @@ closed; whatever already succeeded is not repeated:
 ```text
 $ atenea resume 20260804T114108-a4974e
 run       20260804T114108-a4974e
+task      find every TODO comment
 verdict   ok
+matches   12
 spent     1.033s over 1 step(s)
   explore  0 step(s), 0s
   work     1 step(s), 1.033s

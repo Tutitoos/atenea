@@ -381,7 +381,7 @@ func TestAPlainTextFailureIsStillSorted(t *testing.T) {
 func TestAnEmptyAnswerIsNotZeroMatches(t *testing.T) {
 	runner := newTestRunner(t)
 	req := request(t, map[string]any{"query": "x"})
-	_, err := runner.readAnswer(envelope{Result: "I could not do that"}, req, newSearch(t, req.Payload))
+	_, _, err := runner.readAnswer(envelope{Result: "I could not do that"}, req, newSearch(t, req.Payload))
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
 		t.Fatalf("kind = %v, want unavailable: a turn with no structure did not search", got)
 	}
@@ -394,7 +394,7 @@ func TestARefusedActionIsAPermissionFailure(t *testing.T) {
 		StructuredOutput:  json.RawMessage(`{"matches":[]}`),
 		PermissionDenials: []json.RawMessage{json.RawMessage(`{"tool":"Write"}`)},
 	}
-	_, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	_, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
 		t.Fatalf("kind = %v, want permission_denied", got)
 	}
@@ -414,7 +414,7 @@ func TestTheAnswerIsCheckedAgainstWhatWasForbidden(t *testing.T) {
 		{"path":"/etc/shadow","line":1,"column":1,"snippet":"secret"}
 	]}`)}
 
-	result, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestAMatchWithoutAColumnKeepsItsLine(t *testing.T) {
 	out := envelope{StructuredOutput: json.RawMessage(
 		`{"matches":[{"path":"a.go","line":7,"snippet":"x"}]}`)}
 
-	result, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestANonsenseCoordinateIsDropped(t *testing.T) {
 		{"path":"d.go","line":9,"column":2}
 	]}`)}
 
-	result, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestAnAnswerOutsideTheRequestedTypesIsDropped(t *testing.T) {
 		{"path":"README.md","line":1,"column":1}
 	]}`)}
 
-	result, err := runner.readAnswer(out, req, newSearch(t, payload))
+	result, _, err := runner.readAnswer(out, req, newSearch(t, payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -496,12 +496,86 @@ func TestAnAnswerOutsideTheRequestedTypesIsDropped(t *testing.T) {
 	}
 }
 
+func TestInScope(t *testing.T) {
+	cases := []struct {
+		name     string
+		relative string
+		scope    []string
+		want     bool
+	}{
+		{"empty scope means everything", "cmd/atenea/main.go", nil, true},
+		{"dot means everything", "cmd/atenea/main.go", []string{"."}, true},
+		{"exact file match", "pkg/contract/version.go", []string{"pkg/contract/version.go"}, true},
+		{"nested under a directory", "internal/adapter/omp/omp.go", []string{"internal/adapter"}, true},
+		{"sibling directory is not a match", "internal/adapter2/other.go", []string{"internal/adapter"}, false},
+		{"outside every entry", "cmd/atenea/main.go", []string{"internal/adapter"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inScope(tc.relative, tc.scope); got != tc.want {
+				t.Errorf("inScope(%q, %v) = %v, want %v", tc.relative, tc.scope, got, tc.want)
+			}
+		})
+	}
+}
+
+// Scope is a request-shaping constraint, not a secret: unlike a sensitive
+// file, a stray hit is worth reporting rather than hiding, and a sibling
+// directory that merely shares a prefix must never be mistaken for a match.
+func TestAMatchOutsideTheRequestedScopeIsDroppedWithANotice(t *testing.T) {
+	runner := newTestRunner(t)
+	payload := map[string]any{"query": "x", "scope": []any{"internal/adapter"}}
+	req := request(t, payload)
+	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[
+		{"path":"internal/adapter/claudecode.go","line":1,"column":1},
+		{"path":"internal/adapter2/other.go","line":1,"column":1},
+		{"path":"cmd/atenea/main.go","line":1,"column":1}
+	]}`)}
+
+	result, notices, err := runner.readAnswer(out, req, newSearch(t, payload))
+	if err != nil {
+		t.Fatalf("readAnswer: %v", err)
+	}
+	matches, _ := result["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches = %d, want only the one inside scope: %v", len(matches), matches)
+	}
+	first, _ := matches[0].(map[string]any)
+	if first["path"] != "internal/adapter/claudecode.go" {
+		t.Errorf("the surviving match is %v", first["path"])
+	}
+	if !anyContains(notices, "2 match") {
+		t.Errorf("notices = %q, want one naming the two dropped hits", notices)
+	}
+}
+
+func TestNoScopeMeansNoNoticeAndNothingDropped(t *testing.T) {
+	runner := newTestRunner(t)
+	req := request(t, map[string]any{"query": "x"})
+	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[
+		{"path":"a.go","line":1,"column":1},
+		{"path":"deep/nested/b.go","line":1,"column":1}
+	]}`)}
+
+	result, notices, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	if err != nil {
+		t.Fatalf("readAnswer: %v", err)
+	}
+	matches, _ := result["matches"].([]any)
+	if len(matches) != 2 {
+		t.Fatalf("matches = %d, want both: an empty scope means the whole repository", len(matches))
+	}
+	if len(notices) != 0 {
+		t.Errorf("notices = %q, want none", notices)
+	}
+}
+
 func TestNoMatchesIsAnAnswerNotAFailure(t *testing.T) {
 	runner := newTestRunner(t)
 	req := request(t, map[string]any{"query": "x"})
 	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[]}`)}
 
-	result, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}

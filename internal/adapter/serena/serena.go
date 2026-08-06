@@ -56,10 +56,12 @@ const (
 	CapabilityDefinition      = "symbol.definition"
 	CapabilityReferences      = "symbol.references"
 	CapabilityImplementations = "symbol.implementations"
+	CapabilityOverview        = "symbol.overview"
 
 	ImplDefinition      = "serena.definition"
 	ImplReferences      = "serena.references"
 	ImplImplementations = "serena.implementations"
+	ImplOverview        = "serena.overview"
 )
 
 // DefaultEndpoint is where the ToolHive proxy puts Serena when the port is
@@ -86,7 +88,7 @@ const protocolVersion = "2025-06-18"
 // not a package-level slice because a caller that appended to a shared one
 // would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplImplementations}
+	return []string{ImplDefinition, ImplReferences, ImplImplementations, ImplOverview}
 }
 
 // Options configure the adapter.
@@ -113,18 +115,29 @@ type Options struct {
 type conn struct {
 	endpoint string
 
-	// mu serializes every exchange on this endpoint. See the package comment:
-	// one active project at a time means one caller at a time per URL.
+	// mu serializes each commission's exchange on this endpoint: one active
+	// project at a time means one caller at a time per URL, so two
+	// commissions never interleave activation or the session lifecycle.
 	mu sync.Mutex
-	// session is the MCP session id, established lazily on the first call and
-	// reused. It is guarded by mu like everything else here.
+	// wireMu additionally guards session, active, nextID, and version below.
+	// A commission holds mu for its whole exchange, but symbol.overview's
+	// locateAll dispatches many find_symbol calls concurrently inside that
+	// one hold: mu excludes other commissions from each other, not these
+	// siblings, so the fields every rpc() call touches need their own,
+	// finer lock that each concurrent call actually takes.
+	wireMu sync.Mutex
+	// session is the MCP session id, established lazily on the first call
+	// and reused. Guarded by wireMu.
 	session string
-	// active is the project path this Serena is currently pointed at, so a run
-	// of steps against one repository does not re-activate it every time.
+	// active is the project path this Serena is currently pointed at, so a
+	// run of steps against one repository does not re-activate it every
+	// time. Guarded by wireMu.
 	active string
-	// nextID numbers the JSON-RPC requests on this session.
+	// nextID numbers the JSON-RPC requests on this session. Guarded by
+	// wireMu.
 	nextID int
 	// version is what the server called itself when the session opened.
+	// Guarded by wireMu.
 	version string
 }
 
@@ -232,8 +245,8 @@ func (r *Runner) serverVersion() string {
 	if c == nil {
 		return ""
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
 	return c.version
 }
 
@@ -256,6 +269,19 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if !r.Serves(req.Implementation.ID) {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"serena adapter does not serve implementation %s", req.Implementation.ID)
+	}
+	if req.Capability.ID == CapabilityOverview {
+		// Not a fourth kind alongside the switch below: kindOf, ask, resolve
+		// and shape all exist to turn a POSITION into a symbol, and this
+		// capability has no position -- it is the thing that hands one back.
+		// Forcing it through that pipeline would mean bending four functions
+		// built for one shape to also fit a second, unrelated one. What it
+		// does share -- validation already done above, the connection, the
+		// lock, activation, failure translation -- it shares by calling the
+		// same methods this pipeline calls, not by joining the switch.
+		outcome, version, runErr := r.runOverview(ctx, req)
+		toolVersion = version
+		return outcome, runErr
 	}
 	kind, err := kindOf(req.Capability.ID)
 	if err != nil {
@@ -283,7 +309,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	// retarget Serena between them. Distinct endpoints take distinct locks.
 	c.mu.Lock()
 	records, notes, runErr := r.resolve(call, c, root, kind, ask)
+	c.wireMu.Lock()
 	toolVersion = c.version
+	c.wireMu.Unlock()
 	c.mu.Unlock()
 
 	if runErr != nil {
@@ -318,6 +346,124 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 			req.Capability.ID, req.Repository.ID, len(records)),
 	})
 	return outcome, nil
+}
+
+// runOverview is symbol.overview's own Run: the same shared steps -- timing,
+// a bounded context, the repository root, one lock per endpoint -- around a
+// different exchange. Where resolve asks Serena about a position, overview
+// asks for the whole file at once and then locates, concurrently, every name
+// that answer reported.
+func (r *Runner) runOverview(ctx context.Context, req contract.RunRequest) (contract.Outcome, string, error) {
+	a, err := readOverviewAsk(req.Payload)
+	if err != nil {
+		return contract.Outcome{}, "", err
+	}
+
+	started := time.Now()
+	call, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	root, err := filepath.Abs(req.Repository.Path)
+	if err != nil {
+		return contract.Outcome{}, "", contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
+	}
+
+	c := r.connFor(req.Repository)
+	// Same indivisible unit as Run: activation and everything that depends on
+	// it, held under one lock for the whole exchange.
+	c.mu.Lock()
+	entries, notes, runErr := r.overview(call, c, root, a)
+	c.wireMu.Lock()
+	toolVersion := c.version
+	c.wireMu.Unlock()
+	c.mu.Unlock()
+
+	if runErr != nil {
+		return contract.Outcome{}, toolVersion, r.failureFor(runErr, call)
+	}
+
+	result, err := shapeOverview(entries, req.Capability)
+	if err != nil {
+		return contract.Outcome{}, toolVersion, err
+	}
+	outcome := contract.Outcome{
+		Result:  result,
+		Verdict: contract.VerdictOK,
+		// No memory figure, same reasoning as Run: Serena runs in somebody
+		// else's process, so there is no child process here to weigh.
+		Spent: contract.Sample{Duration: time.Since(started)},
+	}
+	for _, note := range notes {
+		if note == "" {
+			continue
+		}
+		outcome.Discoveries = append(outcome.Discoveries,
+			contract.Discovery{Level: contract.ContextRepository, Note: note})
+	}
+	outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
+		Level: contract.ContextRepository,
+		Note: fmt.Sprintf("serena answered %s for %s with %d symbol(s)",
+			req.Capability.ID, req.Repository.ID, len(entries)),
+	})
+	return outcome, toolVersion, nil
+}
+
+// overview runs the exchange. It assumes c.mu is held, same as resolve.
+//
+// The sensitivity and containment checks below are not free elsewhere in
+// this file: identifierAt gets them for the other three capabilities by
+// reading the file locally, through readLineAt, before ever calling Serena.
+// This capability has no position to read first -- the file itself is the
+// whole ask -- so without an explicit check here, a sensitive or
+// repository-escaping path would reach a second process, and whatever its
+// own parser can see in the file, before anything in this adapter had a
+// chance to refuse it.
+func (r *Runner) overview(ctx context.Context, c *conn, root string, a overviewAsk) ([]overviewEntry, []string, error) {
+	if r.isSensitive(a.file) {
+		return nil, nil, contract.Fail(contract.FailurePermissionDenied,
+			"%s carries secrets and is not read", a.file)
+	}
+	if _, err := within(root, a.file); err != nil {
+		return nil, nil, err
+	}
+	retargeted, previous, err := r.activate(ctx, c, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	var notes []string
+	if retargeted {
+		notes = append(notes, fmt.Sprintf(
+			"serena retargeted %s from %s to %s", c.endpoint, previous, root))
+	}
+	raw, err := r.call(ctx, c, "get_symbols_overview", map[string]any{
+		"relative_path": a.file,
+		"depth":         a.depth,
+	})
+	if err != nil {
+		return nil, notes, err
+	}
+	names, err := parseOverviewNames(raw)
+	if err != nil {
+		return nil, notes, err
+	}
+	entries, err := r.locateAll(ctx, c, root, a, names)
+	if err != nil {
+		return nil, notes, err
+	}
+	// get_symbols_overview groups by kind, which the caller never asked
+	// about; top to bottom, as the file actually reads, is the useful order,
+	// and it only becomes available now that every entry has a real line.
+	slices.SortFunc(entries, func(x, y overviewEntry) int {
+		if x.line != y.line {
+			return x.line - y.line
+		}
+		if x.column != y.column {
+			return x.column - y.column
+		}
+		return strings.Compare(x.name, y.name)
+	})
+	return entries, notes, nil
 }
 
 // kind is which of the three questions is being asked. Keeping it as one value
@@ -450,6 +596,39 @@ func list(value any) []string {
 	return nil
 }
 
+// overviewAsk is symbol.overview's own payload, once checked: a file and how
+// deep to descend into it. It does not extend ask -- nothing else ask
+// carries applies here, there is no position, and no function in this file
+// needs to branch on which capability it is serving.
+type overviewAsk struct {
+	file  string
+	depth int
+}
+
+func readOverviewAsk(payload map[string]any) (overviewAsk, error) {
+	file, _ := payload["file"].(string)
+	out := overviewAsk{file: strings.TrimSpace(file)}
+	if out.file == "" {
+		return overviewAsk{}, contract.Fail(contract.FailureInvalidInput,
+			"%s: file is empty", CapabilityOverview)
+	}
+	if filepath.IsAbs(out.file) {
+		// Same rule as readAsk, for the same reason: relative to the
+		// repository root is what the capability promises, and an absolute
+		// path would only work by accident on this machine.
+		return overviewAsk{}, contract.Fail(contract.FailureInvalidInput,
+			"%s: file %q must be relative to the repository root", CapabilityOverview, out.file)
+	}
+	if n, ok := whole(payload["depth"]); ok {
+		if n < 0 {
+			return overviewAsk{}, contract.Fail(contract.FailureInvalidInput,
+				"%s: depth must not be negative, got %d", CapabilityOverview, n)
+		}
+		out.depth = n
+	}
+	return out, nil
+}
+
 // location is one answer, in Atenea's words rather than Serena's.
 type location struct {
 	Path    string
@@ -503,16 +682,161 @@ func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a as
 // case that tears language servers down. A first activation (previous empty)
 // is not a retarget.
 func (r *Runner) activate(ctx context.Context, c *conn, root string) (retargeted bool, previous string, err error) {
-	if c.active == root {
+	c.wireMu.Lock()
+	already := c.active == root
+	previous = c.active
+	c.wireMu.Unlock()
+	if already {
 		return false, "", nil
 	}
-	previous = c.active
 	if _, err := r.call(ctx, c, "activate_project", map[string]any{"project": root}); err != nil {
+		c.wireMu.Lock()
 		c.active = ""
+		c.wireMu.Unlock()
 		return false, previous, err
 	}
+	c.wireMu.Lock()
 	c.active = root
+	c.wireMu.Unlock()
 	return previous != "", previous, nil
+}
+
+// overviewEntry is one answer to symbol.overview: what get_symbols_overview
+// establishes (name, nesting) plus what only find_symbol and a local read of
+// the source line can recover -- a real line, and the column neither Serena
+// tool ever reports.
+type overviewEntry struct {
+	name    string
+	kind    string
+	parent  string
+	line    int
+	endLine int
+	column  int
+}
+
+// maxConcurrentSymbolLookups bounds how many find_symbol calls run at once
+// for one symbol.overview commission. Unbounded, measured against this
+// repository's own largest file (62 top-level symbols): 232ms, no worse than
+// firing 20 at once -- Serena, over gopls, absorbed that width on one file
+// without degrading. This bound exists for the file this repository does not
+// have: hundreds of symbols, where an unbounded fan-out would open hundreds
+// of requests against one endpoint at once instead of racing a fixed pool
+// through them. 16 is arbitrary within "comfortably above what this
+// repository ever asks for, comfortably below whatever would actually stress
+// a shared endpoint" -- not a number this repository's own files can settle
+// either side of.
+const maxConcurrentSymbolLookups = 16
+
+// locateAll turns the bare names get_symbols_overview reported into entries
+// with a real line and column, by asking find_symbol once per name -- the
+// only call in this exchange that returns a location at all -- capped at
+// maxConcurrentSymbolLookups in flight together.
+//
+// It assumes c.mu is held, same as every exchange with this endpoint: these
+// are read-only calls against the project overview already activated, and
+// nothing else may retarget Serena while they are outstanding.
+func (r *Runner) locateAll(ctx context.Context, c *conn, root string, a overviewAsk, names []overviewName) ([]overviewEntry, error) {
+	entries := make([]overviewEntry, len(names))
+	errs := make([]error, len(names))
+
+	sem := make(chan struct{}, maxConcurrentSymbolLookups)
+	var wg sync.WaitGroup
+	for i, n := range names {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, n overviewName) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			entries[i], errs[i] = r.locateOne(ctx, c, root, a, n)
+		}(i, n)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
+// locateOne finds where one overview name actually sits: find_symbol gives
+// its line and its own kind, a local read of that exact line recovers the
+// column find_symbol never reports.
+//
+// max_matches asks for more than the one match expected, on purpose.
+// Serena's own truncation at exactly the requested count would turn a
+// genuine ambiguity into a parse failure instead of a named one -- the
+// difference between "this ran out of room" and "this file has more than
+// one name where get_symbols_overview already said there was one," which are
+// not the same fact, and only the second is this adapter's to report.
+func (r *Runner) locateOne(ctx context.Context, c *conn, root string, a overviewAsk, n overviewName) (overviewEntry, error) {
+	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
+		"name_path_pattern": n.queryPath,
+		"relative_path":     a.file,
+		"max_matches":       5,
+	})
+	if err != nil {
+		return overviewEntry{}, err
+	}
+	found, err := parseSymbols(raw)
+	if err != nil {
+		return overviewEntry{}, err
+	}
+	// find_symbol's own matcher is not anchored to the depth this overview
+	// asked about: an unqualified pattern like "kind" matches every symbol
+	// in the file named kind, at any nesting -- not only the one
+	// get_symbols_overview actually reported at this depth. Measured live:
+	// this file has both a top-level type named kind and an unrelated
+	// field overviewEntry/kind, and find_symbol returns both for the
+	// pattern "kind" unfiltered.
+	//
+	// A candidate whose own name_path exactly echoes the path just asked
+	// for is the more faithful read, so narrow to those when at least one
+	// exists. But narrowing can't be unconditional: get_symbols_overview
+	// reports Go methods flat, with no receiver, while find_symbol's real
+	// name_path for the same method is always receiver-qualified -- so a
+	// method query never has an exact echo to narrow to. Measured live:
+	// three unrelated types in one file each define String(), overview
+	// reports all three as the bare name "String", and no candidate's
+	// name_path is ever the bare string "String". That is a genuine
+	// ambiguity this adapter cannot resolve from what overview told it,
+	// not a missing symbol -- so an unnarrowed multi-match result falls
+	// through to the ambiguous case below rather than being reported as
+	// not found.
+	if exact := slices.DeleteFunc(slices.Clone(found), func(s symbol) bool { return s.NamePath != n.queryPath }); len(exact) > 0 {
+		found = exact
+	}
+	if len(found) == 0 {
+		return overviewEntry{}, contract.Fail(contract.FailureNotFound,
+			"serena's own overview named %q in %s, but find_symbol cannot locate it", n.queryPath, a.file)
+	}
+	if len(found) > 1 {
+		return overviewEntry{}, contract.Fail(contract.FailureInvalidInput,
+			"%s: %q matches %d symbols; serena's overview cannot be trusted to mean one of them",
+			a.file, n.queryPath, len(found))
+	}
+	match := found[0]
+	line := toContractLine(match.Location.StartLine)
+	endLine := toContractLine(match.Location.EndLine)
+
+	text, err := readLineAt(r, root, a.file, line)
+	if err != nil {
+		return overviewEntry{}, err
+	}
+	column, ok := columnOf(text, n.name)
+	if !ok {
+		return overviewEntry{}, contract.Fail(contract.FailureUnavailable,
+			"%s:%d: %q is not on its own reported line as a whole word", a.file, line, n.name)
+	}
+
+	entry := overviewEntry{name: n.name, kind: match.Kind, parent: n.parent, line: line, column: column}
+	if endLine != line {
+		// A single-line symbol repeating its own start line here would be
+		// noise, not information -- the caller already has it.
+		entry.endLine = endLine
+	}
+	return entry, nil
 }
 
 // symbolAt turns the position the capability speaks into the symbol Serena
@@ -708,6 +1032,34 @@ func shape(k kind, found []location, capability contract.Capability) (map[string
 	} else {
 		result = map[string]any{"locations": records}
 	}
+	if err := capability.ValidateOutput(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// shapeOverview turns overview entries into the output symbol.overview
+// declares, and checks them against it -- same discipline as shape, for the
+// same reason: a capability whose declared shape is not enforced is a
+// comment rather than a contract.
+func shapeOverview(entries []overviewEntry, capability contract.Capability) (map[string]any, error) {
+	records := make([]any, 0, len(entries))
+	for _, e := range entries {
+		record := map[string]any{
+			"name":   e.name,
+			"kind":   e.kind,
+			"line":   e.line,
+			"column": e.column,
+		}
+		if e.endLine != 0 {
+			record["end_line"] = e.endLine
+		}
+		if e.parent != "" {
+			record["parent"] = e.parent
+		}
+		records = append(records, record)
+	}
+	result := map[string]any{"symbols": records}
 	if err := capability.ValidateOutput(result); err != nil {
 		return nil, err
 	}

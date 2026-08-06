@@ -13,7 +13,91 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.5.0] - 2026-08-06
+
+### Added
+
+- **`symbol.overview` answers "what does this file contain," the one
+  question the other three symbol capabilities all assume is already
+  known.** `symbol.definition`, `.references` and `.implementations` each
+  need a name or a position handed in first; nothing listed a file's own
+  symbols the way an editor's outline pane does, noticed while dogfooding
+  ordinary day-to-day use and tracked in the open questions doc until now.
+  `serena.overview` drives Serena's `get_symbols_overview` for the flat or
+  nested (`depth`) list of names, then fans out one `find_symbol` call per
+  name -- bounded at 16 in flight together -- to recover the line and
+  column neither `get_symbols_overview` nor any other Serena tool reports
+  on its own; a local read of the resolved line recovers the column past
+  that. This is the first capability to issue concurrent calls inside a
+  single commission, so the MCP session state the adapter shares between
+  them -- the JSON-RPC id counter and the session handle -- moved under a
+  lock of its own; the per-commission lock above it excludes other
+  commissions, never these siblings from each other. The orchestrator
+  advertises the capability on its agent card, so a plan can reach for it
+  the same way it reaches for the other three.
+
+  Building it against a real repository surfaced a real ambiguity in how
+  Serena's own tools disagree with each other: `find_symbol` matches an
+  unqualified pattern like `"kind"` against any symbol named `kind`
+  anywhere in the file regardless of nesting, so a query meant for this
+  repository's own top-level `type kind uint8` also matched an unrelated
+  nested field, `overviewEntry.kind`, three types away -- and separately,
+  `get_symbols_overview` reports every method as a bare, receiver-less
+  name, so three unrelated types in `cmd/atenea/main.go` each defining
+  `String()` all overview as the same unqualified `"String"` with no way
+  to tell them apart. `locateOne` now prefers a candidate whose own
+  `name_path` exactly echoes the path the overview walk claimed, when at
+  least one exists, which resolves the first case outright; when none does
+  -- the only way the second case can happen, since `get_symbols_overview`
+  never hands this adapter a receiver to ask for -- the unnarrowed matches
+  are reported as genuinely ambiguous rather than guessed at or claimed
+  not found.
+
+  Cost estimates in `default.toml` are measured, not guessed: 392-630ms and
+  ~1700-1900 tokens across eighteen live runs in two independent sessions,
+  against this repository's own largest file at nested depth (91 symbols),
+  including two `serena.service` restarts checked specifically for the cold
+  language-server tax every other Serena implementation's estimate only
+  allows headroom for -- none was measurable here, both cold calls landing
+  inside the ordinary spread. The declared estimate rounds to the top of
+  both ranges rather than the middle, because a funnel told a provider is
+  cheaper than it is will pick it over one it should have lost to. Verified
+  against the compiled binary and a live language server on this repository:
+  `ask symbol.overview --repo current --set file=internal/adapter/serena/serena.go --set depth=1`
+  resolves all 91 symbols including both `kind` collisions correctly and
+  distinctly; the same call against `cmd/atenea/main.go` answers
+  `invalid_input: "String" matches 3 symbols; serena's overview cannot be
+  trusted to mean one of them` instead of a false `not_found`. No change to
+  `pkg/contract`: the new capability and implementation are data in
+  `default.toml`, answered through the existing request/outcome shape.
+
+### Fixed
+
+- **`claude.search`'s `scope` input was advisory only -- a returned match was
+  never checked against it.** `omp` makes scope real by construction:
+  `targets()` refuses any path outside it before ripgrep ever runs.
+  `claude-code` only ever wrote scope into the prompt and trusted the model
+  to honor it, unlike the sensitive-path list the same adapter already
+  double-checks. `cleanHit` now checks a match's path against the requested
+  scope right after confirming it sits inside the repository at all -- the
+  same place the sensitivity check already runs -- and drops (never fails)
+  anything outside it; a drop surfaces as an aggregate Notice on the Outcome
+  (`"N match(es) fell outside the requested scope and were dropped"`), never
+  a silent subtraction.
+
+  Implementations can now declare which of the two ways they keep this
+  promise: `Implementation.ScopeGuarantee` is `confined` when the tool is
+  physically restricted to scope and cannot see outside it (`ripgrep`, via
+  `targets()`), `filtered` when the provider may look anywhere but every hit
+  is checked afterward (`claude.search`, as of this fix), or the empty
+  default for anything that has not declared either -- read as the weakest
+  claim, never as confined. It sits outside the four blocks that decide
+  selection: it never disqualifies a candidate and the funnel does not rank
+  on it, a disclosed property of the answer rather than a filter, printed
+  per implementation by `atenea catalog` so the promise is queryable instead
+  of assumed.
+  `pkg/contract` bumped to `1.9.0`: additive, an adapter built against
+  `1.8.0` goes on compiling and simply never sets the field.
 
 ## [0.4.0] - 2026-08-05
 
@@ -915,6 +999,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.5.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.2.0

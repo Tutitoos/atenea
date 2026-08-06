@@ -77,7 +77,17 @@ type Version struct {
 // optional, so an adapter built against 1.7.0 goes on compiling and simply
 // never answers the probe; nothing about the shape of a request or an
 // outcome changed underneath it.
-var Current = Version{Major: 1, Minor: 8, Patch: 0}
+//
+// 1.9.0 added `Implementation.ScopeGuarantee`. The `code.search` scope input
+// was already enforced two different ways by two different implementations
+// -- ripgrep confines what it can read, an agentic reader like Claude Code
+// was only ever asked nicely -- and nothing before this let a caller tell
+// which promise they got. ScopeUnspecified reads as the weakest claim, the
+// same convention VCS and Scale already use for a fact nobody has declared
+// yet. Additive: an adapter built against 1.8.0 goes on compiling and simply
+// never sets the field; a core speaking 1.9.0 that sees it unspecified
+// treats the implementation as making no claim, not as confined.
+var Current = Version{Major: 1, Minor: 9, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

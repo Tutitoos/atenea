@@ -113,6 +113,7 @@ const (
 	definitionCapability      = "symbol.definition"
 	referencesCapability      = "symbol.references"
 	implementationsCapability = "symbol.implementations"
+	overviewCapability        = "symbol.overview"
 	callsCapability           = "symbol.calls"
 	impactCapability          = "code.impact"
 )
@@ -188,6 +189,7 @@ var card = contract.Agent{
 		definitionCapability,
 		referencesCapability,
 		implementationsCapability,
+		overviewCapability,
 		callsCapability,
 		impactCapability,
 		repositoryIndexCapability,

@@ -10,7 +10,7 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `0.4.0`, speaking contract `1.8.0` — alpha: `0.x.y` until it goes
+Version `0.5.0`, speaking contract `1.9.0` — alpha: `0.x.y` until it goes
 stable. What landed is in the
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
@@ -69,9 +69,10 @@ default so the P0 capability works out of the box; `--allow EFFECT` grants
 one more to a single commission.
 
 Symbols are the second family of capabilities: `symbol.definition`,
-`symbol.references` and `symbol.implementations`. They are answered by Serena,
-which is not a CLI at all but an MCP server behind a local proxy, so the third
-adapter speaks JSON-RPC over HTTP instead of spawning a process.
+`symbol.references`, `symbol.implementations` and `symbol.overview`. They are
+answered by Serena, which is not a CLI at all but an MCP server behind a local
+proxy, so the third adapter speaks JSON-RPC over HTTP instead of spawning a
+process.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
@@ -145,7 +146,7 @@ internal/           the brain, not importable from outside
   adapter/claudecode/      the client adapter: translates for the Claude Code CLI
   adapter/codebasememory/  the call-graph adapter: symbol.calls and code.impact from its own index
   adapter/omp/             the client adapter: translates for the omp CLI
-  adapter/serena/          the symbol adapter: MCP over HTTP, positions to names
+  adapter/serena/          the symbol adapter: MCP over HTTP, positions to names and back
   checkpoint/              run receipts on disk
   clock/                   the one lane every background rhythm runs in
   config/                  the single settings file
