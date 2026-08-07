@@ -13,6 +13,30 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [0.6.1] - 2026-08-07
+
+### Fixed
+
+- **The release gate claimed to run the same check as CI and did not, which is
+  why `v0.6.0` is a tag with no release behind it.** The step is named "the
+  same gate CI runs on main" and its comment said so twice, but CI installs
+  the linter with `golangci/golangci-lint-action@v8` while this step piped
+  `install.sh` from the linter's *master* branch into `sh`. Two mechanisms,
+  one claim of equivalence, and nothing checking it. On 2026-08-07 upstream
+  began shipping a `.sbom.json` asset whose name is a superstring of the
+  tarball's; the unpinned script downloaded the SBOM, checksummed it against
+  the tarball's hash, and exited 1. Both hashes in that error are legitimate
+  published values -- `fd3a137c…` is genuinely the SBOM and `8df580d2…`
+  genuinely the tarball -- so nothing was compromised; the script simply
+  picked the wrong file. The step now uses the same action, so the
+  equivalence is a fact about the file rather than a promise in a comment.
+
+  `v0.6.0` is left exactly as it fell: a tag on a commit CI proved green,
+  with no GitHub release attached. Moving it would have made the release list
+  contiguous by deleting the evidence that a gate failed, and a changelog that
+  edits away its own inconvenient facts is worth less than the gap it hides.
+  Everything `0.6.0` describes below shipped in `0.6.1`.
+
 ## [0.6.0] - 2026-08-07
 
 ### Added
@@ -1164,6 +1188,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.6.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.4.0

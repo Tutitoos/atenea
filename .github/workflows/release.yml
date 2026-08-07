@@ -45,16 +45,23 @@ jobs:
           fi
           echo "tag ${GITHUB_REF_NAME} == binary ${got}"
 
+      # Same linter, same version, same configuration as CI -- and, now, the
+      # same mechanism. The previous version of this step claimed to run "the
+      # same gate CI runs on main" while actually piping install.sh from the
+      # linter's *master* branch into sh, which CI never does. The claim was
+      # false, and being false is what let v0.6.0 through: on 2026-08-07 that
+      # script downloaded the release's .sbom.json instead of the tarball,
+      # failed its own checksum, and killed the release -- while CI on the very
+      # same commit was green, because the action resolved the download
+      # correctly. An equivalence that two different mechanisms have to keep
+      # true is an equivalence that stops being true without telling anyone.
+      # Three releases were cut on top of a red pipeline because nobody asked
+      # this question at tag time; a fourth was blocked because the asking
+      # itself was broken.
       - name: Lint must be clean (the same gate CI runs on main)
-        run: |
-          set -eu
-          # The same linter, the same version, the same configuration file CI
-          # gates on -- so the question being answered here is exactly the one
-          # CI would have answered if the tag had been a main push. Three
-          # releases were cut on top of a red pipeline because nobody asked
-          # this question at tag time.
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
-          "$(go env GOPATH)/bin/golangci-lint" run
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
 
       - name: The changelog must have this release in it
         run: |
