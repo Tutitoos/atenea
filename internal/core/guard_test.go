@@ -139,26 +139,26 @@ func TestRunWarmsAndStopsAManagedProcessCleanly(t *testing.T) {
 
 // The endpoint key and a process table cannot both decide where the adapter
 // dials: one is an address a user picked, the other does not exist until
-// something spawns. Declaring a process settles it, and settles it harder
-// than "ignored" suggests -- the value is never read, so it is never
-// validated either. An endpoint that is not a URL at all is refused outright
-// on its own and passes without comment beside a process table, which is
-// worth pinning in both directions: it means deleting a process block can
-// turn a file that always loaded into one that suddenly does not.
+// something spawns. Declaring a process settles it -- the written endpoint
+// is not what gets dialed and not what the status screen reports.
+//
+// It is still read well enough to be checked, though, which is the half
+// worth guarding. An endpoint that could never work is a mistake whether or
+// not something else happens to be answering instead, and excusing it beside
+// a process table would mean deleting that table later turns a file that has
+// always loaded into one that suddenly does not.
 func TestAManagedProcessTakesOverTheWrittenEndpoint(t *testing.T) {
-	// Not a URL. The adapter refuses this shape, so a core that builds
-	// against it is a core that never handed it to the adapter.
-	managed := strings.Replace(managedCatalog,
-		`endpoint = "http://127.0.0.1:1/mcp"`, `endpoint = "localhost:9121"`, 1)
-
-	atenea := build(t, managed)
+	atenea := build(t, managedCatalog)
 	status := atenea.Status()
 	if len(status.Processes) != 1 {
 		t.Fatalf("processes = %d, want the one the file declared", len(status.Processes))
 	}
-	// The supervisor owns the port. The host and the MCP path are still what
-	// the adapter has to be able to dial.
+	// The fixture's own endpoint is port 1, so anything else here is the
+	// supervisor's. The host and the MCP path stay what the adapter dials.
 	got := status.Processes[0].Endpoint
+	if got == "http://127.0.0.1:1/mcp" {
+		t.Errorf("endpoint = %q, want the supervisor's port, not the file's", got)
+	}
 	if !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.HasSuffix(got, "/mcp") {
 		t.Errorf("endpoint = %q, want the supervisor's own URL", got)
 	}
@@ -168,21 +168,29 @@ func TestAManagedProcessTakesOverTheWrittenEndpoint(t *testing.T) {
   lifecycle = "on_demand"
   restart_limit = 0
 `
-	unmanaged := strings.Replace(managed, processTable, "", 1)
-	if unmanaged == managed {
-		t.Fatal("fixture drifted: the process table is not where this test expects it")
+	// Not a URL, so the adapter can refuse it -- and has to refuse it the
+	// same way with the process table and without.
+	bogus := strings.Replace(managedCatalog,
+		`endpoint = "http://127.0.0.1:1/mcp"`, `endpoint = "localhost:9121"`, 1)
+	if bogus == managedCatalog || !strings.Contains(bogus, processTable) {
+		t.Fatal("fixture drifted: this test no longer edits what it thinks it does")
 	}
-	// Nothing to take the endpoint over now, so it has to be read -- and
-	// reading it is the step that fails.
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	cfg, err := config.Load(writeTemp(t, unmanaged))
-	if err == nil {
-		_, err = core.New(cfg)
-	}
-	if err == nil {
-		t.Fatal("an endpoint that is not a URL was accepted with nothing to take it over")
-	}
-	if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
-		t.Errorf("kind = %v, want invalid_input; err = %v", kind, err)
+	for name, body := range map[string]string{
+		"managed":   bogus,
+		"unmanaged": strings.Replace(bogus, processTable, "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			cfg, err := config.Load(writeTemp(t, body))
+			if err == nil {
+				_, err = core.New(cfg)
+			}
+			if err == nil {
+				t.Fatal("an endpoint that is not a URL was accepted")
+			}
+			if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
+				t.Errorf("kind = %v, want invalid_input; err = %v", kind, err)
+			}
+		})
 	}
 }

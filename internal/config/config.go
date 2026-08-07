@@ -1023,6 +1023,17 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 			"settings %s: orchestrator.serena.process.lifecycle must be %q or %q, got %q",
 			source, supervisor.Persistent, supervisor.OnDemand, p.Lifecycle)
 	}
+	// idle_timeout describes the idle reaper, and the reaper skips persistent
+	// servers by definition, so the two keys together are a contradiction
+	// rather than a redundancy. Every other knob here that stops applying has
+	// something beside it saying why -- an `enabled` set to false, a limit set
+	// to zero, a status line that reads "off". This one would have nothing to
+	// read anywhere, which is the only reason it is refused and they are not.
+	if out.Lifecycle == supervisor.Persistent && strings.TrimSpace(p.IdleTimeout) != "" {
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.idle_timeout has no meaning for a %q server: only %q servers are stopped when idle",
+			source, supervisor.Persistent, supervisor.OnDemand)
+	}
 	if p.Port != nil {
 		if *p.Port < 0 || *p.Port > 65535 {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,

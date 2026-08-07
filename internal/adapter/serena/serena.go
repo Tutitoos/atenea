@@ -156,15 +156,33 @@ type Runner struct {
 	conns   map[string]*conn
 }
 
+// ValidateEndpoint reports whether an endpoint is one this adapter could
+// dial. Empty is allowed and means DefaultEndpoint.
+//
+// It is exported because the settings layer has to check an endpoint it will
+// then throw away: declaring a managed process takes the address over, and a
+// file whose validity depended on whether that table happened to sit beside
+// it would mean two different things on two days.
+func ValidateEndpoint(endpoint string) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		return contract.Fail(contract.FailureInvalidInput,
+			"serena adapter: endpoint %q must be an http or https URL", endpoint)
+	}
+	return nil
+}
+
 // New validates the options and returns the adapter.
 func New(opts Options) (*Runner, error) {
 	endpoint := strings.TrimSpace(opts.Endpoint)
+	if err := ValidateEndpoint(endpoint); err != nil {
+		return nil, err
+	}
 	if endpoint == "" {
 		endpoint = DefaultEndpoint
-	}
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"serena adapter: endpoint %q must be an http or https URL", endpoint)
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {

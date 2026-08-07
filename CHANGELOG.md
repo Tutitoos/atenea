@@ -17,6 +17,26 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`idle_timeout` was accepted beside `lifecycle = "persistent"` and did
+  nothing.** The idle reaper only ever visits `on_demand` servers, so the key
+  was inert for a reason that lives in the supervisor and appears nowhere in
+  the file. It is refused at load now, naming both lifecycles so the message
+  says which one the key belongs to. The survey that went with it found four
+  more knobs that stop applying — `[metrics]` and `[backup]` under
+  `enabled = false`, `checkpoint_dir` under `checkpoints = false`, and
+  `restart_delay`/`stable_after` under `restart_limit = 0` — and all four are
+  deliberately kept, because each sits in the same table as the key that
+  switches it off and `atenea status` reports the result as `off` or drops
+  the rhythm entirely. The rule the file is now held to is that a knob which
+  stops applying must have something visible saying why; those four have a
+  witness and `idle_timeout` had none.
+- **A malformed `orchestrator.serena.endpoint` was only refused when no
+  process table sat beside it.** Declaring a managed process takes the address
+  over, and the written one was then never read, so it was never checked —
+  `endpoint = "localhost:9121"` passed with the table and failed without it,
+  which meant deleting the table could break a file that had always loaded.
+  The endpoint is now validated either way, through the same rule the adapter
+  applies, so a file means one thing rather than two.
 - **A crashed Serena was given up on at the first crash, never the "couple of
   times" the design says.** `supervisor.DefaultRestartLimit = 2` was declared
   and applied nowhere. `restart_limit` is a `*int` precisely so an omitted key

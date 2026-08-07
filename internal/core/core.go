@@ -355,6 +355,14 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
 	endpoint := cfg.Orchestrator.Serena.Endpoint
 	if cfg.Orchestrator.Serena.Process != nil {
+		// Checked before it is discarded. The supervisor's address is the one
+		// that gets dialed, but a written endpoint that could never work is
+		// still a mistake, and letting a process table excuse it would mean
+		// deleting that table later turns a file that always loaded into one
+		// that suddenly does not.
+		if err := serena.ValidateEndpoint(endpoint); err != nil {
+			return nil, err
+		}
 		var err error
 		if endpoint, err = procs.Endpoint(config.RunnerSerena); err != nil {
 			return nil, err

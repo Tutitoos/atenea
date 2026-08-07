@@ -138,7 +138,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   restart_limit = 2                    # retries after a crash; 0 never retries
   restart_delay = "2s"                 # pause between a crash and the next try
   stable_after = "30s"                 # uptime that earns a fresh restart budget
-  idle_timeout = "5m"                  # on_demand only: idle before it is stopped
+  idle_timeout = "5m"                  # on_demand only; refused beside persistent
   stop_grace = "5s"                    # SIGTERM, then SIGKILL
 
   [orchestrator.codebasememory]
@@ -238,18 +238,25 @@ externally managed server, taken on faith at whatever `endpoint` names.
 Declaring the table hands the job to Atenea instead — which is what retires a
 hand-written systemd unit or a terminal nobody may close.
 
-Declaring it also settles the address, and more thoroughly than "ignored"
-suggests: `endpoint` is never read, so it is never validated either. An
-`endpoint` that is not a URL is refused outright on its own and passes without
-comment beside a process table, which means deleting the table later can turn
-a file that always loaded into one that suddenly does not. What the adapter
-dials, and what the status screen prints, is the supervisor's own address:
-`127.0.0.1`, the port below, and Serena's MCP path.
+Declaring it also settles the address. `endpoint` is not what gets dialed and
+not what the status screen reports — that is the supervisor's own address:
+`127.0.0.1`, the port below, and Serena's MCP path. The written one is still
+checked, though, so a file means the same thing whether or not a process table
+happens to sit beside it: an `endpoint` that could never work is refused
+either way, and deleting the table later cannot turn a file that always loaded
+into one that suddenly does not.
 
 `command` and `lifecycle` are the two required keys once the table exists;
 every other knob has a default. `persistent` is launched at startup and kept
 alive. `on_demand` waits for the first call that needs it and is stopped again
-after `idle_timeout`, which `persistent` accepts and ignores.
+after `idle_timeout` — which is why writing `idle_timeout` beside
+`persistent` is refused rather than ignored. The idle reaper skips persistent
+servers, so the key would sit there doing nothing with nothing anywhere to say
+so. That is the test the whole file is held to: a knob that stops applying has
+to have something visible explaining why. `enabled = false` and
+`restart_limit = 0` pass it — they sit in the same table as what they switch
+off, and `atenea status` reports the result as `off`. This one had no such
+witness, so it is a load error instead.
 
 An omitted `port`, or `0`, has the OS pick a free one — and Atenea then has to
 tell the server which port it picked, which is what `{{port}}` is for: every

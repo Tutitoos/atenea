@@ -1065,6 +1065,46 @@ func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
 	}
 }
 
+// A knob that quietly does nothing is the failure this whole settings layer
+// keeps being audited for, and idle_timeout under a persistent server is the
+// one case with nothing anywhere to give it away. Every other knob that stops
+// applying is explained by something the reader can see: `enabled = false`,
+// `restart_limit = 0`, a status line that says "off". The idle reaper simply
+// skips persistent servers, so the key is inert for a reason that lives in
+// the supervisor and appears nowhere in the file. Refused at load instead.
+func TestIdleTimeoutIsRefusedForAPersistentServer(t *testing.T) {
+	const table = "\n[orchestrator.serena.process]\ncommand = \"serena\"\n"
+
+	_, err := config.Load(write(t, minimal+table+
+		"lifecycle = \"persistent\"\nidle_timeout = \"30s\"\n"))
+	if err == nil {
+		t.Fatal("idle_timeout was accepted for a server the reaper never touches")
+	}
+	if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
+		t.Errorf("kind = %v, want invalid_input", kind)
+	}
+	// The message has to name the way out, not just the mistake: both
+	// lifecycles, so the reader can see which one the key belongs to.
+	for _, want := range []string{"idle_timeout", "persistent", "on_demand"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+
+	// The same key is ordinary on the lifecycle it describes, and a
+	// persistent server that never mentions it stays perfectly legal.
+	for name, body := range map[string]string{
+		"on_demand with idle_timeout": "lifecycle = \"on_demand\"\nidle_timeout = \"30s\"\n",
+		"persistent without one":      "lifecycle = \"persistent\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := config.Load(write(t, minimal+table+body)); err != nil {
+				t.Errorf("Load: %v", err)
+			}
+		})
+	}
+}
+
 // supervisor.DefaultRestartLimit exists because the design wants "a couple of
 // times" before a crashed server is given up on. Nothing was applying it: the
 // supervisor documents the choice as the Spec builder's, config left the field

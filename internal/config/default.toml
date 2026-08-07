@@ -169,7 +169,12 @@ runners = ["omp"]
   #
   # The rest tune crash recovery and all take the supervisor package's own
   # defaults when left out: restart_limit, restart_delay, stable_after,
-  # ready_timeout, idle_timeout, stop_grace.
+  # ready_timeout, stop_grace.
+  #
+  # idle_timeout is the exception: it is how long an idle server may sit
+  # before it is stopped, so it belongs to "on_demand" alone. Writing it
+  # beside "persistent" is refused rather than ignored -- nothing about a
+  # persistent server would ever have shown you it was doing nothing.
 
   [orchestrator.codebasememory]
   # The codebase-memory-mcp executable. A bare name is looked up on PATH.
