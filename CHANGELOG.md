@@ -13,7 +13,7 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.6.0] - 2026-08-07
 
 ### Added
 
@@ -86,6 +86,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   declare stays deliberately allowed: it can never be chosen, and refusing it
   would break a small hand-written catalog attaching a runner whose shipped
   defaults name more than it uses.
+
+  This adds a required method to `contract.Runner`, which no version number in
+  this scheme describes honestly: a minor bump promises adapters keep
+  compiling and they do not. It carries none. Every implementer lives in this
+  repository — adapters are selected by name in the core, so one cannot yet be
+  supplied from outside — and all of them were edited in the same commit. The
+  package now says which half of it the version promise covers, and that the
+  change which has to be major is the one that opens the interface to outside
+  implementers, not a method added after it.
 - **`codebase-memory.search` was declared with nothing behind it.** Measured
   before removing it: on a medium repository declaring a codebase-memory index,
   with the id added to the adapter's served list, the config loaded, the status
@@ -135,11 +144,9 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   blanks it, and it beats an explicit path written beside it. `atenea status`
   reports which way it went on its `runs` line, as a directory or as `off`.
 - **The eleven fields of `[orchestrator.serena.process]` had no coverage at
-  all**, including the one with teeth: declaring the table stops `endpoint`
-  from being read, and therefore from being validated. `endpoint =
-  "localhost:9121"` is refused outright on its own and passes without comment
-  beside a process table, so deleting the table later can turn a file that
-  always loaded into one that no longer does. The page now documents every
+  all**, including the one with teeth: declaring the table used to stop
+  `endpoint` from being read, and therefore from being validated. That hole is
+  closed above; what was missing here was the page. It now documents every
   field against measured defaults — `{{port}}` substitution, `env` extending
   rather than replacing the inherited environment, and `restart_limit`
   counting retries rather than attempts — and both load-bearing claims are
@@ -1157,6 +1164,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.6.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.3.0

@@ -10,7 +10,7 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `0.5.0`, speaking contract `1.9.0` — alpha: `0.x.y` until it goes
+Version `0.6.0`, speaking contract `1.11.0` — alpha: `0.x.y` until it goes
 stable. What landed is in the
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
@@ -76,7 +76,7 @@ process.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=118 --set column=18
+  --set file=internal/selector/selector.go --set line=161 --set column=20
 ```
 
 `ask` is one capability against one repository — the atomic unit a workflow is
@@ -144,7 +144,7 @@ background
 cmd/atenea/         entry point: the service and the operator commands
 internal/           the brain, not importable from outside
   adapter/claudecode/      the client adapter: translates for the Claude Code CLI
-  adapter/codebasememory/  the call-graph adapter: symbol.calls and code.impact from its own index
+  adapter/codebasememory/  the call-graph adapter: symbol.calls, symbol.overview, code.impact and repository.index from its own index
   adapter/omp/             the client adapter: translates for the omp CLI
   adapter/serena/          the symbol adapter: MCP over HTTP, positions to names and back
   checkpoint/              run receipts on disk

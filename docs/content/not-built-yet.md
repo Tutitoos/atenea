@@ -57,17 +57,20 @@ failure, for the same reason: the answer is right.
 
 What wandering actually costs is tokens and time spent on results nobody could
 use, and that is a cost fact. Cost is the last funnel stage, the one that
-chooses between providers which all work, and it currently ranks on declared
-estimates rather than measurements. When it ranks on measurements, this is one
-of the numbers it should read: a provider returning nine strays for every good
-hit is paying nine times over for the same answer.
+chooses between providers which all work. It already ranks on measured numbers
+where they exist — `Cost.Effective` returns the measurement once a provider has
+cleared the break-in threshold and the declared estimate before that, and the
+trace says which of the two settled it. What it ranks on is duration and
+tokens. Strays are a third number sitting in the same base, unread: a provider
+returning nine of them for every good hit is paying nine times over for the
+same answer, and nothing currently notices.
 
 The column keeps a week of attempts, the same window health already reads for
 its fault streak, which is the right grain for a rate. It is not carried into
 the hourly rollup: a lifetime sum nothing reads is exactly the kind of entry
 the section above this one exists to warn about.
 
-**Done when:** the cost stage ranks on measured numbers, and this is one of them.
+**Done when:** the cost stage reads this number alongside duration and tokens.
 
 ## One agent does everything
 

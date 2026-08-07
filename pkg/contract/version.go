@@ -26,6 +26,17 @@ type Version struct {
 // commitment. Major bumps break adapters; minor bumps add fields without
 // breaking them; patch is cosmetic.
 //
+// What that promise covers is the data: the types above and below travel
+// between a core and an adapter, and a field added to one is additive by
+// construction. The Runner interface is the other half of this package and is
+// NOT covered the same way, because it cannot be: a required method added to
+// an interface breaks every implementer, and there is no version of "additive"
+// that avoids it. Today that costs nobody anything -- adapters are selected by
+// name in internal/core, so every Runner in existence is in this repository
+// and gets edited in the same commit. It stops being free the moment an
+// adapter can be supplied from outside, and that change is the one that has to
+// come with a major bump, not the method addition that follows it.
+//
 // 1.2.0 added the `canceled` failure bin and the `canceled` verdict. Both are
 // additive: a core can now say a thing it could not say before, and an adapter
 // built against 1.1.0 goes on compiling and never has to send either.
@@ -87,6 +98,13 @@ type Version struct {
 // yet. Additive: an adapter built against 1.8.0 goes on compiling and simply
 // never sets the field; a core speaking 1.9.0 that sees it unspecified
 // treats the implementation as making no claim, not as confined.
+//
+// Between 1.9.0 and 1.10.0 the Runner interface gained a required
+// `Capabilities() []string`, so the core can refuse at load a settings file
+// naming an implementation the adapter has no code path for. It carries no
+// version number of its own for the reason given above: no number in this
+// scheme describes it honestly, and every implementer lives in this
+// repository and was edited in the same commit.
 //
 // 1.10.0 added `Outcome.OutOfScope`. An adapter that cannot confine its own
 // search already dropped the matches that strayed and said so in a Notice,

@@ -18,7 +18,14 @@ go build -o bin/atenea ./cmd/atenea
 
 A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
-its four candidate providers.
+its three candidate providers.
+
+A binary built from a checkout stamps its own revision onto the version, so
+`version` prints `0.6.0+9b34dd0` rather than the bare number quoted on these
+pages — and `0.6.0+9b34dd0.modified` when the tree has uncommitted changes.
+That suffix is SemVer build metadata: it says which tree this came from and is
+ignored when versions are compared. Only a release artifact reports the number
+alone.
 
 ```sh
 ./bin/atenea status
@@ -155,7 +162,7 @@ typo.
 ```text
 capability  code.search
 repository  current
-chosen      ripgrep  (cheapest of the healthy ones (estimated))
+chosen      ripgrep  (the only surviving implementation)
 
 funnel
   constraints  3 in -> 2 out: claude.search, ripgrep
@@ -256,25 +263,29 @@ it — one capability, one repository, no planning:
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=118 --set column=18
+  --set file=internal/selector/selector.go --set line=161 --set column=20
 ```
 
 ```text
-run       20260802T132043-9f7e98
+run       20260807T133630-3ff8bc
 task      symbol.definition in current
 verdict   ok
-spent     41ms over 1 step(s)
-  ask      1 step(s), 41ms
+spent     2.15s over 1 step(s)
+  ask      1 step(s), 2.15s
 
 discovered
-  [repository] position internal/selector/selector.go:118:18 names "Select", which is symbol Selector/Select
+  [repository] position internal/selector/selector.go:161:20 names "Select", which is symbol Select
   [repository] serena answered symbol.definition for current with 1 location(s)
 
 answer
   location
-    line     118
+    line     161
     path     internal/selector/selector.go
 ```
+
+A position is a position in *this* tree: these two examples name real lines in
+Atenea's own source, and editing the file moves them. If one comes back
+`not_found`, the line moved — that is the capability working, not failing.
 
 `--set` takes `name=value` and is typed by the capability's own declaration:
 `line` is an integer because the capability says so, and a value that is not
@@ -283,13 +294,19 @@ repeat the flag for each entry:
 
 ```sh
 ./bin/atenea ask symbol.references --repo current \
-  --set file=pkg/contract/capability.go --set line=140 --set column=6 \
+  --set file=pkg/contract/capability.go --set line=135 --set column=6 \
   --set scope=internal --set scope=cmd
 ```
 
 There is no `matches` line: a commission counts hits across repositories, an
 ask has an answer. Printing a zero nobody counted would read as "found
 nothing" rather than "did not count".
+
+Everything above prints for a person. `task`, `ask`, `resume` and `detect` also
+take `--json`, which prints the whole result as one JSON object instead — always
+complete, and it ignores `--trace` rather than interleaving prose into it. That
+is the mode to parse; the prose layout above is not a format anything should
+depend on.
 
 The trace names the symbol the position resolved to. That is not decoration:
 Atenea speaks positions and Serena speaks symbols, so the answer cannot be
@@ -497,7 +514,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.5.0  contract 1.11.0  AMBER
+atenea 0.6.0  contract 1.11.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 1 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

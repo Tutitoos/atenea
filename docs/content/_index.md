@@ -31,7 +31,7 @@ what it knows about the repository in front of it.
 
 ## Where the project stands
 
-**These pages describe Atenea `0.5.0`**, speaking
+**These pages describe Atenea `0.6.0`**, speaking
 contract `1.11.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
 goes stable; the contract adapters compile against is already a commitment. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
@@ -40,7 +40,8 @@ landed.
 The core, the Capability Registry and the funnel run on all four stages. Four
 adapters ship: `omp` and Claude Code answer text search by driving a CLI,
 `codebase-memory` walks the call graph it keeps on disk for `symbol.calls`,
-`code.impact` and `repository.index`, and Serena speaks MCP over HTTP for
+`code.impact` and `repository.index` and reads that same graph at rest for
+`symbol.overview`, and Serena speaks MCP over HTTP for
 all four symbol capabilities. It installs as a background service that
 keeps its own history in shape, proven now against a live language server
 on this repository: `symbol.definition` and `symbol.references` resolve

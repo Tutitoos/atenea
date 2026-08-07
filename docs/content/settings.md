@@ -74,10 +74,13 @@ So the way to change one setting is still to start from the whole file:
 
 ```sh
 atenea config init          # writes the built-in file, catalog and all
+atenea config init --force  # overwrites one that is already there
 atenea config path          # says where that is
 ```
 
-then edit it. A full file states every value where you can read it, which is
+then edit it. A bare `init` refuses when a file is already there and names
+`--force`, so writing the defaults can never silently discard settings you had.
+A full file states every value where you can read it, which is
 the only version of this that survives an upgrade. Merging the catalog was
 considered and refused: a half-file whose meaning depends on what a particular
 binary happened to ship is a file nobody can read on its own. The knobs that do
@@ -112,7 +115,8 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.local]
   implementations = ["ripgrep"]        # what the stand-in can actually execute
-  skip_dirs = [".git", "node_modules"] # never walked
+  # never walked; the stand-in does not read .gitignore, so it is told instead
+  skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
   [orchestrator.claudecode]
   binary = "claude"                    # bare name is looked up on PATH
