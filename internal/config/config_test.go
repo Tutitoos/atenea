@@ -88,6 +88,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codebase-memory.calls",
 		"codebase-memory.impact",
 		"codebase-memory.index",
+		"codebase-memory.overview",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",

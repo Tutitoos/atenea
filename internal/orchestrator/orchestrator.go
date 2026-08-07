@@ -1038,6 +1038,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		Candidates: candidates,
 		Reachable:  a.runner.Implementations(),
 		Measuring:  measuring,
+		Payload:    step.Payload,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision

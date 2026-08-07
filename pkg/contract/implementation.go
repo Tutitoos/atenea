@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -117,6 +118,29 @@ type Constraints struct {
 	// using on. ScaleUnspecified on either end means unbounded.
 	MinScale Scale
 	MaxScale Scale
+	// MaxInput bounds what this implementation can be asked for, by input
+	// name, as an inclusive upper limit. It is the first constraint here that
+	// reads the request rather than the repository.
+	//
+	// Everything above this line is a fact about where the work happens, and
+	// the funnel could check all of it before a caller had said what they
+	// wanted. Some implementations are narrower than the capability they
+	// answer in a way only the request reveals: a provider whose index holds
+	// a file's top-level symbols but not a struct's fields answers
+	// symbol.overview correctly at depth 0 and cannot answer it at depth 1 at
+	// all. Without this the funnel would pick it, the call would have to
+	// refuse, and the refusal would be recorded as a fault -- so the provider
+	// would be marked down for being honest about a boundary it declared.
+	//
+	// An input the caller did not send is not checked. The bound is on what
+	// was asked for; a request that named no value gets the provider's
+	// default, and a provider that only does depth 0 returns its depth-0
+	// answer, which is a correct answer to a request that specified no depth.
+	//
+	// Only integer inputs can be bounded, and only from above. A lower bound
+	// is absent because nothing needs one; adding min_input later is
+	// additive and changes nothing here.
+	MaxInput map[string]int
 }
 
 // Sample is one cost observation: what a call spent.
@@ -395,6 +419,15 @@ func (i Implementation) Validate() error {
 		return Fail(FailureInvalidInput,
 			"implementation %s: min_scale %s is above max_scale %s", i.ID, lo, hi)
 	}
+	// Whether the input exists and is an integer is checked where the
+	// capability is in hand, when the registry pairs the two. All that can be
+	// known here is that the key names something.
+	for name := range i.Constraints.MaxInput {
+		if strings.TrimSpace(name) == "" {
+			return Fail(FailureInvalidInput,
+				"implementation %s: max_input has an unnamed input", i.ID)
+		}
+	}
 	if i.Cost.Samples < 0 {
 		return Fail(FailureInvalidInput, "implementation %s: negative sample count", i.ID)
 	}
@@ -408,5 +441,6 @@ func (i Implementation) Validate() error {
 // Clone returns a deep copy.
 func (i Implementation) Clone() Implementation {
 	i.Constraints.Languages = slices.Clone(i.Constraints.Languages)
+	i.Constraints.MaxInput = maps.Clone(i.Constraints.MaxInput)
 	return i
 }

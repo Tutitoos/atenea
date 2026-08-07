@@ -110,6 +110,16 @@ type Request struct {
 	// so the funnel ranks on the declared estimates and says so rather than
 	// rotating forever between providers to fill a ledger nobody keeps.
 	Measuring bool
+	// Payload is what the caller actually asked for, when there is a call
+	// behind this selection. It is read by the one constraint that depends on
+	// the request rather than the repository, and by nothing else: the funnel
+	// decides who should answer, it never inspects an answer.
+	//
+	// Nil is normal and means no call -- atenea select asks who would be
+	// picked without asking for anything in particular. An input that is
+	// absent is not checked either way, so a dry run reads exactly like a
+	// call that named no values, which is what it is.
+	Payload map[string]any
 }
 
 // Drop records one implementation leaving the funnel, and why.
@@ -222,6 +232,10 @@ func (s *Selector) filterConstraints(req Request, candidates []contract.Implemen
 			stage.Dropped = append(stage.Dropped, Drop{Implementation: impl.ID, Reason: reason})
 			continue
 		}
+		if reason, ok := answers(impl, req.Payload); !ok {
+			stage.Dropped = append(stage.Dropped, Drop{Implementation: impl.ID, Reason: reason})
+			continue
+		}
 		kept = append(kept, impl)
 	}
 	stage.Out = ids(kept)
@@ -255,6 +269,55 @@ func fits(impl contract.Implementation, repo contract.Repository) (string, bool)
 		}
 	}
 	return "", true
+}
+
+// answers reports whether an implementation can be asked this particular
+// question. It is fits' twin: one reads the repository, the other reads the
+// request, and both say "not this one, and here is why" in the same stage.
+//
+// An absent input is not a violation. The bound is on what the caller asked
+// for, and a request that named no value gets the provider's own default --
+// which is the capability's declared default, or the capability would not be
+// swappable in the first place.
+func answers(impl contract.Implementation, payload map[string]any) (string, bool) {
+	for name, bound := range impl.Constraints.MaxInput {
+		raw, sent := payload[name]
+		if !sent {
+			continue
+		}
+		asked, ok := asInt(raw)
+		if !ok {
+			// Not a number at all. The capability's own payload validation
+			// owns that complaint and words it better; a funnel that also
+			// refused here would turn one mistake into two different
+			// messages depending on how far the request happened to get.
+			continue
+		}
+		if asked > bound {
+			return fmt.Sprintf("answers %s up to %d, this asks for %d", name, bound, asked), false
+		}
+	}
+	return "", true
+}
+
+// asInt accepts the float64 a JSON decoder produces for a whole number, so an
+// adapter speaking JSON is not forced to pre-convert.
+func asInt(value any) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float64:
+		if n != float64(int64(n)) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func filterHealth(candidates []contract.Implementation) ([]contract.Implementation, Stage) {

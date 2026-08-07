@@ -53,12 +53,14 @@ import (
 // provider may answer either capability tomorrow.
 const (
 	CapabilitySymbolCalls     = "symbol.calls"
+	CapabilitySymbolOverview  = "symbol.overview"
 	CapabilityCodeImpact      = "code.impact"
 	CapabilityRepositoryIndex = "repository.index"
 
-	ImplCalls  = "codebase-memory.calls"
-	ImplImpact = "codebase-memory.impact"
-	ImplIndex  = "codebase-memory.index"
+	ImplCalls    = "codebase-memory.calls"
+	ImplOverview = "codebase-memory.overview"
+	ImplImpact   = "codebase-memory.impact"
+	ImplIndex    = "codebase-memory.index"
 )
 
 // DefaultBinary is the command looked up on PATH when the settings name none.
@@ -91,7 +93,7 @@ const maxImpactSeeds = 50
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplCalls, ImplImpact, ImplIndex}
+	return []string{ImplCalls, ImplOverview, ImplImpact, ImplIndex}
 }
 
 // Options configure the adapter. Everything here is declared in the settings
@@ -192,7 +194,10 @@ func (r *Runner) Implementations() []string {
 // switch below turned into data, so a settings file naming an implementation
 // no case answers is refused at load rather than at the call.
 func (r *Runner) Capabilities() []string {
-	return []string{CapabilitySymbolCalls, CapabilityCodeImpact, CapabilityRepositoryIndex}
+	return []string{
+		CapabilitySymbolCalls, CapabilitySymbolOverview,
+		CapabilityCodeImpact, CapabilityRepositoryIndex,
+	}
 }
 
 // Sensitive lists the configured secret-carrying patterns, sorted.
@@ -230,6 +235,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	switch req.Capability.ID {
 	case CapabilitySymbolCalls:
 		out, err = r.runSymbolCalls(ctx, req, root)
+	case CapabilitySymbolOverview:
+		out, err = r.runSymbolOverview(ctx, req, root)
 	case CapabilityCodeImpact:
 		out, err = r.runCodeImpact(ctx, req, root)
 	case CapabilityRepositoryIndex:

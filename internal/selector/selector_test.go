@@ -20,6 +20,15 @@ func needsIndex() implOption {
 	return func(i *contract.Implementation) { i.Constraints.RequiresIndex = true }
 }
 
+func maxInput(name string, bound int) implOption {
+	return func(i *contract.Implementation) {
+		if i.Constraints.MaxInput == nil {
+			i.Constraints.MaxInput = map[string]int{}
+		}
+		i.Constraints.MaxInput[name] = bound
+	}
+}
+
 func needsVCS() implOption {
 	return func(i *contract.Implementation) { i.Constraints.RequiresVCS = true }
 }
@@ -139,6 +148,109 @@ func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
 		if !strings.Contains(reasons[id], want) {
 			t.Errorf("%s dropped for %q, want it to mention %q", id, reasons[id], want)
 		}
+	}
+}
+
+// Every other constraint reads the repository. This one reads the request:
+// an implementation that can only answer a narrower version of the question
+// loses to one that can answer the whole of it, and only when the call
+// actually asks for the wider thing.
+func TestMaxInputDropsOnlyWhenTheCallExceedsIt(t *testing.T) {
+	candidates := []contract.Implementation{
+		impl("shallow", maxInput("depth", 0)),
+		impl("deep"),
+	}
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    []string
+	}{
+		{"within the bound", map[string]any{"depth": 0}, []string{"deep", "shallow"}},
+		{"above the bound", map[string]any{"depth": 1}, []string{"deep"}},
+		{"input not named", map[string]any{"file": "a.go"}, []string{"deep", "shallow"}},
+		{"no payload at all", nil, []string{"deep", "shallow"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := mustSelector(t).Select(selector.Request{
+				Capability: "code.search",
+				Repository: smallGoRepo(),
+				Candidates: candidates,
+				Payload:    tc.payload,
+			})
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			got := slices.Clone(stage(t, decision, selector.StageConstraints).Out)
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("survivors = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A dropped candidate has to say what it could not be asked for, not merely
+// that it lost: the number the caller sent and the number the provider tops
+// out at are the two halves of the fix.
+func TestMaxInputDropReasonNamesTheInputAndBothNumbers(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("shallow", maxInput("depth", 0)), impl("deep")},
+		Payload:    map[string]any{"depth": 3},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	var reason string
+	for _, drop := range stage(t, decision, selector.StageConstraints).Dropped {
+		if drop.Implementation == "shallow" {
+			reason = drop.Reason
+		}
+	}
+	for _, want := range []string{"depth", "3", "0"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("reason %q does not mention %q", reason, want)
+		}
+	}
+}
+
+// A value the bound cannot be compared against is left alone rather than
+// treated as a violation. The payload is already invalid and RunRequest's own
+// validation says so precisely, whoever is chosen; dropping here would only
+// add a second, worse-worded explanation to the trace for a call that was
+// never going to run.
+func TestMaxInputIgnoresAnUncomparableValue(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("shallow", maxInput("depth", 0)), impl("deep")},
+		Payload:    map[string]any{"depth": "deep please"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	got := slices.Clone(stage(t, decision, selector.StageConstraints).Out)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"deep", "shallow"}) {
+		t.Fatalf("survivors = %v, want both", got)
+	}
+}
+
+// A JSON decoder produces float64 for whole numbers, and an adapter speaking
+// JSON must not have to pre-convert to be understood.
+func TestMaxInputAcceptsAWholeFloat(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("shallow", maxInput("depth", 0))},
+		Payload:    map[string]any{"depth": float64(0)},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if got := stage(t, decision, selector.StageConstraints).Out; !slices.Equal(got, []string{"shallow"}) {
+		t.Fatalf("survivors = %v, want shallow to survive", got)
 	}
 }
 

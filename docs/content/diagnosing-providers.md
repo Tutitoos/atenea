@@ -29,12 +29,12 @@ and broken are different findings, and only the second is worth debugging.
 ```text
 serves     ripgrep
 no runner  claude.search, codebase-memory.calls, codebase-memory.impact,
-           codebase-memory.index, serena.definition,
-           serena.implementations, serena.overview, serena.references,
-           serena.search
+           codebase-memory.index, codebase-memory.overview,
+           serena.definition, serena.implementations, serena.overview,
+           serena.references, serena.search
 ```
 
-That is the stock catalogue: ten implementations declared, one reachable,
+That is the stock catalogue: eleven implementations declared, one reachable,
 because `runners = ["omp"]` attaches a single adapter. Attaching Serena — the
 configuration this write-up is about — makes it five:
 
@@ -46,12 +46,15 @@ configuration this write-up is about — makes it five:
 | `symbol.implementations` | `serena.implementations` | **local HTTP** |
 | `symbol.overview` | `serena.overview` | **local HTTP** |
 
-Note what the catalogue does *not* buy you here. `code.search` declares four
-implementations, but three of them have no adapter — `serena.search` is
+Note what the catalogue does *not* buy you here. `code.search` declares three
+implementations, but two of them have no adapter — `serena.search` is
 deliberately excluded even from the Serena adapter, which is wired for symbols
 and refuses to claim a text search it has no code for. So the coverage is
 lopsided in a way the capability list alone does not show: text search stands on
 a local binary, and **every symbol capability stands on one transport**.
+`symbol.overview` is the only one with a second provider declared —
+`codebase-memory.overview`, over a local binary — and it is not attached in
+this configuration, so it does not soften the outage below.
 
 Now break that transport.
 

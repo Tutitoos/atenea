@@ -15,6 +15,43 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Added
+
+- **`symbol.overview` has a second provider, and a way to say what it cannot
+  be asked.** `codebase-memory.overview` answers the capability from the graph
+  the provider already built: one `query_graph` round trip for what the file
+  declares, one pass over the file to recover the columns the graph does not
+  store. It answers markdown too, where the headings are what the file
+  declares and no language server has anything to say.
+
+  It can only answer at `depth = 0` — the graph holds a file's top-level
+  declarations and nothing nested inside them, so a deeper ask would return
+  the same list and read as a complete answer to a different question. Saying
+  that needed a constraint of a kind that did not exist: every constraint
+  until now read the repository ("can this provider work *here*"), and this
+  one reads the request ("can it be asked *this*"). `max_input` bounds a
+  declared integer input by name, inclusive, and binds only when the call
+  actually names it.
+
+  At `depth = 0` both providers compete; at `depth = 1` this one is dropped in
+  the constraints stage naming both numbers, and Serena, which descends
+  properly, is what is left. A bound naming an input the capability does not
+  declare, or declares as anything but `int`, is refused when the settings
+  file loads — otherwise the funnel reads a name no request carries and the
+  narrowing silently does not exist.
+
+  `pkg/contract` bumped to `1.11.0`: additive, an adapter built against
+  `1.10.0` goes on compiling and leaves the map nil, which bounds nothing.
+
+  The `kind` this provider reports is the graph's node label and will not
+  always match Serena's word for the same symbol — measured: a Go const comes
+  back as `Variable` here and `Constant` from Serena. That is not normalised
+  away, because it cannot be honestly: the graph has no `Constant` label and
+  no property separating a const from a var, so the distinction it would have
+  to report is one it never read. The capability now says outright that `kind`
+  is the provider's own vocabulary and is the one field here that is not
+  comparable between providers.
+
 ### Fixed
 
 - **A provider that wandered out of scope on every call paid nothing for it.**

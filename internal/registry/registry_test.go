@@ -40,6 +40,50 @@ func seeded(t *testing.T) *registry.Registry {
 	return reg
 }
 
+// A bound that names nothing the capability sends is refused at load. The
+// alternative is worse than an error: the funnel reads a name no request
+// carries, every implementation survives, and the narrowing the settings
+// file asked for is silently absent.
+func TestMaxInputMustNameADeclaredIntInput(t *testing.T) {
+	capability := codeSearch()
+	capability.Inputs = append(capability.Inputs,
+		contract.Field{Name: "depth", Type: contract.TypeInt},
+		contract.Field{Name: "scope", Type: contract.TypeString})
+
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"undeclared input", "dpeth", "does not declare"},
+		{"declared but not an int", "scope", "not int"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := registry.New()
+			if err := reg.AddCapability(capability); err != nil {
+				t.Fatalf("AddCapability: %v", err)
+			}
+			bounded := impl("ripgrep", "ripgrep")
+			bounded.Constraints.MaxInput = map[string]int{tc.input: 0}
+			err := reg.AddImplementation(bounded)
+			if contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+
+	reg := registry.New()
+	if err := reg.AddCapability(capability); err != nil {
+		t.Fatalf("AddCapability: %v", err)
+	}
+	bounded := impl("ripgrep", "ripgrep")
+	bounded.Constraints.MaxInput = map[string]int{"depth": 0}
+	if err := reg.AddImplementation(bounded); err != nil {
+		t.Fatalf("a bound on a declared int input was refused: %v", err)
+	}
+}
+
 func TestImplementationsForIsSortedAndComplete(t *testing.T) {
 	impls, err := seeded(t).ImplementationsFor("code.search")
 	if err != nil {

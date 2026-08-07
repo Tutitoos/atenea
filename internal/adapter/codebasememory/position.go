@@ -101,6 +101,52 @@ func (r *Runner) snippetFor(root, file string, line, n int) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// linesAt reads the named 1-based lines in one pass, returning only the ones
+// the file actually has. A caller asking for many scattered lines -- one per
+// symbol a file declares -- would otherwise reopen it once per line.
+//
+// Callers that already refused a sensitive file are not made to repeat the
+// check here; this is the private half of a read the exported path guards.
+func (r *Runner) linesAt(root, file string, want []int) (map[int]string, error) {
+	if len(want) == 0 {
+		return map[int]string{}, nil
+	}
+	resolved, err := within(root, file)
+	if err != nil {
+		return nil, err
+	}
+	need := make(map[int]struct{}, len(want))
+	last := 0
+	for _, n := range want {
+		need[n] = struct{}{}
+		last = max(last, n)
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, contract.Fail(contract.FailureNotFound, "%s is not in this repository", file)
+		}
+		return nil, contract.Fail(contract.FailureUnavailable, "cannot read %s: %v", file, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	out := make(map[int]string, len(need))
+	for i := 1; scanner.Scan(); i++ {
+		if _, ok := need[i]; ok {
+			out[i] = scanner.Text()
+		}
+		if i >= last {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "cannot read %s: %v", file, err)
+	}
+	return out, nil
+}
+
 // wordAt extracts the identifier sitting at a 1-based column.
 func wordAt(text string, column int, file string, line int) (string, error) {
 	runes := []rune(text)

@@ -181,11 +181,12 @@ runners = ["omp"]
   binary = "codebase-memory-mcp"
   # Implementations the adapter answers for. This adapter is wired for the two
   # capabilities that read the call graph itself -- symbol.calls and
-  # code.impact -- and for the one that writes what they read:
+  # code.impact -- for symbol.overview, which reads the same graph at rest
+  # rather than walking it, and for the one that writes what they all read:
   # repository.index. It has no code path for code.search, and naming one here
   # is now refused at load rather than discovered at the call: core checks this
   # list against what the adapter can actually dispatch.
-  implementations = ["codebase-memory.calls", "codebase-memory.impact", "codebase-memory.index"]
+  implementations = ["codebase-memory.calls", "codebase-memory.overview", "codebase-memory.impact", "codebase-memory.index"]
   # How long one codebase-memory-mcp or git invocation may take. It sits at
   # Serena's own ceiling: both open an index before they can answer, and a
   # cold one is slow long before it is stuck.
@@ -643,7 +644,13 @@ effects = ["read"]
     name = "kind"
     type = "string"
     required = true
-    summary = "The provider's own name for what kind of symbol this is (function, struct, method, ...)."
+    summary = """
+What kind of symbol this is, in the provider's own vocabulary (function, struct, \
+method, ...). It is the one field here that is not comparable between providers: \
+two of them can be equally right about the same symbol and still call it \
+different things, because the distinction one draws may not exist in what the \
+other reads. Branch on name, line and column; read kind.\
+"""
 
     [[capability.output.field]]
     name = "line"
@@ -1070,8 +1077,8 @@ capability = "symbol.overview"
   estimated_duration = "700ms"
   estimated_tokens = 1900
 
-# codebase-memory answers both of these from one call graph -- no second
-# index, no second provider concept, just two questions the one graph can
+# codebase-memory answers three of these from one call graph -- no second
+# index, no second provider concept, just three questions the one graph can
 # answer.
 
 [[implementation]]
@@ -1088,6 +1095,40 @@ capability = "symbol.calls"
   [implementation.cost]
   estimated_duration = "900ms"
   estimated_tokens = 600
+
+[[implementation]]
+id = "codebase-memory.overview"
+provider = "codebase-memory"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+  min_scale = ""         # see below: unlike its siblings, this one does not walk
+  max_scale = ""
+  # depth 0 only. The graph holds what a file declares at its own top level
+  # and nothing inside those declarations -- a struct's fields are not nodes
+  # -- so a deeper ask would come back with the same list and read as a
+  # complete answer to a different question. Serena descends properly and
+  # keeps the deeper asks.
+  max_input = { depth = 0 }
+  # The kind this one reports is the graph's node label, and it will not
+  # always be the word serena.overview uses for the same symbol. Measured: a
+  # Go const comes back as "Variable" here and "Constant" from Serena. That
+  # is not a defect to normalise away -- the graph has no Constant label and
+  # no property separating a const from a var, so the distinction it would
+  # have to report is one it never read. The capability says kind is the
+  # provider's own word for this reason.
+
+  [implementation.cost]
+  # One query_graph round trip and one pass over the file to recover columns.
+  # Its two siblings are held to min_scale = "medium" because a graph walk
+  # only pays for its own index on a big repository; this one never walks --
+  # it is a point lookup on an index that, by requires_index, already exists.
+  # It also answers for markdown, where the headings are what the file
+  # declares and no language server has anything to say.
+  estimated_duration = "800ms"
+  estimated_tokens = 400
 
 [[implementation]]
 id = "codebase-memory.impact"

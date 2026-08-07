@@ -95,7 +95,14 @@ type Version struct {
 // number the core records. Additive: an adapter built against 1.9.0 goes on
 // compiling and leaves it zero, which reads as "nothing strayed" -- the same
 // thing it means for a provider confined by construction.
-var Current = Version{Major: 1, Minor: 10, Patch: 0}
+//
+// 1.11.0 added `Constraints.MaxInput`. Every constraint before it asked
+// whether a provider could work on this repository; this one asks whether it
+// can be asked this question, bounding a declared integer input by name.
+// Additive: an adapter built against 1.10.0 goes on compiling and leaves the
+// map nil, which bounds nothing -- the same answer the funnel gave before the
+// field existed.
+var Current = Version{Major: 1, Minor: 11, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

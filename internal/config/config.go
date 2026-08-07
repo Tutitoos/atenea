@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -496,6 +497,9 @@ type fileConstraints struct {
 	RequiresVCS   bool     `toml:"requires_vcs"`
 	MinScale      string   `toml:"min_scale"`
 	MaxScale      string   `toml:"max_scale"`
+	// MaxInput bounds request inputs by name, inclusive. It is the one
+	// constraint here that reads what was asked for rather than where.
+	MaxInput map[string]int `toml:"max_input"`
 }
 
 // fileCost only carries the estimate. Measurements are never declared by hand:
@@ -1214,6 +1218,7 @@ func (i fileImpl) build(source string) (contract.Implementation, error) {
 			RequiresVCS:   i.Constraints.RequiresVCS,
 			MinScale:      minScale,
 			MaxScale:      maxScale,
+			MaxInput:      maps.Clone(i.Constraints.MaxInput),
 		},
 		Cost: contract.Cost{
 			Estimated:   estimated,

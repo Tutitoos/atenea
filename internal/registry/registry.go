@@ -64,15 +64,44 @@ func (r *Registry) AddImplementation(impl contract.Implementation) error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"implementation %s is already registered", impl.ID)
 	}
-	if _, known := r.capabilities[impl.Capability]; !known {
+	capability, known := r.capabilities[impl.Capability]
+	if !known {
 		return contract.Fail(contract.FailureInvalidInput,
 			"implementation %s targets unknown capability %s", impl.ID, impl.Capability)
+	}
+	// A bound on an input the capability does not declare would never bind:
+	// the funnel would read a name nothing sends, keep the implementation for
+	// every request, and the narrowing the settings file asked for would
+	// silently not exist. Only integers can be bounded, so a bound on any
+	// other shape is the same mistake wearing a real name.
+	for name := range impl.Constraints.MaxInput {
+		field, found := inputNamed(capability, name)
+		if !found {
+			return contract.Fail(contract.FailureInvalidInput,
+				"implementation %s: max_input names %q, which capability %s does not declare as an input",
+				impl.ID, name, capability.ID)
+		}
+		if field.Type != contract.TypeInt {
+			return contract.Fail(contract.FailureInvalidInput,
+				"implementation %s: max_input bounds %q, which capability %s declares as %s, not int",
+				impl.ID, name, capability.ID, field.Type)
+		}
 	}
 	r.implementers[impl.ID] = impl.Clone()
 	ids := append(r.byCapability[impl.Capability], impl.ID)
 	slices.Sort(ids)
 	r.byCapability[impl.Capability] = ids
 	return nil
+}
+
+// inputNamed finds one of a capability's declared inputs by name.
+func inputNamed(capability contract.Capability, name string) (contract.Field, bool) {
+	for _, field := range capability.Inputs {
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return contract.Field{}, false
 }
 
 // AddRepository registers a unit of work.

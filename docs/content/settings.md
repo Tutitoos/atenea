@@ -143,7 +143,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.codebasememory]
   binary = "codebase-memory-mcp"       # bare name is looked up on PATH
-  implementations = ["codebase-memory.calls", "codebase-memory.impact", "codebase-memory.index"]
+  implementations = ["codebase-memory.calls", "codebase-memory.overview", "codebase-memory.impact", "codebase-memory.index"]
   timeout = "90s"                      # opening an index cold is slow, not stuck
 ```
 
@@ -443,6 +443,7 @@ scope_guarantee = ""        # "", filtered, confined -- see below
   requires_vcs = false               # needs the repository under version control (e.g. a git diff against a baseline)
   min_scale = ""                     # "", small, medium, large
   max_scale = ""
+  max_input = { depth = 0 }          # bounds what this one may be ASKED, not where it may run
 
   [implementation.cost]
   estimated_duration = "600ms"
@@ -468,6 +469,25 @@ deserves to know which one it got:
 It is disclosure, not selection: the funnel never ranks on it and it never
 disqualifies a candidate. `atenea catalog` prints it per implementation so the
 promise is queryable rather than assumed.
+
+`max_input` is the one constraint that reads the **request** instead of the
+repository. Every other entry in the block answers "can this provider work
+*here*"; this one answers "can this provider be asked *this*". It bounds a
+declared integer input by name, inclusive, and it binds only when the call
+actually names that input — an omitted value is the capability's own default,
+which every implementation must honour, so nothing is dropped for it.
+
+`codebase-memory.overview` ships `{ depth = 0 }`: its graph holds what a file
+declares at its own top level and nothing nested inside those declarations, so
+a deeper ask would return the same list and read as a complete answer.
+At `depth = 0` both providers are candidates and the funnel ranks them; at
+`depth = 1` it is dropped in the constraints stage and Serena, which descends
+properly, is the one left. The drop names both numbers.
+
+A bound on an input the capability does not declare, or declares as anything
+other than `int`, is refused when the settings file loads. The alternative is
+silent: the funnel would read a name no request carries and the narrowing you
+asked for would simply not exist.
 
 Two things are **not** declarable, deliberately:
 
