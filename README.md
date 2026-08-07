@@ -86,16 +86,16 @@ Serena's API names a *symbol*. Reading the word under the cursor is the
 adapter's job, and the trace says which name it resolved to.
 
 ```text
-run       20260802T003739-e22d82
+run       20260807T165853-f92263
 task      ValidateOutput
 verdict   ok
-matches   11
-spent     12ms over 2 step(s)
-  explore  1 step(s), 6ms
-  work     1 step(s), 5ms
+matches   27
+spent     1.209s over 2 step(s)
+  explore  1 step(s), 774ms
+  work     1 step(s), 436ms
 
 discovered
-  [repository] current: 11 hit(s) for "ValidateOutput", under internal, pkg
+  [repository] current: 27 hit(s) for "ValidateOutput"
 
 run with --trace for the plan, the funnel and every review
 ```
@@ -105,10 +105,10 @@ and the work that follows is narrowed to those areas. Every decision and every
 review carries its trace — a choice nobody can explain is a choice nobody can
 trust.
 
-(Run it against this repository and the numbers will differ: this README and
-the docs now quote the search term themselves. The README is a root file, and
-a hit with no directory above it cannot be narrowed away — so the work runs
-wide rather than quietly dropping it.)
+That run is this repository, and it shows the one case that cannot be narrowed:
+this README quotes the search term, a hit with no directory above it has no area
+to narrow to, and so the work ran wide rather than quietly dropping it. The
+timings are omp's, the runner the shipped settings attach.
 
 ## Leave it running
 
