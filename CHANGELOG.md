@@ -62,6 +62,19 @@ told the opposite, because no edit to it can help: upgrade the binary.
 
 ### Fixed
 
+- **Four failure bins that describe the request were condemning the provider.**
+  A streak of failures demotes a provider and drops it from the funnel, which
+  is right for `unavailable` and `timeout` and wrong for `not_found`,
+  `permission_denied`, `invalid_input` and `canceled`: those are facts about
+  what was asked for, not evidence about who was asked. Measured: a TypeScript
+  sweep of 34 files answered 26 correctly, but three generated files absent
+  from the graph returned an honest `not_found` in a row, and Atenea marked
+  every implementation of `symbol.overview` down for the entire repository --
+  every real file after that point failed. The same sweep now reports 26 ok, 8
+  honestly failed. The four bins are invisible to the health record: a run of
+  them neither condemns a provider nor exonerates one, leaving the streak
+  exactly as the last real attempt left it.
+
 - **`lefthook install` was a required step mentioned only as a comment in a
   command list.** Git never clones hooks, so every fresh checkout of this
   repository has none: measured, a clone accepts a deliberately unformatted

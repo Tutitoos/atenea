@@ -480,6 +480,14 @@ the provider actually said. Three in a row in *different* bins is a provider in
 trouble with no single cause, so it is marked degraded and ranks last rather
 than being dropped — the funnel would rather use a flaky provider than none.
 
+Four bins never reach that record: `not_found`, `permission_denied`,
+`invalid_input` and `canceled` describe the request, not the provider, so a run
+of them neither condemns one nor clears one. Before that exemption existed, a
+sweep of thirty-four TypeScript files hit three generated ones absent from any
+graph, each answered an honest `not_found`, and Atenea marked every
+implementation of `symbol.overview` down for the whole repository — every real
+file after those three failed, against a provider that was answering correctly.
+
 *In a row* counts back from the newest failure and stops at the first one that
 broke differently. So a provider with a long record of assorted trouble, now
 failing every call the same way, is down on today's reason — the older, often

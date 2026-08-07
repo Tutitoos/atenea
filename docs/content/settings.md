@@ -313,8 +313,10 @@ never dropped, so it can still earn its first number the day it starts working.
 successful`.
 
 It also costs the health screen half its evidence. A provider is marked alive
-by having worked recently and marked down by a run of failures, and both facts
-come out of this base — so with it off, every provider that nothing has probed
+by having worked recently and marked down by a run of failures that are its own
+fault — a clean `not_found` or a spent budget is a fact about the request and
+never counts — and both facts come out of this base — so with it off, every
+provider that nothing has probed
 in *this* process reads `health=unknown` forever. `atenea status` says which of
 the two it is showing, on the funnel line: `measuring is off: ranking on
 declared estimates for good`, rather than the `nothing measured yet` of a base

@@ -107,11 +107,22 @@ could mark it down evaporated when the last command exited.
 So the record on disk is a health verdict too, and it answers in both
 directions.
 
-Downwards, a run of failures. Three in a row in the same bin is an outage and
-leaves the funnel; three in different bins is a provider in trouble with no
-single cause, which ranks last but stays. Both expire after five quiet minutes,
-because a provider health has dropped is a provider nothing calls, and nothing
-that is never called can ever prove it recovered.
+Downwards, a run of failures the provider is actually responsible for. Three in
+a row in the same bin is an outage and leaves the funnel; three in different
+bins is a provider in trouble with no single cause, which ranks last but stays.
+Both expire after five quiet minutes, because a provider health has dropped is
+a provider nothing calls, and nothing that is never called can ever prove it
+recovered.
+
+Four bins never reach this record at all. `not_found`, `permission_denied`,
+`invalid_input` and `canceled` are facts about the request, not evidence about
+who was asked, so a run of them neither condemns a provider nor exonerates one:
+the streak stays exactly where the last real attempt left it. The cost is what
+that omission bought before it existed — a sweep of thirty-four TypeScript
+files hit three generated ones no graph contains, each answered an honest
+`not_found`, and Atenea marked every implementation of `symbol.overview` down
+for the whole repository. Every real file after those three failed, and the
+provider had answered correctly every time.
 
 *In a row* is measured from the newest failure backwards, and it stops at the
 first attempt that broke differently — not over the whole run since the last
@@ -396,8 +407,12 @@ Health does not save it either, because nothing probed it. Failing cheaply paid
 better than working.
 
 So a failure is not a price; it is the absence of one. It stays in the record —
-attempts and failures are both counted, and they are what health reads — but it
-divides nothing. An implementation with a long record and no successful call
+attempts and failures are both counted, whatever the bin, and `atenea select`
+reads those totals — but it divides nothing. Health reads a narrower slice of
+the same rows: the four request-shaped bins above are filtered out before the
+streak is built, so a provider with twenty `not_found` answers shows twenty
+attempts here and nothing at all to health. An implementation with a long
+record and no successful call
 has no measured cost at all and falls back to its declared estimate, and the
 trace says exactly that rather than leaving a reader to wonder why the ranking
 ignored a base full of rows.

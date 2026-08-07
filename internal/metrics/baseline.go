@@ -278,12 +278,32 @@ QUALIFY row_number() OVER (
 // is asked, because health is a per-repository fact: the same provider can be
 // warm on one repository and dead on another, and merging them would report a
 // state that is true nowhere.
+//
+// Four bins never reach this record at all. A streak is evidence about a
+// provider, and `not_found`, `permission_denied`, `invalid_input` and
+// `canceled` are all facts about the request instead: the thing asked for is
+// not here, policy refused, the payload was malformed, the caller stopped.
+// The provider either answered correctly or was never asked, and counting
+// that against it condemns it for being right.
+//
+// Measured: eight generated TypeScript files absent from a graph returned an
+// honest `not_found` each, three in a row tripped the breaker, and
+// symbol.overview went down for the whole repository -- every real file after
+// them failed with "every implementation is down" while both providers were
+// perfectly healthy.
+//
+// They are filtered out rather than treated as successes, because they are not
+// evidence in either direction: a refusal must not condemn a provider and must
+// not exonerate one either. A run of them is invisible here, which leaves the
+// streak exactly as the last real attempt left it.
 const recencyTemplate = `WITH recent AS (
 	SELECT capability, repository, implementation, ok, failure_kind, failure, raw, happened_at,
 	       row_number() OVER (
 	           PARTITION BY capability, repository, implementation ORDER BY happened_at DESC
 	       ) AS rn
 	FROM measurement
+	WHERE (ok OR coalesce(failure_kind, '') NOT IN
+	           ('not_found', 'permission_denied', 'invalid_input', 'canceled'))
 	%s
 ), ends AS (
 	SELECT capability, repository, implementation,
@@ -323,7 +343,7 @@ GROUP BY 1, 2, 3`
 // a fix to the shape cannot land in only half of them, which is exactly how
 // the funnel and the status screen would drift apart.
 var (
-	recencyHere = fmt.Sprintf(recencyTemplate, "WHERE capability = ? AND repository = ?")
+	recencyHere = fmt.Sprintf(recencyTemplate, "AND capability = ? AND repository = ?")
 	recencyAll  = fmt.Sprintf(recencyTemplate, "")
 )
 

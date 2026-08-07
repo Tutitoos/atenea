@@ -178,6 +178,20 @@ means nobody wired it up — a settings question, and no reason to touch the
 provider. `health` means it was wired and did not answer, which is the only one
 of the two that is an outage.
 
+`health` is narrower than "it failed", and deliberately so. Four bins never
+reach the record at all: `not_found`, `permission_denied`, `invalid_input` and
+`canceled` are facts about the request, not evidence about who was asked, so a
+run of them neither condemns a provider nor exonerates one — the streak stays
+exactly where the last real attempt left it. Only a provider's own failures,
+three of a kind inside five minutes, mark it down.
+
+This is the same wrong-culprit trap as the resolver above, one layer in. A
+sweep of thirty-four TypeScript files hit three generated ones that no graph
+contains; each returned an honest `not_found`, three in a row read as an
+outage, and Atenea marked every implementation of `symbol.overview` down for
+the whole repository. Every real file after that point failed, and the report
+named the provider — which had answered correctly every single time.
+
 Then check the seam itself, from outside Atenea:
 
 ```sh

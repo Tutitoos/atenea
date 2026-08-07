@@ -783,6 +783,31 @@ func TestATradeOffIsNotPretendedToBeADecision(t *testing.T) {
 	}
 }
 
+// Health is the first ranking stage, so when it separates two providers it is
+// what settled the choice - and the trace has to say so even when the two
+// carry the same score. A score is a number inside a state, not a substitute
+// for it: `degraded 0.5` and `alive 0.5` are not a tie, and a reason naming
+// cost here would send a reader looking for a price that decided nothing.
+func TestDifferentHealthStatesAreSettledByHealthNotCost(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{
+			impl("limping", health(contract.HealthDegraded, 0.5), estimated(time.Millisecond, 1)),
+			impl("well", health(contract.HealthAlive, 0.5), estimated(time.Hour, 99999)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "well" {
+		t.Fatalf("chose %q, want the alive provider over the degraded one", decision.Chosen.ID)
+	}
+	if !strings.Contains(decision.Reason, "healthiest") {
+		t.Errorf("reason = %q, want health named: the states differ, only the scores match", decision.Reason)
+	}
+}
+
 // Cost ranks, it never filters. An expensive provider that is the only one
 // left still answers -- and it has to, or it would never earn the measurements
 // that could correct its estimate.

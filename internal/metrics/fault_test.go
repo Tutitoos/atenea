@@ -89,7 +89,7 @@ func TestFailuresWithNoSingleCauseDegradeRatherThanDrop(t *testing.T) {
 	now := time.Now().UTC()
 	s.Record(broke(now, "serena.definition", "timeout", "took too long"))
 	s.Record(broke(now.Add(time.Second), "serena.definition", "unavailable", "no language server"))
-	s.Record(broke(now.Add(2*time.Second), "serena.definition", "invalid_input", "bad path"))
+	s.Record(broke(now.Add(2*time.Second), "serena.definition", "unspecified", "the adapter did not sort this"))
 
 	fault := faultOf(t, s, "serena.definition")
 	if fault.Streak != 3 {
@@ -110,14 +110,19 @@ func TestFailuresWithNoSingleCauseDegradeRatherThanDrop(t *testing.T) {
 // The bug this exists for, measured on a real machine before it was fixed.
 //
 // `claude.search` had never once succeeded on this repository, so the run
-// since the last success was its ENTIRE history: five `unavailable` failures
-// from the days it was not logged in, then three `permission_denied` ones
-// after that was fixed and its real ceiling started biting. Counting bins
-// over the whole run found two, blanked the Kind, and reported a merely
-// degraded provider -- so a cause that had been fixed days earlier was
+// since the last success was its ENTIRE history: five failures of one bin from
+// the days it was not logged in, then three of another after that was fixed.
+// Counting bins over the whole run found two, blanked the Kind, and reported a
+// merely degraded provider -- so a cause that had been fixed days earlier was
 // masking the one failing every call today, and it could never stop masking
 // it: a provider that has never succeeded here never earns a clean slate to
 // start a fresh run from.
+//
+// The pair originally measured was unavailable then permission_denied.
+// permission_denied no longer reaches this record at all -- it is a fact about
+// the request rather than about the provider -- so the run is rebuilt from two
+// bins that do count. What is under test is the ordering, not which bins
+// happened to expose it.
 func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
@@ -127,7 +132,7 @@ func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
 	}
 	for i := range 3 {
 		s.Record(broke(now.Add(time.Duration(5+i)*time.Second), "claude.search",
-			"permission_denied", "permission_denied: claude code stopped at its spending ceiling"))
+			"timeout", "timeout: claude code took longer than the limit allows"))
 	}
 
 	fault := faultOf(t, s, "claude.search")
@@ -138,8 +143,8 @@ func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
 		t.Fatalf("same-kind streak = %d, want 3: only the newest run shares a bin",
 			fault.SameKindStreak)
 	}
-	if fault.Kind != "permission_denied" {
-		t.Errorf("kind = %q, want permission_denied: three in a row at the newest end is nameable",
+	if fault.Kind != "timeout" {
+		t.Errorf("kind = %q, want timeout: three in a row at the newest end is nameable",
 			fault.Kind)
 	}
 	health, hurt := fault.Health(now.Add(8 * time.Second))
@@ -154,9 +159,9 @@ func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
 		t.Error("a provider failing every call the same way was left in the funnel")
 	}
 	// The count in the sentence is the run that earned the verdict, not the
-	// whole history: claiming eight permission_denied failures when three of
-	// them were that bin would be evidence nobody could check.
-	if !strings.Contains(health.Reason, "3 permission_denied failures in a row") {
+	// whole history: claiming eight timeout failures when three of them were
+	// that bin would be evidence nobody could check.
+	if !strings.Contains(health.Reason, "3 timeout failures in a row") {
 		t.Errorf("reason = %q, want the same-kind count, not the whole streak", health.Reason)
 	}
 }
@@ -169,7 +174,7 @@ func TestAShortSameKindTailIsStillNotAnOutage(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
 	s.Record(broke(now, "serena.search", "timeout", "timeout: took too long"))
-	s.Record(broke(now.Add(time.Second), "serena.search", "invalid_input", "invalid_input: bad path"))
+	s.Record(broke(now.Add(time.Second), "serena.search", "unspecified", "unspecified: the adapter did not sort this"))
 	s.Record(broke(now.Add(2*time.Second), "serena.search", "unavailable", "unavailable: no server"))
 	s.Record(broke(now.Add(3*time.Second), "serena.search", "unavailable", "unavailable: no server"))
 
@@ -178,7 +183,7 @@ func TestAShortSameKindTailIsStillNotAnOutage(t *testing.T) {
 		t.Fatalf("streak = %d, want 4", fault.Streak)
 	}
 	if fault.SameKindStreak != 2 {
-		t.Fatalf("same-kind streak = %d, want 2: the tail stops at the invalid_input",
+		t.Fatalf("same-kind streak = %d, want 2: the tail stops at the unspecified",
 			fault.SameKindStreak)
 	}
 	if fault.Kind != "" {
@@ -190,6 +195,55 @@ func TestAShortSameKindTailIsStillNotAnOutage(t *testing.T) {
 	}
 	if !health.Usable() {
 		t.Error("a provider with no single fault was dropped from the funnel")
+	}
+}
+
+// A bin that describes the request, not the provider, is not evidence about
+// the provider and must never reach the record.
+//
+// Measured before this held: eight generated TypeScript files absent from a
+// graph each returned an honest not_found, three in a row tripped the breaker,
+// and symbol.overview went down for the entire repository -- every real file
+// asked about after them was refused with "every implementation is down",
+// while both providers were answering perfectly.
+func TestARequestShapedRefusalNeverCondemnsTheProvider(t *testing.T) {
+	now := time.Now().UTC()
+	for _, bin := range []string{"not_found", "permission_denied", "invalid_input", "canceled"} {
+		s := store(t, Options{})
+		for i := range 5 {
+			s.Record(broke(now.Add(time.Duration(i)*time.Second), "codebase-memory.overview",
+				bin, bin+": the request could not be served"))
+		}
+		fault := faultOf(t, s, "codebase-memory.overview")
+		if fault.Streak != 0 {
+			t.Errorf("%s: streak = %d, want 0: the provider answered correctly every time",
+				bin, fault.Streak)
+		}
+		if _, hurt := fault.Health(now.Add(5 * time.Second)); hurt {
+			t.Errorf("%s: five of them condemned a provider that did nothing wrong", bin)
+		}
+	}
+}
+
+// The exemption must not work by swallowing the run: a refusal is not evidence
+// in either direction, so it cannot rescue a provider that really is down.
+func TestARefusalDoesNotBreakAGenuineOutage(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC()
+	s.Record(broke(now, "serena.overview", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(time.Second), "serena.overview", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(2*time.Second), "serena.overview", "not_found", "not_found: no such file"))
+	s.Record(broke(now.Add(3*time.Second), "serena.overview", "unavailable", "unavailable: no server"))
+
+	fault := faultOf(t, s, "serena.overview")
+	if fault.SameKindStreak != 3 {
+		t.Fatalf("same-kind streak = %d, want 3: the not_found is invisible, not a break",
+			fault.SameKindStreak)
+	}
+	health, hurt := fault.Health(now.Add(4 * time.Second))
+	if !hurt || health.State != contract.HealthDown {
+		t.Errorf("state = %v (reached=%v), want down: a refusal laundered a real outage",
+			health.State, hurt)
 	}
 }
 
