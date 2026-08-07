@@ -79,7 +79,8 @@ Servers behind a local proxy bind an **address**, and clients are configured
 with a **name**. Those are only the same thing while name resolution agrees with
 them.
 
-Observed on one machine, four MCP servers behind local proxies:
+Observed on one machine in July 2026, when four MCP servers ran behind local
+proxies:
 
 ```text
 $ ss -lntp
@@ -88,6 +89,12 @@ LISTEN  127.0.0.1:40011   thv    # context7
 LISTEN  127.0.0.1:40020   thv    # semgrep
 LISTEN  127.0.0.1:40021   thv    # chrome-devtools
 ```
+
+That machine now runs two of the four as stdio-per-client, with no proxy and
+no port, so the capture is history rather than an inventory -- read the ports
+as an example, never as a list to copy. The failure it demonstrates is not
+history: it applies to every proxied server, and it gets worse as the count
+goes up, because they all share the one name that broke.
 
 Every one of them is bound to `127.0.0.1` — IPv4, and only IPv4. Nothing is
 listening on `::1`.
