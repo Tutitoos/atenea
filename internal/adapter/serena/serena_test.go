@@ -389,12 +389,16 @@ func TestAPositionOnNothingIsABadRequest(t *testing.T) {
 // conversion has exactly one place to be wrong, so it gets its own test.
 func TestSerenaLinesArriveOneBased(t *testing.T) {
 	s, endpoint := newStub(t)
-	s.answers["find_declaration"] = declarationAnswer
+	// A one-line range on purpose: the reported line is then the only line the
+	// name can be found on, so a conversion off by one cannot be absorbed by
+	// the scan that looks for it.
+	s.answers["find_declaration"] = `{"name_path":"Shape/area","kind":"Method",` +
+		`"relative_path":"pkg/shapes.go","body_location":{"start_line":1,"end_line":1}}`
 	runner := newRunner(t, endpoint)
 
 	outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
-		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
-	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+		"pkg/shapes.go": "package pkg\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go", "line": 2, "column": 6})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -405,6 +409,39 @@ func TestSerenaLinesArriveOneBased(t *testing.T) {
 	// start_line 1 in the answer above.
 	if location["line"] != 2 {
 		t.Errorf("line = %v, want 2: serena's 1 is the contract's 2", location["line"])
+	}
+}
+
+// A language server may begin a symbol's range at the doc comment above the
+// declaration instead of at the declaration: rust-analyzer does, gopls does
+// not. The line handed back has to be where the name is actually written
+// either way, or two capabilities answer differently about one symbol --
+// measured live, symbol.overview said 48 and symbol.definition said 42 for the
+// same Rust constant.
+func TestADocCommentedSymbolReportsItsDeclarationNotItsComment(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_declaration"] = `{"name_path":"CANDIDATES","kind":"Variable",` +
+		`"relative_path":"src/encode.rs","body_location":{"start_line":1,"end_line":4}}`
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilityDefinition, repo(t, map[string]string{
+		"src/encode.rs": "use std::fmt;\n" +
+			"/// En orden de preferencia, se prueban de arriba abajo.\n" +
+			"/// No lo cambies sin medir.\n" +
+			"const CANDIDATES: [Candidate; 4] = [\n" +
+			"];\n",
+	}), map[string]any{"file": "src/encode.rs", "line": 4, "column": 7})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	location, ok := outcome.Result["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v, want a location record", outcome.Result)
+	}
+	// The reported range opens on line 2, the first line of the doc comment.
+	// The declaration itself is on line 4.
+	if location["line"] != 4 {
+		t.Errorf("line = %v, want 4: the doc comment above a symbol is not its declaration", location["line"])
 	}
 }
 

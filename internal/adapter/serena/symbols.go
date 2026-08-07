@@ -275,16 +275,59 @@ func markedLine(around string) (int, string, bool) {
 }
 
 // locationsFrom turns symbols into the capability's locations.
-func locationsFrom(symbols []symbol, a ask) []location {
+//
+// The line reported is where the symbol writes its own name, not the first
+// line of the range the language server handed over. Those are the same line
+// in Go and different ones in Rust -- see nameSiteIn -- and a definition that
+// answers with the doc comment above an item sends the caller to prose. It also
+// made two capabilities disagree about one symbol in the same investigation:
+// symbol.overview said `CANDIDATES` was on line 48, symbol.definition said 42.
+//
+// When the name cannot be placed the reported start stands. Unlike
+// symbol.overview there is no sibling entry left to carry the call, and a line
+// a few above the declaration is a better answer than refusing to give one.
+func (r *Runner) locationsFrom(root string, symbols []symbol, a ask) []location {
 	out := make([]location, 0, len(symbols))
 	for _, s := range symbols {
-		loc := location{Path: s.Path, Line: toContractLine(s.Location.StartLine)}
+		start := toContractLine(s.Location.StartLine)
+		loc := location{Path: s.Path, Line: start}
+		if name := lastSegment(s.NamePath); name != "" {
+			span := toContractLine(s.Location.EndLine) - start + 1
+			if span < 1 {
+				span = 1
+			}
+			if span > nameScanLines {
+				span = nameScanLines
+			}
+			// Best effort on purpose: this is a refinement of an answer that is
+			// already usable, so an unreadable file leaves the start line alone
+			// rather than failing a call that had succeeded.
+			if window, err := readLinesFrom(r, root, s.Path, start, span); err == nil {
+				if line, _, ok := nameSiteIn(window, start, name); ok {
+					loc.Line = line
+				}
+			}
+		}
 		if a.snippet {
 			loc.Snippet = trimToLines(s.Body, a.lines)
 		}
 		out = append(out, loc)
 	}
 	return out
+}
+
+// lastSegment is the bare name at the end of a name path: "Options/Endpoint"
+// names Endpoint. An overload index is dropped with it -- "my_method[1]" is
+// written in the source as my_method.
+func lastSegment(namePath string) string {
+	name := namePath
+	if cut := strings.LastIndex(name, "/"); cut >= 0 {
+		name = name[cut+1:]
+	}
+	if cut := strings.LastIndex(name, "["); cut > 0 {
+		name = name[:cut]
+	}
+	return name
 }
 
 // trimToLines honors "small by default, expandable": the caller said how much
@@ -363,43 +406,68 @@ func pick(candidates []symbol, a ask) (symbol, error) {
 // path that climbs out of it -- with .., with an absolute path, or through a
 // symlink -- is reading something nobody authorized.
 func readLineAt(r *Runner, root, file string, line int) (string, error) {
+	lines, err := readLinesFrom(r, root, file, line, 1)
+	if err != nil {
+		return "", err
+	}
+	return lines[0], nil
+}
+
+// readLinesFrom reads up to count lines beginning at start, in one pass.
+//
+// The window exists for nameSiteIn: a symbol's own name sits somewhere inside
+// the range its language server reported for it, and looking for it must not
+// cost one file open per line of that range.
+//
+// A window running past the end of the file is not an error so long as it
+// began inside it. The caller is asking about a symbol, not about a line
+// number, and a short tail is just the end of the range.
+func readLinesFrom(r *Runner, root, file string, start, count int) ([]string, error) {
 	if r.isSensitive(file) {
 		// Exploring skips these in silence because a skipped hit costs
 		// nothing. This is not exploring: a caller asked about one exact
 		// position, and answering "nothing found" would be a lie. It is
 		// refused out loud instead.
-		return "", contract.Fail(contract.FailurePermissionDenied,
+		return nil, contract.Fail(contract.FailurePermissionDenied,
 			"%s carries secrets and is not read", file)
 	}
 	resolved, err := within(root, file)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	f, err := os.Open(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", contract.Fail(contract.FailureNotFound,
+			return nil, contract.Fail(contract.FailureNotFound,
 				"%s is not in this repository", file)
 		}
-		return "", contract.Fail(contract.FailureUnavailable,
+		return nil, contract.Fail(contract.FailureUnavailable,
 			"cannot read %s: %v", file, err)
 	}
 	// Nothing was written, so a failed close has nothing to report.
 	defer func() { _ = f.Close() }()
 
+	out := make([]string, 0, count)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	for n := 1; scanner.Scan(); n++ {
-		if n == line {
-			return scanner.Text(), nil
+		if n < start {
+			continue
+		}
+		out = append(out, scanner.Text())
+		if len(out) == count {
+			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", contract.Fail(contract.FailureUnavailable,
+		return nil, contract.Fail(contract.FailureUnavailable,
 			"cannot read %s: %v", file, err)
 	}
-	return "", contract.Fail(contract.FailureInvalidInput,
-		"%s has fewer than %d line(s)", file, line)
+	if len(out) == 0 {
+		return nil, contract.Fail(contract.FailureNotFound,
+			"%s has fewer than %d line(s)", file, start)
+	}
+	return out, nil
 }
 
 // identifierAt reads the one word the caller pointed at.
@@ -561,6 +629,66 @@ func columnOf(line, name string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// nameScanLines bounds how far into a symbol's reported range its own name is
+// looked for. A declaration writes its name at the top of its range; scanning
+// the whole of a long body would eventually find the name *used* rather than
+// declared, and report that as the definition.
+const nameScanLines = 24
+
+// commentMarkers open a comment or continue one in every language this
+// adapter serves. A Rust attribute (`#[derive(...)]`) is caught by the same
+// `#` and skipped for the same reason: it is not where the name is declared.
+var commentMarkers = []string{"///", "//", "/*", "*/", "*", "#"}
+
+// looksLikeComment reports whether a line is prose or decoration rather than
+// the declaration itself. A blank line counts, having nothing to declare.
+func looksLikeComment(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return true
+	}
+	for _, marker := range commentMarkers {
+		if strings.HasPrefix(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameSiteIn finds where a symbol writes its own name inside the range its
+// language server reported for it, and returns that line and column.
+//
+// The reported start line is not reliably the declaration, and which one it is
+// depends on the language server rather than on anything Atenea controls.
+// Measured live against two repositories: gopls starts a Go symbol at its
+// `func` line, while rust-analyzer starts a Rust one at the first line of the
+// doc comment above it -- `CANDIDATES` is declared on line 48 of encode.rs and
+// reported as starting on 42. Reading only the start line therefore recovers
+// the declaration in one language and a line of prose in the other, which is
+// exactly what it did: `symbol.definition` answered 42 while `symbol.overview`,
+// answering from a different provider, said 48 for the same symbol.
+//
+// Comment lines are passed over first, because a doc comment routinely
+// mentions the name it documents and that line is not the declaration. If
+// nothing outside a comment carries the name, a comment line holding it is
+// still a better answer than none.
+func nameSiteIn(lines []string, start int, name string) (line, column int, ok bool) {
+	for i, text := range lines {
+		if looksLikeComment(text) {
+			continue
+		}
+		if column, found := columnOf(text, name); found {
+			return start + i, column, true
+		}
+	}
+	for i, text := range lines {
+		if column, found := columnOf(text, name); found {
+			return start + i, column, true
+		}
+	}
+	return 0, 0, false
 }
 
 // declarationRegex builds the one-group pattern find_declaration's own

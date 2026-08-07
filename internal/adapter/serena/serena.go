@@ -453,9 +453,17 @@ func (r *Runner) overview(ctx context.Context, c *conn, root string, a overviewA
 	if err != nil {
 		return nil, notes, err
 	}
-	entries, err := r.locateAll(ctx, c, root, a, names)
+	entries, unplaceable, err := r.locateAll(ctx, c, root, a, names)
 	if err != nil {
 		return nil, notes, err
+	}
+	if unplaceable > 0 {
+		// Said out loud rather than swallowed: the answer is short by a known
+		// amount, and a caller comparing two providers' symbol counts deserves
+		// to know which one declined to guess.
+		notes = append(notes, fmt.Sprintf(
+			"%d of %d symbol(s) skipped: serena named them but their own name is not written anywhere in the range it reported",
+			unplaceable, len(names)))
 	}
 	// get_symbols_overview groups by kind, which the caller never asked
 	// about; top to bottom, as the file actually reads, is the useful order,
@@ -671,12 +679,12 @@ func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a as
 	notes = append(notes, note)
 	switch k {
 	case kindDefinition:
-		return locationsFrom([]symbol{found}, a), notes, nil
+		return r.locationsFrom(root, []symbol{found}, a), notes, nil
 	case kindReferences:
 		out, err := r.referencing(ctx, c, a, found)
 		return out, notes, err
 	default:
-		out, err := r.findImplementations(ctx, c, a, found)
+		out, err := r.findImplementations(ctx, c, root, a, found)
 		return out, notes, err
 	}
 }
@@ -733,6 +741,16 @@ type overviewEntry struct {
 // either side of.
 const maxConcurrentSymbolLookups = 16
 
+// errNameNotLocated marks one symbol whose own name is written nowhere in the
+// range its language server reported for it.
+//
+// It is deliberately not a contract failure. Serena answered, and every other
+// symbol in the same file answered with it: one name that cannot be placed is
+// one entry missing, not a provider outage. Binning it as `unavailable` is what
+// took a 21-symbol Rust file offline over a single unplaceable name -- and
+// demoted Serena's health for the whole repository on the way past.
+var errNameNotLocated = errors.New("symbol name not found inside its reported range")
+
 // locateAll turns the bare names get_symbols_overview reported into entries
 // with a real line and column, by asking find_symbol once per name -- the
 // only call in this exchange that returns a location at all -- capped at
@@ -741,7 +759,7 @@ const maxConcurrentSymbolLookups = 16
 // It assumes c.mu is held, same as every exchange with this endpoint: these
 // are read-only calls against the project overview already activated, and
 // nothing else may retarget Serena while they are outstanding.
-func (r *Runner) locateAll(ctx context.Context, c *conn, root string, a overviewAsk, names []overviewName) ([]overviewEntry, error) {
+func (r *Runner) locateAll(ctx context.Context, c *conn, root string, a overviewAsk, names []overviewName) ([]overviewEntry, int, error) {
 	entries := make([]overviewEntry, len(names))
 	errs := make([]error, len(names))
 
@@ -758,12 +776,19 @@ func (r *Runner) locateAll(ctx context.Context, c *conn, root string, a overview
 	}
 	wg.Wait()
 
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
+	out := make([]overviewEntry, 0, len(names))
+	unplaceable := 0
+	for i := range names {
+		switch {
+		case errors.Is(errs[i], errNameNotLocated):
+			unplaceable++
+		case errs[i] != nil:
+			return nil, 0, errs[i]
+		default:
+			out = append(out, entries[i])
 		}
 	}
-	return entries, nil
+	return out, unplaceable, nil
 }
 
 // locateOne finds where one overview name actually sits: find_symbol gives
@@ -826,18 +851,28 @@ func (r *Runner) locateOne(ctx context.Context, c *conn, root string, a overview
 	line := toContractLine(match.Location.StartLine)
 	endLine := toContractLine(match.Location.EndLine)
 
-	text, err := readLineAt(r, root, a.file, line)
+	// The name is looked for across the reported range, not on its first line.
+	// Which line actually carries the declaration is the language server's
+	// choice, not Atenea's: gopls starts at the `func`, rust-analyzer starts at
+	// the doc comment above it.
+	span := endLine - line + 1
+	if span < 1 {
+		span = 1
+	}
+	if span > nameScanLines {
+		span = nameScanLines
+	}
+	window, err := readLinesFrom(r, root, a.file, line, span)
 	if err != nil {
 		return overviewEntry{}, err
 	}
-	column, ok := columnOf(text, n.name)
+	nameLine, column, ok := nameSiteIn(window, line, n.name)
 	if !ok {
-		return overviewEntry{}, contract.Fail(contract.FailureUnavailable,
-			"%s:%d: %q is not on its own reported line as a whole word", a.file, line, n.name)
+		return overviewEntry{}, errNameNotLocated
 	}
 
-	entry := overviewEntry{name: n.name, kind: match.Kind, parent: n.parent, line: line, column: column}
-	if endLine != line {
+	entry := overviewEntry{name: n.name, kind: match.Kind, parent: n.parent, line: nameLine, column: column}
+	if endLine != nameLine {
 		// A single-line symbol repeating its own start line here would be
 		// noise, not information -- the caller already has it.
 		entry.endLine = endLine
@@ -972,7 +1007,7 @@ func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol)
 // Not every language server implements this request, and the ones that do not
 // say so plainly. That is a provider that cannot answer here, not a broken
 // commission, so the bin is unavailable and the funnel falls back.
-func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, target symbol) ([]location, error) {
+func (r *Runner) findImplementations(ctx context.Context, c *conn, root string, a ask, target symbol) ([]location, error) {
 	raw, err := r.call(ctx, c, "find_implementations", map[string]any{
 		"name_path":     target.NamePath,
 		"relative_path": target.Path,
@@ -990,7 +1025,7 @@ func (r *Runner) findImplementations(ctx context.Context, c *conn, a ask, target
 	if err != nil {
 		return nil, err
 	}
-	return withinScope(locationsFrom(found, a), a.scope), nil
+	return withinScope(r.locationsFrom(root, found, a), a.scope), nil
 }
 
 // withinScope enforces the scope the caller declared.

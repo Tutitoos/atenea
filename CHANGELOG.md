@@ -86,6 +86,15 @@ told the opposite, because no edit to it can help: upgrade the binary.
   them neither condemns a provider nor exonerates one, leaving the streak
   exactly as the last real attempt left it.
 
+- **`symbol.definition` reported the doc comment instead of the declaration.**
+  The serena adapter took the first line of the range the language server
+  reported, which holds for gopls and breaks for rust-analyzer: it starts a
+  symbol's range at its doc comment. Serena publishes only `body_location`, so
+  there is no name range to ask for -- the range is now scanned for the line
+  that writes the name, skipping comment lines first. Measured on a Rust
+  repository: `symbol.overview` answers for 21 of 21 files where it managed 2
+  before, and `definition` on `pick` answers line 116 rather than 48.
+
 - **`lefthook install` was a required step mentioned only as a comment in a
   command list.** Git never clones hooks, so every fresh checkout of this
   repository has none: measured, a clone accepts a deliberately unformatted
