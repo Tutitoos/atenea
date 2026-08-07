@@ -95,6 +95,12 @@ told the opposite, because no edit to it can help: upgrade the binary.
   repository: `symbol.overview` answers for 21 of 21 files where it managed 2
   before, and `definition` on `pick` answers line 116 rather than 48.
 
+- **Resuming a torn run pointed at a file that was never there.** A receipt
+  destroyed by an ugly close is set aside as `.json.torn` rather than deleted,
+  precisely so somebody can read what was lost -- and `atenea resume` answered
+  "no such file or directory" for the `.json`, which is true and sends the
+  reader to the one path with nothing on it. It now names the file that exists.
+
 - **`lefthook install` was a required step mentioned only as a comment in a
   command list.** Git never clones hooks, so every fresh checkout of this
   repository has none: measured, a clone accepts a deliberately unformatted

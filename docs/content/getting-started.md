@@ -396,6 +396,10 @@ receipts are never touched. If the measurement base itself will not answer it is
 moved aside under its own name and a fresh one opened in its place — the history
 that went with it is what the copies are for.
 
+Resuming a run whose receipt was torn refuses and names the `.torn` file rather
+than reporting the `.json` that is no longer there: the file that exists is the
+one worth reading, and the missing one leads nowhere.
+
 A base held open by another Atenea is not damage and is never moved. That check
 is the difference between recovering from corruption and manufacturing it.
 

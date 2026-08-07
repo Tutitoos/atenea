@@ -653,6 +653,14 @@ because those bytes are the only evidence of what was lost. Good receipts are
 not touched — including the receipt of a commission the cut interrupted, which
 is exactly the one worth reading back.
 
+Resuming a run whose receipt was torn is a dead end, and the reason is a file
+in the same directory. The refusal names it: reporting the missing `.json`
+would be true and would send the reader to the one path with nothing on it.
+A write that fails because the disk is full says so in its first words. The bin
+stays `permission_denied` — nothing a provider or a caller did caused it, which
+is exactly why that bin is one of the four the health record ignores — but
+`permission_denied` alone sends a reader to `ls -l` when the answer is `df`.
+
 If the measurement base will not answer, it is moved aside under its own name
 and a fresh one opened where it was. Refusing to start would be the wrong
 trade: the funnel already copes with having no measurements — that is the cold

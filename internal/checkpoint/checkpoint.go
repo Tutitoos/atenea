@@ -12,6 +12,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -210,6 +212,21 @@ func (s *Store) Load(id string) (Run, error) {
 	}
 	raw, err := os.ReadFile(filepath.Join(s.dir, id+".json"))
 	if err != nil {
+		// A receipt torn by an ugly close is set aside as .json.torn rather
+		// than deleted, precisely so somebody can read what was lost.
+		// Reporting the missing .json sends that reader to a file that was
+		// never there and says nothing about the one that is. Measured:
+		// `atenea resume <id>` on a torn receipt answered "no such file or
+		// directory" with the evidence sitting beside it in the same
+		// directory.
+		if errors.Is(err, fs.ErrNotExist) {
+			aside := filepath.Join(s.dir, id+".json.torn")
+			if _, statErr := os.Stat(aside); statErr == nil {
+				return Run{}, contract.Fail(contract.FailureNotFound,
+					"run %s was torn by an ugly close and cannot be resumed; what survived it is at %s",
+					id, aside)
+			}
+		}
 		return Run{}, contract.Fail(contract.FailureNotFound, "run %s: %v", id, err)
 	}
 	var run Run

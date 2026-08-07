@@ -130,3 +130,8 @@ not a second billed attempt. `--budget USD` replaces what remains of the
 original grant, in case the ceiling was the reason it stopped; `--allow`
 instead adds to what the commission already carries, since an effect already
 held should never be lost by resuming.
+
+A receipt destroyed by an ugly close is set aside rather than deleted, and
+resuming it says so by name: the surviving `.json.torn` file is the only
+evidence of what was lost, so the refusal points at that instead of at the
+`.json` that is no longer there.

@@ -3,7 +3,10 @@ package checkpoint_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 )
@@ -89,6 +92,36 @@ func TestATornReceiptIsSetAsideAndKeptAsEvidence(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Errorf("List = %v, want the torn receipt out of the runs", ids)
+	}
+}
+
+// Resuming a torn run is a dead end, and the reason it is a dead end is a file
+// sitting in the same directory. Measured before this held: `atenea resume`
+// answered "no such file or directory" for the .json, which is true and sends
+// the reader to the one path that has nothing on it.
+func TestResumingATornRunNamesTheEvidenceItLeftBehind(t *testing.T) {
+	dir := t.TempDir()
+	store := storeAt(t, dir)
+	const id = "20260802T120000-abc123"
+	writeFile(t, filepath.Join(dir, id+".json"), `{"id":"20260802T120000-abc123","task":"find every`)
+	if _, err := store.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	_, err := store.Load(id)
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", contract.KindOf(err))
+	}
+	aside := filepath.Join(dir, id+".json.torn")
+	if !strings.Contains(err.Error(), aside) {
+		t.Errorf("error = %q, want the path of the file that is actually there (%s)", err, aside)
+	}
+
+	// A run that never existed is a different fact and must not borrow this
+	// sentence: there is no evidence to point at.
+	_, err = store.Load("20260101T000000-000000")
+	if strings.Contains(err.Error(), "torn") {
+		t.Errorf("error = %q, want a plain missing-run answer for a run nobody wrote", err)
 	}
 }
 
