@@ -90,6 +90,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   Go's `*url.Error` puts the method and the whole URL in front of the clause
   that says what happened; the address is already on the line above it.
 
+- **A stdio server that dies on startup said so two different ways, and a race
+  picked which one you got.** Both the write of `initialize` and the read of the
+  reply can be the first to notice the child is gone: the write sees `EPIPE`, or
+  the request fits in the pipe buffer and the death surfaces one line later as
+  EOF. The read path reported the process fact and carried the server's own
+  stderr; the write path reported `closed before it could be asked: write |1:
+  broken pipe` -- a connection metaphor for a process that never got off the
+  ground, which is the exact sentence this probe exists to replace. Measured:
+  the same commit passed on the machine it was written on for days and failed on
+  a CI runner, because the runner is slower to start a child and faster to reap
+  it. One fact now has one sentence, shared by both paths, and a write error that
+  is genuinely a write error keeps its own wording.
+
 ### Removed
 
 - **`file.read` is struck from the design's base list.** It was never built,

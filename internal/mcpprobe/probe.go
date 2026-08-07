@@ -33,6 +33,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/procgroup"
@@ -286,11 +287,13 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 		return nil, err
 	}
 	if _, err := stdin.Write(append(body, '\n')); err != nil {
-		// A broken pipe means the child is already gone, so its stderr is
-		// complete and worth the wait: this is the path where the reason
-		// lives there and nowhere else.
+		// Either way the child's stderr is complete and worth the wait: this
+		// is the path where the reason lives there and nowhere else.
 		settle()
-		return nil, withStderr(fmt.Errorf("closed before it could be asked: %w", err), &stderr)
+		if childIsGone(err) {
+			return nil, withStderr(errExited, &stderr)
+		}
+		return nil, withStderr(fmt.Errorf("could not be asked: %w", err), &stderr)
 	}
 
 	reader := bufio.NewReaderSize(stdout, 1<<20)
@@ -302,7 +305,7 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 				// the whole point: "connection closed" sends a reader to the
 				// network, and there is no network here.
 				settle()
-				return nil, withStderr(errors.New("exited without answering"), &stderr)
+				return nil, withStderr(errExited, &stderr)
 			}
 			return nil, withStderr(err, &stderr)
 		}
@@ -323,6 +326,33 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 		return out.Result, nil
 	}
 	return nil, withStderr(fmt.Errorf("printed %d lines and never framed a reply", maxNoise), &stderr)
+}
+
+// errExited is the one sentence for a stdio server that died before it
+// answered. Both places that can notice it return exactly this, so the two
+// cannot drift into two wordings for one fact again.
+var errExited = errors.New("exited without answering")
+
+// childIsGone reports whether a write failed because there is no longer a
+// process on the other end of the pipe.
+//
+// A write that fails for that reason is not a diagnosis of its own: the child
+// is dead, which is exactly what the read loop below reports as EOF. Which of
+// the two notices first is a race -- whether the child got far enough for the
+// write to see EPIPE, or whether the request fit in the pipe buffer and the
+// death surfaced one ReadString later. Measured: the same server that exits on
+// startup reported `exited without answering` on the machine this was written
+// on and `closed before it could be asked: write |1: broken pipe` on a CI
+// runner, from the same commit.
+//
+// One fact must have one sentence, or every caller has to learn both and the
+// OS-level one wins the reader's attention while saying the least. A write
+// error that is *not* this keeps its own wording, because then the write really
+// is the news.
+func childIsGone(err error) bool {
+	return errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, os.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe)
 }
 
 // said is the child's stderr, collected while the child is still running.
