@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/platform"
@@ -169,13 +170,12 @@ func (s *Store) Save(run Run) error {
 	defer s.mu.Unlock()
 
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return contract.Fail(contract.FailurePermissionDenied,
-			"checkpoint directory %s: %v", s.dir, err)
+		return diskFailure(err, "checkpoint directory %s: %v", s.dir, err)
 	}
 	final := filepath.Join(s.dir, run.ID+".json")
 	temp, err := os.CreateTemp(s.dir, run.ID+".*.tmp")
 	if err != nil {
-		return contract.Fail(contract.FailurePermissionDenied, "run %s: %v", run.ID, err)
+		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
 	name := temp.Name()
 	// The temporary file leaves this function in exactly one shape: renamed
@@ -190,16 +190,33 @@ func (s *Store) Save(run Run) error {
 
 	if _, err := temp.Write(body); err != nil {
 		_ = temp.Close()
-		return contract.Fail(contract.FailurePermissionDenied, "run %s: %v", run.ID, err)
+		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
 	if err := temp.Close(); err != nil {
-		return contract.Fail(contract.FailurePermissionDenied, "run %s: %v", run.ID, err)
+		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
 	if err := os.Rename(name, final); err != nil {
-		return contract.Fail(contract.FailurePermissionDenied, "run %s: %v", run.ID, err)
+		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
 	renamed = true
 	return nil
+}
+
+// diskFailure describes a filesystem write that did not happen.
+//
+// The bin stays permission_denied. A full disk is not the provider's doing and
+// not the caller's either, and the health record exempts this bin for exactly
+// that reason (internal/metrics/baseline.go), so promoting it to a bin of its
+// own would start condemning providers for the state of the machine. What has
+// to change is the sentence: measured on a filled disk, a torn dump reported
+// `permission_denied` with the ENOSPC text trailing at the end of a line about
+// a run id, and the first place anybody takes permission_denied is `ls -l`.
+func diskFailure(err error, format string, args ...any) error {
+	if errors.Is(err, syscall.ENOSPC) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"no space left on device: "+format, args...)
+	}
+	return contract.Fail(contract.FailurePermissionDenied, format, args...)
 }
 
 // Load reads one run back.

@@ -101,6 +101,15 @@ told the opposite, because no edit to it can help: upgrade the binary.
   "no such file or directory" for the `.json`, which is true and sends the
   reader to the one path with nothing on it. It now names the file that exists.
 
+- **A full disk read as a permissions problem.** ENOSPC has no bin of its own
+  and must not get one: nothing a provider or a caller did caused it, and the
+  bin it lands in is now exempt from the health record for exactly that reason.
+  What was wrong is the sentence -- the disk was the last clause of a line
+  about a run id, and the first place anybody takes `permission_denied` is
+  `ls -l`, not `df`. Every write in `internal/checkpoint` now leads with
+  "no space left on device" when that is what happened. Measured on a real
+  filled filesystem.
+
 - **`lefthook install` was a required step mentioned only as a comment in a
   command list.** Git never clones hooks, so every fresh checkout of this
   repository has none: measured, a clone accepts a deliberately unformatted

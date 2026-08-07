@@ -82,8 +82,7 @@ func (s *Store) Recover() (Recovery, error) {
 			// Deleting would leave nobody able to say what was lost.
 			aside := name + ".torn"
 			if err := os.Rename(filepath.Join(s.dir, name), filepath.Join(s.dir, aside)); err != nil {
-				return rec, contract.Fail(contract.FailurePermissionDenied,
-					"setting aside %s: %v", name, err)
+				return rec, diskFailure(err, "setting aside %s: %v", name, err)
 			}
 			rec.Torn++
 			// The name the evidence carries now, because being able to find it

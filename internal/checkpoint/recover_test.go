@@ -125,6 +125,29 @@ func TestResumingATornRunNamesTheEvidenceItLeftBehind(t *testing.T) {
 	}
 }
 
+// An ordinary write failure must not borrow the disk sentence. The ENOSPC side
+// of the same rule is in disk_test.go, in-package: a full filesystem cannot be
+// produced honestly from a unit test without mounting one.
+func TestAPlainWriteFailureDoesNotBlameTheDisk(t *testing.T) {
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+
+	store := storeAt(t, filepath.Join(readOnly, "runs"))
+	err := store.Save(checkpoint.Run{ID: "20260802T120000-abc124", Kind: "ask"})
+	if err == nil {
+		t.Skip("this user can write into a directory with mode 0500")
+	}
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied", contract.KindOf(err))
+	}
+	if strings.Contains(err.Error(), "no space left on device") {
+		t.Errorf("error = %q, want a plain write failure for a directory nobody may write", err)
+	}
+}
+
 // A cut that lands after the braces close leaves a file that parses and
 // describes no run at all. It is as unusable as one that does not parse.
 func TestAReceiptThatNamesNoRunIsTorn(t *testing.T) {
