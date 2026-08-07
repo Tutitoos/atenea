@@ -90,6 +90,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   Go's `*url.Error` puts the method and the whole URL in front of the clause
   that says what happened; the address is already on the line above it.
 
+### Removed
+
+- **`file.read` is struck from the design's base list.** It was never built,
+  and until now the entry sat there implying a gap that somebody would
+  eventually try to close. A capability exists so the funnel has something to
+  choose between: `code.search` has four candidate implementations and the
+  choice is real -- literal text is cheap and exact, a model turn is expensive
+  and can infer, a graph needs an index and ranks what it finds. Reading a
+  named range of a named path has one implementation on any machine, the
+  filesystem, and every client that would ask already holds it. Nothing to
+  constrain, no health to track, no cost to rank, and nothing to fall back to.
+  A funnel in front of a file read is overhead with a trace attached.
+
+  It looked like a gap exactly once, and only under an artificial rule: a run
+  forbidden from using anything but Atenea had to read a function body by
+  searching for its name with `context_lines = 30`, and the window truncated
+  the following declaration mid-expression. That is a real limitation of
+  reading through a search tool. It is not an argument for the capability,
+  because the constraint that produced it does not exist in normal use -- the
+  client reads the file and asks Atenea only what needs deciding. If a machine
+  ever appears where reading is genuinely a choice between providers, that is a
+  new capability with its own contract, not this one revived.
+
 ## [0.7.0] - 2026-08-07
 
 `pkg/contract` bumped to `2.0.0`, and it is the first bump that is not
