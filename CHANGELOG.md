@@ -13,6 +13,21 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **`lefthook install` was a required step mentioned only as a comment in a
+  command list.** Git never clones hooks, so every fresh checkout of this
+  repository has none: measured, a clone accepts a deliberately unformatted
+  file at exit 0 until that command runs. The README and getting-started now
+  say so in prose, say to run it first, and say plainly that the hooks are a
+  convenience while the enforced gate is the release workflow -- the one check
+  nobody can skip by forgetting a setup step. A manual step nobody is told
+  about is the same as no step -- the same shape as the lint streak recorded
+  under `0.6.0`, where the hook existed and had never been installed on the
+  machine cutting the releases.
+
 ## [0.6.1] - 2026-08-07
 
 ### Fixed

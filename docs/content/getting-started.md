@@ -575,10 +575,25 @@ learned anything about how fast that provider is.
 ## Development
 
 ```sh
+lefthook install        # do this first: installs the pre-commit and pre-push hooks
 go test -race ./...     # the suite
-lefthook install        # pre-commit: gofmt, go vet, golangci-lint
 air                     # hot reload while developing, local only
 ```
+
+**Run `lefthook install` after cloning.** Git never clones hooks -- they live in
+`.git/hooks`, which no clone copies -- so a fresh checkout has none, and
+unformatted code commits without complaint. Measured, not assumed: a clone of
+this repository accepts a deliberately unformatted file at exit 0 until that
+command has run. One command installs both hooks: pre-commit runs `gofmt`,
+`go vet` and `golangci-lint`; pre-push runs the suite with `-race`.
+
+The hooks are a convenience, not the guarantee. **The enforced gate is the
+release workflow.** It re-runs the linter and the full suite at tag time and
+refuses to publish if either fails, which makes it the only check that cannot
+be skipped by forgetting a setup step. It has refused: `v0.6.0` is a tag with
+no release behind it, because that gate failed while CI on the same commit was
+green. The changelog explains what broke and why the tag was left where it
+fell.
 
 ### Publishing these docs
 

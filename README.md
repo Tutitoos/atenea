@@ -166,10 +166,21 @@ docs/               documentation sources, served by Hugo on GitHub Pages
 ## Development
 
 ```sh
+lefthook install        # do this first: installs the pre-commit and pre-push hooks
 go test -race ./...     # the suite
-lefthook install        # pre-commit: gofmt, go vet, golangci-lint
 air                     # hot reload, local development only
 ```
+
+**Run `lefthook install` after cloning.** Git never clones hooks, so a fresh
+checkout has none and unformatted code commits without complaint. One command
+installs both: pre-commit runs `gofmt`, `go vet` and `golangci-lint`;
+pre-push runs the suite with `-race`.
+
+The hooks are a convenience, not the guarantee. **The enforced gate is the
+release workflow**, which re-runs the linter and the full suite at tag time and
+refuses to publish if either fails — it is the only check nobody can skip by
+forgetting a setup step. `v0.6.0` is a tag with no release behind it for
+exactly that reason; the [changelog](CHANGELOG.md) says why.
 
 ## Credits
 
