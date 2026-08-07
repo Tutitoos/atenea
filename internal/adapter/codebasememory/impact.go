@@ -252,9 +252,9 @@ func directlyChanged(hunks []hunk, symbols map[string][]symbolRange) []symbolRan
 // impactHit is one symbol code.impact reports, at the shortest distance any
 // seed reached it from.
 type impactHit struct {
-	name, kind, filePath string
-	line, depth          int
-	hasLocation          bool
+	name, kind  string
+	line, depth int
+	hasLocation bool
 }
 
 // walkImpact asks trace_path once per directly changed symbol who calls into
@@ -264,7 +264,7 @@ type impactHit struct {
 func (r *Runner) walkImpact(ctx context.Context, root string, seeds []symbolRange, depth int, weight *meter) (map[string]impactHit, error) {
 	out := make(map[string]impactHit, len(seeds))
 	for _, s := range seeds {
-		out[s.qualifiedName] = impactHit{name: s.name, kind: s.kind, filePath: "", line: s.start, depth: 0, hasLocation: true}
+		out[s.qualifiedName] = impactHit{name: s.name, kind: s.kind, line: s.start, depth: 0, hasLocation: true}
 	}
 	if depth <= 0 {
 		return out, nil
