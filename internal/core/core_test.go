@@ -151,6 +151,83 @@ func writeTemp(t *testing.T, body string) string {
 	return path
 }
 
+// symbolCapability is a capability the stand-in has no case for. It runs
+// code.search and nothing else, so an implementation of this one in its
+// served list is a promise no code can keep.
+const symbolCapability = `
+[[capability]]
+id = "symbol.definition"
+version = "1.0.0"
+summary = "Find where a symbol is born."
+effects = ["read"]
+
+  [[capability.input]]
+  name = "symbol"
+  type = "string"
+  required = true
+
+  [[capability.output]]
+  name = "locations"
+  type = "record_list"
+  required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+[[implementation]]
+id = "serena.definition"
+provider = "serena"
+capability = "symbol.definition"
+`
+
+// The mistake this catches used to be accepted in full: the settings file
+// loaded, the status screen printed the implementation as served, the funnel
+// chose it, and only the call found the switch with no case for it -- coming
+// back not_found, which blames the request for a wiring mistake made long
+// before it.
+func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
+	body := strings.Replace(catalog,
+		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
+		`implementations = ["ripgrep", "serena.search", "graph.search", "serena.definition"]`, 1)
+	if !strings.Contains(body, "serena.definition") {
+		t.Fatal("fixture drifted: the served list this test edits is no longer there")
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg, err := config.Load(writeTemp(t, body+symbolCapability))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := core.New(cfg); err == nil {
+		t.Fatal("a runner told to serve a capability it cannot run was accepted")
+	} else if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
+		t.Errorf("kind = %v, want invalid_input: err = %v", kind, err)
+	} else if !strings.Contains(err.Error(), "cannot run symbol.definition") {
+		t.Errorf("the message must name the capability it cannot run: %v", err)
+	}
+}
+
+// The other half of the same rule, and the reason it is not simply "every id
+// must be known": an id the catalog never declares cannot be chosen, because
+// the funnel only picks from the catalog. Refusing it would break a small
+// hand-written catalog that attaches a runner whose shipped defaults name
+// more than that catalog uses -- a real configuration, not a hypothetical.
+func TestAnUndeclaredImplementationInAServedListIsTolerated(t *testing.T) {
+	body := strings.Replace(catalog,
+		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
+		`implementations = ["ripgrep", "serena.search", "graph.search", "nothing.declares.this"]`, 1)
+	atenea := build(t, body)
+	if _, err := atenea.Select("code.search", "api"); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+}
+
 // The whole point of the first brick: register a capability, and have the
 // funnel pick a provider from constraints and health alone.
 func TestEndToEndSelectionFollowsTheFunnel(t *testing.T) {

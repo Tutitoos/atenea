@@ -253,6 +253,13 @@ func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
+// Capabilities lists what this adapter's Run can actually dispatch, so a
+// settings file naming an implementation it has no case for is refused at
+// load rather than at the call.
+func (r *Runner) Capabilities() []string {
+	return []string{CapabilityDefinition, CapabilityReferences, CapabilityImplementations, CapabilityOverview}
+}
+
 // Run executes one step.
 //
 // The version travels back on every path, including the failing ones. Here it

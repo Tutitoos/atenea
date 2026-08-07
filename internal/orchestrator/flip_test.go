@@ -26,6 +26,8 @@ func (b billed) ID() string { return "billed" }
 
 func (b billed) Implementations() []string { return []string{"fast", "slow"} }
 
+func (b billed) Capabilities() []string { return []string{"code.search"} }
+
 func (b billed) Serves(id string) bool { return id == "fast" || id == "slow" }
 
 func (b billed) Run(_ context.Context, req contract.RunRequest) (contract.Outcome, error) {

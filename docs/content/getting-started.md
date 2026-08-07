@@ -158,8 +158,7 @@ repository  current
 chosen      ripgrep  (cheapest of the healthy ones (estimated))
 
 funnel
-  constraints  4 in -> 2 out: claude.search, ripgrep
-      dropped codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+  constraints  3 in -> 2 out: claude.search, ripgrep
       dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
   reach        2 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
@@ -207,12 +206,10 @@ plan
 steps
   explore-current      explore  ripgrep                  6ms
       review   child=ok parent=ok (output matches the capability)
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
       dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
   search-current       work     ripgrep                  5ms
       review   child=ok parent=ok (output matches the capability)
       scope    internal, pkg
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
       dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
 ```
 

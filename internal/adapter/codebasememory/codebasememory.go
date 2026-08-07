@@ -188,6 +188,13 @@ func (r *Runner) Implementations() []string {
 	return out
 }
 
+// Capabilities lists what this adapter's Run can actually dispatch. It is the
+// switch below turned into data, so a settings file naming an implementation
+// no case answers is refused at load rather than at the call.
+func (r *Runner) Capabilities() []string {
+	return []string{CapabilitySymbolCalls, CapabilityCodeImpact, CapabilityRepositoryIndex}
+}
+
 // Sensitive lists the configured secret-carrying patterns, sorted.
 func (r *Runner) Sensitive() []string {
 	out := slices.Clone(r.sensitive)

@@ -159,6 +159,11 @@ func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
+// Capabilities lists what this adapter's Run can actually dispatch, so a
+// settings file naming an implementation it has no case for is refused at
+// load rather than at the call.
+func (r *Runner) Capabilities() []string { return []string{CodeSearch} }
+
 // Implementations lists what this adapter answers for, sorted.
 func (r *Runner) Implementations() []string {
 	out := slices.Clone(r.implementations)

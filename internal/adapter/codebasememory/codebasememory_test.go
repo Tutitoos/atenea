@@ -58,8 +58,8 @@ func TestTheAdapterAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 	if !runner.Serves(ImplCalls) || !runner.Serves(ImplImpact) {
 		t.Errorf("Serves is wrong: %v", runner.Implementations())
 	}
-	if runner.Serves("codebase-memory.search") {
-		t.Error("this adapter must not claim code.search: three other providers already answer it")
+	if slices.Contains(runner.Capabilities(), "code.search") {
+		t.Error("this adapter must not claim code.search: it has no case for it, and core's load-time dispatch check reads exactly this list")
 	}
 	want := []string{ImplCalls, ImplImpact}
 	slices.Sort(want)
@@ -321,18 +321,21 @@ func TestRunRejectsAnImplementationItDoesNotServeForCodeImpact(t *testing.T) {
 	}
 }
 
+// The load-time check in core is what stops a settings file from ever
+// reaching this point. This is the adapter's own last word if one somehow
+// does: an id it was told to serve, for a capability it has no case for.
 func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 	capability := symbolCallsCapability()
 	capability.ID = "code.search"
 	capability.Inputs = []contract.Field{{Name: "query", Type: contract.TypeString, Required: true}}
 	req := contract.RunRequest{
 		Capability:     capability,
-		Implementation: contract.Implementation{ID: "codebase-memory.search", Provider: "codebase-memory", Capability: "code.search"},
+		Implementation: contract.Implementation{ID: "codebase-memory.hypothetical", Provider: "codebase-memory", Capability: "code.search"},
 		Repository:     contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		Payload:        map[string]any{"query": "x"},
 		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
 	}
-	runner, err := New(Options{Implementations: []string{"codebase-memory.search"}})
+	runner, err := New(Options{Implementations: []string{"codebase-memory.hypothetical"}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -31,6 +31,7 @@ type fakeProber struct {
 func (f *fakeProber) ID() string                { return f.id }
 func (f *fakeProber) Serves(string) bool        { return true }
 func (f *fakeProber) Implementations() []string { return nil }
+func (f *fakeProber) Capabilities() []string    { return []string{"code.search"} }
 func (f *fakeProber) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
 	return contract.Outcome{}, contract.Fail(contract.FailureNotFound, "fakeProber does not run anything")
 }
@@ -48,6 +49,7 @@ type fakeRunner struct{ id string }
 func (f *fakeRunner) ID() string                { return f.id }
 func (f *fakeRunner) Serves(string) bool        { return true }
 func (f *fakeRunner) Implementations() []string { return nil }
+func (f *fakeRunner) Capabilities() []string    { return []string{"code.search"} }
 func (f *fakeRunner) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
 	return contract.Outcome{}, contract.Fail(contract.FailureNotFound, "fakeRunner does not run anything")
 }

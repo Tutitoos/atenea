@@ -17,6 +17,28 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A settings file could name an implementation no adapter could run, and
+  nothing noticed until the call.** A runner's served list came from the
+  settings file and was trusted whole: `Serves` said yes, `atenea status`
+  printed the implementation as served, the funnel chose it, and only then did
+  dispatch reach a switch with no case for it and return `not_found` --
+  blaming the request for a wiring mistake made long before it. `contract.Runner`
+  now also reports the capabilities it can actually execute, and the core
+  checks the served list against them at load. An id the catalog does not
+  declare stays deliberately allowed: it can never be chosen, and refusing it
+  would break a small hand-written catalog attaching a runner whose shipped
+  defaults name more than it uses.
+- **`codebase-memory.search` was declared with nothing behind it.** Measured
+  before removing it: on a medium repository declaring a codebase-memory index,
+  with the id added to the adapter's served list, the config loaded, the status
+  screen said the adapter served it, the funnel chose it, and the call returned
+  `not_found: codebase-memory adapter has no implementation of code.search`.
+  The catalogue entry is gone. `ripgrep` already answers `code.search`
+  correctly and cheaply everywhere with no index; a graph-backed search's real
+  advantage is ranking hits into their containing symbols, which `code.search`
+  has no output field to carry. That idea is recorded in
+  [What is not built yet] as a possible future capability with its own
+  contract, not as a lost implementation of this one.
 - **`idle_timeout` was accepted beside `lifecycle = "persistent"` and did
   nothing.** The idle reaper only ever visits `on_demand` servers, so the key
   was inert for a reason that lives in the supervisor and appears nowhere in

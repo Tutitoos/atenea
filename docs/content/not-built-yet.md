@@ -15,27 +15,32 @@ not do yet, in the order the design itself put them. Each entry says how you wou
 know it was finished, because "done" is the word this page exists to be careful
 with.
 
-## `codebase-memory.search`, a brick nobody has laid
+## Ranked code search, if anything ever wants it
 
-`code.search` declares four implementations in the shipped catalogue —
-`ripgrep`, `serena.search`, `codebase-memory.search` and `claude.search` —
-and two of them have never had an adapter behind them. `serena.search`
-stays unclaimed on purpose: Serena is wired for the symbol family, and a
-text search it has no code for would make the funnel promise an answer
-nobody can give. `codebase-memory` answers three capabilities now —
-`symbol.calls`, `code.impact` and `repository.index` — for the same
-reason it stays away from `code.search`: three cheaper or
-equally-capable providers already exist for it, and a fourth identical
-answer would only give the funnel one more thing to rank.
+`code.search` used to declare a fourth implementation, `codebase-memory.search`,
+with no adapter behind it. It is now deleted. The entry was selectable and
+impossible: on a medium repository that declared a codebase-memory index, and
+with the id added to the adapter's served list, the funnel chose it and the
+call came back `not_found`. A catalogue entry nothing can run is not a
+placeholder for future work, it is a promise the funnel keeps making and
+nothing can keep.
 
-`codebase-memory.search` is the one of the four nothing explains. It
-shows up on every status screen under `no runner` and always will, until
-this closes. It is either a brick nobody has laid or an entry that should
-be deleted; leaving it as a permanent amber line is the one thing it
-should not be.
+`serena.search` stays unclaimed on purpose, which is the difference: Serena is
+wired for the symbol family, and a text search it has no code for would make
+the funnel promise an answer nobody can give.
 
-**Done when:** the catalogue declares nothing that cannot be reached, or the
-adapter exists.
+What was genuinely interesting about a graph-backed search is not in
+`code.search` at all. `ripgrep` already answers that capability correctly and
+cheaply everywhere, with no index. The graph's advantage would be *ranking* --
+deduplicating matches into their containing functions and ordering them by
+structural importance -- and `code.search` has no output field that can carry
+it, so an implementation would have had to throw the advantage away to fit the
+contract.
+
+**If it is ever wanted, it is a new capability with its own contract**, not a
+re-declaration of this one. A capability whose output says which symbol
+contains each hit, and in what order, is a different question from "where does
+this text appear". Nothing is blocked on it today.
 
 ## One agent does everything
 

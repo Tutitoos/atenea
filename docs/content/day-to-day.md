@@ -55,7 +55,6 @@ One screen. The first light is Atenea as a whole, then one per provider.
 ```text
 code.search              [read process]
     amber  claude.search            provider=claude-code        health=unknown
-    amber  codebase-memory.search   provider=codebase-memory    health=unknown
     amber  ripgrep                  provider=ripgrep            health=unknown
     amber  serena.search            provider=serena             health=unknown
 ```
@@ -74,7 +73,7 @@ charged, and — the useful half — who was dropped and why.
 steps
   ask-current          ask      ripgrep                  1.015s
       review   child=ok parent=ok (output matches the capability)
-      dropped  codebase-memory.search: needs an index from provider codebase-memory, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
 ```
 
 If you only want to know *who would be picked* without spending anything,

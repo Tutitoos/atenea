@@ -305,6 +305,9 @@ func buildRunners(cfg config.Config) ([]contract.Runner, *supervisor.Supervisor,
 	if err := checkReach(cfg.Source, out); err != nil {
 		return nil, nil, err
 	}
+	if err := checkDispatch(cfg.Source, cfg.Implementations, out); err != nil {
+		return nil, nil, err
+	}
 	return out, procs, nil
 }
 
@@ -406,6 +409,42 @@ func checkReach(source string, runners []contract.Runner) error {
 	return nil
 }
 
+// checkDispatch refuses a runner told to answer for an implementation whose
+// capability its code cannot dispatch.
+//
+// This is the same door checkReach guards, closed against a quieter lie. A
+// runner's served list comes from the settings file and was trusted whole:
+// Serves said yes, the status screen printed the implementation as served,
+// and the funnel chose it -- then the call reached a switch with no case for
+// it and came back not_found, blaming the request for a wiring mistake made
+// long before it. That is knowable here, with the catalog and the runners
+// both in hand.
+//
+// An id the catalog does not declare is deliberately NOT an error. It cannot
+// be chosen, because the funnel only ever picks from the catalog, so it can
+// never produce the failure above -- and refusing it would break the legitimate
+// case of a small hand-written catalog attaching a runner whose shipped
+// defaults name more than that catalog uses.
+func checkDispatch(source string, impls []contract.Implementation, runners []contract.Runner) error {
+	capabilityOf := make(map[string]string, len(impls))
+	for _, impl := range impls {
+		capabilityOf[impl.ID] = impl.Capability
+	}
+	for _, runner := range runners {
+		for _, id := range runner.Implementations() {
+			capability, declared := capabilityOf[id]
+			if !declared || slices.Contains(runner.Capabilities(), capability) {
+				continue
+			}
+			return contract.Fail(contract.FailureInvalidInput,
+				"settings %s: %s is told to serve implementation %s, but it cannot run %s -- it runs %s",
+				source, runner.ID(), id, capability,
+				strings.Join(runner.Capabilities(), ", "))
+		}
+	}
+	return nil
+}
+
 // fanOut is the one runner the orchestrator sees when several are attached.
 //
 // It holds no policy: the funnel has already chosen an implementation, and
@@ -432,6 +471,15 @@ func (f fanOut) Implementations() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func (f fanOut) Capabilities() []string {
+	var out []string
+	for _, runner := range f {
+		out = append(out, runner.Capabilities()...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func (f fanOut) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {

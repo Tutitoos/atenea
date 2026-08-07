@@ -110,6 +110,15 @@ func (f *fakeRunner) Serves(id string) bool {
 // production runner ever could. build fills it from the fixture catalog.
 func (f *fakeRunner) Implementations() []string { return f.serves }
 
+// Capabilities is deliberately wide: these fakes stand in for every provider
+// the fixture catalogs name, and the wiring check that reads this lives in
+// core, not here.
+func (f *fakeRunner) Capabilities() []string {
+	return []string{"code.search", "symbol.definition", "symbol.references",
+		"symbol.implementations", "symbol.overview", "symbol.calls",
+		"code.impact", "repository.index"}
+}
+
 func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	now := f.live.Add(1)
 	for {

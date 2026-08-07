@@ -19,9 +19,3 @@ by being answered, not by quietly falling off it.
   Undecided: does a scope violation deserve the same fault-streak treatment
   as a hard failure, or is a Notice — read by whoever asked, never scored by
   the funnel — the correct permanent shape for this?
-
-- **`codebase-memory.search` is declared with no adapter behind it.** Already
-  tracked in [What is not built yet]({{< relref "not-built-yet" >}}) as the
-  one of `code.search`'s four catalogue entries nothing explains — `no
-  runner` on every status screen since it shipped. Undecided: build the
-  adapter, or delete the entry.

@@ -28,6 +28,17 @@ type Runner interface {
 	// is the whole list, which is what lets the wiring above catch two clients
 	// claiming the same work before either of them runs any.
 	Implementations() []string
+	// Capabilities lists every capability this runner can actually execute.
+	//
+	// It is not Implementations by another name, and the difference is the
+	// whole reason it exists. Implementations is what a settings file told
+	// this runner to answer for; Capabilities is what its code can dispatch.
+	// Nothing used to compare the two, so a settings file could name an
+	// implementation the adapter had no case for and be accepted: the status
+	// screen said the adapter served it, the funnel chose it, and only the
+	// call itself discovered there was nothing behind it. The wiring above
+	// checks one against the other before anything runs.
+	Capabilities() []string
 	// Run executes one step with the implementation the funnel chose.
 	Run(ctx context.Context, req RunRequest) (Outcome, error)
 }

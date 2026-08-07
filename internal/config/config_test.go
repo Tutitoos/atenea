@@ -88,7 +88,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codebase-memory.calls",
 		"codebase-memory.impact",
 		"codebase-memory.index",
-		"codebase-memory.search",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",
@@ -121,7 +120,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			if impl.ScopeGuarantee != contract.ScopeFiltered {
 				t.Errorf("claude.search ships with scope_guarantee=%s, want filtered", impl.ScopeGuarantee)
 			}
-		case "serena.search", "codebase-memory.search":
+		case "serena.search":
 			if impl.ScopeGuarantee != contract.ScopeUnspecified {
 				t.Errorf("%s ships with scope_guarantee=%s, want unspecified: no adapter answers it yet",
 					impl.ID, impl.ScopeGuarantee)

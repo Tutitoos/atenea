@@ -24,6 +24,7 @@ type exploding struct{}
 func (exploding) ID() string                { return "exploding" }
 func (exploding) Serves(string) bool        { return true }
 func (exploding) Implementations() []string { return []string{"fast", "slow"} }
+func (exploding) Capabilities() []string    { return []string{"code.search"} }
 func (exploding) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
 	panic("the runner reached a state it does not have a name for")
 }

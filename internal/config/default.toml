@@ -179,13 +179,12 @@ runners = ["omp"]
   [orchestrator.codebasememory]
   # The codebase-memory-mcp executable. A bare name is looked up on PATH.
   binary = "codebase-memory-mcp"
-  # Implementations the adapter answers for. codebase-memory.search below is
-  # deliberately NOT here: that catalog entry stays an unimplemented
-  # possibility, on purpose, until something actually claims code.search from
-  # this graph. This adapter is wired for the two capabilities that read the
-  # call graph itself -- symbol.calls and code.impact -- and for the one that
-  # writes what they read: repository.index. Claiming a text search it has no
-  # code path for would make the funnel promise an answer nobody can give.
+  # Implementations the adapter answers for. This adapter is wired for the two
+  # capabilities that read the call graph itself -- symbol.calls and
+  # code.impact -- and for the one that writes what they read:
+  # repository.index. It has no code path for code.search, and naming one here
+  # is now refused at load rather than discovered at the call: core checks this
+  # list against what the adapter can actually dispatch.
   implementations = ["codebase-memory.calls", "codebase-memory.impact", "codebase-memory.index"]
   # How long one codebase-memory-mcp or git invocation may take. It sits at
   # Serena's own ceiling: both open an index before they can answer, and a
@@ -967,21 +966,6 @@ capability = "code.search"
   estimated_tokens = 900
 
 [[implementation]]
-id = "codebase-memory.search"
-provider = "codebase-memory"
-capability = "code.search"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-  min_scale = "medium"    # the graph only pays for itself on a big repository
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "1.2s"
-  estimated_tokens = 700
-
-[[implementation]]
 id = "claude.search"
 provider = "claude-code"
 capability = "code.search"
@@ -1086,10 +1070,9 @@ capability = "symbol.overview"
   estimated_duration = "700ms"
   estimated_tokens = 1900
 
-# codebase-memory answers both of these from the same call graph
-# codebase-memory.search above would open, if anything ever claimed it -- no
-# second index, no second provider concept, just two more questions the one
-# graph can answer.
+# codebase-memory answers both of these from one call graph -- no second
+# index, no second provider concept, just two questions the one graph can
+# answer.
 
 [[implementation]]
 id = "codebase-memory.calls"
