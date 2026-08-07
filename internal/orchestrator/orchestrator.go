@@ -1075,10 +1075,9 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		// Running a step is a probe.
 		if contract.KindOf(runErr) == contract.FailureUnavailable {
 			_ = a.catalog.SetHealth(decision.Chosen.ID, contract.Health{
-				State:      contract.HealthDown,
-				Reason:     runErr.Error(),
-				Raw:        contract.RawOf(runErr),
-				ObservedAt: time.Now(),
+				State:  contract.HealthDown,
+				Reason: runErr.Error(),
+				Raw:    contract.RawOf(runErr),
 			})
 		}
 		return a.close(out, runErr)

@@ -38,7 +38,7 @@ func detectFixture(t *testing.T, binary string, repos ...[2]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	var body strings.Builder
-	body.WriteString("contract = \"1.0.0\"\n\n[orchestrator]\nrunners = [\"codebasememory\"]\n\n")
+	body.WriteString("contract = \"2.0.0\"\n\n[orchestrator]\nrunners = [\"codebasememory\"]\n\n")
 	body.WriteString("  [orchestrator.codebasememory]\n  binary = " + quoteTOML(binary) + "\n")
 	body.WriteString("  implementations = [\"codebase-memory.index\"]\n")
 	for _, repo := range repos {

@@ -1535,7 +1535,7 @@ func TestResumeRefusesAStaleContractVersion(t *testing.T) {
 	if err := store.Save(checkpoint.Run{
 		ID: runID, Kind: checkpoint.KindAsk, Task: "x",
 		Repositories: []string{"api"}, BudgetUSD: 1,
-		ContractVersion: "2.0.0", Started: time.Now(),
+		ContractVersion: "1.0.0", Started: time.Now(),
 		Plan: contract.Plan{Task: "x", Steps: []contract.Step{{
 			ID: "ask-api", Capability: "code.search", Repository: "api",
 			Payload: map[string]any{"query": "x"}, Permission: permission,

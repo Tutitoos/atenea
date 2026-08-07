@@ -303,8 +303,13 @@ type Health struct {
 	// than living only on the attempt that caused it, because a provider the
 	// funnel is refusing right now is exactly the one whose evidence a human
 	// most needs without having to go dispatch a fresh failing call to see it.
-	Raw        string
-	ObservedAt time.Time
+	//
+	// Aging is not recorded here. A Health value cannot outlive its evidence:
+	// Fault.Health and Baseline.Health both take `now` and refuse to speak once
+	// FaultWindow or SuccessWindow has passed, so a Health that exists is a
+	// Health still inside its window. A timestamp beside it would be a second
+	// mechanism for a job the windows already do.
+	Raw string
 }
 
 // Usable reports whether the funnel keeps this provider.

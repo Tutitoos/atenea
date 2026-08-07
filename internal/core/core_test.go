@@ -20,7 +20,7 @@ import (
 // genuinely different constraints, and two repositories that pull the funnel in
 // opposite directions.
 const catalog = `
-contract = "1.0.0"
+contract = "2.0.0"
 
 [core]
 shutdown_grace = "2s"

@@ -27,9 +27,6 @@ func TestARecentSuccessIsEvidenceOfHealth(t *testing.T) {
 	if health.State != contract.HealthAlive {
 		t.Errorf("state = %v, want alive", health.State)
 	}
-	if health.ObservedAt != b.Success {
-		t.Errorf("observed at %v, want the success itself at %v", health.ObservedAt, b.Success)
-	}
 }
 
 // A success is a statement about the moment it happened. Left to speak

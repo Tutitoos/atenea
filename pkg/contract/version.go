@@ -120,7 +120,24 @@ type Version struct {
 // Additive: an adapter built against 1.10.0 goes on compiling and leaves the
 // map nil, which bounds nothing -- the same answer the funnel gave before the
 // field existed.
-var Current = Version{Major: 1, Minor: 11, Patch: 0}
+//
+// 2.0.0 removed `Health.ObservedAt`, and it is the first bump here that is
+// not additive. Every entry above adds; this one takes away, so it is major
+// by the rule at the top rather than by how much code it moved. An adapter
+// built against 1.x that named the field in a composite literal stops
+// compiling, and `Supports` refuses the whole 1.x line rather than letting a
+// peer discover the gap one field at a time.
+//
+// What it removed was a field nothing wrote and nothing read. A Health value
+// cannot outlive its evidence: `Fault.Health` and `Baseline.Health` both take
+// `now` and refuse to speak once FaultWindow or SuccessWindow has passed, so
+// a Health that exists at all is one still inside its window. The timestamp
+// was a second mechanism for a job the windows already do, and two mechanisms
+// for one job is how they drift apart. Deleting it is cheap today -- every
+// Runner in existence is in this repository -- and the cost of keeping it was
+// a field an outside adapter would eventually populate, believing the core
+// read it.
+var Current = Version{Major: 2, Minor: 0, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

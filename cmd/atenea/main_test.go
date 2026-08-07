@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 }
 
 const settings = `
-contract = "1.0.0"
+contract = "2.0.0"
 
 [[capability]]
 id = "code.search"
@@ -649,7 +649,7 @@ func TestAFailedVerdictLeavesThroughTheExitCode(t *testing.T) {
 
 func TestBrokenSettingsFailLoudly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	if err := os.WriteFile(path, []byte("contract = \"1.0.0\"\nnonsense = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("contract = \"2.0.0\"\nnonsense = true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	_, err := exec(t, "--config", path, "status")

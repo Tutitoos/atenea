@@ -227,7 +227,7 @@ func write(t *testing.T, body string) string {
 }
 
 const minimal = `
-contract = "1.0.0"
+contract = "2.0.0"
 
 [[capability]]
 id = "code.search"
@@ -275,7 +275,7 @@ func TestLoadReadsAFile(t *testing.T) {
 // retarget" path, not a missing value.
 func TestLoadReadsSerenaEndpoint(t *testing.T) {
 	body := `
-contract = "1.0.0"
+contract = "2.0.0"
 
 [[capability]]
 id = "code.search"
@@ -348,9 +348,9 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 
 func TestContractVersionIsEnforced(t *testing.T) {
 	cases := map[string]string{
-		"missing":     strings.Replace(minimal, `contract = "1.0.0"`, "", 1),
-		"unparseable": strings.Replace(minimal, `contract = "1.0.0"`, `contract = "one"`, 1),
-		"too new":     strings.Replace(minimal, `contract = "1.0.0"`, `contract = "9.0.0"`, 1),
+		"missing":     strings.Replace(minimal, `contract = "2.0.0"`, "", 1),
+		"unparseable": strings.Replace(minimal, `contract = "2.0.0"`, `contract = "one"`, 1),
+		"too new":     strings.Replace(minimal, `contract = "2.0.0"`, `contract = "9.0.0"`, 1),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -363,7 +363,38 @@ func TestContractVersionIsEnforced(t *testing.T) {
 	}
 }
 
-func TestBrokenCatalogueEntriesAreRefused(t *testing.T) {
+// Two version numbers in a sentence do not say which one is meant to move,
+// and the two directions have opposite fixes: a file left behind by a
+// breaking release needs one line changed, a file from the future needs a
+// newer binary and no edit at all. Telling the second case to edit the line
+// would buy it a second, more confusing failure.
+func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
+	behind := strings.Replace(minimal, `contract = "2.0.0"`, `contract = "1.0.0"`, 1)
+	_, err := config.Load(write(t, behind))
+	if err == nil {
+		t.Fatal("a file from the previous major was accepted")
+	}
+	// Derived, not typed: the fix a refusal names is whatever this core speaks
+	// today, and a literal here would have to be edited on every bump -- which
+	// is a test that fails for being out of date rather than for being wrong.
+	if !strings.Contains(err.Error(), `change the contract line to "2.0.0"`) {
+		t.Errorf("err = %v, want the one-line fix spelled out", err)
+	}
+
+	ahead := strings.Replace(minimal, `contract = "2.0.0"`, `contract = "9.0.0"`, 1)
+	_, err = config.Load(write(t, ahead))
+	if err == nil {
+		t.Fatal("a file from the future was accepted")
+	}
+	if strings.Contains(err.Error(), "change the contract line") {
+		t.Errorf("err = %v, want no edit suggested: no edit to the file can fix it", err)
+	}
+	if !strings.Contains(err.Error(), "upgrade atenea") {
+		t.Errorf("err = %v, want it to name the binary as the thing that is behind", err)
+	}
+}
+
+func TestBrokenCatalogEntriesAreRefused(t *testing.T) {
 	cases := map[string]string{
 		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["device"]`, 1),
 		"unknown type":     strings.Replace(minimal, `type = "string"`, `type = "float"`, 1),

@@ -28,7 +28,7 @@ at, and the difference is the thing to know before you delete a line.
 ones: what your file lists is the whole list. A settings file containing only
 
 ```toml
-contract = "1.0.0"
+contract = "2.0.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -90,7 +90,7 @@ for pinning them rather than trusting them.
 ## Skeleton
 
 ```toml
-contract = "1.0.0"          # required: the contract version this file targets
+contract = "2.0.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work

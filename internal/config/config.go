@@ -563,8 +563,8 @@ func parse(raw []byte, source string) (Config, error) {
 	}
 	if !contract.Current.Supports(cfg.Contract) {
 		return Config{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: contract %s is not supported by this core (%s)",
-			source, cfg.Contract, contract.Current)
+			"settings %s: contract %s is not supported by this core (%s): %s",
+			source, cfg.Contract, contract.Current, contractRemedy(cfg.Contract))
 	}
 
 	if cfg.Core, err = decoded.Core.build(source); err != nil {
@@ -659,6 +659,25 @@ var defaultSensitive = []string{
 // two are not the same answer at the same price, and the selector has to be
 // able to tell them apart.
 var defaultClaudeImplementations = []string{"claude.search"}
+
+// contractRemedy names the edit that fixes a refused settings file, because
+// the two numbers alone do not say which of them is meant to move.
+//
+// A file behind by a major version is the case that has a one-line fix, and
+// it is the common one: the number a file declares is the core it was written
+// for, no settings key has ever changed shape with it, and a `Health` -- the
+// thing the 2.0.0 break removed -- never appears in a settings file at all.
+// So the file is almost always already correct and only says the wrong year.
+//
+// Every other direction is a file this binary is too old to read, and no edit
+// to the file can fix that. Saying "change the line" there would be advice
+// that produces a second, more confusing failure.
+func contractRemedy(declared contract.Version) string {
+	if declared.Major < contract.Current.Major {
+		return fmt.Sprintf("change the contract line to %q; no other key moves", contract.Current)
+	}
+	return "this file was written for a newer core; upgrade atenea"
+}
 
 func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	out := Orchestrator{

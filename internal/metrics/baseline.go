@@ -96,7 +96,7 @@ func (f Fault) Health(now time.Time) (contract.Health, bool) {
 	if f.Streak < FaultStreak || now.Sub(f.Latest) > FaultWindow {
 		return contract.Health{}, false
 	}
-	h := contract.Health{ObservedAt: f.Latest, Raw: f.Raw}
+	h := contract.Health{Raw: f.Raw}
 	if f.Kind != "" {
 		h.State = contract.HealthDown
 		h.Reason = fmt.Sprintf("%d %s failures in a row, last one %s",
@@ -182,9 +182,8 @@ func (b Baseline) Health(now time.Time) (contract.Health, bool) {
 		return contract.Health{}, false
 	}
 	return contract.Health{
-		State:      contract.HealthAlive,
-		Reason:     fmt.Sprintf("last call here worked, %s ago", since(now, b.Success)),
-		ObservedAt: b.Success,
+		State:  contract.HealthAlive,
+		Reason: fmt.Sprintf("last call here worked, %s ago", since(now, b.Success)),
 		// Score is deliberately left at zero rather than set to 1.
 		//
 		// Score breaks ties between two providers in the same state, and the

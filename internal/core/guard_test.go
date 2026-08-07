@@ -19,7 +19,7 @@ import (
 // no retry delay to wait out -- fast and deterministic, the same shape a
 // real crash-looping install would produce without the real wait to prove it.
 const managedCatalog = `
-contract = "1.0.0"
+contract = "2.0.0"
 
 [core]
 shutdown_grace = "2s"

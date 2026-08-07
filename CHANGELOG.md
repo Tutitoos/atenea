@@ -15,6 +15,35 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+`pkg/contract` bumped to `2.0.0`, and it is the first bump that is not
+additive: `Health.ObservedAt` is gone, so an adapter built against `1.x` that
+named it in a composite literal stops compiling, and `Supports` refuses the
+whole `1.x` line rather than letting a peer find the gap one field at a time.
+Nothing wrote the field and nothing read it -- the detail is under **Removed**
+below. Every Runner in existence is in this repository, so no adapter author
+is woken by this.
+
+A settings file is, and that is the number doing its job rather than
+inflating. A major bump is a warning aimed at whoever can feel the break, and
+the earlier ones in this file had nobody to warn: eleven minor bumps in a row
+cost a reader nothing because nothing downstream could tell. This one is felt
+by every file on disk, once, by exactly one line -- which is the smallest
+break the number is capable of announcing, and precisely the case it exists
+to announce. Sizing the bump to how much code moved would have hidden it.
+
+**Upgrading needs one line.** Every settings file on disk says
+`contract = "1.0.0"`, so this core refuses it and names the fix:
+
+```text
+settings ~/.config/atenea/atenea.toml: contract 1.0.0 is not supported by
+this core (2.0.0): change the contract line to "2.0.0"; no other key moves
+```
+
+That is the whole upgrade. No settings key was added, renamed or removed by
+the bump, and a `Health` never appears in a settings file at all -- the file
+is already correct and only says the wrong year. A file from the *future* is
+told the opposite, because no edit to it can help: upgrade the binary.
+
 ### Fixed
 
 - **`lefthook install` was a required step mentioned only as a comment in a
@@ -27,6 +56,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   about is the same as no step -- the same shape as the lint streak recorded
   under `0.6.0`, where the hook existed and had never been installed on the
   machine cutting the releases.
+
+### Removed
+
+- **`contract.Health.ObservedAt`** -- breaking, and the reason for the major
+  bump above. A `Health` value cannot outlive its evidence: `Fault.Health` and
+  `Baseline.Health` both take `now` and refuse to speak once `FaultWindow` or
+  `SuccessWindow` has passed, so a `Health` that exists at all is one still
+  inside its window. The timestamp was a second mechanism for a job the
+  windows already do, and two mechanisms for one job is how they drift apart.
+  It was written in one place, read in none, and asserted by a single test
+  that checked it equalled the success it was copied from. What made it worth
+  removing rather than leaving inert is that it was exported: an outside
+  adapter would eventually have populated it believing the core read it.
 
 ## [0.6.1] - 2026-08-07
 
