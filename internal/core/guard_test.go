@@ -183,7 +183,7 @@ func TestAManagedProcessTakesOverTheWrittenEndpoint(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			cfg, err := config.Load(writeTemp(t, body))
 			if err == nil {
-				_, err = core.New(cfg)
+				_, err = core.New(cfg, core.Command)
 			}
 			if err == nil {
 				t.Fatal("an endpoint that is not a URL was accepted")

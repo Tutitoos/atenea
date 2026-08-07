@@ -73,6 +73,13 @@ type Core struct {
 	agent     *orchestrator.Agent
 
 	started time.Time
+	// role is what this process is allowed to maintain. It is kept so the
+	// status screen can say which one it is talking to: a command reporting a
+	// clock it is not running would be describing somebody else's process.
+	role Role
+	// upkeep releases the claim, and is nil for a command -- there is nothing
+	// to release when nothing was claimed.
+	upkeep func()
 
 	mu sync.Mutex
 	// sessions is the live chat table. A plain map under the lock the core
@@ -112,8 +119,37 @@ func (m meter) Record(x metrics.Measurement) { m.store.Record(x) }
 // screen instead.
 func (m meter) Settle(ctx context.Context) { _ = m.beats.Do(ctx, jobFlush) }
 
-// New builds a core from settings.
-func New(cfg config.Config) (*Core, error) {
+// Role says whether this Core is the process responsible for the state on disk
+// or one of the many that merely use it. Exactly one of the two is allowed to
+// perform upkeep -- the receipt sweep and, once started, the clock's lanes --
+// because every one of those tasks coordinates through an in-process lock and
+// so cannot be done twice at once without the two passes fighting.
+//
+// The distinction was true by accident before it was declared: only `atenea
+// run` ever called Run, so only the service ever ticked. The sweep had no such
+// luck and ran on every construction, which is the bug this closes.
+type Role int
+
+const (
+	// Service is the long-lived process: it sweeps, it ticks, and it is the
+	// one that will hold the socket.
+	Service Role = iota
+	// Command is every one-shot subcommand. It dispatches and reads freely;
+	// it touches nobody's upkeep.
+	Command
+)
+
+// String names the role for a message a person has to read.
+func (r Role) String() string {
+	if r == Command {
+		return "command"
+	}
+	return "service"
+}
+
+// New builds a core from settings. The role decides whether this process
+// performs the upkeep that must happen exactly once; see Role.
+func New(cfg config.Config, role Role) (*Core, error) {
 	catalog := registry.New()
 	for _, capability := range cfg.Capabilities {
 		if err := catalog.AddCapability(capability); err != nil {
@@ -153,12 +189,38 @@ func New(cfg config.Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The upkeep is claimed before anything is swept, ticked or opened, because
+	// the claim is the right to do any of it. A second service is refused here,
+	// which is also why it never reaches the measurement base: two services
+	// contending for that lock would answer slowly instead of clearly.
+	var upkeep func()
+	built := false
+	if role == Service {
+		upkeep, err = claimUpkeep()
+		if err != nil {
+			return nil, err
+		}
+		// A construction that falls over below must not leave the claim behind:
+		// the next start would be refused on behalf of nobody.
+		defer func() {
+			if !built {
+				upkeep()
+			}
+		}()
+	}
 	// The damage assessment, before anything is served. Receipts first: an
 	// interrupted dump is swept and a torn one set aside, so nothing that
 	// follows reads a record of a run that never happened that way.
-	found, err := recoverReceipts(checkpoints)
-	if err != nil {
-		return nil, err
+	//
+	// Only the service does this. A command cannot tell an abandoned temporary
+	// file from one the service has open this instant, and the pass that
+	// decides holds a mutex this process does not share with it.
+	var found Recovery
+	if role == Service {
+		found, err = recoverReceipts(checkpoints)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var store *metrics.Store
 	if cfg.Metrics.Enabled {
@@ -212,6 +274,7 @@ func New(cfg config.Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	built = true
 	return &Core{
 		settings:     cfg,
 		catalog:      catalog,
@@ -227,6 +290,8 @@ func New(cfg config.Config) (*Core, error) {
 		agent:        agent,
 		sessions:     make(map[string]*Session),
 		started:      time.Now(),
+		role:         role,
+		upkeep:       upkeep,
 	}, nil
 }
 
@@ -808,14 +873,26 @@ func (c *Core) Shutdown() error {
 	}
 }
 
-// settle stops the rhythms and writes whatever is still in memory.
+// settle stops the rhythms, releases the upkeep and writes whatever is still in
+// memory.
 //
 // This is the second of the two safety nets around batching, and the last
 // chance the batch gets. Unlike the one at a phase close, its error is
 // returned: nothing comes after it, so a caller that ignored it would be
 // throwing away the only report that measurements were lost.
+//
+// The claim goes back here rather than at the end of Shutdown because both of
+// Shutdown's exits pass through this one function, and because the claim is the
+// right to tick: it has no meaning once the clock is stopped, and holding it a
+// moment longer would refuse a restart for no reason. A kill that skips this
+// path leaves the file behind with a pid that no longer exists, which the next
+// claim clears.
 func (c *Core) settle() error {
 	c.beats.Stop()
+	if c.upkeep != nil {
+		c.upkeep()
+		c.upkeep = nil
+	}
 	if c.measurements == nil {
 		return nil
 	}

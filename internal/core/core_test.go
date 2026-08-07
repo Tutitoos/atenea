@@ -135,7 +135,7 @@ func build(t *testing.T, body string) *core.Core {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	atenea, err := core.New(cfg)
+	atenea, err := core.New(cfg, core.Command)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if _, err := core.New(cfg); err == nil {
+	if _, err := core.New(cfg, core.Command); err == nil {
 		t.Fatal("a runner told to serve a capability it cannot run was accepted")
 	} else if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
 		t.Errorf("kind = %v, want invalid_input: err = %v", kind, err)
@@ -351,7 +351,7 @@ prefer = "ripgrep"
 			if err != nil {
 				t.Fatalf("config.Load: %v", err)
 			}
-			if _, err := core.New(cfg); err == nil {
+			if _, err := core.New(cfg, core.Command); err == nil {
 				t.Fatal("expected the boot to fail")
 			}
 		})
@@ -512,7 +512,7 @@ func TestTwoRunnersClaimingOneImplementationIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if _, err := core.New(cfg); contract.KindOf(err) != contract.FailureInvalidInput {
+	if _, err := core.New(cfg, core.Command); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
 }

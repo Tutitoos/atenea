@@ -423,6 +423,13 @@ one worth reading, and the missing one leads nowhere.
 A base held open by another Atenea is not damage and is never moved. That check
 is the difference between recovering from corruption and manufacturing it.
 
+The repair is the service's, and only the service's. A command cannot tell an
+abandoned temporary file from one the service has open this instant, so it leaves
+the directory alone — the `process` line on the status screen says which of the
+two you are reading, and a `recovered` line absent from a command means nothing
+was repaired *by that process*. A second `atenea run` is refused and names the
+pid that already holds the upkeep; every other command runs beside it untouched.
+
 **The light** is one glance, and it is the worst of everything under it. Amber
 for Atenea being unwell — a lane that failed, copies gone stale, an ugly close
 it recovered from, an incident nobody has read — and amber for a provider that

@@ -78,7 +78,38 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   for a `string_list` that is `items`, not the array, because a set says which
   words may appear and never how many.
 
+- **The status screen names which process it is.** A new `process` line, `service`
+  or `command`. Every other fact on that screen is true whoever prints it, which
+  is a rule the background section was built around; the repair is now the one
+  exception, so the screen says which of the two you are reading rather than
+  leaving a silent `recovered` line to be read as "nothing was repaired".
+
 ### Fixed
+
+- **A command no longer sweeps the receipts of a service that is running.** The
+  recovery pass deleted every `*.tmp` it found on every core construction --
+  which is to say on every subcommand, not just on the way up -- and
+  `Store.Recover` holds a mutex for the whole pass precisely so that "a dump
+  being written right now cannot have its temporary file swept out from under
+  the rename". A mutex cannot do that across processes. An `atenea status` run
+  beside a live service could delete the file a run had open, and that run then
+  reported a checkpoint write failure for a reason that had nothing to do with
+  it.
+
+  Upkeep now belongs to one process and is claimed on disk, in
+  `$XDG_RUNTIME_DIR/atenea/upkeep.lock` (the state root when that is unset). The
+  service sweeps receipts and ticks the clock; a second `atenea run` is refused
+  `unavailable` and the refusal names the pid that already holds it -- which is
+  why the claim is a file carrying a pid rather than a kernel lock, since "no"
+  without a pid leaves an operator with two processes and no way to tell which
+  one to stop. Every other command runs beside the service exactly as before:
+  the refusal is for the upkeep, not for using Atenea.
+
+  The clock had the same exposure and survived it by luck: `Run` is what starts
+  the beats and only `atenea run` ever called it, so the invariant was true by
+  accident. It is now declared, and the mechanism the resume lock already used
+  is shared rather than copied -- `internal/pidlock` is the one implementation,
+  and `checkpoint.Lock` calls it.
 
 - **A probed stdio server no longer hangs the probe by outliving it.** Killing
   the process Atenea started left that process's own helpers running, and

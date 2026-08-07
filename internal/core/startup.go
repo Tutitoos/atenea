@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/backup"
@@ -13,6 +15,8 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/pidlock"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -55,6 +59,33 @@ func (r Recovery) Summary() string {
 		out += "; the measurement base did not answer and was moved to " + r.BaseSetAside
 	}
 	return out
+}
+
+// upkeepFile is the claim: one per user, in the directory that exists for
+// things which only matter while a process is running.
+const upkeepFile = "upkeep.lock"
+
+// claimUpkeep takes the exclusive right to maintain the state on disk.
+//
+// Two services would each sweep the receipt directory, each tick the clock, and
+// each drive the flush, the roll-up and the backup against one measurement base.
+// Every one of those coordinates through a lock held inside a single process, so
+// the second service does not make the work twice as reliable -- it makes the
+// locks stop meaning anything. The claim turns that into a refusal that names
+// who already has it.
+func claimUpkeep() (func(), error) {
+	path := filepath.Join(platform.RuntimeDir(), upkeepFile)
+	release, err := pidlock.Claim(path)
+	switch {
+	case errors.Is(err, pidlock.ErrHeld):
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"another atenea already has the upkeep (pid %d, %s): only one may sweep receipts and tick the clock",
+			pidlock.Holder(path), path)
+	case err != nil:
+		return nil, contract.Fail(contract.FailurePermissionDenied,
+			"claiming the upkeep at %s: %v", path, err)
+	}
+	return release, nil
 }
 
 // recoverReceipts runs the paper-copy half of the pass.

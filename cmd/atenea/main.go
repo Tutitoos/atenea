@@ -340,18 +340,32 @@ func run(args []string, out io.Writer) error {
 	}
 }
 
-// load reads the settings file and builds a Core. Every caller must
-// eventually stop what it built: a command that only reads status today
-// might still launch a managed process to answer honestly -- Serena on
-// first use, if the settings file opted it in -- and a bare return would
-// leak it as an orphan the moment this process exits. defer Shutdown right
-// after checking the error, the same as any other acquired resource.
+// load reads the settings file and builds a Core for a one-shot subcommand.
+// Every caller must eventually stop what it built: a command that only reads
+// status today might still launch a managed process to answer honestly --
+// Serena on first use, if the settings file opted it in -- and a bare return
+// would leak it as an orphan the moment this process exits. defer Shutdown
+// right after checking the error, the same as any other acquired resource.
+//
+// This is the door for everything except the service, and it is separate from
+// loadService rather than a flag on one function so that a subcommand added
+// later performs no upkeep unless somebody writes down that it should.
 func load(settingsPath string) (*core.Core, error) {
+	return build(settingsPath, core.Command)
+}
+
+// loadService builds the Core for `atenea run`: the one process that sweeps
+// receipts and ticks the clock. Nothing else may use this.
+func loadService(settingsPath string) (*core.Core, error) {
+	return build(settingsPath, core.Service)
+}
+
+func build(settingsPath string, role core.Role) (*core.Core, error) {
 	cfg, err := config.Load(settingsPath)
 	if err != nil {
 		return nil, err
 	}
-	return core.New(cfg)
+	return core.New(cfg, role)
 }
 
 func cmdVersion(out io.Writer) error {
@@ -371,6 +385,11 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "atenea %s  contract %s  %s\n",
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
+	// Every other fact on this screen is true whoever prints it -- that is the
+	// rule printBackground is built around. The repair is the one exception: only
+	// the service sweeps, so a `recovered` line that says nothing here means
+	// nothing was repaired BY THIS PROCESS, and the role is what says so.
+	fmt.Fprintf(out, "process   %s\n", status.Role)
 	if len(status.Missing) > 0 {
 		// Beside the settings line, because that file is the thing to edit.
 		// Not a light and not an incident: nothing is broken yet, and the
@@ -1593,7 +1612,7 @@ func scopeOf(payload map[string]any) []string {
 }
 
 func cmdRun(settingsPath string, out io.Writer) error {
-	atenea, err := load(settingsPath)
+	atenea, err := loadService(settingsPath)
 	if err != nil {
 		return err
 	}

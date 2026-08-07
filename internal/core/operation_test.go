@@ -84,7 +84,7 @@ func TestTheScreenCountsTheCopiesThatAreThere(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)
 	dir := filepath.Join(root, "copies")
-	atenea, err := core.New(load(t, healthy+"\n[backup]\ndir = \""+dir+"\"\n"))
+	atenea, err := core.New(load(t, healthy+"\n[backup]\ndir = \""+dir+"\"\n"), core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestACopyingRhythmThatStoppedShowsAmber(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)
 	dir := filepath.Join(root, "copies")
-	atenea, err := core.New(load(t, healthy+"\n[backup]\ndir = \""+dir+"\"\nevery = \"1h\"\n"))
+	atenea, err := core.New(load(t, healthy+"\n[backup]\ndir = \""+dir+"\"\nevery = \"1h\"\n"), core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestAnUglyCloseIsRepairedAndReported(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	atenea, err := core.New(load(t, healthy))
+	atenea, err := core.New(load(t, healthy), core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestAStartAfterACleanStopIsGreen(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", root)
 	settings := load(t, healthy)
 
-	first, err := core.New(settings)
+	first, err := core.New(settings, core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestAStartAfterACleanStopIsGreen(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	second, err := core.New(settings)
+	second, err := core.New(settings, core.Service)
 	if err != nil {
 		t.Fatalf("second core.New: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestARepairLeavesTheGoodReceiptsAlone(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	atenea, err := core.New(load(t, healthy))
+	atenea, err := core.New(load(t, healthy), core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -299,7 +299,7 @@ func filedIncident(t *testing.T) config.Config {
 	dir := filepath.Join(root, "copies")
 	settings := load(t, healthy+"\n[backup]\ndir = \""+dir+"\"\nevery = \"1s\"\n")
 
-	atenea, err := core.New(settings)
+	atenea, err := core.New(settings, core.Service)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -334,7 +334,7 @@ func filedIncident(t *testing.T) config.Config {
 func TestAFailingBackgroundLaneTurnsTheLightAmberInEveryProcess(t *testing.T) {
 	settings := filedIncident(t)
 
-	reader, err := core.New(settings)
+	reader, err := core.New(settings, core.Command)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestAFailingBackgroundLaneTurnsTheLightAmberInEveryProcess(t *testing.T) {
 func TestReadingTheIncidentsClearsTheLight(t *testing.T) {
 	settings := filedIncident(t)
 
-	reader, err := core.New(settings)
+	reader, err := core.New(settings, core.Command)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}

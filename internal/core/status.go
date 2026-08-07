@@ -41,6 +41,12 @@ type Status struct {
 	Version  string
 	Contract contract.Version
 	Settings string
+	// Role is what this process maintains. Every screen below it is honest only
+	// about the process printing it: a command has no clock of its own, so the
+	// rhythms it lists are the ones it would keep if it were the service, read
+	// from disk. Naming the role is what keeps the reader from taking a
+	// command's view for the service's.
+	Role string
 	// Missing names implementations the shipped catalog declares and this
 	// machine's settings file does not. Settings replace the catalog rather
 	// than patching it, so an older file silently misses whatever later
@@ -349,6 +355,7 @@ func (c *Core) Status() Status {
 		Version:  c.Version(),
 		Contract: contract.Current,
 		Settings: c.settings.Source,
+		Role:     c.role.String(),
 		Missing:  c.settings.Missing,
 		Uptime:   c.Uptime().Truncate(time.Second).String(),
 		Stopping: c.Stopping(),

@@ -53,6 +53,22 @@ func ConfigDir() string {
 	return filepath.Join(home, ".config", dirName)
 }
 
+// RuntimeDir is where Atenea keeps what only matters while it is running: the
+// upkeep claim today, and the socket that will sit beside it.
+//
+// XDG_RUNTIME_DIR is the right home for both. It is per-user, already 0700, and
+// the login session clears it -- so nothing from a previous boot can be mistaken
+// for a live claim. When it is unset, which is the ordinary case for cron, a
+// container, or ssh without a session, the state root stands in: a claim file
+// there behaves identically, and the pid inside it is what keeps a leftover from
+// being read as a holder.
+func RuntimeDir() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, dirName)
+	}
+	return StateDir()
+}
+
 // BackupDir is where copies of the history go: a folder of its own, beside the
 // state root and never inside it.
 //

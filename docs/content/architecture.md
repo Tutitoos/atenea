@@ -660,6 +660,17 @@ because those bytes are the only evidence of what was lost. Good receipts are
 not touched — including the receipt of a commission the cut interrupted, which
 is exactly the one worth reading back.
 
+The service does this, and nothing else does. A sweep cannot tell an abandoned
+temporary file from one another process has open this instant, and the pass that
+decides holds a mutex which stops at the edge of the process holding it — so a
+command sweeping beside a running service would delete a live writer's file and
+that writer would report a checkpoint failure for a reason having nothing to do
+with its own run. One process is allowed to maintain the state on disk; it says
+so in a file carrying its pid, and a second `atenea run` is refused by name
+rather than joining in. Every other command works beside it untouched — the
+refusal is for the upkeep, not for using Atenea. The `process` line on the
+status screen is which of the two you are reading.
+
 Resuming a run whose receipt was torn is a dead end, and the reason is a file
 in the same directory. The refusal names it: reporting the missing `.json`
 would be true and would send the reader to the one path with nothing on it.
