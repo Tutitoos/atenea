@@ -148,6 +148,15 @@ told the opposite, because no edit to it can help: upgrade the binary.
   under `0.6.0`, where the hook existed and had never been installed on the
   machine cutting the releases.
 
+- **The stand-in's ignore list was described as standing in for `.gitignore`,
+  and it does not.** `default.toml` explained the list as the rule a real
+  search tool gets from the repository, told to the stand-in instead. Measured
+  on a probe repository, the two disagree in both directions: the stand-in
+  skipped a tracked file under `build/` that omp searched, and returned two
+  `.gitignore`'d files omp did not. The comment now says the list is a floor
+  and nothing more, and that having no client installed is the reason to
+  choose the stand-in -- speed is not, even at the 28-65x measured.
+
 ### Removed
 
 - **`contract.Health.ObservedAt`** -- breaking, and the reason for the major

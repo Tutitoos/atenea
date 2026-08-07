@@ -72,7 +72,11 @@ checkpoint_dir = ""
 # is off by default because it costs money per call. "serena" is not a CLI at
 # all: it is an MCP server, attached the same way because a capability does not
 # care whether its provider is a command or a server. "local" is a stand-in
-# that searches the disk directly, for a machine with no client installed. An
+# that searches the disk directly, for a machine with no client installed. It
+# and omp both serve ripgrep, so attaching both is refused at load: the choice
+# is exclusive. The stand-in spawns nothing and is far faster for it -- 28-65x
+# measured -- but it answers a slightly different question, because it reads no
+# .gitignore. Having no client is the reason to choose it; speed is not. An
 # empty list leaves the core able to plan and choose, with nothing to dispatch.
 runners = ["omp"]
 
@@ -195,8 +199,11 @@ runners = ["omp"]
   [orchestrator.local]
   # Implementations the stand-in answers for.
   implementations = ["ripgrep"]
-  # Directories never descended into. A real search tool skips these by reading
-  # .gitignore; the stand-in does not read it, so it is told instead.
+  # Directories never descended into. This is a floor, not an equivalent of the
+  # rule a real search tool applies: omp reads the repository's own .gitignore,
+  # and this list reads nothing. Measured on a probe repository, the two
+  # disagree in both directions -- the stand-in skipped a tracked file under
+  # build/ that omp searched, and returned two .gitignore'd files omp did not.
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
 [metrics]

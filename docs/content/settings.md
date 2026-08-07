@@ -125,7 +125,7 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.local]
   implementations = ["ripgrep"]        # what the stand-in can actually execute
-  # never walked; the stand-in does not read .gitignore, so it is told instead
+  # never walked; the stand-in reads no .gitignore, so it is told instead
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
   [orchestrator.claudecode]
@@ -177,6 +177,19 @@ a stand-in that searches the disk directly, for a machine with no client
 installed. An empty list leaves the core able to plan and choose but unable to
 dispatch — a working core with nobody attached, and the status screen says so
 rather than failing halfway through a commission.
+
+`local` and `omp` both answer for `ripgrep`, so attaching both is refused by the
+rule below and the choice between them is exclusive. It is worth making
+deliberately, because the stand-in is not a slower omp — it is a faster one that
+answers a slightly different question. Spawning nothing makes it 28–65× quicker
+on the repositories this was measured against, with identical results on all
+three. But it reads no `.gitignore`, and against a probe repository built to
+separate the two rules the answers diverged in both directions: the stand-in
+skipped a tracked file under `build/` because the name is on its fixed list, and
+returned two `.gitignore`'d files — one of them a private note — that omp did
+not. Neither answer is wrong for the rule it applies. Only one of them applies
+the rule the repository itself declares, which is why `omp` ships attached and
+the speed is not the reason to switch.
 
 Each runner answers for its own implementations, and two of them claiming the
 same one is refused at load. Dispatch would still work — whoever was asked
