@@ -13,7 +13,7 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.7.0] - 2026-08-07
 
 `pkg/contract` bumped to `2.0.0`, and it is the first bump that is not
 additive: `Health.ObservedAt` is gone, so an adapter built against `1.x` that
@@ -1345,6 +1345,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.7.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.7.0
 [0.6.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.5.0
