@@ -61,8 +61,16 @@ func (r Recovery) Summary() string {
 	return out
 }
 
-// upkeepFile is the claim: one per user, in the directory that exists for
-// things which only matter while a process is running.
+// upkeepFile is the claim, and it sits in the state root beside the very things
+// it protects -- the receipts and the measurement base.
+//
+// Not in XDG_RUNTIME_DIR, which is where a lock of this kind would ordinarily
+// go. A lock only excludes people who look in the same place, and that variable
+// is set for a systemd --user service and for a login shell but unset under
+// cron: the two would claim two different files and both go on sweeping. The
+// state root is derived from HOME, so every process that shares the state shares
+// the claim on it. The one thing the runtime directory would have given us --
+// nothing stale surviving a reboot -- the pid inside the file already gives.
 const upkeepFile = "upkeep.lock"
 
 // claimUpkeep takes the exclusive right to maintain the state on disk.
@@ -74,7 +82,7 @@ const upkeepFile = "upkeep.lock"
 // locks stop meaning anything. The claim turns that into a refusal that names
 // who already has it.
 func claimUpkeep() (func(), error) {
-	path := filepath.Join(platform.RuntimeDir(), upkeepFile)
+	path := filepath.Join(platform.StateDir(), upkeepFile)
 	release, err := pidlock.Claim(path)
 	switch {
 	case errors.Is(err, pidlock.ErrHeld):

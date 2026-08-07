@@ -97,8 +97,13 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   it.
 
   Upkeep now belongs to one process and is claimed on disk, in
-  `$XDG_RUNTIME_DIR/atenea/upkeep.lock` (the state root when that is unset). The
-  service sweeps receipts and ticks the clock; a second `atenea run` is refused
+  `upkeep.lock` in the state root -- beside the receipts and the base it
+  protects, and deliberately not in `$XDG_RUNTIME_DIR` where a lock of this kind
+  would ordinarily go: that variable is set for a `systemd --user` service and
+  for a login shell but unset under cron, so the two would claim two different
+  files and both go on sweeping. A lock only excludes people looking in the same
+  place. The state root is derived from `HOME`, so every process sharing the
+  state shares the claim on it. The service sweeps receipts and ticks the clock; a second `atenea run` is refused
   `unavailable` and the refusal names the pid that already holds it -- which is
   why the claim is a file carrying a pid rather than a kernel lock, since "no"
   without a pid leaves an operator with two processes and no way to tell which

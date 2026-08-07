@@ -175,6 +175,34 @@ func TestAServiceThatStopsReleasesTheUpkeep(t *testing.T) {
 	}
 }
 
+// A lock only excludes people who look in the same place. XDG_RUNTIME_DIR is
+// set for a systemd --user service and for a login shell, and unset under cron
+// -- so a claim that lived there would put two services in two different files
+// and let both of them sweep and tick, which is the bug this whole change
+// exists to stop. The claim goes where everybody agrees: the state root, which
+// is derived from HOME.
+func TestTheUpkeepClaimIgnoresTheRuntimeDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(root, "run"))
+	cfg := upkeepSettings(t, root)
+
+	first, err := core.New(cfg, core.Service)
+	if err != nil {
+		t.Fatalf("first service: %v", err)
+	}
+	defer func() { _ = first.Shutdown() }()
+
+	// The same installation, reached by a process that has no runtime directory.
+	// Nothing about the state root changed, so the answer must not change.
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if _, err := core.New(cfg, core.Service); err == nil {
+		t.Fatal("a service with no XDG_RUNTIME_DIR claimed the upkeep a second time")
+	} else if kind := contract.KindOf(err); kind != contract.FailureUnavailable {
+		t.Errorf("kind = %v, want unavailable: err = %v", kind, err)
+	}
+}
+
 // A service killed outright cannot release anything on its way down, and the
 // upkeep it held must not stay claimed forever: the next start would be refused
 // on behalf of a process that no longer exists.
