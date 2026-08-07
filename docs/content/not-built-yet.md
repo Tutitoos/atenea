@@ -42,12 +42,37 @@ re-declaration of this one. A capability whose output says which symbol
 contains each hit, and in what order, is a different question from "where does
 this text appear". Nothing is blocked on it today.
 
+## Reading a file is not a capability
+
+The design's base list names `file.read` beside `code.search` and the symbol
+family. It is struck, not pending.
+
+A capability exists so the funnel has something to choose between. `code.search`
+has four candidate implementations and the choice is real: literal text is cheap
+and exact, a model turn is expensive and can infer, a graph needs an index and
+ranks what it finds. Reading a named range of a named path has one implementation
+on any machine — the filesystem — and every client that would ask already holds
+it. There is no constraint to check, no health to track, no cost to rank and
+nothing to fall back to. A funnel in front of a file read is overhead with a
+trace attached.
+
+It looked like a gap exactly once, and only under an artificial rule: a run
+forbidden from using anything but Atenea had to read a function body by searching
+for its name with `context_lines = 30`, and the window truncated the following
+declaration mid-expression. That is a real limitation of reading through a search
+tool. It is not an argument for the capability, because the constraint that
+produced it does not exist in normal use — the client reads the file, and asks
+Atenea only what needs deciding.
+
+If a machine ever appears where reading is genuinely a choice between providers,
+that is a new capability with its own contract, not this one revived.
+
 ## Wandering is recorded and nothing ranks on it yet
 
 An adapter that cannot confine its own search checks every match afterward and
-drops the ones outside the requested scope. The count of those strays is now
-recorded per attempt, in the `out_of_scope` column of the measurement base.
-Nothing reads it yet.
+drops the ones outside the requested scope. The count of those strays is
+recorded per attempt, in the `out_of_scope` column of the measurement base, and
+`atenea metrics` prints it. Nothing *ranks* on it.
 
 It is deliberately not health. Health answers "can this provider answer at
 all", and a provider that wanders still answers — the core drops the strays and
