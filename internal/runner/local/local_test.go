@@ -397,17 +397,10 @@ func TestUnknownCapabilityIsNotFound(t *testing.T) {
 	}
 }
 
-// The commission stamps what is allowed, and the runner obeys the stamp
-// instead of deciding for itself.
-func TestAnEffectOutsideTheCommissionIsRefused(t *testing.T) {
-	root := fixture(t)
-	req := request(t, root, map[string]any{"query": "login"})
-	req.Permission = contract.Permission{Task: "find login"} // nothing granted
-	_, err := newRunner(t).Run(t.Context(), req)
-	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
-		t.Fatalf("kind = %v, want permission_denied", got)
-	}
-}
+// The permission gate is not here any more: it is one site in the core, on the
+// seam every dispatch crosses (internal/core/commission.go). An adapter is a
+// dumb translator, and five of them carrying three identical lines meant an
+// adapter written outside this repository enforced nothing at all.
 
 // A failed attempt is still a measurement, and a measurement filed with no
 // version cannot be told apart from the release before it. The case worth
@@ -416,10 +409,10 @@ func TestAnEffectOutsideTheCommissionIsRefused(t *testing.T) {
 func TestAFailedRunStillReportsWhoFailed(t *testing.T) {
 	root := fixture(t)
 	req := request(t, root, map[string]any{"query": "login"})
-	req.Permission = contract.Permission{Task: "find login"} // nothing granted
+	req.Implementation.ID = "nobody.search"
 	outcome, err := newRunner(t).Run(t.Context(), req)
 	if err == nil {
-		t.Fatal("the refusal stopped happening; this test is about the refusal")
+		t.Fatal("an implementation this runner does not serve came back clean")
 	}
 	if outcome.ToolVersion == "" {
 		t.Error("a refused call was filed with no version at all")

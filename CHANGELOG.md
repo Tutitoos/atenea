@@ -44,6 +44,22 @@ the bump, and a `Health` never appears in a settings file at all -- the file
 is already correct and only says the wrong year. A file from the *future* is
 told the opposite, because no edit to it can help: upgrade the binary.
 
+### Changed
+
+- **The permission gate was copy-pasted into five adapters and absent from the
+  core's dispatch path; it is now one site the core owns.** `claudecode.go`,
+  `codebasememory.go`, `omp.go`, `serena.go` and the local stand-in each
+  carried the same three lines checking `req.Allowed()`, and nothing sat on the
+  seam every dispatch actually crosses. That is the most security-relevant
+  decision in the system living in five dumb translators -- and `pkg/contract`
+  explicitly anticipates adapters supplied from outside this repository, which
+  enforced nothing whatsoever unless their author happened to copy those lines.
+  The check now lives in `internal/core/commission.go`, wrapped around the
+  attached seam in `attach`, and the five copies are gone. Measured live: with
+  the standing grant narrowed to `["read"]`, `code.search` is refused with
+  `permission_denied: code.search causes process, which the commission does not
+  cover` -- through an adapter that no longer checks anything itself.
+
 ### Fixed
 
 - **`lefthook install` was a required step mentioned only as a comment in a

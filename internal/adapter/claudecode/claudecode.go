@@ -163,10 +163,6 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
 	}
-	if missing, ok := req.Allowed(); !ok {
-		return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
-			"%s causes %s, which the commission does not cover", req.Capability.ID, missing)
-	}
 	if !r.Serves(req.Implementation.ID) {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"claude-code adapter does not serve implementation %s", req.Implementation.ID)

@@ -495,17 +495,20 @@ func (f fanOut) Run(ctx context.Context, req contract.RunRequest) (contract.Outc
 		"no attached runner serves implementation %s", req.Implementation.ID)
 }
 
-// attach reduces the live adapters to the single seam the orchestrator takes.
+// attach reduces the live adapters to the single seam the orchestrator takes,
+// behind the permission gate. Nothing dispatched by this core reaches an
+// adapter without crossing commissioned.Run first.
 func attach(runners []contract.Runner) contract.Runner {
 	switch len(runners) {
 	case 0:
 		return nil
 	case 1:
 		// One client needs no routing, and the status screen reads better
-		// naming it directly than naming a wrapper around it.
-		return runners[0]
+		// naming it directly than naming a wrapper around it -- which is why
+		// the gate delegates ID rather than answering for itself.
+		return commissioned{runners[0]}
 	default:
-		return fanOut(runners)
+		return commissioned{fanOut(runners)}
 	}
 }
 

@@ -654,6 +654,17 @@ All the intelligence stays in the core. An adapter translates a request into
 its far side's shape and translates the answer back, and that is all it does.
 The far side may be a CLI or a server; the seam does not care.
 
+That sentence was aspirational until recently, in the one place it mattered
+most. The check that refuses a step whose capability causes an effect the
+commission does not cover was copy-pasted into all five runners and sat nowhere
+on the core's own dispatch path — the most security-relevant decision in the
+system, made five times, by the things this section says never decide anything.
+It is now a single wrapper the core puts around the attached seam, so nothing
+dispatched here reaches an adapter without crossing it first, and every adapter
+is free to be as dumb as the design says it is. The version rule below
+anticipates adapters built outside this repository: the gate is what makes one
+of those safe by construction rather than by its author's diligence.
+
 The return path is the treacherous one, because every CLI phrases failure
 differently. Each adapter sorts its own errors into six shared bins:
 `invalid_input`, `not_found`, `permission_denied`, `external_denied`,

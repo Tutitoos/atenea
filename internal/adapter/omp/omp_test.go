@@ -550,11 +550,9 @@ func TestARequestThisAdapterCannotAnswerIsSortedNotAttempted(t *testing.T) {
 			bend: func(r *contract.RunRequest) { r.Implementation.ID = "serena.search" },
 			want: contract.FailureUnavailable,
 		},
-		{
-			name: "an effect the commission does not cover",
-			bend: func(r *contract.RunRequest) { r.Permission.Effects = nil },
-			want: contract.FailurePermissionDenied,
-		},
+		// The commission's own effects are not in this table: the gate that
+		// checks them is one site in the core now
+		// (internal/core/commission.go), not a copy in each adapter.
 		{
 			name: "a payload missing its required field",
 			bend: func(r *contract.RunRequest) { r.Payload = map[string]any{} },

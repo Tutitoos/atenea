@@ -613,17 +613,9 @@ func TestAMissingBinaryIsUnavailableRatherThanFatal(t *testing.T) {
 	}
 }
 
-func TestWorkOutsideTheCommissionIsRefused(t *testing.T) {
-	runner := newTestRunner(t)
-	req := request(t, map[string]any{"query": "x"})
-	// A capability that writes, handed a commission that only covers reading.
-	req.Capability.Effects = []contract.Effect{contract.EffectRead, contract.EffectWrite}
-
-	_, err := runner.Run(context.Background(), req)
-	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
-		t.Fatalf("kind = %v, want permission_denied", got)
-	}
-}
+// The permission gate moved to the core, one site on the seam every dispatch
+// crosses (internal/core/commission.go). It is not this adapter's decision and
+// never should have been five adapters' decision.
 
 func TestAnImplementationThisAdapterDoesNotServeIsUnavailable(t *testing.T) {
 	runner := newTestRunner(t)
