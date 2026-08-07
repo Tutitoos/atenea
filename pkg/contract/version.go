@@ -137,7 +137,20 @@ type Version struct {
 // Runner in existence is in this repository -- and the cost of keeping it was
 // a field an outside adapter would eventually populate, believing the core
 // read it.
-var Current = Version{Major: 2, Minor: 0, Patch: 0}
+//
+// 2.1.0 added `Field.Enum`, closing a declared string input to a fixed set of
+// values. Every field type before it said what shape a value has; this one
+// says which values exist. Additive: an adapter built against 2.0.0 goes on
+// compiling and leaves the slice nil, which closes nothing -- the same answer
+// the validator gave before the field existed.
+//
+// It was added for a caller that cannot be asked. Prose already named these
+// sets -- "incoming", "outgoing" or "both" -- and a human reading the summary
+// inferred the boundary correctly. A machine building a request from a
+// generated schema cannot infer it, and finds the edge by being refused. A
+// refusal is a round trip and a confused caller, so the set is now declared
+// where a schema can carry it rather than only where a person can read it.
+var Current = Version{Major: 2, Minor: 1, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

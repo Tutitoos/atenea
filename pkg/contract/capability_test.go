@@ -35,6 +35,28 @@ func codeSearch() contract.Capability {
 	}
 }
 
+// walk mirrors the shipped symbol.calls shape: a direction closed to three
+// words, a list whose elements are closed to two, and one string left open.
+func walk() contract.Capability {
+	return contract.Capability{
+		ID:        "symbol.calls",
+		Version:   contract.Version{Major: 1},
+		Summary:   "Walk the call graph from a symbol.",
+		Semantics: "One hop at a time.",
+		Effects:   []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{
+				Name: "direction", Type: contract.TypeString, Required: true,
+				Enum: []string{"incoming", "outgoing", "both"},
+			},
+			{Name: "kinds", Type: contract.TypeStringList, Enum: []string{"function", "method"}},
+		},
+		Outputs: []contract.Field{
+			{Name: "status", Type: contract.TypeString, Required: true},
+		},
+	}
+}
+
 func TestCapabilityValidateAcceptsTheP0Shape(t *testing.T) {
 	if err := codeSearch().Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -52,6 +74,10 @@ func TestCapabilityValidateRejectsBadDefinitions(t *testing.T) {
 		"unknown effect":    func(c *contract.Capability) { c.Effects = []contract.Effect{99} },
 		"record no fields":  func(c *contract.Capability) { c.Outputs[0].Fields = nil },
 		"scalar has fields": func(c *contract.Capability) { c.Inputs[0].Fields = c.Outputs[0].Fields },
+		"enum on an int":    func(c *contract.Capability) { c.Inputs[3].Enum = []string{"two"} },
+		"enum on a record":  func(c *contract.Capability) { c.Outputs[0].Enum = []string{"a"} },
+		"empty enum value":  func(c *contract.Capability) { c.Inputs[0].Enum = []string{""} },
+		"repeated enum":     func(c *contract.Capability) { c.Inputs[0].Enum = []string{"a", "a"} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -164,6 +190,66 @@ func TestCloneDoesNotShareState(t *testing.T) {
 	}
 	if original.Effects[0] != contract.EffectRead {
 		t.Error("clone shared the effect slice")
+	}
+}
+
+func TestEveryValueOfAClosedSetIsAccepted(t *testing.T) {
+	for _, value := range []string{"incoming", "outgoing", "both"} {
+		if err := walk().ValidateInput(map[string]any{"direction": value}); err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+	}
+}
+
+func TestAValueOutsideAClosedSetIsRefusedByName(t *testing.T) {
+	err := walk().ValidateInput(map[string]any{"direction": "sideways"})
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	// The set has to travel with the refusal. A caller that guessed wrong
+	// needs the list, not the verdict -- and the caller this field exists for
+	// cannot be asked, so the message is the only place it learns. That makes
+	// naming the set the load-bearing half, worth asserting rather than
+	// assuming.
+	for _, want := range []string{"incoming", "outgoing", "both"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+func TestAClosedSetConstrainsEachListElement(t *testing.T) {
+	err := walk().ValidateInput(map[string]any{
+		"direction": "both",
+		"kinds":     []any{"function", "trait"},
+	})
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	// Which element failed, not just that one did: a list of ten with one bad
+	// word is unreadable without the index.
+	if !strings.Contains(err.Error(), "kinds[1]") {
+		t.Errorf("refusal does not name the offending element: %v", err)
+	}
+}
+
+func TestAStringWithNoDeclaredSetStaysOpen(t *testing.T) {
+	// status carries no enum, and a provider reports in its own words. Adding
+	// the field must not close what was never declared closed.
+	if err := walk().ValidateOutput(map[string]any{"status": "reindexed 41 files"}); err != nil {
+		t.Fatalf("open string refused: %v", err)
+	}
+}
+
+func TestCloneDoesNotShareAClosedSet(t *testing.T) {
+	original := walk()
+	clone := original.Clone()
+	clone.Inputs[0].Enum[0] = "mutated"
+	if original.Inputs[0].Enum[0] != "incoming" {
+		t.Error("clone shared the enum slice")
 	}
 }
 

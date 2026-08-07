@@ -55,6 +55,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   nothing dispatches against it -- Atenea reaches its own providers through
   adapters.
 
+- **`enum` on a capability's string field, closing it to a fixed set.**
+  `pkg/contract` bumped to `2.1.0` — additive: an adapter built against
+  `2.0.0` compiles unchanged and leaves the slice nil, which closes nothing.
+  A file targeting `2.0.0` still loads; the shipped file now declares `2.1.0`
+  because it uses the field.
+
+  Three sets are declared today, and they were already written in prose:
+  `symbol.calls` input `direction` (`incoming`, `outgoing`, `both`), its
+  output `direction` (`incoming`, `outgoing` — a hop is found walking one way,
+  never both at once), and `repository.index` `mode` (`fast`, `moderate`,
+  `full`). A refusal names the whole set, because the caller this exists for
+  cannot be asked and the message is the only place it learns.
+
+  It is opt-in for a reason: `symbol.overview`'s `kind` deliberately stays
+  open, since a provider names symbol kinds in its own vocabulary and closing
+  that set would refuse honest answers. Numeric bounds were left out — a range
+  in the contract binds every implementation, and a line number is bounded by
+  the file, not by the capability.
+
+  The generated JSON Schema carries the set on the node holding the value:
+  for a `string_list` that is `items`, not the array, because a set says which
+  words may appear and never how many.
+
 ### Fixed
 
 - **A probed stdio server no longer hangs the probe by outliving it.** Killing

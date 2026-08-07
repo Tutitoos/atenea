@@ -124,6 +124,20 @@ type Field struct {
 	// Fields describes the members of a record or record_list. It must be empty
 	// for every other type.
 	Fields []Field
+	// Enum closes a string field to a fixed set of values; empty leaves it open.
+	// Declarable on string and string_list only, because a closed set of records
+	// is a type, not a constraint.
+	//
+	// It exists for the caller that cannot be asked. A human reading a summary
+	// infers that "incoming", "outgoing" or "both" is the whole list; a machine
+	// generating a request from a schema cannot, and learns the boundary by
+	// being refused. Naming the set is what turns a summary into a promise --
+	// prose is advice, and this is checked.
+	//
+	// Deliberately not extended to numeric bounds: a range that lives in the
+	// contract is a range every implementation must honor, and line numbers
+	// are bounded by the file, not by the capability.
+	Enum []string
 }
 
 // Capability is an action Atenea can ask for without knowing who will run it.
@@ -200,11 +214,38 @@ func validateFields(kind, capID string, fields []Field) error {
 			return Fail(FailureInvalidInput,
 				"capability %s: %s %q is a %s and cannot have nested fields", capID, kind, f.Name, f.Type)
 		}
+		if err := validateEnum(kind, capID, f); err != nil {
+			return err
+		}
 		if nested {
 			if err := validateFields(kind, capID, f.Fields); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// validateEnum checks an enum declaration, not a value against one.
+func validateEnum(kind, capID string, f Field) error {
+	if len(f.Enum) == 0 {
+		return nil
+	}
+	if f.Type != TypeString && f.Type != TypeStringList {
+		return Fail(FailureInvalidInput,
+			"capability %s: %s %q is a %s and cannot have an enum", capID, kind, f.Name, f.Type)
+	}
+	seen := make(map[string]struct{}, len(f.Enum))
+	for _, value := range f.Enum {
+		if value == "" {
+			return Fail(FailureInvalidInput,
+				"capability %s: %s %q has an empty enum value", capID, kind, f.Name)
+		}
+		if _, dup := seen[value]; dup {
+			return Fail(FailureInvalidInput,
+				"capability %s: %s %q lists enum value %q twice", capID, kind, f.Name, value)
+		}
+		seen[value] = struct{}{}
 	}
 	return nil
 }
@@ -261,9 +302,11 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 	}
 	switch f.Type {
 	case TypeString:
-		if _, ok := value.(string); !ok {
+		text, ok := value.(string)
+		if !ok {
 			return typeErr()
 		}
+		return checkEnum(capID, kind, path, f, text)
 	case TypeBool:
 		if _, ok := value.(bool); !ok {
 			return typeErr()
@@ -278,9 +321,13 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 			return typeErr()
 		}
 		for i, item := range items {
-			if _, ok := item.(string); !ok {
+			text, ok := item.(string)
+			if !ok {
 				return Fail(FailureInvalidInput,
 					"capability %s: %s %q[%d] must be string, got %T", capID, kind, path, i, item)
+			}
+			if err := checkEnum(capID, kind, fmt.Sprintf("%s[%d]", path, i), f, text); err != nil {
+				return err
 			}
 		}
 	case TypeRecord:
@@ -309,6 +356,17 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 			"capability %s: %s %q has unknown type %d", capID, kind, path, f.Type)
 	}
 	return nil
+}
+
+// checkEnum refuses a value outside a closed set, and names the set in the
+// refusal. A caller that guessed wrong needs the list, not the verdict.
+func checkEnum(capID, kind, path string, f Field, value string) error {
+	if len(f.Enum) == 0 || slices.Contains(f.Enum, value) {
+		return nil
+	}
+	return Fail(FailureInvalidInput,
+		"capability %s: %s %q must be one of %s, got %q",
+		capID, kind, path, strings.Join(f.Enum, ", "), value)
 }
 
 // isInteger accepts the float64 that a JSON decoder produces for whole numbers,
@@ -366,6 +424,7 @@ func cloneFields(fields []Field) []Field {
 	out := make([]Field, len(fields))
 	for i, f := range fields {
 		f.Fields = cloneFields(f.Fields)
+		f.Enum = slices.Clone(f.Enum)
 		out[i] = f
 	}
 	return out

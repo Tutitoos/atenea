@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "2.0.0"
+contract = "2.1.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,11 +103,29 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "2.0.0"          # required: the contract version this file targets
+contract = "2.1.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 ```
+
+The `contract` line is the one field with no default: a file must say which
+core it was written for, and a core refuses a file from a different major
+version by name rather than reading it and hoping. Minor lag is fine and
+always has been - a file targeting `2.0.0` keeps working against this `2.1.0`
+core, because every minor bump only adds - so in practice this line moves once
+per breaking release. `0.7.0` is the first one, and a file written for any
+`1.x` core is refused on sight:
+
+```text
+settings ~/.config/atenea/atenea.toml: contract 1.0.0 is not supported by
+this core (2.1.0): change the contract line to "2.1.0"; no other key moves
+```
+
+Do that and you are done. The refusal is deliberately not a fallback to the
+defaults: a file quietly ignored is a machine running settings nobody chose.
+A file from a *newer* core than the binary is told to upgrade the binary
+instead, because no edit to the file can fix that one.
 
 ## The orchestrator
 
@@ -445,6 +463,13 @@ effects = ["read", "process"]  # read | write | external | process
   required = true
   summary = "The text to look for."
 
+  [[capability.input]]
+  name = "direction"
+  type = "string"
+  required = true
+  enum = ["incoming", "outgoing", "both"]   # optional: closes the set
+  summary = "Which way to walk."
+
   [[capability.output]]
   name = "matches"
   type = "record_list"
@@ -459,6 +484,23 @@ effects = ["read", "process"]  # read | write | external | process
 Field types: `string`, `string_list`, `int`, `bool`, `record`, `record_list`.
 The set is small on purpose — a contract has to be checkable, not expressive.
 `record` and `record_list` take nested `field` entries; the others must not.
+
+`enum` closes a `string` or `string_list` to a fixed set of values. Omit it and
+the field stays open; declare it and anything else is refused, with the list
+named in the refusal. On a `string_list` it constrains each element — which
+words may appear, never how many.
+
+It is there for the caller that cannot be asked. A summary saying *"incoming",
+"outgoing" or "both"* is enough for a person; a machine filling the field from
+a generated schema has to be told, or it finds the edge by being refused. Which
+is also why it is opt-in: `kind` in `symbol.overview` deliberately has no enum,
+because a provider names symbol kinds in its own vocabulary and closing that
+set would refuse honest answers.
+
+Numeric bounds are not part of a field. A range in the contract is a range
+every implementation must honour, and a line number is bounded by the file, not
+by the capability — `max_input` under an implementation is where a *particular*
+tool says what it can be asked.
 
 ## Implementations
 

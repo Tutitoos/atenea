@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	osexec "os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,6 +248,56 @@ func TestTheSchemaIsTheCapabilitysOwnShape(t *testing.T) {
 	// and it is the one thing a model reads that a parser would not.
 	if got, _ := fields["path"].(map[string]any); got["description"] != "Where it is." {
 		t.Errorf("the field summary did not travel: %v", got)
+	}
+}
+
+// A closed set is the one piece of a field a model cannot infer from prose.
+// It has to reach the schema, and for a list it belongs on the element rather
+// than on the array -- a set says which words may appear, never how many.
+func TestAClosedSetReachesTheSchemaOnTheNodeThatHoldsTheValue(t *testing.T) {
+	encoded, err := jsonSchema([]contract.Field{
+		{
+			Name: "direction", Type: contract.TypeString, Required: true,
+			Enum: []string{"incoming", "outgoing", "both"},
+		},
+		{Name: "kinds", Type: contract.TypeStringList, Enum: []string{"function", "method"}},
+		{Name: "status", Type: contract.TypeString},
+	})
+	if err != nil {
+		t.Fatalf("jsonSchema: %v", err)
+	}
+	var schema struct {
+		Properties struct {
+			Direction struct {
+				Enum []string `json:"enum"`
+			} `json:"direction"`
+			Kinds struct {
+				Enum  []string `json:"enum"`
+				Items struct {
+					Enum []string `json:"enum"`
+				} `json:"items"`
+			} `json:"kinds"`
+			Status struct {
+				Enum []string `json:"enum"`
+			} `json:"status"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &schema); err != nil {
+		t.Fatalf("the schema is not valid JSON: %v", err)
+	}
+	if got := schema.Properties.Direction.Enum; !slices.Equal(got, []string{"incoming", "outgoing", "both"}) {
+		t.Errorf("direction enum = %v, want the declared three", got)
+	}
+	if got := schema.Properties.Kinds.Items.Enum; !slices.Equal(got, []string{"function", "method"}) {
+		t.Errorf("list element enum = %v, want the declared two", got)
+	}
+	if got := schema.Properties.Kinds.Enum; got != nil {
+		t.Errorf("the array itself carries an enum (%v); it constrains elements, not length", got)
+	}
+	// A field with no declared set must stay open in the schema too, or every
+	// provider's own wording becomes a schema violation.
+	if got := schema.Properties.Status.Enum; got != nil {
+		t.Errorf("an undeclared set appeared as %v", got)
 	}
 }
 

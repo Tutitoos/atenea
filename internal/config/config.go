@@ -561,6 +561,7 @@ type fileField struct {
 	Type     string      `toml:"type"`
 	Required bool        `toml:"required"`
 	Summary  string      `toml:"summary"`
+	Enum     []string    `toml:"enum"`
 	Fields   []fileField `toml:"field"`
 }
 
@@ -1336,6 +1337,7 @@ func buildFields(raw []fileField) ([]contract.Field, error) {
 			Type:     kind,
 			Required: f.Required,
 			Summary:  f.Summary,
+			Enum:     f.Enum,
 			Fields:   nested,
 		})
 	}

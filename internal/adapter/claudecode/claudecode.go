@@ -635,12 +635,17 @@ func fieldSchema(field contract.Field) (map[string]any, error) {
 	switch field.Type {
 	case contract.TypeString:
 		out = map[string]any{"type": "string"}
+		enumInto(out, field)
 	case contract.TypeInt:
 		out = map[string]any{"type": "integer"}
 	case contract.TypeBool:
 		out = map[string]any{"type": "boolean"}
 	case contract.TypeStringList:
-		out = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		items := map[string]any{"type": "string"}
+		// The set constrains each element, not the list: a string_list enum
+		// says which words may appear, never how many.
+		enumInto(items, field)
+		out = map[string]any{"type": "array", "items": items}
 	case contract.TypeRecord:
 		nested, err := objectSchema(field.Fields)
 		if err != nil {
@@ -664,6 +669,18 @@ func fieldSchema(field contract.Field) (map[string]any, error) {
 		out["description"] = field.Summary
 	}
 	return out, nil
+}
+
+// enumInto copies a declared set onto the schema node that holds the value.
+//
+// A copy, not the slice itself: this map is marshaled and handed out, and a
+// caller that sorted it in place would be reordering the registry's own
+// capability.
+func enumInto(node map[string]any, field contract.Field) {
+	if len(field.Enum) == 0 {
+		return
+	}
+	node["enum"] = slices.Clone(field.Enum)
 }
 
 // prompt is what the far side is actually told.

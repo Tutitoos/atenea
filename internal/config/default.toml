@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "2.0.0"
+contract = "2.1.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -730,6 +730,7 @@ effects = ["read"]
   type = "string"
   required = true
   summary = "Which way to walk: \"incoming\" (who calls this), \"outgoing\" (what this calls), or \"both\"."
+  enum = ["incoming", "outgoing", "both"]
 
   [[capability.input]]
   name = "scope"
@@ -784,6 +785,9 @@ effects = ["read"]
     type = "string"
     required = true
     summary = "Whether this result was found walking \"incoming\" or \"outgoing\" from the symbol asked about."
+    # "both" is missing on purpose: it is a question, not an answer. A hop was
+    # found walking one way or the other, never both at once.
+    enum = ["incoming", "outgoing"]
 
     [[capability.output.field]]
     name = "depth"
@@ -920,6 +924,7 @@ effects = ["write", "process"]
   type = "string"
   required = false
   summary = "How thorough the index should be: \"fast\", \"moderate\" or \"full\" (default: the provider's own)."
+  enum = ["fast", "moderate", "full"]
 
   [[capability.output]]
   name = "status"

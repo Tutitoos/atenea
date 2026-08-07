@@ -377,8 +377,9 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 	// Derived, not typed: the fix a refusal names is whatever this core speaks
 	// today, and a literal here would have to be edited on every bump -- which
 	// is a test that fails for being out of date rather than for being wrong.
-	if !strings.Contains(err.Error(), `change the contract line to "2.0.0"`) {
-		t.Errorf("err = %v, want the one-line fix spelled out", err)
+	wantFix := `change the contract line to "` + contract.Current.String() + `"`
+	if !strings.Contains(err.Error(), wantFix) {
+		t.Errorf("err = %v, want %s", err, wantFix)
 	}
 
 	ahead := strings.Replace(minimal, `contract = "2.0.0"`, `contract = "9.0.0"`, 1)
@@ -1370,4 +1371,83 @@ func TestSerenaProcessPortZeroIsAccepted(t *testing.T) {
 	if cfg.Orchestrator.Serena.Process.Port != 0 {
 		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Serena.Process.Port)
 	}
+}
+
+// The shipped file is where a closed set stops being a language feature and
+// starts being a promise, so both halves are checked against each other here:
+// every value the file declares must be accepted, and one it does not declare
+// must be refused. A set that is declared but not enforced, or enforced but
+// not declared, is the drift this pins.
+func TestEveryDeclaredSetInTheShippedFileIsTheEnforcedSet(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	checked := 0
+	for _, capability := range cfg.Capabilities {
+		for _, kind := range []struct {
+			name   string
+			fields []contract.Field
+			check  func(map[string]any) error
+		}{
+			{"input", capability.Inputs, capability.ValidateInput},
+			{"output", capability.Outputs, capability.ValidateOutput},
+		} {
+			for _, field := range kind.fields {
+				if len(field.Enum) == 0 || field.Type != contract.TypeString {
+					continue
+				}
+				checked++
+				for _, value := range field.Enum {
+					payload := required(kind.fields)
+					payload[field.Name] = value
+					if err := kind.check(payload); err != nil {
+						t.Errorf("%s %s %s=%q refused: %v",
+							capability.ID, kind.name, field.Name, value, err)
+					}
+				}
+				payload := required(kind.fields)
+				payload[field.Name] = "definitely-not-declared"
+				if err := kind.check(payload); err == nil {
+					t.Errorf("%s %s %s accepted a value outside its declared set",
+						capability.ID, kind.name, field.Name)
+				}
+			}
+		}
+	}
+	// Without this the test passes on a file that declares no sets at all,
+	// which is exactly how the feature would quietly die in the catalog.
+	if checked < 2 {
+		t.Fatalf("only %d closed string field(s) found in the shipped catalog", checked)
+	}
+}
+
+// required builds the smallest payload the field list accepts, so a set can be
+// checked without a missing sibling failing first.
+func required(fields []contract.Field) map[string]any {
+	payload := make(map[string]any, len(fields))
+	for _, field := range fields {
+		if !field.Required {
+			continue
+		}
+		switch field.Type {
+		case contract.TypeString:
+			if len(field.Enum) > 0 {
+				payload[field.Name] = field.Enum[0]
+			} else {
+				payload[field.Name] = "x"
+			}
+		case contract.TypeInt:
+			payload[field.Name] = 1
+		case contract.TypeBool:
+			payload[field.Name] = true
+		case contract.TypeStringList:
+			payload[field.Name] = []any{}
+		case contract.TypeRecord:
+			payload[field.Name] = required(field.Fields)
+		case contract.TypeRecordList:
+			payload[field.Name] = []any{}
+		}
+	}
+	return payload
 }
