@@ -1,0 +1,84 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// wrapSettings writes a settings file declaring one server at addr.
+func wrapSettings(t *testing.T, addr string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "atenea.toml")
+	body := settings + "\n[metrics]\npath = \"" + filepath.Join(dir, "base.duckdb") + "\"\n" +
+		"\n[[mcp_server]]\nid = \"declared\"\nurl = \"" + addr + "\"\ntimeout = \"1s\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+func TestWrapWithoutAClientSaysWhatToPass(t *testing.T) {
+	out, err := cli(t, "wrap")
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "opencode") {
+		t.Errorf("err = %v, want an example of what to pass; got: %s", err, out)
+	}
+}
+
+// The refusal has to list what would have worked. A wrapper that only says
+// "no" leaves the reader to find the answer in a help page they have already
+// decided not to open.
+func TestWrapNamesTheClientsItSupports(t *testing.T) {
+	_, err := cli(t, "wrap", "emacs")
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "supported: opencode") {
+		t.Errorf("err = %v, want the supported list", err)
+	}
+}
+
+// Ordering, pinned: the binary is resolved before anything is probed.
+//
+// The other order is the one that looks harmless and is not -- eleven
+// handshakes, a full report, and only then "opencode: not found", which is
+// the answer that made the whole report pointless. The probes are also the
+// slow part, so getting this backwards is exactly as expensive as it looks.
+func TestWrapChecksTheBinaryBeforeItProbesAnything(t *testing.T) {
+	// A PATH with nothing on it: the client cannot be found, and the
+	// declared server's address is one nothing is listening on.
+	t.Setenv("PATH", t.TempDir())
+	path := wrapSettings(t, "http://127.0.0.1:1/mcp")
+
+	out, err := cli(t, "--config", path, "wrap", "opencode")
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found: %v", contract.KindOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "PATH") {
+		t.Errorf("err = %v, want it to name PATH as the thing that failed", err)
+	}
+	if strings.Contains(out, "declared") || strings.Contains(out, "refused") {
+		t.Errorf("a report was printed before the binary was resolved:\n%s", out)
+	}
+}
+
+// A settings file that declares a server nothing can reach is not an error:
+// naming it is the entire feature. The load must not fail, and the block
+// must survive into the config the command reads.
+func TestADeclaredServerSurvivesIntoTheSettings(t *testing.T) {
+	path := wrapSettings(t, "http://127.0.0.1:1/mcp")
+	out, err := cli(t, "--config", path, "config", "path")
+	if err != nil {
+		t.Fatalf("a declared mcp_server made the settings unreadable: %v", err)
+	}
+	if strings.TrimSpace(out) != path {
+		t.Errorf("path = %q, want %q", strings.TrimSpace(out), path)
+	}
+}

@@ -25,7 +25,10 @@ at, and the difference is the thing to know before you delete a line.
 
 **The catalog is replaced.** The `[[capability]]`, `[[implementation]]`,
 `[[repository]]` and `[[selector.rule]]` blocks are not merged with the shipped
-ones: what your file lists is the whole list. A settings file containing only
+ones: what your file lists is the whole list. `[[mcp_server]]` is the same kind
+of list without being part of the catalog, and for it the rule costs nothing:
+the shipped file declares none, so there is nothing there to lose. A settings
+file containing only
 
 ```toml
 contract = "2.0.0"
@@ -561,6 +564,86 @@ what is declared here. When a provider genuinely has nothing to detect,
 `atenea ask repository.index --repo ID` builds one instead: `write` and
 `process` effects, gated the same as any other capability that touches the
 machine rather than only answering from it.
+
+## MCP servers
+
+```toml
+[[mcp_server]]
+id = "serena"                        # the name the client will see
+url = "http://127.0.0.1:40010/mcp"   # http endpoint
+timeout = "5s"                       # bounds the check; omitted takes the default
+
+[[mcp_server]]
+id = "codebase-memory"
+command = ["codebase-memory-mcp"]    # stdio; started once per check, then killed
+[mcp_server.env]
+CODEBASE_MEMORY_UI = "false"
+```
+
+This list is not the catalog and nothing dispatches against it. Atenea reaches
+its own providers through adapters; these are endpoints `atenea wrap` hands to
+*someone else's* client so that client stops spawning a private copy of a
+server that is already running.
+
+Each block sets `url` or `command`, never both, and repeating an `id` is
+refused rather than resolved. All three refusals are the same rule: the
+payload is keyed by `id`, so a block that cannot be turned into exactly one
+endpoint would end up either ignored or silently overwritten by the block
+after it, and a declaration nobody can act on is worse than no declaration --
+a client is told the server exists before anyone finds out it does not.
+
+`atenea wrap opencode` handshakes every entry here and passes on only the ones
+that answered. Captured on a real machine, both transports, one real failure:
+
+```text
+wrap opencode  6 checked: 5 declared, 1 refused
+
+  declared  codebase-memory  stdio  codebase-memory-mcp --ui=true  codebase-memory-mcp 0.9.0 (9ms)
+  declared  context7         stdio  context7-mcp --transport stdio  Context7 3.2.5 (315ms)
+  declared  headroom         stdio  headroom mcp serve  headroom 1.29.0 (406ms)
+  declared  semgrep          stdio  semgrep mcp --transport stdio  Semgrep 1.23.3 (1.953s)
+  declared  serena           http   http://127.0.0.1:40010/mcp  Serena 1.28.1 (32ms)
+  refused   chrome-devtools  http   http://127.0.0.1:40021/mcp
+                             dial tcp 127.0.0.1:40021: connect: connection refused
+
+  Declared means it answered an MCP handshake, not that its tools work.
+  A refused server is left out of the payload, not switched off:
+  opencode keeps whatever it already declares under that name.
+```
+
+## What `declared` promises, and what it does not
+
+The check is one MCP handshake per server. That is a real measurement and it
+is a narrow one: it proves the server is reachable, starts, and speaks the
+protocol. It proves nothing about whether its tools work.
+
+The gap is not theoretical. On the machine above, `semgrep` answers the
+handshake in under two seconds and reports version 1.23.3 -- and every call to
+its primary tool fails, because the tool builds its ruleset from a registry
+the machine is configured not to contact. It had been failing for days. Wrap
+declares it, correctly, and the report says in one line what that word covers,
+which is why the line is printed on an all-green run too: `5 declared, 0
+refused` is exactly the moment the word is trusted furthest and examined
+least.
+
+Checking further would mean calling tools, and calling a tool is doing work --
+with side effects, a bill, and no way to tell a broken server from a slow one.
+The handshake is the last thing that is free. Wrap narrows the distance
+between *declared* and *working*; it does not close it, and it says so.
+
+A refused server is **absent** from what the client receives, not disabled in
+it. The client merges Atenea's configuration over its own key by key, so an
+absent key leaves the user's entry alone: Atenea declining to vouch for a
+server must never be the reason a working one disappears. The corollary is
+visible above -- `chrome-devtools` stays broken in exactly the way it was
+already broken, and wrap's contribution is that somebody now knows.
+
+Nothing is written to disk. The configuration lives in one environment
+variable for the lifetime of the child process, so a client launched without
+`wrap` is a client with exactly the configuration it had before, and there is
+no `unwrap` because there is nothing to undo. `opencode` is the one client
+wired today; a client configurable only by editing a file on disk cannot be
+added here, because that guarantee is the one a file edit cannot make.
 
 ## Selector rules
 

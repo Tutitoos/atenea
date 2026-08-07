@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"os/signal"
 	"slices"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/wrap"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -58,6 +60,8 @@ Commands:
                          --implementation or --repository, or --all for the lot
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
+  wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
+                         moment ago; dead ones are named and left out
   version                Print the product and contract versions
 
 Global flags:
@@ -180,6 +184,31 @@ Flags:
 'init' writes the built-in settings file to disk; --force overwrites one
 that already exists. 'path' prints where settings are read from.
 `,
+	"wrap": `Usage: atenea wrap CLIENT [client args...]
+
+Launches CLIENT with MCP configuration Atenea generated from the
+[[mcp_server]] blocks in the settings file, having checked every one of
+them a moment before.
+
+A server that completes an MCP handshake is declared to the client. One
+that does not is named, with the reason, and left out of the payload --
+left out rather than switched off, so the client keeps whatever it already
+declares under that name.
+
+The check is one handshake, and that is the whole of what "declared" means.
+It proves a server is reachable and speaking MCP; it does not prove any of
+its tools work. A server can answer initialize perfectly and fail on every
+call after it, so an all-green report is a floor, not a warranty.
+
+Nothing is written to disk. The configuration lives in one environment
+variable for the lifetime of the child, so a client launched without wrap
+is a client with exactly the configuration it had before. There is no
+unwrap because there is nothing to undo.
+
+Arguments after CLIENT are passed through untouched.
+
+Supported clients: opencode
+`,
 }
 
 // helpRequested reports whether -h or --help appears anywhere in args. Most
@@ -301,6 +330,8 @@ func run(args []string, out io.Writer) error {
 		return cmdMetrics(settingsPath, commandArgs, out)
 	case "config":
 		return cmdConfig(settingsPath, commandArgs, out)
+	case "wrap":
+		return cmdWrap(settingsPath, commandArgs, out)
 	case "help", "-h", "--help":
 		fmt.Fprint(out, usage)
 		return nil
@@ -1728,6 +1759,77 @@ func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 	default:
 		return contract.Fail(contract.FailureInvalidInput, "unknown config subcommand %q", args[0])
 	}
+}
+
+// clients maps a client name to the environment variable that client reads
+// its MCP configuration from, and the function that renders it.
+//
+// The map is the whole extension point, and it is deliberately this small:
+// every client that can be wrapped is one that takes its configuration from
+// the environment. A client that can only be configured by editing a file on
+// disk does not belong here, because the guarantee that makes wrap safe to
+// try -- run it without wrap and nothing about your setup has changed -- is
+// exactly the guarantee a file edit cannot make.
+var clients = map[string]struct {
+	env    string
+	render func(wrap.Plan) (string, error)
+}{
+	"opencode": {env: "OPENCODE_CONFIG_CONTENT", render: wrap.Plan.OpenCodePayload},
+}
+
+func cmdWrap(settingsPath string, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"wrap needs a client, e.g. atenea wrap opencode")
+	}
+	name, rest := args[0], args[1:]
+	client, ok := clients[name]
+	if !ok {
+		return contract.Fail(contract.FailureInvalidInput,
+			"cannot wrap %q; supported: %s", name, strings.Join(slices.Sorted(maps.Keys(clients)), ", "))
+	}
+	// Resolved before anything is probed. Spending eleven handshakes to
+	// discover the binary is not installed would be the report arriving
+	// after the answer that makes it pointless.
+	binary, err := exec.LookPath(name)
+	if err != nil {
+		return contract.Fail(contract.FailureNotFound,
+			"%s is not on PATH: %v", name, err)
+	}
+
+	// Settings only. A Core would open the measurement base and may start a
+	// managed Serena, and this command holds no lock and asks no provider
+	// anything -- it reads a list and launches a process that will outlive
+	// it, so holding a DuckDB file open for the length of a chat session is
+	// a cost with nothing on the other side of it.
+	cfg, err := config.Load(settingsPath)
+	if err != nil {
+		return err
+	}
+	plan := wrap.Check(context.Background(), cfg.MCPServers)
+	plan.Report(out, name)
+
+	payload, err := client.render(plan)
+	if err != nil {
+		return err
+	}
+	return launch(binary, append([]string{name}, rest...), client.env, payload)
+}
+
+// launch replaces this process with the client.
+//
+// Replacing rather than spawning is what makes the wrapper invisible once it
+// has done its job. A parent sitting in the middle would have to forward
+// signals, copy three streams, and translate an exit status -- three chances
+// to get wrong what the kernel gets right for free. It also settles the
+// question of what happens to Atenea while a chat session runs for an hour:
+// nothing, because Atenea is no longer there.
+func launch(binary string, argv []string, key, payload string) error {
+	env := append(os.Environ(), key+"="+payload)
+	if err := syscall.Exec(binary, argv, env); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "cannot start %s: %v", binary, err)
+	}
+	return nil // unreachable: Exec only returns on failure.
 }
 
 // ceiling renders a limit where zero means there is none.

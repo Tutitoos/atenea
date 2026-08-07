@@ -1197,6 +1197,32 @@ indexed_by = []           # providers holding a ready index for this repository
 #                         # empty falls back to [orchestrator.serena].endpoint and retargets via activate_project.
 
 # ---------------------------------------------------------------------------
+# MCP servers: endpoints `atenea wrap` hands to a client instead of letting it
+# spawn its own copy.
+#
+# This list is not the catalogue and nothing here answers a capability --
+# Atenea reaches its own providers through adapters. It exists so that the
+# declaration a client trusts is checked before the client is told about it:
+# `atenea wrap opencode` handshakes every entry below and passes on only the
+# ones that answered, naming the rest and why.
+#
+# Nothing is written to a client's config file. Launch the client without
+# wrap and it is exactly as it was.
+#
+# Each block sets `url` OR `command`, never both.
+# ---------------------------------------------------------------------------
+# [[mcp_server]]
+# id = "serena"                        # the name the client will see
+# url = "http://127.0.0.1:40010/mcp"   # http endpoint; ToolHive proxies live here
+# timeout = "5s"                       # bounds the check; omitted takes the default
+
+# [[mcp_server]]
+# id = "codebase-memory"
+# command = ["codebase-memory-mcp"]    # stdio server; started once per check, then killed
+# [mcp_server.env]
+# CODEBASE_MEMORY_UI = "false"
+
+# ---------------------------------------------------------------------------
 # Selector rules: the user's word, above any automatic ranking.
 # Omit `repository` to make a rule apply everywhere.
 # ---------------------------------------------------------------------------

@@ -96,7 +96,7 @@ func settingsFile(t *testing.T) string {
 	return path
 }
 
-func exec(t *testing.T, args ...string) (string, error) {
+func cli(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
 	err := run(args, &out)
@@ -104,7 +104,7 @@ func exec(t *testing.T, args ...string) (string, error) {
 }
 
 func TestVersionPrintsBothVersions(t *testing.T) {
-	out, err := exec(t, "version")
+	out, err := cli(t, "version")
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestVersionPrintsBothVersions(t *testing.T) {
 }
 
 func TestNoArgumentsPrintsUsage(t *testing.T) {
-	out, err := exec(t)
+	out, err := cli(t)
 	if err != nil {
 		t.Fatalf("no args: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestNoArgumentsPrintsUsage(t *testing.T) {
 func TestEverySubcommandHasHelp(t *testing.T) {
 	for command, want := range commandHelp {
 		t.Run(command, func(t *testing.T) {
-			out, err := exec(t, command, "--help")
+			out, err := cli(t, command, "--help")
 			if err != nil {
 				t.Fatalf("%s --help: %v", command, err)
 			}
@@ -147,7 +147,7 @@ func TestEverySubcommandHasHelp(t *testing.T) {
 func TestHelpWinsEvenWhereAPositionalArgumentComesFirst(t *testing.T) {
 	for _, command := range []string{"ask", "select", "task", "resume"} {
 		t.Run(command, func(t *testing.T) {
-			out, err := exec(t, command, "-h")
+			out, err := cli(t, command, "-h")
 			if err != nil {
 				t.Fatalf("%s -h: %v", command, err)
 			}
@@ -162,7 +162,7 @@ func TestHelpWinsEvenWhereAPositionalArgumentComesFirst(t *testing.T) {
 // token: a run that would have spent something must not start just because
 // --help came after the flags that would have paid for it.
 func TestHelpWinsEvenTrailingAfterRealFlags(t *testing.T) {
-	out, err := exec(t, "ask", "code.search", "--repo", "current", "--set", "query=TODO", "-h")
+	out, err := cli(t, "ask", "code.search", "--repo", "current", "--set", "query=TODO", "-h")
 	if err != nil {
 		t.Fatalf("ask ... -h: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestHelpWinsEvenTrailingAfterRealFlags(t *testing.T) {
 // An unknown command asking for help is still an unknown command: the help
 // map only intercepts names dispatch actually recognizes.
 func TestHelpOnAnUnknownCommandStillErrors(t *testing.T) {
-	_, err := exec(t, "bogus", "--help")
+	_, err := cli(t, "bogus", "--help")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -184,7 +184,7 @@ func TestHelpOnAnUnknownCommandStillErrors(t *testing.T) {
 }
 
 func TestStatusShowsEveryProviderWithItsLight(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "status")
+	out, err := cli(t, "--config", settingsFile(t), "status")
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 	freshInstall(t)
 
 	// Who is behind the catalog, according to the core itself.
-	status, err := exec(t, "status")
+	status, err := cli(t, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, status)
 	}
@@ -276,7 +276,7 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 	}
 
 	// And it is that far side that answers a real commission.
-	out, err := exec(t, "task", "TODO", "--trace")
+	out, err := cli(t, "task", "TODO", "--trace")
 	if err != nil {
 		t.Fatalf("task: %v\n%s", err, out)
 	}
@@ -309,7 +309,7 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
 	freshInstall(t)
 
-	out, err := exec(t, "task", "TODO", "--trace")
+	out, err := cli(t, "task", "TODO", "--trace")
 	if err != nil {
 		t.Fatalf("task: %v\n%s", err, out)
 	}
@@ -353,7 +353,7 @@ func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
 func TestTheCommissionNeverReadsASensitiveFile(t *testing.T) {
 	freshInstall(t)
 
-	out, err := exec(t, "task", "hunter2", "--trace")
+	out, err := cli(t, "task", "hunter2", "--trace")
 	if err != nil {
 		t.Fatalf("task: %v\n%s", err, out)
 	}
@@ -370,7 +370,7 @@ func TestTheCommissionNeverReadsASensitiveFile(t *testing.T) {
 func TestTheRunSurvivesOnDisk(t *testing.T) {
 	_, runs := freshInstall(t)
 
-	out, err := exec(t, "task", "TODO")
+	out, err := cli(t, "task", "TODO")
 	if err != nil {
 		t.Fatalf("task: %v\n%s", err, out)
 	}
@@ -415,7 +415,7 @@ func TestTheRunSurvivesOnDisk(t *testing.T) {
 // must not look like an empty answer.
 func TestTaskAgainstAnUnknownRepositoryFails(t *testing.T) {
 	freshInstall(t)
-	_, err := exec(t, "task", "TODO", "--repo", "ghost")
+	_, err := cli(t, "task", "TODO", "--repo", "ghost")
 	if got := contract.KindOf(err); got != contract.FailureNotFound {
 		t.Fatalf("kind = %v, want not_found", got)
 	}
@@ -423,7 +423,7 @@ func TestTaskAgainstAnUnknownRepositoryFails(t *testing.T) {
 
 func TestTaskWithoutACommissionIsRefused(t *testing.T) {
 	freshInstall(t)
-	_, err := exec(t, "task")
+	_, err := cli(t, "task")
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", got)
 	}
@@ -435,10 +435,10 @@ func TestTaskWithoutACommissionIsRefused(t *testing.T) {
 func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
 	freshInstall(t)
 	for _, arg := range []string{"-1", "-0.01"} {
-		if _, err := exec(t, "task", "TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
+		if _, err := cli(t, "task", "TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Errorf("--budget %s was filed as %v", arg, contract.KindOf(err))
 		}
-		if _, err := exec(t, "ask", "code.search", "--repo", "current",
+		if _, err := cli(t, "ask", "code.search", "--repo", "current",
 			"--set", "query=TODO", "--budget", arg); contract.KindOf(err) != contract.FailureInvalidInput {
 			t.Errorf("ask --budget %s was filed as %v", arg, contract.KindOf(err))
 		}
@@ -449,7 +449,7 @@ func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
 // funded by hand is the one case where the settings file is not the answer.
 func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
 	freshInstall(t)
-	if _, err := exec(t, "task", "TODO", "--budget", "5"); err != nil {
+	if _, err := cli(t, "task", "TODO", "--budget", "5"); err != nil {
 		t.Fatalf("a funded commission was refused: %v", err)
 	}
 }
@@ -459,10 +459,10 @@ func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
 // to the typo.
 func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
 	freshInstall(t)
-	if _, err := exec(t, "task", "TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
+	if _, err := cli(t, "task", "TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Errorf("--allow ghost was filed as %v", contract.KindOf(err))
 	}
-	if _, err := exec(t, "ask", "code.search", "--repo", "current",
+	if _, err := cli(t, "ask", "code.search", "--repo", "current",
 		"--set", "query=TODO", "--allow", "ghost"); contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Errorf("ask --allow ghost was filed as %v", contract.KindOf(err))
 	}
@@ -472,7 +472,7 @@ func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
 // recognizes must not be refused for a reason unrelated to permission.
 func TestTheCommandLineAllowFlagReachesTheRun(t *testing.T) {
 	freshInstall(t)
-	if _, err := exec(t, "task", "TODO", "--allow", "write"); err != nil {
+	if _, err := cli(t, "task", "TODO", "--allow", "write"); err != nil {
 		t.Fatalf("a commission granted write was refused: %v", err)
 	}
 }
@@ -480,7 +480,7 @@ func TestTheCommandLineAllowFlagReachesTheRun(t *testing.T) {
 // The trace is the deliverable, not a debug extra: a decision nobody can
 // explain is a decision nobody can trust.
 func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "select", "code.search", "--repo", "api")
+	out, err := cli(t, "--config", settingsFile(t), "select", "code.search", "--repo", "api")
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {
 
 // With exactly one repository registered, naming it is ceremony.
 func TestSelectDefaultsToTheOnlyRepository(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "select", "code.search")
+	out, err := cli(t, "--config", settingsFile(t), "select", "code.search")
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -507,7 +507,7 @@ func TestSelectDefaultsToTheOnlyRepository(t *testing.T) {
 }
 
 func TestCatalogShowsTheFourBlocks(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "catalog")
+	out, err := cli(t, "--config", settingsFile(t), "catalog")
 	if err != nil {
 		t.Fatalf("catalog: %v", err)
 	}
@@ -520,16 +520,16 @@ func TestCatalogShowsTheFourBlocks(t *testing.T) {
 
 func TestConfigInitWritesAUsableFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	if _, err := exec(t, "--config", path, "config", "init"); err != nil {
+	if _, err := cli(t, "--config", path, "config", "init"); err != nil {
 		t.Fatalf("config init: %v", err)
 	}
-	if _, err := exec(t, "--config", path, "config", "init"); err == nil {
+	if _, err := cli(t, "--config", path, "config", "init"); err == nil {
 		t.Fatal("a second init without --force should fail")
 	}
-	if _, err := exec(t, "--config", path, "config", "init", "--force"); err != nil {
+	if _, err := cli(t, "--config", path, "config", "init", "--force"); err != nil {
 		t.Fatalf("config init --force: %v", err)
 	}
-	out, err := exec(t, "--config", path, "status")
+	out, err := cli(t, "--config", path, "status")
 	if err != nil {
 		t.Fatalf("status on the written file: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestConfigInitWritesAUsableFile(t *testing.T) {
 }
 
 func TestConfigPathReportsTheResolvedLocation(t *testing.T) {
-	out, err := exec(t, "--config", "/tmp/explicit.toml", "config", "path")
+	out, err := cli(t, "--config", "/tmp/explicit.toml", "config", "path")
 	if err != nil {
 		t.Fatalf("config path: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestErrorsMapOntoDistinctExitCodes(t *testing.T) {
 	path := settingsFile(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := exec(t, append([]string{"--config", path}, tc.args...)...)
+			_, err := cli(t, append([]string{"--config", path}, tc.args...)...)
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -579,7 +579,7 @@ func TestErrorsMapOntoDistinctExitCodes(t *testing.T) {
 // never runs, and the exit code says so -- 2, the same bin as any other
 // malformed invocation, not 6 (a commission that was dispatched and failed).
 func TestAMissingRequiredFieldNeverDispatches(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "ask", "code.search", "--repo", "api")
+	out, err := cli(t, "--config", settingsFile(t), "ask", "code.search", "--repo", "api")
 	if err == nil {
 		t.Fatalf("expected an error, out:\n%s", out)
 	}
@@ -598,7 +598,7 @@ func TestAMissingRequiredFieldNeverDispatches(t *testing.T) {
 // The exact repro from the friction report: type "code.serach" for
 // "code.search" and the CLI names the near miss instead of a flat refusal.
 func TestATypodCapabilitySuggestsTheRealOne(t *testing.T) {
-	_, err := exec(t, "--config", settingsFile(t), "ask", "code.serach", "--repo", "api", "--set", "query=TODO")
+	_, err := cli(t, "--config", settingsFile(t), "ask", "code.serach", "--repo", "api", "--set", "query=TODO")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -625,7 +625,7 @@ func TestAFailedVerdictLeavesThroughTheExitCode(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	out, err := exec(t, "--config", path, "task", "TODO")
+	out, err := cli(t, "--config", path, "task", "TODO")
 	if err == nil {
 		t.Fatal("a failed commission left as if it had worked")
 	}
@@ -652,7 +652,7 @@ func TestBrokenSettingsFailLoudly(t *testing.T) {
 	if err := os.WriteFile(path, []byte("contract = \"2.0.0\"\nnonsense = true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := exec(t, "--config", path, "status")
+	_, err := cli(t, "--config", path, "status")
 	if contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
@@ -664,7 +664,7 @@ func TestBrokenSettingsFailLoudly(t *testing.T) {
 // one-second process keeps in its own memory.
 func TestTheScreenShowsTheBackgroundRhythmsAndTheCopies(t *testing.T) {
 	freshInstall(t)
-	out, err := exec(t, "status")
+	out, err := cli(t, "status")
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -712,7 +712,7 @@ func TestTheScreenSaysWhenCopyingIsOff(t *testing.T) {
 	// here would drift from what actually ships.
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
-	if _, err := exec(t, "config", "init"); err != nil {
+	if _, err := cli(t, "config", "init"); err != nil {
 		t.Fatalf("config init: %v", err)
 	}
 	path := filepath.Join(cfg, "atenea", "atenea.toml")
@@ -730,7 +730,7 @@ func TestTheScreenSaysWhenCopyingIsOff(t *testing.T) {
 	if err := os.WriteFile(path, []byte(off), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	out, err := exec(t, "status")
+	out, err := cli(t, "status")
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}

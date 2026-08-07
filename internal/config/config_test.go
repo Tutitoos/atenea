@@ -394,6 +394,71 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 	}
 }
 
+// A declaration nothing can check is worse than no declaration, because a
+// client is told the server exists before anyone finds out it does not.
+// Every rule here is that one rule: an entry must name exactly one
+// reachable thing.
+func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
+	cases := map[string]string{
+		"no id":            "\n[[mcp_server]]\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"neither":          "\n[[mcp_server]]\nid = \"x\"\n",
+		"both":             "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ncommand = [\"sh\"]\n",
+		"relative url":     "\n[[mcp_server]]\nid = \"x\"\nurl = \"/mcp\"\n",
+		"wrong scheme":     "\n[[mcp_server]]\nid = \"x\"\nurl = \"ws://127.0.0.1:1/mcp\"\n",
+		"empty argument":   "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
+		"bad timeout":      "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
+		"negative timeout": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
+	}
+	for name, block := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load(write(t, minimal+block))
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Fatalf("kind = %v", contract.KindOf(err))
+			}
+		})
+	}
+}
+
+// Two blocks under one id is the case that would otherwise pass and then
+// half-work: the payload is keyed by id, so the later entry wins silently
+// and the earlier one is never probed, never declared, and never mentioned.
+// Only the file can say which one it meant.
+func TestADuplicateMCPServerIDIsRefused(t *testing.T) {
+	body := minimal +
+		"\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\n" +
+		"\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\n"
+	_, err := config.Load(write(t, body))
+	if err == nil {
+		t.Fatal("two blocks under one id were accepted")
+	}
+	if !strings.Contains(err.Error(), "declared twice") {
+		t.Errorf("err = %v, want it to name the duplicate", err)
+	}
+}
+
+// The happy path, and the one thing about it worth pinning: a url is
+// normalized once here rather than at every point of use.
+func TestADeclaredMCPServerIsReadBack(t *testing.T) {
+	body := minimal + "\n[[mcp_server]]\nid = \"serena\"\nurl = \"http://127.0.0.1:40010/mcp\"\ntimeout = \"3s\"\n" +
+		"\n[[mcp_server]]\nid = \"local\"\ncommand = [\"sh\", \"-c\", \"true\"]\n\n[mcp_server.env]\nK = \"v\"\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.MCPServers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(cfg.MCPServers))
+	}
+	if got := cfg.MCPServers[0]; got.URL != "http://127.0.0.1:40010/mcp" || got.Timeout != 3*time.Second {
+		t.Errorf("first = %+v, want the declared url and timeout", got)
+	}
+	if got := cfg.MCPServers[1]; len(got.Command) != 3 || got.Env["K"] != "v" {
+		t.Errorf("second = %+v, want the declared command and env", got)
+	}
+}
+
 func TestBrokenCatalogEntriesAreRefused(t *testing.T) {
 	cases := map[string]string{
 		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["device"]`, 1),

@@ -22,7 +22,7 @@ import (
 // to report. A sweep that finds nobody to ask has to say so, not print
 // nothing.
 func TestDetectReportsWhenNoAttachedProviderCanTell(t *testing.T) {
-	out, err := exec(t, "--config", settingsFile(t), "detect")
+	out, err := cli(t, "--config", settingsFile(t), "detect")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDetectReportsReadyAndNotReadyPerRepository(t *testing.T) {
 	staleDir := filepath.Join(t.TempDir(), "stale-repo")
 	settingsPath := detectFixture(t, binary, [2]string{"ready", readyDir}, [2]string{"stale", staleDir})
 
-	out, err := exec(t, "--config", settingsPath, "detect")
+	out, err := cli(t, "--config", settingsPath, "detect")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDetectRepoFlagNarrowsToOneRepository(t *testing.T) {
 	staleDir := filepath.Join(t.TempDir(), "stale-repo")
 	settingsPath := detectFixture(t, binary, [2]string{"ready", readyDir}, [2]string{"stale", staleDir})
 
-	out, err := exec(t, "--config", settingsPath, "detect", "--repo", "ready")
+	out, err := cli(t, "--config", settingsPath, "detect", "--repo", "ready")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestDetectRepoFlagNarrowsToOneRepository(t *testing.T) {
 func TestDetectRepoFlagOnAnUnknownRepositoryFails(t *testing.T) {
 	binary := fakeIndexStatus(t, "ready-repo")
 	settingsPath := detectFixture(t, binary, [2]string{"api", filepath.Join(t.TempDir(), "api")})
-	if _, err := exec(t, "--config", settingsPath, "detect", "--repo", "nope"); err == nil {
+	if _, err := cli(t, "--config", settingsPath, "detect", "--repo", "nope"); err == nil {
 		t.Fatal("detect --repo nope should fail")
 	}
 }
@@ -134,7 +134,7 @@ func TestDetectJSONReportsReadyAndNotReady(t *testing.T) {
 	staleDir := filepath.Join(t.TempDir(), "stale-repo")
 	settingsPath := detectFixture(t, binary, [2]string{"ready", readyDir}, [2]string{"stale", staleDir})
 
-	out, err := exec(t, "--config", settingsPath, "detect", "--json")
+	out, err := cli(t, "--config", settingsPath, "detect", "--json")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}

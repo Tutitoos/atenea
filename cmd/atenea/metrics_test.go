@@ -54,7 +54,7 @@ func based(t *testing.T) string {
 // could look at. The three counts have to sit next to each other, because the
 // gap between them is the diagnosis.
 func TestTheBaseCanBeRead(t *testing.T) {
-	out, err := exec(t, "--config", based(t), "metrics")
+	out, err := cli(t, "--config", based(t), "metrics")
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestTheBaseCanBeRead(t *testing.T) {
 // Emptying the whole base is the one act here that destroys something nothing
 // can rebuild, so the word 'clear' is not enough on its own.
 func TestClearingEverythingHasToBeSaidOutLoud(t *testing.T) {
-	out, err := exec(t, "--config", based(t), "metrics", "clear")
+	out, err := cli(t, "--config", based(t), "metrics", "clear")
 	if err == nil {
 		t.Fatalf("a bare clear emptied the base:\n%s", out)
 	}
@@ -98,7 +98,7 @@ func TestClearingEverythingHasToBeSaidOutLoud(t *testing.T) {
 // both.
 func TestClearingOneImplementationLeavesTheRest(t *testing.T) {
 	cfg := based(t)
-	out, err := exec(t, "--config", cfg, "metrics", "clear", "--implementation", "serena.search")
+	out, err := cli(t, "--config", cfg, "metrics", "clear", "--implementation", "serena.search")
 	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestClearingOneImplementationLeavesTheRest(t *testing.T) {
 		t.Errorf("the clear does not say what went: %q", out)
 	}
 
-	after, err := exec(t, "--config", cfg, "metrics")
+	after, err := cli(t, "--config", cfg, "metrics")
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestClearingOneImplementationLeavesTheRest(t *testing.T) {
 // A narrowing flag is itself a statement of intent, so it needs no --all. But
 // naming something the base has never heard of must not read as success.
 func TestClearingWhatWasNeverThereSaysSo(t *testing.T) {
-	out, err := exec(t, "--config", based(t), "metrics", "clear", "--implementation", "grep")
+	out, err := cli(t, "--config", based(t), "metrics", "clear", "--implementation", "grep")
 	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
@@ -132,10 +132,10 @@ func TestClearingWhatWasNeverThereSaysSo(t *testing.T) {
 
 func TestClearingAllEmptiesTheBase(t *testing.T) {
 	cfg := based(t)
-	if _, err := exec(t, "--config", cfg, "metrics", "clear", "--all"); err != nil {
+	if _, err := cli(t, "--config", cfg, "metrics", "clear", "--all"); err != nil {
 		t.Fatalf("clear --all: %v", err)
 	}
-	after, err := exec(t, "--config", cfg, "metrics")
+	after, err := cli(t, "--config", cfg, "metrics")
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}

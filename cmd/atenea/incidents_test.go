@@ -44,7 +44,7 @@ func fault(t *testing.T, n *notebook.Notebook, in notebook.Incident) {
 // "incidents 0" trains the eye to skip the one line it exists to catch.
 func TestAQuietStatusScreenSaysNothingAboutIncidents(t *testing.T) {
 	settings, _ := isolated(t)
-	out, err := exec(t, "--config", settings, "status")
+	out, err := cli(t, "--config", settings, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, out)
 	}
@@ -67,7 +67,7 @@ func TestTheStatusScreenShowsUnreadIncidents(t *testing.T) {
 		At: time.Date(2026, 8, 2, 17, 40, 0, 0, time.UTC),
 	})
 
-	out, err := exec(t, "--config", settings, "status")
+	out, err := cli(t, "--config", settings, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, out)
 	}
@@ -98,7 +98,7 @@ func TestReadingTheNotebookLeavesItAlone(t *testing.T) {
 	})
 
 	for range 3 {
-		out, err := exec(t, "--config", settings, "incidents")
+		out, err := cli(t, "--config", settings, "incidents")
 		if err != nil {
 			t.Fatalf("incidents: %v\n%s", err, out)
 		}
@@ -113,7 +113,7 @@ func TestReadingTheNotebookLeavesItAlone(t *testing.T) {
 		}
 	}
 	// Three reads later the status screen still says it is new.
-	status, err := exec(t, "--config", settings, "status")
+	status, err := cli(t, "--config", settings, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, status)
 	}
@@ -127,14 +127,14 @@ func TestClearIsTheOnlyThingThatMovesTheMark(t *testing.T) {
 	settings, state := isolated(t)
 	fault(t, book(t, state), notebook.Incident{Op: "orchestrator.step", Detail: "boom"})
 
-	out, err := exec(t, "--config", settings, "incidents", "clear")
+	out, err := cli(t, "--config", settings, "incidents", "clear")
 	if err != nil {
 		t.Fatalf("clear: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "marked 1 incident(s) read") {
 		t.Errorf("clear did not say what it took responsibility for: %q", out)
 	}
-	status, err := exec(t, "--config", settings, "status")
+	status, err := cli(t, "--config", settings, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, status)
 	}
@@ -142,7 +142,7 @@ func TestClearIsTheOnlyThingThatMovesTheMark(t *testing.T) {
 		t.Errorf("the screen still nags after a clear:\n%s", status)
 	}
 	// Cleared is not deleted. The notebook is the record.
-	out, err = exec(t, "--config", settings, "incidents", "--all")
+	out, err = cli(t, "--config", settings, "incidents", "--all")
 	if err != nil {
 		t.Fatalf("incidents --all: %v\n%s", err, out)
 	}
@@ -150,7 +150,7 @@ func TestClearIsTheOnlyThingThatMovesTheMark(t *testing.T) {
 		t.Errorf("clearing threw the entry away:\n%s", out)
 	}
 	// And the default view now says so rather than looking empty.
-	out, err = exec(t, "--config", settings, "incidents")
+	out, err = cli(t, "--config", settings, "incidents")
 	if err != nil {
 		t.Fatalf("incidents: %v\n%s", err, out)
 	}
@@ -163,7 +163,7 @@ func TestClearIsTheOnlyThingThatMovesTheMark(t *testing.T) {
 // empty list that reads like a bug.
 func TestAnEmptyNotebookSaysItIsEmpty(t *testing.T) {
 	settings, _ := isolated(t)
-	out, err := exec(t, "--config", settings, "incidents")
+	out, err := cli(t, "--config", settings, "incidents")
 	if err != nil {
 		t.Fatalf("incidents: %v\n%s", err, out)
 	}
@@ -179,11 +179,11 @@ func TestAnUnknownWordIsRefused(t *testing.T) {
 	settings, state := isolated(t)
 	fault(t, book(t, state), notebook.Incident{Op: "orchestrator.step", Detail: "boom"})
 
-	out, err := exec(t, "--config", settings, "incidents", "cler")
+	out, err := cli(t, "--config", settings, "incidents", "cler")
 	if contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input (%q)", contract.KindOf(err), out)
 	}
-	status, _ := exec(t, "--config", settings, "status")
+	status, _ := cli(t, "--config", settings, "status")
 	if !strings.Contains(status, "1 unread") {
 		t.Errorf("a misspelled clear cleared anyway:\n%s", status)
 	}
@@ -207,14 +207,14 @@ func TestATornEntryIsReportedNotHidden(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	status, err := exec(t, "--config", settings, "status")
+	status, err := cli(t, "--config", settings, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, status)
 	}
 	if !strings.Contains(status, "1 unreadable") {
 		t.Errorf("the status screen hid the torn line:\n%s", status)
 	}
-	out, err := exec(t, "--config", settings, "incidents")
+	out, err := cli(t, "--config", settings, "incidents")
 	if err != nil {
 		t.Fatalf("incidents: %v\n%s", err, out)
 	}
@@ -226,7 +226,7 @@ func TestATornEntryIsReportedNotHidden(t *testing.T) {
 // The command is on the front page. A tool nobody can find is a tool nobody
 // uses, and this one only matters on the day something has gone wrong.
 func TestTheUsageMentionsTheNotebook(t *testing.T) {
-	out, err := exec(t, "help")
+	out, err := cli(t, "help")
 	if err != nil {
 		t.Fatalf("help: %v", err)
 	}

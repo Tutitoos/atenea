@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,6 +69,31 @@ type Config struct {
 	// It is advisory, never an error: the file is the user's, and a catalog
 	// trimmed on purpose is a legitimate thing to have.
 	Missing []string
+	// MCPServers are the MCP endpoints Atenea will vouch for on a client's
+	// behalf, used by `atenea wrap`. They are not part of the catalog and
+	// nothing dispatches against them: Atenea's own providers are reached
+	// through adapters, not through this list.
+	MCPServers []MCPServer
+}
+
+// MCPServer is one MCP endpoint a client should be pointed at instead of
+// spawning its own copy.
+//
+// The point of declaring it here rather than in each client's own config is
+// that there is then one declaration to keep true instead of one per client,
+// and something that can check it before a client is told it exists.
+type MCPServer struct {
+	// ID is the name the client will see. It replaces any server the client
+	// already declares under the same name, which is how a per-session
+	// spawn becomes a pointer at a shared one.
+	ID string
+	// URL is set for an HTTP endpoint, Command for a stdio one. Exactly one
+	// of the two, which is what picks the transport.
+	URL     string
+	Command []string
+	Env     map[string]string
+	// Timeout bounds the readiness check. Zero takes the probe's default.
+	Timeout time.Duration
 }
 
 // Core holds the operational knobs.
@@ -410,6 +436,7 @@ type file struct {
 	Capabilities    []fileCapability `toml:"capability"`
 	Implementations []fileImpl       `toml:"implementation"`
 	Repositories    []fileRepository `toml:"repository"`
+	MCPServers      []fileMCPServer  `toml:"mcp_server"`
 }
 
 type fileCore struct {
@@ -583,6 +610,64 @@ type fileRepository struct {
 	SerenaEndpoint string   `toml:"serena_endpoint"`
 }
 
+type fileMCPServer struct {
+	ID      string            `toml:"id"`
+	URL     string            `toml:"url"`
+	Command []string          `toml:"command"`
+	Env     map[string]string `toml:"env"`
+	Timeout string            `toml:"timeout"`
+}
+
+// build validates one declared endpoint. The rules are all one rule: a
+// declaration that cannot be checked is worse than no declaration, because
+// it reads as a promise. So an entry must name something reachable, and it
+// must name exactly one thing -- a block carrying both a url and a command
+// has two answers to "where is this" and no way to choose between them.
+func (m fileMCPServer) build(source string) (MCPServer, error) {
+	fail := func(format string, args ...any) (MCPServer, error) {
+		return MCPServer{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s", source, fmt.Sprintf(format, args...))
+	}
+	id := strings.TrimSpace(m.ID)
+	if id == "" {
+		return fail("mcp_server: id is required")
+	}
+	hasURL, hasCommand := strings.TrimSpace(m.URL) != "", len(m.Command) > 0
+	switch {
+	case hasURL && hasCommand:
+		return fail("mcp_server %s: has both url and command; a server is reached one way", id)
+	case !hasURL && !hasCommand:
+		return fail("mcp_server %s: needs a url or a command", id)
+	}
+	out := MCPServer{ID: id, Command: m.Command, Env: m.Env}
+	if hasURL {
+		parsed, err := url.Parse(strings.TrimSpace(m.URL))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fail("mcp_server %s: url %q is not an absolute http(s) url", id, m.URL)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fail("mcp_server %s: url scheme %q is not http or https", id, parsed.Scheme)
+		}
+		out.URL = parsed.String()
+	}
+	for i, part := range out.Command {
+		if strings.TrimSpace(part) == "" {
+			return fail("mcp_server %s: command has an empty argument at position %d", id, i)
+		}
+	}
+	if m.Timeout != "" {
+		d, err := time.ParseDuration(m.Timeout)
+		if err != nil {
+			return fail("mcp_server %s: timeout %q: %v", id, m.Timeout, err)
+		}
+		if d <= 0 {
+			return fail("mcp_server %s: timeout %s is not positive", id, d)
+		}
+		out.Timeout = d
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
@@ -663,6 +748,23 @@ func parse(raw []byte, source string) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Repositories = append(cfg.Repositories, repo)
+	}
+	// Two blocks under one id would silently make one of them dead: the
+	// payload is a map keyed by id, so the later would win and the earlier
+	// would never be probed or declared. Refusing is the only way the file
+	// can say which one it meant.
+	seen := make(map[string]bool, len(decoded.MCPServers))
+	for _, raw := range decoded.MCPServers {
+		server, err := raw.build(source)
+		if err != nil {
+			return Config{}, err
+		}
+		if seen[server.ID] {
+			return Config{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: mcp_server %s is declared twice", source, server.ID)
+		}
+		seen[server.ID] = true
+		cfg.MCPServers = append(cfg.MCPServers, server)
 	}
 	return cfg, nil
 }

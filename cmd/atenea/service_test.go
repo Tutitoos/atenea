@@ -19,7 +19,7 @@ func TestServiceRefusesAWordItDoesNotKnow(t *testing.T) {
 		{"service", "conjure"},
 		{"service", "instal"}, //nolint:misspell // the near-miss of a real verb is the point
 	} {
-		_, err := exec(t, args...)
+		_, err := cli(t, args...)
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 			t.Errorf("%v was answered with %v, want invalid_input", args, got)
 		}
@@ -38,7 +38,7 @@ func TestServiceStatusReportsOnAMachineWithNothingInstalled(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
 
-	out, err := exec(t, "service", "status")
+	out, err := cli(t, "service", "status")
 	if err != nil {
 		t.Fatalf("a status screen must not fail: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestServiceStatusReportsOnAMachineWithNothingInstalled(t *testing.T) {
 // of installing Atenea on a machine, and a command nobody can find is a
 // command nobody runs.
 func TestTheUsageMentionsTheService(t *testing.T) {
-	out, err := exec(t, "help")
+	out, err := cli(t, "help")
 	if err != nil {
 		t.Fatalf("help: %v", err)
 	}

@@ -13,6 +13,60 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Added
+
+- **`atenea wrap CLIENT` launches a client with MCP servers Atenea checked a
+  moment earlier.** The servers come from new `[[mcp_server]]` blocks in the
+  settings file; each one is handshaked before the client starts, and only the
+  ones that answered are declared to it. Measured on the machine this was
+  written on: of six declared servers one was refusing connections while the
+  supervisor in front of it reported `running`, and it had been doing so for
+  five hours. The client that used it listed it as connected-until-used; the
+  supervisor logged nothing.
+
+  **`declared` means the server answered one MCP handshake. It does not mean
+  its tools work**, and the report says so on every run, including a run with
+  nothing wrong -- `5 declared, 0 refused` is exactly the moment the word is
+  trusted furthest and read least. The gap is real: on the same machine a
+  server answers the handshake in under two seconds and every call to its
+  primary tool fails, and had been failing for days. Checking further means
+  calling tools, and calling a tool is doing work with side effects and a
+  bill. The handshake is the last thing that is free.
+
+  A refused server is left **out** of the payload rather than switched off.
+  The client deep-merges what Atenea generates over its own config, so an
+  absent key leaves whatever the user already had in place: Atenea declining
+  to vouch for a server is never the reason a working one disappears.
+
+  Nothing is written to disk. The configuration lives in one environment
+  variable for the lifetime of the child process, which is what makes it safe
+  to try -- run the client without `wrap` and it has exactly the configuration
+  it had before. There is no `unwrap` because there is nothing to undo.
+
+  `opencode` is the one client wired today, via `OPENCODE_CONFIG_CONTENT`.
+
+- **`[[mcp_server]]` settings blocks.** `id` plus exactly one of `url` or
+  `command`, with optional `env` and `timeout`. A block naming both, naming
+  neither, carrying a relative or non-http URL, or repeating an `id` already
+  declared is refused at load: the payload is keyed by `id`, so a duplicate
+  would silently make one of the two dead. This list is not the catalogue and
+  nothing dispatches against it -- Atenea reaches its own providers through
+  adapters.
+
+### Fixed
+
+- **A probed stdio server no longer hangs the probe by outliving it.** Killing
+  the process Atenea started left that process's own helpers running, and
+  `Wait` cannot return while a survivor still holds the inherited pipe. The
+  probe now kills the process group, the way the rest of the codebase already
+  does through `internal/procgroup`.
+
+- **A connection failure reports the cause without restating the request.**
+  Go's `*url.Error` puts the method and the whole URL in front of the clause
+  that says what happened; the address is already on the line above it.
+
 ## [0.7.0] - 2026-08-07
 
 `pkg/contract` bumped to `2.0.0`, and it is the first bump that is not

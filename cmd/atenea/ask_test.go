@@ -137,7 +137,7 @@ const stubSymbol = `[{"name_path":"Area","kind":"Function","relative_path":"pkg/
 func TestASymbolDefinitionGoesAllTheWayThrough(t *testing.T) {
 	stub, settingsPath := symbolInstall(t, map[string]string{"find_symbol": stubSymbol})
 
-	out, err := exec(t, "--config", settingsPath, "ask", "symbol.definition",
+	out, err := cli(t, "--config", settingsPath, "ask", "symbol.definition",
 		"--repo", "current", "--set", "file=pkg/shapes.go", "--set", "line=5", "--set", "column=8",
 		"--trace")
 	if err != nil {
@@ -178,7 +178,7 @@ func TestSymbolReferencesComeBackAsAList(t *testing.T) {
 		"find_referencing_symbols": references,
 	})
 
-	out, err := exec(t, "--config", settingsPath, "ask", "symbol.references",
+	out, err := cli(t, "--config", settingsPath, "ask", "symbol.references",
 		"--repo", "current", "--set", "file=pkg/shapes.go", "--set", "line=5", "--set", "column=8")
 	if err != nil {
 		t.Fatalf("ask: %v\n%s", err, out)
@@ -210,7 +210,7 @@ func TestTheAskPayloadIsTypedByTheCapability(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--config", settingsPath, "ask", "symbol.definition", "--repo", "current"}, tc.args...)
-			out, err := exec(t, args...)
+			out, err := cli(t, args...)
 			if err == nil {
 				t.Fatalf("accepted a bad payload:\n%s", out)
 			}
@@ -226,7 +226,7 @@ func TestTheAskPayloadIsTypedByTheCapability(t *testing.T) {
 func TestAskingForACapabilityNobodyDeclaredIsNotFound(t *testing.T) {
 	_, settingsPath := symbolInstall(t, nil)
 
-	_, err := exec(t, "--config", settingsPath, "ask", "symbol.invented", "--repo", "current",
+	_, err := cli(t, "--config", settingsPath, "ask", "symbol.invented", "--repo", "current",
 		"--set", "file=a.go")
 	if err == nil {
 		t.Fatal("an unknown capability was accepted")
@@ -250,7 +250,7 @@ func containsTool(tools []string, want string) bool {
 func TestAnAskReportsAnAnswerNotATally(t *testing.T) {
 	_, settingsPath := symbolInstall(t, map[string]string{"find_symbol": stubSymbol})
 
-	out, err := exec(t, "--config", settingsPath, "ask", "symbol.definition",
+	out, err := cli(t, "--config", settingsPath, "ask", "symbol.definition",
 		"--repo", "current", "--set", "file=pkg/shapes.go", "--set", "line=5", "--set", "column=8")
 	if err != nil {
 		t.Fatalf("ask: %v\n%s", err, out)
@@ -280,7 +280,7 @@ func TestASerenaThatIsDownFailsTheAsk(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	out, err := exec(t, "--config", settingsPath, "ask", "symbol.definition",
+	out, err := cli(t, "--config", settingsPath, "ask", "symbol.definition",
 		"--repo", "current", "--set", "file=pkg/shapes.go", "--set", "line=5", "--set", "column=8",
 		"--trace")
 	if err == nil {
