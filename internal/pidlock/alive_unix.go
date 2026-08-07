@@ -1,6 +1,6 @@
 //go:build unix
 
-package checkpoint
+package pidlock
 
 import "syscall"
 
