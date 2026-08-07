@@ -24,11 +24,18 @@ the work, picks who answers each piece and reports back.
 
 ```text
 $ atenea task "find every TODO"
-run       20260803T120617-f5f47c
-task      code.search in current
+run       20260807T181922-60e188
+task      find every TODO
 verdict   ok
-spent     1.016s over 1 step(s)
-  ask      1 step(s), 1.016s
+matches   30
+spent     2.453s over 2 step(s)
+  explore  1 step(s), 777ms
+  work     1 step(s), 1.676s
+
+discovered
+  [repository] current: 30 hit(s) for "find every TODO", under cmd, docs, internal, pkg
+
+run with --trace for the plan, the funnel and every review
 ```
 
 `verdict` is the whole summary: `ok`, `failed`, or `canceled` if you stopped it.

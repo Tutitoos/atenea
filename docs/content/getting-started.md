@@ -203,42 +203,54 @@ and reviews what comes back.
 ```
 
 ```text
-run       20260802T003739-e22d82
+run       20260807T181838-411e3b
 task      ValidateOutput
 verdict   ok
-matches   11
-spent     12ms over 2 step(s)
-  explore  1 step(s), 6ms
-  work     1 step(s), 5ms
+matches   27
+spent     3.187s over 2 step(s)
+  explore  1 step(s), 2.562s
+  work     1 step(s), 625ms
 
 discovered
-  [repository] current: 11 hit(s) for "ValidateOutput", under internal, pkg
+  [repository] current: 27 hit(s) for "ValidateOutput"
 
 plan
   wave 1  explore-current
   wave 2  search-current
 
 steps
-  explore-current      explore  ripgrep                  6ms
+  explore-current      explore  ripgrep                  2.562s
       review   child=ok parent=ok (output matches the capability)
-      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
-  search-current       work     ripgrep                  5ms
+      found    README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go, internal/adapter/codebasememory/overview.go
+               and 8 more file(s): atenea ask code.search --repo current --json
+  search-current       work     ripgrep                  625ms
       review   child=ok parent=ok (output matches the capability)
-      scope    internal, pkg
-      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      found    README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go, internal/adapter/codebasememory/overview.go
+               and 8 more file(s): atenea ask code.search --repo current --json
+
+dropped in every step
+  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+  claude.search: no attached runner serves it
 ```
 
 Two heights, like the status screen: the summary always, the full trace only
 when asked for. Drop `--trace` and everything from `plan` down disappears.
 
-The look found hits under `internal` and `pkg` only, so the work that followed
-was narrowed to those two areas instead of walking the tree again.
+Each step names the files it found, capped at eight, and when it caps it gives
+you the command that prints the rest: a count is all that composes across
+repositories, but a count is not something anybody can act on. The two drops
+are identical in both steps, so they print once at the end rather than twice
+each — a fact about this machine's catalog, not about either step.
 
-A hit sitting at the repository root is the one case that cannot be narrowed:
-there is no directory above it, so the work runs wide rather than quietly
-dropping it. That is easy to see for yourself — this page and the README now
-quote the search term, so running the example against Atenea's own repository
-reports more hits and no `scope` line.
+That run is Atenea's own repository, and it shows the one case that cannot be
+narrowed: this page and the README quote the search term, and a hit with no
+directory above it has no area to narrow to. So the work ran wide — no `scope`
+line — rather than quietly dropping it. Against a repository where the hits sit
+under `internal` and `pkg` only, the work that follows is narrowed to those two
+areas instead of walking the tree again.
+
+The timings are omp's, the one runner the shipped settings attach. Every other
+implementation of `code.search` is dropped here for a reason the trace states.
 
 `--repo` narrows the commission; repeat it for several. Every run leaves a
 receipt under `$XDG_STATE_HOME/atenea/runs`, including one that was cut short.

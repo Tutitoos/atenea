@@ -1356,6 +1356,7 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 	}
 
 	fmt.Fprintf(out, "\nsteps\n")
+	everywhere, static := staticDrops(result.Steps)
 	for _, step := range result.Steps {
 		fmt.Fprintf(out, "  %-20s %-8s %-24s %s\n",
 			step.Step.ID, step.Phase, orDash(step.Decision.Chosen.ID),
@@ -1403,8 +1404,28 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 		if scope := scopeOf(step.Step.Payload); len(scope) > 0 {
 			fmt.Fprintf(out, "      scope    %s\n", strings.Join(scope, ", "))
 		}
+		// Where the hits are, not just how many. A commission reports a count
+		// because that is all that composes across repositories -- but a count
+		// is not something anybody can act on, and the paths were reachable
+		// only by re-running the same work as `ask --json`. Measured on the
+		// dogfood run: `15 hit(s) for "CANDIDATES"` and a second full
+		// dispatch to learn which files. A trace is exactly where this belongs.
+		if paths := answerPaths(step.Outcome.Result); len(paths) > 0 {
+			shown := paths
+			if len(shown) > maxTracePaths {
+				shown = shown[:maxTracePaths]
+			}
+			fmt.Fprintf(out, "      found    %s\n", strings.Join(shown, ", "))
+			if len(paths) > len(shown) {
+				fmt.Fprintf(out, "               and %d more file(s): atenea ask %s --repo %s --json\n",
+					len(paths)-len(shown), step.Step.Capability, step.Step.Repository)
+			}
+		}
 		for _, stage := range step.Decision.Stages {
 			for _, dropped := range stage.Dropped {
+				if everywhere[dropKey{dropped.Implementation, dropped.Reason, dropped.Raw}] {
+					continue
+				}
 				fmt.Fprintf(out, "      dropped  %s: %s\n", dropped.Implementation, dropped.Reason)
 				if dropped.Raw != "" {
 					fmt.Fprintf(out, "               raw: %s\n", oneLine(dropped.Raw))
@@ -1412,6 +1433,109 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 			}
 		}
 	}
+
+	// A drop that is identical in every step is a fact about the catalog on
+	// this machine, not about any step: "no attached runner serves it" does
+	// not become truer for being printed six times, and repeating it buries
+	// the drops that DID vary, which are the only ones worth reading a trace
+	// for. Measured on the dogfood run: four of five trace lines per step were
+	// the same three sentences.
+	if len(everywhere) > 0 {
+		fmt.Fprintf(out, "\ndropped in every step\n")
+		for _, d := range static {
+			fmt.Fprintf(out, "  %s: %s\n", d.implementation, d.reason)
+			if d.raw != "" {
+				fmt.Fprintf(out, "      raw: %s\n", oneLine(d.raw))
+			}
+		}
+	}
+}
+
+// dropKey identifies one funnel drop by what it actually says. Two steps that
+// dropped the same provider for the same reason carry the same key even
+// though they are different DroppedImplementation values.
+type dropKey struct{ implementation, reason, raw string }
+
+// staticDrops finds the drops every step with a funnel decision shares, in
+// the order they were first seen.
+//
+// One step cannot have a repetition, so nothing is collapsed for a single ask:
+// there the drops are the whole story of that one funnel.
+func staticDrops(steps []orchestrator.StepResult) (map[dropKey]bool, []dropKey) {
+	seen := make(map[dropKey]int)
+	var order []dropKey
+	decided := 0
+	for _, step := range steps {
+		if len(step.Decision.Stages) == 0 {
+			continue
+		}
+		decided++
+		here := make(map[dropKey]bool)
+		for _, stage := range step.Decision.Stages {
+			for _, dropped := range stage.Dropped {
+				key := dropKey{dropped.Implementation, dropped.Reason, dropped.Raw}
+				if here[key] {
+					continue
+				}
+				here[key] = true
+				if seen[key] == 0 {
+					order = append(order, key)
+				}
+				seen[key]++
+			}
+		}
+	}
+	if decided < 2 {
+		return nil, nil
+	}
+	everywhere := make(map[dropKey]bool)
+	static := make([]dropKey, 0, len(order))
+	for _, key := range order {
+		if seen[key] == decided {
+			everywhere[key] = true
+			static = append(static, key)
+		}
+	}
+	return everywhere, static
+}
+
+// maxTracePaths caps how many files a trace names before it points at the
+// command that prints all of them. A trace is detail, not the answer itself,
+// and a hundred paths in a step block buries the funnel underneath them.
+const maxTracePaths = 8
+
+// answerPaths collects the distinct files an outcome named, in the order it
+// named them.
+//
+// It walks the whole answer rather than knowing any capability's shape:
+// code.search returns matches, the symbol capabilities return locations, and
+// every one of them calls the field "path" because the contract says so. A
+// capability that ever answers without one simply contributes nothing here.
+func answerPaths(result map[string]any) []string {
+	seen := make(map[string]bool)
+	var out []string
+	var walk func(value any)
+	walk = func(value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			if path, ok := typed["path"].(string); ok && path != "" && !seen[path] {
+				seen[path] = true
+				out = append(out, path)
+			}
+			for _, name := range slices.Sorted(maps.Keys(typed)) {
+				if name == "path" {
+					continue
+				}
+				walk(typed[name])
+			}
+		case []any:
+			for _, item := range typed {
+				walk(item)
+			}
+		}
+	}
+	walk(result)
+	return out
 }
 
 // scopeOf reads the "scope" payload field regardless of how it got there. A

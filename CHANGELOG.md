@@ -60,6 +60,15 @@ told the opposite, because no edit to it can help: upgrade the binary.
   `permission_denied: code.search causes process, which the commission does not
   cover` -- through an adapter that no longer checks anything itself.
 
+- **A trace repeated the same static drop under every step.** On the dogfood
+  run four of five lines per step were the same three sentences: "no attached
+  runner serves it" does not become truer for being printed six times, and the
+  repetition buries the drops that did vary, which are the only ones worth
+  reading a trace for. Drops identical across every step that reached the
+  funnel now print once under `dropped in every step`. A single-step run is
+  unchanged: one step cannot repeat itself, and there the drops are the whole
+  story of that funnel.
+
 ### Added
 
 - **`atenea status` names shipped implementations your settings file does not
@@ -72,6 +81,13 @@ told the opposite, because no edit to it can help: upgrade the binary.
   candidate died there was nothing to fall back to. The warning is advisory and
   names only implementations of capabilities the file still declares: dropping
   a whole capability is a deliberate act, not drift.
+
+- **A trace says where the hits are, not just how many.** A commission reports
+  a count because a count is all that composes across repositories -- but
+  nobody can act on a count, and learning which files were behind
+  `15 hit(s) for "CANDIDATES"` cost a second full dispatch as `ask --json`.
+  Each step under `--trace` now prints the distinct files it found, capped at
+  eight, and when it caps it names the exact command that prints the rest.
 
 - **`out_of_scope` has a reader, and survives being folded.** The column was
   recorded from `0.5.0` and read by nothing. It now has both halves it was
