@@ -61,14 +61,16 @@ chooses between providers which all work. It already ranks on measured numbers
 where they exist — `Cost.Effective` returns the measurement once a provider has
 cleared the break-in threshold and the declared estimate before that, and the
 trace says which of the two settled it. What it ranks on is duration and
-tokens. Strays are a third number sitting in the same base, unread: a provider
-returning nine of them for every good hit is paying nine times over for the
-same answer, and nothing currently notices.
+tokens. Strays are a third number sitting in the same base, read by a person
+and by nothing else: a provider returning nine of them for every good hit is
+paying nine times over for the same answer, and no funnel stage notices.
 
-The column keeps a week of attempts, the same window health already reads for
-its fault streak, which is the right grain for a rate. It is not carried into
-the hourly rollup: a lifetime sum nothing reads is exactly the kind of entry
-the section above this one exists to warn about.
+The column keeps a week of attempts at full grain, the same window health reads
+for its fault streak, and folds into the rollup ladder after that like every
+other count. It was not carried there at first, on the argument that a lifetime
+sum nothing reads is exactly the kind of entry the section above this one warns
+about — but a number with a reader that silently shrinks on a compaction
+schedule is worse than one with no reader, so it now survives the fold.
 
 **Done when:** the cost stage reads this number alongside duration and tokens.
 

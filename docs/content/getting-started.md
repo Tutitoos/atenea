@@ -461,18 +461,25 @@ atenea metrics             # per capability, implementation and repository
 
 ```text
 capability         implementation         repository      tries   failed   priced       each      worst
-code.search        ripgrep                current            40        0       40     1.01s      1.04s
-code.search        claude.search          current            14       14        0         -    948ms
+code.search        ripgrep                current           113        9      104  966.738ms   3.25242s
+code.search        claude.search          current             3        0        3 1m19.557393s 2m32.638458s
 ```
+
+A provider that returned hits outside the scope it was asked for gets a line of
+its own below the table. That number is recorded and never ranked on: a
+provider honest enough to report its own overreach must not rank below one that
+hides it.
 
 The three counts sit together because the gap between them is the diagnosis.
 **Only the priced ones are a price.** A failure is counted and never averaged
 in: a provider that refuses instantly — not logged in, no index, no server —
 would otherwise record a stream of very fast, very cheap calls and become the
 cheapest thing on the machine, and the funnel would hand it everything while
-every commission failed. Failing cheaply must not pay. `claude.search` above
-has fourteen attempts and no cost at all, so it ranks on whatever estimate the
-settings file declared for it, and the trace says so.
+every commission failed. Failing cheaply must not pay. `ripgrep` above failed
+nine of its hundred and thirteen attempts, and not one of those nine moved the
+966ms it is ranked on. A provider with attempts but nothing priced has no
+measured cost at all, so it ranks on whatever estimate the settings file
+declared for it, and the trace says so.
 
 Failures decide health instead. Three in a row *in the same bin* is an outage:
 the provider leaves the funnel and the trace names the count, the bin and what

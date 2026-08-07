@@ -753,7 +753,7 @@ model turn, so the same capability needs a different kind of care at both ends.
 | --- | --- |
 | Answers in prose unless told otherwise | Turns the capability's declared output shape into a JSON Schema and holds the turn to it |
 | May report a file the commission excluded | Re-checks every path against the request before returning, because a prompt is an instruction and not a guard |
-| May report a match outside the `scope` the caller asked for | Drops it in `cleanHit`, right where containment and sensitivity are already checked, and reports the count once as an aggregate `Notice` — scope is a request-shaping constraint, not a secret, so a drop is worth saying out loud rather than hiding |
+| May report a match outside the `scope` the caller asked for | Drops it in `cleanHit`, right where containment and sensitivity are already checked, reports the count once as an aggregate `Notice`, and files the same number on the attempt — scope is a request-shaping constraint, not a secret, so a drop is worth saying out loud rather than hiding. `atenea metrics` prints the recorded total; nothing ranks on it, because a provider that reports its own overreach must not rank below one that hides it |
 | Costs real money per call | Holds the turn to the share the commission granted it, and refuses before spawning when that share is zero |
 | Is slow by nature | Gets a timeout above omp's, because a model that is thinking is not a model that is stuck — 90s, measured: two real searches made 8 and 9 turns in 55s and 66s, and both were ended by the grant rather than by time |
 | Reports `is_error: true` with a success subtype when a session is stale | Reads the error flag, not the subtype, and bins an expired login as `unavailable` |

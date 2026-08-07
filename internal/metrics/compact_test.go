@@ -211,6 +211,74 @@ func TestMergingKeepsTheLargestRealMemoryFigure(t *testing.T) {
 	}
 }
 
+// Before the rollup carried the column, a stray count lived for exactly as
+// long as its attempt stayed unfolded, and the first compaction pass rounded
+// the whole history of it to zero without saying so. That was survivable while
+// nothing read the number; a reader turns it into a figure that shrinks on a
+// schedule for reasons its reader cannot see.
+func TestStrayHitsSurviveTheFoldAndThePromotion(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC().Truncate(time.Hour)
+	for i := range 3 {
+		wandered := attempt(now.Add(-2*time.Hour).Add(time.Duration(i)*time.Minute),
+			"code.search", "claude.search")
+		wandered.OutOfScope = 4
+		s.Record(wandered)
+	}
+
+	if err := s.Compact(context.Background(), now); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	rows, err := s.Summary(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(rows))
+	}
+	if rows[0].Wandered != 12 {
+		t.Fatalf("Wandered = %d, want the 12 that were recorded before the fold", rows[0].Wandered)
+	}
+
+	// A second fold landing on a bucket that already exists takes the merge
+	// path, not the insert. That branch adds every other count and had to be
+	// taught to add this one too: a bucket touched twice must not keep only
+	// the strays from whichever pass got there first.
+	for i := range 2 {
+		late := attempt(now.Add(-2*time.Hour).Add(time.Duration(10+i)*time.Minute),
+			"code.search", "claude.search")
+		late.OutOfScope = 5
+		s.Record(late)
+	}
+	if err := s.Compact(context.Background(), now); err != nil {
+		t.Fatalf("second fold: %v", err)
+	}
+	rows, err = s.Summary(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("summary after merge: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Wandered != 22 {
+		t.Fatalf("Wandered = %+v after a merge, want 22 in one row", rows)
+	}
+
+	// And again one grain coarser: the ladder is walked more than once, and a
+	// sum that only survives the first rung is a sum that disappears tomorrow.
+	if err := s.Compact(context.Background(), now.AddDate(0, 0, 8)); err != nil {
+		t.Fatalf("third compact: %v", err)
+	}
+	rows, err = s.Summary(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("summary after promotion: %v", err)
+	}
+	var total int64
+	for _, r := range rows {
+		total += r.Wandered
+	}
+	if total != 22 {
+		t.Fatalf("Wandered = %d after promotion, want 22", total)
+	}
+}
+
 // A bucket where nothing could ever be weighed must stay empty rather than
 // claiming the far side used no memory at all.
 func TestABucketThatWasNeverWeighedStaysUnknown(t *testing.T) {

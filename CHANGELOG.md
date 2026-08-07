@@ -60,6 +60,17 @@ told the opposite, because no edit to it can help: upgrade the binary.
   `permission_denied: code.search causes process, which the commission does not
   cover` -- through an adapter that no longer checks anything itself.
 
+### Added
+
+- **`out_of_scope` has a reader, and survives being folded.** The column was
+  recorded from `0.5.0` and read by nothing. It now has both halves it was
+  missing: `atenea metrics` prints a line for any provider that returned
+  results outside the scope it was asked for, and migration `0007` adds the
+  column to the rollup table so the number is not silently rounded to zero by
+  the first compaction pass. It is still never scored, and that asymmetry is
+  deliberate: a provider that reports its own overreach honestly must not rank
+  below one that hides it.
+
 ### Fixed
 
 - **Four failure bins that describe the request were condemning the provider.**

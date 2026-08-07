@@ -95,6 +95,10 @@ the same story and worth a look once in a while: attempts, failures, how many
 were priced, and the worst single call per provider. The gap between attempts and
 failures is usually the diagnosis.
 
+If a provider ever returns hits outside the scope it was asked for, `atenea
+metrics` prints that count too. It is recorded and never ranked on — a provider
+honest enough to report its own overreach must not rank below one that hides it.
+
 ## `atenea resume RUN_ID`
 
 For when `task` was interrupted or the process died mid-plan. `--list` shows

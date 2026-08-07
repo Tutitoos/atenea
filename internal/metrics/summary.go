@@ -39,6 +39,16 @@ type Row struct {
 	// RSSSamples at zero means nobody could weigh it.
 	PeakRSS    int64
 	RSSSamples int64
+	// Wandered is how many results these attempts returned that fell outside
+	// the scope they were asked for, and which the adapter dropped before
+	// answering.
+	//
+	// Recorded, never scored -- and that asymmetry is deliberate. A provider
+	// that confines its own search has nothing to count here, so scoring the
+	// column would hand a silent advantage to any provider that hides its
+	// overreach instead of reporting it. It is evidence for a person deciding
+	// where to point a capability, not an input to the funnel.
+	Wandered int64
 }
 
 // summarize reads the attempt table and the rollups together.
@@ -53,7 +63,8 @@ const summarize = `WITH parts AS (
 	       coalesce(sum(duration_us) FILTER (WHERE ok), 0) AS dsum,
 	       max(duration_us) AS dmax,
 	       coalesce(sum(tokens) FILTER (WHERE ok), 0) AS tsum,
-	       max(peak_rss_bytes) AS rmax, count(peak_rss_bytes) AS rn
+	       max(peak_rss_bytes) AS rmax, count(peak_rss_bytes) AS rn,
+	       coalesce(sum(out_of_scope), 0) AS stray
 	FROM measurement
 	WHERE NOT folded AND happened_at >= ?
 	GROUP BY 1, 2, 4, 5
@@ -61,14 +72,15 @@ const summarize = `WITH parts AS (
 	SELECT capability, implementation, any_value(provider), repository, tool_version,
 	       sum(attempts), sum(failures), sum(ok_attempts),
 	       sum(ok_duration_us_sum), max(duration_us_max),
-	       sum(ok_tokens_sum), max(peak_rss_max), sum(rss_samples)
+	       sum(ok_tokens_sum), max(peak_rss_max), sum(rss_samples),
+	       coalesce(sum(out_of_scope), 0)
 	FROM rollup
 	WHERE bucket >= ?
 	GROUP BY 1, 2, 4, 5
 )
 SELECT capability, implementation, any_value(provider), repository, tool_version,
        sum(attempts), sum(failures), sum(wins), sum(dsum), max(dmax), sum(tsum),
-       max(rmax), sum(rn)
+       max(rmax), sum(rn), sum(stray)
 FROM parts
 GROUP BY 1, 2, 4, 5
 ORDER BY 1, 2, 4, 5`
@@ -103,7 +115,7 @@ func (s *Store) Summary(ctx context.Context, since time.Time) ([]Row, error) {
 		var rmax *int64
 		if err := rows.Scan(&r.Capability, &r.Implementation, &r.Provider,
 			&r.Repository, &r.ToolVersion, &r.Attempts, &r.Failures, &r.Successes,
-			&dsum, &dmax, &r.Tokens, &rmax, &r.RSSSamples); err != nil {
+			&dsum, &dmax, &r.Tokens, &rmax, &r.RSSSamples, &r.Wandered); err != nil {
 			return nil, fmt.Errorf("metrics: summary: %w", err)
 		}
 		if r.Successes > 0 {

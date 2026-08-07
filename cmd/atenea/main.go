@@ -669,6 +669,20 @@ func printMetrics(atenea *core.Core, filter metrics.Filter, out io.Writer) error
 	}
 	fmt.Fprintf(out, "\n'each' is the average of the calls that WORKED. "+
 		"A failure is counted, never priced.\n")
+	// The strays get their own line rather than a column, because the column
+	// would be empty for every provider that confines its own search -- which
+	// is all of them but one. It is recorded and never scored: a provider that
+	// reports its overreach honestly must not rank below one that hides it, so
+	// this is evidence for whoever is deciding where to point a capability,
+	// and nothing the funnel reads.
+	for _, r := range rows {
+		if r.Wandered == 0 {
+			continue
+		}
+		fmt.Fprintf(out, "%s returned %d result(s) outside the scope it was asked for on %s; "+
+			"dropped before answering, recorded, never scored.\n",
+			r.Implementation, r.Wandered, r.Repository)
+	}
 	return nil
 }
 
