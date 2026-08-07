@@ -101,6 +101,7 @@ max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 runners = ["omp"]           # any of omp, claudecode, serena, codebasememory, local; [] dispatches nowhere
+checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.omp]
@@ -123,6 +124,22 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
   implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview"]
   timeout = "90s"                      # a language server indexing cold is slow, not stuck
+
+  # Optional. Present means Atenea launches and watches the server itself,
+  # instead of expecting one already listening at the `endpoint` above.
+  [orchestrator.serena.process]
+  command = "serena"                   # required once this table exists
+  args = ["start-mcp-server", "--transport", "streamable-http",
+          "--host", "127.0.0.1", "--port", "{{port}}", "--project", "/srv/api"]
+  env = ["SERENA_LOG_LEVEL=WARNING"]   # added to the inherited environment
+  lifecycle = "on_demand"              # required: "persistent" or "on_demand"
+  port = 0                             # 0 lets the OS choose; {{port}} receives it
+  ready_timeout = "15s"                # one spawn's window to answer the handshake
+  restart_limit = 2                    # retries after a crash; 0 never retries
+  restart_delay = "2s"                 # pause between a crash and the next try
+  stable_after = "30s"                 # uptime that earns a fresh restart budget
+  idle_timeout = "5m"                  # on_demand only: idle before it is stopped
+  stop_grace = "5s"                    # SIGTERM, then SIGKILL
 
   [orchestrator.codebasememory]
   binary = "codebase-memory-mcp"       # bare name is looked up on PATH
@@ -204,10 +221,54 @@ trace — `no attached runner serves it`, not `down`, because a provider nobody
 wired up is not a provider that is broken. The status screen lists them up
 front, under `no runner`.
 
-Setting `checkpoint_dir = ""` after an explicit path does not disable dumps; it
-falls back to the default location. To turn checkpointing off, point the
-orchestrator at no store at all — the directory is created on first write, so a
-core that never receives a commission leaves nothing behind.
+`checkpoints` is what turns run receipts off, and the only thing that does.
+`checkpoint_dir` follows the ordinary override rule, where an empty string is
+indistinguishable from a key nobody wrote and so inherits the default rather
+than blanking it: `checkpoint_dir = ""` keeps writing, to
+`$XDG_STATE_HOME/atenea/runs`. Only `checkpoints = false` stops it, and it
+wins over an explicit path written beside it. `atenea status` reports which
+way it went on its `runs` line — a directory, or `off`.
+
+### A far side Atenea launches itself
+
+`serena` is the one far side that is a server rather than a command, so it is
+the only one that can be already running, or not running at all, before Atenea
+starts. Leaving `[orchestrator.serena.process]` out keeps that arrangement: an
+externally managed server, taken on faith at whatever `endpoint` names.
+Declaring the table hands the job to Atenea instead — which is what retires a
+hand-written systemd unit or a terminal nobody may close.
+
+Declaring it also settles the address, and more thoroughly than "ignored"
+suggests: `endpoint` is never read, so it is never validated either. An
+`endpoint` that is not a URL is refused outright on its own and passes without
+comment beside a process table, which means deleting the table later can turn
+a file that always loaded into one that suddenly does not. What the adapter
+dials, and what the status screen prints, is the supervisor's own address:
+`127.0.0.1`, the port below, and Serena's MCP path.
+
+`command` and `lifecycle` are the two required keys once the table exists;
+every other knob has a default. `persistent` is launched at startup and kept
+alive. `on_demand` waits for the first call that needs it and is stopped again
+after `idle_timeout`, which `persistent` accepts and ignores.
+
+An omitted `port`, or `0`, has the OS pick a free one — and Atenea then has to
+tell the server which port it picked, which is what `{{port}}` is for: every
+occurrence in `args` becomes the chosen port, the same one the readiness probe
+then dials. Pin a port instead when something outside Atenea also has to find
+the server; `{{port}}` receives it either way. `env` is added to the
+environment Atenea already has rather than replacing it, so `PATH` survives
+and a named key overrides.
+
+`restart_limit` counts retries after a crash, not attempts: `2`, the default,
+means three spawns before the server is marked down for good, and `0` means
+the first crash is final. It is the one knob here where zero is a real
+setting rather than a key nobody wrote, which is why leaving it out gives you
+`2` and not nothing.
+
+A server that never comes up fails at the guard rather than at the adapter,
+because the guard is what waits for it: the call comes back `unavailable`
+saying `serena did not come up`, with the reason it did not carried alongside
+untranslated.
 
 ## The measurement base
 

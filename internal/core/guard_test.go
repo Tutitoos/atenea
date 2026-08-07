@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -132,5 +134,55 @@ func TestRunWarmsAndStopsAManagedProcessCleanly(t *testing.T) {
 	// A second Shutdown must still be the no-op it is for an unmanaged core.
 	if err := atenea.Shutdown(); err != nil {
 		t.Fatalf("second Shutdown: %v", err)
+	}
+}
+
+// The endpoint key and a process table cannot both decide where the adapter
+// dials: one is an address a user picked, the other does not exist until
+// something spawns. Declaring a process settles it, and settles it harder
+// than "ignored" suggests -- the value is never read, so it is never
+// validated either. An endpoint that is not a URL at all is refused outright
+// on its own and passes without comment beside a process table, which is
+// worth pinning in both directions: it means deleting a process block can
+// turn a file that always loaded into one that suddenly does not.
+func TestAManagedProcessTakesOverTheWrittenEndpoint(t *testing.T) {
+	// Not a URL. The adapter refuses this shape, so a core that builds
+	// against it is a core that never handed it to the adapter.
+	managed := strings.Replace(managedCatalog,
+		`endpoint = "http://127.0.0.1:1/mcp"`, `endpoint = "localhost:9121"`, 1)
+
+	atenea := build(t, managed)
+	status := atenea.Status()
+	if len(status.Processes) != 1 {
+		t.Fatalf("processes = %d, want the one the file declared", len(status.Processes))
+	}
+	// The supervisor owns the port. The host and the MCP path are still what
+	// the adapter has to be able to dial.
+	got := status.Processes[0].Endpoint
+	if !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.HasSuffix(got, "/mcp") {
+		t.Errorf("endpoint = %q, want the supervisor's own URL", got)
+	}
+
+	const processTable = `  [orchestrator.serena.process]
+  command = "/nonexistent/atenea-test-serena-binary"
+  lifecycle = "on_demand"
+  restart_limit = 0
+`
+	unmanaged := strings.Replace(managed, processTable, "", 1)
+	if unmanaged == managed {
+		t.Fatal("fixture drifted: the process table is not where this test expects it")
+	}
+	// Nothing to take the endpoint over now, so it has to be read -- and
+	// reading it is the step that fails.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg, err := config.Load(writeTemp(t, unmanaged))
+	if err == nil {
+		_, err = core.New(cfg)
+	}
+	if err == nil {
+		t.Fatal("an endpoint that is not a URL was accepted with nothing to take it over")
+	}
+	if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
+		t.Errorf("kind = %v, want invalid_input; err = %v", kind, err)
 	}
 }

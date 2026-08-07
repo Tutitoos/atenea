@@ -540,6 +540,46 @@ sensitive = ["*.pem"]
 	}
 }
 
+// Two keys decide where a run's paper copy goes, and they are not
+// symmetrical. `checkpoint_dir` follows the ordinary override rule, where an
+// empty string is indistinguishable from an absent one and therefore
+// inherits rather than blanks. So turning checkpointing off is not something
+// a path can say: only `checkpoints = false` can, and it wins over a path
+// written beside it. `atenea status` prints the result of this on its `runs`
+// line, as a directory or as "off".
+func TestOnlyCheckpointsFalseTurnsRunsOff(t *testing.T) {
+	shipped, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	fallback := shipped.Orchestrator.CheckpointDir
+	if fallback == "" {
+		t.Fatal("a fresh install has nowhere to write its receipts")
+	}
+	for _, tc := range []struct {
+		name string
+		keys string
+		want string
+	}{
+		{"omitted", "", fallback},
+		{"an empty dir reads as absent", "checkpoint_dir = \"\"\n", fallback},
+		{"an explicit dir is obeyed", "checkpoint_dir = \"/tmp/receipts\"\n", "/tmp/receipts"},
+		{"on, with an empty dir", "checkpoints = true\ncheckpoint_dir = \"\"\n", fallback},
+		{"off", "checkpoints = false\n", ""},
+		{"off beats an explicit dir", "checkpoints = false\ncheckpoint_dir = \"/tmp/receipts\"\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Load(write(t, minimal+"\n[orchestrator]\n"+tc.keys))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Orchestrator.CheckpointDir; got != tc.want {
+				t.Errorf("checkpoint_dir = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // An empty list is a deliberate statement -- "nothing here is secret" -- and
 // has to survive as one rather than being mistaken for an omission.
 func TestAnEmptySensitiveListDisarmsTheGuardOnPurpose(t *testing.T) {
@@ -1001,10 +1041,14 @@ stop_grace = "15s"
 	}
 }
 
-// The recovery knobs are the supervisor package's to default, not config's:
+// The duration knobs are the supervisor package's to default, not config's:
 // a Spec built from a Process that never mentioned them must arrive at
 // supervisor.Spec.withDefaults still zero, so there is exactly one place
 // those numbers are decided rather than two that could drift apart.
+//
+// restart_limit is the exception and is asserted separately below: zero is a
+// legitimate value there, so the supervisor cannot tell it from an omitted key
+// and config has to resolve it while the pointer still says which it was.
 func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
 	body := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n"
 	cfg, err := config.Load(write(t, body))
@@ -1015,9 +1059,38 @@ func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
 	if got == nil {
 		t.Fatal("Process = nil, want the table the file declared")
 	}
-	if got.Port != 0 || got.RestartLimit != 0 || got.RestartDelay != 0 ||
+	if got.Port != 0 || got.RestartDelay != 0 ||
 		got.StableAfter != 0 || got.ReadyTimeout != 0 || got.IdleTimeout != 0 || got.StopGrace != 0 {
-		t.Errorf("Process = %+v, want every unset knob left at zero for the supervisor to default", got)
+		t.Errorf("Process = %+v, want every unset timing left at zero for the supervisor to default", got)
+	}
+}
+
+// supervisor.DefaultRestartLimit exists because the design wants "a couple of
+// times" before a crashed server is given up on. Nothing was applying it: the
+// supervisor documents the choice as the Spec builder's, config left the field
+// at its zero, and zero means never retry. A settings file that opted into a
+// managed Serena without naming restart_limit therefore got a server that was
+// marked down on its first crash, and the constant was referenced nowhere.
+func TestSerenaProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *testing.T) {
+	table := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n"
+
+	omitted, err := config.Load(write(t, table))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := omitted.Orchestrator.Serena.Process.RestartLimit; got != supervisor.DefaultRestartLimit {
+		t.Errorf("omitted restart_limit = %d, want the supervisor default %d",
+			got, supervisor.DefaultRestartLimit)
+	}
+
+	// Explicit zero has to survive, or turning retries off would be
+	// impossible to say -- which is the whole reason the field is a pointer.
+	off, err := config.Load(write(t, table+"restart_limit = 0\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := off.Orchestrator.Serena.Process.RestartLimit; got != 0 {
+		t.Errorf("explicit restart_limit = 0 became %d; never retry must stay sayable", got)
 	}
 }
 

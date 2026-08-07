@@ -17,6 +17,33 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A crashed Serena was given up on at the first crash, never the "couple of
+  times" the design says.** `supervisor.DefaultRestartLimit = 2` was declared
+  and applied nowhere. `restart_limit` is a `*int` precisely so an omitted key
+  can be told apart from an explicit `0`, but `config` resolved the absent
+  pointer to a Go zero, and `supervisor.withDefaults` — which fills the other
+  five process timings — deliberately leaves `RestartLimit` alone, because by
+  the time a `Spec` is built zero is a legitimate "never retry". Each side's
+  comment named the other as the one that would apply it, and neither did.
+  Measured against the binary: a server that cannot spawn is now attempted
+  three times over 4.1s, where it used to be attempted once and marked down.
+- **`checkpoints` was never named on the settings page.** Turning run receipts
+  off was documented as pointing "the orchestrator at no store at all", which
+  is a Go-level idea a settings file cannot express. `checkpoint_dir = ""`
+  turns nothing off: an empty string is indistinguishable from an absent key
+  and inherits the default, so it keeps writing. Only `checkpoints = false`
+  blanks it, and it beats an explicit path written beside it. `atenea status`
+  reports which way it went on its `runs` line, as a directory or as `off`.
+- **The eleven fields of `[orchestrator.serena.process]` had no coverage at
+  all**, including the one with teeth: declaring the table stops `endpoint`
+  from being read, and therefore from being validated. `endpoint =
+  "localhost:9121"` is refused outright on its own and passes without comment
+  beside a process table, so deleting the table later can turn a file that
+  always loaded into one that no longer does. The page now documents every
+  field against measured defaults — `{{port}}` substitution, `env` extending
+  rather than replacing the inherited environment, and `restart_limit`
+  counting retries rather than attempts — and both load-bearing claims are
+  tests rather than sentences.
 - **The settings page claimed a value you leave out is absent; for everything
   outside the catalog it falls back to a compiled default.** The catalog blocks
   really are replaced outright — that part was right, and the page's own

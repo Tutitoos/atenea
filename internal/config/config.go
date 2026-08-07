@@ -208,10 +208,16 @@ type ManagedProcess struct {
 	// one, the safer default for anything that does not need a stable
 	// address on this machine.
 	Port int
-	// RestartLimit, RestartDelay, StableAfter, ReadyTimeout, IdleTimeout and
-	// StopGrace tune the crash-recovery behavior. Zero takes the supervisor
-	// package's own default for each.
+	// RestartLimit is how many crashes are retried before the server is
+	// marked down for good. Unlike the five below it is resolved here, not
+	// in the supervisor: zero means "never retry" rather than "unset", so
+	// the supervisor has no way to spot an omitted key and leaves the
+	// choice to whoever builds the Spec.
 	RestartLimit int
+	// RestartDelay, StableAfter, ReadyTimeout, IdleTimeout and StopGrace
+	// tune the rest of the crash-recovery behavior. Zero takes the
+	// supervisor package's own default for each, so those numbers are
+	// decided in one place rather than two that could drift apart.
 	RestartDelay time.Duration
 	StableAfter  time.Duration
 	ReadyTimeout time.Duration
@@ -1000,6 +1006,14 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		Command: strings.TrimSpace(p.Command),
 		Args:    append([]string(nil), p.Args...),
 		Env:     append([]string(nil), p.Env...),
+		// The five duration knobs below are left at zero on purpose: the
+		// supervisor defaults those, so the numbers live in one place.
+		// This one cannot work that way. Zero is a legitimate restart
+		// limit -- never retry, go straight to down -- so the supervisor
+		// cannot tell it apart from "not set" and says so, deferring the
+		// distinction to whoever builds the Spec. That is here, and the
+		// pointer above is what still carries it.
+		RestartLimit: supervisor.DefaultRestartLimit,
 	}
 	switch supervisor.Lifecycle(p.Lifecycle) {
 	case supervisor.Persistent, supervisor.OnDemand:
