@@ -248,7 +248,17 @@ func (s *Store) Load(id string) (Run, error) {
 	}
 	var run Run
 	if err := json.Unmarshal(raw, &run); err != nil {
-		return Run{}, contract.Fail(contract.FailureInvalidInput, "run %s: %v", id, err)
+		// A receipt that will not parse was torn by an ugly close: there is no
+		// fsync before the rename, so a cut can land a .json the kernel never
+		// finished writing. Setting it aside is the service's job and only the
+		// service's, so on a machine where the service has not started since
+		// the cut nothing has done it yet -- and a parse error on its own is a
+		// dead end. It names a real fault and no way out of it, which is the
+		// same shape as reporting the missing .json above: honest, and no use
+		// to the person reading it. One sentence closes it.
+		return Run{}, contract.Fail(contract.FailureInvalidInput,
+			"run %s was torn by an ugly close and cannot be resumed: %v; the service sets a torn receipt aside on its next start (atenea run), and what survived it will be at %s",
+			id, err, filepath.Join(s.dir, id+".json.torn"))
 	}
 	return run, nil
 }

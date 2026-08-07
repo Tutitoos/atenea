@@ -125,6 +125,37 @@ func TestResumingATornRunNamesTheEvidenceItLeftBehind(t *testing.T) {
 	}
 }
 
+// The set-aside is the service's job and only the service's, so on a machine
+// where the service has not started since the cut nothing has done it yet. The
+// receipt still will not parse and resuming still refuses -- but a parse error
+// on its own names a real fault and no way out of it, which is the same dead end
+// as reporting a missing .json. The refusal has to say what closes it.
+func TestResumingATornRunNobodyHasSetAsideSaysWhatWillFixIt(t *testing.T) {
+	dir := t.TempDir()
+	store := storeAt(t, dir)
+	const id = "20260802T120000-abc123"
+	writeFile(t, filepath.Join(dir, id+".json"), `{"id":"20260802T120000-abc123","task":"find every`)
+	// No Recover: this is the machine whose service has not run since the cut.
+
+	_, err := store.Load(id)
+	if err == nil {
+		t.Fatal("a receipt that does not parse was accepted")
+	}
+	for _, want := range []string{"torn", "atenea run", filepath.Join(dir, id+".json.torn")} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+
+	// A run that never existed must not borrow the sentence: there is nothing
+	// for a service to set aside, so naming the remedy would send the reader to
+	// a file that will never appear.
+	_, err = store.Load("20260101T000000-000000")
+	if strings.Contains(err.Error(), "atenea run") {
+		t.Errorf("error = %q, want a plain missing-run answer for a run nobody wrote", err)
+	}
+}
+
 // An ordinary write failure must not borrow the disk sentence. The ENOSPC side
 // of the same rule is in disk_test.go, in-package: a full filesystem cannot be
 // produced honestly from a unit test without mounting one.

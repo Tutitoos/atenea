@@ -116,6 +116,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   is shared rather than copied -- `internal/pidlock` is the one implementation,
   and `checkpoint.Lock` calls it.
 
+- **Resuming a torn receipt nobody has set aside says what closes it.** Setting a
+  torn receipt aside is the service's job and only the service's, so on a machine
+  whose service has not started since the cut nothing has done it yet and the
+  loader meets the unparsed file directly. It refused with the parse error alone
+  -- `unexpected end of JSON input` -- which names a real fault and no way out of
+  it, the same dead end as reporting a missing `.json`. It now names the remedy
+  and where the evidence will be. A run nobody ever wrote does not borrow the
+  sentence: there is nothing for a service to set aside.
+
 - **A probed stdio server no longer hangs the probe by outliving it.** Killing
   the process Atenea started left that process's own helpers running, and
   `Wait` cannot return while a survivor still holds the inherited pipe. The
