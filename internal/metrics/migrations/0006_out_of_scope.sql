@@ -1,0 +1,32 @@
+-- out_of_scope is how many results an attempt returned that fell outside the
+-- scope it was asked for, and which the adapter dropped before answering.
+--
+-- Before this column the number existed for the length of one sentence: the
+-- adapter counted the strays, wrote "N match(es) fell outside the requested
+-- scope and were dropped" onto the answer, and the count died there. A
+-- provider that wandered on every single call paid nothing for it and kept
+-- being picked, because nothing that ranks providers had ever seen the number.
+--
+-- Recorded here, and deliberately not scored anywhere yet. It is not health:
+-- health answers "can this provider answer at all", and one that wanders still
+-- answers -- the core drops the strays and the caller gets a clean result, so
+-- marking it down would remove a working provider to punish a defect that was
+-- already neutralized. What wandering actually costs is tokens and time spent
+-- on results nobody could use, and that is a cost fact. Cost is the funnel
+-- stage that chooses between providers which all work, and this is the
+-- evidence it will need -- gathered from the first call rather than from the
+-- day somebody decides to wire it.
+--
+-- Per attempt, and not carried into rollup on purpose. Attempts live for the
+-- retention window (a week by default) and are then folded into their hour;
+-- this column does not survive that fold. That is the right grain for the
+-- consumer it is meant for: a cost stage wants a recent rate -- strays per
+-- call over the last few days -- which is exactly the window scanRecency
+-- already reads for health. A lifetime sum in rollup would be a column
+-- nothing reads, and the catalogue has just been cleared of one of those.
+--
+-- Arrives without NOT NULL: DuckDB refuses a constraint on ADD COLUMN. The
+-- UPDATE below backfills every existing row so no NULL is reachable, and
+-- every insert from here on names the column explicitly.
+ALTER TABLE measurement ADD COLUMN out_of_scope BIGINT;
+UPDATE measurement SET out_of_scope = 0;

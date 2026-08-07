@@ -265,4 +265,24 @@ type Outcome struct {
 	// freshness (or anything else a Notice might cover) was checked and
 	// confirmed clean -- most capabilities carry no such check at all.
 	Notices []string
+	// OutOfScope is how many results this call returned that fell outside the
+	// scope it was asked for, and which the adapter dropped before answering.
+	// Zero means either a clean answer or a provider that cannot stray --
+	// one confined by construction has nothing to count.
+	//
+	// It is a fact about the quality of this answer, and it is deliberately
+	// three things at once that it is not. It is not a Notice: a sentence is
+	// read once by whoever asked and then gone, which is exactly why a
+	// provider that wandered on every call paid nothing for it. It is not in
+	// Sample, for the same reason SpentUSD is not -- Sample is time, tokens
+	// and memory, the physical cost of running the work, and this is a
+	// judgement about what came back. And it is not a failure: the answer is
+	// right, the core already filtered it, and marking the provider down
+	// would remove a provider that works to punish a defect that was
+	// neutralized.
+	//
+	// What it is for is ranking. Wandering is waste -- tokens and time spent
+	// on results nobody could use -- and waste belongs to cost, which is the
+	// funnel stage that decides between providers that all work.
+	OutOfScope int
 }

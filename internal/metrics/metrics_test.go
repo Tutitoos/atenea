@@ -165,6 +165,64 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	}
 }
 
+// The count used to live for the length of one sentence: the adapter wrote
+// "N match(es) fell outside the requested scope and were dropped" onto the
+// answer, whoever asked read it once, and nothing that ranks providers ever
+// saw the number. This is the half that makes it a fact instead of prose.
+func TestOutOfScopeHitsAreRecordedAsANumber(t *testing.T) {
+	s := store(t, Options{})
+	wandered := attempt(time.Now(), "code.search", "claude.search")
+	wandered.OutOfScope = 7
+	s.Record(wandered)
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	db, err := s.connect(context.Background())
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer db.Close()
+	var stored int64
+	if err := db.QueryRow("SELECT out_of_scope FROM measurement").Scan(&stored); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if stored != 7 {
+		t.Fatalf("out_of_scope = %d, want 7", stored)
+	}
+}
+
+// The decision this column exists under: wandering is recorded and never
+// scored. Health answers "can this provider answer at all", and one that
+// strays still answers -- the core drops the strays and the caller gets a
+// clean result. Scoring it here would mark a working provider down and the
+// funnel would then report no implementation available for something that
+// demonstrably works.
+func TestWanderingOutOfScopeNeverDemotesAProvider(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now()
+	for i := range 5 {
+		bad := attempt(now.Add(time.Duration(i)*time.Second), "code.search", "claude.search")
+		bad.OutOfScope = 100
+		s.Record(bad)
+	}
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	verdicts, err := s.Health(context.Background(), now)
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	verdict, seen := verdicts["claude.search"]
+	if !seen {
+		t.Fatal("the attempts were not measured at all: this test would pass for the wrong reason")
+	}
+	if verdict.Health.State == contract.HealthDown {
+		t.Errorf("five all-wandering calls marked the provider down: %+v", verdict.Health)
+	}
+}
+
 // Zero bytes is a measurement; the absence of one is not. An adapter talking to
 // a server has no process to weigh, and the store has to be able to say so.
 func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {

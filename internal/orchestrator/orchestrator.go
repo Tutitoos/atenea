@@ -1442,6 +1442,7 @@ func measure(runID string, step StepResult) metrics.Measurement {
 		OK:             step.Review.Parent == contract.VerdictOK,
 		Failure:        step.Failure,
 		Raw:            step.Raw,
+		OutOfScope:     step.Outcome.OutOfScope,
 	}
 	if step.Failure != "" {
 		m.FailureKind = step.FailureKind.String()

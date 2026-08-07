@@ -220,7 +220,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		return weighed, err
 	}
 
-	result, scopeNotices, err := r.readAnswer(answer, req, ask)
+	result, outOfScope, err := r.readAnswer(answer, req, ask)
 	if err != nil {
 		return weighed, err
 	}
@@ -248,8 +248,13 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if notices := completenessDoubt(answer, req.Permission.BudgetUSD); len(notices) > 0 {
 		outcome.Notices = append(outcome.Notices, notices...)
 	}
-	if len(scopeNotices) > 0 {
-		outcome.Notices = append(outcome.Notices, scopeNotices...)
+	// The count travels as a number and the sentence is built from it, so the
+	// caller who reads the receipt and the funnel that ranks the provider are
+	// looking at the same fact rather than at prose and a guess.
+	outcome.OutOfScope = outOfScope
+	if outOfScope > 0 {
+		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
+			"%d match(es) fell outside the requested scope and were dropped", outOfScope))
 	}
 	return outcome, nil
 }
@@ -745,22 +750,22 @@ func oneLine(value string) string { return strings.Join(strings.Fields(value), "
 // it was told not to open, or a path outside the repository it was pointed at.
 // Trusting the instruction alone would make the security design advisory, so
 // what comes back is checked again here, where the answer can still be refused.
-func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (map[string]any, []string, error) {
+func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (map[string]any, int, error) {
 	if len(out.PermissionDenials) > 0 {
-		return nil, nil, contract.Fail(contract.FailurePermissionDenied,
+		return nil, 0, contract.Fail(contract.FailurePermissionDenied,
 			"claude code was refused %d action(s) it needed", len(out.PermissionDenials)).
 			WithRaw(out.Result)
 	}
 	if len(out.StructuredOutput) == 0 {
 		// The turn ended without the shape it was asked for. That is not a
 		// search with no matches -- it is a search that did not happen.
-		return nil, nil, contract.Fail(contract.FailureUnavailable,
+		return nil, 0, contract.Fail(contract.FailureUnavailable,
 			"claude code answered without the structure it was asked for").
 			WithRaw(out.Result)
 	}
 	var answer map[string]any
 	if err := json.Unmarshal(out.StructuredOutput, &answer); err != nil {
-		return nil, nil, contract.Fail(contract.FailureUnavailable,
+		return nil, 0, contract.Fail(contract.FailureUnavailable,
 			"claude code's structured answer is not an object").
 			WithRaw(string(out.StructuredOutput))
 	}
@@ -783,12 +788,7 @@ func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (
 		}
 		matches = append(matches, hit)
 	}
-	var notices []string
-	if droppedOutOfScope > 0 {
-		notices = append(notices, fmt.Sprintf(
-			"%d match(es) fell outside the requested scope and were dropped", droppedOutOfScope))
-	}
-	return map[string]any{"matches": matches}, notices, nil
+	return map[string]any{"matches": matches}, droppedOutOfScope, nil
 }
 
 // cleanHit checks one reported match and normalises it, or drops it.

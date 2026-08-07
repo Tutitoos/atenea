@@ -118,6 +118,19 @@ type Measurement struct {
 	// failure just to see what it actually said. Empty on success, and empty
 	// on a failure the core raised itself with nothing to quote.
 	Raw string
+	// OutOfScope is how many results this attempt returned that fell outside
+	// the requested scope and were dropped before the answer came back.
+	//
+	// It is recorded and never scored. Health answers "can this provider
+	// answer at all", and a provider that wanders still answers -- the core
+	// filters the strays and the caller gets a clean result, so demoting it
+	// would drop a working provider over a defect already neutralized. What
+	// wandering costs is tokens and time on results nobody could use, which
+	// is a cost fact, and cost is the funnel stage that chooses between
+	// providers that all work. This column is the evidence that stage will
+	// need, gathered from the first call rather than from the day somebody
+	// decides to wire it.
+	OutOfScope int
 }
 
 // DefaultPath is where the database lives when the settings file says nothing.
@@ -229,8 +242,8 @@ func (s *Store) Written() int {
 const insertMeasurement = `INSERT INTO measurement
 	(happened_at, run_id, step_id, capability, implementation, provider,
 	 repository, tool_version, duration_us, tokens, peak_rss_bytes,
-	 ok, failure_kind, failure, raw)
-	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	 ok, failure_kind, failure, raw, out_of_scope)
+	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // Flush writes the buffered batch. An empty buffer is not an error and does not
 // touch the disk.
@@ -291,7 +304,7 @@ func (s *Store) write(ctx context.Context, batch []Measurement) error {
 			m.At.UTC(), m.RunID, m.StepID, m.Capability, m.Implementation,
 			m.Provider, m.Repository, m.ToolVersion,
 			m.Spent.Duration.Microseconds(), int64(m.Spent.Tokens), rss,
-			m.OK, m.FailureKind, m.Failure, m.Raw)
+			m.OK, m.FailureKind, m.Failure, m.Raw, int64(m.OutOfScope))
 		if err != nil {
 			return fmt.Errorf("metrics: insert: %w", err)
 		}

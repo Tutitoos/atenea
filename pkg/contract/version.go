@@ -87,7 +87,15 @@ type Version struct {
 // yet. Additive: an adapter built against 1.8.0 goes on compiling and simply
 // never sets the field; a core speaking 1.9.0 that sees it unspecified
 // treats the implementation as making no claim, not as confined.
-var Current = Version{Major: 1, Minor: 9, Patch: 0}
+//
+// 1.10.0 added `Outcome.OutOfScope`. An adapter that cannot confine its own
+// search already dropped the matches that strayed and said so in a Notice,
+// but a sentence is read once and scored by nothing, so a provider that
+// wandered on every call paid nothing for it. The count now travels as a
+// number the core records. Additive: an adapter built against 1.9.0 goes on
+// compiling and leaves it zero, which reads as "nothing strayed" -- the same
+// thing it means for a provider confined by construction.
+var Current = Version{Major: 1, Minor: 10, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

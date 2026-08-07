@@ -17,6 +17,27 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A provider that wandered out of scope on every call paid nothing for it.**
+  The count of dropped strays existed for the length of one sentence: the
+  adapter wrote `"N match(es) fell outside the requested scope and were
+  dropped"` onto the answer, whoever asked read it once, and nothing that
+  ranks providers ever saw the number. It is now a fact on `contract.Outcome`
+  and a column in the measurement base, with the sentence built from the same
+  number rather than beside it.
+
+  It is recorded and deliberately never scored. Health answers "can this
+  provider answer at all", and one that wanders still answers — the core drops
+  the strays and the caller gets a clean result, so demoting it would remove a
+  working provider to punish a defect already neutralized, and the funnel
+  would then report nothing available for something that demonstrably works.
+  What wandering costs is tokens and time on results nobody could use, which
+  is a cost fact; cost is the stage that chooses between providers that all
+  work, and it will read this when it ranks on measurements instead of
+  estimates. Both halves are tests: one that the number reaches the disk, one
+  that five all-wandering calls leave health alone.
+  `pkg/contract` bumped to `1.10.0`: additive, an adapter built against
+  `1.9.0` goes on compiling and leaves it zero, which reads as "nothing
+  strayed" — the same thing it means for a provider confined by construction.
 - **A settings file could name an implementation no adapter could run, and
   nothing noticed until the call.** A runner's served list came from the
   settings file and was trusted whole: `Serves` said yes, `atenea status`

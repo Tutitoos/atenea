@@ -532,7 +532,7 @@ func TestAMatchOutsideTheRequestedScopeIsDroppedWithANotice(t *testing.T) {
 		{"path":"cmd/atenea/main.go","line":1,"column":1}
 	]}`)}
 
-	result, notices, err := runner.readAnswer(out, req, newSearch(t, payload))
+	result, outOfScope, err := runner.readAnswer(out, req, newSearch(t, payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -544,8 +544,8 @@ func TestAMatchOutsideTheRequestedScopeIsDroppedWithANotice(t *testing.T) {
 	if first["path"] != "internal/adapter/claudecode.go" {
 		t.Errorf("the surviving match is %v", first["path"])
 	}
-	if !anyContains(notices, "2 match") {
-		t.Errorf("notices = %q, want one naming the two dropped hits", notices)
+	if outOfScope != 2 {
+		t.Errorf("out of scope = %d, want 2: the count is what gets recorded, the sentence is built from it", outOfScope)
 	}
 }
 
@@ -557,7 +557,7 @@ func TestNoScopeMeansNoNoticeAndNothingDropped(t *testing.T) {
 		{"path":"deep/nested/b.go","line":1,"column":1}
 	]}`)}
 
-	result, notices, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, outOfScope, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -565,8 +565,8 @@ func TestNoScopeMeansNoNoticeAndNothingDropped(t *testing.T) {
 	if len(matches) != 2 {
 		t.Fatalf("matches = %d, want both: an empty scope means the whole repository", len(matches))
 	}
-	if len(notices) != 0 {
-		t.Errorf("notices = %q, want none", notices)
+	if outOfScope != 0 {
+		t.Errorf("out of scope = %d, want 0", outOfScope)
 	}
 }
 

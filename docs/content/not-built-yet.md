@@ -42,6 +42,33 @@ re-declaration of this one. A capability whose output says which symbol
 contains each hit, and in what order, is a different question from "where does
 this text appear". Nothing is blocked on it today.
 
+## Wandering is recorded and nothing ranks on it yet
+
+An adapter that cannot confine its own search checks every match afterward and
+drops the ones outside the requested scope. The count of those strays is now
+recorded per attempt, in the `out_of_scope` column of the measurement base.
+Nothing reads it yet.
+
+It is deliberately not health. Health answers "can this provider answer at
+all", and a provider that wanders still answers — the core drops the strays and
+the caller gets a clean result, so marking it down would remove a working
+provider to punish a defect that was already neutralized. It is also not a
+failure, for the same reason: the answer is right.
+
+What wandering actually costs is tokens and time spent on results nobody could
+use, and that is a cost fact. Cost is the last funnel stage, the one that
+chooses between providers which all work, and it currently ranks on declared
+estimates rather than measurements. When it ranks on measurements, this is one
+of the numbers it should read: a provider returning nine strays for every good
+hit is paying nine times over for the same answer.
+
+The column keeps a week of attempts, the same window health already reads for
+its fault streak, which is the right grain for a rate. It is not carried into
+the hourly rollup: a lifetime sum nothing reads is exactly the kind of entry
+the section above this one exists to warn about.
+
+**Done when:** the cost stage ranks on measured numbers, and this is one of them.
+
 ## One agent does everything
 
 The contract drew up two agent families early on: `AgentOrchestrator` and a
