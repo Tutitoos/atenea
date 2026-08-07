@@ -606,6 +606,13 @@ everywhere, and the copies, which are on disk and the same for everybody
 looking. A lane that fails reaches the reader through the notebook, which is
 also on disk. Every fact on that screen is true no matter who prints it.
 
+One more line earns its place there for the same reason. A settings file
+replaces the catalog rather than patching it, so a file written before a
+release never gains what the release shipped — silently, until a funnel that
+should have had a fallback turns out to have one candidate. The screen compares
+the two catalogs and names what is missing, beside the settings path it came
+from. It is a fact about a file on disk, so it is true no matter who prints it.
+
 ### One lane for everything in the background
 
 Three rhythms — the measurement flush, the history roll-up, the copies — run in

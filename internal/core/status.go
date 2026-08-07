@@ -38,9 +38,15 @@ func (l Light) String() string {
 // Status is the short, fixed screen: overall light, every implementation with
 // its color, and where the settings came from.
 type Status struct {
-	Version      string
-	Contract     contract.Version
-	Settings     string
+	Version  string
+	Contract contract.Version
+	Settings string
+	// Missing names implementations the shipped catalog declares and this
+	// machine's settings file does not. Settings replace the catalog rather
+	// than patching it, so an older file silently misses whatever later
+	// releases added -- and the first symptom is a funnel with no fallback,
+	// which reads as bad luck rather than as a stale file.
+	Missing      []string
 	Uptime       string
 	Stopping     bool
 	Light        Light
@@ -343,6 +349,7 @@ func (c *Core) Status() Status {
 		Version:  c.Version(),
 		Contract: contract.Current,
 		Settings: c.settings.Source,
+		Missing:  c.settings.Missing,
 		Uptime:   c.Uptime().Truncate(time.Second).String(),
 		Stopping: c.Stopping(),
 		Light:    LightGreen,

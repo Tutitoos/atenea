@@ -153,6 +153,14 @@ default location is not an error — that is the fresh-install path — but a
 missing file you asked for by name is, because staying quiet there would hide a
 typo.
 
+Whichever of those four you land on, `atenea status` compares the catalog it
+loaded against the one built into the binary and prints a `catalog` line naming
+anything the binary ships that your file does not declare. A settings file
+replaces the catalog rather than patching it, so an older file silently misses
+whatever later releases added — this is how you find out, instead of finding
+out the day a funnel that should have had a fallback turns out to have one
+candidate. It stays quiet about capabilities you removed on purpose.
+
 ## Ask the funnel a question
 
 ```sh

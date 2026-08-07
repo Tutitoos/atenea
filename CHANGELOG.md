@@ -62,6 +62,17 @@ told the opposite, because no edit to it can help: upgrade the binary.
 
 ### Added
 
+- **`atenea status` names shipped implementations your settings file does not
+  declare.** Settings replace the catalogue wholesale rather than patching it
+  -- documented and deliberate -- but that means a file written before a
+  release never gains what the release shipped, and nothing said so. Measured
+  on the machine cutting these releases: a file predating `0.6.0` was still
+  registering one implementation of `symbol.overview` after the binary began
+  shipping two, so the funnel ran with a single candidate, and when that
+  candidate died there was nothing to fall back to. The warning is advisory and
+  names only implementations of capabilities the file still declares: dropping
+  a whole capability is a deliberate act, not drift.
+
 - **`out_of_scope` has a reader, and survives being folded.** The column was
   recorded from `0.5.0` and read by nothing. It now has both halves it was
   missing: `atenea metrics` prints a line for any provider that returned

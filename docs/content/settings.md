@@ -87,6 +87,16 @@ binary happened to ship is a file nobody can read on its own. The knobs that do
 fall back are precisely where that objection still bites, which is the argument
 for pinning them rather than trusting them.
 
+A full rewrite is still the only way to *have* everything a release shipped. It
+is no longer the only way to find out you do not: `atenea status` compares your
+catalog against the built-in one and prints a `catalog` line beside `settings`
+naming the implementations it is missing. It stays quiet about capabilities you
+dropped outright, because dropping one is a decision rather than drift. The
+warning exists because the drift is otherwise invisible until it bites: a file
+written before `0.6.0` kept registering one implementation of `symbol.overview`
+after the binary began shipping two, so the funnel ran with a single candidate,
+and the day that candidate died there was nothing behind it.
+
 ## Skeleton
 
 ```toml

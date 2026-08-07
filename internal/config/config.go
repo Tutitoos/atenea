@@ -53,6 +53,21 @@ type Config struct {
 	Capabilities    []contract.Capability
 	Implementations []contract.Implementation
 	Repositories    []contract.Repository
+	// Missing names implementations the shipped catalog declares and this
+	// settings file does not.
+	//
+	// Settings replace the catalog wholesale rather than patching it, which
+	// is documented and deliberate -- but it means a file written before a
+	// release never gains what that release shipped, and until now nothing
+	// said so. Measured on a real machine: a settings file predating v0.6.0
+	// still registered one implementation of symbol.overview after the binary
+	// began shipping two, so the funnel ran with a single candidate where it
+	// should have had a fallback, and a dead provider had nothing to fall back
+	// to.
+	//
+	// It is advisory, never an error: the file is the user's, and a catalog
+	// trimmed on purpose is a legitimate thing to have.
+	Missing []string
 }
 
 // Core holds the operational knobs.
@@ -308,7 +323,12 @@ func Load(explicit string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		return parse(raw, path)
+		cfg, parseErr := parse(raw, path)
+		if parseErr != nil {
+			return Config{}, parseErr
+		}
+		cfg.Missing = missingImplementations(cfg)
+		return cfg, nil
 	case errors.Is(err, fs.ErrNotExist) && explicit == "":
 		return Defaults()
 	default:
@@ -320,6 +340,42 @@ func Load(explicit string) (Config, error) {
 // Defaults returns the embedded settings.
 func Defaults() (Config, error) {
 	return parse(defaultSettings, BuiltIn)
+}
+
+// missingImplementations lists what the shipped catalog declares for the
+// capabilities this file kept, and this file does not.
+//
+// Only capabilities the file still declares are considered: dropping a whole
+// capability is a deliberate act, and naming the providers it no longer needs
+// would be noise rather than a warning.
+func missingImplementations(cfg Config) []string {
+	shipped, err := Defaults()
+	if err != nil {
+		// Embedded defaults that do not parse are a build fault, and this
+		// comparison is advisory: it must never be the reason a working
+		// settings file fails to load.
+		return nil
+	}
+	have := make(map[string]struct{}, len(cfg.Implementations))
+	for _, impl := range cfg.Implementations {
+		have[impl.ID] = struct{}{}
+	}
+	declared := make(map[string]struct{}, len(cfg.Capabilities))
+	for _, capability := range cfg.Capabilities {
+		declared[capability.ID] = struct{}{}
+	}
+	var out []string
+	for _, impl := range shipped.Implementations {
+		if _, ok := have[impl.ID]; ok {
+			continue
+		}
+		if _, ok := declared[impl.Capability]; !ok {
+			continue
+		}
+		out = append(out, impl.ID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // WriteDefault copies the built-in settings to path.

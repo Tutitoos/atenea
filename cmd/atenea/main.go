@@ -340,6 +340,14 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "atenea %s  contract %s  %s\n",
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
+	if len(status.Missing) > 0 {
+		// Beside the settings line, because that file is the thing to edit.
+		// Not a light and not an incident: nothing is broken yet, and the
+		// symptom when it breaks -- a funnel with one candidate and no
+		// fallback -- reads as bad luck unless this line was seen first.
+		fmt.Fprintf(out, "catalog   %d shipped implementation(s) this settings file does not declare: %s\n",
+			len(status.Missing), strings.Join(status.Missing, ", "))
+	}
 	fmt.Fprintf(out, "funnel    %s\n", status.Funnel)
 	printIncidentLine(out, status.Incidents)
 	if summary := status.Recovered.Summary(); summary != "" {

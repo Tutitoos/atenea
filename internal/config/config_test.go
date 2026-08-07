@@ -478,6 +478,82 @@ func TestWriteDefaultRoundTrips(t *testing.T) {
 	}
 }
 
+// Settings replace the catalog wholesale rather than patching it, so a file
+// written before a release never gains what that release shipped. Measured on
+// a real machine: a file predating v0.6.0 still declared one implementation of
+// symbol.overview after the binary began shipping two, so the funnel ran with
+// a single candidate and the missing one was never the suspect.
+func TestAStaleCatalogNamesWhatItIsMissing(t *testing.T) {
+	full := filepath.Join(t.TempDir(), "full.toml")
+	if err := config.WriteDefault(full, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	body, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Drop one implementation block, leaving its capability and its sibling
+	// implementations in place: that is exactly the shape an older file has.
+	blocks := strings.Split(string(body), "[[implementation]]")
+	dropped := ""
+	kept := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if dropped == "" && strings.Contains(block, `id = "codebase-memory.overview"`) {
+			dropped = "codebase-memory.overview"
+			continue
+		}
+		kept = append(kept, block)
+	}
+	if dropped == "" {
+		t.Fatal("the shipped catalog no longer declares codebase-memory.overview; pick another block")
+	}
+
+	stale, err := config.Load(write(t, strings.Join(kept, "[[implementation]]")))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Contains(stale.Missing, dropped) {
+		t.Errorf("Missing = %v, want it to name %s", stale.Missing, dropped)
+	}
+
+	// The shipped file is never stale against itself, or the warning would be
+	// on every screen from the first boot and worth nothing.
+	shipped, err := config.Load(full)
+	if err != nil {
+		t.Fatalf("Load shipped: %v", err)
+	}
+	if len(shipped.Missing) != 0 {
+		t.Errorf("Missing = %v on a freshly written file, want none", shipped.Missing)
+	}
+
+	// Dropping a whole capability is a deliberate act, not drift: `minimal`
+	// declares code.search alone, so the providers behind the seven
+	// capabilities it does not want must not be named at it.
+	trimmed, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load minimal: %v", err)
+	}
+	catalog, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	searchOnly := make(map[string]bool)
+	for _, impl := range catalog.Implementations {
+		if impl.Capability == "code.search" {
+			searchOnly[impl.ID] = true
+		}
+	}
+	if len(trimmed.Missing) == 0 {
+		t.Fatal("a catalog of one capability is missing none of its shipped providers")
+	}
+	for _, id := range trimmed.Missing {
+		if !searchOnly[id] {
+			t.Errorf("Missing names %s, which answers a capability this file dropped on purpose", id)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The orchestrator and security blocks
 // ---------------------------------------------------------------------------

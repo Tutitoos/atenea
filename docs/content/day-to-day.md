@@ -64,16 +64,28 @@ broken. `health=down` is the one that matters. The orchestrator block above it
 separates two things worth keeping apart: `serves` is what an attached adapter
 can answer, `no runner` is what the catalogue declares with nothing wired to it.
 
+A third distinction shows up as a `catalog` line beside `settings`, and only
+when it applies: implementations the binary ships that your settings file does
+not declare. A settings file replaces the catalog rather than patching it, so a
+file written before a release quietly never gains what that release added —
+`no runner` is something wired to nothing, `catalog` is something never wired
+at all because your file has not heard of it.
+
 ## `--trace`
 
 Goes on `task` or `ask`. Prints the plan, who was chosen for each step, what it
-charged, and — the useful half — who was dropped and why.
+charged, which files it found, and — the useful half — who was dropped and why.
+A drop that is identical in every step prints once at the end instead of under
+each one: it is a fact about your catalog, not about any step.
 
 ```text
 steps
-  ask-current          ask      ripgrep                  1.015s
+  ask-current          ask      ripgrep                  1.588s
       review   child=ok parent=ok (output matches the capability)
+      found    cmd/atenea/cancel_test.go, cmd/atenea/json_test.go, cmd/atenea/main.go, cmd/atenea/main_test.go, cmd/atenea/money_test.go, docs/content/day-to-day.md, internal/adapter/claudecode/cancel_test.go, internal/adapter/claudecode/completeness_test.go
+               and 16 more file(s): atenea ask code.search --repo current --json
       dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped  claude.search: no attached runner serves it
 ```
 
 If you only want to know *who would be picked* without spending anything,
