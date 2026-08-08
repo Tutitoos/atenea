@@ -935,6 +935,49 @@ edit or remove — the same shape `budget_usd` already has for money. It ships
 turned on in the default settings: refusing it by default would not make the
 spawn auditable, it would make the one P0 capability unusable out of the box.
 
+The check itself is `commissioned`, a wrapper around whatever Runner is
+attached: every effect the capability declares must be carried by the step's
+permission, or the call is refused with `code.search causes process, which the
+commission does not cover`. It is a verdict on the step rather than a
+transport error, because the run happened and its answer was no.
+
+Wrapping the runner is the placement that matters. The same three lines used
+to be copy-pasted into five adapters with nothing on the core's own dispatch
+path, which meant an adapter supplied from outside this repository enforced
+nothing at all unless its author happened to copy them. Everything below money
+rests on this one wrapper, so it is the core that holds it.
+
+### The client floor
+
+The standing grant answers "what may this machine's work do". It used to
+answer a second question it was never asked: what may a chat opened by
+somebody who connected to us do. Those are the same until an MCP client
+exists, and Atenea has had one since 2026-08-07.
+
+`[orchestrator] client_effects` is the second answer. It ships equal to
+`effects`, and an absent key inherits it, so no file written before the key
+existed behaves differently — but it is resolved once, when the settings are
+read, and the two are separate lists from then on. Widening your own floor for
+an afternoon at the terminal stops widening every client that connects.
+
+It is also a ceiling, which the standing grant is not: a chat cannot be opened
+claiming more than it, and is refused at the door rather than at its first
+question. The ceiling arrives with the line — a file that never wrote one has
+no ceiling, exactly as before, because "I said nothing about clients" must not
+quietly become "clients may hold nothing".
+
+The floor travels on the commission, not on the core. `Session.Ask` and
+`Session.Do` stamp it; `Core.Ask` and `Core.Do`, the console's doors, do not,
+and dispatch falls back to the standing grant when a request carries none.
+That is why the type is a value rather than a list: an operator writing
+`client_effects = []` means "read and nothing else", and a nil slice already
+means "nobody said". Collapsing the two would hand the whole standing floor to
+precisely the client meant to have none.
+
+A resume keeps the standing grant even for a run a chat started. `atenea
+resume` is a command typed at the terminal, and the person typing it is the
+operator: it is their floor because it is their act.
+
 ### Money is a permission, not a cost
 
 A spending ceiling is in this list, next to the effects. Cost is what something

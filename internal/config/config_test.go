@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1516,4 +1517,45 @@ func required(fields []contract.Field) map[string]any {
 		}
 	}
 	return payload
+}
+
+// A setting nobody documented is a setting nobody can find, and the shipped
+// file is not the documentation: its comments explain a key to somebody who
+// already knows it is there. The settings page is where a reader goes to
+// learn what exists at all.
+//
+// This was 44 of 45 by hand before it was a test, so it is a guard on a
+// convention that already held rather than a new demand. The one that was
+// missing was the key added the same day this test was: the manual habit
+// failed on its first opportunity, which is the whole argument for the test.
+func TestEverySettingIsOnTheSettingsPage(t *testing.T) {
+	shipped, err := os.ReadFile("default.toml")
+	if err != nil {
+		t.Fatalf("read the shipped settings: %v", err)
+	}
+	page, err := os.ReadFile("../../docs/content/settings.md")
+	if err != nil {
+		t.Fatalf("read the settings page: %v", err)
+	}
+
+	// Bare keys only. A table header names a section rather than a setting,
+	// and a commented-out line is prose about one.
+	key := regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\s*=`)
+	seen := make(map[string]struct{})
+	for line := range strings.SplitSeq(string(shipped), "\n") {
+		match := key.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
+		}
+		if _, already := seen[match[1]]; already {
+			continue
+		}
+		seen[match[1]] = struct{}{}
+		if !strings.Contains(string(page), match[1]) {
+			t.Errorf("%s is shipped in default.toml and never named on the settings page", match[1])
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no settings were found in default.toml; this test would pass for an empty file")
+	}
 }

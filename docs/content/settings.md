@@ -134,6 +134,7 @@ instead, because no edit to the file can fix that one.
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
+client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
 runners = ["omp"]           # any of omp, claudecode, serena, codebasememory, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
@@ -262,6 +263,41 @@ write` grants one more effect to that one commission, repeatable for
 several. Unlike `--budget` on a resume, which replaces what remains of the
 grant, `--allow` only ever adds — an effect already held is never worth
 losing by accident.
+
+`client_effects` is that same grant for a chat opened by a connected MCP
+client, rather than by the person at this terminal. Until it existed there was
+one line for both: widening `effects` to `write` for an afternoon's work
+widened every client that connected, permanently and silently, and this file
+had no way to say otherwise. That is the gap it closes.
+
+It ships equal to `effects` and separate from it, and separate is the part
+that matters — after the day you widen your own line, the two are different
+numbers. Deleting the key does not turn the rule off: it hands clients
+whatever `effects` says, which is what every settings file written before the
+key existed already does, so nothing changes by upgrading. `atenea status`
+prints both on its `standing` and `clients` lines, and marks the second
+`inherited` when it is a copy, because two identical lists with nothing
+between them look like two decisions when only one was made.
+
+An empty list is a real answer and not an omission — that is why this key is a
+list that may be empty while `effects` is one that may not. `client_effects =
+[]` means a connected client may read and nothing else, which on this machine
+refuses `code.search`: every implementation of it is a binary and so needs
+`process`. That is why it is not the default. A default that refuses the
+headline capability on day one does not teach caution, it teaches people to
+turn the default off.
+
+It is also a ceiling. A client cannot open a chat claiming more than this,
+and one that tries is refused at `initialize` rather than at its first
+`tools/call` — a client told at the door can say so, one told mid-conversation
+has already promised somebody the work. The ceiling arrives with the line: a
+file that never wrote one has no ceiling, exactly as before.
+
+A capability declares the effects running it has, and a step is refused when
+its permission does not carry one of them — `code.search causes process, which
+the commission does not cover`, as a verdict on the step rather than a
+transport error. Both grants rest on that one check, which sits in the core
+wrapping whichever runner is attached rather than in the adapters.
 
 An implementation no attached runner can execute is not removed from the
 catalog. It is dropped by the funnel's `reach` stage, which says so in the

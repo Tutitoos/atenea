@@ -17,6 +17,31 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A settings file can say what a connected client may do, separately from
+  what the operator's own console may do.** `[orchestrator] client_effects` is
+  the standing grant for a chat an MCP client opened. It ships equal to
+  `effects` and separate from it: an absent key inherits, so no file written
+  before today behaves differently, but the inheritance happens once when the
+  settings are read and the two are separate lists after that. Widening your
+  own floor for an afternoon at the terminal no longer widens every client
+  that connects, silently and permanently, with nothing able to say otherwise.
+
+  An empty list is a real answer -- a client may read and nothing else -- which
+  is why the key is a list that may be empty while `effects` is one that may
+  not. It is not the default: on this machine every implementation of
+  `code.search` is a binary, so read-only-for-clients would refuse the headline
+  capability on day one, and a default that does that teaches people to turn
+  the default off rather than teaching caution.
+
+  It is a ceiling as well as a floor. A chat cannot be opened claiming more
+  than it, and is refused at `initialize` rather than at its first
+  `tools/call`. The ceiling arrives with the line that sets it: a file that
+  never wrote one has no ceiling, because "I said nothing about clients" must
+  not quietly become "clients may hold nothing".
+
+  `atenea status` prints both, as `standing` and `clients`, and marks the
+  second `inherited` when it is a copy -- two identical lists with nothing
+  between them look like two decisions when only one was made.
 - **Atenea is an MCP server, and clients connect to it.** The premise the whole
   design was built around, working end to end for the first time: every
   capability in the settings file is a tool, offered over the socket the
@@ -102,10 +127,11 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   nobody above them to ask. A client speaking for a chat is not, and until now
   it had no door of its own.
 
-  The two halves are shared with `Do` rather than copied. The gate on the
-  dispatch path does not cover this and never did: it refuses a capability whose
-  effects the *commission* does not cover, and the commission is built from what
-  the caller asked for -- so it compares a request with itself.
+  The two halves are shared with `Do` rather than copied, and neither is the
+  dispatch path's own check: that one compares a capability's declared effects
+  against the permission the step carries, which is a question about the
+  machine's policy rather than about who is asking. What a chat is entitled to
+  ask for in the first place is only knowable here.
 
 ### Changed
 

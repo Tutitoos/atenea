@@ -177,52 +177,6 @@ has; *"y confirmaciones"* is not, for any of them.
 **Done when:** a write outside a granted path stops and asks, rather than
 being refused up front or allowed silently.
 
-## A chat can only widen the operator's floor
-
-A session's grant is additive. All four dispatch paths -- a commission, a single
-`ask`, and both halves of a resume -- layer it the same way:
-`Grant(standingEffects)` first, then whatever that call asked for on top. The
-settings file's standing grant therefore applies to every run on this machine,
-and `Session.entitled` holds a chat only to what it adds. A chat opened with no
-grant at all still runs under the operator's floor.
-
-That is the right answer today, and only because of who opens sessions. Nothing
-outside this repository does: the CLI's own `run` and `ask` go through
-`Core.Do` and `Core.Ask`, the console's doors, which trust the effects they are
-handed for the good reason that somebody standing at a terminal *is* the
-operator. A floor set by the operator, inherited by the operator, is not a
-privilege boundary being crossed -- it is one person's settings file applying
-to one person's work.
-
-**That stopped being the whole story on 2026-08-07.** The MCP server shipped,
-`initialize` carries a `clientInfo.name`, and the `chats` table has rows in it
-that no operator typed. A session opened by a client is now the ordinary case
-rather than the anticipated one, and the floor is inherited by a caller who
-did not set it.
-
-What that costs today, exactly, so the decision is made against facts rather
-than the word "indefensible": the shipped standing grant is `["process"]` on
-top of the read that is always free, and a client can only ever reach declared
-capabilities running declared implementations against registered repositories.
-So a connected client can make ripgrep run -- which is what an MCP server is
-for -- and can do nothing this machine's settings file has not already listed.
-The sharp edge is not the default, it is what happens when an operator widens
-their own floor: add `write` for an afternoon's work at the terminal and every
-client that connects silently gains it, with nothing in the settings file able
-to say otherwise. The `chats` table says `adds=` for exactly this reason -- it
-reports what a chat asked for on top, and a reader who takes the dash to mean
-"can do nothing" has been misled by an honest column.
-
-What is missing is unchanged and now blocking rather than anticipated: a grant
-that can narrow as well as widen, and a decision about which of the two a
-session with no grant should mean. Read-only for clients is the conservative
-answer and it is not free -- it would refuse `code.search`, whose only
-implementations are binaries, to every client on the day it shipped.
-
-**Done when:** the settings file can say what a connected client may do,
-separately from what the operator's own console may do, and `atenea status`
-shows the difference.
-
 ## OpenCode, still parked
 
 The design parked the third adapter deliberately: *"cuando el sistema esté rodado.
@@ -263,3 +217,15 @@ answers earlier bugs let through, the fourth past the cross-type
 ambiguity its own live verification against this repository found.
 Those are laid, measured, and defended by tests that have been mutated to check
 they fail when they should.
+
+The entry that stood here about a chat only ever widening the operator's floor
+closed on 2026-08-07, the day after it stopped being hypothetical. The settings
+file has `client_effects`: a grant for a chat a client opened, separate from
+the operator's own, defaulting to it so no existing file changes behavior, and
+a ceiling as well as a floor. `atenea status` prints both and marks the second
+`inherited` when it is a copy.
+
+What makes it bind was already there: `commissioned` wraps the attached runner
+and refuses any step whose permission does not carry an effect its capability
+declares. Both grants rest on that one wrapper, which is why neither of them
+needed a check of its own.
