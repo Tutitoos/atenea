@@ -377,6 +377,51 @@ says so on the `process` line, so the command works either way.
 `atenea service uninstall` stops it, disables it and removes the unit. It leaves
 the state root alone — what Atenea has learned is not the service's to delete.
 
+## Connect a client
+
+Atenea is an MCP server, and the way in is `atenea mcp`: a bridge the client
+launches, speaking MCP on stdin and stdout and relaying to the running service.
+It decides nothing on its own — the catalog, the funnel and the permissions all
+live in the one service — so a client that connects sees exactly what
+`atenea catalog` shows.
+
+```json
+{
+  "mcpServers": {
+    "atenea": { "command": "atenea", "args": ["mcp"] }
+  }
+}
+```
+
+Every capability becomes a tool, described by the declaration in your settings
+file. Every tool takes a `repository`, because that is Atenea's unit of work —
+required only when you have more than one registered, exactly like `--repo` on
+the command line.
+
+Check the setup without going through a client, which is worth doing because a
+client that cannot start its server usually says so in one line and hides the
+reason:
+
+```text
+$ atenea mcp --check
+atenea 0.8.0 is listening at ~/.local/state/atenea/run/core.sock
+8 capability(ies) would be offered as tools
+2 chat(s) open right now
+```
+
+Each connected client is a chat, named by the client itself, and `atenea status`
+lists them while they last:
+
+```text
+chats
+  claude-code      c-8f21e4   up 12m      runs 3   adds=-
+  omp              c-1b90aa   up 4m       runs 0   adds=-
+```
+
+`adds` is what that chat asked for on top of the standing grant in your settings
+file — not everything it may do. A dash means it asked for nothing extra, and it
+still runs on the floor that file sets.
+
 ## Day to day
 
 Three things happen on their own once it is installed, and one line tells you

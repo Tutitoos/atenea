@@ -190,24 +190,38 @@ That is the right answer today, and only because of who opens sessions. Nothing
 outside this repository does: the CLI's own `run` and `ask` go through
 `Core.Do` and `Core.Ask`, the console's doors, which trust the effects they are
 handed for the good reason that somebody standing at a terminal *is* the
-operator. `atenea status` has a Chats table and it has always been empty. A
-floor set by the operator, inherited by the operator, is not a privilege
-boundary being crossed -- it is one person's settings file applying to one
-person's work.
+operator. A floor set by the operator, inherited by the operator, is not a
+privilege boundary being crossed -- it is one person's settings file applying
+to one person's work.
 
-It stops being defensible the moment a session is opened by something that is
-not the operator at a terminal. That is not a hypothetical: it is the MCP
-server in the service, where `initialize` carries a `clientInfo.name` and
-identity falls out of the socket. Then the floor is inherited by a caller who
-did not set it and may not be trusted with it, and "this chat declared no
-effects" will quietly mean "this chat may do whatever the settings file
-allows" -- which is the wrong default for a client and the right one for a
-console. The gate is in the correct place for the change; what is missing is a
-grant that can narrow as well as widen, and a decision about which of the two
-a session with no grant should mean.
+**That stopped being the whole story on 2026-08-07.** The MCP server shipped,
+`initialize` carries a `clientInfo.name`, and the `chats` table has rows in it
+that no operator typed. A session opened by a client is now the ordinary case
+rather than the anticipated one, and the floor is inherited by a caller who
+did not set it.
 
-**Done when:** a session opened by a client can hold a grant narrower than the
-standing one, and the first client to open a session is the reason it does.
+What that costs today, exactly, so the decision is made against facts rather
+than the word "indefensible": the shipped standing grant is `["process"]` on
+top of the read that is always free, and a client can only ever reach declared
+capabilities running declared implementations against registered repositories.
+So a connected client can make ripgrep run -- which is what an MCP server is
+for -- and can do nothing this machine's settings file has not already listed.
+The sharp edge is not the default, it is what happens when an operator widens
+their own floor: add `write` for an afternoon's work at the terminal and every
+client that connects silently gains it, with nothing in the settings file able
+to say otherwise. The `chats` table says `adds=` for exactly this reason -- it
+reports what a chat asked for on top, and a reader who takes the dash to mean
+"can do nothing" has been misled by an honest column.
+
+What is missing is unchanged and now blocking rather than anticipated: a grant
+that can narrow as well as widen, and a decision about which of the two a
+session with no grant should mean. Read-only for clients is the conservative
+answer and it is not free -- it would refuse `code.search`, whose only
+implementations are binaries, to every client on the day it shipped.
+
+**Done when:** the settings file can say what a connected client may do,
+separately from what the operator's own console may do, and `atenea status`
+shows the difference.
 
 ## OpenCode, still parked
 

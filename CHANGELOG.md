@@ -17,14 +17,53 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **Atenea is an MCP server, and clients connect to it.** The premise the whole
+  design was built around, working end to end for the first time: every
+  capability in the settings file is a tool, offered over the socket the
+  service already opened, answered by whichever implementation the funnel picks
+  at the moment of the call.
+
+  `atenea mcp` is the bridge a client launches -- newline-delimited JSON on
+  stdin and stdout, relayed to the service and nothing more. It parses nothing
+  and decides nothing, because a bridge that understood the protocol would be a
+  second place the answers could differ. It is deliberately not a fallback into
+  running Atenea in-process: that would give each client its own core and its
+  own catalog, which is the arrangement this design exists to replace.
+  `atenea mcp --check` reports whether a service is listening without going
+  through a client, because clients show one line and hide the reason.
+
+  Each connection is one chat, named by the `clientInfo` in its handshake and
+  closed when the client hangs up. Tools are refused before the handshake:
+  until a client says who it is there is no chat for the work to belong to,
+  which would make it untraceable and ungoverned. A chat asks for no grant and
+  is given none -- it can look, and it runs under the settings file's standing
+  grant, because a session grant only ever widens the operator's floor.
+
+  Every tool takes a `repository`, which no capability declares: the unit of
+  work is Atenea's question, not the capability's, and a model has no `--repo`
+  to reach for. Required only when more than one is registered, matching what
+  the CLI already does. The tool's `inputSchema` and `outputSchema` are the
+  capability's own declarations from `2.2.0`, which is what that release was
+  for.
+
+  Verified against Claude Code, not a fake: it listed all eight tools and
+  called `code.search`, which reached ripgrep through the funnel and came back
+  with the file, line, column and snippet.
+
+- **The status screen shows who is connected.** `atenea status` has a `chats`
+  table: one row per client, with its name, how long it has been there, how
+  many runs it has asked for and what it may authorize. There was never a chats
+  table before -- not an empty one, none at all, because nothing could have
+  filled it. Two clients at once is the only way the isolation between them
+  stops being a claim in a design document.
+
 - **The service has a door, and `atenea status` knocks on it.** A Unix socket
   under the state root, opened by the service and by nothing else, speaking the
   same JSON-RPC line protocol MCP does. `atenea status` now asks the running
   service for its view instead of working one out from disk, and the `process`
   line says which it got. The half of that screen that only the service can
   know -- the uptime, the clock's real run, the chats open right now -- reaches
-  a reader for the first time. Every Chats table this CLI has ever printed was
-  empty, and not because nobody was connected.
+  a reader for the first time.
 
   It asks only when the service is answering about the same settings file the
   command was asked about: naming a file is a different question, and a service

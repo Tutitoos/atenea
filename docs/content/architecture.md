@@ -603,8 +603,9 @@ same core, built again, reading the same disk.
 
 The socket exists because half of that screen is only true of the process that
 maintains it — the uptime, what the clock has actually run, the chats open right
-now. A command has none of it, so before the door existed every Chats table the
-CLI printed was empty, and not because nobody was connected.
+now. A command has none of it, and before the door existed there was no way for
+one to be told, so the screen simply had no `chats` table. It has one now, with
+a row per connected MCP client.
 
 **Nothing on the status screen may come from a tally kept in memory**, and the
 door does not change that rule — it sharpens the reason. The screen is now
