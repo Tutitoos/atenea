@@ -86,16 +86,16 @@ Serena's API names a *symbol*. Reading the word under the cursor is the
 adapter's job, and the trace says which name it resolved to.
 
 ```text
-run       20260807T165853-f92263
+run       20260808T172133-fcb614
 task      ValidateOutput
 verdict   ok
-matches   27
-spent     1.209s over 2 step(s)
-  explore  1 step(s), 774ms
-  work     1 step(s), 436ms
+matches   30
+spent     1.205s of tool time over 2 step(s), 1.276s elapsed
+  explore  1 step(s), 778ms in 797ms
+  work     1 step(s), 426ms in 442ms
 
 discovered
-  [repository] current: 27 hit(s) for "ValidateOutput"
+  [repository] current: 30 hit(s) for "ValidateOutput"
 
 run with --trace for the plan, the funnel and every review
 ```

@@ -203,30 +203,30 @@ and reviews what comes back.
 ```
 
 ```text
-run       20260807T181838-411e3b
+run       20260808T172133-fcb614
 task      ValidateOutput
 verdict   ok
-matches   27
-spent     3.187s over 2 step(s)
-  explore  1 step(s), 2.562s
-  work     1 step(s), 625ms
+matches   30
+spent     1.205s of tool time over 2 step(s), 1.276s elapsed
+  explore  1 step(s), 778ms in 797ms
+  work     1 step(s), 426ms in 442ms
 
 discovered
-  [repository] current: 27 hit(s) for "ValidateOutput"
+  [repository] current: 30 hit(s) for "ValidateOutput"
 
 plan
   wave 1  explore-current
   wave 2  search-current
 
 steps
-  explore-current      explore  ripgrep                  2.562s
+  explore-current      explore  ripgrep                  778ms
       review   child=ok parent=ok (output matches the capability)
-      found    README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go, internal/adapter/codebasememory/overview.go
-               and 8 more file(s): atenea ask code.search --repo current --json
-  search-current       work     ripgrep                  625ms
+      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go
+               and 9 more file(s): atenea ask code.search --repo current --json
+  search-current       work     ripgrep                  426ms
       review   child=ok parent=ok (output matches the capability)
-      found    README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go, internal/adapter/codebasememory/overview.go
-               and 8 more file(s): atenea ask code.search --repo current --json
+      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go
+               and 9 more file(s): atenea ask code.search --repo current --json
 
 dropped in every step
   serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
@@ -294,15 +294,17 @@ it — one capability, one repository, no planning:
 ```
 
 ```text
-run       20260807T133630-3ff8bc
+run       20260808T172223-d465d5
 task      symbol.definition in current
 verdict   ok
-spent     2.15s over 1 step(s)
-  ask      1 step(s), 2.15s
+spent     158ms of tool time over 1 step(s), 207ms elapsed
+  ask      1 step(s), 158ms in 178ms
 
 discovered
   [repository] position internal/selector/selector.go:161:20 names "Select", which is symbol Select
   [repository] serena answered symbol.definition for current with 1 location(s)
+
+run with --trace for the plan, the funnel and every review
 
 answer
   location

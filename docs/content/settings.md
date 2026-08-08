@@ -187,6 +187,15 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 a time so a laptop stays responsive. `0` means no ceiling, which is a choice
 for a build machine, not a default.
 
+It only ever comes up when a wave has more than one step in it, and what puts
+steps in a wave is **repositories**. A commission looks at each repository in
+scope and splits the work per repository, so a settings file with one
+`[[repository]]` produces waves one step wide however high this is set, and
+`atenea task` on a file with two runs both explores at once and then both
+searches at once. The run report is where that shows: it prints what the
+commission cost and what it took, and on a wide wave the second number is the
+smaller one.
+
 `runners` names the far sides of the contract, and it is a list because several
 can be attached at once. `omp` is the client adapter that ships attached.
 `claudecode` drives the Claude Code CLI and is off by default, because it is

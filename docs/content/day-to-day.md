@@ -24,16 +24,16 @@ the work, picks who answers each piece and reports back.
 
 ```text
 $ atenea task "find every TODO"
-run       20260807T181922-60e188
+run       20260808T171646-d4fc3e
 task      find every TODO
 verdict   ok
-matches   30
-spent     2.453s over 2 step(s)
-  explore  1 step(s), 777ms
-  work     1 step(s), 1.676s
+matches   32
+spent     2.481s of tool time over 2 step(s), 2.545s elapsed
+  explore  1 step(s), 754ms in 767ms
+  work     1 step(s), 1.727s in 1.744s
 
 discovered
-  [repository] current: 30 hit(s) for "find every TODO", under cmd, docs, internal, pkg
+  [repository] current: 32 hit(s) for "find every TODO", under cmd, docs, internal, pkg
 
 run with --trace for the plan, the funnel and every review
 ```
@@ -44,6 +44,32 @@ commission ran and came back failed, `130` means you pressed ctrl-c. Note that `
 is **not** "it did not work": it is reserved for a failure Atenea could not sort,
 which means a bug worth reporting. [Getting started]({{< relref "getting-started" >}})
 has the full table.
+
+The two times are different questions. `of tool time` is the sum of every step,
+which is what the work cost; `elapsed` is the wall, which is what you waited.
+They only come apart when a wave has more than one step in it, and what puts
+steps in a wave is repositories: with two registered, the same commission
+explores both at once and then searches both at once.
+
+```text
+$ atenea task "TODO"
+run       20260808T171159-d2b5cb
+task      TODO
+verdict   ok
+matches   134
+spent     3.781s of tool time over 4 step(s), 2.618s elapsed
+  explore  2 step(s), 1.588s in 811ms
+  work     2 step(s), 2.193s in 1.77s
+
+discovered
+  [repository] atenea: 133 hit(s) for "TODO", under cmd, docs, internal, pkg
+  [repository] lanplay: 1 hit(s) for "TODO", under docs
+```
+
+`1.588s in 811ms` is two searches that ran together. `--trace` names the waves
+themselves, and `--json` carries `elapsed_ms` beside `spent_ms` plus a
+`closed_at` per step, which is how a script sees the overlap rather than
+inferring it.
 
 `--budget USD` funds one commission above whatever the settings file grants. Money
 is a permission here: a step with none refuses before spawning anything.
@@ -125,30 +151,30 @@ what is still worth continuing — every receipt with steps left, oldest first:
 
 ```text
 $ atenea resume --list
-20260804T114108-a4974e       -         1 step(s) remaining  find every TODO comment
+20260808T172045-69883f       canceled  1 step(s) remaining  find every TODO comment
 ```
 
 Resuming reads the receipt back and dispatches only the steps that never
 closed; whatever already succeeded is not repeated:
 
 ```text
-$ atenea resume 20260804T114108-a4974e
-run       20260804T114108-a4974e
+$ atenea resume 20260808T172045-69883f
+run       20260808T172045-69883f
 task      find every TODO comment
 verdict   ok
-matches   12
-spent     1.033s over 1 step(s)
-  explore  0 step(s), 0s
-  work     1 step(s), 1.033s
+matches   2
+spent     786ms of tool time over 1 step(s), 821ms elapsed
+  explore  0 step(s), 0s in 0s
+  work     1 step(s), 786ms in 803ms
 ```
 
 One step, not two: the first had already closed before the crash and is read
-off the receipt rather than paid for again. Resuming a run with nothing left
-to do is a clean no-op — `spent 0s over 0 step(s)`, same verdict as before —
-not a second billed attempt. `--budget USD` replaces what remains of the
-original grant, in case the ceiling was the reason it stopped; `--allow`
-instead adds to what the commission already carries, since an effect already
-held should never be lost by resuming.
+off the receipt rather than paid for again. Resuming a run with nothing left to
+do is a clean no-op — `spent 0s of tool time over 0 step(s), 0s elapsed`, the
+same verdict as before — not a second billed attempt. `--budget USD` replaces
+what remains of the original grant, in case the ceiling was the reason it
+stopped; `--allow` instead adds to what the commission already carries, since an
+effect already held should never be lost by resuming.
 
 A receipt destroyed by an ugly close is set aside rather than deleted, and
 resuming it says so by name: the surviving `.json.torn` file is the only

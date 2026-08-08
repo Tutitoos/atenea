@@ -15,6 +15,7 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+
 ### Added
 
 - **A settings file can say what a connected client may do, separately from
@@ -133,6 +134,28 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   machine's policy rather than about who is asking. What a chat is entitled to
   ask for in the first place is only knowable here.
 
+- **The run report says what the commission took, not only what it cost.** A
+  wave charges every step it ran and spends one stretch of the operator's
+  afternoon, so those are two numbers: `spent 3.781s of tool time over 4
+  step(s), 2.618s elapsed`, and per phase `explore 2 step(s), 1.588s in 811ms`.
+  Only the sum was ever printed, which is the larger of the two -- a run that
+  took 2.6s was reported as 3.7s, and a parallel run was indistinguishable from
+  a queue. `--json` carries `elapsed_ms` at both heights beside `spent_ms` and
+  `closed_at` per step, and every entry point stamps it: a commission, a single
+  `ask`, and a `resume`, which redispatched real work and reported `0s elapsed`
+  beside a step that took 714ms.
+
+  What makes a wave wide is **repositories**: the work is split per repository,
+  so a settings file with one `[[repository]]` produces waves one step wide
+  however high `max_parallel` is set. That is now written down where the ceiling
+  is documented, because it is the whole reason the gap could sit unnoticed. The
+  machinery has been correct and covered by tests since the first orchestrator
+  -- one of them asserting overlap across two repositories all along, because
+  the fixture registers two while the shipped file registers one -- and on this
+  machine it had never once been asked to run two steps at the same time. It has
+  now: two repositories, both explores at once and both searches at once, the
+  explore pair overlapping for 775ms of their 777ms.
+
 ### Changed
 
 - **The schema Claude Code is held to now refuses keys the capability never
@@ -190,6 +213,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   `(estimated)`, which is precisely the misunderstanding the measurement base
   exists to prevent. The count now uses the funnel's own threshold, so the two
   answer the same question.
+
+- **A step's close time on the receipt was the wave's, not the step's.** The
+  recorder runs after a whole wave returns and read the clock there, so every
+  step in a wave was filed with the same instant. Read the way `closed_at`
+  beside `duration_ms` invites -- as an interval -- that moved the quick steps of
+  a wave to the back: a 440ms step that started with its partner appeared to
+  start 1.27s later, after the slow one had almost finished. The stamp now comes
+  from the step's own close, which is the single exit every path already goes
+  through, so two intervals show the overlap they had.
 
 ## [0.8.0] - 2026-08-07
 

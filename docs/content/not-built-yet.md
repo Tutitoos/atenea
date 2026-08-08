@@ -253,3 +253,38 @@ funnel did not yet believe. The run also spent real money -- one `code.search`
 went to Claude Code for $0.1286 of its $0.25 ceiling -- and that landed on the
 receipt with its ceiling beside it, which is what the adapter's own comment
 said had to happen.
+
+## What the first wide wave settled, on 2026-08-08
+
+Parallel dispatch has now happened on this machine. A commission over two real
+repositories ran both explores at once and then both searches at once: the
+explore pair overlapped for 775ms of their 777ms, the work pair for the whole of
+the shorter one, and the run took 2.6s against 3.7s of step time. Before this,
+286 receipts held plans at most two steps long and **no wave wider than one**.
+
+Nothing in the machinery was missing, and nothing was added to it. The wave
+splitter, the `max_parallel` ceiling and the per-repository fan-out were correct
+and covered by tests -- one of which had been asserting overlap between two
+repositories since long before this -- because the test fixture registers two
+repositories while the shipped settings file registers one. That is the whole
+distance between "tested" and "has happened": the width of a wave comes from the
+catalog, and every real run on this machine had one repository in it.
+
+Two defects came out of running it, both in the reporting, both now fixed and in
+the CHANGELOG: the report printed only the summed step time, so a parallel run
+read as slower than it was and could not be told from a queue; and a step's
+`closed_at` was stamped by the recorder after the wave returned, so reading it
+beside `duration_ms` -- the one obvious use of the pair -- placed a quick step
+1.27s after the partner it actually started with. The second one misled its own
+author first, which is the strongest thing that can be said for fixing it.
+
+One correction to the record here, and it is about method rather than code:
+`atenea resume` was listed among things never watched live because no receipt on
+this machine showed one. It had been watched, days earlier, and the receipts were
+cleaned up afterwards -- an audit of surviving artifacts cannot see what was
+tidied, and it understates rather than overstates. It has now been watched again,
+twice, with the receipts left in place: a commission interrupted at 1.1s with
+ctrl-c, resumed, the closed explore step read off the receipt and only the work
+step redispatched, and a second resume of the same run correctly doing nothing at
+all. Both are in the documented examples, which are output the binary actually
+printed today.
