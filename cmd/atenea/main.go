@@ -810,8 +810,30 @@ func printMetrics(atenea *core.Core, filter metrics.Filter, out io.Writer) error
 		fmt.Fprintf(out, "the measurement base holds nothing for %s\n", filter)
 		return nil
 	}
-	fmt.Fprintf(out, "%-18s %-22s %-12s %8s %8s %8s %10s %10s\n",
-		"capability", "implementation", "repository", "tries", "failed", "priced", "each", "worst")
+	// Widths come from the rows rather than from a number guessed before the
+	// catalog existed: "symbol.implementations" already outgrows any column a
+	// person would pick, and a table that shifts by six characters on the one
+	// row with a long name is a table nobody trusts the rest of.
+	width := func(header string, of func(metrics.Row) string) int {
+		n := len(header)
+		for _, r := range rows {
+			if got := len(of(r)); got > n {
+				n = got
+			}
+		}
+		return n
+	}
+	wc := width("capability", func(r metrics.Row) string { return r.Capability })
+	wi := width("implementation", func(r metrics.Row) string { return r.Implementation })
+	wr := width("repository", func(r metrics.Row) string { return r.Repository })
+	// The version is a column and not a footnote because the base keys on it:
+	// two rows for one implementation are two versions of its tool, and
+	// hiding what split them leaves the same capability, implementation and
+	// repository on screen twice with no visible reason.
+	wv := width("version", func(r metrics.Row) string { return orDash(r.ToolVersion) })
+	fmt.Fprintf(out, "%-*s %-*s %-*s %-*s %8s %8s %8s %10s %10s\n",
+		wc, "capability", wi, "implementation", wr, "repository", wv, "version",
+		"tries", "failed", "priced", "each", "worst")
 	for _, r := range rows {
 		// The three counts sit next to each other because the gap between them
 		// is the diagnosis. Attempts with no priced calls is a provider with a
@@ -821,8 +843,9 @@ func printMetrics(atenea *core.Core, filter metrics.Filter, out io.Writer) error
 		if r.Successes > 0 {
 			each = r.Mean.String()
 		}
-		fmt.Fprintf(out, "%-18s %-22s %-12s %8d %8d %8d %10s %10s\n",
-			r.Capability, r.Implementation, r.Repository,
+		fmt.Fprintf(out, "%-*s %-*s %-*s %-*s %8d %8d %8d %10s %10s\n",
+			wc, r.Capability, wi, r.Implementation, wr, r.Repository,
+			wv, orDash(r.ToolVersion),
 			r.Attempts, r.Failures, r.Successes, each, r.Slowest)
 	}
 	fmt.Fprintf(out, "\n'each' is the average of the calls that WORKED. "+
