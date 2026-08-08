@@ -15,6 +15,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -1557,5 +1558,99 @@ func TestEverySettingIsOnTheSettingsPage(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatal("no settings were found in default.toml; this test would pass for an empty file")
+	}
+}
+
+// A fresh install has classified nothing, and the settings page says an
+// unclassified scale "never disqualifies anyone: an unknown fact is not a
+// proven mismatch, and dropping candidates over it would silently empty the
+// funnel". The shipped repository is exactly that repository -- nobody has
+// measured it -- so the shipped file has to leave the question open rather
+// than answer it on the operator's behalf. Declaring a size costs whoever
+// asked for it: a guess of "small" drops every graph implementation on day
+// one, and the funnel reports the drop correctly, which makes the capability
+// look unimplemented instead of unclassified.
+func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	if len(cfg.Repositories) == 0 {
+		t.Fatal("the shipped file declares no repository; this test would pass for an empty catalog")
+	}
+
+	// Teeth: the assertion below is only worth making while some shipped
+	// implementation actually constrains scale. If none did, an unclassified
+	// repository would drop nothing for reasons that have nothing to do with
+	// the principle under test.
+	constrains := false
+	for _, impl := range cfg.Implementations {
+		if impl.Constraints.MinScale != contract.ScaleUnspecified ||
+			impl.Constraints.MaxScale != contract.ScaleUnspecified {
+			constrains = true
+			break
+		}
+	}
+	if !constrains {
+		t.Fatal("no shipped implementation constrains scale; this test would pass vacuously")
+	}
+
+	sel, err := selector.New(cfg.Selector)
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	reachable := make([]string, 0, len(cfg.Implementations))
+	providers := make([]string, 0, len(cfg.Implementations))
+	for _, impl := range cfg.Implementations {
+		reachable = append(reachable, impl.ID)
+		if !slices.Contains(providers, impl.Provider) {
+			providers = append(providers, impl.Provider)
+		}
+	}
+
+	for _, shipped := range cfg.Repositories {
+		if shipped.Scale != contract.ScaleUnspecified {
+			t.Errorf("the shipped repository %s is classified %q; a fresh install has measured nothing",
+				shipped.ID, shipped.Scale.String())
+		}
+		// An index the operator has not declared is dropped before size is
+		// ever weighed, which would hide the drop this test is looking for.
+		// Declaring one is the single step a fresh install is expected to
+		// take, so the funnel below runs on a repository that took it: after
+		// that, a size nobody measured is the only thing left that could
+		// empty it.
+		repo := contract.NewRepository(shipped.ID, shipped.Path, shipped.Languages,
+			shipped.Scale, shipped.VCS, providers)
+		for _, capability := range cfg.Capabilities {
+			candidates := make([]contract.Implementation, 0, len(cfg.Implementations))
+			for _, impl := range cfg.Implementations {
+				if impl.Capability == capability.ID {
+					candidates = append(candidates, impl)
+				}
+			}
+			if len(candidates) == 0 {
+				continue
+			}
+			// A capability with nothing left is not this test's business: the
+			// shipped file leaves indexed_by empty on purpose, and serena has
+			// no probe that could fill it in, so an empty funnel is the
+			// documented state of a fresh install. Select hands back the trace
+			// either way, and the trace is what is under test.
+			decision, _ := sel.Select(selector.Request{
+				Capability: capability.ID,
+				Repository: repo,
+				Candidates: candidates,
+				Reachable:  reachable,
+			})
+			for _, stage := range decision.Stages {
+				for _, drop := range stage.Dropped {
+					if strings.Contains(drop.Reason, "scale") ||
+						strings.Contains(drop.Reason, "repository or bigger") {
+						t.Errorf("%s in %s: %s dropped over an unmeasured size: %s",
+							capability.ID, repo.ID, drop.Implementation, drop.Reason)
+					}
+				}
+			}
+		}
 	}
 }

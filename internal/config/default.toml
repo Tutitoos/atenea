@@ -1213,7 +1213,8 @@ capability = "repository.index"
 id = "current"
 path = "."
 languages = ["go"]
-scale = "small"
+scale = ""                # nobody has measured this repository yet, and unspecified never
+                          # disqualifies; a guess of "small" drops every graph implementation
 vcs = ""                  # unknown until declared; unspecified never disqualifies (pkg/contract/implementation.go)
 indexed_by = []           # providers holding a ready index for this repository
 # serena_endpoint = ""    # optional: pin this repo to its own Serena URL (e.g. http://127.0.0.1:9121/mcp).
