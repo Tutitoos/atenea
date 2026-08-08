@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/config"
@@ -64,6 +65,20 @@ func describes(t *testing.T, side string, node map[string]any, fields []contract
 		t.Errorf("%s: unknown keys are advertised as welcome, and the validator refuses them", side)
 	}
 
+	// Required is a promise in both directions: a field the schema demands but
+	// the capability does not is a caller sending what nobody asked for, and
+	// the reverse is a caller refused for an omission it was never warned of.
+	promised, _ := node["required"].([]string)
+	declared := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field.Required {
+			declared = append(declared, field.Name)
+		}
+	}
+	if !slices.Equal(promised, declared) {
+		t.Errorf("%s: schema requires %v, capability requires %v", side, promised, declared)
+	}
+
 	properties, _ := node["properties"].(map[string]any)
 	if len(properties) != len(fields) {
 		t.Errorf("%s: %d properties for %d declared fields", side, len(properties), len(fields))
@@ -92,48 +107,90 @@ func describes(t *testing.T, side string, node map[string]any, fields []contract
 	}
 }
 
-// The schema says what will be accepted and ValidateInput is what accepts. For
-// the one capability every client calls first, that agreement is worth
-// asserting against the shipped declaration rather than a fixture: a payload
-// the schema advertises and the validator then refuses is a caller punished
-// for doing as it was told.
-func TestTheShippedSearchSchemaAgreesWithItsValidator(t *testing.T) {
+// The schema says what will be accepted and ValidateInput is what accepts, so
+// every capability Atenea ships is walked through both. A payload built to
+// satisfy the schema and then refused by the validator is a caller punished for
+// doing as it was told, and it is the failure a client cannot diagnose: it did
+// exactly what the tool list advertised.
+//
+// The payload is synthesized from the SCHEMA's own promises, never from the
+// fields, so the validator is the one judging and the schema is the one on
+// trial.
+func TestEveryShippedSchemaAgreesWithItsValidator(t *testing.T) {
 	cfg, err := config.Defaults()
 	if err != nil {
 		t.Fatalf("Defaults: %v", err)
 	}
-	var search contract.Capability
+
 	for _, capability := range cfg.Capabilities {
-		if capability.ID == "code.search" {
-			search = capability
+		t.Run(capability.ID, func(t *testing.T) {
+			schema, err := capability.InputSchema()
+			if err != nil {
+				t.Fatalf("InputSchema: %v", err)
+			}
+
+			valid := satisfy(t, schema)
+			if err := capability.ValidateInput(valid); err != nil {
+				t.Errorf("the validator refused what the schema promises: %v", err)
+			}
+
+			unknown := map[string]any{"definitely_not_declared": true}
+			for name, value := range valid {
+				unknown[name] = value
+			}
+			if err := capability.ValidateInput(unknown); err == nil {
+				t.Error("the validator accepted a key the schema declares closed")
+			}
+		})
+	}
+}
+
+// satisfy builds a payload the schema promises to accept: every property it
+// declares, filled by the type it states for that property.
+//
+// Every property and not only the required ones, because the optional fields
+// are where a type can be misdescribed without anything noticing -- a payload
+// that skips them proves only that the required ones are right.
+func satisfy(t *testing.T, node map[string]any) map[string]any {
+	t.Helper()
+
+	out := map[string]any{}
+	properties, _ := node["properties"].(map[string]any)
+	for name, described := range properties {
+		entry, ok := described.(map[string]any)
+		if !ok {
+			t.Fatalf("property %q is %v, not a schema node", name, described)
 		}
+		out[name] = value(t, entry)
 	}
-	if search.ID == "" {
-		t.Fatal("the shipped catalog has no code.search")
-	}
-	schema, err := search.InputSchema()
-	if err != nil {
-		t.Fatalf("InputSchema: %v", err)
-	}
-	properties, _ := schema["properties"].(map[string]any)
-	required, _ := schema["required"].([]string)
+	return out
+}
 
-	valid := map[string]any{}
-	for _, name := range required {
-		valid[name] = "x"
-	}
-	if err := search.ValidateInput(valid); err != nil {
-		t.Errorf("the schema's own required set was refused by the validator: %v", err)
-	}
+func value(t *testing.T, node map[string]any) any {
+	t.Helper()
 
-	unknown := map[string]any{"definitely_not_declared": true}
-	for name := range valid {
-		unknown[name] = valid[name]
+	// A closed set means only its own words are acceptable, so an invented
+	// string would be refused for the wrong reason.
+	if set, ok := node["enum"].([]string); ok && len(set) > 0 {
+		return set[0]
 	}
-	if _, declared := properties["definitely_not_declared"]; declared {
-		t.Fatal("the fixture key is declared, so this proves nothing")
-	}
-	if err := search.ValidateInput(unknown); err == nil {
-		t.Error("the validator accepted a key the schema does not declare")
+	switch node["type"] {
+	case "string":
+		return "x"
+	case "integer":
+		return 1
+	case "boolean":
+		return true
+	case "array":
+		element, ok := node["items"].(map[string]any)
+		if !ok {
+			return []any{}
+		}
+		return []any{value(t, element)}
+	case "object":
+		return satisfy(t, node)
+	default:
+		t.Fatalf("the schema states a type nothing can satisfy: %v", node["type"])
+		return nil
 	}
 }
