@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,5 +76,77 @@ func TestAStepClosesWhenItFinishedNotWhenTheWaveDid(t *testing.T) {
 	if gap := quick.Sub(slow); gap > 100*time.Millisecond || gap < -100*time.Millisecond {
 		t.Errorf("the two steps of one wave start %s apart on the receipt; they were dispatched together",
 			gap.Round(time.Millisecond))
+	}
+}
+
+// The run reports the time it took, not only the time it cost. On a wave two
+// steps wide those are different numbers, and the difference is the entire
+// point of the wave.
+func TestARunReportsTheTimeItActuallyTook(t *testing.T) {
+	agent, _ := build(t, &fakeRunner{delay: 150 * time.Millisecond}, 0, "")
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Elapsed <= 0 {
+		t.Fatal("the run does not report how long it took")
+	}
+	if result.Elapsed >= result.Spent.Duration {
+		t.Errorf("elapsed %s is not below the %s it cost: two repositories ran in each wave, so the wall has to be shorter than the sum",
+			result.Elapsed.Round(time.Millisecond), result.Spent.Duration.Round(time.Millisecond))
+	}
+	for _, phase := range result.Phases {
+		if phase.Elapsed <= 0 {
+			t.Errorf("phase %s does not report how long it took", phase.Name)
+			continue
+		}
+		if phase.Elapsed >= phase.Spent.Duration {
+			t.Errorf("phase %s: elapsed %s is not below the %s it cost", phase.Name,
+				phase.Elapsed.Round(time.Millisecond), phase.Spent.Duration.Round(time.Millisecond))
+		}
+	}
+}
+
+// Every way into the orchestrator closes a result, and each one has to stamp
+// the wall. A single question is the cheap case and a resumed commission is the
+// one that catches a stamp written in only one of the three: resume dispatches
+// real work in a new process and reported 0s elapsed beside a step that took
+// 714ms, which reads as a run that took no time at all.
+func TestEveryWayIntoTheOrchestratorReportsTheWall(t *testing.T) {
+	dir := t.TempDir()
+	agent, _ := build(t, &fakeRunner{delay: 40 * time.Millisecond}, 0, dir)
+
+	asked, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search", Repository: "api", Payload: map[string]any{"query": "login"},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if asked.Elapsed <= 0 {
+		t.Error("a question does not report how long it took")
+	}
+
+	// A run interrupted mid-flight, then resumed: the resumed attempt does the
+	// remaining work, so it has a wall of its own to report.
+	ctx, cancel := context.WithCancel(t.Context())
+	slow, _ := build(t, &fakeRunner{delay: time.Minute}, 0, dir)
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	stopped, _ := slow.Run(ctx, orchestrator.Task{Text: "login"})
+	if stopped == nil || stopped.Verdict != contract.VerdictCanceled {
+		t.Skipf("nothing was interrupted, so there is nothing to resume: %v", stopped)
+	}
+
+	back, err := agent.Resume(t.Context(), stopped.RunID, orchestrator.ResumeOptions{})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if len(back.Steps) == 0 {
+		t.Skip("the resumed attempt had nothing left to dispatch")
+	}
+	if back.Elapsed <= 0 {
+		t.Errorf("a resumed run redispatched %d step(s) and reports no time at all", len(back.Steps))
 	}
 }

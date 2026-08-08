@@ -1490,11 +1490,17 @@ func printResult(out io.Writer, result *orchestrator.Result, trace bool) {
 	}) {
 		fmt.Fprintf(out, "matches   %d\n", result.Matches)
 	}
-	fmt.Fprintf(out, "spent     %s over %d step(s)\n",
-		result.Spent.Duration.Round(time.Millisecond), len(result.Steps))
+	// Two figures, because a wave makes them different: the sum is what the
+	// tools charged and the wall is what the operator waited. Printing only the
+	// sum reports a parallel run as slower than it was, and leaves the whole
+	// return on running a wave invisible.
+	fmt.Fprintf(out, "spent     %s of tool time over %d step(s), %s elapsed\n",
+		result.Spent.Duration.Round(time.Millisecond), len(result.Steps),
+		result.Elapsed.Round(time.Millisecond))
 	for _, phase := range result.Phases {
-		fmt.Fprintf(out, "  %-8s %d step(s), %s\n",
-			phase.Name, phase.Steps, phase.Spent.Duration.Round(time.Millisecond))
+		fmt.Fprintf(out, "  %-8s %d step(s), %s in %s\n",
+			phase.Name, phase.Steps, phase.Spent.Duration.Round(time.Millisecond),
+			phase.Elapsed.Round(time.Millisecond))
 	}
 	// Money is only mentioned when money changed hands. A "$0.0000" line on
 	// every run of a free tool would train the eye to skip the one line that

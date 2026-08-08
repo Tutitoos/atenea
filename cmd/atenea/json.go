@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
@@ -26,11 +27,14 @@ import (
 )
 
 type jsonResult struct {
-	Run         string          `json:"run"`
-	Task        string          `json:"task"`
-	Verdict     string          `json:"verdict"`
-	Matches     *int            `json:"matches,omitempty"`
-	SpentMS     int64           `json:"spent_ms"`
+	Run     string `json:"run"`
+	Task    string `json:"task"`
+	Verdict string `json:"verdict"`
+	Matches *int   `json:"matches,omitempty"`
+	SpentMS int64  `json:"spent_ms"`
+	// ElapsedMS is the wall beside the sum. A reader with only the sum cannot
+	// tell a wave from a queue, and the sum is the bigger number of the two.
+	ElapsedMS   int64           `json:"elapsed_ms"`
 	ChargedUSD  float64         `json:"charged_usd,omitempty"`
 	Phases      []jsonPhase     `json:"phases,omitempty"`
 	Discoveries []jsonDiscovery `json:"discoveries,omitempty"`
@@ -40,9 +44,10 @@ type jsonResult struct {
 }
 
 type jsonPhase struct {
-	Name    string `json:"name"`
-	Steps   int    `json:"steps"`
-	SpentMS int64  `json:"spent_ms"`
+	Name      string `json:"name"`
+	Steps     int    `json:"steps"`
+	SpentMS   int64  `json:"spent_ms"`
+	ElapsedMS int64  `json:"elapsed_ms"`
 }
 
 type jsonDiscovery struct {
@@ -51,22 +56,27 @@ type jsonDiscovery struct {
 }
 
 type jsonStep struct {
-	ID             string         `json:"id"`
-	Phase          string         `json:"phase"`
-	Capability     string         `json:"capability"`
-	Repository     string         `json:"repository"`
-	Implementation string         `json:"implementation,omitempty"`
-	SpentMS        int64          `json:"spent_ms"`
-	ChargedUSD     float64        `json:"charged_usd,omitempty"`
-	OverspentUSD   float64        `json:"overspent_usd,omitempty"`
-	Review         *jsonReview    `json:"review,omitempty"`
-	Failure        string         `json:"failure,omitempty"`
-	FailureKind    string         `json:"failure_kind,omitempty"`
-	Raw            string         `json:"raw,omitempty"`
-	Notices        []string       `json:"notices,omitempty"`
-	Scope          []string       `json:"scope,omitempty"`
-	Dropped        []jsonDrop     `json:"dropped,omitempty"`
-	Result         map[string]any `json:"result,omitempty"`
+	ID             string `json:"id"`
+	Phase          string `json:"phase"`
+	Capability     string `json:"capability"`
+	Repository     string `json:"repository"`
+	Implementation string `json:"implementation,omitempty"`
+	SpentMS        int64  `json:"spent_ms"`
+	// ClosedAt and SpentMS are an interval, which is how a script sees that two
+	// steps of one wave overlapped. Stamped by the step itself, so a quick step
+	// beside a slow one reports the moment it finished rather than the moment
+	// the wave it belonged to did.
+	ClosedAt     time.Time      `json:"closed_at"`
+	ChargedUSD   float64        `json:"charged_usd,omitempty"`
+	OverspentUSD float64        `json:"overspent_usd,omitempty"`
+	Review       *jsonReview    `json:"review,omitempty"`
+	Failure      string         `json:"failure,omitempty"`
+	FailureKind  string         `json:"failure_kind,omitempty"`
+	Raw          string         `json:"raw,omitempty"`
+	Notices      []string       `json:"notices,omitempty"`
+	Scope        []string       `json:"scope,omitempty"`
+	Dropped      []jsonDrop     `json:"dropped,omitempty"`
+	Result       map[string]any `json:"result,omitempty"`
 }
 
 // jsonReview is nil on a canceled step. There was no review to report --
@@ -95,6 +105,7 @@ func printResultJSON(out io.Writer, result *orchestrator.Result) {
 		Task:       result.Task,
 		Verdict:    result.Verdict.String(),
 		SpentMS:    result.Spent.Duration.Milliseconds(),
+		ElapsedMS:  result.Elapsed.Milliseconds(),
 		ChargedUSD: result.SpentUSD,
 		Steps:      make([]jsonStep, 0, len(result.Steps)),
 	}
@@ -109,7 +120,9 @@ func printResultJSON(out io.Writer, result *orchestrator.Result) {
 	}
 	for _, phase := range result.Phases {
 		js.Phases = append(js.Phases, jsonPhase{
-			Name: phase.Name, Steps: phase.Steps, SpentMS: phase.Spent.Duration.Milliseconds(),
+			Name: phase.Name, Steps: phase.Steps,
+			SpentMS:   phase.Spent.Duration.Milliseconds(),
+			ElapsedMS: phase.Elapsed.Milliseconds(),
 		})
 	}
 	for _, found := range result.Discoveries {
@@ -142,6 +155,7 @@ func jsonStepOf(step orchestrator.StepResult) jsonStep {
 		Repository:     step.Step.Repository,
 		Implementation: step.Decision.Chosen.ID,
 		SpentMS:        step.Spent.Duration.Milliseconds(),
+		ClosedAt:       step.ClosedAt,
 		ChargedUSD:     step.Outcome.SpentUSD,
 		OverspentUSD:   orchestrator.Overspend(step),
 		Failure:        step.Failure,

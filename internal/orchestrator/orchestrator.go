@@ -296,6 +296,14 @@ type Result struct {
 	Discoveries []contract.Discovery
 	Verdict     contract.Verdict
 	Spent       contract.Sample
+	// Elapsed is how long the commission actually took, which is not what it
+	// cost: a wave of four steps charges four durations and spends one. Spent
+	// is the sum, this is the wall, and the gap between them is the whole
+	// return on running a wave at all. Without it on the report a parallel run
+	// and a sequential one are indistinguishable from the outside -- which is
+	// how the first wide wave ever dispatched on a real machine went
+	// unremarked.
+	Elapsed time.Duration
 	// SpentUSD is what the commission was charged, over every step. Reported,
 	// never ranked: see contract.Outcome.SpentUSD for why money is not one of
 	// the measured axes.
@@ -308,6 +316,10 @@ type Phase struct {
 	Name  string
 	Steps int
 	Spent contract.Sample
+	// Elapsed is the same distinction one height down, and this is where it is
+	// most useful: a phase is one or more waves, so the gap between its two
+	// figures is what the concurrency in it was worth.
+	Elapsed time.Duration
 }
 
 // StepResult is one node of the plan after it closed.
@@ -400,6 +412,10 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	// a commission interrupted halfway is exactly the one worth reading back.
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
+		// Summed above, walled here, and both on the report: a commission that
+		// ran its steps in waves costs more time than it takes, and the report
+		// is the only place an operator can see that it did.
+		result.Elapsed = time.Since(started)
 		result.SpentUSD = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
@@ -531,6 +547,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	}
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
+		result.Elapsed = time.Since(started)
 		result.SpentUSD = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
@@ -644,6 +661,10 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	}
 	purse := newGrant(budgetUSD)
 
+	// This attempt's own clock, not the interrupted one's. The receipt keeps
+	// Started from the first try on purpose -- it is the same commission -- but
+	// what this process took is what the screen in front of somebody is about.
+	started := time.Now()
 	result = &Result{RunID: record.ID, Task: record.Task, Plan: record.Plan}
 	// Captured before anything below can add to record.Steps, so this is
 	// exactly what passed review in an earlier process: the steps this
@@ -658,6 +679,7 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	record.Closed = false
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
+		result.Elapsed = time.Since(started)
 		result.SpentUSD = totalUSD(result.Steps)
 		result.Verdict = resumeVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
@@ -880,6 +902,10 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 	}
 
 	phaseSpent := contract.Sample{}
+	// What the phase costs is the sum of its steps; what it takes is this
+	// clock. On a wave more than one step wide the two are different numbers,
+	// and the gap is what the concurrency was worth.
+	phaseStarted := time.Now()
 	closed := make([]StepResult, 0, len(plan.Steps)-len(finished))
 	// The batch lands however this phase ends, not only when it ends well.
 	// This is the safety net under batching, and the exits that are not the
@@ -949,7 +975,9 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 		}
 	}
-	result.Phases = append(result.Phases, Phase{Name: phase, Steps: len(closed), Spent: phaseSpent})
+	result.Phases = append(result.Phases, Phase{
+		Name: phase, Steps: len(closed), Spent: phaseSpent, Elapsed: time.Since(phaseStarted),
+	})
 	// A phase closing is one of the two moments measurements are pushed to
 	// disk, the other being the process going down. Between them the batch
 	// lives in memory, which is the whole point of batching; these two are
