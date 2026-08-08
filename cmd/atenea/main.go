@@ -468,6 +468,16 @@ func printStatus(out io.Writer, status core.Status) error {
 	if len(agent.Unreachable) > 0 {
 		fmt.Fprintf(out, "  no runner  %s\n", strings.Join(agent.Unreachable, ", "))
 	}
+	fmt.Fprintf(out, "  standing   %s\n", orDash(strings.Join(agent.Standing, ", ")))
+	// The list prints either way, with a note when it is a copy: two identical
+	// lists printed without one would look like two decisions, and only one
+	// was made. The copy is the one that moves when the line above does, which
+	// is the sharp edge this line exists to keep visible.
+	clients := orDash(strings.Join(agent.ClientFloor, ", "))
+	if agent.ClientFloorInherited {
+		clients += "  (inherited: widening standing widens clients)"
+	}
+	fmt.Fprintf(out, "  clients    %s\n", clients)
 	fmt.Fprintf(out, "  parallel   %s\n", ceiling(agent.MaxParallel))
 	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
 

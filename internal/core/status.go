@@ -224,8 +224,18 @@ type OrchestratorStatus struct {
 	// them here is the difference between a puzzle and a fact.
 	Unreachable []string
 	MaxParallel int
-	Checkpoints string
-	Light       Light
+	// Standing is what every commission from this console is granted without
+	// asking, by effect name. Reading is free and not listed.
+	Standing []string
+	// ClientFloor is the same for a chat opened by a connected client, and
+	// ClientFloorInherited says the settings file never named one -- in which
+	// case the two lists are equal because one is a copy, and widening
+	// Standing widens clients with it. That is the whole reason this is on
+	// the screen: two equal lists with no note would look like a decision.
+	ClientFloor          []string
+	ClientFloorInherited bool
+	Checkpoints          string
+	Light                Light
 }
 
 // funnelLine says out loud which filters are wired and, crucially, how far the
@@ -588,6 +598,14 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 		MaxParallel:  c.agent.MaxParallel(),
 		Checkpoints:  c.checkpoints.Dir(),
 		Light:        LightGreen,
+	}
+	orchestrator := c.settings.Orchestrator
+	out.ClientFloorInherited = orchestrator.ClientEffectsInherited
+	for _, effect := range orchestrator.StandingEffects {
+		out.Standing = append(out.Standing, effect.String())
+	}
+	for _, effect := range orchestrator.ClientEffects {
+		out.ClientFloor = append(out.ClientFloor, effect.String())
 	}
 	for _, level := range card.Context {
 		out.Context = append(out.Context, level.String())
