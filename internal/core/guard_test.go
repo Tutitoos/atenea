@@ -74,6 +74,18 @@ languages = ["go"]
 scale = "small"
 `
 
+// onDisk points the fixture's repository at a directory that is really there.
+//
+// The seam refuses a step whose repository path is missing before any process
+// is warmed for it (grounded), which is the right order in production and the
+// wrong one for these tests: they are about what happens *behind* that gate --
+// a managed process that cannot spawn -- so the path has to be real for the
+// call to reach the guard at all.
+func onDisk(t *testing.T, body string) string {
+	t.Helper()
+	return strings.Replace(body, `path = "/srv/api"`, `path = "`+t.TempDir()+`"`, 1)
+}
+
 // A managed Serena that can never spawn must fail the call at the guard, not
 // at the adapter -- EnsureReady is the gate, and the adapter's own dial is
 // never supposed to be reached behind a process Atenea itself could not
@@ -81,7 +93,7 @@ scale = "small"
 // is recorded on the step and reviewed, the same as any other capability
 // outcome, so the assertion belongs on result.Steps, not on err.
 func TestManagedSerenaGuardsDispatchUntilReady(t *testing.T) {
-	atenea := build(t, managedCatalog)
+	atenea := build(t, onDisk(t, managedCatalog))
 
 	result, err := atenea.Ask(context.Background(), orchestrator.Question{
 		Capability: "symbol.definition",

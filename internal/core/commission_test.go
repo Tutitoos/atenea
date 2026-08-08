@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -84,5 +85,64 @@ func TestTheGateDoesNotRenameTheClientBehindIt(t *testing.T) {
 	}
 	if !seam.Serves("anything") {
 		t.Error("the gate stopped delegating Serves")
+	}
+}
+
+func stepIn(path string) contract.RunRequest {
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Repository = contract.Repository{ID: "libraries", Path: path}
+	return req
+}
+
+// A repository whose path is not there is a settings mistake, and it used to
+// reach the adapter and come back as "omp could not be started: fork/exec
+// /home/me/.local/bin/omp: no such file or directory" -- because Go reports a
+// missing cmd.Dir by naming the binary, which is the one thing that was fine.
+// It sent the operator to reinstall a tool that already existed.
+func TestARepositoryThatIsNotThereNamesTheDirectory(t *testing.T) {
+	adapter := &outsider{}
+	seam := attach([]contract.Runner{adapter})
+
+	_, err := seam.Run(context.Background(), stepIn("/tmp/atenea-no-such-repository"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "/tmp/atenea-no-such-repository") ||
+		!strings.Contains(msg, "libraries") {
+		t.Errorf("the refusal names neither the path nor the repository: %q", msg)
+	}
+	if adapter.ran != 0 {
+		t.Errorf("the adapter ran %d time(s) for a repository that is not there", adapter.ran)
+	}
+}
+
+// The bin matters as much as the message. unavailable is the bin that condemns
+// a provider: three of them in a row take it out of the funnel for every
+// repository on the machine, so one wrong path in the settings file would
+// disable a working tool everywhere. invalid_input is filtered out of the
+// health record entirely, which is the honest reading -- nothing is wrong with
+// the provider.
+func TestABadPathDoesNotCondemnTheProvider(t *testing.T) {
+	seam := attach([]contract.Runner{&outsider{}})
+	_, err := seam.Run(context.Background(), stepIn("/tmp/atenea-no-such-repository"))
+	if got := contract.KindOf(err); got == contract.FailureUnavailable {
+		t.Error("a missing repository path is reported as the provider being down")
+	}
+}
+
+// The gate is a gate: a repository that is there passes, and a request with no
+// repository at all is not this check's business.
+func TestARepositoryThatIsThereStillPasses(t *testing.T) {
+	adapter := &outsider{}
+	seam := attach([]contract.Runner{adapter})
+	if _, err := seam.Run(context.Background(), stepIn(t.TempDir())); err != nil {
+		t.Fatalf("a repository that exists was refused: %v", err)
+	}
+	if _, err := seam.Run(context.Background(),
+		writingStep(contract.EffectRead, contract.EffectWrite)); err != nil {
+		t.Fatalf("a request carrying no repository was refused: %v", err)
+	}
+	if adapter.ran != 2 {
+		t.Errorf("the adapter ran %d time(s), want 2", adapter.ran)
 	}
 }

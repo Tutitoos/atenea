@@ -28,7 +28,7 @@ func TestStatusReportsNoProcessesWhenNothingIsManaged(t *testing.T) {
 // problem: on_demand idle is green, the same restraint BackupStatus.stale
 // applies to a fresh install with no copy yet.
 func TestStatusReportsAnOnDemandProcessBeforeAndAfterItGoesDown(t *testing.T) {
-	atenea := build(t, managedCatalog)
+	atenea := build(t, onDisk(t, managedCatalog))
 
 	before := atenea.Status().Processes
 	if len(before) != 1 {

@@ -2,6 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"strings"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -31,4 +35,46 @@ func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contrac
 			"%s causes %s, which the commission does not cover", req.Capability.ID, missing)
 	}
 	return c.Runner.Run(ctx, req)
+}
+
+// grounded refuses a step whose repository is not on this machine's disk.
+//
+// It sits beside the permission gate for the same reason that one does: every
+// adapter turns Repository.Path into the child process's working directory,
+// and Go reports a missing cmd.Dir by naming the *binary* -- "fork/exec
+// /home/me/.local/bin/omp: no such file or directory" for a tool that is
+// installed and fine. Measured on a real three-repository commission: one
+// wrong path in the settings file sent the operator to reinstall omp.
+//
+// The bin is the other half. That failure arrived as unavailable, which is the
+// bin that condemns a provider: it takes health down for every repository on
+// the machine, so the two steps that had nothing wrong with them failed too,
+// with "every implementation of code.search is down". invalid_input is what
+// this is -- the settings file is wrong, the provider is not -- and the health
+// record filters that bin out, so nothing is condemned for it.
+//
+// A path is required of every repository (contract.Repository.Validate), so
+// the empty case is not this gate's business: requests that carry no
+// repository at all pass straight through.
+type grounded struct{ contract.Runner }
+
+func (g grounded) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+	path := strings.TrimSpace(req.Repository.Path)
+	if path == "" {
+		return g.Runner.Run(ctx, req)
+	}
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %s does not exist", req.Repository.ID, path)
+	case err != nil:
+		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %s cannot be read", req.Repository.ID, path).
+			WithRaw(err.Error())
+	case !info.IsDir():
+		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %s is not a directory", req.Repository.ID, path)
+	}
+	return g.Runner.Run(ctx, req)
 }
