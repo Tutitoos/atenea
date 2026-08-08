@@ -1240,8 +1240,9 @@ indexed_by = []           # providers holding a ready index for this repository
 # of the above, points the client at the server and steps out of the path.
 # `raw` has Atenea hold one shared connection and re-offer that server's own
 # tools as `raw.<id>.<tool>`, with no funnel, no capability and no measurement
-# -- a receipt is still written, saying it had no funnel. HTTP only for now: a
-# `raw` block with a `command` is refused rather than silently ignored.
+# -- a receipt is still written, saying it had no funnel. Either transport may
+# be `raw`: a `url` block is one shared connection, a `command` block is one
+# shared process that Atenea starts on first use and stops when it stops.
 #
 # A `raw` block must also declare `tools` and `effects`, and neither has a
 # default. `tools` is an allow list: only those names are offered, and only
@@ -1271,7 +1272,13 @@ indexed_by = []           # providers holding a ready index for this repository
 
 # [[mcp_server]]
 # id = "codebase-memory"
-# command = ["codebase-memory-mcp"]    # stdio server; started once per check, then killed
+# command = ["codebase-memory-mcp"]    # stdio server
+# expose = "raw"                       # one process for every chat, instead of
+#                                      # one per client: a stdio server has no
+#                                      # address, so a client that is not given
+#                                      # this one spawns a private copy
+# tools = ["search_code", "get_architecture"]
+# effects = ["read"]
 # [mcp_server.env]
 # CODEBASE_MEMORY_UI = "false"
 

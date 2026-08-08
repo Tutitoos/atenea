@@ -441,10 +441,10 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		"negative timeout": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
 		"dotted id":        "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
 		"unknown expose":   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
-		// Passthrough over stdio needs one process shared between chats and
-		// is not built. Accepting the declaration would offer nothing and
-		// say nothing, which is the failure mode this whole list prevents.
-		"raw over stdio": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\n",
+		// A stdio raw block still has to carry the same budget as any other
+		// one; what is no longer refused is the transport itself, which
+		// TestAStdioBackendIsDeclaredLikeAnyOther pins from the other side.
+		"raw over stdio without tools": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\n",
 		// A raw block has to say what it may offer and what that costs.
 		// Neither has a default: one reading of an absent list widens the
 		// machine to whatever the backend ships next, the other is a
@@ -573,6 +573,50 @@ func TestExposeDefaultsToPointerAndReadsBackRawWithItsBudget(t *testing.T) {
 		if strings.HasPrefix(i.ID, contract.ReservedNamespace+".") {
 			t.Errorf("implementation %s came from a declaration", i.ID)
 		}
+	}
+}
+
+// A stdio backend is declared the way an HTTP one is: same expose, same
+// budget, same effects, and the command in place of the url.
+//
+// The transport used to be refused here with "not built yet", so this is the
+// test that the refusal is gone and that nothing else went with it -- the
+// rules that make a raw block honest are per-block, not per-transport.
+func TestAStdioBackendIsDeclaredLikeAnyOther(t *testing.T) {
+	body := minimal +
+		"\n[[mcp_server]]\nid = \"codebase-memory\"\ncommand = [\"codebase-memory-mcp\", \"--ui=true\"]\n" +
+		"expose = \"raw\"\ntools = [\"search_code\", \"index_repository\"]\neffects = [\"read\"]\n" +
+		"env = { CBM_HOME = \"/tmp/cbm\" }\n" +
+		"\n  [[mcp_server.tool]]\n  name = \"index_repository\"\n  effects = [\"read\", \"write\"]\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	server := cfg.MCPServers[0]
+	if server.Expose != config.ExposeRaw {
+		t.Errorf("expose = %q, want %q", server.Expose, config.ExposeRaw)
+	}
+	if want := []string{"codebase-memory-mcp", "--ui=true"}; !slices.Equal(server.Command, want) {
+		t.Errorf("command = %v, want %v", server.Command, want)
+	}
+	if server.URL != "" {
+		t.Errorf("url = %q, want empty: this block declared a command", server.URL)
+	}
+	if got := server.Env["CBM_HOME"]; got != "/tmp/cbm" {
+		t.Errorf("env = %v, want the declared CBM_HOME", server.Env)
+	}
+	// The budget and the effects are the same rules they are over HTTP:
+	// nothing about them is transport-specific, and a copy that only ran on
+	// one transport is how they would drift apart.
+	if want := []string{"search_code", "index_repository"}; !slices.Equal(server.Tools, want) {
+		t.Errorf("tools = %v, want %v", server.Tools, want)
+	}
+	if got := server.EffectsOf("search_code"); !slices.Equal(got, []contract.Effect{contract.EffectRead}) {
+		t.Errorf("inherited effects = %v, want the server's read", got)
+	}
+	want := []contract.Effect{contract.EffectRead, contract.EffectWrite}
+	if got := server.EffectsOf("index_repository"); !slices.Equal(got, want) {
+		t.Errorf("narrowed effects = %v, want %v", got, want)
 	}
 }
 

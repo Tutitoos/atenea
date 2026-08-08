@@ -63,9 +63,65 @@ type Tool struct {
 // Shared is the only instance policy here and it is the one that makes the
 // whole feature worth having: six clients each spawning a private copy is the
 // waste this replaces. It also means the backend outlives any single chat, so
-// nothing in this type may hold a chat's identity -- the session belongs to
-// the process, not to whoever happened to open it.
-type Backend struct {
+// nothing behind this interface may hold a chat's identity -- the session
+// belongs to the process, not to whoever happened to open it.
+//
+// There are two implementations and the difference between them is only how
+// bytes reach the server. Everything above this line -- the budget, the
+// effects gate, the naming, the receipts -- is written once against this
+// interface, because a rule that had to be re-implemented per transport is a
+// rule that would eventually differ per transport.
+type Backend interface {
+	// ID is the declared name of the server, which is the middle segment of
+	// every tool this backend offers.
+	ID() string
+	// Where is the address or the command, for a report that has to say
+	// where it looked.
+	Where() string
+	// Tools is what the server offers right now, already filtered to the
+	// budget.
+	Tools(ctx context.Context) ([]Tool, error)
+	// Call runs one tool and hands back what the server said, whole.
+	Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error)
+	// Allows reports whether a tool name is inside the declared budget.
+	Allows(tool string) bool
+	// Allowed is the budget as declared, for a report that has to show it.
+	Allowed() []string
+	// Close releases whatever this backend is holding. What that means is
+	// the one thing the two modes genuinely disagree about: an HTTP backend
+	// forgets a session it did not create, a stdio backend stops a process
+	// it did.
+	Close()
+}
+
+// Spec is a declared backend, in the words the settings file used.
+//
+// One struct for both modes rather than two constructors, because which mode
+// a block means is not the operator's choice to make twice: settings already
+// refuses a block that names both a url and a command, so exactly one of the
+// two fields is set here and the choice is a consequence of that, not a
+// second decision that could disagree with the first.
+type Spec struct {
+	ID      string
+	URL     string
+	Command []string
+	Env     map[string]string
+	Timeout time.Duration
+	Allowed []string
+}
+
+// New prepares a backend. Nothing is dialed and nothing is spawned here: a
+// server that is down at startup must not stop Atenea from starting, and one
+// that comes up later must start working without a restart, so the first call
+// that needs the server is the one that reaches for it.
+func New(spec Spec) Backend {
+	if len(spec.Command) > 0 {
+		return newStdio(spec)
+	}
+	return newHTTP(spec)
+}
+
+type httpBackend struct {
 	id      string
 	url     string
 	timeout time.Duration
@@ -89,19 +145,16 @@ type Backend struct {
 	seq atomic.Int64
 }
 
-// New prepares a backend. Nothing is dialed here: a server that is down at
-// startup must not stop Atenea from starting, and one that comes up later
-// must start working without a restart, so the handshake waits for the first
-// call that needs it.
-func New(id, endpoint string, timeout time.Duration, allowed []string) *Backend {
+func newHTTP(spec Spec) *httpBackend {
+	timeout := spec.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	return &Backend{
-		id:      id,
-		url:     endpoint,
+	return &httpBackend{
+		id:      spec.ID,
+		url:     spec.URL,
 		timeout: timeout,
-		allowed: slices.Clone(allowed),
+		allowed: slices.Clone(spec.Allowed),
 		// Keep-alives are wanted here, unlike the probe's client: this is a
 		// session that will be used again, and re-dialing per call would add
 		// a handshake to every tool a chat runs.
@@ -110,17 +163,17 @@ func New(id, endpoint string, timeout time.Duration, allowed []string) *Backend 
 }
 
 // Allows reports whether a tool name is inside the declared budget.
-func (b *Backend) Allows(tool string) bool { return slices.Contains(b.allowed, tool) }
+func (b *httpBackend) Allows(tool string) bool { return slices.Contains(b.allowed, tool) }
 
 // Allowed is the budget as declared, for a report that has to show it.
-func (b *Backend) Allowed() []string { return slices.Clone(b.allowed) }
+func (b *httpBackend) Allowed() []string { return slices.Clone(b.allowed) }
 
 // ID is the declared name of the server, which is the middle segment of every
 // tool this backend offers.
-func (b *Backend) ID() string { return b.id }
+func (b *httpBackend) ID() string { return b.id }
 
 // Where is the address, for a report that has to say where it looked.
-func (b *Backend) Where() string { return b.url }
+func (b *httpBackend) Where() string { return b.url }
 
 // Name is the one place a passthrough tool's public name is built.
 //
@@ -157,11 +210,20 @@ func Split(name string) (server, tool string, ok bool) {
 // fourteen warm, so a snapshot taken at declaration time would be wrong by
 // lunchtime and wrong in the direction that hides tools rather than the one
 // that fails loudly.
-func (b *Backend) Tools(ctx context.Context) ([]Tool, error) {
+func (b *httpBackend) Tools(ctx context.Context) ([]Tool, error) {
 	raw, err := b.request(ctx, "tools/list", map[string]any{})
 	if err != nil {
 		return nil, err
 	}
+	return toolsFrom(raw, b.allowed, b.fail)
+}
+
+// toolsFrom reads a tools/list answer and keeps only what the budget allows.
+//
+// Shared by both transports on purpose: this is where the allow list stops
+// being a declaration and starts being the list a chat sees, and a second
+// copy of it is a second place a tool could leak through.
+func toolsFrom(raw json.RawMessage, allowed []string, fail failer) ([]Tool, error) {
 	var body struct {
 		Tools []struct {
 			Name        string          `json:"name"`
@@ -170,20 +232,55 @@ func (b *Backend) Tools(ctx context.Context) ([]Tool, error) {
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, b.fail(contract.FailureUnavailable, "listing tools: %v", err)
+		return nil, fail(contract.FailureUnavailable, "listing tools: %v", err)
 	}
-	out := make([]Tool, 0, min(len(body.Tools), len(b.allowed)))
+	out := make([]Tool, 0, min(len(body.Tools), len(allowed)))
 	for _, t := range body.Tools {
 		// Filtered against the declaration, not against what the server
 		// wishes it offered. A backend that grows a tool overnight grows
 		// nothing here: the list an operator wrote is the list a chat sees,
 		// and a new tool arrives when somebody decides it may.
-		if !b.Allows(strings.TrimSpace(t.Name)) {
+		if !slices.Contains(allowed, strings.TrimSpace(t.Name)) {
 			continue
 		}
 		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
 	return out, nil
+}
+
+// failer is a backend's own error constructor, passed to the shared helpers so
+// that an error raised in common code still names the server that caused it.
+type failer func(kind contract.FailureKind, format string, args ...any) error
+
+// rpcError is the error member of a JSON-RPC answer.
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// errBackendGone marks the one failure the stdio mode retries: the process
+// that was answering has stopped. It is the stdio counterpart of a stale
+// session -- same shape of problem, same single retry, and the same refusal
+// to loop.
+var errBackendGone = errors.New("passthrough: backend stopped")
+
+// resultOf takes the result out of a JSON-RPC answer, or turns its error
+// member into the right bin.
+func resultOf(raw json.RawMessage, method string, fail failer) (json.RawMessage, error) {
+	var answer struct {
+		Result json.RawMessage `json:"result"`
+		Error  *rpcError       `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return nil, fail(contract.FailureUnavailable, "%s: unreadable answer: %v", method, err)
+	}
+	if answer.Error != nil {
+		// A backend refusing a call is not Atenea being unavailable, and the
+		// bin has to say which: the caller can fix a bad argument and cannot
+		// fix a dead server.
+		return nil, fail(contract.FailureInvalidInput, "%s: %s", method, answer.Error.Message)
+	}
+	return answer.Result, nil
 }
 
 // Call runs one of the backend's tools and hands back what it said, whole.
@@ -193,7 +290,7 @@ func (b *Backend) Tools(ctx context.Context) ([]Tool, error) {
 // tool: reading it here would mean this package forming an opinion about a
 // tool it knows nothing about, and the opinion would end up in a health
 // record for a provider with no competitor to be judged against.
-func (b *Backend) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+func (b *httpBackend) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
 	// Checked again here, and deliberately not only where the list is built.
 	// A name that never appeared on a list is still a name a client can
 	// send, and a budget enforced only by omission is a budget enforced only
@@ -211,7 +308,7 @@ func (b *Backend) Call(ctx context.Context, tool string, args map[string]any) (j
 // Close forgets the session. The backend is somebody else's process and is
 // not stopped: Atenea did not start it, and a shared server that dies when
 // one of its users goes away is not shared.
-func (b *Backend) Close() {
+func (b *httpBackend) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.session, b.open = "", false
@@ -224,7 +321,7 @@ func (b *Backend) Close() {
 // second failure is the backend saying something a retry cannot fix, and a
 // loop here would turn one dead server into a stall in every chat attached to
 // it.
-func (b *Backend) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func (b *httpBackend) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	raw, err := b.attempt(ctx, method, params)
 	if err == nil {
 		return raw, nil
@@ -245,7 +342,7 @@ func (b *Backend) request(ctx context.Context, method string, params any) (json.
 // know the session id we are using.
 var errStaleSession = errors.New("passthrough: session not found")
 
-func (b *Backend) attempt(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func (b *httpBackend) attempt(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if err := b.ensure(ctx); err != nil {
 		return nil, err
 	}
@@ -257,7 +354,7 @@ func (b *Backend) attempt(ctx context.Context, method string, params any) (json.
 
 // ensure performs the handshake once, under the lock, for whoever gets there
 // first. Everyone else waits and then finds it done.
-func (b *Backend) ensure(ctx context.Context) error {
+func (b *httpBackend) ensure(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.open {
@@ -284,7 +381,7 @@ func (b *Backend) ensure(ctx context.Context) error {
 }
 
 // send performs one JSON-RPC round trip and returns the result member.
-func (b *Backend) send(ctx context.Context, method string, params any, session string) (json.RawMessage, error) {
+func (b *httpBackend) send(ctx context.Context, method string, params any, session string) (json.RawMessage, error) {
 	// Atomic rather than guarded by mu: send is called from ensure, which
 	// already holds mu, and taking it again there would deadlock the first
 	// chat to touch a cold backend. The counter needs atomicity, not the
@@ -317,27 +414,11 @@ func (b *Backend) send(ctx context.Context, method string, params any, session s
 	if err != nil {
 		return nil, b.fail(contract.FailureUnavailable, "%s: %v", method, err)
 	}
-	var answer struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(payload, &answer); err != nil {
-		return nil, b.fail(contract.FailureUnavailable, "%s: unreadable answer: %v", method, err)
-	}
-	if answer.Error != nil {
-		// A backend refusing a call is not Atenea being unavailable, and the
-		// bin has to say which: the caller can fix a bad argument and cannot
-		// fix a dead server.
-		return nil, b.fail(contract.FailureInvalidInput, "%s: %s", method, answer.Error.Message)
-	}
-	return answer.Result, nil
+	return resultOf(payload, method, b.fail)
 }
 
 // notify sends a message that is owed no answer.
-func (b *Backend) notify(ctx context.Context, method, session string) error {
+func (b *httpBackend) notify(ctx context.Context, method, session string) error {
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
 	if err != nil {
 		return b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
@@ -362,7 +443,7 @@ type reply struct {
 	text    string
 }
 
-func (b *Backend) post(ctx context.Context, body []byte, session string) (reply, error) {
+func (b *httpBackend) post(ctx context.Context, body []byte, session string) (reply, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.url, bytes.NewReader(body))
@@ -402,7 +483,7 @@ func (b *Backend) post(ctx context.Context, body []byte, session string) (reply,
 
 // fail names the server in every error this package produces. A chat sees
 // these words with no idea which of several backends produced them.
-func (b *Backend) fail(kind contract.FailureKind, format string, args ...any) error {
+func (b *httpBackend) fail(kind contract.FailureKind, format string, args ...any) error {
 	return contract.Fail(kind, "%s: %s", b.id, fmt.Sprintf(format, args...))
 }
 

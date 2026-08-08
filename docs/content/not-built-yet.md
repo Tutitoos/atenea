@@ -338,9 +338,9 @@ held back from every payload and reported under `held`.
 
 What is still absent is `instance`. Every raw backend is one shared session
 for the whole process; `per_repository` and `per_chat` are not built, and the
-key is refused as unknown rather than accepted and ignored. Passthrough is
-also HTTP-only: `expose = "raw"` on a `command` entry is refused, because one
-stdio process shared across chats is a lifecycle nobody has built here yet.
+key is refused as unknown rather than accepted and ignored. Both transports
+are reachable now: a `command` entry declared `expose = "raw"` is spawned once
+and shared, which is the entry above this one.
 
 ### Names, and a collision that is invisible from a tool list
 
@@ -389,34 +389,41 @@ the schema does not have -- and feeding those into a provider's health record
 would condemn a working server for a client's mistake. That is the same defect
 that shipped in `0.9.1`: a missing working directory blamed on the binary.
 
-### One shared instance, which is the hard part
+### One shared instance, and the policies still missing from it
 
-An HTTP backend already serves many sessions. A stdio backend is one duplex pipe
-with per-connection state, so fan-in needs request ids remapped per chat,
-responses routed back to the chat that asked, a decision about what happens to
-server-initiated notifications, and a lifetime longer than any one chat --
-which is what the supervisor with `EnsureReady` and `Acquire`/`Release` already
-does for adapters, and is the reason this is an extension rather than a new
-subsystem.
+**Landed on 2026-08-08 for the only policy that existed anyway: `shared`.** A
+`command` block may now be declared `expose = "raw"`. Atenea spawns the process
+on the first call that needs it, replays the handshake once per spawn, holds
+stdin open for the life of the process, and routes each answer back to the chat
+that asked by JSON-RPC id. Measured against the real `codebase-memory-mcp`:
+three chats, one child process, and the child gone when Atenea stopped.
 
-The trap is state that belongs to the connection, and the machine already proves
-it: serena's `activate_project` is process-wide, which is exactly why a second
-serena runs on `:9121` for one repository. Two chats sharing one instance would
-fight over the active project. So the policy is per server and never global:
+What is left is the part that was always the harder half -- state that belongs
+to the connection -- and the machine still proves it: serena's
+`activate_project` is process-wide, which is exactly why a second serena runs
+on `:9121` for one repository. Two chats sharing one instance would fight over
+the active project. So the policy is per server and never global:
 
 - **`shared`** -- stateless, or state that is globally consistent:
-  `codebase-memory`, `semgrep`, `context7`.
+  `codebase-memory`, `semgrep`, `context7`. This is what is built, and today it
+  is not a choice: it is the only behaviour, which is why `instance` is still
+  refused as an unknown key rather than accepted and ignored.
 - **`per_repository`** -- the state *is* the project: `serena`. This generalises
   the `:9121` special case into a rule instead of a second machine-level
   exception.
 - **`per_chat`** -- the state is the conversation. Saves no processes, but keeps
   the server declared in one file instead of five.
 
-A backend's tool list is also not a constant: `codebase-memory` advertises eight
-tools cold and fourteen once its store is open, the extra six being the
-project-lifecycle ones. Passthrough lists per session and forwards
-`tools/list_changed`; a snapshot taken at declaration time would be wrong on this
-machine today.
+Server-initiated notifications are also still dropped. A message with no id
+answers nobody, and handing one to a chat that did not ask would be inventing a
+recipient; `tools/list_changed` is the one that would matter, and it does not
+matter yet because the list is re-read on every `tools/list` rather than cached.
+A backend's tool list is not a constant -- `codebase-memory` advertises eight
+tools cold and fourteen once its store is open -- so that re-read is the design,
+not an optimisation waiting to happen. Measured again while building this: the
+same server advertised `get_graph_schema` and not `list_projects` on a cold
+start, so a snapshot taken at declaration time would have been wrong within
+the minute.
 
 ### What cannot move, so the goal is Atenea plus two
 

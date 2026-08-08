@@ -783,10 +783,26 @@ It is still probed and still reported, under `held`.
 
 `raw` is reserved as the first segment of any capability or implementation id,
 so nothing in the catalogue can ever collide with a passthrough name -- refused
-in `Capability.Validate` and `Implementation.Validate`. **Passthrough is
-HTTP-only today**: `expose = "raw"` on a `command` entry is refused rather than
-quietly ignored, because a stdio backend needs one process shared between chats
-and that is not built.
+in `Capability.Validate` and `Implementation.Validate`.
+
+**Both transports are served.** A `url` entry is one HTTP session shared by
+every chat. A `command` entry is one *process*: Atenea spawns it on the first
+call that needs it, replays the MCP handshake once for the process rather than
+once per chat, holds its stdin open for as long as it lives -- a stdio server
+reads EOF on stdin as its client leaving -- and routes each answer back to the
+chat that asked by request id. It is stopped when Atenea stops, because Atenea
+started it. This is the case worth declaring: an HTTP server can be pointed at
+by five clients, but a stdio server has no address, so every client that wants
+one has no choice but to spawn its own. On the machine this was written for
+that meant five private copies of one indexer, each holding its own index of
+the same repositories.
+
+One rule is stricter over a pipe than over HTTP: **a call that dies is not
+retried**. A `tools/list` that died is asked again of the replacement, because
+nothing happened; a `tools/call` is not, because the server may have run the
+tool and died carrying the answer back, and re-sending it would run a declared
+`write` twice. The chat is told instead, and the next call gets a fresh
+process.
 
 `atenea wrap opencode` handshakes every entry here and passes on only the ones
 that answered -- minus the raw ones, which Atenea serves itself. Captured on a

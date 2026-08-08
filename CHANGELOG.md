@@ -17,6 +17,24 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A `command` backend declared `expose = "raw"` is now one process shared by
+  every chat.** This is the number the feature was for: a stdio MCP server has
+  no address, so a client that is not handed one has no choice but to spawn a
+  private copy, and this machine was running five copies of one indexer, each
+  holding its own index of the same repositories. Atenea spawns it on the first
+  call that needs it, replays the handshake once per process rather than once
+  per chat, holds stdin open for the life of the process -- a stdio server
+  reads EOF on stdin as its client leaving -- and routes each answer back to
+  the chat that asked by request id. Measured against the real
+  `codebase-memory-mcp`: three chats, one child, the budget refusing a tool
+  outside it, and the child gone when Atenea stopped.
+- **A dead call is not silently repeated.** A `tools/list` that died is asked
+  again of the replacement process, because nothing happened. A `tools/call` is
+  not: the server may have run the tool and died carrying the answer back, and
+  this cannot tell that apart from dying before it started, so re-sending it
+  would run a declared `write` twice because a pipe broke. The caller is told,
+  and the next call gets a fresh process.
+
 - **`expose` on an `[[mcp_server]]` block, and the `raw.` namespace it
   uses.** The declaration list has always meant one thing -- point a client at a
   server that is already running, then step out of the path. `expose` names
@@ -94,6 +112,13 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   name that could not be parsed later is refused when it is written.
 
 ### Fixed
+
+- **Nothing ever closed a declared backend on shutdown.** It cost nothing while
+  every backend was an HTTP session -- `Close` only forgot a session id -- but a
+  stdio backend is a child process, and one left behind per restart is how a
+  machine accumulates the copies this feature removes. Both of `Shutdown`'s
+  exits now release every backend, after the door is shut and in-flight work
+  has had its margin.
 
 - **A receipt's `effects` were written as base64.** `contract.Effect` is a
   `uint8`, so a list of them is a `[]byte` to `encoding/json` and a real

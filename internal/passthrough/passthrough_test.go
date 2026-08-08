@@ -86,11 +86,14 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(body))
 }
 
-func dial(t *testing.T, b *backend) *passthrough.Backend {
+func dial(t *testing.T, b *backend) passthrough.Backend {
 	t.Helper()
 	server := httptest.NewServer(b)
 	t.Cleanup(server.Close)
-	return passthrough.New("semgrep", server.URL, 5*time.Second, []string{"semgrep_scan"})
+	return passthrough.New(passthrough.Spec{
+		ID: "semgrep", URL: server.URL, Timeout: 5 * time.Second,
+		Allowed: []string{"semgrep_scan"},
+	})
 }
 
 // The name is the seam between the two namespaces, so it is worth pinning
@@ -234,7 +237,10 @@ func TestAnEventStreamAnswerIsRead(t *testing.T) {
 // The bins are the difference between "try again later" and "you asked
 // wrongly", and a chat can only act on the second.
 func TestFailuresLandInTheRightBins(t *testing.T) {
-	dead := passthrough.New("semgrep", "http://127.0.0.1:1/mcp", 2*time.Second, []string{"semgrep_scan"})
+	dead := passthrough.New(passthrough.Spec{
+		ID: "semgrep", URL: "http://127.0.0.1:1/mcp", Timeout: 2 * time.Second,
+		Allowed: []string{"semgrep_scan"},
+	})
 	_, err := dead.Tools(t.Context())
 	if err == nil {
 		t.Fatal("a dead backend answered")
@@ -258,7 +264,9 @@ func TestFailuresLandInTheRightBins(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"no such tool"}}`, *msg.ID)
 	}))
 	t.Cleanup(refusing.Close)
-	_, err = passthrough.New("semgrep", refusing.URL, 2*time.Second, []string{"nope"}).
+	_, err = passthrough.New(passthrough.Spec{
+		ID: "semgrep", URL: refusing.URL, Timeout: 2 * time.Second, Allowed: []string{"nope"},
+	}).
 		Call(t.Context(), "nope", nil)
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Errorf("refused call kind = %v, want invalid_input", got)
@@ -274,7 +282,10 @@ func TestTheAllowListBoundsBothListingAndCalling(t *testing.T) {
 	t.Cleanup(http.Close)
 	// The server offers semgrep_scan; this declaration allows something else
 	// entirely, so the tool it really has must not survive the filter.
-	narrow := passthrough.New("semgrep", http.URL, 5*time.Second, []string{"something_else"})
+	narrow := passthrough.New(passthrough.Spec{
+		ID: "semgrep", URL: http.URL, Timeout: 5 * time.Second,
+		Allowed: []string{"something_else"},
+	})
 
 	tools, err := narrow.Tools(t.Context())
 	if err != nil {

@@ -772,15 +772,11 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	default:
 		return fail("mcp_server %s: expose %q is not %s or %s", id, expose, ExposeOff, ExposeRaw)
 	}
-	// Passthrough is HTTP-only today. A stdio backend needs one process
-	// shared between chats -- fan-in over a single duplex pipe, with
-	// per-connection state and a lifecycle that outlives any one chat --
-	// which is a different piece of work and is not built. Refusing here is
-	// the difference between a declaration that does nothing and an operator
-	// who finds out by noticing a tool never appeared.
-	if out.Expose == ExposeRaw && out.URL == "" {
-		return fail("mcp_server %s: expose = %q needs a url; passthrough over stdio is not built yet", id, ExposeRaw)
-	}
+	// Both transports reach a raw backend now. Which one a block means was
+	// already settled above -- a block carries a url or a command, never
+	// both -- so there is nothing left to refuse here: the same budget, the
+	// same effects and the same naming apply either way, and the only thing
+	// that differs is who owns the process at the other end.
 	// Everything below is a raw block's own vocabulary. On an off block
 	// Atenea never sees a call at all, so a budget here would be a rule with
 	// nothing to apply it to -- and a rule that looks enforced but is not is

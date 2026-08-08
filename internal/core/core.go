@@ -42,7 +42,7 @@ import (
 // the permission together, and holding them in separate maps is how one of
 // them eventually gets consulted without the other.
 type rawBackend struct {
-	*passthrough.Backend
+	passthrough.Backend
 	declared config.MCPServer
 }
 
@@ -303,16 +303,24 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	}
 	// The declared backends, held for the whole life of the process rather
 	// than per chat -- which is the entire point of declaring them. Nothing
-	// is dialed here: a backend that is down at startup must not stop Atenea
-	// from starting, and one that comes up later must start working without
-	// a restart.
+	// is dialed and nothing is spawned here: a backend that is down at
+	// startup must not stop Atenea from starting, one that comes up later
+	// must start working without a restart, and a stdio server nobody has
+	// asked for yet is a process nobody should be paying for.
 	backends := make(map[string]rawBackend)
 	for _, server := range cfg.MCPServers {
 		if server.Expose != config.ExposeRaw {
 			continue
 		}
 		backends[server.ID] = rawBackend{
-			Backend:  passthrough.New(server.ID, server.URL, server.Timeout, server.Tools),
+			Backend: passthrough.New(passthrough.Spec{
+				ID:      server.ID,
+				URL:     server.URL,
+				Command: server.Command,
+				Env:     server.Env,
+				Timeout: server.Timeout,
+				Allowed: server.Tools,
+			}),
 			declared: server,
 		}
 	}
@@ -979,6 +987,7 @@ func (c *Core) Shutdown() error {
 		clear(c.sessions)
 		c.mu.Unlock()
 		c.stopProcesses()
+		c.closeBackends()
 		return c.settle()
 	case <-time.After(c.settings.Core.ShutdownGrace):
 		// The table is left alone on purpose: work is still running, so the
@@ -986,9 +995,24 @@ func (c *Core) Shutdown() error {
 		// The batch is still written: measurements of work that did finish are
 		// not the thing to throw away because something else overran.
 		c.stopProcesses()
+		c.closeBackends()
 		_ = c.settle()
 		return contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)
+	}
+}
+
+// closeBackends releases every declared backend, on both ways out.
+//
+// It matters for exactly one of the two modes, and that one is new: an HTTP
+// backend only forgets a session id, but a stdio backend is a process Atenea
+// started, and one left behind is the waste this whole feature exists to
+// remove -- reappearing once per restart, which is how a machine ends up
+// running six copies of one indexer. Called after the door is shut and the
+// in-flight work has been given its margin, so nothing is cut off mid-answer.
+func (c *Core) closeBackends() {
+	for _, backend := range c.backends {
+		backend.Close()
 	}
 }
 
