@@ -27,8 +27,9 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   outputs, because a model has to be told what form to answer in. Only half of
   that reason was ever adapter-specific: a caller building a *request* needs
   the same statement about the inputs, and the only place that can honestly
-  make it is the package that also refuses the payload, so `ValidateInput` and
-  `InputSchema` are now one declaration read in two directions, in one package.
+  make it is the package that also refuses the payload. `ValidateInput` and
+  `InputSchema` are now one declaration read in two directions, in one package,
+  with a test that fails the moment the two disagree about any payload.
 
 - **A chat can dispatch one capability, not only a whole commission.**
   `Session.Ask` is `Session.Do`'s isolation applied to the shape a single
@@ -43,6 +44,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   dispatch path does not cover this and never did: it refuses a capability whose
   effects the *commission* does not cover, and the commission is built from what
   the caller asked for -- so it compares a request with itself.
+
+### Changed
+
+- **The schema Claude Code is held to now refuses keys the capability never
+  declared.** `additionalProperties: false` is emitted at every depth, which is
+  what `ValidateOutput` has always enforced on the answer coming back. The ask
+  and the check were describing different shapes: a model that invented a field
+  was told nothing going out and refused coming in. Verified against the real
+  CLI, which accepts the closed schema and answers within it.
 
 ### Fixed
 

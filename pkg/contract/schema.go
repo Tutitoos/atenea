@@ -9,8 +9,9 @@ import "slices"
 // has not sent one yet, which is the only form a far side that thinks -- or a
 // client reading tools/list -- can act on.
 //
-// It is kept in the same package as ValidateInput on purpose: two walks over
-// one declaration, living apart, is the shape that drifts.
+// The two are deliberately generated from the same fields and kept in one
+// package: a schema that advertises a shape the validator then refuses is
+// worse than no schema at all, because the caller did what it was told.
 func (c Capability) InputSchema() (map[string]any, error) {
 	return objectSchema(c.Inputs)
 }
@@ -27,6 +28,11 @@ func (c Capability) OutputSchema() (map[string]any, error) {
 }
 
 // objectSchema turns a set of declared fields into one JSON Schema object.
+//
+// additionalProperties is false at every depth, and that is not caution: it
+// is what checkPayload already does. A payload carrying a field the capability
+// never promised is refused on arrival, so a schema that allowed it would be
+// advertising a door that is nailed shut.
 func objectSchema(fields []Field) (map[string]any, error) {
 	properties := make(map[string]any, len(fields))
 	required := make([]string, 0, len(fields))
@@ -41,8 +47,9 @@ func objectSchema(fields []Field) (map[string]any, error) {
 		}
 	}
 	out := map[string]any{
-		"type":       "object",
-		"properties": properties,
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
 	}
 	if len(required) > 0 {
 		out["required"] = required
