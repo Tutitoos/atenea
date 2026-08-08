@@ -209,11 +209,15 @@ func (s *Session) readable(found []contract.Discovery) []contract.Discovery {
 // knownEffect reports whether an effect is one the contract declares. A grant
 // built from a zero value would quietly widen to nothing and read as if it had
 // been honored.
+//
+// Asked of the contract rather than matched against a list retyped here, and
+// that is not tidiness. The retyped list is exactly how this broke: it named
+// read, write and external, `process` was added to the contract afterwards, and
+// a switch does not notice. The result was that no chat could ever be granted
+// `process` -- so no chat could run `code.search`, which declares read AND
+// process because ripgrep is both, and which is the first thing any client
+// calls. An unknown effect has no name to round-trip, so it still fails.
 func knownEffect(effect contract.Effect) bool {
-	switch effect {
-	case contract.EffectRead, contract.EffectWrite, contract.EffectExternal:
-		return true
-	default:
-		return false
-	}
+	_, err := contract.ParseEffect(effect.String())
+	return err == nil
 }

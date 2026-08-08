@@ -13,6 +13,22 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **A chat could not be granted `process`, so no chat could run `code.search`.**
+  The guard on `Open` matched the grant against a list of three effects retyped
+  in `internal/core`; the contract declares four. `process` was added to the
+  contract after the guard was written and a `switch` does not notice. Since
+  `code.search` declares `read` and `process` together -- ripgrep is both -- and
+  it is the first capability any client calls, every chat was refused the P0
+  capability at the door.
+
+  The guard now asks the contract instead of holding its own copy of the answer,
+  so the next effect added cannot repeat it, and a test walks every effect the
+  contract declares rather than a list retyped in the test.
+
 ## [0.8.0] - 2026-08-07
 
 ### Added

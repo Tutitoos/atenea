@@ -378,6 +378,54 @@ func TestABadGrantIsRefusedAtTheDoor(t *testing.T) {
 	}
 }
 
+// The P0 capability declares read AND process, because ripgrep is both. A chat
+// that may not hold process may not run the one capability every client calls
+// first -- so the grant has to be able to carry it. It could not: the guard on
+// Open listed three of the contract's four effects, and process was the one
+// missing, added to the contract after the guard was written.
+func TestAChatCanBeGrantedProcess(t *testing.T) {
+	atenea := build(t, catalog)
+	defer func() { _ = atenea.Shutdown() }()
+
+	chat, err := atenea.Open(core.SessionOptions{
+		ID:      "searcher",
+		Client:  "test",
+		Grant:   []contract.Effect{contract.EffectProcess},
+		Context: []contract.ContextLevel{contract.ContextRepository},
+	})
+	if err != nil {
+		t.Fatalf("a chat could not be granted process, so it could never run code.search: %v", err)
+	}
+	if !chat.Allows(contract.EffectProcess) {
+		t.Error("the grant was accepted and then not honored")
+	}
+}
+
+// Every effect the contract declares must be grantable, and the guard must not
+// be a list somebody has to remember to widen. This is the test that would have
+// caught process going missing, and it is written against the contract's own
+// parser rather than against a list retyped here -- a second list would drift
+// the same way the first one did.
+func TestEveryContractEffectCanBeGranted(t *testing.T) {
+	atenea := build(t, catalog)
+	defer func() { _ = atenea.Shutdown() }()
+
+	for _, name := range []string{"read", "write", "external", "process"} {
+		effect, err := contract.ParseEffect(name)
+		if err != nil {
+			t.Fatalf("the contract does not parse its own effect %q: %v", name, err)
+		}
+		if _, err := atenea.Open(core.SessionOptions{
+			ID:      "grant-" + name,
+			Client:  "test",
+			Grant:   []contract.Effect{effect},
+			Context: []contract.ContextLevel{contract.ContextRepository},
+		}); err != nil {
+			t.Errorf("effect %q is declared by the contract and refused by the grant: %v", name, err)
+		}
+	}
+}
+
 // The status screen is the only place anybody sees the isolation, so what it
 // reports has to be the chat's real reach.
 func TestTheStatusScreenShowsEveryOpenChat(t *testing.T) {
