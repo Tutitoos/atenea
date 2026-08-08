@@ -416,12 +416,27 @@ stay client-declared, and "clients declare Atenea and nothing else" is therefore
 false by two -- said here so the plan is not measured against a target it was
 never going to reach.
 
+One of the two is **currently absent rather than immovable**, and the distinction
+is worth keeping. On 2026-08-08 the `claude-mem` declaration in two clients was
+found to be a locator that exits 1 with `claude-mem: mcp server not found`: the
+plugin tree it searches is gone from this machine, so the server it names has not
+run for days. Its data is untouched on disk and reinstalling it changes nothing
+here -- the exception is about what the server *is*, not whether it happens to be
+installed. If it is retired instead, the count drops to one, `headroom`, and this
+paragraph is what says so rather than a silent edit to the number above.
+
 Also out of reach in any mode: the client's own built-in file, edit and shell
 tools, which are not MCP and never route here; and argument shapes that mean
 different things depending on whose working directory is the truth --
-`semgrep_scan` wants an absolute path inside its own mounts while
-`semgrep_scan_with_custom_rule` wants a relative one, and once Atenea holds the
-instance it is Atenea's roots that decide, not the caller's.
+`semgrep_scan` takes an absolute host path and `semgrep_scan_with_custom_rule`
+takes a relative one plus inline content, so the same call means different things
+depending on who is holding the instance. This one carries a warning from the
+machine it was measured on: that semgrep once ran as a container with the code
+roots mounted read-only, its own rules kept promising that barrier for days after
+it stopped existing, and the escape was proven with a bait file outside every
+declared root. Whoever holds one shared instance inherits its reach, so this is
+where the `grounded` check earns a second use: refusing a raw path that names no
+declared repository is the only barrier left once the mounts are gone.
 
 ### Decisions taken on 2026-08-08, so they are not re-litigated
 
