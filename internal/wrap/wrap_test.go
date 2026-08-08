@@ -11,6 +11,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/wrap"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 const okResult = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",` +
@@ -84,6 +85,42 @@ func TestALiveServerIsDeclaredAtTheAddressThatAnswered(t *testing.T) {
 	}
 	if entry["type"] != "remote" || entry["url"] != url {
 		t.Errorf("entry = %v, want a remote at %s", entry, url)
+	}
+}
+
+// A raw backend is the one case where handing a client the address would undo
+// the work: the client would reach it directly, under no allow list and no
+// effect check, and the budget would be routed around by the very command
+// that exists to apply it. It is checked and reported, and it stays out of
+// the payload whether or not it answered.
+func TestARawBackendIsHeldRatherThanHandedToTheClient(t *testing.T) {
+	url := live(t)
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "pointer", URL: url},
+		{
+			ID: "held", URL: url, Expose: config.ExposeRaw,
+			Tools: []string{"scan"}, Effects: []contract.Effect{contract.EffectRead},
+		},
+	})
+	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "held" {
+		t.Fatalf("held = %v, want the raw backend", plan.Held)
+	}
+	if len(plan.Declared) != 1 || plan.Declared[0].Server.ID != "pointer" {
+		t.Fatalf("declared = %v, want only the pointer", plan.Declared)
+	}
+	servers := payload(t, plan)
+	if entry, ok := servers["held"]; ok {
+		t.Errorf("a raw backend was handed to the client as %v: the budget is bypassable", entry)
+	}
+	if _, ok := servers["pointer"]; !ok {
+		t.Error("the pointer stopped being declared; only raw backends are held")
+	}
+	// An operator diffing this report against their client's tool list has
+	// to find the server they declared, not an unexplained absence.
+	var report strings.Builder
+	plan.Report(&report, "opencode")
+	if got := report.String(); !strings.Contains(got, "held") || !strings.Contains(got, "raw.held.<tool>") {
+		t.Errorf("report does not account for the held backend:\n%s", got)
 	}
 }
 

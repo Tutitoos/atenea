@@ -37,6 +37,15 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// rawBackend is a live session paired with the declaration that authorized
+// it. The two are one lookup on purpose: every call needs the connection and
+// the permission together, and holding them in separate maps is how one of
+// them eventually gets consulted without the other.
+type rawBackend struct {
+	*passthrough.Backend
+	declared config.MCPServer
+}
+
 // Core is safe for concurrent use. Sessions are isolated per chat, but the
 // catalog underneath them is shared.
 type Core struct {
@@ -50,7 +59,7 @@ type Core struct {
 	// They are not runners and never reach the orchestrator: nothing here
 	// answers a capability, so there is nothing for the funnel to rank and
 	// nothing for the measurement base to learn.
-	backends map[string]*passthrough.Backend
+	backends map[string]rawBackend
 	chooser  *selector.Selector
 	// runners are the live client adapters, kept as a list because the status
 	// screen names each of them; the orchestrator behind them sees one seam.
@@ -297,12 +306,15 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	// is dialed here: a backend that is down at startup must not stop Atenea
 	// from starting, and one that comes up later must start working without
 	// a restart.
-	backends := make(map[string]*passthrough.Backend)
+	backends := make(map[string]rawBackend)
 	for _, server := range cfg.MCPServers {
 		if server.Expose != config.ExposeRaw {
 			continue
 		}
-		backends[server.ID] = passthrough.New(server.ID, server.URL, server.Timeout)
+		backends[server.ID] = rawBackend{
+			Backend:  passthrough.New(server.ID, server.URL, server.Timeout, server.Tools),
+			declared: server,
+		}
 	}
 	built = true
 	return &Core{
@@ -719,7 +731,7 @@ func (c *Core) Checkpoints() *checkpoint.Store { return c.checkpoints }
 // treats its own dumps: the tool already ran on somebody else's server, and
 // refusing to hand back its answer because the paperwork failed would turn a
 // bookkeeping problem into a broken call. The notebook is where that goes.
-func (c *Core) fileRawReceipt(session *Session, name string, started time.Time, callErr error) {
+func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.Effect, started time.Time, callErr error) {
 	if c.checkpoints == nil || !c.checkpoints.Enabled() {
 		return
 	}
@@ -744,7 +756,13 @@ func (c *Core) fileRawReceipt(session *Session, name string, started time.Time, 
 		Started:         started,
 		Updated:         now,
 		Closed:          true,
-		Verdict:         verdict,
+		// What the call was authorized to cause, in the operator's own
+		// words from the settings file. A raw payload is opaque, so this is
+		// the only durable statement of what the machine allowed -- and a
+		// refused call keeps it too, which is what makes the refusal
+		// auditable rather than merely effective.
+		Effects: effects,
+		Verdict: verdict,
 		Steps: []checkpoint.StepState{{
 			ID:             name,
 			Implementation: name,

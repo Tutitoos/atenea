@@ -318,13 +318,29 @@ with `funnel.state = "none"` -- and in the same run directory, a `code.search`
 step reads `kept` with four stages and two named drops, which is the pair the
 receipt entry below was written for.
 
-What is still absent is every line below the first in that block: `instance`,
-`tools` and `effects` are not read. A raw backend today offers all of its tools
-to any chat that reaches the socket, which is exactly the surface the `tools`
-allow list exists to close, and the reason this entry is not struck out.
-Passthrough is also HTTP-only: `expose = "raw"` on a `command` entry is refused
-rather than ignored, because one stdio process shared across chats is a
-lifecycle nobody has built here yet.
+Then the budget and the permissions, which is what made the mode usable rather
+than merely working. `tools` is required of a raw block and has no default:
+only the names on it are offered, and only they can be called -- enforced at
+the backend, so a name that never appeared on a list is refused when a client
+sends it anyway. `effects` is required too, narrowable per tool with
+`[[mcp_server.tool]]`, and checked on every call against what the chat may
+authorize, through the same `Session.entitled` a capability crosses rather
+than a gate of passthrough's own. Measured against the live `semgrep`: two of
+its four tools offered, `get_supported_languages` answered, `semgrep_scan`
+refused for `process`, `semgrep_rule_schema` refused for being outside the
+list -- and all three on the record, each carrying the effects it was measured
+against.
+
+Writing the budget turned up a hole in a command nobody had reread: `atenea
+wrap` hands every declared server to the client, which for a raw backend is a
+direct route around the allow list and the effects check. Raw backends are now
+held back from every payload and reported under `held`.
+
+What is still absent is `instance`. Every raw backend is one shared session
+for the whole process; `per_repository` and `per_chat` are not built, and the
+key is refused as unknown rather than accepted and ignored. Passthrough is
+also HTTP-only: `expose = "raw"` on a `command` entry is refused, because one
+stdio process shared across chats is a lifecycle nobody has built here yet.
 
 ### Names, and a collision that is invisible from a tool list
 
@@ -342,13 +358,21 @@ construction, because the server id is in the name.
 
 Atenea cannot know what a raw tool does, and that serena list contains
 `execute_shell_command` and `replace_in_files`. So effects are **declared** per
-server, and per tool where a server mixes them; undeclared means `unknown`, and
-`unknown` is refused unless a client holds a grant naming that server. The
-refusal happens in `commissioned`, the one wrapper everything already crosses --
-passthrough does not get a gate of its own, because a second gate on the same
-seam is how the first one stops being load-bearing. `grounded` applies only when
-a raw call names a repository, which most will not, and inventing the parameter
-so the check has something to read would be worse than not checking.
+server, and per tool where a server mixes them.
+
+Two things in the original sketch turned out differently when it was built.
+Undeclared was to mean `unknown`, refused unless a client held a grant naming
+the server; instead the *declaration* is refused, so `unknown` is not a state
+that can exist at runtime and no new kind of grant was needed. And the refusal
+was to happen in `commissioned` -- but that wrapper takes a `contract.Runner`
+and a capability, and a raw call has neither, so it never crosses it. The same
+rule lives one seam earlier in `Session.entitled`, which is where a
+capability's `tools/call` is also held to what the chat may authorize. The
+intent was right and the address was wrong: still one gate, not two.
+
+`grounded` applies only when a raw call names a repository, which most will
+not, and inventing the parameter so the check has something to read would be
+worse than not checking.
 
 ### Receipts, for a payload Atenea cannot read
 

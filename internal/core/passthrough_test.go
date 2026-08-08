@@ -7,11 +7,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // fakeBackend is a declared server: it answers a handshake, lists one tool
@@ -39,15 +42,20 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result string
 	switch msg.Method {
 	case "tools/list":
-		result = `{"tools":[{"name":"semgrep_scan","description":"scan code",` +
-			`"inputSchema":{"type":"object","properties":{"code_files":{"type":"array"}},"required":["code_files"]}}]}`
+		// Three tools, on purpose: one the operator allows, one allowed but
+		// costlier, and one that is exactly the reason an allow list exists.
+		result = `{"tools":[` +
+			`{"name":"semgrep_scan","description":"scan code",` +
+			`"inputSchema":{"type":"object","properties":{"code_files":{"type":"array"}},"required":["code_files"]}},` +
+			`{"name":"semgrep_fix","description":"rewrite findings","inputSchema":{"type":"object"}},` +
+			`{"name":"execute_shell_command","description":"run anything","inputSchema":{"type":"object"}}` +
+			`]}`
 	case "tools/call":
 		f.mu.Lock()
 		f.calls = append(f.calls, msg.Params.Arguments)
 		f.mu.Unlock()
-		if msg.Params.Name != "semgrep_scan" {
-			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"no tool %s"}}`,
-				*msg.ID, msg.Params.Name)
+		if msg.Params.Name == "execute_shell_command" {
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"owned"}]}}`, *msg.ID)
 			return
 		}
 		result = `{"content":[{"type":"text","text":"0 findings"}],"isError":false}`
@@ -71,7 +79,47 @@ func rawSettings(t *testing.T, endpoint string) string {
 	// stages never discard anyone proves the field is written, not that it
 	// records what it claims to.
 	settings += "\n[[implementation]]\nid = \"serena.search\"\nprovider = \"serena\"\ncapability = \"code.search\"\n"
-	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"semgrep\"\nurl = %q\nexpose = \"raw\"\n", endpoint)
+	// The budget the backend is held to: two of the three tools it offers,
+	// and one of those two costs more than reading.
+	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"semgrep\"\nurl = %q\nexpose = \"raw\"\n"+
+		"tools = [\"semgrep_scan\", \"semgrep_fix\"]\neffects = [\"read\"]\n"+
+		"\n  [[mcp_server.tool]]\n  name = \"semgrep_fix\"\n  effects = [\"read\", \"write\"]\n", endpoint)
+}
+
+// answerText is the one text block a tool result carries, which is where both
+// an answer and a refusal are written.
+func answerText(got map[string]any) string {
+	content, _ := got["content"].([]any)
+	if len(content) == 0 {
+		return ""
+	}
+	first, _ := content[0].(map[string]any)
+	text, _ := first["text"].(string)
+	return text
+}
+
+// onlyRun is the single raw receipt a test's one call produced.
+func onlyRun(t *testing.T, atenea *core.Core) checkpoint.Run {
+	t.Helper()
+	store := atenea.Checkpoints()
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found checkpoint.Run
+	for _, id := range ids {
+		run, err := store.Load(id)
+		if err != nil {
+			t.Fatalf("Load %s: %v", id, err)
+		}
+		if run.Kind == checkpoint.KindRaw {
+			found = run
+		}
+	}
+	if found.ID == "" {
+		t.Fatalf("no raw receipt among %v", ids)
+	}
+	return found
 }
 
 // The two namespaces share one list and must stay legible in it: a capability
@@ -119,6 +167,121 @@ func TestABackendsToolsAreOfferedUnderTheReservedPrefix(t *testing.T) {
 	}
 	if _, ok := raw["outputSchema"]; ok {
 		t.Errorf("a raw tool was given an output schema it never declared: %v", raw)
+	}
+}
+
+// The allow list is the budget, and a tool outside it must not appear on any
+// list a client reads. A backend that advertises a shell is the whole reason
+// the list exists: what it offers is its own business, what Atenea re-offers
+// is the operator's.
+func TestAToolOutsideTheAllowListIsNeverOffered(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/list", nil), "tools/list")
+
+	tools, _ := got["tools"].([]any)
+	offered := make([]string, 0, len(tools))
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.") {
+			offered = append(offered, name)
+		}
+	}
+	want := []string{"raw.semgrep.semgrep_fix", "raw.semgrep.semgrep_scan"}
+	slices.Sort(offered)
+	if !slices.Equal(offered, want) {
+		t.Errorf("offered %v, want exactly the declared two %v", offered, want)
+	}
+}
+
+// Filtering the list is not enforcement: a name that never appeared is still
+// a name a client can send. The call has to be refused on its own, and it has
+// to be refused before the backend hears about it.
+func TestAToolOutsideTheAllowListIsRefusedWhenCalledAnyway(t *testing.T) {
+	fake := &fakeBackend{}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "raw.semgrep.execute_shell_command", "arguments": map[string]any{},
+	}), "tools/call")
+
+	if got["isError"] != true {
+		t.Fatalf("an undeclared tool was not refused: %v", got)
+	}
+	if text := answerText(got); !strings.Contains(text, "not in this backend's tools") {
+		t.Errorf("refusal = %q, want it to name the budget", text)
+	}
+	// The point of refusing here rather than only omitting it from a list.
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Errorf("the backend was reached %d times by a tool nobody allowed", len(fake.calls))
+	}
+}
+
+// An allowed tool still has to be paid for. `semgrep_fix` is declared to
+// write, and a chat holding no grant beyond reading may not authorize that --
+// the same rule, and the same refusal, a capability meets.
+func TestARawToolCostingMoreThanTheChatHoldsIsRefused(t *testing.T) {
+	fake := &fakeBackend{}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "raw.semgrep.semgrep_fix", "arguments": map[string]any{},
+	}), "tools/call")
+
+	if got["isError"] != true {
+		t.Fatalf("a write tool was run by a chat that may only read: %v", got)
+	}
+	if text := answerText(got); !strings.Contains(text, "may not authorize write") {
+		t.Errorf("refusal = %q, want it to name the effect", text)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Errorf("the backend ran a tool the chat could not authorize")
+	}
+}
+
+// A refused call is the kind an operator most wants to find later, so it
+// leaves the same receipt a successful one does -- carrying what it would
+// have been authorized to cause, which is the only durable statement of that.
+func TestARefusedRawCallIsStillOnTheRecord(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	result(t, c.call("tools/call", map[string]any{
+		"name": "raw.semgrep.semgrep_fix", "arguments": map[string]any{},
+	}), "tools/call")
+
+	run := onlyRun(t, atenea)
+	if run.Verdict != contract.VerdictFailed.String() {
+		t.Errorf("verdict = %q, want a failure on the record", run.Verdict)
+	}
+	if !slices.Contains(run.Effects, contract.EffectWrite) {
+		t.Errorf("effects = %v, want the write it was refused for", run.Effects)
+	}
+	if len(run.Steps) != 1 || run.Steps[0].Funnel.State != checkpoint.FunnelNone {
+		t.Errorf("a refused raw call did not read as a passthrough: %+v", run.Steps)
 	}
 }
 

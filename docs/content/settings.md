@@ -725,6 +725,62 @@ to `none`. That is not the same as a step whose funnel went unrecorded, which
 reads `not_kept`, and telling those two silences apart is why the field has
 three states rather than being absent.
 
+### What a raw backend may offer, and what it costs
+
+A `raw` block must declare both, and neither has a default:
+
+```toml
+[[mcp_server]]
+id = "semgrep"
+url = "http://127.0.0.1:40020/mcp"
+expose = "raw"
+tools = ["get_supported_languages", "semgrep_scan"]   # the allow list
+effects = ["read"]                                    # what they may cause
+
+  [[mcp_server.tool]]
+  name = "semgrep_scan"      # narrower than the server's, for one tool
+  effects = ["read", "process"]
+```
+
+`tools` is the budget. Only the names on it are offered, and only they can be
+called: the list is enforced at the backend, so a name that never appeared on
+any tool list is still refused when a client sends it anyway. Both readings of
+an *absent* list are defensible -- offer everything, offer nothing -- which is
+exactly why neither is guessed. A block declaring `raw` with no `tools` is
+refused, and so is an empty list.
+
+`effects` is what those tools are authorized to cause, in the same four names
+capabilities use: `read`, `write`, `external`, `process`. Atenea cannot infer
+them; a backend's own list can hold `execute_shell_command` beside
+`find_symbol`, and nothing in a name or a schema says which is which. A
+`[[mcp_server.tool]]` block narrows the declaration for one tool, and a tool
+with no block of its own causes what the server declared. A per-tool block
+naming a tool outside `tools` is refused -- it describes a call that is already
+refused a layer earlier, and left in it reads as coverage nobody has.
+
+At call time the declared effects are held against what the chat may
+authorize, through the same `Session.entitled` a capability crosses. Reading
+is free; anything else needs a grant. Captured against the live `semgrep` on
+the author's machine, with the block above:
+
+```text
+get_supported_languages  ok       supported languages are: apex, bash, c, c#, …
+semgrep_scan             refused  permission_denied: session … may not authorize process
+semgrep_rule_schema      refused  permission_denied: semgrep: tool "semgrep_rule_schema"
+                                  is not in this backend's tools
+```
+
+All three left a receipt, and each carries the effects it was measured
+against -- `["read"]`, `["read","process"]`, `["read"]`. A refused call is
+recorded exactly like one that ran, because an attempt that was stopped is
+what an audit is looking for.
+
+A raw backend is also **held back from `atenea wrap`**. Every other entry is
+handed to the client so it can talk to the shared server directly; doing that
+for a raw one would point the client past the allow list and the effects
+check, so the budget would be bypassed by the very command meant to apply it.
+It is still probed and still reported, under `held`.
+
 `raw` is reserved as the first segment of any capability or implementation id,
 so nothing in the catalogue can ever collide with a passthrough name -- refused
 in `Capability.Validate` and `Implementation.Validate`. **Passthrough is
@@ -733,22 +789,19 @@ quietly ignored, because a stdio backend needs one process shared between chats
 and that is not built.
 
 `atenea wrap opencode` handshakes every entry here and passes on only the ones
-that answered. Captured on a real machine, both transports, one real failure:
+that answered -- minus the raw ones, which Atenea serves itself. Captured on a
+real machine:
 
 ```text
-wrap opencode  6 checked: 5 declared, 1 refused
+wrap opencode  4 checked: 3 declared, 0 refused, 1 held
 
-  declared  codebase-memory  stdio  codebase-memory-mcp --ui=true  codebase-memory-mcp 0.9.0 (9ms)
-  declared  context7         stdio  context7-mcp --transport stdio  Context7 3.2.5 (315ms)
-  declared  headroom         stdio  headroom mcp serve  headroom 1.29.0 (406ms)
-  declared  semgrep          stdio  semgrep mcp --transport stdio  Semgrep 1.23.3 (1.953s)
-  declared  serena           http   http://127.0.0.1:40010/mcp  Serena 1.28.1 (32ms)
-  refused   chrome-devtools  http   http://127.0.0.1:40021/mcp
-                             dial tcp 127.0.0.1:40021: connect: connection refused
+  declared  chrome-devtools  http   http://127.0.0.1:40021/mcp  chrome_devtools 1.6.0 (2ms)
+  declared  context7         http   http://127.0.0.1:40011/mcp  Context7 4.0.0 (478ms)
+  declared  serena           http   http://127.0.0.1:40010/mcp  Serena 1.28.1 (27ms)
+  held      semgrep          http   http://127.0.0.1:40020/mcp  Semgrep 1.23.3 (3ms)
+                             served as raw.semgrep.<tool>; opencode is not pointed at it
 
   Declared means it answered an MCP handshake, not that its tools work.
-  A refused server is left out of the payload, not switched off:
-  opencode keeps whatever it already declares under that name.
 ```
 
 ## What `declared` promises, and what it does not

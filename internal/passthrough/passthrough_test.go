@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -89,7 +90,7 @@ func dial(t *testing.T, b *backend) *passthrough.Backend {
 	t.Helper()
 	server := httptest.NewServer(b)
 	t.Cleanup(server.Close)
-	return passthrough.New("semgrep", server.URL, 5*time.Second)
+	return passthrough.New("semgrep", server.URL, 5*time.Second, []string{"semgrep_scan"})
 }
 
 // The name is the seam between the two namespaces, so it is worth pinning
@@ -233,7 +234,7 @@ func TestAnEventStreamAnswerIsRead(t *testing.T) {
 // The bins are the difference between "try again later" and "you asked
 // wrongly", and a chat can only act on the second.
 func TestFailuresLandInTheRightBins(t *testing.T) {
-	dead := passthrough.New("semgrep", "http://127.0.0.1:1/mcp", 2*time.Second)
+	dead := passthrough.New("semgrep", "http://127.0.0.1:1/mcp", 2*time.Second, []string{"semgrep_scan"})
 	_, err := dead.Tools(t.Context())
 	if err == nil {
 		t.Fatal("a dead backend answered")
@@ -257,8 +258,41 @@ func TestFailuresLandInTheRightBins(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"no such tool"}}`, *msg.ID)
 	}))
 	t.Cleanup(refusing.Close)
-	_, err = passthrough.New("semgrep", refusing.URL, 2*time.Second).Call(t.Context(), "nope", nil)
+	_, err = passthrough.New("semgrep", refusing.URL, 2*time.Second, []string{"nope"}).
+		Call(t.Context(), "nope", nil)
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Errorf("refused call kind = %v, want invalid_input", got)
+	}
+}
+
+// The budget belongs to the backend rather than to whoever is listing: a
+// filter one layer up is a filter the next caller can forget, and the next
+// caller here would be holding a live connection to somebody else's shell.
+func TestTheAllowListBoundsBothListingAndCalling(t *testing.T) {
+	server := &backend{}
+	http := httptest.NewServer(server)
+	t.Cleanup(http.Close)
+	// The server offers semgrep_scan; this declaration allows something else
+	// entirely, so the tool it really has must not survive the filter.
+	narrow := passthrough.New("semgrep", http.URL, 5*time.Second, []string{"something_else"})
+
+	tools, err := narrow.Tools(t.Context())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if len(tools) != 0 {
+		t.Errorf("tools = %v, want none: the one it offers is not allowed", tools)
+	}
+	_, err = narrow.Call(t.Context(), "semgrep_scan", nil)
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Errorf("kind = %v, want permission_denied", got)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if slices.Contains(server.calls, "tools/call") {
+		t.Errorf("a tool outside the budget reached the wire: %v", server.calls)
+	}
+	if !narrow.Allows("something_else") || narrow.Allows("semgrep_scan") {
+		t.Errorf("Allows disagrees with the declaration: %v", narrow.Allowed())
 	}
 }

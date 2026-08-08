@@ -103,11 +103,35 @@ type MCPServer struct {
 	// and then steps out of the path. ExposeRaw means Atenea holds the
 	// connection and re-offers the tools verbatim under `raw.<id>.<tool>`.
 	//
-	// Nothing dispatches on ExposeRaw yet. It is parsed and refused-when-
-	// wrong first, on purpose: a declaration that is read but not honored is
-	// a promise the next phase can keep, while a dispatch path built before
-	// the declaration is checked has nowhere to report a bad one.
+	// A raw backend must also say what it may offer and what that costs:
+	// Tools is an allow list with no default, and Effects is what every one
+	// of them is authorized to cause. Both are required of a raw block and
+	// neither is read on an off one -- see the refusals in build.
 	Expose Expose
+	// Tools are the backend's own tool names this machine allows through,
+	// already trimmed and deduplicated. Empty on an off block; never empty
+	// on a raw one.
+	Tools []string
+	// Effects is the whole backend's authorization, and ToolEffects narrows
+	// it for the tools that differ. A tool absent from ToolEffects causes
+	// Effects; there is no third answer, because an undeclared effect is
+	// the thing this pair exists to make impossible.
+	Effects     []contract.Effect
+	ToolEffects map[string][]contract.Effect
+}
+
+// EffectsOf reports what one of this backend's tools is authorized to cause.
+//
+// A tool with its own declaration uses it; every other tool causes what the
+// server declared. There is deliberately no third answer: a tool that reached
+// this call is already inside the allow list, and an allow list entry with no
+// effects cannot exist, so "undeclared" is not a state this can be asked
+// about.
+func (m MCPServer) EffectsOf(tool string) []contract.Effect {
+	if narrowed, ok := m.ToolEffects[tool]; ok {
+		return narrowed
+	}
+	return m.Effects
 }
 
 // Expose is how a declared backend may be reached.
@@ -670,6 +694,14 @@ type fileMCPServer struct {
 	Env     map[string]string `toml:"env"`
 	Timeout string            `toml:"timeout"`
 	Expose  string            `toml:"expose"`
+	Tools   []string          `toml:"tools"`
+	Effects []string          `toml:"effects"`
+	Tool    []fileMCPTool     `toml:"tool"`
+}
+
+type fileMCPTool struct {
+	Name    string   `toml:"name"`
+	Effects []string `toml:"effects"`
 }
 
 // build validates one declared endpoint. The rules are all one rule: a
@@ -748,6 +780,111 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	// who finds out by noticing a tool never appeared.
 	if out.Expose == ExposeRaw && out.URL == "" {
 		return fail("mcp_server %s: expose = %q needs a url; passthrough over stdio is not built yet", id, ExposeRaw)
+	}
+	// Everything below is a raw block's own vocabulary. On an off block
+	// Atenea never sees a call at all, so a budget here would be a rule with
+	// nothing to apply it to -- and a rule that looks enforced but is not is
+	// worse than an absent one.
+	if out.Expose != ExposeRaw {
+		switch {
+		case len(m.Tools) > 0:
+			return fail("mcp_server %s: tools needs expose = %q; a pointer never sees a call to filter", id, ExposeRaw)
+		case len(m.Effects) > 0:
+			return fail("mcp_server %s: effects needs expose = %q", id, ExposeRaw)
+		case len(m.Tool) > 0:
+			return fail("mcp_server %s: [[mcp_server.tool]] needs expose = %q", id, ExposeRaw)
+		}
+		return out, nil
+	}
+	// The allow list has no default and an empty one is refused rather than
+	// obeyed. Both readings of an absent list are defensible -- offer
+	// everything, offer nothing -- and that is exactly why neither may be
+	// guessed: one silently widens a machine's surface to whatever a backend
+	// happens to ship next week, the other is a declaration that does
+	// nothing. The operator says which tools, or there is no backend.
+	tools, err := namedTools(m.Tools)
+	if err != nil {
+		return fail("mcp_server %s: %v", id, err)
+	}
+	if len(tools) == 0 {
+		return fail("mcp_server %s: expose = %q needs tools; an allow list is the budget, and it has no default",
+			id, ExposeRaw)
+	}
+	out.Tools = tools
+	// Atenea cannot know what a raw tool does. A backend's own list can hold
+	// `execute_shell_command` beside `find_symbol`, and nothing in a name or
+	// a schema says which is which, so the effects are declared by the
+	// operator or the backend does not load. An undeclared effect is not a
+	// quiet `read`.
+	if len(m.Effects) == 0 {
+		return fail("mcp_server %s: expose = %q needs effects; Atenea cannot infer what somebody else's tool does",
+			id, ExposeRaw)
+	}
+	if out.Effects, err = namedEffects(m.Effects); err != nil {
+		return fail("mcp_server %s: effects: %v", id, err)
+	}
+	for _, tool := range m.Tool {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			return fail("mcp_server %s: [[mcp_server.tool]] needs a name", id)
+		}
+		// A per-tool block for a tool the allow list never named is a
+		// permission nothing can ever consult: the call it describes is
+		// refused one layer earlier. Left in, it reads as coverage.
+		if !slices.Contains(out.Tools, name) {
+			return fail("mcp_server %s: tool %s is not in tools", id, name)
+		}
+		if _, seen := out.ToolEffects[name]; seen {
+			return fail("mcp_server %s: tool %s is declared twice", id, name)
+		}
+		if len(tool.Effects) == 0 {
+			return fail("mcp_server %s: tool %s: effects is required; omit the block to inherit the server's",
+				id, name)
+		}
+		narrowed, err := namedEffects(tool.Effects)
+		if err != nil {
+			return fail("mcp_server %s: tool %s: %v", id, name, err)
+		}
+		if out.ToolEffects == nil {
+			out.ToolEffects = make(map[string][]contract.Effect, len(m.Tool))
+		}
+		out.ToolEffects[name] = narrowed
+	}
+	return out, nil
+}
+
+// namedTools trims an allow list and refuses a repeat. A name listed twice is
+// not a wider permission -- it is two people editing the same file, and the
+// second one may have meant a different tool.
+func namedTools(raw []string) ([]string, error) {
+	out := make([]string, 0, len(raw))
+	for _, name := range raw {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, errors.New("tools: an empty tool name")
+		}
+		if slices.Contains(out, name) {
+			return nil, fmt.Errorf("tools: %s is listed twice", name)
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// namedEffects reads a declared effect list. Unknown names are refused by
+// contract.ParseEffect, so a typo cannot quietly narrow a permission to
+// nothing.
+func namedEffects(raw []string) ([]contract.Effect, error) {
+	out := make([]contract.Effect, 0, len(raw))
+	for _, name := range raw {
+		effect, err := contract.ParseEffect(strings.TrimSpace(name))
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(out, effect) {
+			return nil, fmt.Errorf("%s is listed twice", effect)
+		}
+		out = append(out, effect)
 	}
 	return out, nil
 }

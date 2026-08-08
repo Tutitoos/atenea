@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,6 +70,12 @@ type Backend struct {
 	url     string
 	timeout time.Duration
 	client  *http.Client
+	// allowed is the operator's budget: the only tool names this backend
+	// may offer or run, whatever it advertises. It is held here rather than
+	// applied by the caller because there is no reading of an unlisted tool
+	// that any caller should be able to choose -- a filter one layer up is
+	// a filter the next caller can forget.
+	allowed []string
 
 	// mu guards the handshake and the id it produces. Two chats calling a
 	// cold backend at the same moment must produce one session, not two:
@@ -86,7 +93,7 @@ type Backend struct {
 // startup must not stop Atenea from starting, and one that comes up later
 // must start working without a restart, so the handshake waits for the first
 // call that needs it.
-func New(id, endpoint string, timeout time.Duration) *Backend {
+func New(id, endpoint string, timeout time.Duration, allowed []string) *Backend {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
@@ -94,12 +101,19 @@ func New(id, endpoint string, timeout time.Duration) *Backend {
 		id:      id,
 		url:     endpoint,
 		timeout: timeout,
+		allowed: slices.Clone(allowed),
 		// Keep-alives are wanted here, unlike the probe's client: this is a
 		// session that will be used again, and re-dialing per call would add
 		// a handshake to every tool a chat runs.
 		client: &http.Client{},
 	}
 }
+
+// Allows reports whether a tool name is inside the declared budget.
+func (b *Backend) Allows(tool string) bool { return slices.Contains(b.allowed, tool) }
+
+// Allowed is the budget as declared, for a report that has to show it.
+func (b *Backend) Allowed() []string { return slices.Clone(b.allowed) }
 
 // ID is the declared name of the server, which is the middle segment of every
 // tool this backend offers.
@@ -158,9 +172,13 @@ func (b *Backend) Tools(ctx context.Context) ([]Tool, error) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, b.fail(contract.FailureUnavailable, "listing tools: %v", err)
 	}
-	out := make([]Tool, 0, len(body.Tools))
+	out := make([]Tool, 0, min(len(body.Tools), len(b.allowed)))
 	for _, t := range body.Tools {
-		if strings.TrimSpace(t.Name) == "" {
+		// Filtered against the declaration, not against what the server
+		// wishes it offered. A backend that grows a tool overnight grows
+		// nothing here: the list an operator wrote is the list a chat sees,
+		// and a new tool arrives when somebody decides it may.
+		if !b.Allows(strings.TrimSpace(t.Name)) {
 			continue
 		}
 		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
@@ -176,6 +194,14 @@ func (b *Backend) Tools(ctx context.Context) ([]Tool, error) {
 // tool it knows nothing about, and the opinion would end up in a health
 // record for a provider with no competitor to be judged against.
 func (b *Backend) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	// Checked again here, and deliberately not only where the list is built.
+	// A name that never appeared on a list is still a name a client can
+	// send, and a budget enforced only by omission is a budget enforced only
+	// against clients that are asking politely.
+	if !b.Allows(tool) {
+		return nil, b.fail(contract.FailurePermissionDenied,
+			"tool %q is not in this backend's tools", tool)
+	}
 	if args == nil {
 		args = map[string]any{}
 	}

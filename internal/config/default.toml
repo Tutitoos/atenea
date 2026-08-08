@@ -1242,12 +1242,32 @@ indexed_by = []           # providers holding a ready index for this repository
 # tools as `raw.<id>.<tool>`, with no funnel, no capability and no measurement
 # -- a receipt is still written, saying it had no funnel. HTTP only for now: a
 # `raw` block with a `command` is refused rather than silently ignored.
+#
+# A `raw` block must also declare `tools` and `effects`, and neither has a
+# default. `tools` is an allow list: only those names are offered, and only
+# they can be called. `effects` is what they may cause -- read, write,
+# external or process -- checked against what the chat may authorize on every
+# call. Atenea cannot infer either one: a backend's list can hold
+# `execute_shell_command` beside `find_symbol`, and no schema says which is
+# which. A raw backend is also kept out of `atenea wrap`, since pointing a
+# client straight at it would route around both.
 # ---------------------------------------------------------------------------
 # [[mcp_server]]
 # id = "serena"                        # the name the client will see
 # url = "http://127.0.0.1:40010/mcp"   # http endpoint; ToolHive proxies live here
 # timeout = "5s"                       # bounds the check; omitted takes the default
 # expose = "off"                       # off | raw
+
+# [[mcp_server]]
+# id = "semgrep"
+# url = "http://127.0.0.1:40020/mcp"
+# expose = "raw"                       # Atenea holds the connection and re-offers
+# tools = ["semgrep_scan"]             # required: only these are offered or callable
+# effects = ["read"]                   # required: what those tools may cause
+#
+#   [[mcp_server.tool]]                # optional: narrower, for one tool
+#   name = "semgrep_scan"
+#   effects = ["read", "process"]
 
 # [[mcp_server]]
 # id = "codebase-memory"

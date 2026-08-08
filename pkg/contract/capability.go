@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -63,6 +64,45 @@ func ParseEffect(s string) (Effect, error) {
 		return e, nil
 	}
 	return 0, fmt.Errorf("unknown effect %q: want read, write, external or process", s)
+}
+
+// MarshalJSON writes an effect as its name.
+//
+// Without this, a list of them is a []uint8 and encoding/json writes it as
+// base64: a receipt's `"effects":"AAM="` is a record nobody can audit, which
+// is the only reason the field is written down. Measured on a real receipt
+// before it was fixed.
+func (e Effect) MarshalJSON() ([]byte, error) {
+	name, ok := effectNames[e]
+	if !ok {
+		return nil, fmt.Errorf("effect %d has no name", uint8(e))
+	}
+	return json.Marshal(name)
+}
+
+// UnmarshalJSON reads either the name this writes or the bare number older
+// receipts hold. The number is accepted because a run recorded before the
+// name existed is still a run somebody may need to read, and refusing it
+// would make an upgrade quietly lose history.
+func (e *Effect) UnmarshalJSON(raw []byte) error {
+	var name string
+	if err := json.Unmarshal(raw, &name); err == nil {
+		parsed, err := ParseEffect(name)
+		if err != nil {
+			return err
+		}
+		*e = parsed
+		return nil
+	}
+	var number uint8
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return fmt.Errorf("effect: want a name or a number, got %s", raw)
+	}
+	if _, ok := effectNames[Effect(number)]; !ok {
+		return fmt.Errorf("effect: unknown number %d", number)
+	}
+	*e = Effect(number)
+	return nil
 }
 
 // FieldType is the type of a single input or output field. The set is

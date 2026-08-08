@@ -174,6 +174,11 @@ type Version struct {
 // The namespace half is a refusal rather than a feature, which is the only
 // reason it fits in a minor: nothing that was valid became invalid except a
 // capability id claiming the one segment now spoken for.
+//
+// It also gave `Effect` a JSON form. It is a uint8, so a list of them was
+// written as base64 -- a receipt read back `"effects":"AAM="`, which is not a
+// record of anything. They now write as names and read back from either, so
+// a receipt filed before this still loads.
 var Current = Version{Major: 2, Minor: 3, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.

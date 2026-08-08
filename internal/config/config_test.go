@@ -419,6 +419,12 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 	}
 }
 
+// rawBlock is the smallest declaration that reaches the raw-only rules: a
+// valid HTTP endpoint exposed raw, with whatever the case under test adds.
+func rawBlock(extra string) string {
+	return "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"raw\"\n" + extra
+}
+
 // A declaration nothing can check is worse than no declaration, because a
 // client is told the server exists before anyone finds out it does not.
 // Every rule here is that one rule: an entry must name exactly one
@@ -439,6 +445,37 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		// is not built. Accepting the declaration would offer nothing and
 		// say nothing, which is the failure mode this whole list prevents.
 		"raw over stdio": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\n",
+		// A raw block has to say what it may offer and what that costs.
+		// Neither has a default: one reading of an absent list widens the
+		// machine to whatever the backend ships next, the other is a
+		// declaration that does nothing, and guessing between them is the
+		// mistake.
+		"raw without tools":    rawBlock("") + "effects = [\"read\"]\n",
+		"raw with empty tools": rawBlock("") + "tools = []\neffects = [\"read\"]\n",
+		"raw without effects":  rawBlock("") + "tools = [\"scan\"]\n",
+		"empty tool name":      rawBlock("") + "tools = [\"scan\", \" \"]\neffects = [\"read\"]\n",
+		"repeated tool":        rawBlock("") + "tools = [\"scan\", \"scan\"]\neffects = [\"read\"]\n",
+		"unknown effect":       rawBlock("") + "tools = [\"scan\"]\neffects = [\"telepathy\"]\n",
+		"repeated effect":      rawBlock("") + "tools = [\"scan\"]\neffects = [\"read\", \"read\"]\n",
+		// A per-tool block for a tool the allow list never named describes a
+		// call that is refused one layer earlier: left in, it reads as
+		// coverage nobody has.
+		"tool outside the list": rawBlock("") + "tools = [\"scan\"]\neffects = [\"read\"]\n" +
+			"\n  [[mcp_server.tool]]\n  name = \"fix\"\n  effects = [\"write\"]\n",
+		"tool with no name": rawBlock("") + "tools = [\"scan\"]\neffects = [\"read\"]\n" +
+			"\n  [[mcp_server.tool]]\n  effects = [\"write\"]\n",
+		"tool with no effects": rawBlock("") + "tools = [\"scan\"]\neffects = [\"read\"]\n" +
+			"\n  [[mcp_server.tool]]\n  name = \"scan\"\n",
+		"tool declared twice": rawBlock("") + "tools = [\"scan\"]\neffects = [\"read\"]\n" +
+			"\n  [[mcp_server.tool]]\n  name = \"scan\"\n  effects = [\"write\"]\n" +
+			"\n  [[mcp_server.tool]]\n  name = \"scan\"\n  effects = [\"read\"]\n",
+		// A budget on a pointer is a rule with nothing to apply it to:
+		// Atenea never sees the call, so the tools travel straight from the
+		// client to the server.
+		"tools without raw":   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntools = [\"scan\"]\n",
+		"effects without raw": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\neffects = [\"read\"]\n",
+		"tool block without raw": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\n" +
+			"\n  [[mcp_server.tool]]\n  name = \"scan\"\n  effects = [\"read\"]\n",
 	}
 	for name, block := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -490,14 +527,16 @@ func TestADeclaredMCPServerIsReadBack(t *testing.T) {
 	}
 }
 
-// expose is the field that separates a pointer from a passthrough, and the
-// two things worth pinning are the default and the fact that nothing acts on
-// it yet: a file written before the field existed must keep meaning what it
-// meant, and a file declaring raw must load without anything dispatching.
-func TestExposeDefaultsToPointerAndReadsBackRaw(t *testing.T) {
+// expose is the field that separates a pointer from a passthrough, and a raw
+// block carries the budget the passthrough is held to. What is worth pinning
+// is the default an older file inherits, the budget reading back whole, and
+// the catalog staying untouched by any of it.
+func TestExposeDefaultsToPointerAndReadsBackRawWithItsBudget(t *testing.T) {
 	body := minimal +
 		"\n[[mcp_server]]\nid = \"quiet\"\nurl = \"http://127.0.0.1:1/mcp\"\n" +
-		"\n[[mcp_server]]\nid = \"semgrep\"\nurl = \"http://127.0.0.1:40020/mcp\"\nexpose = \"raw\"\n"
+		"\n[[mcp_server]]\nid = \"semgrep\"\nurl = \"http://127.0.0.1:40020/mcp\"\nexpose = \"raw\"\n" +
+		"tools = [\"semgrep_scan\", \"semgrep_fix\"]\neffects = [\"read\"]\n" +
+		"\n  [[mcp_server.tool]]\n  name = \"semgrep_fix\"\n  effects = [\"read\", \"write\"]\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -505,11 +544,26 @@ func TestExposeDefaultsToPointerAndReadsBackRaw(t *testing.T) {
 	if got := cfg.MCPServers[0].Expose; got != config.ExposeOff {
 		t.Errorf("absent expose = %q, want %q", got, config.ExposeOff)
 	}
-	if got := cfg.MCPServers[1].Expose; got != config.ExposeRaw {
-		t.Errorf("declared expose = %q, want %q", got, config.ExposeRaw)
+	raw := cfg.MCPServers[1]
+	if raw.Expose != config.ExposeRaw {
+		t.Errorf("declared expose = %q, want %q", raw.Expose, config.ExposeRaw)
 	}
-	// The proof that nothing dispatches: a backend declared raw adds no
-	// capability and no implementation to the catalog it loaded beside.
+	if want := []string{"semgrep_scan", "semgrep_fix"}; !slices.Equal(raw.Tools, want) {
+		t.Errorf("tools = %v, want %v", raw.Tools, want)
+	}
+	// A tool with no block of its own causes what the server declared; one
+	// with a block causes what the block says. There is no third answer,
+	// which is what makes an undeclared effect impossible rather than
+	// merely discouraged.
+	if got := raw.EffectsOf("semgrep_scan"); !slices.Equal(got, []contract.Effect{contract.EffectRead}) {
+		t.Errorf("inherited effects = %v, want the server's read", got)
+	}
+	want := []contract.Effect{contract.EffectRead, contract.EffectWrite}
+	if got := raw.EffectsOf("semgrep_fix"); !slices.Equal(got, want) {
+		t.Errorf("narrowed effects = %v, want %v", got, want)
+	}
+	// A backend declared raw adds no capability and no implementation to the
+	// catalog it loaded beside: the two namespaces stay disjoint.
 	for _, c := range cfg.Capabilities {
 		if strings.HasPrefix(c.ID, contract.ReservedNamespace+".") {
 			t.Errorf("capability %s came from a declaration", c.ID)

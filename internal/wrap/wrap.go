@@ -48,6 +48,12 @@ type Checked struct {
 type Plan struct {
 	Declared []Checked
 	Refused  []Checked
+	// Held are the backends Atenea serves itself. They are checked and
+	// reported like the others and then deliberately kept out of every
+	// payload: a client pointed at a raw server would reach it directly,
+	// under no allow list and no effect check, which is the budget being
+	// routed around by the very command that is supposed to apply it.
+	Held []Checked
 }
 
 func toProbe(s config.MCPServer) mcpprobe.Server {
@@ -61,6 +67,10 @@ func toProbe(s config.MCPServer) mcpprobe.Server {
 // their timeouts, and the whole point is that this happens before a person
 // has finished reading the line that says it is happening.
 func Check(ctx context.Context, servers []config.MCPServer) Plan {
+	held := make([]bool, len(servers))
+	for i, s := range servers {
+		held[i] = s.Expose == config.ExposeRaw
+	}
 	probes := make([]mcpprobe.Server, len(servers))
 	results := make([]mcpprobe.Result, len(servers))
 	var wg sync.WaitGroup
@@ -77,17 +87,24 @@ func Check(ctx context.Context, servers []config.MCPServer) Plan {
 	var plan Plan
 	for i := range probes {
 		entry := Checked{Server: probes[i], Result: results[i]}
-		if results[i].OK {
+		switch {
+		// Held before reachable: a raw backend that is down is still one
+		// Atenea owns, and putting it in Refused would invite the reading
+		// that the client should be told about it after all.
+		case held[i]:
+			plan.Held = append(plan.Held, entry)
+		case results[i].OK:
 			plan.Declared = append(plan.Declared, entry)
-			continue
+		default:
+			plan.Refused = append(plan.Refused, entry)
 		}
-		plan.Refused = append(plan.Refused, entry)
 	}
 	// Sorted so two runs against the same machine produce the same payload
 	// and the same report. A diff between two wrap runs should be a change in
 	// the world, never a change in map iteration order.
 	sortByID(plan.Declared)
 	sortByID(plan.Refused)
+	sortByID(plan.Held)
 	return plan
 }
 
@@ -133,24 +150,23 @@ func (p Plan) OpenCodePayload() (string, error) {
 	return string(out), nil
 }
 
-// Report says what was declared and what was refused, in that order, before
-// the client takes the terminal.
+// Report says what happened, in the words the operator can act on.
 //
 // It prints even when everything worked. A check whose output only appears on
 // failure trains a reader to assume silence means it ran, and the failure
 // this replaces was itself silent.
 func (p Plan) Report(w io.Writer, client string) {
-	total := len(p.Declared) + len(p.Refused)
+	total := len(p.Declared) + len(p.Refused) + len(p.Held)
 	if total == 0 {
 		fmt.Fprintf(w, "wrap %s  no mcp_server declared in settings\n", client)
 		fmt.Fprintf(w, "  %s starts with its own configuration, unchanged.\n", client)
 		return
 	}
-	fmt.Fprintf(w, "wrap %s  %d checked: %d declared, %d refused\n\n",
-		client, total, len(p.Declared), len(p.Refused))
+	fmt.Fprintf(w, "wrap %s  %d checked: %d declared, %d refused, %d held\n\n",
+		client, total, len(p.Declared), len(p.Refused), len(p.Held))
 
 	width := 0
-	for _, group := range [][]Checked{p.Declared, p.Refused} {
+	for _, group := range [][]Checked{p.Declared, p.Refused, p.Held} {
 		for _, entry := range group {
 			width = max(width, len(entry.Server.ID))
 		}
@@ -166,6 +182,15 @@ func (p Plan) Report(w io.Writer, client string) {
 		// It is the only part of this report that is not already in the
 		// settings file, so it is the part that must not be clipped.
 		fmt.Fprintf(w, "  %-*s            %v\n", width, "", entry.Result.Err)
+	}
+	for _, entry := range p.Held {
+		fmt.Fprintf(w, "  held      %-*s  %-5s  %s%s\n",
+			width, entry.Server.ID, entry.Server.Transport(), entry.Server.Where(), who(entry.Result))
+		// Why it is not in the payload, at the row rather than in a
+		// footnote: an operator comparing this against their client's tool
+		// list needs the reason where the absence is.
+		fmt.Fprintf(w, "  %-*s            served as raw.%s.<tool>; %s is not pointed at it\n",
+			width, "", entry.Server.ID, client)
 	}
 	// Always printed, including the all-green run -- especially then. A
 	// report reading "5 declared, 0 refused" is the moment the word does the

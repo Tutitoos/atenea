@@ -362,8 +362,22 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
 	}
 	started := time.Now()
+	// What this tool was declared to cause, held against what this chat may
+	// authorize -- the same rule a capability crosses in Session.entitled,
+	// applied at the same boundary. Not a gate of its own: a second gate on
+	// the same seam is how the first one stops being load-bearing.
+	//
+	// It runs before the budget check inside Call, so a tool nobody may
+	// authorize is refused whether or not it was ever on the allow list. A
+	// refusal is filed like any other answer, because an attempt that was
+	// stopped is exactly what an audit is looking for.
+	effects := backend.declared.EffectsOf(tool)
+	if err := v.session.entitled(effects); err != nil {
+		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
+		return toolFailure(err.Error()), nil
+	}
 	result, err := backend.Call(ctx, tool, params.Arguments)
-	v.core.fileRawReceipt(v.session, params.Name, started, err)
+	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 	if err != nil {
 		// A backend's refusal is an answer, not a protocol error: the model
 		// asked for something real and can read why it did not work. The

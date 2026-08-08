@@ -1,6 +1,8 @@
 package contract_test
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -272,5 +274,42 @@ func TestParseEffectAndFieldType(t *testing.T) {
 	}
 	if _, err := contract.ParseFieldType("float"); err == nil {
 		t.Fatal("unknown field type should fail")
+	}
+}
+
+// A receipt records what a run was authorized to cause, and that record is
+// only worth writing if somebody can read it. Effect is a uint8, so the
+// default encoding of a list of them is base64 -- `"effects":"AAM="` was on a
+// real receipt before this existed.
+func TestEffectsAreWrittenAsNamesAndReadBackFromEither(t *testing.T) {
+	body, err := json.Marshal([]contract.Effect{contract.EffectRead, contract.EffectProcess})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if got, want := string(body), `["read","process"]`; got != want {
+		t.Fatalf("marshaled %s, want %s", got, want)
+	}
+	var back []contract.Effect
+	if err := json.Unmarshal(body, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !slices.Equal(back, []contract.Effect{contract.EffectRead, contract.EffectProcess}) {
+		t.Errorf("round trip = %v", back)
+	}
+	// A receipt written before the names existed is still a run somebody may
+	// need to read: the numbers it holds keep loading.
+	var old []contract.Effect
+	if err := json.Unmarshal([]byte(`[0,3]`), &old); err != nil {
+		t.Fatalf("older receipt: %v", err)
+	}
+	if !slices.Equal(old, []contract.Effect{contract.EffectRead, contract.EffectProcess}) {
+		t.Errorf("older receipt read as %v", old)
+	}
+	// A number nothing names is refused rather than read as some effect.
+	if err := json.Unmarshal([]byte(`[9]`), &old); err == nil {
+		t.Error("an unnamed effect number was accepted")
+	}
+	if err := json.Unmarshal([]byte(`["telepathy"]`), &old); err == nil {
+		t.Error("an unknown effect name was accepted")
 	}
 }

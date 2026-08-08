@@ -52,6 +52,33 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   this, a passthrough step and a step whose trace was lost read identically.
   A raw call files a receipt of its own, `kind = "raw"`, written closed
   because there is no plan to resume and nothing later can pick it up.
+- **A raw backend must declare `tools`, and only those are offered or
+  callable.** The allow list has no default and an empty one is refused. Both
+  readings of an absent list are defensible -- offer everything, offer nothing
+  -- which is exactly why neither may be guessed: one silently widens a
+  machine to whatever the backend ships next week, the other is a declaration
+  that does nothing. The list is enforced at the backend rather than by
+  whoever is listing, so a tool that never appeared on any list is still
+  refused when a client sends the name anyway.
+- **A raw backend must declare `effects`, and every call is held to them.**
+  Atenea cannot infer what somebody else's tool does: a backend's own list can
+  hold `execute_shell_command` beside `find_symbol`, and nothing in a name or
+  a schema says which is which. `effects` covers the server,
+  `[[mcp_server.tool]]` narrows it for one tool, and a tool with no block of
+  its own causes what the server declared -- so "undeclared" is not a state
+  that can reach a call.
+
+  The check is the one a capability already crosses, `Session.entitled`, not a
+  gate of passthrough's own: reading is free, anything else needs the chat's
+  grant. Measured against the live `semgrep` with two of its four tools
+  allowed: `get_supported_languages` answered, `semgrep_scan` was refused for
+  `process`, and `semgrep_rule_schema` was refused for being outside the list.
+  All three left a receipt carrying the effects they were measured against.
+- **A raw backend is held back from `atenea wrap`.** Every other declared
+  server is handed to the client so it can talk to the shared copy directly.
+  Doing that for a raw one points the client past the allow list and the
+  effects check -- the budget routed around by the command meant to apply it.
+  They are still probed and still reported, under a third heading, `held`.
 - **`expose = "raw"` on a `command` entry is refused.** Passthrough is
   HTTP-only: a stdio backend needs one process shared between chats, with
   fan-in over a single pipe and a lifecycle outliving any one chat, and that
@@ -65,6 +92,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - **An `[[mcp_server]]` id containing a dot is refused.** `raw.<id>.<tool>` can
   only be split back into a server and a tool while the id is one segment, so a
   name that could not be parsed later is refused when it is written.
+
+### Fixed
+
+- **A receipt's `effects` were written as base64.** `contract.Effect` is a
+  `uint8`, so a list of them is a `[]byte` to `encoding/json` and a real
+  receipt read back `"effects":"AAM="` -- a record of what a run was
+  authorized to cause, in a form nobody can audit, which is the only reason
+  the field is written down. They now marshal as their names and unmarshal
+  from either, so receipts filed before this still load.
 
 ## [0.9.1] - 2026-08-08
 
