@@ -159,6 +159,21 @@ is deliberate until something needs the second: a per-step funnel trace on
 every receipt is a durable copy of a decision that is already derivable from
 the two records beside it, and it grows with every step ever run.
 
+Something now needs the second, and it arrives with a neighbour. Passthrough
+below introduces steps that have no funnel at all, because a single provider
+leaves nothing to choose between. A step whose trace was never kept and a step
+that never had a trace would then both read as an absent one, and the reader
+would have no way to tell a missing record from a decision that never happened.
+So whenever this is written, it is written as **one field with three states** --
+the trace, kept; not kept; or none, because the step was passthrough -- and it
+lands in the same change as the passthrough marker rather than beside it. Two
+adjacent explanations for the same silence is the drift this page exists to
+catch.
+
+**Done when:** a receipt read back names the candidates dropped at each stage of
+the run that produced it, and a passthrough step in the same file is
+distinguishable from a step whose trace was not kept.
+
 ## History is declared and never loaded
 
 `ContextHistory` — *"what happened in earlier sessions: user decisions and facts
@@ -240,6 +255,212 @@ semantic left standing, only literal grep.
 commission has hit its `budget_usd` ceiling with `claude.search` still
 having work left to do — both at once, not either alone, and not "the
 system feels settled."
+
+## Every client declares its own servers, and Atenea offers seven tools
+
+This entry is not from the twenty-eight sheets. It is a later goal, written down
+on 2026-08-08 with the machine measured rather than assumed, because it is the
+first thing asked of Atenea that its central principle does not obviously allow.
+
+The measurement first. On this machine there are **eight MCP servers and
+thirty-four declarations of them** across five client configuration files:
+`chrome-devtools` (29 tools, the only one every client agrees on), `serena` (30),
+`codebase-memory` (8 cold, 14 warm), `semgrep` (4 filtered over HTTP, 7 raw over
+stdio), `context7` (2, and `omp` talks to 3.2.5 while everyone else talks to
+4.0.0), `headroom` (3), `claude-mem`, and a second `serena` on `:9121` that only
+Atenea's own settings declare. A client sees between 43 and 85 tools depending on
+which one it is. Atenea offers **seven**. Six `codebase-memory` processes were
+running at once, one per client session, beside a seventh that a hand-written
+shim keeps alive for its web UI with a replayed `initialize` and a FIFO -- so
+somebody already needed one shared instance and solved it once, for one server,
+outside Atenea.
+
+The goal is that a client declares Atenea and nothing else. Nine tools of fifty
+have a capability and an adapter, so the question is what happens to the rest,
+and the answer cannot be "write forty capabilities": most of those tools have
+exactly one provider and nothing to choose between, and a capability whose funnel
+can only ever pick one thing is a ceremony.
+
+So: a second mode. A declared backend server, one shared instance of it, its
+tools re-exposed verbatim through the same socket, with no funnel and no
+capability. The honest objection is that this is a proxy wearing an
+orchestrator's name, and it is the right objection -- a proxy forwards
+everything, and the day passthrough is the easy path is the day capabilities stop
+being written.
+
+What makes it coherent is that Atenea already started this and stopped halfway.
+`[[mcp_server]]` exists in the settings file today, keyed by `id`, `url` XOR
+`command`, a repeated `id` refused rather than resolved -- and its own
+documentation says why it exists: endpoints `atenea wrap` hands to *someone
+else's* client "so that client stops spawning a private copy of a server that is
+already running." The problem is already named in the design. `wrap` chose the
+weaker remedy: tell the client where the shared copy lives, then step out of the
+path. That removes duplicate processes and leaves thirty-four declarations in
+five files. This entry is the stronger remedy, and it is the same list gaining a
+dispatch path rather than a new mechanism beside it.
+
+Four conditions keep it from becoming the proxy, and they belong in the code that
+loads the catalogue, not in this page:
+
+1. **The two namespaces are disjoint and unreachable from each other.** A
+   capability call can never be answered by a passthrough server, and a
+   passthrough tool can never be selected for a capability.
+2. **No funnel, said out loud.** A passthrough step records that it had no funnel
+   because it is passthrough -- never an empty one. See the entry above: a step
+   whose funnel was not kept and a step that never had one must not read the same.
+3. **A capability shadows its own raw tools.** The day a second implementation of
+   `code.search` arrives through a backend, the raw tool stops being offered, and
+   a check fails the build if both are live -- so passthrough cannot quietly
+   become the permanent answer to something that deserves a capability.
+4. **Passthrough never feeds the measurement base as an implementation.** Its
+   latency is an operational fact, not evidence in a decision, because there is
+   no competitor for it to be evidence against.
+
+### How a passthrough server is declared
+
+The existing block gains an exposure mode and a lifecycle, and keeps every
+refusal it already has:
+
+```toml
+[[mcp_server]]
+id = "codebase-memory"
+command = ["codebase-memory-mcp", "--ui=true"]
+expose = "raw"          # off, today's behaviour: wrap only, nothing dispatches
+instance = "shared"     # shared, per_repository, per_chat
+tools = ["search_code", "search_graph", "trace_path"]   # deny by default
+effects = ["read"]      # undeclared is `unknown`, and `unknown` is refused
+```
+
+`tools` is an allow list and the default is empty, so a newly declared server
+offers nothing until someone names what it may offer. That is the whole answer to
+the surface: `chrome-devtools` is eight tools or twenty-nine by one edit in one
+file, which is what five client configs have been trying and failing to hold in
+agreement.
+
+### Names, and a collision that is invisible from a tool list
+
+Capability ids are dotted, and so are implementation ids: the base is keyed by
+`capability, implementation, repository`, and today's implementations are
+`ripgrep`, `claude.search`, `serena.definition`, `codebase-memory.impact`. So
+`serena.find_symbol` is not merely ugly, it is ambiguous with an implementation id
+in every receipt and every metrics row. Passthrough tools take a reserved first
+segment -- `raw.serena.find_symbol` -- and loading refuses `raw.` as the first
+segment of any capability or implementation id, and refuses a server id
+containing a dot. Two backends both exposing `search_code` stop colliding by
+construction, because the server id is in the name.
+
+### Permissions, for a tool Atenea does not understand
+
+Atenea cannot know what a raw tool does, and that serena list contains
+`execute_shell_command` and `replace_in_files`. So effects are **declared** per
+server, and per tool where a server mixes them; undeclared means `unknown`, and
+`unknown` is refused unless a client holds a grant naming that server. The
+refusal happens in `commissioned`, the one wrapper everything already crosses --
+passthrough does not get a gate of its own, because a second gate on the same
+seam is how the first one stops being load-bearing. `grounded` applies only when
+a raw call names a repository, which most will not, and inventing the parameter
+so the check has something to read would be worse than not checking.
+
+### Receipts, for a payload Atenea cannot read
+
+Recordable: the tool name, the backend's own name and version from its
+handshake, the duration, the transport verdict, whether the payload came back
+flagged as an error, and which chat asked. Not recordable, and each one has to be
+*said* rather than left to look like an absence: no discoveries, because nothing
+here can interpret an opaque result and a silent omission is indistinguishable
+from a tool that found nothing; no cost unless declared.
+
+And health from transport failures only. A tool-level error is usually the
+caller's fault -- `invalid_input: unknown input field` is a client sending a key
+the schema does not have -- and feeding those into a provider's health record
+would condemn a working server for a client's mistake. That is the same defect
+that shipped in `0.9.1`: a missing working directory blamed on the binary.
+
+### One shared instance, which is the hard part
+
+An HTTP backend already serves many sessions. A stdio backend is one duplex pipe
+with per-connection state, so fan-in needs request ids remapped per chat,
+responses routed back to the chat that asked, a decision about what happens to
+server-initiated notifications, and a lifetime longer than any one chat --
+which is what the supervisor with `EnsureReady` and `Acquire`/`Release` already
+does for adapters, and is the reason this is an extension rather than a new
+subsystem.
+
+The trap is state that belongs to the connection, and the machine already proves
+it: serena's `activate_project` is process-wide, which is exactly why a second
+serena runs on `:9121` for one repository. Two chats sharing one instance would
+fight over the active project. So the policy is per server and never global:
+
+- **`shared`** -- stateless, or state that is globally consistent:
+  `codebase-memory`, `semgrep`, `context7`.
+- **`per_repository`** -- the state *is* the project: `serena`. This generalises
+  the `:9121` special case into a rule instead of a second machine-level
+  exception.
+- **`per_chat`** -- the state is the conversation. Saves no processes, but keeps
+  the server declared in one file instead of five.
+
+A backend's tool list is also not a constant: `codebase-memory` advertises eight
+tools cold and fourteen once its store is open, the extra six being the
+project-lifecycle ones. Passthrough lists per session and forwards
+`tools/list_changed`; a snapshot taken at declaration time would be wrong on this
+machine today.
+
+### What cannot move, so the goal is Atenea plus two
+
+`headroom` compresses *this session's* tool output and hands back a hash to
+retrieve later: its state is the session, and centralising it either leaks one
+chat's content into another's retrieve or needs a session key Atenea cannot
+originate. `claude-mem` reads the client's own transcript directory, config dir
+and working directory; it is a function of the client's private context. Both
+stay client-declared, and "clients declare Atenea and nothing else" is therefore
+false by two -- said here so the plan is not measured against a target it was
+never going to reach.
+
+Also out of reach in any mode: the client's own built-in file, edit and shell
+tools, which are not MCP and never route here; and argument shapes that mean
+different things depending on whose working directory is the truth --
+`semgrep_scan` wants an absolute path inside its own mounts while
+`semgrep_scan_with_custom_rule` wants a relative one, and once Atenea holds the
+instance it is Atenea's roots that decide, not the caller's.
+
+### Decisions taken on 2026-08-08, so they are not re-litigated
+
+- **One shared `context7` credential is accepted.** It completed a Dynamic Client
+  Registration and now holds a refresh token, so a shared instance means one
+  identity for every chat -- and the socket admits only the owning uid, so "every
+  chat" already means "this operator's chats."
+- **Serena stays the host process.** When phase 5 gives Atenea the lifecycle, the
+  systemd units move in the *same* change, so there is never a moment with two
+  owners of the same server.
+- **Curated by default, deny by default, per server.**
+- **`chrome-devtools` is shared and the interference is documented:** one browser
+  is the point, but a tab is per-session and two chats will steal each other's
+  selected page. **Revisit the first time two chats actually collide** -- that is
+  the trigger, not a feeling that it might happen.
+
+### The order, and what proves each step
+
+1. Namespace and its refusals; `expose` parsed and nothing dispatched. Proven by
+   a settings file that fails to load for each of the three collisions.
+2. HTTP passthrough, `shared`, on `semgrep` -- with the no-funnel marker landing
+   together with the receipt gap above, not after it.
+3. Declared effects, and `unknown` refused without a grant. Proven the way the
+   undeclared key already is: a real client refused over the wire.
+4. stdio fan-in on `codebase-memory`. Proven by process count -- six to one --
+   with two chats attached at once and the fourteen-tool surface intact.
+5. `per_repository` on serena, folding `:9121` in, units included.
+6. `chrome-devtools` with its allow list, and per-client filtering deleted.
+7. Clients cut over one at a time, `wrap` extended to emit the reduced config.
+   Thirty-four declarations become five, plus `headroom` and `claude-mem`.
+
+A new tool namespace and a new receipt shape are additive, so this is a contract
+minor -- `2.3.0` -- and no adapter changes. It is not a `1.0.0` conversation.
+
+**Done when:** a client's configuration names `atenea`, `headroom` and
+`claude-mem` and nothing else; `pgrep -c codebase-memory-mcp` reports one with
+two chats attached; and a raw call that Atenea cannot interpret still leaves a
+receipt that says, in its own field, that it had no funnel because it never had a
+choice.
 
 ## What is not missing
 
