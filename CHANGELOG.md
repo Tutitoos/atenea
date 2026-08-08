@@ -13,7 +13,7 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.10.0] - 2026-08-08
 
 `pkg/contract` bumped to `3.0.0`. Like `2.0.0` it is a removal, not an
 addition: `Repository.SerenaEndpoint` is gone, so an adapter that named it
@@ -1906,6 +1906,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.10.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.0
 [0.9.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.8.0

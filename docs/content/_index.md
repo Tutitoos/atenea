@@ -31,8 +31,8 @@ what it knows about the repository in front of it.
 
 ## Where the project stands
 
-**These pages describe Atenea `0.9.1`**, speaking
-contract `2.3.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
+**These pages describe Atenea `0.10.0`**, speaking
+contract `3.0.0`. The product is in alpha at `0.x.y` and reaches `1.0.0` when it
 goes stable; the contract adapters compile against is already a commitment. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.
