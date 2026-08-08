@@ -173,22 +173,67 @@ func (s *Session) Close() { s.core.Close(s.id) }
 // is entitled to know. In between, the run is the same run, written to the
 // same shared history: the learning is common, the reach is not.
 func (s *Session) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Result, error) {
-	for _, effect := range task.Effects {
-		if !s.Allows(effect) {
-			// Refused, not asked. A chat asking for more than it holds is the
-			// moment to go back to the user, and the core has no user: the
-			// client that opened the chat does.
-			return nil, contract.Fail(contract.FailurePermissionDenied,
-				"session %s may not authorize %s", s.id, effect)
-		}
+	if err := s.entitled(task.Effects); err != nil {
+		return nil, err
 	}
 	task.Session = s.id
 	s.runs.Add(1)
 	result, err := s.core.Do(ctx, task)
-	if result != nil {
-		result.Discoveries = s.readable(result.Discoveries)
-	}
+	s.told(result)
 	return result, err
+}
+
+// Ask dispatches one capability against one repository on this chat's behalf.
+//
+// It is Do's isolation applied to the shape a tools/call arrives in, through
+// the same two halves rather than a second copy of them. Core.Ask is the
+// console's door and trusts the effects it is handed, because somebody standing
+// at a terminal IS the user and there is nobody above them to ask. A chat is
+// not: what it may authorize was decided when it was opened, and a client
+// speaking for one has to be held to it.
+//
+// The gate on the dispatch path does not cover this. That one refuses a
+// capability whose effects the COMMISSION does not cover -- and the commission
+// is built from what the caller asked for, so it compares a request with
+// itself. What a chat is ENTITLED to ask for is only known here.
+func (s *Session) Ask(ctx context.Context, q orchestrator.Question) (*orchestrator.Result, error) {
+	if err := s.entitled(q.Effects); err != nil {
+		return nil, err
+	}
+	q.Session = s.id
+	s.runs.Add(1)
+	result, err := s.core.Ask(ctx, q)
+	s.told(result)
+	return result, err
+}
+
+// entitled refuses an effect this chat was not granted.
+//
+// Refused, not asked. A chat asking for more than it holds is the moment to go
+// back to the user, and the core has no user: the client that opened the chat
+// does.
+func (s *Session) entitled(effects []contract.Effect) error {
+	for _, effect := range effects {
+		if !s.Allows(effect) {
+			return contract.Fail(contract.FailurePermissionDenied,
+				"session %s may not authorize %s", s.id, effect)
+		}
+	}
+	return nil
+}
+
+// told withholds from a result what this chat has no right to read.
+//
+// Shared with Do rather than repeated, and deliberately: what an Ask discovers
+// comes from the runner reporting on its own answer, which no runner in this
+// repository does yet, so a copy here would be a copy nothing exercises -- and
+// the first adapter that does report would find out whether the copy had drifted
+// by leaking a fact to a chat that may not read it.
+func (s *Session) told(result *orchestrator.Result) {
+	if result == nil {
+		return
+	}
+	result.Discoveries = s.readable(result.Discoveries)
 }
 
 // readable drops what this chat has no right to read.

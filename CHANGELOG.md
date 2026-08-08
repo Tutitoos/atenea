@@ -15,6 +15,22 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Added
+
+- **A chat can dispatch one capability, not only a whole commission.**
+  `Session.Ask` is `Session.Do`'s isolation applied to the shape a single
+  `tools/call` arrives in: what the chat may authorize going in, what it may be
+  told coming out, and the run attributed to it on the receipt. `Core.Ask`
+  already took that shape but is the console's door -- it trusts the effects it
+  is handed, because somebody standing at a terminal is the user and there is
+  nobody above them to ask. A client speaking for a chat is not, and until now
+  it had no door of its own.
+
+  The two halves are shared with `Do` rather than copied. The gate on the
+  dispatch path does not cover this and never did: it refuses a capability whose
+  effects the *commission* does not cover, and the commission is built from what
+  the caller asked for -- so it compares a request with itself.
+
 ### Fixed
 
 - **A chat could not be granted `process`, so no chat could run `code.search`.**
