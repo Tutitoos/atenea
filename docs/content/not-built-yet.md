@@ -229,3 +229,27 @@ What makes it bind was already there: `commissioned` wraps the attached runner
 and refuses any step whose permission does not carry an effect its capability
 declares. Both grants rest on that one wrapper, which is why neither of them
 needed a check of its own.
+
+## What the proof settled, on 2026-08-08
+
+Every one of the eight shipped capabilities has now been answered over MCP by a
+real client against this repository, in one session: `code.search`,
+`code.impact`, `repository.index`, `symbol.calls` and all four symbol
+capabilities. Before this, one tool of the eight had ever been called that way.
+
+Two clients were connected at the same moment and both appeared on `atenea
+status`, each with its own session id and its own run count -- the isolation the
+code says is only visible on that screen. Their receipts carry a chat apiece,
+and the funnel handed the same capability to different implementations for the
+two of them, which is the break-in rotation spreading measurements rather than
+anything going wrong. A terminal ask leaves a receipt with no chat at all, which
+is correct: nobody opened one.
+
+Three defects came out of it, all in the reporting rather than the machinery,
+and all in the CHANGELOG: a fresh settings file that classified its own
+repository and cost two capabilities, a metrics table that split rows by a
+column it never printed, and a status caption that counted a measurement the
+funnel did not yet believe. The run also spent real money -- one `code.search`
+went to Claude Code for $0.1286 of its $0.25 ceiling -- and that landed on the
+receipt with its ceiling beside it, which is what the adapter's own comment
+said had to happen.

@@ -266,6 +266,13 @@ at which point the estimates in the settings file stop mattering for that
 repository. A provider the file guessed was expensive can win here, and that
 is the entire point of handing out those turns.
 
+`atenea status` counts the same threshold in its funnel caption: an
+implementation is measured there once it has enough successful calls for its own
+numbers to be believed over its declared estimate, which is two -- one can be a
+cold cache. That is why a caption saying nothing is measured yet can sit above a
+base that already has rows in it, and why the caption and the reason on `select`
+never disagree.
+
 What a step *charged*, if anything did, is not in there. Money is never one of
 the axes the funnel ranks on, so it stays out of the base and goes on the
 receipt instead: a `charged` line on the summary when a run cost anything, the
@@ -538,10 +545,16 @@ atenea metrics             # per capability, implementation and repository
 ```
 
 ```text
-capability         implementation         repository      tries   failed   priced       each      worst
-code.search        ripgrep                current           113        9      104  966.738ms   3.25242s
-code.search        claude.search          current             3        0        3 1m19.557393s 2m32.638458s
+capability      implementation  repository version                    tries   failed   priced       each      worst
+code.search     ripgrep         current    omp/17.2.10                  113        9      104  966.738ms   3.25242s
+code.search     claude.search   current    2.1.220 (Claude Code)          3        0        3 1m19.557393s 2m32.638458s
 ```
+
+`version` is the version of the tool behind the implementation, and it is part
+of the key rather than decoration: yesterday's numbers for yesterday's binary
+are history, not a baseline. One implementation therefore appears once per
+version it was measured at, and an attempt refused before the far side ever ran
+shows a `-` there, because nobody could ask it what it was.
 
 A provider that returned hits outside the scope it was asked for gets a line of
 its own below the table. That number is recorded and never ranked on: a
@@ -608,7 +621,7 @@ The status screen only mentions it when there is something to mention:
 
 ```text
 atenea 0.8.0  contract 2.2.0  AMBER
-funnel    constraints -> reach -> health -> cost (measured for 8 of 10 implementations, the rest on declared estimates)
+funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```
 

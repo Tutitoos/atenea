@@ -630,6 +630,13 @@ the previous call was on a different project; a set URL keeps that repository
 on its own warm Serena process so alternating repos does not tear language
 servers down.
 
+The example above is a repository somebody classified. The shipped file is not:
+it leaves `scale` empty, because a fresh install has measured nothing and a
+guess is not free. Writing `small` there drops every implementation that asks
+for a medium repository or bigger -- on this catalog that is `symbol.calls` and
+`code.impact`, which then look unimplemented rather than unclassified. Set it
+once you know, and the two come back.
+
 `indexed_by` is a starting point the operator typed by hand, not a live
 fact -- a settings file does not watch the disk, so it can drift the moment
 an index is built or lost after the file was last edited. `atenea detect

@@ -156,6 +156,41 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   so the next effect added cannot repeat it, and a test walks every effect the
   contract declares rather than a list retyped in the test.
 
+- **A fresh settings file classified its repository `small`, and two
+  capabilities were unreachable because of it.** The shipped `[[repository]]`
+  wrote `scale = "small"` -- a size nobody had measured, on a repository the
+  file had just invented -- while `vcs` on the line below correctly shipped
+  unspecified with a comment saying why. `symbol.calls` and `code.impact` are
+  the two implementations that ask for a medium repository or bigger, so both
+  were dropped on day one. The funnel reported the drop accurately, which made
+  them look unimplemented rather than unclassified. The settings page had
+  already written the rule being broken: an unknown fact is not a proven
+  mismatch, and dropping candidates over one silently empties the funnel.
+  `scale` now ships empty, and a test asserts the shipped repository classifies
+  nothing and that no shipped implementation is dropped over a size nobody
+  measured.
+
+- **`atenea metrics` printed one implementation on two rows without saying what
+  split them.** The base keys on the tool version on purpose -- yesterday's
+  numbers for yesterday's binary are history, not a baseline -- and the table
+  never had that column, so the same capability, implementation and repository
+  appeared twice with no visible reason. An attempt refused before the far side
+  ran has no version at all, which is exactly when the duplicate shows up. The
+  version is now a column, `-` when there is none. The columns were also fixed
+  widths guessed before the catalog existed: `symbol.implementations` and
+  `codebase-memory.overview` both outgrew theirs and shifted every row six
+  characters off its header. Widths now come from the rows.
+
+- **The status screen counted one call as a measurement while every decision
+  below it said `estimated`.** The funnel does not believe an implementation's
+  own numbers over its declared estimate until it has two of them -- one can be
+  a cold cache -- but the caption counted any implementation with a single
+  successful call. On a machine part-way through its break-in that printed
+  `measured for 10 of 11 implementations` above traces that all read
+  `(estimated)`, which is precisely the misunderstanding the measurement base
+  exists to prevent. The count now uses the funnel's own threshold, so the two
+  answer the same question.
+
 ## [0.8.0] - 2026-08-07
 
 ### Added
