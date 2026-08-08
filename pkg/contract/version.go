@@ -150,7 +150,20 @@ type Version struct {
 // generated schema cannot infer it, and finds the edge by being refused. A
 // refusal is a round trip and a confused caller, so the set is now declared
 // where a schema can carry it rather than only where a person can read it.
-var Current = Version{Major: 2, Minor: 1, Patch: 0}
+//
+// 2.2.0 added `Capability.InputSchema` and `Capability.OutputSchema`, which
+// state a capability's declared shape as JSON Schema. Additive: an adapter
+// built against 2.1.0 goes on compiling and simply never calls them.
+//
+// The generator existed before this, inside the Claude Code adapter, wired to
+// the outputs because a model has to be told what form to answer in. Only
+// half the reason was ever adapter-specific. The other half is that a caller
+// building a request needs the same statement about the inputs, and the one
+// place that can honestly make it is the package that also refuses the
+// payload: `ValidateInput` and `InputSchema` are one declaration read in two
+// directions, and a schema that advertises a shape the validator then rejects
+// is worse than none, because the caller did as it was told.
+var Current = Version{Major: 2, Minor: 2, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

@@ -17,6 +17,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A capability can state its own shape as JSON Schema, on both sides**
+  (contract `2.1.0` -> `2.2.0`). `Capability.InputSchema` and
+  `Capability.OutputSchema` turn the declaration into the one form a caller who
+  has not sent a payload yet can act on -- a model being asked to fill in a
+  form, or a client reading a tool list.
+
+  The generator already existed inside the Claude Code adapter, wired to the
+  outputs, because a model has to be told what form to answer in. Only half of
+  that reason was ever adapter-specific: a caller building a *request* needs
+  the same statement about the inputs, and the only place that can honestly
+  make it is the package that also refuses the payload, so `ValidateInput` and
+  `InputSchema` are now one declaration read in two directions, in one package.
+
 - **A chat can dispatch one capability, not only a whole commission.**
   `Session.Ask` is `Session.Do`'s isolation applied to the shape a single
   `tools/call` arrives in: what the chat may authorize going in, what it may be

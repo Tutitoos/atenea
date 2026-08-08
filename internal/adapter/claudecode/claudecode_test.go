@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	osexec "os/exec"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -207,97 +206,34 @@ func TestTheCommissionDecidesWhichToolsExist(t *testing.T) {
 }
 
 // A far side that thinks answers in whatever it was asked for, so the asking
-// has to be exact. The shape is the capability's own, transcribed.
-func TestTheSchemaIsTheCapabilitysOwnShape(t *testing.T) {
-	encoded, err := jsonSchema(codeSearch().Outputs)
+// has to be exact -- and it has to be the ANSWER shape. The schema itself is
+// the contract's, tested there; what belongs here is that this adapter hands
+// the CLI the outputs and not the inputs, encoded the one way the flag takes.
+func TestTheSchemaFlagCarriesTheCapabilitysAnswerShape(t *testing.T) {
+	runner := newTestRunner(t)
+	req := request(t, map[string]any{"query": "x"}, contract.EffectRead)
+	args, err := runner.args(req, newSearch(t, req.Payload))
 	if err != nil {
-		t.Fatalf("jsonSchema: %v", err)
-	}
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(encoded), &schema); err != nil {
-		t.Fatalf("the schema is not valid JSON: %v", err)
-	}
-	if schema["type"] != "object" {
-		t.Fatalf("top level is %v, want an object", schema["type"])
-	}
-	required, _ := schema["required"].([]any)
-	if len(required) != 1 || required[0] != "matches" {
-		t.Errorf("required = %v, want just matches", required)
+		t.Fatalf("args: %v", err)
 	}
 
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(flagValue(t, args, "--json-schema")), &schema); err != nil {
+		t.Fatalf("the flag did not carry valid JSON: %v", err)
+	}
 	properties, _ := schema["properties"].(map[string]any)
-	matches, _ := properties["matches"].(map[string]any)
-	if matches["type"] != "array" {
-		t.Fatalf("matches is %v, want an array", matches["type"])
+	if _, isOutput := properties["matches"]; !isOutput {
+		t.Fatalf("properties = %v, want the answer shape", properties)
 	}
-	item, _ := matches["items"].(map[string]any)
-	fields, _ := item["properties"].(map[string]any)
-	for name, want := range map[string]string{
-		"path": "string", "line": "integer", "column": "integer", "snippet": "string",
-	} {
-		entry, _ := fields[name].(map[string]any)
-		if entry["type"] != want {
-			t.Errorf("%s is %v, want %s", name, entry["type"], want)
-		}
-	}
-	itemRequired, _ := item["required"].([]any)
-	if len(itemRequired) != 3 {
-		t.Errorf("required per match = %v, want path, line and column", itemRequired)
+	if _, isInput := properties["query"]; isInput {
+		t.Error("the far side was asked to fill in the inputs")
 	}
 	// A field's summary is the only place the capability says what it MEANS,
 	// and it is the one thing a model reads that a parser would not.
+	item, _ := properties["matches"].(map[string]any)["items"].(map[string]any)
+	fields, _ := item["properties"].(map[string]any)
 	if got, _ := fields["path"].(map[string]any); got["description"] != "Where it is." {
 		t.Errorf("the field summary did not travel: %v", got)
-	}
-}
-
-// A closed set is the one piece of a field a model cannot infer from prose.
-// It has to reach the schema, and for a list it belongs on the element rather
-// than on the array -- a set says which words may appear, never how many.
-func TestAClosedSetReachesTheSchemaOnTheNodeThatHoldsTheValue(t *testing.T) {
-	encoded, err := jsonSchema([]contract.Field{
-		{
-			Name: "direction", Type: contract.TypeString, Required: true,
-			Enum: []string{"incoming", "outgoing", "both"},
-		},
-		{Name: "kinds", Type: contract.TypeStringList, Enum: []string{"function", "method"}},
-		{Name: "status", Type: contract.TypeString},
-	})
-	if err != nil {
-		t.Fatalf("jsonSchema: %v", err)
-	}
-	var schema struct {
-		Properties struct {
-			Direction struct {
-				Enum []string `json:"enum"`
-			} `json:"direction"`
-			Kinds struct {
-				Enum  []string `json:"enum"`
-				Items struct {
-					Enum []string `json:"enum"`
-				} `json:"items"`
-			} `json:"kinds"`
-			Status struct {
-				Enum []string `json:"enum"`
-			} `json:"status"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal([]byte(encoded), &schema); err != nil {
-		t.Fatalf("the schema is not valid JSON: %v", err)
-	}
-	if got := schema.Properties.Direction.Enum; !slices.Equal(got, []string{"incoming", "outgoing", "both"}) {
-		t.Errorf("direction enum = %v, want the declared three", got)
-	}
-	if got := schema.Properties.Kinds.Items.Enum; !slices.Equal(got, []string{"function", "method"}) {
-		t.Errorf("list element enum = %v, want the declared two", got)
-	}
-	if got := schema.Properties.Kinds.Enum; got != nil {
-		t.Errorf("the array itself carries an enum (%v); it constrains elements, not length", got)
-	}
-	// A field with no declared set must stay open in the schema too, or every
-	// provider's own wording becomes a schema violation.
-	if got := schema.Properties.Status.Enum; got != nil {
-		t.Errorf("an undeclared set appeared as %v", got)
 	}
 }
 

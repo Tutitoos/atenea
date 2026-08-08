@@ -353,7 +353,7 @@ func tools(permission contract.Permission) []string {
 
 // args builds the command line.
 func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
-	schema, err := jsonSchema(req.Capability.Outputs)
+	schema, err := outputSchema(req.Capability)
 	if err != nil {
 		return nil, err
 	}
@@ -589,98 +589,24 @@ func failureFor(message string, runErr error) *contract.Failure {
 // Translating out
 // ---------------------------------------------------------------------------
 
-// jsonSchema turns a capability's declared output shape into the JSON Schema
-// Claude Code validates its structured answer against.
+// outputSchema is the capability's declared answer shape as a JSON string,
+// which is the only form the CLI's --json-schema flag takes.
 //
-// This is the load-bearing half of talking to a far side that thinks. A tool
-// answers in whatever format it answers in and the adapter parses it; a model
-// answers in whatever it was asked for, so asking precisely is the difference
-// between an answer and an essay. The capability already declares the shape,
-// so nothing is invented here -- it is transcribed.
-func jsonSchema(fields []contract.Field) (string, error) {
-	root, err := objectSchema(fields)
+// The shape itself belongs to the contract, next to the validator that judges
+// the answer coming back: this adapter asks a far side to fill in a form and
+// then checks the form, and those two had better be the same form. All that is
+// left here is the encoding.
+func outputSchema(capability contract.Capability) (string, error) {
+	root, err := capability.OutputSchema()
 	if err != nil {
 		return "", err
 	}
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		return "", contract.Fail(contract.FailureInvalidInput,
-			"output schema cannot be expressed as JSON Schema: %v", err)
+			"output schema cannot be expressed as JSON: %v", err)
 	}
 	return string(encoded), nil
-}
-
-func objectSchema(fields []contract.Field) (map[string]any, error) {
-	properties := make(map[string]any, len(fields))
-	required := make([]string, 0, len(fields))
-	for _, field := range fields {
-		entry, err := fieldSchema(field)
-		if err != nil {
-			return nil, err
-		}
-		properties[field.Name] = entry
-		if field.Required {
-			required = append(required, field.Name)
-		}
-	}
-	out := map[string]any{"type": "object", "properties": properties}
-	if len(required) > 0 {
-		out["required"] = required
-	}
-	return out, nil
-}
-
-func fieldSchema(field contract.Field) (map[string]any, error) {
-	var out map[string]any
-	switch field.Type {
-	case contract.TypeString:
-		out = map[string]any{"type": "string"}
-		enumInto(out, field)
-	case contract.TypeInt:
-		out = map[string]any{"type": "integer"}
-	case contract.TypeBool:
-		out = map[string]any{"type": "boolean"}
-	case contract.TypeStringList:
-		items := map[string]any{"type": "string"}
-		// The set constrains each element, not the list: a string_list enum
-		// says which words may appear, never how many.
-		enumInto(items, field)
-		out = map[string]any{"type": "array", "items": items}
-	case contract.TypeRecord:
-		nested, err := objectSchema(field.Fields)
-		if err != nil {
-			return nil, err
-		}
-		out = nested
-	case contract.TypeRecordList:
-		nested, err := objectSchema(field.Fields)
-		if err != nil {
-			return nil, err
-		}
-		out = map[string]any{"type": "array", "items": nested}
-	default:
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"field %s has a type this adapter cannot describe: %s", field.Name, field.Type)
-	}
-	if field.Summary != "" {
-		// The summary is the only place the capability says what a field
-		// MEANS. A far side that reads it fills the field correctly; one that
-		// does not was going to guess anyway.
-		out["description"] = field.Summary
-	}
-	return out, nil
-}
-
-// enumInto copies a declared set onto the schema node that holds the value.
-//
-// A copy, not the slice itself: this map is marshaled and handed out, and a
-// caller that sorted it in place would be reordering the registry's own
-// capability.
-func enumInto(node map[string]any, field contract.Field) {
-	if len(field.Enum) == 0 {
-		return
-	}
-	node["enum"] = slices.Clone(field.Enum)
 }
 
 // prompt is what the far side is actually told.
