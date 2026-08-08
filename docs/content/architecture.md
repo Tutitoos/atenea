@@ -947,6 +947,19 @@ path, which meant an adapter supplied from outside this repository enforced
 nothing at all unless its author happened to copy them. Everything below money
 rests on this one wrapper, so it is the core that holds it.
 
+A second wrapper sits beside it for the same reason, and its bug is the
+argument for the placement. `grounded` refuses a step whose repository path is
+not a directory on this machine. Every adapter turns that path into its child's
+working directory, and Go reports a missing `cmd.Dir` by naming the *binary*:
+one wrong line in the settings file produced `omp could not be started:
+fork/exec /home/me/.local/bin/omp: no such file or directory` for an `omp` that
+was installed and had answered two other steps in the same wave. Worse, it
+arrived in the `unavailable` bin, which is the bin that condemns a provider --
+health went down for `code.search` everywhere and the next wave failed on
+repositories that had nothing wrong with them. Filed as `invalid_input` it
+names the directory, spawns nothing, and leaves the health record alone, which
+is the honest reading: the settings file is wrong and the provider is not.
+
 ### The client floor
 
 The standing grant answers "what may this machine's work do". It used to

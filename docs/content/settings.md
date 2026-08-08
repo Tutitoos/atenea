@@ -639,6 +639,15 @@ the previous call was on a different project; a set URL keeps that repository
 on its own warm Serena process so alternating repos does not tear language
 servers down.
 
+`path` has to be a directory that is really there. Every adapter makes it the
+working directory of the tool it launches, and a missing one used to come back
+as `omp could not be started: fork/exec /home/me/.local/bin/omp: no such file
+or directory` -- Go names the binary when it cannot enter `cmd.Dir`, so the one
+thing that was fine got the blame. A step against a repository that is not on
+the disk is now refused before anything is spawned, named at the directory, and
+filed as `invalid_input`: a bin the measurement base ignores, so a typo here
+cannot mark a working provider down for every other repository on the machine.
+
 The example above is a repository somebody classified. The shipped file is not:
 it leaves `scale` empty, because a fresh install has measured nothing and a
 guess is not free. Writing `small` there drops every implementation that asks

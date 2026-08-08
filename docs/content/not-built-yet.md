@@ -119,6 +119,46 @@ one to do.
 This stays one agent, honestly, until a capability shows up whose dispatch
 genuinely needs a decision the orchestrator's own loop does not already make.
 
+## Every plan step is the same capability
+
+The orchestrator's card declares eight capabilities. Its planner emits one.
+
+A commission is `N` explore steps and `N` work steps, one of each per
+repository in scope, and every one of them is `code.search` --
+`orchestrator.go:442`, `:727` and `:851`, which are all the sites that set a
+step's capability. Measured on 2026-08-08 against the shipped catalogue: a
+commission over three real repositories produced six steps in two waves of
+three, `verdict ok`, and not one of them asked anything but `code.search`.
+
+So a plan that mixes capabilities is not something a richer catalogue would
+produce. It needs a planner that chooses a capability per step -- the obvious
+first shape being explore with `code.search`, then resolve what the explore
+found with `symbol.definition`, which is a real commission a person would want
+and which nothing today can express. Until then the honest description of
+`atenea task` is: it splits a search across repositories and reviews the
+answers, and the other seven capabilities are reachable only one at a time
+through `atenea ask`.
+
+## A receipt says a step failed, never who else was in the running
+
+The funnel's trace is live-only. `atenea select` and `--trace` print every
+stage with its survivors and the reason each candidate was dropped, and the
+measurement base durably keeps the failures that drove those drops -- watched
+on 2026-08-08, a provider left the funnel on its third failure in one bin and
+the base recorded `3 tries, 3 failed` for it.
+
+What no receipt keeps is the decision itself. A step's record names the
+implementation that ran, the verdict and the failure text, so the bin survives
+in prose; it does not name the candidates that were considered and dropped on
+*that* run. Reading a receipt afterwards you can see what happened and look up
+what the base knew, but you cannot reconstruct the funnel as it stood at that
+moment.
+
+This is a gap in auditing a past decision, not in observing a live one, and it
+is deliberate until something needs the second: a per-step funnel trace on
+every receipt is a durable copy of a decision that is already derivable from
+the two records beside it, and it grows with every step ever run.
+
 ## History is declared and never loaded
 
 `ContextHistory` — *"what happened in earlier sessions: user decisions and facts
