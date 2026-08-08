@@ -30,6 +30,11 @@ type Session struct {
 	// in it because reading is free by default: the grant is the ceiling on
 	// everything heavier.
 	grant []contract.Effect
+	// floor is what this chat runs on before it asks for anything, and the
+	// most it could ever be granted. It is pinned when the chat opens rather
+	// than read at each question, so a settings file reloaded underneath a
+	// long conversation cannot widen a chat that is already talking.
+	floor orchestrator.Floor
 	// levels are the context heights this chat may read. A discovery above
 	// them is not withheld as a punishment -- the chat simply has no business
 	// with it, and handing it over would be the leak.
@@ -56,6 +61,17 @@ type SessionOptions struct {
 	Context []contract.ContextLevel
 }
 
+// clientFloor is what a chat opened by a client runs on, and the most one may
+// hold. The zero floor -- the settings file said nothing about clients -- is
+// deliberately not the same value as a written copy of the standing grant:
+// they dispatch identically and differ on whether there is a ceiling at all.
+func (c *Core) clientFloor() orchestrator.Floor {
+	if c.settings.Orchestrator.ClientEffectsInherited {
+		return orchestrator.Floor{}
+	}
+	return orchestrator.FloorOf(c.settings.Orchestrator.ClientEffects)
+}
+
 // Open lets a chat in.
 //
 // Opening is refused once a stop is under way, for the same reason work is:
@@ -66,6 +82,24 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		if !knownEffect(effect) {
 			return nil, contract.Fail(contract.FailureInvalidInput,
 				"session %s: unknown effect in grant", opts.ID)
+		}
+	}
+	// The floor is a ceiling from the other side: it is the most a chat may
+	// hold, so a chat asking to be opened above it is refused here rather
+	// than at its first question. A client told at initialize can say so; one
+	// told mid-conversation has already promised somebody the work.
+	//
+	// The ceiling arrives with the line that sets it, and an operator who
+	// never wrote one gets no ceiling at all. Copying the standing grant into
+	// the zero floor would read identically at dispatch and mean something
+	// quite different here: "I said nothing about clients" would silently
+	// become "clients may hold nothing I did not already grant everybody",
+	// which is a rule nobody typed and which refuses chats that work today.
+	floor := c.clientFloor()
+	for _, effect := range opts.Grant {
+		if !floor.Allows(effect) {
+			return nil, contract.Fail(contract.FailurePermissionDenied,
+				"session %s: a client may not be granted %s on this machine", opts.ID, effect)
 		}
 	}
 	for _, level := range opts.Context {
@@ -99,6 +133,7 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		client: opts.Client,
 		core:   c,
 		grant:  slices.Clone(opts.Grant),
+		floor:  floor,
 		levels: levels,
 		opened: time.Now(),
 	}
@@ -177,6 +212,11 @@ func (s *Session) Do(ctx context.Context, task orchestrator.Task) (*orchestrator
 		return nil, err
 	}
 	task.Session = s.id
+	// The floor travels with the commission rather than being looked up at
+	// dispatch, because the orchestrator has exactly one standing grant and
+	// it is the operator's. A chat that did not say which floor it runs on
+	// would silently run on that one, which is the defect this fixes.
+	task.Floor = s.floor
 	s.runs.Add(1)
 	result, err := s.core.Do(ctx, task)
 	s.told(result)
@@ -201,6 +241,7 @@ func (s *Session) Ask(ctx context.Context, q orchestrator.Question) (*orchestrat
 		return nil, err
 	}
 	q.Session = s.id
+	q.Floor = s.floor
 	s.runs.Add(1)
 	result, err := s.core.Ask(ctx, q)
 	s.told(result)

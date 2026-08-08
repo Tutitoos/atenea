@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -169,6 +170,23 @@ type Orchestrator struct {
 	// requiring it to be asked for on every single call would just move the
 	// same yes to every caller instead of saying it once, here.
 	StandingEffects []contract.Effect
+	// ClientEffects is what a chat opened by a connected client is granted
+	// standing, and the most such a chat may ever be granted. It exists apart
+	// from StandingEffects because the two answer different questions that
+	// used to share one line: what the person at this terminal may do, and
+	// what anything that connects to them may do. Widening the first for an
+	// afternoon silently widened the second, and the file could not say
+	// otherwise.
+	//
+	// It is resolved here rather than at dispatch, so nothing downstream has
+	// to know whether the key was written: an absent key is copied from
+	// StandingEffects once, and the two are separate lists from then on.
+	ClientEffects []contract.Effect
+	// ClientEffectsInherited records that the copy above is a copy. Nothing
+	// behaves differently for it -- it is on the status screen, because
+	// inheriting is the case that still carries the sharp edge and a screen
+	// that showed two equal lists without saying why would hide it.
+	ClientEffectsInherited bool
 	// CheckpointDir is where the paper copy of a run in flight is written. It
 	// is empty when checkpointing is off.
 	CheckpointDir string
@@ -464,9 +482,14 @@ type fileOrchestrator struct {
 	// Effects are granted standing, to every commission and question, on
 	// top of the read that is always free. Nil means none, which is the
 	// correct zero: no effect has ever needed one to be free by default.
-	Effects       []string `toml:"effects"`
-	Checkpoints   *bool    `toml:"checkpoints"`
-	CheckpointDir string   `toml:"checkpoint_dir"`
+	Effects []string `toml:"effects"`
+	// ClientEffects is the same list for a chat opened by a connected client,
+	// and it is a pointer for the reason Runners is: an omitted key inherits
+	// Effects, while an explicitly empty list is how the operator says a
+	// client may do nothing but read. Those two cannot be the same value.
+	ClientEffects *[]string `toml:"client_effects"`
+	Checkpoints   *bool     `toml:"checkpoints"`
+	CheckpointDir string    `toml:"checkpoint_dir"`
 	// Runners uses a pointer so an omitted list and an explicitly empty one
 	// are different things: leaving the block out keeps the shipped adapter,
 	// while writing an empty list is how a user says "dispatch nowhere".
@@ -901,6 +924,25 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			effects = append(effects, effect)
 		}
 		out.StandingEffects = effects
+	}
+	// The client floor is resolved against whatever the standing grant just
+	// became, so the order of these two blocks is load-bearing: reading it
+	// before the block above would inherit the built-in default rather than
+	// the operator's line.
+	if o.ClientEffects == nil {
+		out.ClientEffects = slices.Clone(out.StandingEffects)
+		out.ClientEffectsInherited = true
+	} else {
+		effects := make([]contract.Effect, 0, len(*o.ClientEffects))
+		for _, name := range *o.ClientEffects {
+			effect, err := contract.ParseEffect(name)
+			if err != nil {
+				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
+					"settings %s: orchestrator.client_effects: %v", source, err)
+			}
+			effects = append(effects, effect)
+		}
+		out.ClientEffects = effects
 	}
 	if o.Runners != nil {
 		seen := make(map[string]struct{}, len(*o.Runners))

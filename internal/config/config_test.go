@@ -210,8 +210,30 @@ func TestShippedKnobsAgreeWithTheCompiledFallbacks(t *testing.T) {
 	if len(shipped.Orchestrator.StandingEffects) == 0 {
 		t.Error("the shipped file grants no standing effect; the settings page says it ships one")
 	}
+
+	// The client floor is the second exception and for the opposite reason:
+	// an omitted key is not "none" but "whatever the operator granted
+	// standing", so the fallback inherits and the shipped file does not. That
+	// difference is the feature -- a file that writes the key has separated
+	// the two grants, and one that does not has left them joined.
+	if !fallback.Orchestrator.ClientEffectsInherited {
+		t.Error("omitting client_effects did not inherit; a file written before the key existed would change behavior")
+	}
+	if shipped.Orchestrator.ClientEffectsInherited {
+		t.Error("the shipped file leaves clients joined to the operator's grant; it is meant to ship them separated")
+	}
+	// Separated, but not different: on a fresh install the two lists agree, so
+	// nothing a new operator does on day one behaves differently for having
+	// the key. What it buys is the day they widen their own.
+	if !slices.Equal(shipped.Orchestrator.ClientEffects, shipped.Orchestrator.StandingEffects) {
+		t.Errorf("shipped client floor %v, standing %v: a fresh install should grant clients exactly what it grants the console",
+			shipped.Orchestrator.ClientEffects, shipped.Orchestrator.StandingEffects)
+	}
+
 	shippedOrchestrator, fallbackOrchestrator := shipped.Orchestrator, fallback.Orchestrator
 	shippedOrchestrator.StandingEffects, fallbackOrchestrator.StandingEffects = nil, nil
+	shippedOrchestrator.ClientEffects, fallbackOrchestrator.ClientEffects = nil, nil
+	shippedOrchestrator.ClientEffectsInherited, fallbackOrchestrator.ClientEffectsInherited = false, false
 	if !reflect.DeepEqual(shippedOrchestrator, fallbackOrchestrator) {
 		t.Errorf("[orchestrator] shipped %+v, fallback %+v", shippedOrchestrator, fallbackOrchestrator)
 	}
@@ -883,6 +905,50 @@ func TestAnUnknownStandingEffectIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "orchestrator.effects") {
 		t.Errorf("the error does not name the key that rejected it: %v", err)
+	}
+}
+
+// The same refusal for the client floor, and it needs its own test rather than
+// riding on the one above: the two lists are parsed by two loops, and a key
+// that accepted "ghost" would hand a client a grant nobody could name.
+func TestAnUnknownClientEffectIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator]\nclient_effects = [\"ghost\"]\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+	// Naming the key, not just the value: an operator with both lists written
+	// has two places to look and one of them is right.
+	if !strings.Contains(err.Error(), "orchestrator.client_effects") {
+		t.Errorf("the error does not name the key that rejected it: %v", err)
+	}
+}
+
+// An empty list is the one value that has to survive the round trip meaning
+// what it says. Everywhere else in this file an empty list is indistinguishable
+// from an absent key; here that would silently hand a client the operator's
+// whole floor -- the precise client that was meant to have none.
+func TestAnEmptyClientFloorIsNotAnAbsentOne(t *testing.T) {
+	empty, err := config.Load(write(t, minimal+"\n[orchestrator]\neffects = [\"process\"]\nclient_effects = []\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(empty.Orchestrator.ClientEffects) != 0 {
+		t.Errorf("client_effects = [] granted %v, want none", empty.Orchestrator.ClientEffects)
+	}
+	if empty.Orchestrator.ClientEffectsInherited {
+		t.Error("client_effects = [] was read as an absent key")
+	}
+
+	absent, err := config.Load(write(t, minimal+"\n[orchestrator]\neffects = [\"process\"]\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Equal(absent.Orchestrator.ClientEffects, absent.Orchestrator.StandingEffects) {
+		t.Errorf("an absent key granted %v, want the standing %v",
+			absent.Orchestrator.ClientEffects, absent.Orchestrator.StandingEffects)
+	}
+	if !absent.Orchestrator.ClientEffectsInherited {
+		t.Error("an absent key was not recorded as inherited, so the screen cannot say so")
 	}
 }
 

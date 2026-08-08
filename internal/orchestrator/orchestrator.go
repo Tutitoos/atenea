@@ -278,6 +278,11 @@ type Task struct {
 	// the run nothing: it is written to the receipt so a shared history stays
 	// attributable to the isolated chat that produced it.
 	Session string
+	// Floor is the standing grant this commission composes from. The zero
+	// value is the settings file's, which is what a command at a terminal
+	// runs on; a chat opened by a client fills it in with the client floor
+	// so the operator's own line stays the operator's.
+	Floor Floor
 }
 
 // Result is what a finished commission looks like, at both heights: the
@@ -362,13 +367,14 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	if repoErr != nil {
 		return nil, repoErr
 	}
-	// Reading is free by default. The standing grant adds whatever the
-	// settings file pre-authorized for every commission; the commission's
-	// own Effects adds whatever this one asked for on top of that.
+	// Reading is free by default. The floor adds whatever was pre-authorized
+	// for a commission of this kind -- the settings file's standing grant, or
+	// a connected client's own line where the commission came from a chat --
+	// and the commission's own Effects adds what this one asked for on top.
 	permission := contract.Permission{
 		Task:    task.Text,
 		Effects: []contract.Effect{contract.EffectRead},
-	}.Grant(a.standingEffects).Grant(task.Effects)
+	}.Grant(task.Floor.Or(a.standingEffects)).Grant(task.Effects)
 	// The grant is opened once, here, and spent down by every wave. It is the
 	// commission that holds it -- not the step, not the adapter -- which is
 	// what makes four steps cost one ceiling instead of four.
@@ -470,6 +476,9 @@ type Question struct {
 	BudgetUSD float64
 	// Session is the chat that asked, written to the receipt.
 	Session string
+	// Floor is the standing grant this question composes from, and carries
+	// the same meaning it does on Task: zero is the settings file's own.
+	Floor Floor
 }
 
 // Ask dispatches a single capability and returns the step that closed.
@@ -533,12 +542,13 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		Capability: capabilityID,
 		Repository: repositories[0].ID,
 		Payload:    q.Payload,
-		// Same layering as Run: read, then the standing grant, then whatever
-		// this question asked for on top of that.
+		// Same layering as Run: read, then the floor this question runs on,
+		// then whatever it asked for on top of that. The floor is the standing
+		// grant unless a client's chat pinned its own.
 		Permission: contract.Permission{
 			Task:    text,
 			Effects: []contract.Effect{contract.EffectRead},
-		}.Grant(a.standingEffects).Grant(q.Effects),
+		}.Grant(q.Floor.Or(a.standingEffects)).Grant(q.Effects),
 	}}}
 	if err := plan.Validate(); err != nil {
 		return result, err

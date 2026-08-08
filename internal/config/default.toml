@@ -52,6 +52,24 @@ budget_usd = 0.25
 # yes wired silently into the binary.
 effects = ["process"]
 
+# The same grant, for a chat opened by a connected client rather than by the
+# person at this terminal. It ships equal to the line above and separate from
+# it on purpose: the two answer different questions, and while they shared one
+# line, widening your own floor for an afternoon's work widened every client
+# that connected, permanently and silently, with no way to say otherwise here.
+#
+# Deleting this line does not turn the rule off -- it hands clients whatever
+# `effects` says, which is what every settings file written before this key
+# existed already does. Writing it, even identically, is what separates them.
+# An empty list is a real answer and means a client may only read; it is not
+# the default because on this machine every implementation of code.search is
+# a binary, so a client would be refused the headline capability on day one
+# and the first thing anybody learned about the default would be how to
+# remove it.
+#
+# It is also a ceiling: a client cannot open a chat claiming more than this.
+client_effects = ["process"]
+
 # Whether the state of a run in flight is written to disk. Memory is a
 # whiteboard; disk is paper. The dump happens when a step closes and again when
 # the run closes, and at no other moment.
