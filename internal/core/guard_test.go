@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 // no retry delay to wait out -- fast and deterministic, the same shape a
 // real crash-looping install would produce without the real wait to prove it.
 const managedCatalog = `
-contract = "2.0.0"
+contract = "3.0.0"
 
 [core]
 shutdown_grace = "2s"
@@ -204,5 +205,52 @@ func TestAManagedProcessTakesOverTheWrittenEndpoint(t *testing.T) {
 				t.Errorf("kind = %v, want invalid_input; err = %v", kind, err)
 			}
 		})
+	}
+}
+
+// One declaration, two repositories, two processes -- named after the
+// repository they serve and each pointed at its own project.
+//
+// This is the whole per-repository policy observable from outside: the
+// settings file says it once, and what the machine ends up running is a
+// process per repository. A status screen that showed one `serena` here would
+// mean the second repository is being served by the first one's process,
+// which is the retarget tax this policy exists to remove.
+func TestOneDeclarationBecomesOneProcessPerRepository(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	first, second := t.TempDir(), t.TempDir()
+	body := strings.Replace(managedCatalog,
+		`  lifecycle = "on_demand"`,
+		"  lifecycle = \"on_demand\"\n  instance = \"per_repository\"\n  args = [\"--project\", \"{{project}}\"]",
+		1)
+	body = strings.Replace(body, `path = "/srv/api"`, `path = "`+first+`"`, 1)
+	body += "\n[[repository]]\nid = \"web\"\npath = \"" + second + "\"\nlanguages = [\"go\"]\nscale = \"small\"\n"
+
+	atenea := build(t, body)
+	var ids []string
+	for _, p := range atenea.Status().Processes {
+		ids = append(ids, p.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{"serena@api", "serena@web"}; !slices.Equal(ids, want) {
+		t.Fatalf("processes = %v, want %v", ids, want)
+	}
+}
+
+// The shared policy is what a file that says nothing gets, and it must keep
+// producing exactly one server for every repository on the machine. This is
+// the other half of the pair: the expansion is a choice, not the new default.
+func TestASharedDeclarationStaysOneProcess(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	body := onDisk(t, managedCatalog)
+	body += "\n[[repository]]\nid = \"web\"\npath = \"" + t.TempDir() + "\"\nlanguages = [\"go\"]\nscale = \"small\"\n"
+
+	atenea := build(t, body)
+	var ids []string
+	for _, p := range atenea.Status().Processes {
+		ids = append(ids, p.ID)
+	}
+	if want := []string{"serena"}; !slices.Equal(ids, want) {
+		t.Fatalf("processes = %v, want %v", ids, want)
 	}
 }

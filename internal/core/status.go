@@ -183,13 +183,12 @@ type ImplementationStatus struct {
 
 // RepositoryStatus is one unit of work.
 type RepositoryStatus struct {
-	ID             string
-	Path           string
-	Scale          string
-	VCS            string
-	Languages      []string
-	Indexes        []string
-	SerenaEndpoint string
+	ID        string
+	Path      string
+	Scale     string
+	VCS       string
+	Languages []string
+	Indexes   []string
 }
 
 // ChatStatus is one open session: who it belongs to, what it may authorize
@@ -399,6 +398,17 @@ func (c *Core) Status() Status {
 		usable := 0
 		for _, impl := range impls {
 			total++
+			// Two probes reach this line and neither is the declaration: what
+			// the metrics base has on disk, and what a call in this process
+			// just found. Both are per repository, both say so, and both are
+			// folded in the same direction -- a failure somewhere is news, and
+			// a success somewhere is not a claim about anywhere else.
+			if observed, where, ok := c.catalog.Observations(impl.ID); ok {
+				if observed.Reason != "" {
+					observed.Reason = "on " + where + ": " + observed.Reason
+				}
+				impl.Health = metrics.Reconcile(impl.Health, observed)
+			}
 			if v, ok := recorded[impl.ID]; ok {
 				health := v.Health
 				if located && health.Reason != "" {
@@ -429,13 +439,12 @@ func (c *Core) Status() Status {
 
 	for _, repo := range c.catalog.Repositories() {
 		status.Repositories = append(status.Repositories, RepositoryStatus{
-			ID:             repo.ID,
-			Path:           repo.Path,
-			Scale:          repo.Scale.String(),
-			VCS:            repo.VCS.String(),
-			Languages:      repo.Languages,
-			Indexes:        repo.Indexes(),
-			SerenaEndpoint: repo.SerenaEndpoint,
+			ID:        repo.ID,
+			Path:      repo.Path,
+			Scale:     repo.Scale.String(),
+			VCS:       repo.VCS.String(),
+			Languages: repo.Languages,
+			Indexes:   repo.Indexes(),
 		})
 	}
 

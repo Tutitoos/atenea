@@ -179,7 +179,26 @@ type Version struct {
 // written as base64 -- a receipt read back `"effects":"AAM="`, which is not a
 // record of anything. They now write as names and read back from either, so
 // a receipt filed before this still loads.
-var Current = Version{Major: 2, Minor: 3, Patch: 0}
+//
+// 3.0.0 removed `Repository.SerenaEndpoint`, and like 2.0.0 it is major
+// because it takes away rather than adds.
+//
+// The field existed to name a second Serena that somebody else had already
+// started for one repository -- on this machine, a hand-written systemd unit
+// on `:9121` beside the one on `:40010`, identical but for a port and a
+// `--project`. That is a per-repository instance policy typed out by hand,
+// once per repository, in machine configuration Atenea could not see. Declaring
+// `instance = "per_repository"` on the managed process makes it a rule
+// instead: Atenea starts one Serena per repository, on demand, picks the
+// ports, and stops them when it stops. There is nothing left for a
+// per-repository URL to say that the declaration does not already say better,
+// and leaving the field would leave two ways to answer one question -- the
+// second of which points at a process Atenea does not own.
+//
+// An adapter that never read the field goes on compiling. One that set it was
+// pointing the core at a Serena with a second owner, which is the arrangement
+// this removes.
+var Current = Version{Major: 3, Minor: 0, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

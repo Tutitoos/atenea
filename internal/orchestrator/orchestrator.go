@@ -41,7 +41,8 @@ type Catalog interface {
 	Repository(id string) (contract.Repository, error)
 	Repositories() []contract.Repository
 	ImplementationsFor(capabilityID string) ([]contract.Implementation, error)
-	SetHealth(implementationID string, health contract.Health) error
+	Observed(repositoryID string, impls []contract.Implementation) []contract.Implementation
+	SetHealth(repositoryID, implementationID string, health contract.Health) error
 }
 
 // Chooser is the funnel. The orchestrator asks for a capability on a
@@ -1075,6 +1076,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if err != nil {
 		return a.close(out, err)
 	}
+	candidates = a.catalog.Observed(repository.ID, candidates)
 	measuring, notices := a.priced(ctx, step.Capability, repository.ID, candidates)
 	decision, err := a.chooser.Select(selector.Request{
 		Capability: step.Capability,
@@ -1118,7 +1120,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		// funnel filters on health, and health is owned by whoever probed last.
 		// Running a step is a probe.
 		if contract.KindOf(runErr) == contract.FailureUnavailable {
-			_ = a.catalog.SetHealth(decision.Chosen.ID, contract.Health{
+			_ = a.catalog.SetHealth(repository.ID, decision.Chosen.ID, contract.Health{
 				State:  contract.HealthDown,
 				Reason: runErr.Error(),
 				Raw:    contract.RawOf(runErr),

@@ -296,6 +296,41 @@ type ClaudeCodeAdapter struct {
 	Timeout time.Duration
 }
 
+// Instance is how many copies of a managed server there should be, and what
+// distinguishes one from another.
+//
+// It exists because of one measured thing. Serena's `activate_project` is
+// process-wide: a second chat pointing the same process at a different
+// repository takes the first one's language server down with it, so two
+// projects cannot stay warm in one process. This machine already solved that
+// by hand -- two systemd units, identical but for a port and a `--project`,
+// one per repository -- which is a policy typed out per repository in a place
+// Atenea could not see. Naming it here makes it a rule instead.
+//
+// The set is deliberately small and closed. `per_chat` is not here: it would
+// be a process per conversation, saving nothing, and nothing on this machine
+// has ever needed it. An unknown value is refused rather than read as the
+// default, for the reason every other refusal in this file exists -- a policy
+// an operator believes is in force and is not is worse than one they can see
+// is missing.
+type Instance string
+
+const (
+	// InstanceShared is one process for the whole machine, and the default:
+	// it is what every managed server did before this existed.
+	InstanceShared Instance = "shared"
+	// InstancePerRepository is one process per declared repository, each
+	// pinned to that repository and started only when something asks for it.
+	InstancePerRepository Instance = "per_repository"
+)
+
+// ProjectPlaceholder is replaced with a repository's path when a
+// per-repository server is built. It is the seam that makes one declaration
+// mean N processes: without it every instance would launch the same command
+// on a different port, all pointed at the same project, which is why a
+// per-repository block that omits it is refused.
+const ProjectPlaceholder = "{{project}}"
+
 // ManagedProcess declares that Atenea should launch this server itself and
 // keep it alive, rather than assuming something else already started it at a
 // fixed Endpoint. Present only when the settings file opts in; nil leaves the
@@ -336,6 +371,12 @@ type ManagedProcess struct {
 	ReadyTimeout time.Duration
 	IdleTimeout  time.Duration
 	StopGrace    time.Duration
+	// Instance says how many of this server there should be. It is the one
+	// field here with no counterpart in supervisor.Spec, because the
+	// supervisor does not know what a repository is: the core answers it by
+	// building one Spec per instance, and each of those is an ordinary
+	// server to everything downstream.
+	Instance Instance
 }
 
 // SerenaAdapter configures the Serena adapter.
@@ -596,6 +637,7 @@ type fileManagedProcess struct {
 	ReadyTimeout string   `toml:"ready_timeout"`
 	IdleTimeout  string   `toml:"idle_timeout"`
 	StopGrace    string   `toml:"stop_grace"`
+	Instance     string   `toml:"instance"`
 }
 
 // fileCodebaseMemoryAdapter is the TOML shape of CodebaseMemoryAdapter.
@@ -678,13 +720,12 @@ type fileHealth struct {
 }
 
 type fileRepository struct {
-	ID             string   `toml:"id"`
-	Path           string   `toml:"path"`
-	Languages      []string `toml:"languages"`
-	Scale          string   `toml:"scale"`
-	VCS            string   `toml:"vcs"`
-	IndexedBy      []string `toml:"indexed_by"`
-	SerenaEndpoint string   `toml:"serena_endpoint"`
+	ID        string   `toml:"id"`
+	Path      string   `toml:"path"`
+	Languages []string `toml:"languages"`
+	Scale     string   `toml:"scale"`
+	VCS       string   `toml:"vcs"`
+	IndexedBy []string `toml:"indexed_by"`
 }
 
 type fileMCPServer struct {
@@ -1458,6 +1499,49 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		}
 		out.Port = *p.Port
 	}
+	switch Instance(strings.TrimSpace(p.Instance)) {
+	case "":
+		out.Instance = InstanceShared
+	case InstanceShared, InstancePerRepository:
+		out.Instance = Instance(strings.TrimSpace(p.Instance))
+	default:
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.instance must be %q or %q, got %q",
+			source, InstanceShared, InstancePerRepository, p.Instance)
+	}
+	// The three rules below are all one rule seen from three sides: a
+	// per-repository declaration has to be able to produce servers that
+	// differ from each other, and a shared one has to be able to produce the
+	// single server it promises.
+	hasProject := slices.Contains(out.Args, ProjectPlaceholder)
+	switch {
+	case out.Instance == InstancePerRepository && !hasProject:
+		// Without it every instance is the same command on a different
+		// port, all pointed at whatever project the server picks for
+		// itself -- N processes doing one process's work, and no error
+		// anywhere to say so.
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.instance = %q needs %s in args: "+
+				"without it every repository would start the same server",
+			source, InstancePerRepository, ProjectPlaceholder)
+	case out.Instance == InstanceShared && hasProject:
+		// The mirror image: a placeholder with nothing to substitute would
+		// reach the command line verbatim, and the server would be asked to
+		// open a project literally named `{{project}}`.
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s in args needs instance = %q; a shared server has no repository to substitute",
+			source, ProjectPlaceholder, InstancePerRepository)
+	case out.Instance == InstancePerRepository && out.Port != 0:
+		// One port cannot hold two servers, so a fixed port silently caps
+		// this policy at one working instance: the first repository binds
+		// and every other one crashes on startup with an address already in
+		// use. Zero is not merely the better default here, it is the only
+		// answer that works.
+		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.serena.process.port cannot be fixed with instance = %q: "+
+				"each repository needs its own port, so leave it unset and Atenea picks them",
+			source, InstancePerRepository)
+	}
 	if p.RestartLimit != nil {
 		if *p.RestartLimit < 0 {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
@@ -1663,7 +1747,6 @@ func (r fileRepository) build(source string) (contract.Repository, error) {
 			"settings %s: repository %s: vcs: %v", source, r.ID, err)
 	}
 	out := contract.NewRepository(r.ID, r.Path, r.Languages, scale, vcs, r.IndexedBy)
-	out.SerenaEndpoint = strings.TrimSpace(r.SerenaEndpoint)
 	if err := out.Validate(); err != nil {
 		return contract.Repository{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)

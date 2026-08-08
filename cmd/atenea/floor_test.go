@@ -20,7 +20,7 @@ func floorSettings(t *testing.T, policy string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "atenea.toml")
-	const anchor = "contract = \"2.0.0\"\n"
+	const anchor = "contract = \"3.0.0\"\n"
 	body := strings.Replace(settings, anchor, anchor+"\n[orchestrator]\n"+policy+"\n", 1)
 	if body == settings {
 		t.Fatal("the fixture no longer declares its contract on one line")

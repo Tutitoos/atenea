@@ -473,7 +473,8 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 // call is guarded so the process is running before the adapter ever sees it.
 func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
 	endpoint := cfg.Orchestrator.Serena.Endpoint
-	if cfg.Orchestrator.Serena.Process != nil {
+	managed := cfg.Orchestrator.Serena.Process
+	if managed != nil {
 		// Checked before it is discarded. The supervisor's address is the one
 		// that gets dialed, but a written endpoint that could never work is
 		// still a mistake, and letting a process table excuse it would mean
@@ -482,24 +483,44 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 		if err := serena.ValidateEndpoint(endpoint); err != nil {
 			return nil, err
 		}
-		var err error
-		if endpoint, err = procs.Endpoint(config.RunnerSerena); err != nil {
-			return nil, err
-		}
 	}
-	runner, err := serena.New(serena.Options{
+	// One function answers both halves, because they are one question asked
+	// twice: which process serves this repository. The guard wakes it and the
+	// adapter dials it, and if those two ever disagreed the adapter would be
+	// talking to a server nobody had started.
+	instanceID := func(contract.Repository) string { return config.RunnerSerena }
+	if managed != nil && managed.Instance == config.InstancePerRepository {
+		instanceID = func(repo contract.Repository) string { return serenaInstanceID(repo.ID) }
+	}
+	opts := serena.Options{
 		Endpoint:        endpoint,
 		Implementations: cfg.Orchestrator.Serena.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         cfg.Orchestrator.Serena.Timeout,
-	})
+	}
+	if managed != nil {
+		if managed.Instance == config.InstancePerRepository {
+			// There is no single address to hand over: each repository has
+			// its own, and the adapter asks per call.
+			opts.EndpointFor = func(repo contract.Repository) (string, error) {
+				return procs.Endpoint(instanceID(repo))
+			}
+		} else {
+			resolved, err := procs.Endpoint(config.RunnerSerena)
+			if err != nil {
+				return nil, err
+			}
+			opts.Endpoint = resolved
+		}
+	}
+	runner, err := serena.New(opts)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Orchestrator.Serena.Process == nil {
+	if managed == nil {
 		return runner, nil
 	}
-	return guardedRunner{Runner: runner, procs: procs, id: config.RunnerSerena}, nil
+	return guardedRunner{Runner: runner, procs: procs, instanceID: instanceID}, nil
 }
 
 // checkReach refuses two live adapters that both claim the same
@@ -680,6 +701,7 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 	if err != nil {
 		return selector.Decision{}, err
 	}
+	candidates = c.catalog.Observed(repo.ID, candidates)
 	// Select is a one-shot lookup with no caller to cancel it: the CLI asks,
 	// prints and exits. The store bounds its own wait on the file lock, so a
 	// background context here cannot hang on a second Atenea's flush.

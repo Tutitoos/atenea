@@ -20,7 +20,7 @@ import (
 // genuinely different constraints, and two repositories that pull the funnel in
 // opposite directions.
 const catalog = `
-contract = "2.0.0"
+contract = "3.0.0"
 
 [core]
 shutdown_grace = "2s"
@@ -283,7 +283,7 @@ func TestSelectionFollowsHealthAtRuntime(t *testing.T) {
 		t.Fatalf("chosen = %s", before.Chosen.ID)
 	}
 
-	err = atenea.Registry().SetHealth("serena.search", contract.Health{
+	err = atenea.Registry().SetHealth("api", "serena.search", contract.Health{
 		State:  contract.HealthDown,
 		Reason: "container exited",
 	})
@@ -469,15 +469,21 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 		t.Errorf("light = %s, want amber", status.Light)
 	}
 
-	if err := atenea.Registry().SetHealth("graph.search", contract.Health{State: contract.HealthAlive}); err != nil {
+	if err := atenea.Registry().SetHealth("api", "graph.search",
+		contract.Health{State: contract.HealthAlive}); err != nil {
 		t.Fatalf("SetHealth: %v", err)
 	}
 	if got := atenea.Status().Light; got != core.LightGreen {
 		t.Errorf("light = %s, want green once everything is alive", got)
 	}
 
+	// A probe is per repository, but the screen summarizes the machine: one
+	// repository finding a provider down is still the operator's problem, so
+	// it has to reach the light rather than hide behind the repository that
+	// is fine.
 	for _, id := range []string{"ripgrep", "serena.search", "graph.search"} {
-		if err := atenea.Registry().SetHealth(id, contract.Health{State: contract.HealthDown}); err != nil {
+		if err := atenea.Registry().SetHealth("api", id,
+			contract.Health{State: contract.HealthDown}); err != nil {
 			t.Fatalf("SetHealth: %v", err)
 		}
 	}

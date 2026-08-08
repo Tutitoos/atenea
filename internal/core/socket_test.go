@@ -209,7 +209,7 @@ func ask(t *testing.T, line string) string {
 }
 
 const socketSettings = `
-contract = "2.2.0"
+contract = "3.0.0"
 
 [core]
 shutdown_grace = "2s"

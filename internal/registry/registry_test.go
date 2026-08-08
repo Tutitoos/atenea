@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,24 +169,61 @@ func TestUnknownCapabilityFarFromAnythingSuggestsNothing(t *testing.T) {
 func mustErr[T any](_ T, err error) error { return err }
 
 // Health is the one block that moves while Atenea runs. Everything else is
-// declarative, so the registry only exposes this mutator.
-func TestSetHealthReplacesTheBlock(t *testing.T) {
+// declarative, so the registry only exposes this mutator -- and it is keyed
+// by repository, because a provider that cannot serve one repository is not
+// thereby down for the rest.
+func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 	reg := seeded(t)
-	want := contract.Health{State: contract.HealthDown, Reason: "container exited"}
-	if err := reg.SetHealth("serena.search", want); err != nil {
+	web := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	api := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	for _, r := range []contract.Repository{web, api} {
+		if err := reg.AddRepository(r); err != nil {
+			t.Fatalf("AddRepository %s: %v", r.ID, err)
+		}
+	}
+	want := contract.Health{State: contract.HealthDown, Reason: "no language server"}
+	if err := reg.SetHealth("web", "serena.search", want); err != nil {
 		t.Fatalf("SetHealth: %v", err)
 	}
-	got, err := reg.Implementation("serena.search")
+
+	// The declaration itself never moves: it is what the operator wrote, and
+	// the status screen still has to be able to show it.
+	declared, err := reg.Implementation("serena.search")
 	if err != nil {
 		t.Fatalf("Implementation: %v", err)
 	}
-	if got.Health.State != contract.HealthDown || got.Health.Reason != "container exited" {
-		t.Fatalf("health = %+v", got.Health)
+	if declared.Health.State == contract.HealthDown {
+		t.Error("a probe against one repository rewrote the declaration")
 	}
-	if err := reg.SetHealth("nope", want); contract.KindOf(err) != contract.FailureNotFound {
+
+	impls, err := reg.ImplementationsFor("code.search")
+	if err != nil {
+		t.Fatalf("ImplementationsFor: %v", err)
+	}
+	for _, tc := range []struct {
+		repository string
+		want       contract.HealthState
+	}{
+		{"web", contract.HealthDown},
+		{"api", declared.Health.State},
+	} {
+		for _, got := range reg.Observed(tc.repository, slices.Clone(impls)) {
+			if got.ID != "serena.search" {
+				continue
+			}
+			if got.Health.State != tc.want {
+				t.Errorf("%s: health = %v, want %v", tc.repository, got.Health.State, tc.want)
+			}
+		}
+	}
+
+	if err := reg.SetHealth("web", "nope", want); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("unknown implementation: kind = %v", contract.KindOf(err))
 	}
-	if err := reg.SetHealth("ripgrep", contract.Health{Score: 2}); err == nil {
+	if err := reg.SetHealth("nope", "serena.search", want); contract.KindOf(err) != contract.FailureNotFound {
+		t.Errorf("unknown repository: kind = %v", contract.KindOf(err))
+	}
+	if err := reg.SetHealth("web", "ripgrep", contract.Health{Score: 2}); err == nil {
 		t.Error("out-of-range score should fail")
 	}
 }
@@ -249,6 +287,10 @@ func TestReadsAreDefensiveCopies(t *testing.T) {
 
 func TestConcurrentReadsAndHealthWrites(t *testing.T) {
 	reg := seeded(t)
+	if err := reg.AddRepository(contract.NewRepository(
+		"web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		t.Fatalf("AddRepository: %v", err)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -257,16 +299,19 @@ func TestConcurrentReadsAndHealthWrites(t *testing.T) {
 			if i%2 == 0 {
 				state = contract.HealthDown
 			}
-			if err := reg.SetHealth("ripgrep", contract.Health{State: state}); err != nil {
+			if err := reg.SetHealth("web", "ripgrep", contract.Health{State: state}); err != nil {
 				t.Errorf("SetHealth: %v", err)
 				return
 			}
 		}
 	}()
 	for range 500 {
-		if _, err := reg.ImplementationsFor("code.search"); err != nil {
+		impls, err := reg.ImplementationsFor("code.search")
+		if err != nil {
 			t.Fatalf("ImplementationsFor: %v", err)
 		}
+		reg.Observed("web", impls)
+		reg.Observations("ripgrep")
 	}
 	<-done
 }

@@ -15,8 +15,56 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+`pkg/contract` bumped to `3.0.0`. Like `2.0.0` it is a removal, not an
+addition: `Repository.SerenaEndpoint` is gone, so an adapter that named it
+stops compiling and `Supports` refuses the whole `2.x` line.
+
+**Upgrading is two lines, in this order,** because the core reports them one
+at a time and the key is checked before the contract:
+
+```text
+settings ~/.config/atenea/atenea.toml: unknown key(s): repository.serena_endpoint
+settings ~/.config/atenea/atenea.toml: contract 2.3.0 is not supported by
+this core (3.0.0): change the contract line to "3.0.0"; no other key moves
+```
+
+Delete the `serena_endpoint` line from every `[[repository]]` that carries
+one, then change the contract line. A repository that had a pinned Serena
+keeps its dedicated process by declaring the policy once instead:
+`instance = "per_repository"` under `[orchestrator.serena.process]`, with
+`{{project}}` in `args` and no fixed `port`. Only then do the two systemd
+units come out -- until the new binary is installed they are still what the
+old one reads.
+
 ### Added
 
+- **`[orchestrator.serena.process].instance = "per_repository"` runs one Serena
+  per repository instead of retargeting one.** `activate_project` is
+  process-wide, so a shared instance tears its language server down and
+  reindexes on every alternation between two repositories -- and this machine
+  had already answered that by hand, with two systemd units differing only in
+  `--port` and `--project`. One declaration now expands to one supervised
+  process per `[[repository]]`, each launched against its own project through a
+  new `{{project}}` placeholder, each on its own port, each named
+  `serena@<repository>` on the status screen. `shared` stays the default and
+  the behaviour every managed server had before the key existed. Measured
+  against the real binary: two repositories, two processes, one declaration,
+  and both reaped when Atenea stopped. The two hand-written `serena` systemd
+  units this replaces -- one per repository, differing only in `--port` and
+  `--project` -- come out at install time, not before it: they are what the
+  currently installed binary still reads through the key removed below, so the
+  order is install, migrate the settings file, then `systemctl --user disable
+  --now serena.service serena-desktop-remote.service`.
+- **Health is recorded per repository.** Found by driving the above rather than
+  by reading it: Serena has no TypeScript language server on this machine, a
+  call on a TypeScript repository came back `unavailable`, and the Go
+  repository next door -- answered by its own healthy process three seconds
+  earlier -- was then refused with `every implementation of symbol.definition
+  is down`. A provider is not up or down in the abstract. What probing finds is
+  now keyed by repository, the funnel filters on what the repository in front
+  of it found, and the declaration in the settings file is never overwritten by
+  a probe. `atenea status` names the repository that found the failure:
+  `health=down (on web: ...)`.
 - **A `command` backend declared `expose = "raw"` is now one process shared by
   every chat.** This is the number the feature was for: a stdio MCP server has
   no address, so a client that is not handed one has no choice but to spawn a
@@ -110,6 +158,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - **An `[[mcp_server]]` id containing a dot is refused.** `raw.<id>.<tool>` can
   only be split back into a server and a tool while the id is one segment, so a
   name that could not be parsed later is refused when it is written.
+
+### Removed
+
+- **`[[repository]].serena_endpoint` is gone; contract `2.3.0` -> `3.0.0`.** It
+  answered "which Serena serves this repository" one repository at a time, and
+  pointed at a process Atenea did not start, watch or stop -- so a repository
+  could name an address with nothing behind it and only find out on the call.
+  `instance = "per_repository"` answers the same question once, for processes
+  Atenea owns. Removing a field is a major: a settings file declaring a `2.x`
+  contract no longer loads, and the key is now refused as unknown rather than
+  parsed and ignored, which is the failure that rule exists to prevent.
 
 ### Fixed
 

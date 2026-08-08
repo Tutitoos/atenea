@@ -7,6 +7,7 @@
 package registry
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,12 @@ type Registry struct {
 	implementers map[string]contract.Implementation
 	repositories map[string]contract.Repository
 	byCapability map[string][]string
+	// observed holds what probing found, keyed by repository and then by
+	// implementation. It is separate from the declared health on the
+	// implementation itself because the two answer different questions: the
+	// declaration is what the operator believes about the provider, and this
+	// is what the last call against one repository actually got.
+	observed map[string]map[string]contract.Health
 }
 
 // New returns an empty registry.
@@ -31,6 +38,7 @@ func New() *Registry {
 		implementers: make(map[string]contract.Implementation),
 		repositories: make(map[string]contract.Repository),
 		byCapability: make(map[string][]string),
+		observed:     make(map[string]map[string]contract.Health),
 	}
 }
 
@@ -256,26 +264,91 @@ func (r *Registry) Repositories() []contract.Repository {
 	return out
 }
 
-// SetHealth replaces the health block of an implementation.
+// SetHealth records what probing one repository found about an
+// implementation.
 //
 // Health is the one block that changes while Atenea runs: the settings file
-// declares a starting point, and from then on whoever probes the provider owns
-// the value. Everything else in the catalog is declarative.
-func (r *Registry) SetHealth(implementationID string, health contract.Health) error {
+// declares a starting point, and from then on whoever probes the provider
+// owns the value. Everything else in the catalog is declarative.
+//
+// It is keyed by repository because a provider is not up or down in the
+// abstract. Serena with no TypeScript language server is down for a
+// TypeScript repository and perfectly alive for a Go one, and under a
+// per-repository instance policy the two are not even the same process. A
+// single global verdict would let one repository's missing language server
+// refuse work on every other repository on the machine.
+func (r *Registry) SetHealth(repositoryID, implementationID string, health contract.Health) error {
 	if health.Score < 0 || health.Score > 1 {
 		return contract.Fail(contract.FailureInvalidInput,
 			"implementation %s: health score %v is outside 0..1", implementationID, health.Score)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	impl, ok := r.implementers[implementationID]
-	if !ok {
+	if _, ok := r.implementers[implementationID]; !ok {
 		return contract.Fail(contract.FailureNotFound,
 			"unknown implementation %s", implementationID)
 	}
-	impl.Health = health
-	r.implementers[implementationID] = impl
+	if _, ok := r.repositories[repositoryID]; !ok {
+		return contract.Fail(contract.FailureNotFound,
+			"unknown repository %s", repositoryID)
+	}
+	byImpl, ok := r.observed[repositoryID]
+	if !ok {
+		byImpl = make(map[string]contract.Health)
+		r.observed[repositoryID] = byImpl
+	}
+	byImpl[implementationID] = health
 	return nil
+}
+
+// Observed returns the candidates as they stand for one repository: the
+// declared health where nothing has been probed, and what probing found where
+// it has.
+//
+// The overlay is applied here rather than inside ImplementationsFor because
+// the catalog is also read with no repository in hand -- the status screen
+// lists what was declared -- and a lookup that silently answered differently
+// depending on who asked would be the harder of the two to reason about.
+func (r *Registry) Observed(repositoryID string, impls []contract.Implementation) []contract.Implementation {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	byImpl := r.observed[repositoryID]
+	if len(byImpl) == 0 {
+		return impls
+	}
+	for i, impl := range impls {
+		if health, ok := byImpl[impl.ID]; ok {
+			impls[i].Health = health
+		}
+	}
+	return impls
+}
+
+// Observations reports the worst thing probing found about an implementation
+// and which repository found it, for the status screen.
+//
+// Worst rather than newest: a screen that showed the last call would flip
+// between two repositories on every request, and the question an operator is
+// asking a status screen is whether anything is wrong, not what happened most
+// recently.
+func (r *Registry) Observations(implementationID string) (contract.Health, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var (
+		worst contract.Health
+		where string
+		found bool
+	)
+	for _, repositoryID := range slices.Sorted(maps.Keys(r.observed)) {
+		health, ok := r.observed[repositoryID][implementationID]
+		if !ok {
+			continue
+		}
+		if !found || health.State.Rank() > worst.State.Rank() {
+			worst, where, found = health, repositoryID, true
+		}
+	}
+	return worst, where, found
 }
 
 // SetIndexed corrects one repository's belief about whether a provider has a

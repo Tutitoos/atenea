@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "2.3.0"
+contract = "3.0.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -197,6 +197,19 @@ runners = ["omp"]
   # before it is stopped, so it belongs to "on_demand" alone. Writing it
   # beside "persistent" is refused rather than ignored -- nothing about a
   # persistent server would ever have shown you it was doing nothing.
+  #
+  # instance says how many copies of this server there should be. "shared"
+  # (the default) is one for the whole machine, retargeted with
+  # activate_project whenever a call arrives for a different repository.
+  # "per_repository" is one process per [[repository]] below, each started
+  # with its own project and never retargeted -- worth its memory exactly
+  # when work alternates between repositories often enough that the
+  # retargeting is what you are waiting for.
+  #
+  # per_repository requires {{project}} somewhere in args, which is replaced
+  # with the repository's path, and forbids a fixed port: each copy needs its
+  # own, so leave port unset and let Atenea pick them.
+  # instance = "shared"
 
   [orchestrator.codebasememory]
   # The codebase-memory-mcp executable. A bare name is looked up on PATH.
@@ -1217,8 +1230,6 @@ scale = ""                # nobody has measured this repository yet, and unspeci
                           # disqualifies; a guess of "small" drops every graph implementation
 vcs = ""                  # unknown until declared; unspecified never disqualifies (pkg/contract/implementation.go)
 indexed_by = []           # providers holding a ready index for this repository
-# serena_endpoint = ""    # optional: pin this repo to its own Serena URL (e.g. http://127.0.0.1:9121/mcp).
-#                         # empty falls back to [orchestrator.serena].endpoint and retargets via activate_project.
 
 # ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it

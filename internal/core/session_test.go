@@ -23,7 +23,7 @@ func chats(t *testing.T) *core.Core {
 		t.Fatalf("write: %v", err)
 	}
 	return build(t, fmt.Sprintf(`
-contract = "2.0.0"
+contract = "3.0.0"
 
 [core]
 shutdown_grace = "2s"

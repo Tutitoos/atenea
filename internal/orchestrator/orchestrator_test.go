@@ -667,15 +667,27 @@ func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 		t.Fatalf("verdict = %v, want failed", result.Verdict)
 	}
 	chosen := result.Steps[0].Decision.Chosen.ID
-	impl, err := reg.Implementation(chosen)
+	health, where, ok := reg.Observations(chosen)
+	if !ok {
+		t.Fatalf("%s failed as unavailable and nothing was recorded against it", chosen)
+	}
+	if where != "api" {
+		t.Errorf("recorded against %q, want the repository the call ran on", where)
+	}
+	if health.State != contract.HealthDown {
+		t.Fatalf("%s failed as unavailable and its health is still %v", chosen, health.State)
+	}
+	if health.Reason == "" {
+		t.Error("health went down without saying why")
+	}
+	// And the declaration is untouched: it is what the operator wrote, and a
+	// probe on one repository is not a correction to it.
+	declared, err := reg.Implementation(chosen)
 	if err != nil {
 		t.Fatalf("Implementation: %v", err)
 	}
-	if impl.Health.State != contract.HealthDown {
-		t.Fatalf("%s failed as unavailable and its health is still %v", chosen, impl.Health.State)
-	}
-	if impl.Health.Reason == "" {
-		t.Error("health went down without saying why")
+	if declared.Health.State == contract.HealthDown {
+		t.Error("a probe rewrote the declared health")
 	}
 }
 
@@ -701,12 +713,83 @@ func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
 		t.Errorf("step.Raw = %q, want the provider's own text", result.Steps[0].Raw)
 	}
 	chosen := result.Steps[0].Decision.Chosen.ID
-	impl, err := reg.Implementation(chosen)
-	if err != nil {
-		t.Fatalf("Implementation: %v", err)
+	health, _, ok := reg.Observations(chosen)
+	if !ok {
+		t.Fatalf("nothing was recorded against %s", chosen)
 	}
-	if impl.Health.Raw != "no symbol matching 'Frame/consistent' found" {
-		t.Errorf("health.Raw = %q, want it on the mark the next call will read", impl.Health.Raw)
+	if health.Raw != "no symbol matching 'Frame/consistent' found" {
+		t.Errorf("health.Raw = %q, want it on the mark the next call will read", health.Raw)
+	}
+}
+
+// One repository finding a provider unusable must not refuse the next
+// repository.
+//
+// Found live: Serena has no TypeScript language server on this machine, so a
+// call on a TypeScript repository came back unavailable -- and the Go
+// repository next door, whose own Serena process had answered three seconds
+// earlier, was then refused with "every implementation is down". A provider
+// is not up or down in the abstract, and under a per-repository instance
+// policy the two repositories are not even talking to the same process.
+func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
+	runner := &fakeRunner{
+		serves: []string{"serena.search"},
+		answer: func(req contract.RunRequest) (contract.Outcome, error) {
+			if req.Repository.ID == "web" {
+				return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+					"serena has no working language server for this request")
+			}
+			return hits("cmd/api/main.go"), nil
+		},
+	}
+	agent, reg := build(t, runner, 0, "")
+	// Both repositories must reach the same implementation, or the failure on
+	// one could never have reached the other and the test proves nothing.
+	if err := reg.SetIndexed("web", "serena", true); err != nil {
+		t.Fatalf("SetIndexed: %v", err)
+	}
+	// web first, so its verdict is on the books before api is ever asked.
+	for _, tc := range []struct {
+		repository string
+		want       contract.Verdict
+	}{
+		{"web", contract.VerdictFailed},
+		{"api", contract.VerdictOK},
+	} {
+		result, err := agent.Run(t.Context(), orchestrator.Task{
+			Text: "login", Repositories: []string{tc.repository},
+		})
+		if err != nil {
+			t.Fatalf("%s: Run: %v", tc.repository, err)
+		}
+		if result.Verdict != tc.want {
+			t.Fatalf("%s: verdict = %v, want %v (steps=%+v)",
+				tc.repository, result.Verdict, tc.want, result.Steps)
+		}
+	}
+
+	// And the record says which repository found it, so the status screen can
+	// name the one that is actually broken.
+	if _, where, ok := reg.Observations("serena.search"); !ok || where != "web" {
+		t.Errorf("observation = %q (recorded=%v), want it against web", where, ok)
+	}
+
+	// The other half of remembering: asked again, web is refused by the funnel
+	// on what the last call found, instead of dispatching into the same wall.
+	// Without that, a recorded verdict is a note nobody reads.
+	before := len(runner.requests())
+	again, err := agent.Run(t.Context(), orchestrator.Task{Text: "login", Repositories: []string{"web"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if again.Verdict != contract.VerdictFailed {
+		t.Fatalf("verdict = %v, want failed", again.Verdict)
+	}
+	if got := len(runner.requests()); got != before {
+		t.Errorf("%d call(s) reached the provider after it was recorded down", got-before)
+	}
+	if failure := again.Steps[0].Failure; !strings.Contains(failure, "is down for repository web") {
+		t.Errorf("failure = %q, want the funnel's own refusal", failure)
 	}
 }
 

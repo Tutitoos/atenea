@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 }
 
 const settings = `
-contract = "2.0.0"
+contract = "3.0.0"
 
 [[capability]]
 id = "code.search"

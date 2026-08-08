@@ -93,9 +93,19 @@ func DefaultImplementations() []string {
 
 // Options configure the adapter.
 type Options struct {
-	// Endpoint is the default MCP server URL. Used for every repository that
-	// does not name its own SerenaEndpoint.
+	// Endpoint is the default MCP server URL, used for every repository that
+	// EndpointFor does not answer for.
 	Endpoint string
+	// EndpointFor resolves the URL for one repository, and is how a
+	// per-repository policy reaches this adapter without the adapter knowing
+	// such a policy exists. Nil, or an empty answer, means Endpoint.
+	//
+	// A function rather than a map because the far side is started on
+	// demand: the URL for a repository is known before the process is up,
+	// but the caller supplying this is also the one that has to ensure it
+	// comes up, and giving it the call rather than a snapshot keeps those
+	// two facts in one place.
+	EndpointFor func(repo contract.Repository) (string, error)
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Sensitive holds the path patterns that carry secrets. This adapter opens
@@ -144,6 +154,7 @@ type conn struct {
 // Runner is the Serena far side of contract.Runner.
 type Runner struct {
 	defaultEndpoint string
+	endpointFor     func(repo contract.Repository) (string, error)
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
@@ -206,6 +217,7 @@ func New(opts Options) (*Runner, error) {
 	}
 	return &Runner{
 		defaultEndpoint: endpoint,
+		endpointFor:     opts.EndpointFor,
 		implementations: impls,
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
@@ -215,21 +227,33 @@ func New(opts Options) (*Runner, error) {
 }
 
 // connFor returns the session state for the endpoint this repository should
-// hit. A repository that names its own SerenaEndpoint gets that URL; everyone
-// else shares the adapter default. Distinct URLs never share a conn.
-func (r *Runner) connFor(repo contract.Repository) *conn {
-	endpoint := strings.TrimSpace(repo.SerenaEndpoint)
-	if endpoint == "" {
-		endpoint = r.defaultEndpoint
+// hit.
+//
+// Distinct URLs never share a conn, and that is the whole reason this exists:
+// Serena's active project is process-wide, so two repositories on one URL take
+// turns and pay a language server restart each time they swap. Two
+// repositories on two URLs do not. Which of those a machine gets is decided by
+// the resolver, above this adapter -- it knows about instance policies and
+// repositories, and this only knows that a URL is a session.
+func (r *Runner) connFor(repo contract.Repository) (*conn, error) {
+	endpoint := r.defaultEndpoint
+	if r.endpointFor != nil {
+		resolved, err := r.endpointFor(repo)
+		if err != nil {
+			return nil, err
+		}
+		if resolved = strings.TrimSpace(resolved); resolved != "" {
+			endpoint = resolved
+		}
 	}
 	r.connsMu.Lock()
 	defer r.connsMu.Unlock()
 	if c, ok := r.conns[endpoint]; ok {
-		return c
+		return c, nil
 	}
 	c := &conn{endpoint: endpoint}
 	r.conns[endpoint] = c
-	return c
+	return c, nil
 }
 
 // ID names the runner on the status screen.
@@ -308,7 +332,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
 	}
 
-	c := r.connFor(req.Repository)
+	c, err := r.connFor(req.Repository)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
 	// One lock around the whole exchange on this endpoint, not around each
 	// round trip: the project activation and the calls that depend on it have
 	// to be one indivisible unit, or a second caller on the same URL would
@@ -375,7 +402,10 @@ func (r *Runner) runOverview(ctx context.Context, req contract.RunRequest) (cont
 			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
 	}
 
-	c := r.connFor(req.Repository)
+	c, err := r.connFor(req.Repository)
+	if err != nil {
+		return contract.Outcome{}, "", err
+	}
 	// Same indivisible unit as Run: activation and everything that depends on
 	// it, held under one lock for the whole exchange.
 	c.mu.Lock()

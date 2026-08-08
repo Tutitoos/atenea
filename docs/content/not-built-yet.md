@@ -233,7 +233,9 @@ thirty-four declarations of them** across five client configuration files:
 `codebase-memory` (8 cold, 14 warm), `semgrep` (4 filtered over HTTP, 7 raw over
 stdio), `context7` (2, and `omp` talks to 3.2.5 while everyone else talks to
 4.0.0), `headroom` (3), `claude-mem`, and a second `serena` on `:9121` that only
-Atenea's own settings declare. A client sees between 43 and 85 tools depending on
+Atenea's own settings declared -- both of those `serena` units are what
+`instance = "per_repository"` replaces, and they come out when it is installed.
+A client sees between 43 and 85 tools depending on
 which one it is. Atenea offers **seven**. Six `codebase-memory` processes were
 running at once, one per client session, beside a seventh that a hand-written
 shim keeps alive for its web UI with a replayed `initialize` and a FIFO -- so
@@ -398,21 +400,36 @@ stdin open for the life of the process, and routes each answer back to the chat
 that asked by JSON-RPC id. Measured against the real `codebase-memory-mcp`:
 three chats, one child process, and the child gone when Atenea stopped.
 
-What is left is the part that was always the harder half -- state that belongs
-to the connection -- and the machine still proves it: serena's
-`activate_project` is process-wide, which is exactly why a second serena runs
-on `:9121` for one repository. Two chats sharing one instance would fight over
-the active project. So the policy is per server and never global:
+**Landed on 2026-08-08 for `per_repository` too, on the server that needed
+it.** `[orchestrator.serena.process].instance = "per_repository"` turns one
+declaration into one supervised process per `[[repository]]`, each launched
+against its own project with `{{project}}` and its own port, named
+`serena@<repo>` on the status screen. The retarget it removes was the whole
+cost: `activate_project` is process-wide, so two repositories sharing one
+instance tore each other's language server down on every alternation. Measured
+against the real binary: two repositories, two processes, one declaration, both
+reaped when Atenea stopped -- and the two hand-written systemd units that
+implemented this by hand are what it replaces. They come out at install time
+rather than with the commit: the binary running on this machine today is the
+one that still reads them, through the per-repository endpoint key this change
+removes.
+
+That left one hole, found by driving it rather than by reading it: health was
+keyed by implementation alone. A repository whose language server was missing
+marked `serena.definition` down for the *machine*, and the repository next door
+-- answered by its own healthy process three seconds earlier -- was refused
+with `every implementation is down`. Observations are now recorded per
+repository, which is the honest key in both policies.
+
+What is left of the seam:
 
 - **`shared`** -- stateless, or state that is globally consistent:
-  `codebase-memory`, `semgrep`, `context7`. This is what is built, and today it
-  is not a choice: it is the only behaviour, which is why `instance` is still
-  refused as an unknown key rather than accepted and ignored.
-- **`per_repository`** -- the state *is* the project: `serena`. This generalises
-  the `:9121` special case into a rule instead of a second machine-level
-  exception.
-- **`per_chat`** -- the state is the conversation. Saves no processes, but keeps
-  the server declared in one file instead of five.
+  `codebase-memory`, `semgrep`, `context7`. Built, and the default.
+- **`per_repository`** -- the state *is* the project: `serena`. Built.
+- **`per_chat`** -- the state is the conversation. Not built. Saves no
+  processes, but would keep the server declared in one file instead of five.
+  Nothing on this machine needs it yet, which is why it is refused as an
+  unknown value rather than accepted and ignored.
 
 Server-initiated notifications are also still dropped. A message with no id
 answers nobody, and handing one to a chat that did not ask would be inventing a
@@ -503,13 +520,18 @@ declared repository is the only barrier left once the mounts are gone.
    undeclared key already is: a real client refused over the wire.
 4. stdio fan-in on `codebase-memory`. Proven by process count -- six to one --
    with two chats attached at once and the fourteen-tool surface intact.
-5. `per_repository` on serena, folding `:9121` in, units included.
+5. `per_repository` on serena, folding `:9121` in, units included. **Done
+   2026-08-08**, and it cost a contract major (`3.0.0`): the per-repository
+   Serena URL on `[[repository]]` is gone, since the policy answers the same
+   question for a process Atenea actually owns.
 6. `chrome-devtools` with its allow list, and per-client filtering deleted.
 7. Clients cut over one at a time, `wrap` extended to emit the reduced config.
    Thirty-four declarations become five, plus `headroom` and `claude-mem`.
 
-A new tool namespace and a new receipt shape are additive, so this is a contract
-minor -- `2.3.0` -- and no adapter changes. It is not a `1.0.0` conversation.
+A new tool namespace and a new receipt shape are additive, so those steps were a
+contract minor -- `2.3.0` -- and no adapter changes. Step 5 was not: removing a
+field is a major, and the contract now reads `3.0.0`. It is still not a `1.0.0`
+conversation.
 
 **Done when:** a client's configuration names `atenea`, `headroom` and
 `claude-mem` and nothing else; `pgrep -c codebase-memory-mcp` reports one with

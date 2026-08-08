@@ -263,6 +263,13 @@ func repo(t *testing.T, files map[string]string) contract.Repository {
 	return contract.NewRepository("current", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
 }
 
+// named re-labels a fixture repository, so a routing test can tell two of
+// them apart by the only thing a resolver is given: the id.
+func named(t *testing.T, id string, r contract.Repository) contract.Repository {
+	t.Helper()
+	return contract.NewRepository(id, r.Path, r.Languages, r.Scale, r.VCS, nil)
+}
+
 func newRunner(t *testing.T, endpoint string) *Runner {
 	t.Helper()
 	runner, err := New(Options{
@@ -270,6 +277,26 @@ func newRunner(t *testing.T, endpoint string) *Runner {
 		Implementations: DefaultImplementations(),
 		Sensitive:       []string{".env", "*.pem", "credentials.json"},
 		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return runner
+}
+
+// newRoutedRunner builds a runner whose endpoint depends on the repository,
+// which is what a per-repository instance policy looks like from in here: the
+// adapter is handed a resolver and never learns why the answers differ.
+func newRoutedRunner(t *testing.T, fallback string, byRepo map[string]string) *Runner {
+	t.Helper()
+	runner, err := New(Options{
+		Endpoint:        fallback,
+		Implementations: DefaultImplementations(),
+		Sensitive:       []string{".env", "*.pem", "credentials.json"},
+		Timeout:         5 * time.Second,
+		EndpointFor: func(repo contract.Repository) (string, error) {
+			return byRepo[repo.ID], nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -655,20 +682,19 @@ func TestAnImplementationIsReadAsASymbolNotAReference(t *testing.T) {
 // Per-repo endpoints and the retarget note
 // ---------------------------------------------------------------------------
 
-// A repository that names its own Serena URL must hit that URL, not the
-// adapter default. Otherwise the dedicated warm unit is dead weight and the
-// default endpoint still pays the retarget tax.
-func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
+// A repository the resolver answers for must hit that URL, not the adapter
+// default. Otherwise its own warm process is dead weight and the shared
+// endpoint still pays the retarget tax.
+func TestARepositorysOwnEndpointOverridesTheDefault(t *testing.T) {
 	defaultStub, defaultURL := newStub(t)
 	repoStub, repoURL := newStub(t)
 	repoStub.answers["find_declaration"] = declarationAnswer
 	defaultStub.answers["find_declaration"] = declarationAnswer
 
-	runner := newRunner(t, defaultURL)
-	r := repo(t, map[string]string{
+	r := named(t, "web", repo(t, map[string]string{
 		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
-	})
-	r.SerenaEndpoint = repoURL
+	}))
+	runner := newRoutedRunner(t, defaultURL, map[string]string{"web": repoURL})
 
 	if _, err := run(t, runner, CapabilityDefinition, r, map[string]any{
 		"file": "pkg/shapes.go", "line": 3, "column": 6,
@@ -686,6 +712,54 @@ func TestARepositoryEndpointOverridesTheDefault(t *testing.T) {
 	}
 }
 
+// A repository the resolver has no answer for falls back to the default,
+// which is what keeps a shared policy and a per-repository one the same code
+// path: an unanswered repository is not an error, it is the shared server.
+func TestAnUnansweredRepositoryFallsBackToTheDefault(t *testing.T) {
+	shared, sharedURL := newStub(t)
+	shared.answers["find_declaration"] = declarationAnswer
+
+	r := named(t, "api", repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	}))
+	runner := newRoutedRunner(t, sharedURL, map[string]string{"web": "http://127.0.0.1:1/mcp"})
+
+	if _, err := run(t, runner, CapabilityDefinition, r, map[string]any{
+		"file": "pkg/shapes.go", "line": 3, "column": 6,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, ok := shared.called("find_declaration"); !ok {
+		t.Fatal("the default endpoint was never used")
+	}
+}
+
+// A resolver that cannot answer stops the call rather than quietly sending it
+// to the default. The failure it reports is a server that would not start,
+// and answering from a different process instead would hide that behind a
+// result computed against the wrong project.
+func TestAResolverFailureStopsTheCall(t *testing.T) {
+	_, sharedURL := newStub(t)
+	runner, err := New(Options{
+		Endpoint:        sharedURL,
+		Implementations: DefaultImplementations(),
+		Timeout:         5 * time.Second,
+		EndpointFor: func(contract.Repository) (string, error) {
+			return "", contract.Fail(contract.FailureUnavailable, "serena@web did not come up")
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r := named(t, "web", repo(t, map[string]string{"pkg/shapes.go": "package pkg\n"}))
+	_, runErr := run(t, runner, CapabilityDefinition, r, map[string]any{
+		"file": "pkg/shapes.go", "line": 1, "column": 1,
+	})
+	if got := contract.KindOf(runErr); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable (err=%v)", got, runErr)
+	}
+}
+
 // Two repositories on two endpoints must not share a session: a handshake on
 // one is meaningless to the other, and locking them together would serialize
 // work that two warm processes can do in parallel.
@@ -695,11 +769,9 @@ func TestDistinctEndpointsKeepDistinctSessions(t *testing.T) {
 	a.answers["find_declaration"] = declarationAnswer
 	b.answers["find_declaration"] = declarationAnswer
 
-	runner := newRunner(t, aURL)
-	ra := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
-	// leave ra on the default (aURL)
-	rb := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"})
-	rb.SerenaEndpoint = bURL
+	ra := named(t, "atenea", repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"}))
+	rb := named(t, "web", repo(t, map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"}))
+	runner := newRoutedRunner(t, aURL, map[string]string{"atenea": aURL, "web": bURL})
 
 	if _, err := run(t, runner, CapabilityDefinition, ra, map[string]any{
 		"file": "pkg/shapes.go", "line": 3, "column": 6,
@@ -720,6 +792,19 @@ func TestDistinctEndpointsKeepDistinctSessions(t *testing.T) {
 	runner.connsMu.Unlock()
 	if n != 2 {
 		t.Fatalf("conns = %d, want 2", n)
+	}
+	// And neither was asked to retarget: that is the tax two processes exist
+	// to avoid, so it is the thing worth asserting rather than the count.
+	for name, stub := range map[string]*stub{"a": a, "b": b} {
+		activations := 0
+		for _, tool := range stub.toolNames() {
+			if tool == "activate_project" {
+				activations++
+			}
+		}
+		if activations > 1 {
+			t.Errorf("endpoint %s activated %d times: it is being shared", name, activations)
+		}
 	}
 }
 

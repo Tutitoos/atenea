@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "2.3.0"
+contract = "3.0.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "2.3.0"          # required: the contract version this file targets
+contract = "3.0.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -166,9 +166,10 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   [orchestrator.serena.process]
   command = "serena"                   # required once this table exists
   args = ["start-mcp-server", "--transport", "streamable-http",
-          "--host", "127.0.0.1", "--port", "{{port}}", "--project", "/srv/api"]
+          "--host", "127.0.0.1", "--port", "{{port}}", "--project", "{{project}}"]
   env = ["SERENA_LOG_LEVEL=WARNING"]   # added to the inherited environment
   lifecycle = "on_demand"              # required: "persistent" or "on_demand"
+  instance = "per_repository"          # "shared" (default) or one copy per repository
   port = 0                             # 0 lets the OS choose; {{port}} receives it
   ready_timeout = "15s"                # one spawn's window to answer the handshake
   restart_limit = 2                    # retries after a crash; 0 never retries
@@ -369,6 +370,40 @@ A server that never comes up fails at the guard rather than at the adapter,
 because the guard is what waits for it: the call comes back `unavailable`
 saying `serena did not come up`, with the reason it did not carried alongside
 untranslated.
+
+### One Serena, or one per repository
+
+`instance` says how many copies of the server should exist. `shared`, the
+default and what every managed server did before the key existed, is one
+process for the machine: whichever repository calls first activates its
+project, and a call for a second repository retargets it with
+`activate_project`. That retarget is the cost — a language server torn down
+and reindexed — and it is paid on every alternation, so work that moves
+between two repositories pays it twice per round trip.
+
+`per_repository` spends memory to remove it: one process per `[[repository]]`,
+each started against its own project and never retargeted. They are named
+after the repository they serve, so `atenea status` lists `serena@api` beside
+`serena@web` rather than one row that could be either. Each gets its own port
+and its own session, and the funnel reaches whichever one belongs to the
+repository in the request.
+
+Two things are refused rather than accepted and quietly broken. `{{project}}`
+has to appear in `args` — it is replaced with the repository's path, and
+without it every copy would be launched against the same project, which is N
+identical servers wearing different names. And `port` cannot be fixed: the
+second copy would fail to bind, so the port is Atenea's to pick per process.
+The same two rules run the other way too — `{{project}}` under `shared` is
+refused, because there is no repository to substitute and the placeholder
+would reach the server literally.
+
+Health follows the same split. A provider is not up or down in the abstract:
+Serena with no TypeScript language server is down for a TypeScript repository
+and alive for a Go one, and under this policy the two are not even the same
+process. So what probing finds is recorded per repository, the funnel filters
+on what the repository in front of it found, and `atenea status` names the
+repository that found the failure — `health=down (on web: ...)`. A verdict
+from one repository never refuses work on another.
 
 ## The measurement base
 
@@ -628,16 +663,18 @@ languages = ["go"]
 scale = "small"             # "", small, medium, large
 vcs = "present"             # "", present, absent -- whether the root sits under version control
 indexed_by = ["serena"]     # providers with a ready index HERE
-serena_endpoint = ""        # optional: pin this repo to its own Serena URL
 ```
 
 An unclassified `scale` or an unspecified `vcs` never disqualifies anyone: an
 unknown fact is not a proven mismatch, and dropping candidates over it would
-silently empty the funnel. `serena_endpoint` empty means the adapter's default
-(`[orchestrator.serena].endpoint`) and a retarget via `activate_project` when
-the previous call was on a different project; a set URL keeps that repository
-on its own warm Serena process so alternating repos does not tear language
-servers down.
+silently empty the funnel.
+
+There is no per-repository Serena URL here. Pinning one repository to its own
+Serena is a question about how many copies of that server should exist, and it
+is answered once for the machine by `[orchestrator.serena.process].instance`
+rather than one repository at a time -- see [Serena](#serena). The key that
+used to sit here named a process Atenea did not start, watch or stop, so a
+repository could point at an address that had nothing behind it.
 
 `path` has to be a directory that is really there. Every adapter makes it the
 working directory of the tool it launches, and a missing one used to come back

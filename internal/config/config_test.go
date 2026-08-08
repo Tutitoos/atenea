@@ -251,7 +251,7 @@ func write(t *testing.T, body string) string {
 }
 
 const minimal = `
-contract = "2.0.0"
+contract = "3.0.0"
 
 [[capability]]
 id = "code.search"
@@ -294,69 +294,81 @@ func TestLoadReadsAFile(t *testing.T) {
 	}
 }
 
-// A repository can pin its own Serena so the adapter never retargets the
-// default endpoint for it. Empty stays empty: that is the "fall back and
-// retarget" path, not a missing value.
-func TestLoadReadsSerenaEndpoint(t *testing.T) {
-	body := `
-contract = "2.0.0"
-
-[[capability]]
-id = "code.search"
-version = "1.0.0"
-summary = "Find text."
-effects = ["read"]
-
-  [[capability.input]]
-  name = "query"
-  type = "string"
-  required = true
-
-[[implementation]]
-id = "ripgrep"
-provider = "ripgrep"
-capability = "code.search"
-
-[[repository]]
-id = "api"
-path = "/srv/api"
-languages = ["go"]
-
-[[repository]]
-id = "web"
-path = "/srv/web"
-languages = ["typescript"]
-serena_endpoint = "http://127.0.0.1:9121/mcp"
+// The per-repository policy, read back whole.
+//
+// This replaces `repository.serena_endpoint`, which said the same thing one
+// repository at a time and pointed at a process Atenea did not own.
+func TestAPerRepositoryProcessIsReadBack(t *testing.T) {
+	body := minimal + `
+[orchestrator.serena.process]
+command = "serena"
+args = ["start-mcp-server", "--port", "{{port}}", "--project", "{{project}}"]
+lifecycle = "on_demand"
+instance = "per_repository"
 `
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(cfg.Repositories) != 2 {
-		t.Fatalf("repositories = %d, want 2", len(cfg.Repositories))
-	}
-	var web *contract.Repository
-	for i := range cfg.Repositories {
-		if cfg.Repositories[i].ID == "web" {
-			web = &cfg.Repositories[i]
-		}
-		if cfg.Repositories[i].ID == "api" && cfg.Repositories[i].SerenaEndpoint != "" {
-			t.Errorf("api serena_endpoint = %q, want empty", cfg.Repositories[i].SerenaEndpoint)
-		}
-	}
-	if web == nil {
-		t.Fatal("web repository missing")
-	}
-	if web.SerenaEndpoint != "http://127.0.0.1:9121/mcp" {
-		t.Errorf("web serena_endpoint = %q", web.SerenaEndpoint)
+	if got := cfg.Orchestrator.Serena.Process.Instance; got != config.InstancePerRepository {
+		t.Errorf("instance = %q, want %q", got, config.InstancePerRepository)
 	}
 }
 
-func TestBrokenSerenaEndpointIsRefused(t *testing.T) {
-	bad := strings.Replace(minimal, "vcs = \"present\"\n", "vcs = \"present\"\nserena_endpoint = \"localhost:9121\"\n", 1)
-	_, err := config.Load(write(t, bad))
-	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
-		t.Fatalf("kind = %v, want invalid_input (err=%v)", got, err)
+// Absent means shared, which is what every managed server did before the key
+// existed. A file that never mentions it must not change behavior.
+func TestTheInstancePolicyDefaultsToShared(t *testing.T) {
+	body := minimal + `
+[orchestrator.serena.process]
+command = "serena"
+args = ["start-mcp-server", "--port", "{{port}}"]
+lifecycle = "on_demand"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Orchestrator.Serena.Process.Instance; got != config.InstanceShared {
+		t.Errorf("instance = %q, want %q", got, config.InstanceShared)
+	}
+}
+
+// Each of these declares a policy that cannot do what it says, and each would
+// fail silently rather than loudly: N identical servers, a project literally
+// named `{{project}}`, or every repository after the first crashing on a port
+// that is already bound.
+func TestAnUnworkableInstancePolicyIsRefused(t *testing.T) {
+	process := func(extra string) string {
+		return minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\n" + extra
+	}
+	cases := map[string]string{
+		"unknown policy": process("instance = \"per_chat\"\n"),
+		"per repository without a project placeholder": process(
+			"instance = \"per_repository\"\nargs = [\"--port\", \"{{port}}\"]\n"),
+		"a project placeholder with nothing to substitute": process(
+			"args = [\"--project\", \"{{project}}\"]\n"),
+		"per repository on one fixed port": process(
+			"instance = \"per_repository\"\nargs = [\"--project\", \"{{project}}\"]\nport = 9121\n"),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := config.Load(write(t, body))
+			if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+				t.Fatalf("kind = %v, want invalid_input (err=%v)", got, err)
+			}
+		})
+	}
+}
+
+// The field this replaced is gone from the vocabulary, not merely unused. A
+// key that still parsed and did nothing would be the exact failure the unknown
+// key check exists to prevent.
+func TestTheOldPerRepositoryEndpointIsNoLongerAKey(t *testing.T) {
+	body := strings.Replace(minimal, "vcs = \"present\"\n",
+		"vcs = \"present\"\nserena_endpoint = \"http://127.0.0.1:9121/mcp\"\n", 1)
+	_, err := config.Load(write(t, body))
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("err = %v, want an unknown key refusal", err)
 	}
 }
 
@@ -372,9 +384,9 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 
 func TestContractVersionIsEnforced(t *testing.T) {
 	cases := map[string]string{
-		"missing":     strings.Replace(minimal, `contract = "2.0.0"`, "", 1),
-		"unparseable": strings.Replace(minimal, `contract = "2.0.0"`, `contract = "one"`, 1),
-		"too new":     strings.Replace(minimal, `contract = "2.0.0"`, `contract = "9.0.0"`, 1),
+		"missing":     strings.Replace(minimal, `contract = "3.0.0"`, "", 1),
+		"unparseable": strings.Replace(minimal, `contract = "3.0.0"`, `contract = "one"`, 1),
+		"too new":     strings.Replace(minimal, `contract = "3.0.0"`, `contract = "9.0.0"`, 1),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -393,7 +405,7 @@ func TestContractVersionIsEnforced(t *testing.T) {
 // newer binary and no edit at all. Telling the second case to edit the line
 // would buy it a second, more confusing failure.
 func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
-	behind := strings.Replace(minimal, `contract = "2.0.0"`, `contract = "1.0.0"`, 1)
+	behind := strings.Replace(minimal, `contract = "3.0.0"`, `contract = "1.0.0"`, 1)
 	_, err := config.Load(write(t, behind))
 	if err == nil {
 		t.Fatal("a file from the previous major was accepted")
@@ -406,7 +418,7 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 		t.Errorf("err = %v, want %s", err, wantFix)
 	}
 
-	ahead := strings.Replace(minimal, `contract = "2.0.0"`, `contract = "9.0.0"`, 1)
+	ahead := strings.Replace(minimal, `contract = "3.0.0"`, `contract = "9.0.0"`, 1)
 	_, err = config.Load(write(t, ahead))
 	if err == nil {
 		t.Fatal("a file from the future was accepted")
