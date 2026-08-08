@@ -328,6 +328,12 @@ type StepResult struct {
 	// raised itself with nothing to quote.
 	Raw   string
 	Spent contract.Sample
+	// ClosedAt is when this step finished, stamped by the step itself. It has
+	// to be: the recorder runs after the whole wave returns, so a clock read
+	// there gives every step in the wave the same instant and moves the fast
+	// ones to the back. Read beside Spent.Duration this is an interval, and
+	// two intervals are how a reader sees that two steps overlapped.
+	ClosedAt time.Time
 }
 
 // Review is the parent's audit of a child that just finished.
@@ -1119,6 +1125,11 @@ func (a *Agent) priced(ctx context.Context, capability, repository string,
 
 // close is the parent's review. It runs for every child, always.
 func (a *Agent) close(out StepResult, err error) StepResult {
+	// Every exit from a step arrives here, which makes this the one place the
+	// clock means what the field says. Read at the recorder instead it would
+	// be the wave's end for all of them, and beside a duration that turns the
+	// quick steps of a wave into steps that started late.
+	out.ClosedAt = time.Now()
 	child := out.Outcome.Verdict
 	if err != nil {
 		out.Failure = err.Error()
@@ -1412,7 +1423,17 @@ func Overspend(step StepResult) float64 {
 	return over
 }
 
+// snapshot is the paper copy of one closed step.
+//
+// The close time comes off the step rather than off this clock. A step that
+// never ran has none of its own -- nobody dispatched it, so there is no moment
+// to record but this one -- and it is the only case where filing the recorder's
+// instant is the honest answer.
 func snapshot(step StepResult) checkpoint.StepState {
+	closed := step.ClosedAt
+	if closed.IsZero() {
+		closed = time.Now()
+	}
 	return checkpoint.StepState{
 		ID:             step.Step.ID,
 		Capability:     step.Step.Capability,
@@ -1426,7 +1447,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
 		OverspendUSD:   Overspend(step),
-		ClosedAt:       time.Now(),
+		ClosedAt:       closed,
 	}
 }
 
