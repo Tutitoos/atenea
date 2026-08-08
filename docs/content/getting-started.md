@@ -21,8 +21,8 @@ falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
 
 A binary built from a checkout stamps its own revision onto the version, so
-`version` prints `0.9.0+3604792` rather than the bare number quoted on these
-pages — and `0.9.0+3604792.modified` when the tree has uncommitted changes.
+`version` prints `0.9.1+e443910` rather than the bare number quoted on these
+pages — and `0.9.1+e443910.modified` when the tree has uncommitted changes.
 That suffix is SemVer build metadata: it says which tree this came from and is
 ignored when versions are compared. Only a release artifact reports the number
 alone.
@@ -413,7 +413,7 @@ reason:
 
 ```text
 $ atenea mcp --check
-atenea 0.9.0 is listening at ~/.local/state/atenea/run/core.sock
+atenea 0.9.1 is listening at ~/.local/state/atenea/run/core.sock
 8 capability(ies) would be offered as tools
 2 chat(s) open right now
 ```
@@ -622,7 +622,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.9.0  contract 2.2.0  AMBER
+atenea 0.9.1  contract 2.2.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

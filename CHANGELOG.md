@@ -13,6 +13,26 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [0.9.1] - 2026-08-08
+
+### Fixed
+
+- **A repository whose path is not on the disk blamed the adapter binary and
+  took the provider down everywhere.** Every adapter turns a repository's path
+  into its child process's working directory, and Go reports a missing
+  `cmd.Dir` by naming the *binary*: a commission over three repositories, one
+  of them a path that did not exist, failed with `omp could not be started:
+  fork/exec /home/me/.local/bin/omp: no such file or directory` for an `omp`
+  that was installed, executable and had just answered two other steps in the
+  same wave. The bin was the worse half -- `unavailable` is the bin that
+  condemns a provider, so health went down for `code.search` globally and the
+  second wave failed on every repository with "every implementation is down".
+  One wrong line in the settings file disabled a working tool for the whole
+  machine. There is now a gate beside the permission gate, on the same seam and
+  for the same reason: it names the repository and the directory, refuses
+  before anything is spawned, and files it as `invalid_input` -- a bin the
+  health record ignores, because nothing is wrong with the provider.
+
 ## [0.9.0] - 2026-08-08
 
 
@@ -1713,6 +1733,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.9.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.7.0
