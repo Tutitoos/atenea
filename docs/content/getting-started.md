@@ -21,8 +21,8 @@ falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
 
 A binary built from a checkout stamps its own revision onto the version, so
-`version` prints `0.9.1+e443910` rather than the bare number quoted on these
-pages — and `0.9.1+e443910.modified` when the tree has uncommitted changes.
+`version` prints `0.9.1+f3354b8` rather than the bare number quoted on these
+pages — and `0.9.1+f3354b8.modified` when the tree has uncommitted changes.
 That suffix is SemVer build metadata: it says which tree this came from and is
 ignored when versions are compared. Only a release artifact reports the number
 alone.
