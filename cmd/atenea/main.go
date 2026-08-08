@@ -375,20 +375,47 @@ func cmdVersion(out io.Writer) error {
 }
 
 func cmdStatus(settingsPath string, out io.Writer) error {
-	atenea, err := load(settingsPath)
+	cfg, err := config.Load(settingsPath)
+	if err != nil {
+		return err
+	}
+	// Ask the running service rather than working the screen out from disk.
+	//
+	// Not an optimization. Half of what is printed below is only true of the
+	// process that maintains it -- the uptime, the chats open right now, what
+	// the clock has actually run -- and a command maintains none of it. Every
+	// Chats table this CLI ever printed was empty, and not because nobody was
+	// connected.
+	//
+	// Only when the service is answering about the same file this command was
+	// asked about. Naming a file asks a different question -- "what would this
+	// file give me?" -- and a service running a different one is not the
+	// answer to it. Comparing the resolved sources rather than the arguments
+	// is what makes `--config` on the live file behave like plain `status`
+	// instead of quietly falling back to the poorer screen.
+	if status, ok := core.Asked(); ok && status.Settings == cfg.Source {
+		return printStatus(out, status)
+	}
+	atenea, err := core.New(cfg, core.Command)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = atenea.Shutdown() }()
-	status := atenea.Status()
+	return printStatus(out, atenea.Status())
+}
 
+func printStatus(out io.Writer, status core.Status) error {
 	fmt.Fprintf(out, "atenea %s  contract %s  %s\n",
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
-	// Every other fact on this screen is true whoever prints it -- that is the
-	// rule printBackground is built around. The repair is the one exception: only
-	// the service sweeps, so a `recovered` line that says nothing here means
-	// nothing was repaired BY THIS PROCESS, and the role is what says so.
+	// Whose screen this is. It used to mean "the process printing it", and now
+	// it means the process the numbers came FROM: a command that reached the
+	// service prints the service's, and a command that found nobody prints its
+	// own. That is the same line doing the same job -- a reader who sees
+	// `service` is looking at a clock that is really ticking, chats that are
+	// really open and a `recovered` line that really swept something, and a
+	// reader who sees `command` is looking at what could be worked out from
+	// disk by a process that maintains none of it.
 	fmt.Fprintf(out, "process   %s\n", status.Role)
 	if len(status.Missing) > 0 {
 		// Beside the settings line, because that file is the thing to edit.
@@ -456,11 +483,14 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 // printBackground is Atenea's own house, at the same height as the orchestrator:
 // the rhythms that keep the history in shape, and the copies that protect it.
 //
-// Every fact here has to be true no matter which process prints it. That rules
-// out the running tally each lane keeps in memory: this command is a process
-// that lives for a second and whose clock never ticks, so its own "last ran"
-// would say "not yet" while the service behind it has been copying all day.
-// What is left is the pair that actually answers the question -- the rhythms,
+// Every fact here has to be true no matter which process the screen came from,
+// and this printer now serves two: a service's own view, and a command's view
+// when no service answered. That still rules out the running tally each lane
+// keeps in memory -- it is real in the first case and meaningless in the
+// second, and a number that means two different things depending on a line
+// further up is worse than a number nobody prints.
+//
+// What is left is the pair that answers the question either way -- the rhythms,
 // which come from the settings file and are the same everywhere, and the copies
 // on disk, which are the same for everybody looking. A lane that fails reaches
 // the reader through the crash notebook on the line above.

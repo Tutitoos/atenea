@@ -17,6 +17,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **The service has a door, and `atenea status` knocks on it.** A Unix socket
+  under the state root, opened by the service and by nothing else, speaking the
+  same JSON-RPC line protocol MCP does. `atenea status` now asks the running
+  service for its view instead of working one out from disk, and the `process`
+  line says which it got. The half of that screen that only the service can
+  know -- the uptime, the clock's real run, the chats open right now -- reaches
+  a reader for the first time. Every Chats table this CLI has ever printed was
+  empty, and not because nobody was connected.
+
+  It asks only when the service is answering about the same settings file the
+  command was asked about: naming a file is a different question, and a service
+  running another one is not the answer to it. Anything else -- nobody home, a
+  reply that is not the protocol, a door that opens and never speaks -- falls
+  back to the local screen, because the caller's whole reason for asking is
+  that it has a worse answer ready.
+
+  The door is this machine's: the socket is `0600` in a `0700` directory, and
+  every connection is checked against the kernel's own answer for who opened it
+  (`SO_PEERCRED`) before a byte is read. A killed service leaves the name
+  behind, so a leftover is probed and cleared rather than treated as occupied
+  -- one `SIGKILL` must not lock the machine out until somebody deletes a file
+  by hand.
+
 - **A capability can state its own shape as JSON Schema, on both sides**
   (contract `2.1.0` -> `2.2.0`). `Capability.InputSchema` and
   `Capability.OutputSchema` turn the declaration into the one form a caller who
