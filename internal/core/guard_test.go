@@ -115,7 +115,7 @@ func TestManagedSerenaGuardsDispatchUntilReady(t *testing.T) {
 // by every other Run test in this package.
 func TestRunWarmsAndStopsAManagedProcessCleanly(t *testing.T) {
 	body := strings.Replace(managedCatalog, `lifecycle = "on_demand"`, `lifecycle = "persistent"`, 1)
-	atenea := build(t, body)
+	atenea := buildService(t, body)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)

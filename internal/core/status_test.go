@@ -72,7 +72,7 @@ func TestStatusReportsAnOnDemandProcessBeforeAndAfterItGoesDown(t *testing.T) {
 // footnote nobody rolls up.
 func TestStatusOverallLightFollowsAWarmedUpProcessGoingDown(t *testing.T) {
 	body := strings.Replace(managedCatalog, `lifecycle = "on_demand"`, `lifecycle = "persistent"`, 1)
-	atenea := build(t, body)
+	atenea := buildService(t, body)
 
 	if got := atenea.Status().Light; got != core.LightGreen {
 		t.Fatalf("light before warm-up = %v, want green", got)

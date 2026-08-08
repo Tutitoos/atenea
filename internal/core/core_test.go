@@ -125,6 +125,22 @@ scale = "small"
 
 func build(t *testing.T, body string) *core.Core {
 	t.Helper()
+	return buildAs(t, body, core.Command)
+}
+
+// buildService is for the tests that call Run. Run is the service door -- it
+// claims the upkeep, ticks the clock and opens the socket -- so a command
+// reaching it was only ever possible because nothing stopped it.
+//
+// The state root is per-test, which is what keeps the claim and the socket from
+// colliding when the suite runs in parallel: both are derived from it.
+func buildService(t *testing.T, body string) *core.Core {
+	t.Helper()
+	return buildAs(t, body, core.Service)
+}
+
+func buildAs(t *testing.T, body string, role core.Role) *core.Core {
+	t.Helper()
 	// Every artifact a core creates without being told where -- the run
 	// receipts, the measurement base, the crash notebook -- lands under the
 	// state root. A suite that did not move it would be writing into the home
@@ -135,7 +151,7 @@ func build(t *testing.T, body string) *core.Core {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	atenea, err := core.New(cfg, core.Command)
+	atenea, err := core.New(cfg, role)
 	if err != nil {
 		t.Fatalf("core.New: %v", err)
 	}
@@ -412,7 +428,7 @@ func TestShutdownRefusesNewWorkAndWaitsForInFlight(t *testing.T) {
 }
 
 func TestRunStopsWhenTheContextIsCanceled(t *testing.T) {
-	atenea := build(t, catalog)
+	atenea := buildService(t, catalog)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)

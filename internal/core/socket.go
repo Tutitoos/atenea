@@ -1,0 +1,228 @@
+package core
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"path/filepath"
+	"time"
+
+	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/platform"
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// socketFile is the door. It lives under the state root, in a directory of its
+// own, and the two halves of that are separate decisions.
+//
+// Under the state root, and not in XDG_RUNTIME_DIR where a socket of this kind
+// ordinarily goes, for the reason the upkeep claim already documents: that
+// variable is set for a systemd --user service and for a login shell, unset
+// under cron, so two processes derive two different paths. For a lock that
+// means both sweep; for a socket it means a client cannot find the service that
+// is running. The state root comes from HOME, so everyone agrees. The one thing
+// the runtime directory would give us -- a tmpfs wiped on reboot -- does not
+// solve the failure that actually happens, which is a service killed on a
+// machine that keeps running, and Listen already handles both.
+//
+// In a directory of its own because that directory has to be 0700, and the
+// state root is not this package's to narrow. It holds the receipts, the crash
+// notebook and the measurement base; whatever mode the operator has it at is
+// their business, and a socket appearing inside it is no reason to change that
+// underneath them.
+const socketDir = "run"
+const socketFile = "core.sock"
+
+// SocketPath is where the running service listens.
+func SocketPath() string {
+	return filepath.Join(platform.StateDir(), socketDir, socketFile)
+}
+
+// askTimeout bounds a client's whole exchange with the service. Generous
+// against the work being done -- a status is built from memory -- and short
+// against a person waiting for a screen.
+const askTimeout = 2 * time.Second
+
+// The wire is one JSON object per line.
+//
+// JSON-RPC 2.0 because that is what MCP is, and this socket is where the MCP
+// server will answer. Choosing the envelope now costs four struct fields and
+// means the next protocol method is a case in a switch rather than a second
+// framing beside the first.
+const (
+	rpcVersion = "2.0"
+	// MethodStatus asks the service for its own view of itself.
+	MethodStatus = "atenea/status"
+
+	codeParse         = -32700
+	codeInvalid       = -32600
+	codeMethodUnknown = -32601
+)
+
+type rpcRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      any    `json:"id"`
+	Method  string `json:"method"`
+}
+
+type rpcResponse struct {
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id"`
+	Result  any       `json:"result,omitempty"`
+	Error   *rpcError `json:"error,omitempty"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// listen opens the door, and only the service may.
+//
+// A command must not bind it: the socket says "there is an Atenea here to talk
+// to", and a command is gone a second later. The upkeep claim already makes
+// this true -- a command never holds it -- but stating it here means the rule
+// is where the socket is, not two files away.
+func (c *Core) listen() (*ipc.Listener, error) {
+	if c.role != Service {
+		return nil, contract.Fail(contract.FailurePermissionDenied,
+			"only the service opens the socket; this process is a %s", c.role)
+	}
+	listener, err := ipc.Listen(SocketPath())
+	if err != nil {
+		if errors.Is(err, ipc.ErrInUse) {
+			return nil, contract.Fail(contract.FailureUnavailable,
+				"another atenea is already listening at %s", SocketPath())
+		}
+		return nil, contract.Fail(contract.FailurePermissionDenied, "opening the socket: %v", err)
+	}
+	c.mu.Lock()
+	c.socket = listener
+	c.mu.Unlock()
+	return listener, nil
+}
+
+// accept answers callers until the socket closes.
+//
+// The listener is handed in rather than read from the core on every turn: a
+// stop closes it from another goroutine, and a field that a stop can change
+// under a loop that is dereferencing it is a nil away from a panic. It was,
+// once -- the tests found it before anything else did.
+func (c *Core) accept(ctx context.Context, listener *ipc.Listener) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			// The listener is closed, which is how a clean stop reaches here.
+			return
+		}
+		c.conns.Add(1)
+		go func() {
+			defer c.conns.Done()
+			c.answer(ctx, conn)
+		}()
+	}
+}
+
+// answer serves one connection: a line in, a line out, until it hangs up.
+func (c *Core) answer(ctx context.Context, conn net.Conn) {
+	// A stop has to reach a caller sitting on an open connection, and closing
+	// the listener does not close what it already accepted.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	defer func() { _ = conn.Close() }()
+
+	lines := bufio.NewScanner(conn)
+	lines.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	writer := json.NewEncoder(conn)
+	for lines.Scan() {
+		var req rpcRequest
+		if err := json.Unmarshal(lines.Bytes(), &req); err != nil {
+			_ = writer.Encode(rpcResponse{JSONRPC: rpcVersion,
+				Error: &rpcError{Code: codeParse, Message: "not JSON"}})
+			return
+		}
+		_ = writer.Encode(c.dispatch(req))
+	}
+}
+
+// dispatch is the whole protocol: one method today, and the place the MCP
+// methods land when the service learns to speak to a client rather than only
+// to its own CLI.
+func (c *Core) dispatch(req rpcRequest) rpcResponse {
+	out := rpcResponse{JSONRPC: rpcVersion, ID: req.ID}
+	if req.JSONRPC != rpcVersion {
+		out.Error = &rpcError{Code: codeInvalid, Message: "jsonrpc must be " + rpcVersion}
+		return out
+	}
+	switch req.Method {
+	case MethodStatus:
+		out.Result = c.Status()
+	default:
+		out.Error = &rpcError{Code: codeMethodUnknown, Message: "unknown method " + req.Method}
+	}
+	return out
+}
+
+// closeSocket shuts the door and waits for whoever is still inside.
+//
+// The field is left pointing at the closed listener rather than nilled. A
+// closed one is inert -- Close is idempotent and Accept only reports that it
+// is over -- and clearing it would be a write racing every reader for no gain.
+func (c *Core) closeSocket() {
+	c.mu.Lock()
+	listener := c.socket
+	c.mu.Unlock()
+	if listener == nil {
+		return
+	}
+	_ = listener.Close()
+	c.conns.Wait()
+}
+
+// Asked is a client's side of the same conversation: dial the running service
+// and ask it for its own view.
+//
+// The second return says whether anybody answered, and a false is ordinary --
+// no service is running is the normal state of a machine where somebody types
+// one command. Only a live, well-formed answer counts as yes.
+//
+// Bounded, because the caller's whole reason for asking is that it has a worse
+// answer ready. A socket with a listener behind it that never replies -- a
+// wedged service, or something else holding the name -- makes connect succeed
+// and the read block forever, and an `atenea status` that hangs is worse than
+// one that quietly falls back. The deadline covers the write and the read: the
+// service builds this from memory and answers in microseconds, so anything
+// near a second means it is not going to.
+func Asked() (Status, bool) {
+	conn, err := net.DialTimeout("unix", SocketPath(), askTimeout)
+	if err != nil {
+		return Status{}, false
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(askTimeout)); err != nil {
+		return Status{}, false
+	}
+
+	if err := json.NewEncoder(conn).Encode(rpcRequest{
+		JSONRPC: rpcVersion, ID: 1, Method: MethodStatus,
+	}); err != nil {
+		return Status{}, false
+	}
+	var out struct {
+		Result Status    `json:"result"`
+		Error  *rpcError `json:"error"`
+	}
+	if err := json.NewDecoder(conn).Decode(&out); err != nil || out.Error != nil {
+		return Status{}, false
+	}
+	return out.Result, true
+}

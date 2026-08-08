@@ -24,6 +24,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
@@ -80,6 +81,13 @@ type Core struct {
 	// upkeep releases the claim, and is nil for a command -- there is nothing
 	// to release when nothing was claimed.
 	upkeep func()
+	// socket is the door clients knock on, and only the service opens one.
+	// Nil in a command, which is what makes "a command never answers for the
+	// machine" true rather than merely intended.
+	socket *ipc.Listener
+	// conns counts answers in flight, so a stop waits for a caller mid-question
+	// instead of hanging up on it.
+	conns sync.WaitGroup
 
 	mu sync.Mutex
 	// sessions is the live chat table. A plain map under the lock the core
@@ -812,13 +820,19 @@ func (c *Core) enter() error {
 }
 
 // Run holds the core up until the context is canceled, then stops cleanly.
-// This is the service entry point; there is nothing to serve until the first
-// adapter exists, so for now it is the lifecycle and nothing more.
+//
+// This is the service entry point, and the one place a socket exists: a
+// command settles and goes, and a door nobody is behind is worse than no door.
 func (c *Core) Run(ctx context.Context) error {
+	listener, err := c.listen()
+	if err != nil {
+		return err
+	}
 	// The rhythms only exist while something is holding the core up. A CLI
 	// command lives for a second and settles its batch on the way out; a
 	// service lives for days and needs the beat.
 	c.beats.Start(ctx)
+	go c.accept(ctx, listener)
 	if c.processes != nil {
 		// WarmUp only touches Persistent servers and does not wait for any
 		// of them, so a slow one never holds up the rest of Run starting.
@@ -845,6 +859,11 @@ func (c *Core) Shutdown() error {
 	}
 	c.stopping = true
 	c.mu.Unlock()
+
+	// The door shuts first. New work is already refused by the flag above, but
+	// a caller mid-question is owed its answer, so this stops new connections
+	// and then waits for the ones already inside.
+	c.closeSocket()
 
 	done := make(chan struct{})
 	go func() {
