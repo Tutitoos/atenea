@@ -367,10 +367,12 @@ go build -o ~/.local/bin/atenea ./cmd/atenea
 ~/.local/bin/atenea service install
 ```
 
-Nothing listens. There is no port, no socket and no API: the service is the same
-core the commands use, kept up so the rhythms can beat. `atenea status` reads the
-same disk rather than asking it anything, which is why it works whether the
-service is running or not.
+There is no port and no network: the one thing the service listens on is a Unix
+socket in your own state root, opened by the service and reachable only by you.
+`atenea status` knocks on it and prints what the running service says — the
+uptime, the clock's real run, the chats open right now, none of which a command
+can know on its own. With no service up it works out what it can from disk and
+says so on the `process` line, so the command works either way.
 
 `atenea service uninstall` stops it, disables it and removes the unit. It leaves
 the state root alone — what Atenea has learned is not the service's to delete.

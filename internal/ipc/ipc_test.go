@@ -17,14 +17,22 @@ import (
 // reaching a socket this user owns.
 //
 // The other half -- a different uid being turned away -- has no test here, and
-// that is a limitation rather than an oversight. SO_PEERCRED reports what the
-// kernel knows about the process on the far end, so nothing in-process can
-// stand in for a second user: making the check pass for everyone
-// (`|| true`) leaves this suite green. Covering it needs a run that can become
-// somebody else, which this one cannot. What is defended here instead is the
-// consequence of getting it wrong in the other direction -- an owner locked
-// out of a socket they own, which is the failure a live machine would hit --
-// plus the two modes below, which are the guard that does not depend on uid.
+// cannot have one. SO_PEERCRED reports what the kernel knows about the process
+// on the far end, so nothing in-process can stand in for a second user: making
+// the check pass for everyone (`|| true`) leaves this suite green. Covering it
+// needs a run that can become somebody else, which this one cannot.
+//
+// So it was verified by hand instead, on 2026-08-07, with a real second
+// account against a running service: refused by the directory at the shipped
+// modes, and refused by the uid check with the directory deliberately opened,
+// while the owner was served through the same opening. The capture is in
+// docs/content/architecture.md under "The door only opens for you". Anyone
+// changing sameUser is changing something no test defends -- re-run it.
+//
+// What is defended here is the consequence of getting it wrong in the other
+// direction -- an owner locked out of a socket they own, which is the failure
+// a live machine would hit -- plus the two modes below, which are the guard
+// that does not depend on uid.
 func TestThisUserGetsIn(t *testing.T) {
 	listener := listen(t, socketPath(t))
 	go echo(listener)

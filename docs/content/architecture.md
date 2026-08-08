@@ -594,17 +594,25 @@ wrong.
 
 Atenea installs itself as a `systemd --user` unit and nothing more. There is no
 system unit and no daemon user: everything it touches is under one person's
-home, so a system unit would hand a bug reach it never needs. It listens on
-nothing — no port, no socket, no API. The commands are not clients of the
-service; they are the same core, built again, reading the same disk.
+home, so a system unit would hand a bug reach it never needs.
 
-That has a consequence worth being explicit about: **nothing on the status
-screen may come from a tally kept in memory**. The command that prints it is a
-process that lives for a second and whose clock never beats. So the screen
-reports the rhythms, which come from the settings file and are the same
-everywhere, and the copies, which are on disk and the same for everybody
-looking. A lane that fails reaches the reader through the notebook, which is
-also on disk. Every fact on that screen is true no matter who prints it.
+It listens on exactly one thing: a Unix socket under the state root, opened by
+the service and by nothing else. No port, no token, no network. `atenea status`
+knocks on it and prints what the service says; every other command is still the
+same core, built again, reading the same disk.
+
+The socket exists because half of that screen is only true of the process that
+maintains it — the uptime, what the clock has actually run, the chats open right
+now. A command has none of it, so before the door existed every Chats table the
+CLI printed was empty, and not because nobody was connected.
+
+**Nothing on the status screen may come from a tally kept in memory**, and the
+door does not change that rule — it sharpens the reason. The screen is now
+printed from one of two places, the service's own view or a command's local
+one, and a number that is real in the first and meaningless in the second is
+worse than a number nobody prints. So the maintenance lanes still report their
+rhythms, which come from the settings file, and their copies, which are on
+disk. A lane that fails still reaches the reader through the notebook.
 
 One more line earns its place there for the same reason. A settings file
 replaces the catalog rather than patching it, so a file written before a
@@ -612,6 +620,46 @@ release never gains what the release shipped — silently, until a funnel that
 should have had a fallback turns out to have one candidate. The screen compares
 the two catalogs and names what is missing, beside the settings path it came
 from. It is a fact about a file on disk, so it is true no matter who prints it.
+
+### The door only opens for you
+
+The socket is `0600` inside a `0700` directory, and every connection is checked
+against the kernel's own answer for who opened it (`SO_PEERCRED` on Linux)
+before a byte is read. Two guards, deliberately, because they fail differently:
+a socket is created with the process umask, so between bind and chmod it is
+briefly readable, and the directory is what closes that window.
+
+The uid check is the security boundary of the whole design, and it is the one
+thing the test suite cannot exercise: `SO_PEERCRED` reports what the kernel
+knows about the far end, so nothing in-process can stand in for a second user.
+Making the check pass for everyone leaves the suite green. It was therefore
+verified by hand, once, with a real second account.
+
+Observed on one machine on 2026-08-07, against a service running as uid 1002:
+
+```text
+=== arm 1: the modes Atenea actually ships ===
+dir  700 tutitoos .../state/atenea/run
+sock 600 tutitoos .../state/atenea/run/core.sock
+as ateneapeer: EACCES uid=1003 ([Errno 13] Permission denied)
+
+=== arm 2: filesystem guard deliberately removed ===
+dir  711 tutitoos .../state/atenea/run
+sock 666 tutitoos .../state/atenea/run/core.sock
+as ateneapeer: CONNECT-THEN-EOF uid=1003 (read refused: [Errno 104] ...)
+as owner   : GOT-STATUS uid=1002 bytes=4148 role=service
+```
+
+Two arms, because arm 1 alone proves nothing about the uid check: the directory
+mode answers first, and `SO_PEERCRED` is never reached. Removing the filesystem
+guard is what puts the second user in front of the door it actually guards. In
+arm 2 the modes, the request, the socket and the moment are identical for both
+callers and only the uid differs — the second user connects, is hung up on
+without an answer, and the owner is served through the same opening.
+
+The account was created with no home, no login shell and no group of its own,
+and deleted in the same run. What is history here is the uid numbers; what is
+not is the pair of outcomes, which is the guard working as designed.
 
 ### One lane for everything in the background
 

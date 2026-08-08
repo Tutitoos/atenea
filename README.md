@@ -122,10 +122,13 @@ go build -o ~/.local/bin/atenea ./cmd/atenea
 systemctl --user start atenea.service
 ```
 
-A user unit, never a system one, and nothing listens: no port, no socket, no
-API. Atenea holds no privilege worth borrowing, so `sudo` would only widen what
-a bug could reach, and the commands read the same disk rather than asking the
-service anything — which is why they work whether it is running or not.
+A user unit, never a system one, and no port: the only thing it listens on is a
+Unix socket in your own state root, `0600` in a `0700` directory, with every
+caller checked against the kernel's answer for who they are before a byte is
+read. Atenea holds no privilege worth borrowing, so `sudo` would only widen
+what a bug could reach. `atenea status` asks the running service, because the
+uptime and the chats open right now are only true of the process that keeps
+them; with nothing running it falls back to disk and says so.
 
 What runs on its own: the measurement batch reaches disk every 30s, the history
 is folded hourly, and every six hours a hard-linked copy of everything Atenea
