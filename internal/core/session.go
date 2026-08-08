@@ -212,6 +212,12 @@ func (s *Session) Ask(ctx context.Context, q orchestrator.Question) (*orchestrat
 // Refused, not asked. A chat asking for more than it holds is the moment to go
 // back to the user, and the core has no user: the client that opened the chat
 // does.
+//
+// What this gate holds a chat to is what it ADDS. The settings file's standing
+// grant applies underneath to every run on this machine, so a chat opened with
+// no grant still inherits the operator's floor. That is right while the only
+// thing opening sessions is the operator's own console, and wrong the day a
+// client opens one: a grant that can narrow is the missing half, not this one.
 func (s *Session) entitled(effects []contract.Effect) error {
 	for _, effect := range effects {
 		if !s.Allows(effect) {

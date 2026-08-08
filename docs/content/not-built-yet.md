@@ -177,6 +177,38 @@ has; *"y confirmaciones"* is not, for any of them.
 **Done when:** a write outside a granted path stops and asks, rather than
 being refused up front or allowed silently.
 
+## A chat can only widen the operator's floor
+
+A session's grant is additive. All four dispatch paths -- a commission, a single
+`ask`, and both halves of a resume -- layer it the same way:
+`Grant(standingEffects)` first, then whatever that call asked for on top. The
+settings file's standing grant therefore applies to every run on this machine,
+and `Session.entitled` holds a chat only to what it adds. A chat opened with no
+grant at all still runs under the operator's floor.
+
+That is the right answer today, and only because of who opens sessions. Nothing
+outside this repository does: the CLI's own `run` and `ask` go through
+`Core.Do` and `Core.Ask`, the console's doors, which trust the effects they are
+handed for the good reason that somebody standing at a terminal *is* the
+operator. `atenea status` has a Chats table and it has always been empty. A
+floor set by the operator, inherited by the operator, is not a privilege
+boundary being crossed -- it is one person's settings file applying to one
+person's work.
+
+It stops being defensible the moment a session is opened by something that is
+not the operator at a terminal. That is not a hypothetical: it is the MCP
+server in the service, where `initialize` carries a `clientInfo.name` and
+identity falls out of the socket. Then the floor is inherited by a caller who
+did not set it and may not be trusted with it, and "this chat declared no
+effects" will quietly mean "this chat may do whatever the settings file
+allows" -- which is the wrong default for a client and the right one for a
+console. The gate is in the correct place for the change; what is missing is a
+grant that can narrow as well as widen, and a decision about which of the two
+a session with no grant should mean.
+
+**Done when:** a session opened by a client can hold a grant narrower than the
+standing one, and the first client to open a session is the reason it does.
+
 ## OpenCode, still parked
 
 The design parked the third adapter deliberately: *"cuando el sistema esté rodado.
