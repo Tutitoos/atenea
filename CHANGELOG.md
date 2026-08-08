@@ -13,6 +13,30 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Added
+
+- **`expose` on an `[[mcp_server]]` block, and the `raw.` namespace it will
+  use.** The declaration list has always meant one thing -- point a client at a
+  server that is already running, then step out of the path. `expose` names
+  that behaviour `off` and reserves `raw` for the other one: Atenea holding the
+  connection and re-offering a backend's own tools verbatim as
+  `raw.<server>.<tool>`. The field is parsed and its value checked; an unknown
+  value is refused rather than read as `off`, because a backend an operator
+  believes is reachable and nothing offers is the failure this whole list
+  exists to prevent. Nothing dispatches on `raw` yet: a block declaring it adds
+  no capability, no implementation, and `atenea wrap` treats it as `off`.
+- **`raw` is refused as the first segment of any capability or implementation
+  id.** A capability called `raw.search` would be indistinguishable from a
+  passthrough to a backend named `search`, which would make the absence of a
+  funnel invisible in the one place a caller reads -- the name. Reserving it by
+  refusal rather than convention is the difference between a rule and a habit a
+  catalogue drifts away from.
+- **An `[[mcp_server]]` id containing a dot is refused.** `raw.<id>.<tool>` can
+  only be split back into a server and a tool while the id is one segment, so a
+  name that could not be parsed later is refused when it is written.
+
 ## [0.9.1] - 2026-08-08
 
 ### Fixed

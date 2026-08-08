@@ -30,6 +30,7 @@ func TestImplementationValidateRejectsBadDefinitions(t *testing.T) {
 		"empty provider":      func(i *contract.Implementation) { i.Provider = "" },
 		"undotted capability": func(i *contract.Implementation) { i.Capability = "search" },
 		"uppercase language":  func(i *contract.Implementation) { i.Constraints.Languages = []string{"Go"} },
+		"reserved prefix":     func(i *contract.Implementation) { i.ID = "raw.serena.find_symbol" },
 		"inverted scale": func(i *contract.Implementation) {
 			i.Constraints.MinScale = contract.ScaleLarge
 			i.Constraints.MaxScale = contract.ScaleSmall

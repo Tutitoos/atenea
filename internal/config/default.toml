@@ -1233,12 +1233,20 @@ indexed_by = []           # providers holding a ready index for this repository
 # Nothing is written to a client's config file. Launch the client without
 # wrap and it is exactly as it was.
 #
-# Each block sets `url` OR `command`, never both.
+# Each block sets `url` OR `command`, never both, and an `id` carries no dot:
+# it is one segment of the `raw.<id>.<tool>` name a passthrough would use.
+#
+# `expose` says which of two things a block means. `off`, the default and all
+# of the above, points the client at the server and steps out of the path.
+# `raw` would have Atenea hold the connection and re-offer that server's tools
+# verbatim, with no funnel and no capability. It is parsed and checked today;
+# nothing dispatches on it yet, so a block declaring it behaves like `off`.
 # ---------------------------------------------------------------------------
 # [[mcp_server]]
 # id = "serena"                        # the name the client will see
 # url = "http://127.0.0.1:40010/mcp"   # http endpoint; ToolHive proxies live here
 # timeout = "5s"                       # bounds the check; omitted takes the default
+# expose = "off"                       # off | raw
 
 # [[mcp_server]]
 # id = "codebase-memory"

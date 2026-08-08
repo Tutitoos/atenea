@@ -405,6 +405,11 @@ func (i Implementation) Validate() error {
 		return Fail(FailureInvalidInput,
 			"implementation id %q must be lowercase, e.g. ripgrep or serena.search", i.ID)
 	}
+	if firstSegment(i.ID) == ReservedNamespace {
+		return Fail(FailureInvalidInput,
+			"implementation id %q claims the reserved %s. namespace, which names tools reached without a funnel",
+			i.ID, ReservedNamespace)
+	}
 	if !slugID.MatchString(i.Provider) {
 		return Fail(FailureInvalidInput,
 			"implementation %s: provider %q must be lowercase", i.ID, i.Provider)

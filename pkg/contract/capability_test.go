@@ -78,6 +78,7 @@ func TestCapabilityValidateRejectsBadDefinitions(t *testing.T) {
 		"enum on a record":  func(c *contract.Capability) { c.Outputs[0].Enum = []string{"a"} },
 		"empty enum value":  func(c *contract.Capability) { c.Inputs[0].Enum = []string{""} },
 		"repeated enum":     func(c *contract.Capability) { c.Inputs[0].Enum = []string{"a", "a"} },
+		"reserved prefix":   func(c *contract.Capability) { c.ID = "raw.search" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

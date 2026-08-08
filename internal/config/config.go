@@ -95,7 +95,36 @@ type MCPServer struct {
 	Env     map[string]string
 	// Timeout bounds the readiness check. Zero takes the probe's default.
 	Timeout time.Duration
+	// Expose says whether the backend's own tools may be reached through
+	// Atenea, and is the field that separates a pointer from a passthrough.
+	//
+	// ExposeOff, the default and today's whole behavior, means the entry is
+	// a pointer: `atenea wrap` tells a client where the shared server lives
+	// and then steps out of the path. ExposeRaw means Atenea holds the
+	// connection and re-offers the tools verbatim under `raw.<id>.<tool>`.
+	//
+	// Nothing dispatches on ExposeRaw yet. It is parsed and refused-when-
+	// wrong first, on purpose: a declaration that is read but not honored is
+	// a promise the next phase can keep, while a dispatch path built before
+	// the declaration is checked has nowhere to report a bad one.
+	Expose Expose
 }
+
+// Expose is how a declared backend may be reached.
+//
+// It is a closed set rather than a bool because the third state is already
+// foreseeable -- a curated subset of a backend's tools -- and a bool would
+// have to be replaced rather than extended when it arrives.
+type Expose string
+
+const (
+	// ExposeOff is a pointer: the client is told where the server is and
+	// talks to it directly. Atenea is not in the path.
+	ExposeOff Expose = "off"
+	// ExposeRaw is a passthrough: the tools are re-offered verbatim under
+	// the reserved raw. namespace, with no funnel and no capability.
+	ExposeRaw Expose = "raw"
+)
 
 // Core holds the operational knobs.
 type Core struct {
@@ -640,6 +669,7 @@ type fileMCPServer struct {
 	Command []string          `toml:"command"`
 	Env     map[string]string `toml:"env"`
 	Timeout string            `toml:"timeout"`
+	Expose  string            `toml:"expose"`
 }
 
 // build validates one declared endpoint. The rules are all one rule: a
@@ -655,6 +685,14 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	id := strings.TrimSpace(m.ID)
 	if id == "" {
 		return fail("mcp_server: id is required")
+	}
+	// A dot would make the passthrough name ambiguous: a tool re-offered as
+	// raw.<id>.<tool> can only be split back into a server and a tool while
+	// the server is one segment. The refusal is here rather than at the
+	// dispatch site because a name that cannot be parsed later is already
+	// wrong when it is written, whether or not anything reads it yet.
+	if strings.Contains(id, ".") {
+		return fail("mcp_server %s: id must not contain a dot; it is one segment of raw.<id>.<tool>", id)
 	}
 	hasURL, hasCommand := strings.TrimSpace(m.URL) != "", len(m.Command) > 0
 	switch {
@@ -688,6 +726,19 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 			return fail("mcp_server %s: timeout %s is not positive", id, d)
 		}
 		out.Timeout = d
+	}
+	// An absent key inherits the pointer behavior that shipped before this
+	// field existed, so a settings file written earlier keeps meaning what it
+	// meant. An unknown value is refused rather than defaulted: silently
+	// reading `expose = "true"` as off would leave the operator believing a
+	// backend is reachable when nothing offers it.
+	switch expose := strings.TrimSpace(m.Expose); expose {
+	case "":
+		out.Expose = ExposeOff
+	case string(ExposeOff), string(ExposeRaw):
+		out.Expose = Expose(expose)
+	default:
+		return fail("mcp_server %s: expose %q is not %s or %s", id, expose, ExposeOff, ExposeRaw)
 	}
 	return out, nil
 }

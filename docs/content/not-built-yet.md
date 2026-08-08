@@ -337,6 +337,19 @@ the surface: `chrome-devtools` is eight tools or twenty-nine by one edit in one
 file, which is what five client configs have been trying and failing to hold in
 agreement.
 
+**Landed on 2026-08-08, ahead of any dispatch:** `expose` is parsed and its
+value checked, `off` is the default an older file inherits, and an unknown value
+is refused rather than read as `off`. A server id containing a dot is refused,
+and `raw` is refused as the first segment of any capability or implementation id
+-- in `Capability.Validate` and `Implementation.Validate`, so the namespaces are
+disjoint before anything can occupy them. What is still absent is every line
+below the first: `instance`, `tools` and `effects` are not read, and nothing
+dispatches -- a block declaring `expose = "raw"` adds no capability, no
+implementation, and `wrap` treats it exactly like `off`. That order is on
+purpose: a declaration that is read and refused-when-wrong is a promise the next
+step can keep, while a dispatch path built before its declaration is validated
+has nowhere to report a bad one.
+
 ### Names, and a collision that is invisible from a tool list
 
 Capability ids are dotted, and so are implementation ids: the base is keyed by

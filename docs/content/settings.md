@@ -675,6 +675,7 @@ machine rather than only answering from it.
 id = "serena"                        # the name the client will see
 url = "http://127.0.0.1:40010/mcp"   # http endpoint
 timeout = "5s"                       # bounds the check; omitted takes the default
+expose = "off"                       # off (default) points the client here; raw is a passthrough
 
 [[mcp_server]]
 id = "codebase-memory"
@@ -688,12 +689,33 @@ its own providers through adapters; these are endpoints `atenea wrap` hands to
 *someone else's* client so that client stops spawning a private copy of a
 server that is already running.
 
-Each block sets `url` or `command`, never both, and repeating an `id` is
-refused rather than resolved. All three refusals are the same rule: the
-payload is keyed by `id`, so a block that cannot be turned into exactly one
-endpoint would end up either ignored or silently overwritten by the block
-after it, and a declaration nobody can act on is worse than no declaration --
-a client is told the server exists before anyone finds out it does not.
+Each block sets `url` or `command`, never both; repeating an `id` is refused
+rather than resolved; and an `id` may not contain a dot. Those refusals are
+the same rule: the payload is keyed by `id`, so a block that cannot be turned
+into exactly one endpoint would end up either ignored or silently overwritten
+by the block after it, and a declaration nobody can act on is worse than no
+declaration -- a client is told the server exists before anyone finds out it
+does not. The dot is refused for the same reason one step later: a passthrough
+tool is named `raw.<id>.<tool>`, which can only be split back into a server
+and a tool while the server is one segment.
+
+`expose` is the field that separates the two things this list can mean. `off`,
+the default and everything described above, makes the entry a pointer: the
+client is told where the shared server is and talks to it directly. `raw`
+means Atenea holds the connection and re-offers that server's tools verbatim
+under `raw.<id>.<tool>`, with no funnel, no capability, and no health record
+of its own.
+
+**Nothing dispatches on `raw` yet.** The field is parsed, its value is checked,
+and an unknown one is refused; a backend declared `raw` today adds no
+capability and no implementation to the catalogue, and `atenea wrap` treats it
+exactly like `off`. The declaration is deliberately in the file before the
+dispatch path exists, because a value that is read and checked is a promise the
+next release can keep, while a dispatch path built before the declaration is
+validated has nowhere to report a bad one. `raw` is reserved as the first
+segment of any capability or implementation id, so nothing in the catalogue can
+ever collide with a passthrough name -- that refusal is live now, in
+`Capability.Validate` and `Implementation.Validate`.
 
 `atenea wrap opencode` handshakes every entry here and passes on only the ones
 that answered. Captured on a real machine, both transports, one real failure:

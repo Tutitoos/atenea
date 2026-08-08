@@ -163,11 +163,37 @@ var (
 	fieldName    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
+// ReservedNamespace is the first segment Atenea keeps for itself.
+//
+// A tool reached through a declared backend rather than through a capability
+// is named `raw.<server>.<tool>`, so that a caller reading a name can tell
+// which of the two it is looking at without consulting anything. That only
+// holds if nothing else may claim the segment: a capability called raw.search
+// would be indistinguishable from a backend named search, and the funnel's
+// absence would stop being visible in the name.
+//
+// The reservation is a refusal at definition time rather than a convention,
+// because a convention is exactly what a catalog drifts away from.
+const ReservedNamespace = "raw"
+
+// firstSegment is the part before the first dot, or the whole string.
+func firstSegment(id string) string {
+	if i := strings.IndexByte(id, '.'); i >= 0 {
+		return id[:i]
+	}
+	return id
+}
+
 // Validate checks the capability definition itself.
 func (c Capability) Validate() error {
 	if !capabilityID.MatchString(c.ID) {
 		return Fail(FailureInvalidInput,
 			"capability id %q must be dotted lowercase, e.g. code.search", c.ID)
+	}
+	if firstSegment(c.ID) == ReservedNamespace {
+		return Fail(FailureInvalidInput,
+			"capability id %q claims the reserved %s. namespace, which names tools reached without a funnel",
+			c.ID, ReservedNamespace)
 	}
 	if c.Version == (Version{}) {
 		return Fail(FailureInvalidInput, "capability %s: version is required", c.ID)

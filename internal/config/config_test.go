@@ -433,6 +433,8 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		"empty argument":   "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
 		"bad timeout":      "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
 		"negative timeout": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
+		"dotted id":        "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"unknown expose":   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
 	}
 	for name, block := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -481,6 +483,38 @@ func TestADeclaredMCPServerIsReadBack(t *testing.T) {
 	}
 	if got := cfg.MCPServers[1]; len(got.Command) != 3 || got.Env["K"] != "v" {
 		t.Errorf("second = %+v, want the declared command and env", got)
+	}
+}
+
+// expose is the field that separates a pointer from a passthrough, and the
+// two things worth pinning are the default and the fact that nothing acts on
+// it yet: a file written before the field existed must keep meaning what it
+// meant, and a file declaring raw must load without anything dispatching.
+func TestExposeDefaultsToPointerAndReadsBackRaw(t *testing.T) {
+	body := minimal +
+		"\n[[mcp_server]]\nid = \"quiet\"\nurl = \"http://127.0.0.1:1/mcp\"\n" +
+		"\n[[mcp_server]]\nid = \"semgrep\"\nurl = \"http://127.0.0.1:40020/mcp\"\nexpose = \"raw\"\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.MCPServers[0].Expose; got != config.ExposeOff {
+		t.Errorf("absent expose = %q, want %q", got, config.ExposeOff)
+	}
+	if got := cfg.MCPServers[1].Expose; got != config.ExposeRaw {
+		t.Errorf("declared expose = %q, want %q", got, config.ExposeRaw)
+	}
+	// The proof that nothing dispatches: a backend declared raw adds no
+	// capability and no implementation to the catalog it loaded beside.
+	for _, c := range cfg.Capabilities {
+		if strings.HasPrefix(c.ID, contract.ReservedNamespace+".") {
+			t.Errorf("capability %s came from a declaration", c.ID)
+		}
+	}
+	for _, i := range cfg.Implementations {
+		if strings.HasPrefix(i.ID, contract.ReservedNamespace+".") {
+			t.Errorf("implementation %s came from a declaration", i.ID)
+		}
 	}
 }
 
