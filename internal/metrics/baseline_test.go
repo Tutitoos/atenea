@@ -228,3 +228,51 @@ func TestFoldedHistoryStillAnswers(t *testing.T) {
 		t.Errorf("attempts = %d, want 2", after.Attempts)
 	}
 }
+
+// Measured exists so a screen can say whether the funnel is ranking on real
+// numbers or on the estimate somebody typed, and the funnel does not believe
+// its own numbers until an implementation has two of them -- one call can be a
+// cold cache. Counting the first success as "measured" therefore prints a
+// caption claiming a trust the decision below it does not have: the screen
+// says measured, every trace on the same machine says estimated, and the
+// person reading both concludes one of them is broken.
+func TestOneCallIsNotYetAMeasurement(t *testing.T) {
+	s := store(t, Options{})
+	at := time.Now().UTC()
+	s.Record(call(at, "ripgrep", "14.1.0", time.Millisecond, 0, true))
+
+	got, err := s.Measured(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Measured: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("one call counted as a measurement: %v", got)
+	}
+
+	s.Record(call(at.Add(time.Second), "ripgrep", "14.1.0", 2*time.Millisecond, 0, true))
+	got, err = s.Measured(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Measured: %v", err)
+	}
+	if len(got) != 1 || got[0] != "ripgrep" {
+		t.Errorf("two calls did not count: %v", got)
+	}
+}
+
+// A failure is an attempt, never a measurement: a tool that refuses instantly
+// is not the cheapest thing on the machine, and two refusals must not buy the
+// trust two answers would.
+func TestRefusalsNeverAddUpToAMeasurement(t *testing.T) {
+	s := store(t, Options{})
+	at := time.Now().UTC()
+	s.Record(call(at, "ripgrep", "14.1.0", time.Microsecond, 0, false))
+	s.Record(call(at.Add(time.Second), "ripgrep", "14.1.0", time.Microsecond, 0, false))
+
+	got, err := s.Measured(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Measured: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("refusals counted as measurements: %v", got)
+	}
+}

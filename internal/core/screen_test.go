@@ -158,7 +158,12 @@ func TestTheFunnelLineFollowsTheBase(t *testing.T) {
 
 	now := time.Now().UTC()
 	warm := seeded(t, func(s *metrics.Store) {
+		// Two, because two is what the funnel needs before it believes a
+		// number over a declared estimate. One would leave the caption
+		// claiming a measurement while every trace on the same machine still
+		// says "estimated".
 		s.Record(tried(now, "ripgrep", "api", true, "", ""))
+		s.Record(tried(now.Add(time.Second), "ripgrep", "api", true, "", ""))
 	}).Status().Funnel
 	if warm == cold {
 		t.Fatalf("the caption did not move when the base filled: %q", warm)
@@ -167,6 +172,24 @@ func TestTheFunnelLineFollowsTheBase(t *testing.T) {
 	// count is the whole point: it says which half of the screen to believe.
 	if !strings.Contains(warm, "1 of 3") {
 		t.Errorf("warm caption = %q, want it to count what is measured", warm)
+	}
+}
+
+// The gap between the two is where the caption used to lie. A single call is
+// on the record and prices nothing: the funnel spends its break-in turns
+// buying a second one and says "estimated" in every trace while it does. A
+// screen that called that measured contradicted every decision underneath it.
+func TestOneCallDoesNotEarnTheCaption(t *testing.T) {
+	now := time.Now().UTC()
+	funnel := seeded(t, func(s *metrics.Store) {
+		s.Record(tried(now, "ripgrep", "api", true, "", ""))
+	}).Status().Funnel
+
+	if strings.Contains(funnel, "1 of 3") {
+		t.Errorf("caption = %q: one call is an attempt, not a price", funnel)
+	}
+	if !strings.Contains(funnel, "nothing measured yet") {
+		t.Errorf("caption = %q, want it to admit nothing is priced yet", funnel)
 	}
 }
 

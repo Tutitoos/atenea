@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -352,7 +353,10 @@ func (c *Core) recordedHealth() (map[string]metrics.Verdict, int) {
 	if err != nil {
 		return nil, 0
 	}
-	priced, err := c.measurements.Measured(ctx)
+	// The funnel's own threshold, so the caption and the traces below it are
+	// answering the same question. A count of implementations the base has
+	// merely touched would claim a trust no decision on this machine has.
+	priced, err := c.measurements.Measured(ctx, selector.BreakInSamples)
 	if err != nil {
 		return verdicts, 0
 	}

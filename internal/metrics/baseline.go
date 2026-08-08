@@ -585,16 +585,23 @@ func Reconcile(declared, recorded contract.Health) contract.Health {
 }
 
 // measured lists every implementation the base can put a real price on: one
-// that has at least one successful call still on record, in either table.
+// with at least as many successful calls on record as the caller says it takes
+// to believe a number over a declared estimate.
 //
 // Both tables, because the two age differently. Attempt rows are dropped after
 // a week while their hour survives for months, so an implementation used
 // steadily last month and not since is absent from one and present in the
 // other -- and it does have a measured cost, which is the question being
-// asked.
-const measured = `SELECT DISTINCT implementation FROM measurement WHERE ok
-UNION
-SELECT DISTINCT implementation FROM rollup WHERE ok_attempts > 0`
+// asked. The counts are summed across them rather than unioned: one call in
+// each is two calls, and the question is about the total. Unfolded attempts
+// only on the fine side, because a folded one is already counted in its hour.
+const measured = `WITH wins AS (
+	SELECT implementation, count(*) FILTER (WHERE ok) AS n
+	FROM measurement WHERE NOT folded GROUP BY 1
+	UNION ALL
+	SELECT implementation, coalesce(sum(ok_attempts), 0) FROM rollup GROUP BY 1
+)
+SELECT implementation FROM wins GROUP BY 1 HAVING sum(n) >= ?`
 
 // Measured reports which implementations rank on real numbers rather than on
 // the estimate somebody typed into the settings file.
@@ -603,7 +610,15 @@ SELECT DISTINCT implementation FROM rollup WHERE ok_attempts > 0`
 // read as a measurement is the specific misunderstanding this whole store was
 // built to prevent, and a caption that claims one while displaying the other
 // causes it rather than preventing it.
-func (s *Store) Measured(ctx context.Context) ([]string, error) {
+//
+// minSamples is that threshold and belongs to the caller, not here: the base
+// records calls and the funnel decides how many of them it takes to believe
+// one. Counting the first success would have this answer disagree with every
+// trace on the same machine, which is the confusion above wearing a number.
+func (s *Store) Measured(ctx context.Context, minSamples int) ([]string, error) {
+	if minSamples < 1 {
+		minSamples = 1
+	}
 	if err := s.Flush(ctx); err != nil {
 		return nil, err
 	}
@@ -613,7 +628,7 @@ func (s *Store) Measured(ctx context.Context) ([]string, error) {
 	}
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.QueryContext(ctx, measured)
+	rows, err := db.QueryContext(ctx, measured, minSamples)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: measured: %w", err)
 	}
