@@ -69,16 +69,24 @@ type Run struct {
 	Steps []StepState   `json:"steps"`
 }
 
-// The two values Kind takes.
+// The three values Kind takes.
 const (
 	KindTask = "task"
 	KindAsk  = "ask"
+	// KindRaw is a passthrough: one tool on a declared backend, forwarded
+	// verbatim. It resumes like neither of the others because it does not
+	// resume at all -- there is no plan to rebuild and no step to redispatch,
+	// so a raw receipt is written once, already closed.
+	KindRaw = "raw"
 )
 
 // StepState is one node of the plan as it stood when the dump was taken.
 type StepState struct {
-	ID             string `json:"id"`
-	Capability     string `json:"capability"`
+	ID string `json:"id"`
+	// Capability is empty on a passthrough step, which is the shape of the
+	// thing rather than a gap in it: a raw tool answers no capability, and
+	// naming one here would be the first lie in a record kept for auditing.
+	Capability     string `json:"capability,omitempty"`
 	Repository     string `json:"repository"`
 	Implementation string `json:"implementation,omitempty"`
 	Verdict        string `json:"verdict"`
@@ -106,8 +114,71 @@ type StepState struct {
 	// share, which is the ordinary case: a receipt with every step reading
 	// "$0 over" would be a receipt nobody reads, same reasoning as SpentUSD
 	// above.
-	OverspendUSD float64   `json:"overspend_usd,omitempty"`
-	ClosedAt     time.Time `json:"closed_at"`
+	OverspendUSD float64 `json:"overspend_usd,omitempty"`
+	// Funnel is who else was in the running, or the reason nobody was. See
+	// the type: the field is written on every step from the release that
+	// introduced it, so an absent one dates the receipt rather than
+	// describing the step.
+	Funnel   Funnel    `json:"funnel"`
+	ClosedAt time.Time `json:"closed_at"`
+}
+
+// Funnel is what the selection did, kept on the step it decided.
+//
+// A receipt has always named the implementation that ran and never who else
+// was in the running, which is enough to observe a live run and not enough to
+// audit a past one. It is one field rather than a trace beside a flag because
+// two of its three states are silences that would otherwise look identical: a
+// step whose trace was not kept and a step that never had a funnel both read
+// as an absent trace, and a reader cannot tell a missing record from a
+// decision that never happened.
+//
+// A receipt written before this field existed carries none of it at all, which
+// is a fourth state and an honest one: it says the run predates the record
+// rather than claiming anything about its funnel.
+type Funnel struct {
+	State string `json:"state"`
+	// Stages is the trace, and only FunnelKept carries one. The other two
+	// states are about the absence of a trace, so a stage list beside them
+	// would be a contradiction on the page.
+	Stages []FunnelStage `json:"stages,omitempty"`
+}
+
+// The three states, and the whole point is that they are distinguishable.
+const (
+	// FunnelKept means the funnel ran and its trace is below.
+	FunnelKept = "kept"
+	// FunnelNotKept means a funnel decided this step and nothing recorded
+	// how -- a step rebuilt from an older receipt, or one that never
+	// dispatched and so never reached the selector.
+	FunnelNotKept = "not_kept"
+	// FunnelNone means there was no funnel to keep, because the step was a
+	// passthrough to a declared backend: one provider, nothing to choose
+	// between, and no decision that could have gone another way.
+	FunnelNone = "none"
+)
+
+// FunnelStage is one narrowing, with what it threw out.
+type FunnelStage struct {
+	Name string `json:"name"`
+	// In and Out are counts rather than the surviving names: the survivors
+	// of the last stage are derivable from the drops and the chosen
+	// implementation, and writing every candidate at every stage would grow
+	// the file with a list that repeats itself four times.
+	In      int          `json:"in"`
+	Out     int          `json:"out"`
+	Dropped []FunnelDrop `json:"dropped,omitempty"`
+}
+
+// FunnelDrop is one candidate that did not survive a stage, and why.
+type FunnelDrop struct {
+	Implementation string `json:"implementation"`
+	Reason         string `json:"reason"`
+	// Raw is the provider's own words when the drop came from a health
+	// record rather than the core's own bookkeeping, kept for the same
+	// reason StepState.Raw is: a summary without the evidence is not
+	// something a human can act on.
+	Raw string `json:"raw,omitempty"`
 }
 
 // DefaultDir is where runs are kept when the settings file says nothing.

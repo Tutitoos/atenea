@@ -1476,7 +1476,45 @@ func snapshot(step StepResult) checkpoint.StepState {
 		SpentUSD:       step.Outcome.SpentUSD,
 		OverspendUSD:   Overspend(step),
 		ClosedAt:       closed,
+		Funnel:         trace(step.Decision),
 	}
+}
+
+// trace copies the funnel onto the receipt, or says why there is nothing to
+// copy.
+//
+// The counts come off the stage rather than being recomputed from the drops:
+// a stage that dropped nobody still narrowed nothing for a reason worth
+// reading, and deriving `in` from `out` plus drops would quietly turn a
+// three-candidate stage that dropped none into an empty line.
+//
+// A decision with no stages did not happen: the step never reached the
+// selector, either because it never dispatched or because it was rebuilt from
+// a receipt written before traces were kept. That is FunnelNotKept, and it is
+// deliberately not FunnelNone -- none is reserved for a step that could not
+// have had a funnel at all.
+func trace(decision selector.Decision) checkpoint.Funnel {
+	if len(decision.Stages) == 0 {
+		return checkpoint.Funnel{State: checkpoint.FunnelNotKept}
+	}
+	stages := make([]checkpoint.FunnelStage, 0, len(decision.Stages))
+	for _, stage := range decision.Stages {
+		dropped := make([]checkpoint.FunnelDrop, 0, len(stage.Dropped))
+		for _, drop := range stage.Dropped {
+			dropped = append(dropped, checkpoint.FunnelDrop{
+				Implementation: drop.Implementation,
+				Reason:         drop.Reason,
+				Raw:            drop.Raw,
+			})
+		}
+		stages = append(stages, checkpoint.FunnelStage{
+			Name:    stage.Name,
+			In:      len(stage.In),
+			Out:     len(stage.Out),
+			Dropped: dropped,
+		})
+	}
+	return checkpoint.Funnel{State: checkpoint.FunnelKept, Stages: stages}
 }
 
 // measure turns a closed step into a row for the baseline.

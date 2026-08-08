@@ -139,41 +139,6 @@ and which nothing today can express. Until then the honest description of
 answers, and the other seven capabilities are reachable only one at a time
 through `atenea ask`.
 
-## A receipt says a step failed, never who else was in the running
-
-The funnel's trace is live-only. `atenea select` and `--trace` print every
-stage with its survivors and the reason each candidate was dropped, and the
-measurement base durably keeps the failures that drove those drops -- watched
-on 2026-08-08, a provider left the funnel on its third failure in one bin and
-the base recorded `3 tries, 3 failed` for it.
-
-What no receipt keeps is the decision itself. A step's record names the
-implementation that ran, the verdict and the failure text, so the bin survives
-in prose; it does not name the candidates that were considered and dropped on
-*that* run. Reading a receipt afterwards you can see what happened and look up
-what the base knew, but you cannot reconstruct the funnel as it stood at that
-moment.
-
-This is a gap in auditing a past decision, not in observing a live one, and it
-is deliberate until something needs the second: a per-step funnel trace on
-every receipt is a durable copy of a decision that is already derivable from
-the two records beside it, and it grows with every step ever run.
-
-Something now needs the second, and it arrives with a neighbour. Passthrough
-below introduces steps that have no funnel at all, because a single provider
-leaves nothing to choose between. A step whose trace was never kept and a step
-that never had a trace would then both read as an absent one, and the reader
-would have no way to tell a missing record from a decision that never happened.
-So whenever this is written, it is written as **one field with three states** --
-the trace, kept; not kept; or none, because the step was passthrough -- and it
-lands in the same change as the passthrough marker rather than beside it. Two
-adjacent explanations for the same silence is the drift this page exists to
-catch.
-
-**Done when:** a receipt read back names the candidates dropped at each stage of
-the run that produced it, and a passthrough step in the same file is
-distinguishable from a step whose trace was not kept.
-
 ## History is declared and never loaded
 
 `ContextHistory` — *"what happened in earlier sessions: user decisions and facts
@@ -337,18 +302,29 @@ the surface: `chrome-devtools` is eight tools or twenty-nine by one edit in one
 file, which is what five client configs have been trying and failing to hold in
 agreement.
 
-**Landed on 2026-08-08, ahead of any dispatch:** `expose` is parsed and its
-value checked, `off` is the default an older file inherits, and an unknown value
-is refused rather than read as `off`. A server id containing a dot is refused,
-and `raw` is refused as the first segment of any capability or implementation id
--- in `Capability.Validate` and `Implementation.Validate`, so the namespaces are
-disjoint before anything can occupy them. What is still absent is every line
-below the first: `instance`, `tools` and `effects` are not read, and nothing
-dispatches -- a block declaring `expose = "raw"` adds no capability, no
-implementation, and `wrap` treats it exactly like `off`. That order is on
-purpose: a declaration that is read and refused-when-wrong is a promise the next
-step can keep, while a dispatch path built before its declaration is validated
-has nowhere to report a bad one.
+**Landed on 2026-08-08, in two steps.** First, ahead of any dispatch: `expose`
+parsed and its value checked, `off` the default an older file inherits, an
+unknown value refused rather than read as `off`, a dotted server id refused,
+and `raw` refused as the first segment of any capability or implementation id
+-- so the namespaces were disjoint before anything could occupy them.
+
+Then the dispatch path itself. A declared `raw` backend is dialed on the first
+call that needs it, its tools appear on `tools/list` as `raw.<id>.<tool>` after
+Atenea's own, and a call is forwarded whole and answered whole. Measured
+against the live `semgrep` on this machine: a real client saw 8 capabilities
+and 4 `raw.semgrep.*` tools on one list, and `raw.semgrep.get_supported_languages`
+returned 482 bytes of real answer. Every receipt it writes is `kind = "raw"`
+with `funnel.state = "none"` -- and in the same run directory, a `code.search`
+step reads `kept` with four stages and two named drops, which is the pair the
+receipt entry below was written for.
+
+What is still absent is every line below the first in that block: `instance`,
+`tools` and `effects` are not read. A raw backend today offers all of its tools
+to any chat that reaches the socket, which is exactly the surface the `tools`
+allow list exists to close, and the reason this entry is not struck out.
+Passthrough is also HTTP-only: `expose = "raw"` on a `command` entry is refused
+rather than ignored, because one stdio process shared across chats is a
+lifecycle nobody has built here yet.
 
 ### Names, and a collision that is invisible from a tool list
 
@@ -429,14 +405,34 @@ stay client-declared, and "clients declare Atenea and nothing else" is therefore
 false by two -- said here so the plan is not measured against a target it was
 never going to reach.
 
-One of the two is **currently absent rather than immovable**, and the distinction
-is worth keeping. On 2026-08-08 the `claude-mem` declaration in two clients was
-found to be a locator that exits 1 with `claude-mem: mcp server not found`: the
-plugin tree it searches is gone from this machine, so the server it names has not
-run for days. Its data is untouched on disk and reinstalling it changes nothing
-here -- the exception is about what the server *is*, not whether it happens to be
-installed. If it is retired instead, the count drops to one, `headroom`, and this
-paragraph is what says so rather than a silent edit to the number above.
+One of the two was **absent rather than immovable** for a while, and what
+replaced that absence is worth more than the absence was. On 2026-08-08 the
+`claude-mem` declaration in two clients was found to be a locator that exits 1
+with `claude-mem: mcp server not found`: the plugin tree it searched was gone,
+so the server had not run for days. It was reinstalled the same day and now
+runs. The exception was always about what the server *is*, not whether it
+happens to be installed, so the count stays two.
+
+Reinstalling it surfaced something the absence had been hiding. The opencode
+plugin had been failing to load since 2026-07-10 -- 141 logged
+`Plugin export is not a function` errors -- because opencode's loader walks
+every export of a plugin module and throws on the first that is not a function,
+and the shipped bundle exports two arrays beside its plugin. Re-exporting only
+the function fixes the load, and opencode captures for the first time on this
+machine: a real run produced a session, a prompt and a summary.
+
+**It captures and cannot be read back, and that is the state to write down.**
+The plugin sends `prompt: ""` on session init -- not a race, a constant in the
+bundle -- so the worker stores the placeholder `[media prompt]`, and the worker
+injects prior memory only when the prompt is *not* that placeholder. The two
+halves are the same line of code seen from either end: writing without reading
+is half a memory, and the half that is missing is the half a client would
+notice. Measured, not inferred: observations stayed at 325 across a
+tool-using run, because the plugin fires its observation POSTs without awaiting
+them and a one-shot `opencode run` exits first. None of this changes what
+`claude-mem` is -- it still reads the client's own private context and still
+cannot move -- but a server that only writes is not the working exception this
+paragraph used to describe.
 
 Also out of reach in any mode: the client's own built-in file, edit and shell
 tools, which are not MCP and never route here; and argument shapes that mean

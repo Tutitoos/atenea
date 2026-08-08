@@ -740,6 +740,15 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	default:
 		return fail("mcp_server %s: expose %q is not %s or %s", id, expose, ExposeOff, ExposeRaw)
 	}
+	// Passthrough is HTTP-only today. A stdio backend needs one process
+	// shared between chats -- fan-in over a single duplex pipe, with
+	// per-connection state and a lifecycle that outlives any one chat --
+	// which is a different piece of work and is not built. Refusing here is
+	// the difference between a declaration that does nothing and an operator
+	// who finds out by noticing a tool never appeared.
+	if out.Expose == ExposeRaw && out.URL == "" {
+		return fail("mcp_server %s: expose = %q needs a url; passthrough over stdio is not built yet", id, ExposeRaw)
+	}
 	return out, nil
 }
 

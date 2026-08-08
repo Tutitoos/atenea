@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "2.2.0"
+contract = "2.3.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "2.2.0"          # required: the contract version this file targets
+contract = "2.3.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -112,14 +112,14 @@ shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is fine and
-always has been - a file targeting `2.0.0` keeps working against this `2.2.0`
+always has been - a file targeting `2.0.0` keeps working against this `2.3.0`
 core, because every minor bump only adds - so in practice this line moves once
 per breaking release. `0.7.0` is the first one, and a file written for any
 `1.x` core is refused on sight:
 
 ```text
 settings ~/.config/atenea/atenea.toml: contract 1.0.0 is not supported by
-this core (2.2.0): change the contract line to "2.2.0"; no other key moves
+this core (2.3.0): change the contract line to "2.3.0"; no other key moves
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the
@@ -706,16 +706,31 @@ means Atenea holds the connection and re-offers that server's tools verbatim
 under `raw.<id>.<tool>`, with no funnel, no capability, and no health record
 of its own.
 
-**Nothing dispatches on `raw` yet.** The field is parsed, its value is checked,
-and an unknown one is refused; a backend declared `raw` today adds no
-capability and no implementation to the catalogue, and `atenea wrap` treats it
-exactly like `off`. The declaration is deliberately in the file before the
-dispatch path exists, because a value that is read and checked is a promise the
-next release can keep, while a dispatch path built before the declaration is
-validated has nowhere to report a bad one. `raw` is reserved as the first
-segment of any capability or implementation id, so nothing in the catalogue can
-ever collide with a passthrough name -- that refusal is live now, in
-`Capability.Validate` and `Implementation.Validate`.
+A backend declared `raw` is dialed on the first call that needs it, not at
+startup: one that is down when Atenea starts must not stop it starting, and one
+that comes up later must start working without a restart. The session is opened
+once and shared by every chat, which is the whole reason for declaring it here
+rather than in five client configs. `tools/list` then carries that server's
+tools after Atenea's own capabilities, named `raw.<id>.<tool>`, with the
+backend's own input schema forwarded unedited -- no `repository` argument is
+added, because a raw tool has no idea what a repository is. A backend that does
+not answer is left out of the list rather than listed as broken.
+
+What a raw call does *not* touch is the point of keeping it separate: no
+funnel, because there is nobody to choose between; no capability, so no schema
+of Atenea's is checked against it; and no row in the measurement base, because
+latency with no competitor is not evidence in a decision. It still leaves a
+receipt -- `kind = "raw"`, written closed, with the step's `funnel.state` set
+to `none`. That is not the same as a step whose funnel went unrecorded, which
+reads `not_kept`, and telling those two silences apart is why the field has
+three states rather than being absent.
+
+`raw` is reserved as the first segment of any capability or implementation id,
+so nothing in the catalogue can ever collide with a passthrough name -- refused
+in `Capability.Validate` and `Implementation.Validate`. **Passthrough is
+HTTP-only today**: `expose = "raw"` on a `command` entry is refused rather than
+quietly ignored, because a stdio backend needs one process shared between chats
+and that is not built.
 
 `atenea wrap opencode` handshakes every entry here and passes on only the ones
 that answered. Captured on a real machine, both transports, one real failure:

@@ -28,6 +28,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/registry"
 	"github.com/Tutitoos/atenea/internal/runner/local"
@@ -41,6 +42,15 @@ import (
 type Core struct {
 	settings config.Config
 	catalog  *registry.Registry
+	// backends are the declared servers whose own tools are re-offered
+	// verbatim, keyed by the id that forms the middle segment of their tool
+	// names. Empty on a machine that declared none, which is every machine
+	// until somebody writes `expose = "raw"`.
+	//
+	// They are not runners and never reach the orchestrator: nothing here
+	// answers a capability, so there is nothing for the funnel to rank and
+	// nothing for the measurement base to learn.
+	backends map[string]*passthrough.Backend
 	chooser  *selector.Selector
 	// runners are the live client adapters, kept as a list because the status
 	// screen names each of them; the orchestrator behind them sees one seam.
@@ -282,9 +292,22 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The declared backends, held for the whole life of the process rather
+	// than per chat -- which is the entire point of declaring them. Nothing
+	// is dialed here: a backend that is down at startup must not stop Atenea
+	// from starting, and one that comes up later must start working without
+	// a restart.
+	backends := make(map[string]*passthrough.Backend)
+	for _, server := range cfg.MCPServers {
+		if server.Expose != config.ExposeRaw {
+			continue
+		}
+		backends[server.ID] = passthrough.New(server.ID, server.URL, server.Timeout)
+	}
 	built = true
 	return &Core{
 		settings:     cfg,
+		backends:     backends,
 		catalog:      catalog,
 		chooser:      chooser,
 		runners:      runners,
@@ -683,6 +706,64 @@ func (c *Core) Agent() *orchestrator.Agent { return c.agent }
 
 // Checkpoints exposes the run store.
 func (c *Core) Checkpoints() *checkpoint.Store { return c.checkpoints }
+
+// fileRawReceipt records one passthrough call.
+//
+// It is written already closed, because a raw call has nothing to resume: no
+// plan, no step to redispatch, and nothing a later process could pick up. The
+// funnel on it says `none` -- not an empty trace, which is what a step whose
+// candidates were never recorded looks like. Those two silences are the pair
+// the receipt's Funnel type exists to keep apart.
+//
+// A failure to write is swallowed on purpose, the same way the orchestrator
+// treats its own dumps: the tool already ran on somebody else's server, and
+// refusing to hand back its answer because the paperwork failed would turn a
+// bookkeeping problem into a broken call. The notebook is where that goes.
+func (c *Core) fileRawReceipt(session *Session, name string, started time.Time, callErr error) {
+	if c.checkpoints == nil || !c.checkpoints.Enabled() {
+		return
+	}
+	now := time.Now()
+	verdict, failure := contract.VerdictOK.String(), ""
+	if callErr != nil {
+		verdict, failure = contract.VerdictFailed.String(), callErr.Error()
+	}
+	chat := ""
+	if session != nil {
+		chat = session.ID()
+	}
+	run := checkpoint.Run{
+		ID:      checkpoint.NewID(now),
+		Kind:    checkpoint.KindRaw,
+		Session: chat,
+		// The tool's public name is the whole commission: there is no task
+		// text behind a raw call, and a reader looking for what happened
+		// wants the name a client would have typed.
+		Task:            name,
+		ContractVersion: contract.Current.String(),
+		Started:         started,
+		Updated:         now,
+		Closed:          true,
+		Verdict:         verdict,
+		Steps: []checkpoint.StepState{{
+			ID:             name,
+			Implementation: name,
+			Verdict:        verdict,
+			Review:         verdict,
+			Failure:        failure,
+			Funnel:         checkpoint.Funnel{State: checkpoint.FunnelNone},
+			DurationMS:     now.Sub(started).Milliseconds(),
+			ClosedAt:       now,
+		}},
+	}
+	if err := c.checkpoints.Save(run); err != nil {
+		c.notebook.Catch(notebook.Incident{
+			Op:             "raw-receipt",
+			Detail:         err.Error(),
+			Implementation: name,
+		})
+	}
+}
 
 // Do hands a commission to the orchestrator on the operator's own behalf.
 //

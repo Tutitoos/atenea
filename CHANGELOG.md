@@ -17,16 +17,45 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
-- **`expose` on an `[[mcp_server]]` block, and the `raw.` namespace it will
-  use.** The declaration list has always meant one thing -- point a client at a
+- **`expose` on an `[[mcp_server]]` block, and the `raw.` namespace it
+  uses.** The declaration list has always meant one thing -- point a client at a
   server that is already running, then step out of the path. `expose` names
   that behaviour `off` and reserves `raw` for the other one: Atenea holding the
   connection and re-offering a backend's own tools verbatim as
   `raw.<server>.<tool>`. The field is parsed and its value checked; an unknown
   value is refused rather than read as `off`, because a backend an operator
   believes is reachable and nothing offers is the failure this whole list
-  exists to prevent. Nothing dispatches on `raw` yet: a block declaring it adds
-  no capability, no implementation, and `atenea wrap` treats it as `off`.
+  exists to prevent.
+- **A declared `raw` backend is now dialed, listed and called** (contract
+  `2.2.0` -> `2.3.0`). Atenea holds one session per backend, opened on the
+  first call that needs it rather than at startup -- a server that is down
+  must not stop Atenea starting, and one that comes up later must start
+  working without a restart. Its tools appear on `tools/list` after Atenea's
+  own capabilities, named `raw.<server>.<tool>`, carrying the backend's own
+  input schema unedited: no `repository` argument is added, because a raw tool
+  has no idea what a repository is. A call is forwarded whole and answered
+  whole, and a backend that does not answer is left off the list rather than
+  listed as broken.
+
+  What it deliberately does not touch is the reason it is a separate path: no
+  funnel, because there is nobody to choose between; no capability, so no
+  schema of Atenea's is checked against an opaque payload; and no row in the
+  measurement base, because latency with no competitor is not evidence in a
+  decision. Measured against the live `semgrep` server on the author's
+  machine: one client listed 8 capabilities and 4 `raw.semgrep.*` tools
+  together, and a real call came back with a real answer.
+- **Every step's receipt now records its funnel as one field with three
+  states.** `kept` carries each stage with its survivors and the reason every
+  candidate was dropped; `not_kept` says the trace was not recorded; `none`
+  says the step never had a funnel because it was a passthrough. Two adjacent
+  explanations for the same silence is exactly the drift this avoids -- before
+  this, a passthrough step and a step whose trace was lost read identically.
+  A raw call files a receipt of its own, `kind = "raw"`, written closed
+  because there is no plan to resume and nothing later can pick it up.
+- **`expose = "raw"` on a `command` entry is refused.** Passthrough is
+  HTTP-only: a stdio backend needs one process shared between chats, with
+  fan-in over a single pipe and a lifecycle outliving any one chat, and that
+  is not built. Accepting the declaration would offer nothing and say nothing.
 - **`raw` is refused as the first segment of any capability or implementation
   id.** A capability called `raw.search` would be indistinguishable from a
   passthrough to a backend named `search`, which would make the absence of a

@@ -163,7 +163,18 @@ type Version struct {
 // payload: `ValidateInput` and `InputSchema` are one declaration read in two
 // directions, and a schema that advertises a shape the validator then rejects
 // is worse than none, because the caller did as it was told.
-var Current = Version{Major: 2, Minor: 2, Patch: 0}
+//
+// 2.3.0 added the reserved `raw.` namespace and the receipt's funnel record.
+// Two changes, one release, because they are two halves of the same seam: a
+// tool reached without a funnel needs a name that says so and a receipt that
+// says why. Additive in both directions -- `ReservedNamespace` refuses ids no
+// catalog could honestly have used, and an adapter built against 2.2.0 goes
+// on compiling with a `Funnel` field it never reads.
+//
+// The namespace half is a refusal rather than a feature, which is the only
+// reason it fits in a minor: nothing that was valid became invalid except a
+// capability id claiming the one segment now spoken for.
+var Current = Version{Major: 2, Minor: 3, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

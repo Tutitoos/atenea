@@ -1,0 +1,331 @@
+package core_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/Tutitoos/atenea/internal/checkpoint"
+)
+
+// fakeBackend is a declared server: it answers a handshake, lists one tool
+// with a schema of its own, and echoes the arguments it was called with.
+type fakeBackend struct {
+	mu    sync.Mutex
+	calls []map[string]any
+}
+
+func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var msg struct {
+		ID     *int `json:"id"`
+		Method string
+		Params struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"params"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&msg)
+	if msg.ID == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	w.Header().Set("Mcp-Session-Id", "session-1")
+	var result string
+	switch msg.Method {
+	case "tools/list":
+		result = `{"tools":[{"name":"semgrep_scan","description":"scan code",` +
+			`"inputSchema":{"type":"object","properties":{"code_files":{"type":"array"}},"required":["code_files"]}}]}`
+	case "tools/call":
+		f.mu.Lock()
+		f.calls = append(f.calls, msg.Params.Arguments)
+		f.mu.Unlock()
+		if msg.Params.Name != "semgrep_scan" {
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32602,"message":"no tool %s"}}`,
+				*msg.ID, msg.Params.Name)
+			return
+		}
+		result = `{"content":[{"type":"text","text":"0 findings"}],"isError":false}`
+	default:
+		result = `{}`
+	}
+	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, *msg.ID, result)
+}
+
+// rawSettings is the mcp settings with one declared backend exposed raw.
+func rawSettings(t *testing.T, endpoint string) string {
+	t.Helper()
+	repo := t.TempDir()
+	body := "package main\n\n// TODO: the thing this test looks for\nfunc main() {}\n"
+	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	settings := strings.Replace(socketSettings, `path = "/tmp"`, fmt.Sprintf("path = %q", repo), 1)
+	// A second candidate for the same capability, which no attached runner can
+	// execute. It exists so the funnel has somebody to drop: a trace whose
+	// stages never discard anyone proves the field is written, not that it
+	// records what it claims to.
+	settings += "\n[[implementation]]\nid = \"serena.search\"\nprovider = \"serena\"\ncapability = \"code.search\"\n"
+	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"semgrep\"\nurl = %q\nexpose = \"raw\"\n", endpoint)
+}
+
+// The two namespaces share one list and must stay legible in it: a capability
+// keeps its dotted id, a forwarded tool wears the reserved prefix and the
+// server it came from.
+func TestABackendsToolsAreOfferedUnderTheReservedPrefix(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/list", nil), "tools/list")
+
+	tools, _ := got["tools"].([]any)
+	var raw, capability map[string]any
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		switch tool["name"] {
+		case "raw.semgrep.semgrep_scan":
+			raw = tool
+		case "code.search":
+			capability = tool
+		}
+	}
+	if capability == nil {
+		t.Error("the catalog disappeared when a backend was declared")
+	}
+	if raw == nil {
+		t.Fatalf("the backend's tool is not on the list: %v", tools)
+	}
+	if raw["description"] != "scan code" {
+		t.Errorf("description = %v, want the backend's own", raw["description"])
+	}
+	// The schema is the backend's, unedited: no repository argument is added,
+	// because a raw tool has no idea what a repository is.
+	schema, _ := raw["inputSchema"].(map[string]any)
+	props, _ := schema["properties"].(map[string]any)
+	if _, ok := props["code_files"]; !ok {
+		t.Errorf("the backend's own schema was not forwarded: %v", schema)
+	}
+	if _, ok := props["repository"]; ok {
+		t.Errorf("Atenea's repository argument was added to a raw tool: %v", schema)
+	}
+	if _, ok := raw["outputSchema"]; ok {
+		t.Errorf("a raw tool was given an output schema it never declared: %v", raw)
+	}
+}
+
+// The call itself: arguments reach the backend untouched and its answer comes
+// back whole rather than re-wrapped by a layer that knows nothing about it.
+func TestARawCallReachesTheBackendAndReturnsItsAnswer(t *testing.T) {
+	fake := &fakeBackend{}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name":      "raw.semgrep.semgrep_scan",
+		"arguments": map[string]any{"code_files": []any{"/tmp/x.py"}},
+	}), "tools/call")
+
+	if got["isError"] == true {
+		t.Fatalf("the call failed: %v", got)
+	}
+	content, _ := got["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content = %v, want the backend's own block", got)
+	}
+	first, _ := content[0].(map[string]any)
+	if first["text"] != "0 findings" {
+		t.Errorf("text = %v, want the backend's answer", first["text"])
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 1 {
+		t.Fatalf("backend saw %d calls, want 1", len(fake.calls))
+	}
+	files, _ := fake.calls[0]["code_files"].([]any)
+	if len(files) != 1 || files[0] != "/tmp/x.py" {
+		t.Errorf("arguments arrived as %v, want them untouched", fake.calls[0])
+	}
+}
+
+// The receipt is the half of this phase that outlives the call, and the field
+// that matters is the one that says a funnel never happened -- as opposed to
+// happening and going unrecorded.
+func TestARawCallLeavesAReceiptSayingThereWasNoFunnel(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	result(t, c.call("tools/call", map[string]any{
+		"name":      "raw.semgrep.semgrep_scan",
+		"arguments": map[string]any{"code_files": []any{"/tmp/x.py"}},
+	}), "tools/call")
+
+	store := atenea.Checkpoints()
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found checkpoint.Run
+	for _, id := range ids {
+		run, err := store.Load(id)
+		if err != nil {
+			t.Fatalf("Load %s: %v", id, err)
+		}
+		if run.Kind == checkpoint.KindRaw {
+			found = run
+		}
+	}
+	if found.ID == "" {
+		t.Fatalf("no raw receipt among %v", ids)
+	}
+	if found.Task != "raw.semgrep.semgrep_scan" {
+		t.Errorf("task = %q, want the tool's public name", found.Task)
+	}
+	if !found.Closed {
+		t.Error("a raw receipt is written closed: there is nothing to resume")
+	}
+	if len(found.Steps) != 1 {
+		t.Fatalf("steps = %d, want 1", len(found.Steps))
+	}
+	step := found.Steps[0]
+	if step.Funnel.State != checkpoint.FunnelNone {
+		t.Errorf("funnel state = %q, want %q", step.Funnel.State, checkpoint.FunnelNone)
+	}
+	if len(step.Funnel.Stages) != 0 {
+		t.Errorf("a step with no funnel carries a trace: %v", step.Funnel.Stages)
+	}
+	if step.Capability != "" {
+		t.Errorf("capability = %q, want empty: a raw tool answers none", step.Capability)
+	}
+}
+
+// The pair the three states exist for: in one file, a capability step and a
+// passthrough step must not read the same. Without this the reader cannot tell
+// a missing record from a decision that never happened.
+func TestAPassthroughStepIsDistinguishableFromAKeptFunnel(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	result(t, c.call("tools/call", map[string]any{
+		"name":      "raw.semgrep.semgrep_scan",
+		"arguments": map[string]any{"code_files": []any{"/tmp/x.py"}},
+	}), "tools/call")
+	result(t, c.call("tools/call", map[string]any{
+		"name":      "code.search",
+		"arguments": map[string]any{"query": "TODO"},
+	}), "tools/call")
+
+	store := atenea.Checkpoints()
+	ids, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	states := map[string]bool{}
+	var kept checkpoint.Funnel
+	for _, id := range ids {
+		run, err := store.Load(id)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		for _, step := range run.Steps {
+			states[step.Funnel.State] = true
+			if step.Funnel.State == checkpoint.FunnelKept {
+				kept = step.Funnel
+			}
+		}
+	}
+	if !states[checkpoint.FunnelNone] {
+		t.Errorf("no step says it had no funnel: %v", states)
+	}
+	if !states[checkpoint.FunnelKept] {
+		t.Fatalf("no step kept its funnel: %v", states)
+	}
+	// Kept means the trace is actually there: the candidates dropped at each
+	// stage, which is the thing a past decision could not be audited without.
+	if len(kept.Stages) == 0 {
+		t.Fatal("a kept funnel carries no stages")
+	}
+	named := false
+	for _, stage := range kept.Stages {
+		if stage.Name == "" {
+			t.Errorf("a stage has no name: %+v", stage)
+		}
+		if stage.In < stage.Out {
+			t.Errorf("stage %s let more out than came in: %+v", stage.Name, stage)
+		}
+		for _, drop := range stage.Dropped {
+			if drop.Implementation == "" || drop.Reason == "" {
+				t.Errorf("a drop names nobody: %+v", drop)
+			}
+			named = true
+		}
+	}
+	if !named {
+		t.Error("no candidate was named as dropped; the trace records nothing to audit")
+	}
+}
+
+// A name in the reserved namespace whose backend is not declared is refused as
+// a bad request, not answered with the catalogue's "did you mean" -- the near
+// miss would send a model looking for a capability that was never the point.
+func TestARawNameWithNoBackendIsRefusedPlainly(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	answer := c.call("tools/call", map[string]any{"name": "raw.nobody.scan", "arguments": map[string]any{}})
+
+	failure, _ := answer["error"].(map[string]any)
+	if failure == nil {
+		t.Fatalf("an undeclared backend was accepted: %v", answer)
+	}
+	if msg, _ := failure["message"].(string); !strings.Contains(msg, "nobody") {
+		t.Errorf("message = %q, want the undeclared server named", msg)
+	}
+}
+
+// A backend that is down leaves the capabilities alone. Telling a model about
+// a tool that cannot run is worse than not mentioning it.
+func TestADeadBackendIsLeftOutRatherThanListedBroken(t *testing.T) {
+	atenea := buildService(t, rawSettings(t, "http://127.0.0.1:1/mcp"))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/list", nil), "tools/list")
+
+	tools, _ := got["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatal("a dead backend emptied the tool list")
+	}
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.") {
+			t.Errorf("a dead backend's tool was offered: %v", name)
+		}
+	}
+}

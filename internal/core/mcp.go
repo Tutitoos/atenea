@@ -7,9 +7,11 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -85,7 +87,7 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		result, rpcErr := v.initialize(req.Params)
 		out.Result, out.Error = result, rpcErr
 	case MethodToolsList:
-		result, rpcErr := v.toolsList()
+		result, rpcErr := v.toolsList(ctx)
 		out.Result, out.Error = result, rpcErr
 	case MethodToolsCall:
 		result, rpcErr := v.toolsCall(ctx, req.Params)
@@ -159,7 +161,7 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 // Read from the registry every time rather than built once at startup: it is
 // eight entries and a map walk, and a cached copy would be a second place the
 // catalog lives.
-func (v *conversation) toolsList() (any, *rpcError) {
+func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	if v.session == nil {
 		return nil, notInitialized()
 	}
@@ -182,6 +184,36 @@ func (v *conversation) toolsList() (any, *rpcError) {
 			"inputSchema":  v.aimable(input),
 			"outputSchema": output,
 		})
+	}
+	// The backends' own tools come after the capabilities and are never
+	// mixed into them: a client reading this list top to bottom sees what
+	// Atenea promises first and what it merely forwards second. A backend
+	// that does not answer is left out rather than listed as broken --
+	// telling a model about a tool that cannot run is worse than not
+	// mentioning it, and `atenea wrap` already reports a server that is down
+	// where an operator will read it.
+	for _, id := range slices.Sorted(maps.Keys(v.core.backends)) {
+		backend := v.core.backends[id]
+		offered, err := backend.Tools(ctx)
+		if err != nil {
+			continue
+		}
+		for _, tool := range offered {
+			entry := map[string]any{
+				"name":        passthrough.Name(id, tool.Name),
+				"description": tool.Description,
+			}
+			// The schema is forwarded exactly as the backend gave it, and
+			// the repository argument is not added: that argument is
+			// Atenea's own question about which repository a capability
+			// runs in, and a raw tool has no idea what a repository is.
+			if len(tool.InputSchema) > 0 {
+				entry["inputSchema"] = tool.InputSchema
+			} else {
+				entry["inputSchema"] = map[string]any{"type": "object"}
+			}
+			tools = append(tools, entry)
+		}
 	}
 	return map[string]any{"tools": tools}, nil
 }
@@ -253,6 +285,14 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call: " + err.Error()}
 	}
+	// The reserved segment is checked before the catalog, and it is checked
+	// by name rather than by looking for a backend: a name in the reserved
+	// namespace can never be a capability, so falling through to the catalog
+	// would answer "unknown capability, did you mean..." for a tool whose
+	// real problem is that its backend is not declared here.
+	if server, tool, ok := passthrough.Split(params.Name); ok {
+		return v.rawCall(ctx, server, tool, params)
+	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
 		// The registry's own answer names the near miss when there is one,
@@ -304,6 +344,42 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 		"structuredContent": answer,
 		"isError":           false,
 	}, nil
+}
+
+// rawCall forwards one tool to its backend and files the receipt for it.
+//
+// Nothing about this path touches the orchestrator, the selector or the
+// measurement base, and each omission is a decision rather than a shortcut. A
+// raw tool has no competitor, so a funnel would be a stage with one candidate
+// and a measurement would be a number nothing can be compared against. What
+// it does keep is the receipt: a call that reached somebody else's server on
+// this machine's behalf is exactly the kind of thing an operator later needs
+// to find, and "it was only a passthrough" is how a trail grows holes.
+func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (any, *rpcError) {
+	backend, ok := v.core.backends[server]
+	if !ok {
+		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
+			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
+	}
+	started := time.Now()
+	result, err := backend.Call(ctx, tool, params.Arguments)
+	v.core.fileRawReceipt(v.session, params.Name, started, err)
+	if err != nil {
+		// A backend's refusal is an answer, not a protocol error: the model
+		// asked for something real and can read why it did not work. The
+		// same split the capability path already makes.
+		return toolFailure(err.Error()), nil
+	}
+	// The backend's own result is handed back whole. It already carries
+	// `content` and may carry `structuredContent` and `isError`; re-wrapping
+	// it here would mean this layer deciding what a tool it knows nothing
+	// about meant to say.
+	var out map[string]any
+	if err := json.Unmarshal(result, &out); err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: fmt.Sprintf(
+			"%s: the backend's answer is not an object: %v", params.Name, err)}
+	}
+	return out, nil
 }
 
 // answerOf finds the one answer in a result, and says so when there is none.

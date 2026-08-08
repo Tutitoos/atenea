@@ -435,6 +435,10 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		"negative timeout": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
 		"dotted id":        "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
 		"unknown expose":   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
+		// Passthrough over stdio needs one process shared between chats and
+		// is not built. Accepting the declaration would offer nothing and
+		// say nothing, which is the failure mode this whole list prevents.
+		"raw over stdio": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\nexpose = \"raw\"\n",
 	}
 	for name, block := range cases {
 		t.Run(name, func(t *testing.T) {

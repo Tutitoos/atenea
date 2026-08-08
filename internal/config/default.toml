@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "2.2.0"
+contract = "2.3.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -1238,9 +1238,10 @@ indexed_by = []           # providers holding a ready index for this repository
 #
 # `expose` says which of two things a block means. `off`, the default and all
 # of the above, points the client at the server and steps out of the path.
-# `raw` would have Atenea hold the connection and re-offer that server's tools
-# verbatim, with no funnel and no capability. It is parsed and checked today;
-# nothing dispatches on it yet, so a block declaring it behaves like `off`.
+# `raw` has Atenea hold one shared connection and re-offer that server's own
+# tools as `raw.<id>.<tool>`, with no funnel, no capability and no measurement
+# -- a receipt is still written, saying it had no funnel. HTTP only for now: a
+# `raw` block with a `command` is refused rather than silently ignored.
 # ---------------------------------------------------------------------------
 # [[mcp_server]]
 # id = "serena"                        # the name the client will see
