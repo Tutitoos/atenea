@@ -51,6 +51,8 @@ Commands:
   detect [--repo ID]     Ask attached providers whether they already hold a
                          ready index; corrects indexed_by in memory when they do
   run                    Run as a service until interrupted
+  mcp                    Serve an MCP client over stdin/stdout, bridged to the
+                         running service; --check tests the setup without a client
   service install        Install atenea as a background service that starts
                          with the system; 'uninstall' undoes it, 'status'
                          says where it stands
@@ -153,6 +155,21 @@ Flags:
 	"run": `Usage: atenea run
 
 Run as a service until interrupted (Ctrl-C or SIGTERM).
+`,
+	"mcp": `Usage: atenea mcp
+       atenea mcp --check
+
+Serve one MCP client over stdin and stdout, relaying to the running service.
+Meant to be launched by the client, not by hand: put it in the client's MCP
+configuration as the command to run.
+
+Every capability becomes a tool, and every tool takes a repository because
+that is Atenea's unit of work. The connection is one chat, named after the
+client that opened it and visible in 'atenea status' while it lasts.
+
+A service has to be running -- this bridge decides nothing on its own.
+--check says whether one is listening, and what a client would be offered,
+without going through a client at all.
 `,
 	"service": `Usage: atenea service install
        atenea service uninstall
@@ -322,6 +339,15 @@ func run(args []string, out io.Writer) error {
 		return cmdResume(settingsPath, commandArgs, out)
 	case "run":
 		return cmdRun(settingsPath, out)
+	case "mcp":
+		if len(commandArgs) == 1 && commandArgs[0] == "--check" {
+			return mcpProbe(out)
+		}
+		if len(commandArgs) != 0 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"mcp takes no arguments (or --check): %q", commandArgs[0])
+		}
+		return cmdMCP(os.Stdin, out)
 	case "service":
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
@@ -383,9 +409,10 @@ func cmdStatus(settingsPath string, out io.Writer) error {
 	//
 	// Not an optimization. Half of what is printed below is only true of the
 	// process that maintains it -- the uptime, the chats open right now, what
-	// the clock has actually run -- and a command maintains none of it. Every
-	// Chats table this CLI ever printed was empty, and not because nobody was
-	// connected.
+	// the clock has actually run -- and a command maintains none of it. The
+	// chats table is the clearest case: no command could ever have filled one
+	// in, and for the whole life of this CLI before the door existed there was
+	// nothing to fill it from, so the screen did not print one at all.
 	//
 	// Only when the service is answering about the same file this command was
 	// asked about. Naming a file asks a different question -- "what would this
@@ -444,6 +471,7 @@ func printStatus(out io.Writer, status core.Status) error {
 	fmt.Fprintf(out, "  parallel   %s\n", ceiling(agent.MaxParallel))
 	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
 
+	printChats(out, status)
 	printBackground(out, status)
 	printProcesses(out, status)
 
@@ -478,6 +506,38 @@ func printStatus(out io.Writer, status core.Status) error {
 		fmt.Fprintln(out)
 	}
 	return nil
+}
+
+// printChats shows who is connected right now.
+//
+// This table exists because the isolation is otherwise invisible. Two clients
+// each get their own chat, their own grant and their own view of what a run
+// discovered, and until somebody can see two rows here that is a claim in a
+// design document rather than a fact about the machine.
+//
+// The column is `adds` and not `grant` because that is the honest word. A
+// session grant is additive: what a chat's runs may actually do is the
+// settings file's standing grant plus this, so a chat showing nothing is not
+// a chat that can do nothing -- it is one that asked for nothing on top. The
+// two are printed apart rather than summed because they are set by different
+// people: the floor by whoever owns the settings file, the addition by
+// whoever opened the chat.
+//
+// Only the service can answer any of it, so it is the one part of this screen
+// that depends on having reached one. A command working from disk prints
+// nothing here, and correctly: it is not that no client is connected, it is
+// that this process has no way to know. The `process` line above already said
+// which kind of screen this is.
+func printChats(out io.Writer, status core.Status) {
+	if len(status.Chats) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nchats\n")
+	for _, chat := range status.Chats {
+		fmt.Fprintf(out, "  %-16s %-10s up %-8s runs %d  adds=%s\n",
+			chat.Client, chat.ID, chat.Uptime, chat.Runs,
+			orDash(strings.Join(chat.Grant, ",")))
+	}
 }
 
 // printBackground is Atenea's own house, at the same height as the orchestrator:
