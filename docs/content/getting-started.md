@@ -24,8 +24,10 @@ A binary built from a checkout stamps its own revision onto the version, so
 `version` prints `0.9.1+f3354b8` rather than the bare number quoted on these
 pages — and `0.9.1+f3354b8.modified` when the tree has uncommitted changes.
 That suffix is SemVer build metadata: it says which tree this came from and is
-ignored when versions are compared. Only a release artifact reports the number
-alone.
+ignored when versions are compared. A bare number means the build had nothing to
+stamp: a release artifact, or a build from a linked `git worktree`, which Go does
+not stamp even with `-buildvcs=true`. Do not read a bare number as proof of a
+release on a machine where someone builds in worktrees.
 
 ```sh
 ./bin/atenea status
