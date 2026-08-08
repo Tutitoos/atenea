@@ -65,6 +65,10 @@ type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      any    `json:"id"`
 	Method  string `json:"method"`
+	// Params is left raw: every method decodes its own shape, and a shared
+	// map here would mean each of them re-checking types the decoder could
+	// have checked once.
+	Params json.RawMessage `json:"params"`
 }
 
 type rpcResponse struct {
@@ -143,6 +147,11 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	lines := bufio.NewScanner(conn)
 	lines.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	writer := json.NewEncoder(conn)
+	// One conversation per connection, and it dies with it: the chat a client
+	// opens is closed by hanging up, which is the only signal a client that
+	// crashed will ever send.
+	talk := &conversation{core: c}
+	defer talk.close()
 	for lines.Scan() {
 		var req rpcRequest
 		if err := json.Unmarshal(lines.Bytes(), &req); err != nil {
@@ -150,26 +159,10 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 				Error: &rpcError{Code: codeParse, Message: "not JSON"}})
 			return
 		}
-		_ = writer.Encode(c.dispatch(req))
+		if answer := talk.dispatch(ctx, req); answer != nil {
+			_ = writer.Encode(answer)
+		}
 	}
-}
-
-// dispatch is the whole protocol: one method today, and the place the MCP
-// methods land when the service learns to speak to a client rather than only
-// to its own CLI.
-func (c *Core) dispatch(req rpcRequest) rpcResponse {
-	out := rpcResponse{JSONRPC: rpcVersion, ID: req.ID}
-	if req.JSONRPC != rpcVersion {
-		out.Error = &rpcError{Code: codeInvalid, Message: "jsonrpc must be " + rpcVersion}
-		return out
-	}
-	switch req.Method {
-	case MethodStatus:
-		out.Result = c.Status()
-	default:
-		out.Error = &rpcError{Code: codeMethodUnknown, Message: "unknown method " + req.Method}
-	}
-	return out
 }
 
 // closeSocket shuts the door and waits for whoever is still inside.

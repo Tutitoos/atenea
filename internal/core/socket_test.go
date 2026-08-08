@@ -241,6 +241,20 @@ effects = ["read"]
     type = "string"
     required = true
 
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "column"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+
 [[implementation]]
 id = "ripgrep"
 provider = "ripgrep"
