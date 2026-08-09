@@ -17,6 +17,36 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A backend that asked Atenea a question was never answered, and hung.** The
+  protocol runs in both directions, but the stdio passthrough read every line
+  carrying an `id` as a *response*. A server's *request* carries an `id` too,
+  so it was delivered to a caller waiting on the id the server had chosen —
+  nobody, since Atenea's ids start at `1` — and dropped. The server then waited
+  for a reply that was never coming. Semgrep asks `roots/list` before it will
+  answer its first `tools/call`, so its entire surface was unreachable: every
+  call died on its 25 s deadline with the process healthy and idle, and because
+  the process is shared, one unanswered question wedged it for every chat
+  attached to it. A request is now told `-32601`, against the id the server
+  used, echoed verbatim so a string id comes back a string. Refusing is the
+  honest answer rather than a stopgap: the handshake declares no capabilities,
+  so a server asking for roots, sampling or elicitation is asking for something
+  Atenea never offered — what it must not get is silence.
+
+  Found by counting the child's bytes rather than believing the timeout:
+  `/proc/<pid>/io` showed 106 in and 47 back on a call that reported nothing
+  arriving. The 47 bytes were `{"method":"roots/list","jsonrpc":"2.0","id":0}`.
+  Direct probes had looked fine only because they mistook that request for the
+  reply.
+
+- **`wrap` handed every client the backends Atenea answers for, and never
+  handed it Atenea.** The command exists to point clients at the core, but it
+  emitted `serena` and `codebase-memory` — the two backends behind all eight
+  capabilities — straight into the client's configuration, so a client pointed
+  at them reached past the funnel to the servers the funnel is made of, under
+  no allow list and no effect check. Atenea itself appeared in no payload at
+  all. A capability-backed backend is now `Held`, reported like the others and
+  deliberately kept out, and the core is the one entry every payload carries.
+
 - **A chat opened by a client held nothing, so `client_effects` was a ceiling
   with no way to reach it.** `Core.Open` copied whatever its caller asked for
   into the chat's grant, `initialize` asked for nothing because the protocol

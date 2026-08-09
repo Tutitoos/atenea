@@ -524,9 +524,27 @@ declared repository is the only barrier left once the mounts are gone.
    2026-08-08**, and it cost a contract major (`3.0.0`): the per-repository
    Serena URL on `[[repository]]` is gone, since the policy answers the same
    question for a process Atenea actually owns.
-6. `chrome-devtools` with its allow list, and per-client filtering deleted.
+6. `chrome-devtools` with its allow list, and per-client filtering deleted. **Done
+   2026-08-09**, and it cost no contract change: the allow list is settings, and
+   there was never per-client filtering in the code to delete -- it lived in the
+   clients' own declarations, which are gone. Proven live against the running
+   service: thirteen of twenty-nine tools reachable, and `click` and
+   `lighthouse_audit` refused by name with `not in this backend's tools`.
 7. Clients cut over one at a time, `wrap` extended to emit the reduced config.
    Thirty-four declarations become five, plus `headroom` and `claude-mem`.
+   `wrap` is **done 2026-08-09** and it cost no contract change: the payload
+   holds back the backends a capability already answers for, and carries the
+   core itself, which it never did. Fixing it surfaced why the surface it
+   serves had been half dead -- see the `roots/list` entry in the changelog.
+   The curated surface was then proven live: `context7` and `semgrep` given
+   their allow lists, twenty-six tools reachable, one call per backend
+   answered against this repository, and the two refusals are the effect gate
+   answering instantly rather than anything hanging.
+
+   What is left is not code: repointing the four client configurations on a
+   machine. That is the one step this repository cannot finish on its own,
+   because those files are written by another repository's installer, and a
+   cutover it does not know about is a cutover its next run silently reverts.
 
 A new tool namespace and a new receipt shape are additive, so those steps were a
 contract minor -- `2.3.0` -- and no adapter changes. Step 5 was not: removing a

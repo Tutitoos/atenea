@@ -40,6 +40,10 @@ func TestHelperProcess(t *testing.T) {
 
 	var initialized bool
 	calls := 0
+	// What the client said when this server asked it something, reported
+	// back inside the tool result: the answer to a server-initiated request
+	// is invisible from the caller's side otherwise.
+	heard := ""
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for in.Scan() {
@@ -83,6 +87,19 @@ func TestHelperProcess(t *testing.T) {
 				os.Exit(3)
 			}
 		}
+		// Ask the client something before answering, the way semgrep asks
+		// roots/list before its first tools/call, and refuse to move until
+		// it replies. A client that drops the question wedges this server
+		// for good -- which is the failure this reproduces. The value is
+		// the id to ask with, verbatim, so a test can check it comes back
+		// unchanged whether it is a number or a string.
+		if id := os.Getenv("HELPER_ASKS_FIRST"); id != "" && heard == "" {
+			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"method":"roots/list","params":{}}`+"\n", id)
+			if !in.Scan() {
+				return // the client went away rather than answer
+			}
+			heard = in.Text()
+		}
 		switch msg.Method {
 		case "tools/list":
 			fmt.Println("about to answer a list") // more stdout noise
@@ -98,7 +115,7 @@ func TestHelperProcess(t *testing.T) {
 			}
 			reply(msg.ID, map[string]any{"content": []map[string]any{{
 				"type": "text",
-				"text": fmt.Sprintf("pid=%d tool=%s echo=%v", os.Getpid(), msg.Params.Name, msg.Params.Arguments["echo"]),
+				"text": fmt.Sprintf("pid=%d tool=%s echo=%v heard=%s", os.Getpid(), msg.Params.Name, msg.Params.Arguments["echo"], heard),
 			}}})
 		}
 	}
@@ -210,6 +227,64 @@ func TestAnswersGoBackToTheCallerThatAsked(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// The protocol runs in both directions, and a backend is allowed to ask the
+// client something before it answers. Semgrep does exactly this -- `roots/list`
+// ahead of its first tools/call -- and until 2026-08-09 the question was read
+// as if it were an answer, delivered to a caller waiting on an id that nobody
+// had used, and dropped. The server then waited for a reply that was never
+// sent, so every call to that backend died on its timeout while the process
+// sat healthy and idle. One unanswered question wedges the process for every
+// chat attached to it, not only the one that asked.
+func TestABackendThatAsksTheClientFirstStillGetsAnswered(t *testing.T) {
+	b := helper(t, []string{"search_code"}, map[string]string{"HELPER_ASKS_FIRST": "0"})
+	raw, err := b.Call(t.Context(), "search_code", map[string]any{"echo": "one"})
+	if err != nil {
+		t.Fatalf("a backend that asks first never answered: %v", err)
+	}
+	if got := field(t, raw, "echo="); got != "one" {
+		t.Errorf("echo = %q, want the caller's own argument", got)
+	}
+}
+
+// What Atenea says back matters as much as saying anything. The handshake
+// declares no capabilities, so the honest answer to a request for roots,
+// sampling or elicitation is that it does not serve it -- a JSON-RPC error
+// against the id the server chose, not an invented result. The id is echoed
+// verbatim rather than parsed as a number, because the protocol allows a
+// string there and a server given back an id it never used is no better off
+// than one given silence.
+func TestARefusalCarriesTheServersOwnIDAndSaysNo(t *testing.T) {
+	b := helper(t, []string{"search_code"}, map[string]string{"HELPER_ASKS_FIRST": `"ab-7"`})
+	raw, err := b.Call(t.Context(), "search_code", map[string]any{"echo": "one"})
+	if err != nil {
+		t.Fatalf("calling: %v", err)
+	}
+	heard := tail(t, raw, "heard=")
+	var answer struct {
+		ID    string `json:"id"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(heard), &answer); err != nil {
+		t.Fatalf("the server was sent %q, which is not JSON: %v", heard, err)
+	}
+	if answer.ID != "ab-7" {
+		t.Errorf("answered id %q, want the string id the server asked with", answer.ID)
+	}
+	if answer.Error == nil {
+		t.Fatalf("answered %q with a result, want a refusal: atenea serves no roots", heard)
+	}
+	if answer.Error.Code != -32601 {
+		t.Errorf("refusal code = %d, want -32601 method not found", answer.Error.Code)
+	}
+	if !strings.Contains(answer.Error.Message, "roots/list") {
+		t.Errorf("refusal message = %q, want it to name the method refused", answer.Error.Message)
+	}
 }
 
 // The handshake belongs to the process. A second call must not repeat it, and
@@ -380,6 +455,26 @@ func field(t *testing.T, raw json.RawMessage, key string) string {
 	}
 	t.Fatalf("no %s in %q", key, body.Content[0].Text)
 	return ""
+}
+
+// tail returns everything from key to the end of the text, spaces included.
+// field() splits on whitespace, which is right for a scalar and wrong for a
+// whole JSON message quoted inside the result.
+func tail(t *testing.T, raw json.RawMessage, key string) string {
+	t.Helper()
+	var body struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || len(body.Content) == 0 {
+		t.Fatalf("unreadable result %s: %v", raw, err)
+	}
+	_, rest, ok := strings.Cut(body.Content[0].Text, key)
+	if !ok {
+		t.Fatalf("no %s in %q", key, body.Content[0].Text)
+	}
+	return rest
 }
 
 func lines(t *testing.T, path string) int {

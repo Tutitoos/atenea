@@ -17,6 +17,12 @@ import (
 const okResult = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18",` +
 	`"serverInfo":{"name":"fake","version":"9.9.9"}}}`
 
+// testCore is the door every payload carries. The command is nonsense on
+// purpose: these tests are about who is in the payload, and a real path would
+// invite the reading that the entry is checked like the others. It is not --
+// it is the process doing the checking.
+var testCore = wrap.Core{ID: "atenea", Command: []string{"/nonexistent/atenea", "mcp"}}
+
 // live returns the URL of a server that completes the handshake.
 func live(t *testing.T) string {
 	t.Helper()
@@ -40,7 +46,7 @@ func dead(t *testing.T) string {
 
 func payload(t *testing.T, plan wrap.Plan) map[string]map[string]any {
 	t.Helper()
-	raw, err := plan.OpenCodePayload()
+	raw, err := plan.OpenCodePayload(testCore)
 	if err != nil {
 		t.Fatalf("payload: %v", err)
 	}
@@ -61,7 +67,7 @@ func payload(t *testing.T, plan wrap.Plan) map[string]map[string]any {
 func TestARefusedServerIsAbsentRatherThanDisabled(t *testing.T) {
 	plan := wrap.Check(t.Context(), []config.MCPServer{
 		{ID: "gone", URL: dead(t), Timeout: 2 * time.Second},
-	})
+	}, nil)
 	if len(plan.Refused) != 1 {
 		t.Fatalf("refused = %d, want the dead server refused", len(plan.Refused))
 	}
@@ -75,7 +81,7 @@ func TestARefusedServerIsAbsentRatherThanDisabled(t *testing.T) {
 // the endpoint that answered rather than anything reconstructed afterwards.
 func TestALiveServerIsDeclaredAtTheAddressThatAnswered(t *testing.T) {
 	url := live(t)
-	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: url}})
+	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: url}}, nil)
 	if len(plan.Declared) != 1 {
 		t.Fatalf("declared = %d, want 1: %v", len(plan.Declared), plan.Refused)
 	}
@@ -101,7 +107,7 @@ func TestARawBackendIsHeldRatherThanHandedToTheClient(t *testing.T) {
 			ID: "held", URL: url, Expose: config.ExposeRaw,
 			Tools: []string{"scan"}, Effects: []contract.Effect{contract.EffectRead},
 		},
-	})
+	}, nil)
 	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "held" {
 		t.Fatalf("held = %v, want the raw backend", plan.Held)
 	}
@@ -129,7 +135,7 @@ func TestARawBackendIsHeldRatherThanHandedToTheClient(t *testing.T) {
 // user's own config with nothing. The unused half of the shape must not be
 // serialized at all.
 func TestTheUnusedHalfOfAnEntryIsNotSerialized(t *testing.T) {
-	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: live(t)}})
+	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: live(t)}}, nil)
 	entry := payload(t, plan)["up"]
 	for _, key := range []string{"command", "environment"} {
 		if _, ok := entry[key]; ok {
@@ -154,7 +160,7 @@ func TestAStdioServerIsDeclaredAsLocalWithItsCommand(t *testing.T) {
 		ID:      "sh",
 		Command: []string{"sh", "-c", `read -r _; printf '%s\n' "$REPLY_JSON"; cat >/dev/null`},
 		Env:     map[string]string{"K": "v", "REPLY_JSON": okResult},
-	}})
+	}}, nil)
 	if len(plan.Declared) != 1 {
 		t.Fatalf("declared = %d, want the stdio server: %v", len(plan.Declared), plan.Refused)
 	}
@@ -178,7 +184,7 @@ func TestAStdioServerIsDeclaredAsLocalWithItsCommand(t *testing.T) {
 func TestARefusalCarriesItsReason(t *testing.T) {
 	plan := wrap.Check(t.Context(), []config.MCPServer{
 		{ID: "gone", URL: dead(t), Timeout: 2 * time.Second},
-	})
+	}, nil)
 	var report strings.Builder
 	plan.Report(&report, "opencode")
 	got := report.String()
@@ -198,7 +204,7 @@ func TestARefusalCarriesItsReason(t *testing.T) {
 // happened to semgrep on the machine this was built on, for days, while it
 // reported healthy. So the qualification is not conditional on bad news.
 func TestTheReportSaysWhatDeclaredAttestsToEvenWhenNothingFailed(t *testing.T) {
-	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: live(t)}})
+	plan := wrap.Check(t.Context(), []config.MCPServer{{ID: "up", URL: live(t)}}, nil)
 	if len(plan.Refused) != 0 {
 		t.Fatalf("wanted an all-green plan, got refusals: %v", plan.Refused)
 	}
@@ -217,14 +223,14 @@ func TestTheReportSaysWhatDeclaredAttestsToEvenWhenNothingFailed(t *testing.T) {
 // runs should mean the world changed, never that a map was walked twice.
 func TestTheOrderDoesNotDependOnDeclarationOrder(t *testing.T) {
 	a, b := live(t), live(t)
-	forward := wrap.Check(t.Context(), []config.MCPServer{{ID: "aa", URL: a}, {ID: "bb", URL: b}})
-	backward := wrap.Check(t.Context(), []config.MCPServer{{ID: "bb", URL: b}, {ID: "aa", URL: a}})
+	forward := wrap.Check(t.Context(), []config.MCPServer{{ID: "aa", URL: a}, {ID: "bb", URL: b}}, nil)
+	backward := wrap.Check(t.Context(), []config.MCPServer{{ID: "bb", URL: b}, {ID: "aa", URL: a}}, nil)
 	if forward.Declared[0].Server.ID != "aa" || backward.Declared[0].Server.ID != "aa" {
 		t.Errorf("order = %q then %q, want both sorted",
 			forward.Declared[0].Server.ID, backward.Declared[0].Server.ID)
 	}
-	first, _ := forward.OpenCodePayload()
-	second, _ := backward.OpenCodePayload()
+	first, _ := forward.OpenCodePayload(testCore)
+	second, _ := backward.OpenCodePayload(testCore)
 	if first != second {
 		t.Errorf("payloads differ by declaration order:\n%s\n%s", first, second)
 	}
@@ -233,18 +239,92 @@ func TestTheOrderDoesNotDependOnDeclarationOrder(t *testing.T) {
 // Declaring nothing is a legitimate state, and it has to be said out loud:
 // silence would read as "wrap ran and everything is fine" when what happened
 // is that wrap had nothing to check.
-func TestNothingDeclaredSaysTheClientIsUnchanged(t *testing.T) {
-	plan := wrap.Check(t.Context(), nil)
+//
+// What it must NOT say any more is "unchanged". Until 2026-08-09 the payload
+// really was empty here, because no payload ever named Atenea; now the door
+// goes in whether or not a single backend was declared, and a settings file
+// with no backends still has a core with eight capabilities behind it.
+func TestNothingDeclaredStillHandsTheClientTheDoor(t *testing.T) {
+	plan := wrap.Check(t.Context(), nil, nil)
 	var report strings.Builder
 	plan.Report(&report, "opencode")
-	if !strings.Contains(report.String(), "unchanged") {
-		t.Errorf("report = %q, want it to say the client is unchanged", report.String())
+	if strings.Contains(report.String(), "unchanged") {
+		t.Errorf("report = %q, but the client does change: it gains atenea", report.String())
 	}
-	raw, err := plan.OpenCodePayload()
-	if err != nil {
-		t.Fatalf("payload: %v", err)
+	if !strings.Contains(report.String(), "atenea") {
+		t.Errorf("report = %q, want it to name what the client gains", report.String())
 	}
-	if raw != `{"mcp":{}}` {
-		t.Errorf("payload = %s, want an empty mcp object that merges to nothing", raw)
+	servers := payload(t, plan)
+	if len(servers) != 1 {
+		t.Fatalf("payload = %v, want exactly the core", servers)
+	}
+	if _, ok := servers["atenea"]; !ok {
+		t.Errorf("payload = %v, want the core in it", servers)
+	}
+}
+
+// The defect this phase existed to fix, pinned so it cannot come back.
+//
+// `serena` and `codebase-memory` carry every capability on the machine this
+// was measured on, and wrap put both in the payload. The client then reached
+// the funnel's own backends without going through the funnel: no allow list,
+// no effect check, no receipt. The command that exists to point a client at
+// the core was the one handing out ways around it.
+func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
+	url := live(t)
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "serena", URL: url},
+		{ID: "headroom", URL: url},
+	}, map[string]bool{"serena": true})
+
+	servers := payload(t, plan)
+	if _, ok := servers["serena"]; ok {
+		t.Error("serena is in the payload; a capability's backend must be reached through the capability")
+	}
+	// The other half of the same rule: holding back everything would be a
+	// different bug wearing this one's clothes. A backend nobody implements
+	// against is one Atenea cannot answer for, and the client keeps it.
+	if _, ok := servers["headroom"]; !ok {
+		t.Error("headroom is missing; a backend no capability uses is the client's to declare")
+	}
+	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "serena" {
+		t.Errorf("held = %v, want serena held", plan.Held)
+	}
+}
+
+// A held backend is still reported. Dropping it from the report would make
+// "my client cannot see serena" a silent outcome, and the operator would go
+// looking in the settings file for something that is working as designed.
+func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "codebase-memory", URL: live(t)},
+	}, map[string]bool{"codebase-memory": true})
+
+	var report strings.Builder
+	plan.Report(&report, "opencode")
+	if !strings.Contains(report.String(), "codebase-memory") {
+		t.Errorf("report = %q, want the held backend named", report.String())
+	}
+}
+
+// The core is not a probe result and must not be treated as one. Every other
+// entry earns its place by answering a handshake; this one is the process
+// running the handshakes, and a bad probe elsewhere must not cost the client
+// its only door.
+func TestTheCoreSurvivesAPayloadWhereEverythingElseFailed(t *testing.T) {
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "gone", URL: dead(t), Timeout: 2 * time.Second},
+	}, nil)
+
+	servers := payload(t, plan)
+	if _, ok := servers["gone"]; ok {
+		t.Error("the dead server is in the payload")
+	}
+	entry, ok := servers["atenea"]
+	if !ok {
+		t.Fatalf("payload = %v, want the core present even when every backend failed", servers)
+	}
+	if entry["type"] != "local" {
+		t.Errorf("core type = %v, want a local stdio process", entry["type"])
 	}
 }

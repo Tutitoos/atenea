@@ -480,7 +480,7 @@ func TestAPassthroughStepIsDistinguishableFromAKeptFunnel(t *testing.T) {
 }
 
 // A name in the reserved namespace whose backend is not declared is refused as
-// a bad request, not answered with the catalogue's "did you mean" -- the near
+// a bad request, not answered with the catalog's "did you mean" -- the near
 // miss would send a model looking for a capability that was never the point.
 func TestARawNameWithNoBackendIsRefusedPlainly(t *testing.T) {
 	backend := httptest.NewServer(&fakeBackend{})

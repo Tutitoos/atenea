@@ -48,11 +48,20 @@ type Checked struct {
 type Plan struct {
 	Declared []Checked
 	Refused  []Checked
-	// Held are the backends Atenea serves itself. They are checked and
+	// Held are the backends Atenea answers for. They are checked and
 	// reported like the others and then deliberately kept out of every
-	// payload: a client pointed at a raw server would reach it directly,
-	// under no allow list and no effect check, which is the budget being
-	// routed around by the very command that is supposed to apply it.
+	// payload: a client pointed at one would reach it directly, under no
+	// allow list and no effect check, which is the budget being routed
+	// around by the very command that is supposed to apply it.
+	//
+	// Two kinds qualify, and until 2026-08-09 only the first did. A raw
+	// backend is held because Atenea filters it. A backend behind a
+	// capability is held for the same reason and was being handed over
+	// anyway: `serena` and `codebase-memory` carry all eight capabilities
+	// on this machine, and wrap was putting both in the payload, so the
+	// client reached the funnel's own backends around the funnel. The
+	// command that exists to point clients at the core was pointing them
+	// past it.
 	Held []Checked
 }
 
@@ -60,16 +69,21 @@ func toProbe(s config.MCPServer) mcpprobe.Server {
 	return mcpprobe.Server{ID: s.ID, URL: s.URL, Command: s.Command, Env: s.Env, Timeout: s.Timeout}
 }
 
-// Check probes every declared server and sorts them into the two piles.
+// Check probes every declared server and sorts them into the three piles.
 //
 // The probes run together because they are independent and a client launch
 // waits on all of them: checking eleven servers one after another would add
 // their timeouts, and the whole point is that this happens before a person
 // has finished reading the line that says it is happening.
-func Check(ctx context.Context, servers []config.MCPServer) Plan {
+//
+// served names the backends some capability implementation runs against.
+// It is passed in rather than derived here because the answer lives in the
+// implementation catalog, and a backend's own block cannot know whether
+// anybody points at it.
+func Check(ctx context.Context, servers []config.MCPServer, served map[string]bool) Plan {
 	held := make([]bool, len(servers))
 	for i, s := range servers {
-		held[i] = s.Expose == config.ExposeRaw
+		held[i] = s.Expose == config.ExposeRaw || served[s.ID]
 	}
 	probes := make([]mcpprobe.Server, len(servers))
 	results := make([]mcpprobe.Result, len(servers))
@@ -123,6 +137,18 @@ type openCodeServer struct {
 	Environment map[string]string `json:"environment,omitempty"`
 }
 
+// Core is the entry every payload carries: the client's one door to Atenea.
+//
+// It is not a settings block and never was. Until 2026-08-09 no payload named
+// Atenea at all, so `atenea wrap` handed a client every backend and left out
+// the core -- measured, five servers and no door. The command is built from
+// the running binary rather than a configured path so that a wrap can only
+// ever point at the Atenea that performed it.
+type Core struct {
+	ID      string
+	Command []string
+}
+
 // OpenCodePayload renders what goes in OPENCODE_CONFIG_CONTENT.
 //
 // Only servers that answered are in it. A refused server is left out rather
@@ -130,8 +156,13 @@ type openCodeServer struct {
 // deep-merges this over the user's own config, so an absent key leaves
 // whatever they already had in place. Atenea declining to vouch for a server
 // must never be the reason a client loses one that was working for them.
-func (p Plan) OpenCodePayload() (string, error) {
-	servers := make(map[string]openCodeServer, len(p.Declared))
+//
+// The core is the one exception to "only what answered": it is the process
+// doing the answering. Leaving it out on a bad probe would hand the client a
+// config with no door at all, which is worse than the door it came with.
+func (p Plan) OpenCodePayload(core Core) (string, error) {
+	servers := make(map[string]openCodeServer, len(p.Declared)+1)
+	servers[core.ID] = openCodeServer{Type: "local", Command: core.Command}
 	for _, entry := range p.Declared {
 		s := entry.Server
 		if s.URL != "" {
@@ -158,8 +189,12 @@ func (p Plan) OpenCodePayload() (string, error) {
 func (p Plan) Report(w io.Writer, client string) {
 	total := len(p.Declared) + len(p.Refused) + len(p.Held)
 	if total == 0 {
+		// Not "unchanged" any more, and saying so would be the lie this
+		// package was written to stop. A settings file with no backends
+		// still has a running core with capabilities behind it, and the
+		// payload carries the door to it either way.
 		fmt.Fprintf(w, "wrap %s  no mcp_server declared in settings\n", client)
-		fmt.Fprintf(w, "  %s starts with its own configuration, unchanged.\n", client)
+		fmt.Fprintf(w, "  %s gets atenea and keeps everything else it already declares.\n", client)
 		return
 	}
 	fmt.Fprintf(w, "wrap %s  %d checked: %d declared, %d refused, %d held\n\n",

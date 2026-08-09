@@ -1916,7 +1916,7 @@ func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 // exactly the guarantee a file edit cannot make.
 var clients = map[string]struct {
 	env    string
-	render func(wrap.Plan) (string, error)
+	render func(wrap.Plan, wrap.Core) (string, error)
 }{
 	"opencode": {env: "OPENCODE_CONFIG_CONTENT", render: wrap.Plan.OpenCodePayload},
 }
@@ -1950,10 +1950,25 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	plan := wrap.Check(context.Background(), cfg.MCPServers)
+	// A backend somebody's implementation runs against is one Atenea
+	// answers for, so the client must not be handed it as well. The
+	// catalog is the only place that knows; the backend's own block
+	// cannot see who points at it.
+	served := make(map[string]bool, len(cfg.Implementations))
+	for _, impl := range cfg.Implementations {
+		served[impl.Provider] = true
+	}
+	plan := wrap.Check(context.Background(), cfg.MCPServers, served)
 	plan.Report(out, name)
 
-	payload, err := client.render(plan)
+	// The door is this binary. Resolving it here rather than trusting
+	// argv[0] means a wrap performed by one build cannot point a client at
+	// another one that happens to be earlier on PATH.
+	self, err := os.Executable()
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable, "cannot locate the running atenea: %v", err)
+	}
+	payload, err := client.render(plan, wrap.Core{ID: "atenea", Command: []string{self, "mcp"}})
 	if err != nil {
 		return err
 	}

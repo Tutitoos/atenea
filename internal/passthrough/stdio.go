@@ -322,7 +322,7 @@ func (b *stdioBackend) read(proc *process, stdout io.Reader) {
 	for {
 		line, err := reader.ReadString('\n')
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			b.route(trimmed)
+			b.route(proc, trimmed)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -333,28 +333,86 @@ func (b *stdioBackend) read(proc *process, stdout io.Reader) {
 	}
 }
 
-func (b *stdioBackend) route(line string) {
+// route decides what one line from the backend is, and there are three
+// answers, not two.
+//
+// A response carries an id and no method. A notification carries a method and
+// no id. The third is the one this missed until 2026-08-09: a *request*, which
+// carries both, because the protocol runs in both directions. Semgrep asks
+// `roots/list` before it will answer its first tools/call, and a request was
+// being read here as a response and delivered to a caller waiting on id 0 --
+// which is nobody, since ids here start at 1. The line vanished, the server
+// waited for an answer that was never coming, and every call to that backend
+// died on its timeout with the backend healthy and idle. Measured: 106 bytes
+// in, 47 bytes back, one deadline exceeded.
+func (b *stdioBackend) route(proc *process, line string) {
 	if !strings.HasPrefix(line, "{") {
 		return // a log line
 	}
-	var answer struct {
-		ID     *int64          `json:"id"`
+	var msg struct {
+		// Raw, not int64: a request's id is echoed back verbatim and the
+		// protocol allows a string there. Parsing it as a number would
+		// answer a server with an id it never used.
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
 		Result json.RawMessage `json:"result"`
 		Error  *rpcError       `json:"error"`
 	}
-	if json.Unmarshal([]byte(line), &answer) != nil {
+	if json.Unmarshal([]byte(line), &msg) != nil {
 		return
 	}
+	hasID := len(msg.ID) > 0 && string(msg.ID) != "null"
 	// A notification carries no id and answers nobody. Matching one to a
 	// waiting caller would hand a chat somebody else's news as its result.
-	if answer.ID == nil {
+	if !hasID {
 		return
 	}
-	body, err := json.Marshal(answer)
+	if msg.Method != "" {
+		b.refuse(proc, msg.ID, msg.Method)
+		return
+	}
+	var id int64
+	if json.Unmarshal(msg.ID, &id) != nil {
+		return // not an id this backend can be waiting on
+	}
+	body, err := json.Marshal(struct {
+		ID     int64           `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  *rpcError       `json:"error"`
+	}{ID: id, Result: msg.Result, Error: msg.Error})
 	if err != nil {
 		return
 	}
-	b.pending.deliver(*answer.ID, body)
+	b.pending.deliver(id, body)
+}
+
+// refuse answers a request Atenea does not serve, so the backend stops waiting.
+//
+// Refusing rather than implementing is the honest answer for every one of
+// them today: the handshake declares no capabilities, so a server asking for
+// roots, sampling or elicitation is asking for something Atenea never offered.
+// What matters is that it gets *an* answer -- silence is the one reply that
+// hangs a shared process for every chat attached to it, not just the one that
+// provoked it.
+func (b *stdioBackend) refuse(proc *process, id json.RawMessage, method string) {
+	body, err := json.Marshal(struct {
+		Version string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   rpcError        `json:"error"`
+	}{
+		Version: "2.0",
+		ID:      id,
+		Error: rpcError{
+			Code:    -32601,
+			Message: fmt.Sprintf("atenea does not serve %s", method),
+		},
+	})
+	if err != nil {
+		return
+	}
+	// Best effort on purpose. The write can only fail on a process that is
+	// already gone, and the read loop is about to discover that itself.
+	_ = proc.write(body)
 }
 
 // send writes one request and waits for its answer, its timeout, or the death
