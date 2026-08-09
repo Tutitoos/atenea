@@ -65,5 +65,6 @@ rewritten when they do.
 - [Architecture]({{< relref "architecture" >}})
 - [Settings]({{< relref "settings" >}})
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
+- [When the instrument is the bug]({{< relref "measuring-the-wrong-process" >}}) — three defects that were not there
 - [What is not built yet]({{< relref "not-built-yet" >}}) — and what the next brick is
 - [Open questions]({{< relref "open-questions" >}}) — what dogfooding turned up, not yet decided
