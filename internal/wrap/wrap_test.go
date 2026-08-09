@@ -307,6 +307,41 @@ func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 	}
 }
 
+// The report is a claim about what a client can reach, so it must not name a
+// surface the core does not serve. Held has two causes and only one of them
+// has tools: `expose = "raw"` is re-offered as raw.<id>.<tool>; a backend held
+// because capabilities run on it is not re-offered at all.
+//
+// Measured on this machine on 2026-08-09, against the binary as shipped: wrap
+// announced raw.serena.<tool> and raw.codebase-memory.<tool>, and `atenea mcp`
+// served neither -- 19 raw tools, every one of them chrome-devtools, context7
+// or semgrep, the three that carry expose. The check that exists to stop a
+// client believing an unverified claim was making two of its own.
+func TestOnlyARawBackendIsAnnouncedAsRaw(t *testing.T) {
+	url := live(t)
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "serena", URL: url},
+		{ID: "context7", URL: url, Expose: config.ExposeRaw},
+	}, map[string]bool{"serena": true})
+
+	var report strings.Builder
+	plan.Report(&report, "opencode")
+	got := report.String()
+	if strings.Contains(got, "raw.serena.<tool>") {
+		t.Errorf("report announces a raw surface serena does not have:\n%s", got)
+	}
+	// The other half, or the fix is just a deletion: a backend that really
+	// is re-offered must still say so, under the name it answers to.
+	if !strings.Contains(got, "raw.context7.<tool>") {
+		t.Errorf("report drops the raw surface context7 does have:\n%s", got)
+	}
+	// Both are held either way; the fix is about what the row says, not
+	// about who goes in the payload.
+	if len(plan.Held) != 2 {
+		t.Errorf("held = %d entries, want both", len(plan.Held))
+	}
+}
+
 // The core is not a probe result and must not be treated as one. Every other
 // entry earns its place by answering a handshake; this one is the process
 // running the handshakes, and a bad probe elsewhere must not cost the client

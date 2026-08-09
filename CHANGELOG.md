@@ -47,6 +47,18 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   all. A capability-backed backend is now `Held`, reported like the others and
   deliberately kept out, and the core is the one entry every payload carries.
 
+- **`wrap` announced a raw tool surface for backends that have none.** The
+  report prints a reason beside every held server, and printed the same one
+  for both kinds of hold: `served as raw.<id>.<tool>`. Only a backend carrying
+  `expose = "raw"` is re-offered under that name. `serena` and
+  `codebase-memory` are held because the capabilities run on them, and Atenea
+  serves no tool of theirs at all — measured on the machine this was found on,
+  `tools/list` returned 19 raw tools, every one of them `chrome-devtools`,
+  `context7` or `semgrep`, the three that declare `expose`. So the report sent
+  an operator looking for tools no `tools/list` would ever return. The row now
+  says which of the two holds it is, and the check whose whole job is stopping
+  a client from believing an unverified claim stopped making two of its own.
+
 - **A chat opened by a client held nothing, so `client_effects` was a ceiling
   with no way to reach it.** `Core.Open` copied whatever its caller asked for
   into the chat's grant, `initialize` asked for nothing because the protocol

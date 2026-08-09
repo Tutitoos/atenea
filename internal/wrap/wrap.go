@@ -41,6 +41,12 @@ import (
 type Checked struct {
 	Server mcpprobe.Server
 	Result mcpprobe.Result
+	// Raw is whether this entry carries expose = "raw", and it is here for
+	// the report rather than the payload. The two kinds of held look
+	// identical from outside -- both absent from every payload -- but only
+	// a raw one is re-offered, as raw.<id>.<tool>. A backend held because
+	// capabilities run on it has no tool surface of its own at all.
+	Raw bool
 }
 
 // Plan is the decision, made before the client is launched: who goes into the
@@ -82,8 +88,10 @@ func toProbe(s config.MCPServer) mcpprobe.Server {
 // anybody points at it.
 func Check(ctx context.Context, servers []config.MCPServer, served map[string]bool) Plan {
 	held := make([]bool, len(servers))
+	raw := make([]bool, len(servers))
 	for i, s := range servers {
-		held[i] = s.Expose == config.ExposeRaw || served[s.ID]
+		raw[i] = s.Expose == config.ExposeRaw
+		held[i] = raw[i] || served[s.ID]
 	}
 	probes := make([]mcpprobe.Server, len(servers))
 	results := make([]mcpprobe.Result, len(servers))
@@ -100,7 +108,7 @@ func Check(ctx context.Context, servers []config.MCPServer, served map[string]bo
 
 	var plan Plan
 	for i := range probes {
-		entry := Checked{Server: probes[i], Result: results[i]}
+		entry := Checked{Server: probes[i], Result: results[i], Raw: raw[i]}
 		switch {
 		// Held before reachable: a raw backend that is down is still one
 		// Atenea owns, and putting it in Refused would invite the reading
@@ -224,8 +232,19 @@ func (p Plan) Report(w io.Writer, client string) {
 		// Why it is not in the payload, at the row rather than in a
 		// footnote: an operator comparing this against their client's tool
 		// list needs the reason where the absence is.
-		fmt.Fprintf(w, "  %-*s            served as raw.%s.<tool>; %s is not pointed at it\n",
-			width, "", entry.Server.ID, client)
+		//
+		// And the reason has to be the real one. Announcing raw.<id>.<tool>
+		// for a backend that carries no expose sends that operator looking
+		// for tools no tools/list will ever return: a claim this binary
+		// cannot keep, printed by the command whose entire job is checking
+		// claims before a client is allowed to believe them.
+		if entry.Raw {
+			fmt.Fprintf(w, "  %-*s            served as raw.%s.<tool>; %s is not pointed at it\n",
+				width, "", entry.Server.ID, client)
+			continue
+		}
+		fmt.Fprintf(w, "  %-*s            no raw surface; reached only through the capabilities that run on it\n",
+			width, "")
 	}
 	// Always printed, including the all-green run -- especially then. A
 	// report reading "5 declared, 0 refused" is the moment the word does the
