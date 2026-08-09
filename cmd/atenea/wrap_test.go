@@ -40,8 +40,14 @@ func TestWrapNamesTheClientsItSupports(t *testing.T) {
 	if contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
-	if !strings.Contains(err.Error(), "supported: opencode") {
-		t.Errorf("err = %v, want the supported list", err)
+	// Read from the table rather than pinned to a literal. A client added
+	// to the table whose name never reaches this message is a client
+	// nobody discovers, and the list was a single name for long enough
+	// that the literal looked like the contract.
+	for name := range clients {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("err = %v, want %q named as supported", err, name)
+		}
 	}
 }
 

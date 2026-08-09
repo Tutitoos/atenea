@@ -912,18 +912,41 @@ server must never be the reason a working one disappears. The corollary is
 visible above -- `chrome-devtools` stays broken in exactly the way it was
 already broken, and wrap's contribution is that somebody now knows.
 
-Nothing is written to disk. The configuration lives in one environment
-variable for the lifetime of the child process, so a client launched without
-`wrap` is a client with exactly the configuration it had before, and there is
-no `unwrap` because there is nothing to undo. `opencode` is the one client
-wired today; a client configurable only by editing a file on disk cannot be
-added here, because that guarantee is the one a file edit cannot make.
+Nothing is written to disk. The configuration rides in one environment
+variable or on the client's own command line, for the lifetime of the child
+process, so a client launched without `wrap` is a client with exactly the
+configuration it had before, and there is no `unwrap` because there is nothing
+to undo. Three clients are wired today, and they take it in two ways:
+
+| client | how it arrives | against the client's own |
+|---|---|---|
+| `opencode` | `OPENCODE_CONFIG_CONTENT` | deep-merged, key by key |
+| `claude` | `--mcp-config <json>` | added to every other source it resolves |
+| `codex` | one `-c mcp_servers.<id>={...}` per server | one key each, rest of the table untouched |
+
+The codex shape is one server per override rather than one for the whole
+table on purpose: `-c mcp_servers={...}` replaces the map, and every server
+the user declared in their own `config.toml` would be gone for the length of
+the session.
+
+`omp` is not wired, and it is the interesting one. Its MCP servers are read
+from `mcp.json` files and nothing else -- there is no config-content variable,
+and its `--config` overlay feeds a settings tree whose schema has no
+`mcpServers` key in it at all, so even an inline overlay could not carry a
+server. Wrapping it would mean writing one of those files. That is the
+guarantee above being traded away, so it is not done, and `atenea wrap --help`
+says so by name rather than leaving a reader to discover the omission.
 
 ## Arguments handed to the client, and `--auto`
 
-Everything after the client name is passed to the client untouched. `wrap`
-reads none of it, and adds none of its own: verified by replacing `opencode`
-with a stub that printed its argv, which received exactly `--auto`.
+Everything after the client name is passed to the client untouched. For
+`opencode` wrap adds nothing of its own: verified by replacing the binary with
+a stub that printed its argv, which received exactly `--auto`. For the two
+command-line clients it adds exactly the flags in the table above, and where
+they go is not cosmetic. `--mcp-config` is variadic -- it swallows every
+following token that does not begin with a dash -- so it is appended behind
+the user's own arguments, where there is nothing left to swallow. Put it in
+front and `atenea wrap claude mcp list` reads `mcp` as another config file.
 
 That flag is worth naming here rather than leaving it in a shell alias,
 because it is the one part of the launch line Atenea does not govern. It

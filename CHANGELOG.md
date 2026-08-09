@@ -75,6 +75,25 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`wrap` supports Claude Code and codex**, alongside OpenCode. Both take
+  their configuration on the command line rather than from the environment,
+  which is the same promise by another route: `claude --mcp-config <json>`,
+  added to every source Claude Code already resolves, and one `-c
+  mcp_servers.<id>={...}` per server for codex, each setting a single key of
+  the table. Neither writes anything, so a client launched without `wrap` is
+  still a client with exactly the configuration it had before. The codex
+  overrides are deliberately per-server: `-c mcp_servers={...}` replaces the
+  map, and a user's own `config.toml` servers would vanish for the length of
+  the session. Measured end to end against codex 0.146.0 — the injected
+  `atenea` arrived and the user's `claude-mem` and `mcp-search` were still
+  listed beside it.
+- **`atenea wrap --help` names the client it will not take, and why.** `omp`
+  reads MCP servers from `mcp.json` files and nothing else: no config-content
+  variable, and its `--config` overlay feeds a settings tree whose schema has
+  no `mcpServers` key, so an inline overlay could not carry a server either.
+  Supporting it would mean writing that file, which is the guarantee wrap
+  exists to keep. An omission a reader has to discover is the failure this
+  command was written against.
 - **A client may ask at `initialize` to hold less than it was granted**, under
   `capabilities.experimental.atenea.grant`. Asking for more is refused there
   rather than at the first `tools/call`, and so is an effect name nobody

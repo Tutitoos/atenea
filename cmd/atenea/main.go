@@ -217,14 +217,24 @@ It proves a server is reachable and speaking MCP; it does not prove any of
 its tools work. A server can answer initialize perfectly and fail on every
 call after it, so an all-green report is a floor, not a warranty.
 
-Nothing is written to disk. The configuration lives in one environment
-variable for the lifetime of the child, so a client launched without wrap
-is a client with exactly the configuration it had before. There is no
-unwrap because there is nothing to undo.
+Nothing is written to disk. The configuration rides in one environment
+variable or on the client's own command line, for the lifetime of the
+child, so a client launched without wrap is a client with exactly the
+configuration it had before. There is no unwrap because there is nothing
+to undo.
 
 Arguments after CLIENT are passed through untouched.
 
-Supported clients: opencode
+Supported clients:
+
+  opencode  OPENCODE_CONFIG_CONTENT, deep-merged over its own config
+  claude    --mcp-config <json>, added to every other source it resolves
+  codex     one -c mcp_servers.<id>={...} per server, merged into the table
+
+Not supported: omp. Its MCP servers are read from mcp.json files and
+nothing else -- no config-content variable, and its --config overlay
+carries settings, not servers. Wrapping it would mean writing that file,
+which is the one thing this command promises not to do.
 `,
 }
 
@@ -1905,20 +1915,36 @@ func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 	}
 }
 
-// clients maps a client name to the environment variable that client reads
-// its MCP configuration from, and the function that renders it.
+// clients maps a client name to how Atenea hands it a configuration that was
+// never written to disk.
 //
-// The map is the whole extension point, and it is deliberately this small:
-// every client that can be wrapped is one that takes its configuration from
-// the environment. A client that can only be configured by editing a file on
-// disk does not belong here, because the guarantee that makes wrap safe to
-// try -- run it without wrap and nothing about your setup has changed -- is
-// exactly the guarantee a file edit cannot make.
+// The map is the whole extension point, and what qualifies a client for it is
+// narrow on purpose: it must take its MCP servers from the environment or from
+// its own command line. The guarantee that makes wrap safe to try -- run it
+// without wrap and nothing about your setup has changed -- is exactly the
+// guarantee a file edit cannot make, so a client configurable only by editing
+// a file is left out and named as left out rather than quietly served less.
+//
+// Two shapes, because the clients have two. OpenCode reads one variable and
+// deep-merges it. Claude Code and codex take theirs as arguments: one
+// `--mcp-config <json>` carrying every server, and one `-c
+// mcp_servers.<id>={...}` per server respectively. All three are additive
+// against whatever the user already declares.
 var clients = map[string]struct {
 	env    string
 	render func(wrap.Plan, wrap.Core) (string, error)
+	flags  func(wrap.Plan, wrap.Core) ([]string, error)
+	// after puts the flags behind the user's own arguments instead of in
+	// front. `--mcp-config` is variadic: it swallows every following token
+	// that does not begin with a dash, so a prompt or a subcommand sitting
+	// after it is read as another config path -- measured, `claude
+	// --mcp-config <json> mcp list` reports `MCP config file not found:
+	// mcp`. Last is the one position with nothing left to swallow.
+	after bool
 }{
 	"opencode": {env: "OPENCODE_CONFIG_CONTENT", render: wrap.Plan.OpenCodePayload},
+	"claude":   {flags: wrap.Plan.ClaudeArgs, after: true},
+	"codex":    {flags: wrap.Plan.CodexArgs},
 }
 
 func cmdWrap(settingsPath string, args []string, out io.Writer) error {
@@ -1968,11 +1994,30 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable, "cannot locate the running atenea: %v", err)
 	}
-	payload, err := client.render(plan, wrap.Core{ID: "atenea", Command: []string{self, "mcp"}})
-	if err != nil {
-		return err
+	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp"}}
+
+	var flags, env []string
+	if client.flags != nil {
+		if flags, err = client.flags(plan, core); err != nil {
+			return err
+		}
 	}
-	return launch(binary, append([]string{name}, rest...), client.env, payload)
+	if client.env != "" {
+		payload, err := client.render(plan, core)
+		if err != nil {
+			return err
+		}
+		env = []string{client.env + "=" + payload}
+	}
+	argv := []string{name}
+	if !client.after {
+		argv = append(argv, flags...)
+	}
+	argv = append(argv, rest...)
+	if client.after {
+		argv = append(argv, flags...)
+	}
+	return launch(binary, argv, env)
 }
 
 // launch replaces this process with the client.
@@ -1983,9 +2028,8 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 // to get wrong what the kernel gets right for free. It also settles the
 // question of what happens to Atenea while a chat session runs for an hour:
 // nothing, because Atenea is no longer there.
-func launch(binary string, argv []string, key, payload string) error {
-	env := append(os.Environ(), key+"="+payload)
-	if err := syscall.Exec(binary, argv, env); err != nil {
+func launch(binary string, argv, env []string) error {
+	if err := syscall.Exec(binary, argv, append(os.Environ(), env...)); err != nil {
 		return contract.Fail(contract.FailureUnavailable, "cannot start %s: %v", binary, err)
 	}
 	return nil // unreachable: Exec only returns on failure.

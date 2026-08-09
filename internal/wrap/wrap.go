@@ -189,6 +189,196 @@ func (p Plan) OpenCodePayload(core Core) (string, error) {
 	return string(out), nil
 }
 
+// claudeServer is one entry of Claude Code's `mcpServers` object.
+//
+// The shape differs from OpenCode's in the one way that stops a shared
+// renderer from working: Claude splits the executable from its arguments where
+// OpenCode takes a single list. Two clients, two shapes, two functions --
+// rather than one renderer with a switch in it, which is where a settings
+// file's vocabulary starts leaking into a client's.
+type claudeServer struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+}
+
+// ClaudePayload renders the JSON handed to `claude --mcp-config`.
+//
+// Claude Code merges what arrives here with everything else it resolves --
+// project `.mcp.json`, the user file, plugins -- unless `--strict-mcp-config`
+// is passed, and wrap never passes it. That is the same asymmetry the OpenCode
+// payload is built on: Atenea declining to vouch for a server must never be
+// the reason a client loses one that was working. Where a name collides the
+// whole entry from one source wins rather than the two merging field by field,
+// and under either outcome the client still has a server under that name.
+//
+// `type` is written even for stdio, where the documentation makes it optional.
+// An entry carrying a url and no type is a hard error in Claude Code -- it
+// reads a typeless entry as stdio and skips it -- so being explicit on both
+// costs a few bytes and removes the class.
+func (p Plan) ClaudePayload(core Core) (string, error) {
+	if len(core.Command) == 0 {
+		return "", fmt.Errorf("the core has no command; there is nothing to point the client at")
+	}
+	servers := make(map[string]claudeServer, len(p.Declared)+1)
+	servers[core.ID] = claudeServer{Type: "stdio", Command: core.Command[0], Args: core.Command[1:]}
+	for _, entry := range p.Declared {
+		s := entry.Server
+		if s.URL != "" {
+			servers[s.ID] = claudeServer{Type: "http", URL: s.URL}
+			continue
+		}
+		// The settings file admits exactly one of url or command and no
+		// empty argument inside it, so the head is here to be taken.
+		servers[s.ID] = claudeServer{
+			Type: "stdio", Command: s.Command[0], Args: s.Command[1:], Env: s.Env,
+		}
+	}
+	out, err := json.Marshal(struct {
+		MCPServers map[string]claudeServer `json:"mcpServers"`
+	}{MCPServers: servers})
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// ClaudeArgs is the payload with the flag that carries it, kept together so
+// the two cannot drift: the JSON shape is Claude's because the flag is.
+func (p Plan) ClaudeArgs(core Core) ([]string, error) {
+	payload, err := p.ClaudePayload(core)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"--mcp-config", payload}, nil
+}
+
+// CodexArgs renders the `-c` overrides handed to codex.
+//
+// One override per server, never one for the whole table. `-c
+// mcp_servers={...}` would replace the map, so a user with their own servers
+// in `~/.codex/config.toml` would lose every one of them for the length of the
+// session; `-c mcp_servers.<id>={...}` sets a single key and leaves the rest
+// of the table alone. Measured against codex 0.146.0: an injected server was
+// listed beside the four already declared, and the config file's hash did not
+// move.
+//
+// The value is TOML rather than JSON -- an inline table, `=` not `:` -- so
+// every string goes through an escaper instead of being concatenated.
+func (p Plan) CodexArgs(core Core) ([]string, error) {
+	if len(core.Command) == 0 {
+		return nil, fmt.Errorf("the core has no command; there is nothing to point the client at")
+	}
+	args := make([]string, 0, 2*(len(p.Declared)+1))
+	add := func(id string, s mcpprobe.Server) {
+		args = append(args, "-c", "mcp_servers."+tomlKey(id)+"="+tomlTable(s))
+	}
+	add(core.ID, mcpprobe.Server{Command: core.Command})
+	for _, entry := range p.Declared {
+		add(entry.Server.ID, entry.Server)
+	}
+	return args, nil
+}
+
+// tomlTable renders one server as a TOML inline table.
+func tomlTable(s mcpprobe.Server) string {
+	if s.URL != "" {
+		return "{url=" + tomlString(s.URL) + "}"
+	}
+	var b strings.Builder
+	b.WriteString("{command=")
+	b.WriteString(tomlString(s.Command[0]))
+	if len(s.Command) > 1 {
+		b.WriteString(",args=[")
+		for i, arg := range s.Command[1:] {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(tomlString(arg))
+		}
+		b.WriteByte(']')
+	}
+	if len(s.Env) > 0 {
+		keys := make([]string, 0, len(s.Env))
+		for k := range s.Env {
+			keys = append(keys, k)
+		}
+		// Sorted for the same reason the piles are: two wraps of one
+		// machine must produce the same argv, never map order.
+		sort.Strings(keys)
+		b.WriteString(",env={")
+		for i, k := range keys {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(tomlKey(k))
+			b.WriteByte('=')
+			b.WriteString(tomlString(s.Env[k]))
+		}
+		b.WriteByte('}')
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// tomlString renders a TOML basic string.
+//
+// strconv.Quote is Go's grammar, not TOML's: it emits `\x00` for a byte TOML
+// has no escape for, and codex would reject the whole override. The escapes
+// TOML defines are written here and everything else non-printable becomes
+// `\uXXXX`, which it also defines.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// tomlKey writes a key bare where TOML allows it and quoted where it does not.
+// Server ids cannot carry a dot -- the settings file refuses one, because an
+// id is a segment of every tool name built from it -- but an environment
+// variable's name arrives from the same file with no such promise.
+func tomlKey(k string) string {
+	bare := k != ""
+	for _, r := range k {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			bare = false
+		}
+	}
+	if bare {
+		return k
+	}
+	return tomlString(k)
+}
+
 // Report says what happened, in the words the operator can act on.
 //
 // It prints even when everything worked. A check whose output only appears on

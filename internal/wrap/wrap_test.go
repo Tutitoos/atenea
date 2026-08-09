@@ -363,3 +363,117 @@ func TestTheCoreSurvivesAPayloadWhereEverythingElseFailed(t *testing.T) {
 		t.Errorf("core type = %v, want a local stdio process", entry["type"])
 	}
 }
+
+// claudePayload parses what `claude --mcp-config` would be handed.
+func claudePayload(t *testing.T, plan wrap.Plan) map[string]map[string]any {
+	t.Helper()
+	args, err := plan.ClaudeArgs(testCore)
+	if err != nil {
+		t.Fatalf("claude args: %v", err)
+	}
+	if len(args) != 2 || args[0] != "--mcp-config" {
+		t.Fatalf("args = %q, want the flag and one payload", args)
+	}
+	var out struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(args[1]), &out); err != nil {
+		t.Fatalf("payload is not JSON: %v: %s", err, args[1])
+	}
+	return out.MCPServers
+}
+
+// One settings block, two renderings. Claude Code splits the executable from
+// its arguments where OpenCode takes a single list, and it reads an entry with
+// no `type` as stdio -- so a remote server rendered without one is skipped
+// with its url never read. Both halves are shape, not preference.
+func TestTheClaudePayloadSplitsTheCommandAndNamesEveryType(t *testing.T) {
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "remote", URL: live(t)},
+	}, nil)
+	servers := claudePayload(t, plan)
+
+	core, ok := servers["atenea"]
+	if !ok {
+		t.Fatal("the core is missing; a payload without it hands the client no door")
+	}
+	if core["command"] != "/nonexistent/atenea" {
+		t.Errorf("command = %v, want the executable on its own", core["command"])
+	}
+	if args, _ := core["args"].([]any); len(args) != 1 || args[0] != "mcp" {
+		t.Errorf("args = %v, want the tail of the command", core["args"])
+	}
+	if core["type"] != "stdio" {
+		t.Errorf("core type = %v, want stdio written out", core["type"])
+	}
+	if got := servers["remote"]["type"]; got != "http" {
+		t.Errorf("remote type = %v, want http; a url with no type is skipped", got)
+	}
+}
+
+// The load-bearing difference between the two ways to write a codex override.
+// `-c mcp_servers={...}` replaces the table and takes every server the user
+// declared in their own config.toml with it, for the length of the session.
+// One override per id sets one key and leaves the rest of the table alone.
+func TestACodexOverrideAddressesOneServerNotTheTable(t *testing.T) {
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "remote", URL: live(t)},
+	}, nil)
+	args, err := plan.CodexArgs(testCore)
+	if err != nil {
+		t.Fatalf("codex args: %v", err)
+	}
+	if len(args) != 4 {
+		t.Fatalf("args = %q, want one -c pair for the core and one for the server", args)
+	}
+	for i := 0; i < len(args); i += 2 {
+		if args[i] != "-c" {
+			t.Fatalf("args[%d] = %q, want -c", i, args[i])
+		}
+		if !strings.HasPrefix(args[i+1], "mcp_servers.") {
+			t.Errorf("override %q addresses the whole table; the user's own servers go with it", args[i+1])
+		}
+	}
+	if want := `mcp_servers.remote={url=`; !strings.HasPrefix(args[3], want) {
+		t.Errorf("override = %q, want it to start %q", args[3], want)
+	}
+}
+
+// codex parses the override as TOML, so a quote or a backslash in a path is
+// the difference between a wrapped session and a parse error at launch. The
+// core's own command is the one string in the payload that is always present.
+func TestACodexOverrideEscapesWhatTOMLWouldMisread(t *testing.T) {
+	core := wrap.Core{ID: "atenea", Command: []string{`/no/a"b\c`, "mcp"}}
+	args, err := wrap.Plan{}.CodexArgs(core)
+	if err != nil {
+		t.Fatalf("codex args: %v", err)
+	}
+	if len(args) != 2 {
+		t.Fatalf("args = %q, want the core alone", args)
+	}
+	if want := `command="/no/a\"b\\c"`; !strings.Contains(args[1], want) {
+		t.Errorf("override = %q, want it to carry %s", args[1], want)
+	}
+}
+
+// The asymmetry the package rests on, carried into both new clients: a server
+// Atenea could not reach is absent, never disabled. Claude Code and codex both
+// add what arrives to what they already resolve, so an absent entry leaves the
+// user's own declaration exactly where it was -- and a disabled one would
+// reach in and switch off something that may work perfectly without Atenea.
+func TestARefusedServerIsAbsentFromEveryClient(t *testing.T) {
+	plan := wrap.Check(t.Context(), []config.MCPServer{
+		{ID: "gone", URL: dead(t), Timeout: 2 * time.Second},
+	}, nil)
+
+	if _, ok := claudePayload(t, plan)["gone"]; ok {
+		t.Error("the refused server is in the claude payload")
+	}
+	args, err := plan.CodexArgs(testCore)
+	if err != nil {
+		t.Fatalf("codex args: %v", err)
+	}
+	if strings.Contains(strings.Join(args, " "), "gone") {
+		t.Errorf("the refused server is in the codex overrides: %q", args)
+	}
+}
