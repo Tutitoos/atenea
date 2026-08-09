@@ -124,6 +124,37 @@ result. The same error as the first three, one layer up: **a system you have
 just perturbed is not a system you are observing.** The only thing that caught
 it was refusing to write "is" where the evidence only supported "should be".
 
+## A second instrument, found the same week
+
+`atenea` on this machine is a copy at `~/.local/bin/atenea`, and the user
+service runs that same path: `ExecStart=/home/tutitoos/.local/bin/atenea run`.
+
+A running process holds the inode it was launched from, not the path. Reinstall
+over that path while the service is up and nothing fails, nothing is logged,
+`systemctl status` stays green and the unit is never told — but the service and
+the CLI you type are now two different builds:
+
+```
+~/.local/bin/atenea   inode 7014823
+/proc/<pid>/exe       inode 66173514
+```
+
+Both answer `atenea version` with the same string, because the version is
+stamped at link time and both came from the same tree. Nothing on any screen
+separates them. Everything measured through the CLI then describes one build,
+everything the service does describes the other, and a fix confirmed in one can
+be entirely absent from the other for as long as nobody restarts.
+
+This is the same shape as the three defects above, one layer lower: the earlier
+ones measured the wrong *process*, this one measures the wrong *build* of the
+right process. The check costs one line and no tooling:
+
+```sh
+pid=$(systemctl --user show atenea -p MainPID --value)
+[ "$(stat -Lc %i ~/.local/bin/atenea)" = "$(stat -Lc %i /proc/$pid/exe)" ] \
+  || echo "the service is running a build that is no longer at that path"
+```
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -148,6 +179,11 @@ it was refusing to write "is" where the evidence only supported "should be".
    reading follows your own activity, the first hypothesis is that you are
    looking at your own activity — and the cheapest way to test it is to wait
    and read again, which costs patience and nothing else.
+6. **A version string is not a build.** Two binaries linked from the same tree
+   print the same version and can differ in every line that matters. What
+   identifies a running program is the inode it holds, not the name it reports
+   — and on a machine where the binary is installed by copying over a live
+   path, they come apart silently and stay apart until a restart.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
