@@ -944,9 +944,27 @@ Everything after the client name is passed to the client untouched. For
 a stub that printed its argv, which received exactly `--auto`. For the two
 command-line clients it adds exactly the flags in the table above, and where
 they go is not cosmetic. `--mcp-config` is variadic -- it swallows every
-following token that does not begin with a dash -- so it is appended behind
-the user's own arguments, where there is nothing left to swallow. Put it in
-front and `atenea wrap claude mcp list` reads `mcp` as another config file.
+following token that does not begin with a dash -- and it is also a global
+flag, which a subcommand will not accept. All three placements were measured
+against claude 2.1.220 and only one survives both facts:
+
+| placement | result |
+|---|---|
+| `claude --mcp-config <json> mcp list` | `MCP config file not found: mcp` |
+| `claude mcp list --mcp-config <json>` | `error: unknown option '--mcp-config'` |
+| `claude --mcp-config <json> -- mcp list` | the subcommand runs |
+
+So the flags go in front, and a `--` is inserted when the user's first
+argument is a bare word. Appending them behind the user's arguments reads as
+the safe choice and was shipped that way first: it works for a session and
+kills every subcommand, because a global flag behind a subcommand is not a
+global flag any more.
+
+That a session honours the injected config is measured rather than read: a
+server whose command leaves a file behind on start left one. It cannot be
+read back with `claude mcp list`, which reports the servers on disk and
+ignores the flag entirely -- even under `--strict-mcp-config`, where the list
+came back identical to the unflagged one.
 
 That flag is worth naming here rather than leaving it in a shell alias,
 because it is the one part of the launch line Atenea does not govern. It

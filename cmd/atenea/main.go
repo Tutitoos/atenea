@@ -1940,16 +1940,23 @@ var clients = map[string]struct {
 	env    string
 	render func(wrap.Plan, wrap.Core) (string, error)
 	flags  func(wrap.Plan, wrap.Core) ([]string, error)
-	// after puts the flags behind the user's own arguments instead of in
-	// front. `--mcp-config` is variadic: it swallows every following token
-	// that does not begin with a dash, so a prompt or a subcommand sitting
-	// after it is read as another config path -- measured, `claude
-	// --mcp-config <json> mcp list` reports `MCP config file not found:
-	// mcp`. Last is the one position with nothing left to swallow.
-	after bool
+	// variadic says the flags end in a value that keeps eating: Claude's
+	// `--mcp-config` swallows every following token that does not begin
+	// with a dash. Measured against 2.1.220, all three cases:
+	//
+	//   claude --mcp-config <json> mcp list   -> MCP config file not found: mcp
+	//   claude mcp list --mcp-config <json>   -> error: unknown option
+	//   claude --mcp-config <json> -- mcp list -> the subcommand runs
+	//
+	// So the flags go in front, and a `--` is inserted when the user's own
+	// arguments begin with a bare word. Putting them last instead reads as
+	// the safe choice and is not: a global flag behind a subcommand is not
+	// a global flag any more, it is an unknown option, and every
+	// `claude mcp list` through the wrapper dies on it.
+	variadic bool
 }{
 	"opencode": {env: "OPENCODE_CONFIG_CONTENT", render: wrap.Plan.OpenCodePayload},
-	"claude":   {flags: wrap.Plan.ClaudeArgs, after: true},
+	"claude":   {flags: wrap.Plan.ClaudeArgs, variadic: true},
 	"codex":    {flags: wrap.Plan.CodexArgs},
 }
 
@@ -2015,15 +2022,23 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		}
 		env = []string{client.env + "=" + payload}
 	}
-	argv := []string{name}
-	if !client.after {
-		argv = append(argv, flags...)
+	return launch(binary, clientArgv(name, flags, rest, client.variadic), env)
+}
+
+// clientArgv puts Atenea's flags in front of the user's own arguments, with a
+// `--` between them when the leading flag would otherwise eat the first one.
+//
+// The separator is only ever needed against a bare word. A user argument that
+// starts with a dash stops a variadic flag by itself, which is why `-p` and
+// `--resume` need nothing here, and why `mcp list` does.
+func clientArgv(name string, flags, rest []string, variadic bool) []string {
+	argv := make([]string, 0, len(flags)+len(rest)+2)
+	argv = append(argv, name)
+	argv = append(argv, flags...)
+	if variadic && len(flags) > 0 && len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		argv = append(argv, "--")
 	}
-	argv = append(argv, rest...)
-	if client.after {
-		argv = append(argv, flags...)
-	}
-	return launch(binary, argv, env)
+	return append(argv, rest...)
 }
 
 // launch replaces this process with the client.

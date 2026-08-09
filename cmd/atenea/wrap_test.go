@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,6 +50,64 @@ func TestWrapNamesTheClientsItSupports(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("err = %v, want %q named as supported", err, name)
 		}
+	}
+}
+
+// Where Atenea's flags sit relative to the user's own, pinned against the
+// three placements measured on claude 2.1.220. Each row is a real failure the
+// other placements produce, not a preference:
+//
+//	flags last                 -> error: unknown option '--mcp-config'
+//	flags first, bare word     -> MCP config file not found: mcp
+//	flags first, leading dash  -> the variadic stops on its own
+func TestTheSeparatorAppearsOnlyAgainstABareWord(t *testing.T) {
+	flags := []string{"--mcp-config", "{}"}
+	for _, tc := range []struct {
+		name string
+		rest []string
+		want []string
+	}{
+		{"a subcommand is a bare word and would be eaten",
+			[]string{"mcp", "list"},
+			[]string{"claude", "--mcp-config", "{}", "--", "mcp", "list"}},
+		{"a prompt is a bare word too",
+			[]string{"explain this"},
+			[]string{"claude", "--mcp-config", "{}", "--", "explain this"}},
+		{"a leading dash stops the variadic without help",
+			[]string{"-p", "query"},
+			[]string{"claude", "--mcp-config", "{}", "-p", "query"}},
+		{"nothing to separate from",
+			nil,
+			[]string{"claude", "--mcp-config", "{}"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clientArgv("claude", flags, tc.rest, true)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("argv = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// codex takes repeated `-c key=value`, which is not variadic: it consumes
+// exactly one token. A separator there would be handed to clap as an
+// argument, so the flag that does not eat must not get one.
+func TestANonVariadicClientNeverGetsASeparator(t *testing.T) {
+	got := clientArgv("codex", []string{"-c", "mcp_servers.atenea={}"}, []string{"mcp", "list"}, false)
+	want := []string{"codex", "-c", "mcp_servers.atenea={}", "mcp", "list"}
+	if !slices.Equal(got, want) {
+		t.Errorf("argv = %q, want %q", got, want)
+	}
+}
+
+// opencode carries its configuration in the environment and contributes no
+// flags at all. An empty flag list with a bare word after it must not grow a
+// separator out of nowhere -- there is nothing in front of it to stop.
+func TestNoFlagsMeansNoSeparator(t *testing.T) {
+	got := clientArgv("opencode", nil, []string{"run", "build"}, true)
+	want := []string{"opencode", "run", "build"}
+	if !slices.Equal(got, want) {
+		t.Errorf("argv = %q, want %q", got, want)
 	}
 }
 

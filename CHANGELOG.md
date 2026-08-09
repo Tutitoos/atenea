@@ -87,6 +87,16 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   the session. Measured end to end against codex 0.146.0 — the injected
   `atenea` arrived and the user's `claude-mem` and `mcp-search` were still
   listed beside it.
+  Claude Code was measured too, and the flag's placement is part of the
+  feature rather than a detail: `--mcp-config` is variadic and also global, so
+  in front it eats a following subcommand and behind one it is rejected as an
+  unknown option. It goes in front, with a `--` inserted when the user's first
+  argument is a bare word. Shipped the other way first, which worked for a
+  session and killed every `claude mcp list` run through the wrapper. That a
+  session honours the injection is measured, not read from the docs: a server
+  whose command touches a file on start left the file behind. `claude mcp
+  list` cannot see it — that subcommand reports the servers on disk and
+  ignores the flag, even under `--strict-mcp-config`.
 - **`atenea wrap --help` names the client it will not take, and why.** `omp`
   reads MCP servers from `mcp.json` files and nothing else: no config-content
   variable, and its `--config` overlay feeds a settings tree whose schema has
