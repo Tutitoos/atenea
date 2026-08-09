@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,15 +64,20 @@ func TestWrapChecksTheBinaryBeforeItProbesAnything(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	path := wrapSettings(t, "http://127.0.0.1:1/mcp")
 
-	out, err := cli(t, "--config", path, "wrap", "opencode")
+	// Straight at cmdWrap with its own buffer. The report is written to
+	// stderr in the real dispatch -- stdout belongs to the client wrap
+	// execs -- so asking the CLI's stdout whether a report appeared would
+	// pass no matter what this function did.
+	var report bytes.Buffer
+	err := cmdWrap(path, []string{"opencode"}, &report)
 	if contract.KindOf(err) != contract.FailureNotFound {
 		t.Fatalf("kind = %v, want not_found: %v", contract.KindOf(err), err)
 	}
 	if !strings.Contains(err.Error(), "PATH") {
 		t.Errorf("err = %v, want it to name PATH as the thing that failed", err)
 	}
-	if strings.Contains(out, "declared") || strings.Contains(out, "refused") {
-		t.Errorf("a report was printed before the binary was resolved:\n%s", out)
+	if got := report.String(); strings.Contains(got, "declared") || strings.Contains(got, "refused") {
+		t.Errorf("a report was printed before the binary was resolved:\n%s", got)
 	}
 }
 

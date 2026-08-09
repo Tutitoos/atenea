@@ -367,7 +367,13 @@ func run(args []string, out io.Writer) error {
 	case "config":
 		return cmdConfig(settingsPath, commandArgs, out)
 	case "wrap":
-		return cmdWrap(settingsPath, commandArgs, out)
+		// The report goes to stderr because stdout belongs to the child.
+		// wrap replaces this process with the client, so anything printed
+		// here lands in front of whatever the client writes: `atenea wrap
+		// claude -p query | jq` has to receive claude's JSON and nothing
+		// of ours. An operator still sees the report -- stderr is the
+		// terminal too -- and a pipeline no longer has to.
+		return cmdWrap(settingsPath, commandArgs, os.Stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(out, usage)
 		return nil
