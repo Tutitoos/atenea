@@ -919,6 +919,30 @@ no `unwrap` because there is nothing to undo. `opencode` is the one client
 wired today; a client configurable only by editing a file on disk cannot be
 added here, because that guarantee is the one a file edit cannot make.
 
+## Arguments handed to the client, and `--auto`
+
+Everything after the client name is passed to the client untouched. `wrap`
+reads none of it, and adds none of its own: verified by replacing `opencode`
+with a stub that printed its argv, which received exactly `--auto`.
+
+That flag is worth naming here rather than leaving it in a shell alias,
+because it is the one part of the launch line Atenea does not govern. It
+belongs to opencode, whose own help describes it as *auto-approve permissions
+that are not explicitly denied (dangerous!)*. It is not a `wrap` option and
+never was; on the machine this was written on it arrived by inheritance, from
+an older `headroom wrap opencode --auto` alias, and rode along unexamined when
+the alias moved to `atenea wrap` on 2026-08-09.
+
+It does not widen anything Atenea enforces. The commission check refuses a
+step whose effects its capability does not declare no matter which client
+asked, so `--auto` cannot buy a caller an effect the settings file withholds.
+What it governs is the other half: what the client approves on its own behalf,
+with its own tools, before Atenea is ever consulted. The two are independent,
+which is exactly why one of them being a default nobody chose is worth writing
+down.
+
+Recorded as a standing posture decision to revisit, not a recommendation.
+
 ## Selector rules
 
 ```toml
