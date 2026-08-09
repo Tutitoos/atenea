@@ -297,11 +297,34 @@ refuses `code.search`: every implementation of it is a binary and so needs
 headline capability on day one does not teach caution, it teaches people to
 turn the default off.
 
-It is also a ceiling. A client cannot open a chat claiming more than this,
-and one that tries is refused at `initialize` rather than at its first
-`tools/call` — a client told at the door can say so, one told mid-conversation
-has already promised somebody the work. The ceiling arrives with the line: a
-file that never wrote one has no ceiling, exactly as before.
+A chat opened by a client holds this list. That sentence is younger than the
+key: through `0.10.0` a chat opened holding nothing at all, so
+`client_effects` was a ceiling with no way to reach it, and a raw tool
+declaring anything beyond `read` was refused on every machine whatever this
+file said. Deleting the key still hands clients whatever `effects` says — the
+two readings agree on a file that never wrote the line, which is why upgrading
+changes nothing for anyone who never wrote it.
+
+It is also a ceiling, and now that a chat can reach it, the ceiling is a rule
+rather than a statement. A client may ask at `initialize` to hold *less* than
+this list:
+
+```json
+{"capabilities": {"experimental": {"atenea": {"grant": ["read"]}}}}
+```
+
+A client that needs `write` for one call in fifty can spend the other
+forty-nine unable to make a mistake. Asking for *more* is refused at the door
+rather than at the first `tools/call` — a client told at the door can say so,
+one told mid-conversation has already promised somebody the work. So is an
+effect name nobody recognizes: a client that misspells `write` asked to be
+restrained, and handing it the full grant would be the opposite of what it
+asked for.
+
+The handshake answers with what the chat actually ended up holding, in the
+same block. Before that the only way for a client to learn its own permissions
+was to make a call and read the refusal — and a client that has to provoke an
+error to find out what it may do will provoke it on the user's work.
 
 A capability declares the effects running it has, and a step is refused when
 its permission does not carry one of them — `code.search causes process, which
@@ -811,6 +834,11 @@ All three left a receipt, and each carries the effects it was measured
 against -- `["read"]`, `["read","process"]`, `["read"]`. A refused call is
 recorded exactly like one that ran, because an attempt that was stopped is
 what an audit is looking for.
+
+That middle line was captured against a chat holding nothing beyond `read`,
+which through `0.10.0` was every chat there was. The same call on a machine
+whose `client_effects` grants `process` now runs: the refusal was the ceiling
+being unreachable, not `semgrep_scan` being forbidden.
 
 A raw backend is also **held back from `atenea wrap`**. Every other entry is
 handed to the client so it can talk to the shared server directly; doing that

@@ -67,7 +67,8 @@ effects = ["process"]
 # and the first thing anybody learned about the default would be how to
 # remove it.
 #
-# It is also a ceiling: a client cannot open a chat claiming more than this.
+# It is also a ceiling: a client cannot open a chat claiming more than this,
+# and may ask at `initialize` to hold less.
 client_effects = ["process"]
 
 # Whether the state of a run in flight is written to disk. Memory is a

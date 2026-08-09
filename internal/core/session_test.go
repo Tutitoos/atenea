@@ -17,6 +17,20 @@ import (
 // isolation only shows itself on a run that produced something to withhold.
 func chats(t *testing.T) *core.Core {
 	t.Helper()
+	return chatsGranting(t)
+}
+
+// chatsGranting is the same machine with an operator who wrote a
+// `client_effects` line. A chat can only ever hold what the settings file
+// grants clients, so a test about holding an effect has to say who granted
+// it -- before that key could be reached, any grant was accepted and the
+// ceiling meant nothing.
+func chatsGranting(t *testing.T, effects ...string) *core.Core {
+	t.Helper()
+	clientEffects := ""
+	if len(effects) > 0 {
+		clientEffects = "client_effects = [\"" + strings.Join(effects, "\", \"") + "\"]"
+	}
 	repo := t.TempDir()
 	body := "package main\n\n// TODO: the thing\nfunc main() {}\n"
 	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte(body), 0o600); err != nil {
@@ -31,6 +45,7 @@ shutdown_grace = "2s"
 [orchestrator]
 runners = ["local"]
 checkpoint_dir = %q
+%s
 
   [orchestrator.local]
   implementations = ["ripgrep"]
@@ -83,7 +98,7 @@ id = "work"
 path = %q
 languages = ["go"]
 scale = "small"
-`, t.TempDir(), repo))
+`, t.TempDir(), clientEffects, repo))
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +128,7 @@ func TestAChatCannotAuthorizeWhatItWasNotGranted(t *testing.T) {
 }
 
 func TestAChatCanAuthorizeWhatItHolds(t *testing.T) {
-	atenea := chats(t)
+	atenea := chatsGranting(t, "write")
 	chat, err := atenea.Open(core.SessionOptions{
 		ID:     "writer",
 		Client: "claude-code",
@@ -251,24 +266,27 @@ func TestWhatOneChatIsNotShownIsStillWrittenDown(t *testing.T) {
 // The firebreak the whole brick exists to prove: omp and Claude Code open
 // together, each with its own reach, and neither inheriting the other's.
 func TestTwoClientsAtOnceDoNotShareTheirReach(t *testing.T) {
-	atenea := chats(t)
-	loose, err := atenea.Open(core.SessionOptions{
-		ID: "omp-1", Client: "omp",
-		Grant: []contract.Effect{contract.EffectWrite, contract.EffectExternal},
-	})
+	atenea := chatsGranting(t, "write", "external")
+	loose, err := atenea.Open(core.SessionOptions{ID: "omp-1", Client: "omp"})
 	if err != nil {
 		t.Fatalf("Open omp-1: %v", err)
 	}
-	tight, err := atenea.Open(core.SessionOptions{ID: "cc-1", Client: "claude-code"})
+	// The chat next to it asks to be narrowed to reading. Both chats are
+	// opened by the same operator grant, so this is the only way they can
+	// differ -- and the difference has to survive them running side by side.
+	tight, err := atenea.Open(core.SessionOptions{
+		ID: "cc-1", Client: "claude-code",
+		Grant: []contract.Effect{contract.EffectRead},
+	})
 	if err != nil {
 		t.Fatalf("Open cc-1: %v", err)
 	}
 
 	if !loose.Allows(contract.EffectExternal) {
-		t.Error("the granted chat lost its own grant")
+		t.Error("a chat that asked for nothing did not get what the operator grants clients")
 	}
 	if tight.Allows(contract.EffectWrite) || tight.Allows(contract.EffectExternal) {
-		t.Error("a chat inherited the reach of the one next to it")
+		t.Error("a chat that asked to be narrowed was widened by the one next to it")
 	}
 
 	// Widening the copy a caller is handed must not widen the chat.
@@ -292,7 +310,7 @@ func TestTwoClientsAtOnceDoNotShareTheirReach(t *testing.T) {
 // A chat that could take a name already in use would inherit that chat's
 // grant by guessing it.
 func TestAnOpenChatNameCannotBeTaken(t *testing.T) {
-	atenea := chats(t)
+	atenea := chatsGranting(t, "external")
 	if _, err := atenea.Open(core.SessionOptions{ID: "shared", Client: "omp"}); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -384,7 +402,8 @@ func TestABadGrantIsRefusedAtTheDoor(t *testing.T) {
 // Open listed three of the contract's four effects, and process was the one
 // missing, added to the contract after the guard was written.
 func TestAChatCanBeGrantedProcess(t *testing.T) {
-	atenea := build(t, catalog)
+	atenea := build(t, strings.Replace(catalog, "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = [\"process\"]\n", 1))
 	defer func() { _ = atenea.Shutdown() }()
 
 	chat, err := atenea.Open(core.SessionOptions{
@@ -407,7 +426,11 @@ func TestAChatCanBeGrantedProcess(t *testing.T) {
 // parser rather than against a list retyped here -- a second list would drift
 // the same way the first one did.
 func TestEveryContractEffectCanBeGranted(t *testing.T) {
-	atenea := build(t, catalog)
+	// The operator grants clients everything the contract knows, so what this
+	// measures is the guard's coverage and not the ceiling: a chat may only
+	// hold what the settings file granted, and here it granted all four.
+	atenea := build(t, strings.Replace(catalog, "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = [\"read\", \"write\", \"external\", \"process\"]\n", 1))
 	defer func() { _ = atenea.Shutdown() }()
 
 	for _, name := range []string{"read", "write", "external", "process"} {
@@ -429,7 +452,7 @@ func TestEveryContractEffectCanBeGranted(t *testing.T) {
 // The status screen is the only place anybody sees the isolation, so what it
 // reports has to be the chat's real reach.
 func TestTheStatusScreenShowsEveryOpenChat(t *testing.T) {
-	atenea := chats(t)
+	atenea := chatsGranting(t, "write")
 	if _, err := atenea.Open(core.SessionOptions{
 		ID: "visible", Client: "claude-code",
 		Grant:   []contract.Effect{contract.EffectWrite},

@@ -52,8 +52,13 @@ type SessionOptions struct {
 	// exists so the status screen can show two clients at once, which is the
 	// only way anybody sees the isolation working.
 	Client string
-	// Grant is what commissions from this chat may authorize beyond reading.
-	// Empty is the honest default: a fresh chat can look and nothing else.
+	// Grant is what this chat asks to hold beyond reading, and it may only
+	// ever ask for LESS than the settings file grants clients. Nil is the
+	// common case -- a chat that says nothing holds whatever
+	// `client_effects` gives it, which is the whole reason that key exists.
+	// A non-nil empty list is a real answer and a different one: a client
+	// declaring it will only read, which is the narrowing half that used to
+	// be missing.
 	Grant []contract.Effect
 	// Context lists the heights this chat may read. Empty means the repository
 	// level only, because that is what a chat needs to be told about the work
@@ -78,34 +83,57 @@ func (c *Core) clientFloor() orchestrator.Floor {
 // a session handed out during a shutdown would be a promise the core is about
 // to break.
 func (c *Core) Open(opts SessionOptions) (*Session, error) {
+	// An MCP client never supplies an id -- one is minted below, after these
+	// refusals -- so naming `opts.ID` here would print an empty session in
+	// the message a client is most likely to see.
+	who := naming(opts)
 	for _, effect := range opts.Grant {
 		if !knownEffect(effect) {
 			return nil, contract.Fail(contract.FailureInvalidInput,
-				"session %s: unknown effect in grant", opts.ID)
+				"%s: unknown effect in grant", who)
 		}
 	}
-	// The floor is a ceiling from the other side: it is the most a chat may
-	// hold, so a chat asking to be opened above it is refused here rather
-	// than at its first question. A client told at initialize can say so; one
-	// told mid-conversation has already promised somebody the work.
-	//
-	// The ceiling arrives with the line that sets it, and an operator who
-	// never wrote one gets no ceiling at all. Copying the standing grant into
-	// the zero floor would read identically at dispatch and mean something
-	// quite different here: "I said nothing about clients" would silently
-	// become "clients may hold nothing I did not already grant everybody",
-	// which is a rule nobody typed and which refuses chats that work today.
 	floor := c.clientFloor()
-	for _, effect := range opts.Grant {
-		if !floor.Allows(effect) {
-			return nil, contract.Fail(contract.FailurePermissionDenied,
-				"session %s: a client may not be granted %s on this machine", opts.ID, effect)
+	// What the operator grants a chat opened by a client. A pinned floor is
+	// that answer; an absent one hands over the standing grant, because
+	// "I said nothing about clients" has always meant "clients get what
+	// everybody gets" -- and Floor.Or is where that reading already lives.
+	//
+	// This is the line that was missing. Before it, `client_effects` was a
+	// ceiling with no way to reach it: every chat opened holding nothing,
+	// so any raw tool declaring more than `read` was refused forever and
+	// the key shipped as a default nobody could exercise.
+	held := floor.Or(c.settings.Orchestrator.StandingEffects)
+	grant := slices.Clone(held)
+	if opts.Grant != nil {
+		// A chat may only ever ask for less. Widening is the settings
+		// file's job and stays there: a client naming an effect the
+		// operator withheld would be granting itself permission, which is
+		// the one thing the door is here to refuse.
+		for _, effect := range opts.Grant {
+			// Reading is free for every chat, so naming it is always a
+			// narrowing and never a request: refusing `["read"]` because
+			// the operator never listed it would refuse the smallest
+			// grant a client can ask for.
+			if effect == contract.EffectRead {
+				continue
+			}
+			if !slices.Contains(held, effect) {
+				return nil, contract.Fail(contract.FailurePermissionDenied,
+					"%s: a client may not be granted %s on this machine", who, effect)
+			}
 		}
+		grant = slices.Clone(opts.Grant)
+		// The floor the commission carries is pinned to the same answer, so
+		// the two gates cannot disagree: `entitled` refuses at the door and
+		// the runner's floor refuses at the step, and a chat that asked to
+		// be narrowed is narrow at both.
+		floor = orchestrator.FloorOf(grant)
 	}
 	for _, level := range opts.Context {
 		if level == contract.ContextUnspecified {
 			return nil, contract.Fail(contract.FailureInvalidInput,
-				"session %s: the zero context level is not a declaration", opts.ID)
+				"%s: the zero context level is not a declaration", who)
 		}
 	}
 	levels := slices.Clone(opts.Context)
@@ -132,7 +160,7 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		id:     id,
 		client: opts.Client,
 		core:   c,
-		grant:  slices.Clone(opts.Grant),
+		grant:  grant,
 		floor:  floor,
 		levels: levels,
 		opened: time.Now(),
@@ -296,6 +324,20 @@ func (s *Session) readable(found []contract.Discovery) []contract.Discovery {
 		}
 	}
 	return out
+}
+
+// naming is what a refusal calls a chat that does not have an id yet. An MCP
+// client supplies a name and never an id, so the id is minted after the door
+// has already had its chance to refuse -- and "session : refused" names
+// nothing at all to the person reading it.
+func naming(opts SessionOptions) string {
+	if opts.ID != "" {
+		return "session " + opts.ID
+	}
+	if opts.Client != "" {
+		return "a chat from " + opts.Client
+	}
+	return "an unnamed chat"
 }
 
 // knownEffect reports whether an effect is one the contract declares. A grant

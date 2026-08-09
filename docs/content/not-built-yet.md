@@ -568,6 +568,17 @@ and refuses any step whose permission does not carry an effect its capability
 declares. Both grants rest on that one wrapper, which is why neither of them
 needed a check of its own.
 
+That was true of the wrapper and wrong about the key. The grant was never
+handed to a chat: `Open` copied whatever the caller asked for, `initialize`
+asked for nothing because nothing in the protocol let a client say, and
+`Allows` consulted that empty list alone. So `client_effects` was a ceiling
+with no floor under it, and every raw tool declaring more than `read` was
+refused on every machine whatever the file said — the wrapper bound
+correctly onto a permission nobody had granted. A chat now opens holding
+what the operator grants clients, and may ask at `initialize` to hold less.
+Found on 2026-08-09 by driving a real client against a declared backend
+rather than by reading the key's own tests, all of which passed.
+
 ## What the proof settled, on 2026-08-08
 
 Every one of the eight shipped capabilities has now been answered over MCP by a

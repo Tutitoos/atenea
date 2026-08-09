@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,11 @@ import (
 // The protocol version this server speaks. A client that asks for it gets it
 // back; a client that asks for anything else gets this and decides for itself.
 const mcpVersion = "2025-06-18"
+
+// JSON-RPC's own code for "your request was wrong", retyped here for the same
+// reason the version is: this file is a client, and a client knows the wire
+// and nothing else.
+const codeInvalidParams = -32602
 
 // A client is one connection held open across several messages, which is what
 // the one-shot `ask` cannot express: MCP is a conversation, and the whole point
@@ -414,4 +420,132 @@ func mcpSettings(t *testing.T) string {
 		t.Fatalf("write: %v", err)
 	}
 	return strings.Replace(socketSettings, `path = "/tmp"`, fmt.Sprintf("path = %q", repo), 1)
+}
+
+// The grant a chat ends up holding is reported back at the handshake. Before
+// this, a client had exactly one way to discover its own permissions: make a
+// call and read the refusal. A client that has to provoke an error to learn
+// what it may do will provoke it on the user's work.
+func TestTheHandshakeSaysWhatTheChatHolds(t *testing.T) {
+	atenea := buildService(t, grantingClients(t, `["write", "process"]`))
+	defer serve(t, atenea)()
+
+	got := handshakeGrant(t, result(t, dial(t).handshake("omp"), "initialize"))
+	want := []string{"process", "write"}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("grant = %v, want %v -- a chat that asked for nothing gets what the operator grants clients", got, want)
+	}
+}
+
+// The half that was missing: a client saying it wants less than it was given.
+// A chat that needs write for one call in fifty should be able to spend the
+// other forty-nine unable to make a mistake.
+func TestAClientMayAskToBeNarrowed(t *testing.T) {
+	atenea := buildService(t, grantingClients(t, `["write", "process"]`))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	out := result(t, c.call("initialize", map[string]any{
+		"protocolVersion": mcpVersion,
+		"capabilities": map[string]any{
+			"experimental": map[string]any{
+				"atenea": map[string]any{"grant": []string{"read"}},
+			},
+		},
+		"clientInfo": map[string]any{"name": "omp", "version": "1.0.0"},
+	}), "initialize")
+
+	if got := handshakeGrant(t, out); !slices.Equal(got, []string{"read"}) {
+		t.Errorf("grant = %v, want [read] -- the narrowing was not honored", got)
+	}
+}
+
+// Asking for more than the operator granted is the one thing the door exists
+// to refuse, and it is refused at the door rather than at the first call: a
+// client told "yes" and then refused on every write has been lied to.
+func TestAClientMayNotAskForMoreThanItWasGranted(t *testing.T) {
+	atenea := buildService(t, grantingClients(t, `["read"]`))
+	defer serve(t, atenea)()
+
+	answer := dial(t).call("initialize", map[string]any{
+		"protocolVersion": mcpVersion,
+		"capabilities": map[string]any{
+			"experimental": map[string]any{
+				"atenea": map[string]any{"grant": []string{"write"}},
+			},
+		},
+		"clientInfo": map[string]any{"name": "omp", "version": "1.0.0"},
+	})
+	errObj, ok := answer["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("a client granted itself write and was let in: %v", answer)
+	}
+	if code, _ := errObj["code"].(float64); int(code) != codeInvalidParams {
+		t.Errorf("code = %v, want invalid params: the client asked for something it may not have, "+
+			"which is its mistake and not the server's", errObj["code"])
+	}
+	// The refusal has to name somebody. A client supplies a name and never an
+	// id, and the id is minted after the door has had its chance to refuse, so
+	// the obvious phrasing prints "session :" -- a message naming nothing, in
+	// the case a client is most likely to hit.
+	message, _ := errObj["message"].(string)
+	if !strings.Contains(message, "a chat from omp") {
+		t.Errorf("refusal = %q, want it to name the client that was refused", message)
+	}
+}
+
+// An effect name nobody recognizes is a typo, and a typo in a restraint must
+// not be read as "no restraint asked for": a client that misspells `write` and
+// is handed the full grant asked to be narrowed and got the opposite.
+func TestAMisspelledEffectIsRefusedRatherThanIgnored(t *testing.T) {
+	atenea := buildService(t, grantingClients(t, `["write"]`))
+	defer serve(t, atenea)()
+
+	answer := dial(t).call("initialize", map[string]any{
+		"protocolVersion": mcpVersion,
+		"capabilities": map[string]any{
+			"experimental": map[string]any{
+				"atenea": map[string]any{"grant": []string{"writ"}},
+			},
+		},
+		"clientInfo": map[string]any{"name": "omp", "version": "1.0.0"},
+	})
+	if _, ok := answer["error"].(map[string]any); !ok {
+		t.Fatalf("a misspelled effect was ignored and the chat opened anyway: %v", answer)
+	}
+}
+
+// grantingClients is the mcp fixture with an operator who wrote a
+// `client_effects` line, which is what makes any of this reachable.
+func grantingClients(t *testing.T, effects string) string {
+	t.Helper()
+	return strings.Replace(mcpSettings(t), "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = "+effects+"\n", 1)
+}
+
+// handshakeGrant digs the effects out of the handshake the way a client would.
+func handshakeGrant(t *testing.T, out map[string]any) []string {
+	t.Helper()
+	caps, ok := out["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("no capabilities in the handshake: %v", out)
+	}
+	exp, ok := caps["experimental"].(map[string]any)
+	if !ok {
+		t.Fatalf("the handshake does not say what the chat holds: %v", caps)
+	}
+	mine, ok := exp["atenea"].(map[string]any)
+	if !ok {
+		t.Fatalf("no atenea block in the handshake: %v", exp)
+	}
+	raw, ok := mine["grant"].([]any)
+	if !ok {
+		t.Fatalf("no grant in the handshake: %v", mine)
+	}
+	got := make([]string, 0, len(raw))
+	for _, v := range raw {
+		got = append(got, v.(string))
+	}
+	return got
 }

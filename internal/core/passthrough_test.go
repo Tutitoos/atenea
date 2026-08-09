@@ -258,6 +258,36 @@ func TestARawToolCostingMoreThanTheChatHoldsIsRefused(t *testing.T) {
 	}
 }
 
+// The other side of the same rule, and the reason `client_effects` exists.
+// An operator who grants clients write has said this machine's chats may run
+// a write tool -- and until the chat could actually be handed that grant, the
+// key was a ceiling with no way to reach it: every raw tool declaring more
+// than `read` was refused on every machine, whatever the settings file said.
+func TestARawToolTheOperatorGrantedClientsIsRun(t *testing.T) {
+	fake := &fakeBackend{}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	settings := strings.Replace(rawSettings(t, backend.URL), "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = [\"read\", \"write\"]\n", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "raw.semgrep.semgrep_fix", "arguments": map[string]any{},
+	}), "tools/call")
+
+	if got["isError"] == true {
+		t.Fatalf("the operator granted clients write and the chat was still refused: %v", answerText(got))
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 1 {
+		t.Errorf("backend calls = %d, want the one the chat was entitled to make", len(fake.calls))
+	}
+}
+
 // A refused call is the kind an operator most wants to find later, so it
 // leaves the same receipt a successful one does -- carrying what it would
 // have been authorized to cause, which is the only durable statement of that.

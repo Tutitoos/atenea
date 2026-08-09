@@ -13,6 +13,38 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **A chat opened by a client held nothing, so `client_effects` was a ceiling
+  with no way to reach it.** `Core.Open` copied whatever its caller asked for
+  into the chat's grant, `initialize` asked for nothing because the protocol
+  gave a client no way to say, and `Session.Allows` consults that grant alone.
+  Every chat therefore opened empty: a raw tool declaring anything beyond
+  `read` was refused on every machine whatever the settings file said, and the
+  shipped `client_effects = ["process"]` default could not be exercised by
+  anybody. A chat now opens holding what the operator grants clients —
+  `Floor.Or(standing)`, the same reading an absent key has always had.
+
+  Found by driving a real client against a declared backend, not by reading
+  the key's tests: all of them passed, because each one handed `Open` the
+  grant it then asked about.
+
+### Added
+
+- **A client may ask at `initialize` to hold less than it was granted**, under
+  `capabilities.experimental.atenea.grant`. Asking for more is refused there
+  rather than at the first `tools/call`, and so is an effect name nobody
+  recognizes — a client that misspells `write` asked to be restrained, and the
+  full grant would be the opposite of what it asked for. `read` is always
+  free, so naming it is always a narrowing.
+- **The handshake reports the grant the chat ended up holding**, in the same
+  block. Before this the only way a client could learn its own permissions was
+  to make a call and read the refusal.
+- A chat that narrowed itself pins the floor its commissions carry to the same
+  answer, so the door and the step refuse the same things.
+
 ## [0.10.0] - 2026-08-08
 
 `pkg/contract` bumped to `3.0.0`. Like `2.0.0` it is a removal, not an

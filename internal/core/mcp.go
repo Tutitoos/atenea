@@ -104,6 +104,17 @@ type initializeParams struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"clientInfo"`
+	Capabilities struct {
+		Experimental struct {
+			Atenea struct {
+				// Grant is the chat saying it wants less than the
+				// settings file gives clients. A pointer, because an
+				// absent key and an empty list are different answers:
+				// one is "you decide", the other is "I will only read".
+				Grant *[]string `json:"grant"`
+			} `json:"atenea"`
+		} `json:"experimental"`
+	} `json:"capabilities"`
 }
 
 // initialize opens the chat this connection speaks for.
@@ -112,10 +123,13 @@ type initializeParams struct {
 // can show two clients at once -- and the only way anybody sees the isolation
 // working rather than taking it on trust.
 //
-// No grant is asked for and none is given. A chat starts able to look and
-// nothing else, and still runs under the settings file's standing grant,
-// because a session grant only ever widens the operator's floor. A client that
-// could name its own effects at the door would be granting itself permission.
+// A chat holds what `client_effects` grants clients, and may say at the door
+// that it wants less. It can never say it wants more: widening lives in the
+// settings file, where the operator can see it, and a client naming an effect
+// that was withheld is refused here rather than at its first call.
+//
+// Narrowing is worth having because the alternative is a client that holds
+// write for the whole conversation to make one call that needed it.
 func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 	var params initializeParams
 	if len(raw) > 0 {
@@ -127,15 +141,43 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 	if name == "" {
 		name = "unknown"
 	}
+	// A chat asking for less is parsed before the chat is opened, so a name
+	// nobody recognizes is refused as bad input rather than quietly ignored:
+	// a client that misspells `write` and is handed the full grant anyway
+	// would have asked for a restraint and been given the opposite.
+	var asked []contract.Effect
+	if raw := params.Capabilities.Experimental.Atenea.Grant; raw != nil {
+		asked = make([]contract.Effect, 0, len(*raw))
+		for _, name := range *raw {
+			effect, err := contract.ParseEffect(name)
+			if err != nil {
+				return nil, &rpcError{Code: codeInvalidParams,
+					Message: "initialize: capabilities.experimental.atenea.grant: " + err.Error()}
+			}
+			asked = append(asked, effect)
+		}
+	}
 	// A second initialize on one connection is the same client saying hello
 	// twice. Taking it as a new chat would leave the first stranded in the
 	// table with nothing to close it.
 	v.close()
-	session, err := v.core.Open(SessionOptions{Client: name})
+	session, err := v.core.Open(SessionOptions{Client: name, Grant: asked})
 	if err != nil {
-		return nil, &rpcError{Code: codeInternal, Message: "opening the chat: " + err.Error()}
+		code := codeInternal
+		if contract.KindOf(err) == contract.FailurePermissionDenied {
+			code = codeInvalidParams
+		}
+		return nil, &rpcError{Code: code, Message: "opening the chat: " + err.Error()}
 	}
 	v.session = session
+
+	// What the chat ended up holding, said out loud. A client that asked for
+	// nothing still learns what it has, and one that asked to be narrowed can
+	// see that it was -- neither has to infer a permission from a refusal.
+	granted := make([]string, 0, len(session.Grant()))
+	for _, effect := range session.Grant() {
+		granted = append(granted, effect.String())
+	}
 
 	return map[string]any{
 		"protocolVersion": mcpVersion,
@@ -145,6 +187,9 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 			// promising notifications nobody will ever send is a promise a
 			// client may wait on.
 			"tools": map[string]any{},
+			"experimental": map[string]any{
+				"atenea": map[string]any{"grant": granted},
+			},
 		},
 		"serverInfo": map[string]any{
 			"name":    "atenea",

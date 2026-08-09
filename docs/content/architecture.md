@@ -975,9 +975,18 @@ an afternoon at the terminal stops widening every client that connects.
 
 It is also a ceiling, which the standing grant is not: a chat cannot be opened
 claiming more than it, and is refused at the door rather than at its first
-question. The ceiling arrives with the line — a file that never wrote one has
-no ceiling, exactly as before, because "I said nothing about clients" must not
-quietly become "clients may hold nothing".
+question. A chat may ask for less, at `initialize`, and the handshake answers
+with what it ended up holding.
+
+"I said nothing about clients" resolves to "clients get what everybody gets",
+which is `Floor.Or` and the same reading an absent key has always had. It must
+not quietly become "clients may hold nothing" — which is exactly what it did
+for two days: `Open` handed a chat only what its caller asked for, nothing in
+the protocol let a client ask, and so every chat held the empty list. The
+ceiling was unreachable and the floor was never laid. Both halves exist now,
+and the tests that cover them open a chat against a settings file that grants
+one, because a test whose operator granted nothing cannot tell a ceiling from
+a floor.
 
 The floor travels on the commission, not on the core. `Session.Ask` and
 `Session.Do` stamp it; `Core.Ask` and `Core.Do`, the console's doors, do not,
@@ -985,7 +994,8 @@ and dispatch falls back to the standing grant when a request carries none.
 That is why the type is a value rather than a list: an operator writing
 `client_effects = []` means "read and nothing else", and a nil slice already
 means "nobody said". Collapsing the two would hand the whole standing floor to
-precisely the client meant to have none.
+precisely the client meant to have none. A chat that narrowed itself pins the
+floor to its own answer, so the door and the step refuse the same things.
 
 A resume keeps the standing grant even for a run a chat started. `atenea
 resume` is a command typed at the terminal, and the person typing it is the
