@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -25,15 +26,75 @@ const (
 	LightRed
 )
 
+// lightNames pairs every light with the word it travels as, and is the single
+// table the screen, the encoder and the decoder all read.
+//
+// The wire carries the word rather than the number on purpose. Light is an
+// iota, so a number pins the meaning to declaration order: inserting a state
+// between two existing ones would silently reinterpret every reading a consumer
+// had already learned to map. A name cannot be reordered.
+//
+// This matters more than it looks because a consumer outside this repository
+// reads this field, and it is the one field where a wrong answer is
+// indistinguishable from a right one -- green, amber and red are all plausible
+// on a screen. Every other field either arrives or is obviously missing.
+var lightNames = [...]string{LightGreen: "green", LightAmber: "amber", LightRed: "red"}
+
+// String keeps answering "red" for a value outside the table: on a screen the
+// worst color is the safe answer, and a status line is not the place to refuse
+// to draw. The wire makes the opposite choice -- see MarshalJSON.
 func (l Light) String() string {
-	switch l {
-	case LightGreen:
-		return "green"
-	case LightAmber:
-		return "amber"
-	default:
-		return "red"
+	if int(l) < len(lightNames) {
+		return lightNames[l]
 	}
+	return "red"
+}
+
+// MarshalJSON writes the name, and refuses a light that has none.
+//
+// Loud on purpose, and deliberately unlike String: shipping "red" for a value
+// nobody computed would put a color on someone else's screen that no health
+// check produced. Whoever adds a fourth light gets this error out of the first
+// test that encodes a status, which is where it is cheap.
+func (l Light) MarshalJSON() ([]byte, error) {
+	if int(l) >= len(lightNames) {
+		return nil, fmt.Errorf("light %d has no name: add it to lightNames", uint8(l))
+	}
+	return json.Marshal(lightNames[l])
+}
+
+// UnmarshalJSON reads the name, and also still reads the number.
+//
+// The number is not legacy tolerance for its own sake: one machine runs one
+// binary, but an upgrade replaces it while a service from the previous version
+// is still holding the socket, so a command and the service it asks can
+// disagree about this encoding for as long as nobody restarts. A strict reader
+// would answer "no service" for that whole window -- Asked returns false on any
+// decode error -- and the screen would quietly drop to the command's own view.
+// Reading both costs four lines.
+//
+// An unrecognized name or an out-of-range number is still an error. A light
+// that cannot be understood is not green.
+func (l *Light) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		for light, candidate := range lightNames {
+			if candidate == name {
+				*l = Light(light)
+				return nil
+			}
+		}
+		return fmt.Errorf("unknown light %q", name)
+	}
+	var number uint8
+	if err := json.Unmarshal(data, &number); err != nil {
+		return fmt.Errorf("light must be a name or a number: %w", err)
+	}
+	if int(number) >= len(lightNames) {
+		return fmt.Errorf("light %d has no name", number)
+	}
+	*l = Light(number)
+	return nil
 }
 
 // Status is the short, fixed screen: overall light, every implementation with

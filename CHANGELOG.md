@@ -17,6 +17,32 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **The status light travelled as a number, which pinned its meaning to
+  declaration order.** `Light` is an iota, so the wire carried `1` for amber —
+  and inserting a state between two existing ones would have silently
+  reinterpreted every reading a consumer had already mapped. Nothing reveals
+  that until somebody adds a light: the code compiles, the tests pass, and a
+  reader paints the wrong color with no way to tell. It is the one field on
+  this screen where a wrong answer is indistinguishable from a right one, since
+  green, amber and red are all plausible. The light now travels as its name, out
+  of a single table the screen, the encoder and the decoder all read.
+
+  The decoder still accepts a number, and that is not tolerance for its own
+  sake: an upgrade replaces the binary while a service from the previous version
+  still holds the socket, so a command and the service it asks disagree about
+  this encoding until somebody restarts. `Asked` returns false on any decode
+  error, so a strict reader would have reported "no service" for that whole
+  window and dropped the screen to the command's own view. Measured in both
+  directions against a service on an isolated state root: the new reader against
+  an old service reports `process service` and the old service's own version;
+  the old reader against a new service falls back to `process command`, which is
+  a degradation the screen names rather than a color it invents.
+
+  Unlike `String`, which still answers `red` for a value outside the table
+  because a status line should draw the worst case rather than refuse, the
+  encoder refuses outright. Whoever adds a fourth light meets that error in the
+  first test that encodes a status, which is where it is cheap.
+
 - **The stale-build check in `measuring-the-wrong-process` could only ever say
   "stale".** It compared `stat -Lc %i` on `~/.local/bin/atenea` against the same
   on `/proc/<pid>/exe`, and that magic symlink is resolved inside procfs, so
