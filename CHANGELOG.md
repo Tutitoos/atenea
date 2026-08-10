@@ -13,7 +13,19 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
-## [Unreleased]
+## [0.10.1] - 2026-08-10
+
+A patch: seven defects fixed and five additions, no contract change.
+`pkg/contract` stays at `3.0.0`, so an adapter built against 0.10.0 needs
+nothing.
+
+Worth saying where this one came from. The three Serena and registry fixes at
+the end of `Fixed` were not on any plan — they came out of using the thing:
+an overview of a real file that failed over a name nobody asked about, a
+snippet that arrived empty, and a repository that could not be named by the
+one thing a caller knows about itself. So did the two before them, each found
+by driving a client rather than by reading a test that passed. A plan finds
+what it thought of; this list is mostly what the plan did not.
 
 ### Fixed
 
@@ -2039,6 +2051,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.10.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.1
 [0.10.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.0
 [0.9.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.0
