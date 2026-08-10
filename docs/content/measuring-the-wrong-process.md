@@ -248,6 +248,48 @@ not a minimal reproduction against a stock slot, and a report that cannot be run
 by the person receiving it is a claim, not a finding — which is the whole subject
 of this page. The day the repro exists, it gets filed.
 
+## A fourth instrument: three samplers that reported innocence
+
+Measured on 2026-08-10, building `mcp-writer-trap`: a watcher that names whoever
+rewrites a client's MCP config, at the moment it happens. It waits on inotify
+over five config files and photographs `/proc` when one is written. The subject
+was a config that had been re-stamped once, by nothing reproducible.
+
+It took four versions, and the first three all produced a log that read like a
+quiet machine:
+
+1. **It only listed processes that were still alive.** The event fires after the
+   write, and a writer that finished has already left `/proc`. The log named
+   every long-lived MCP server on the machine and not the one process that
+   mattered. Fixed with a ring of recently-seen processes, kept for ten seconds
+   past exit and marked as gone.
+2. **It died on its first scan and kept the log open.** Parsing
+   `/proc/<pid>/stat` splits on the last `)` to get past `comm`; a process whose
+   name contains `)` raises `IndexError`, which killed the sampling thread. The
+   ring stayed frozen at whatever the first pass captured — so the instrument
+   answered "nobody wrote this" while not sampling at all, and answered it in the
+   same format as a real negative. Fixed by never letting the loop end, and by
+   printing a heartbeat every five seconds with its own pass rate and ring size.
+3. **It marked as examined the processes it had failed to examine.** A pid
+   sampled between `fork` and `exec` has an empty `cmdline`. That read was
+   skipped, and the pid then went into the seen set, so it was never looked at
+   again. The result was an instrument that named a one-second writer on one run
+   and nobody on the next, with no difference between the runs. Fixed by keeping
+   unresolved pids out of the seen set: a pid we could not classify has not been
+   seen.
+
+Only the third version was intermittent, which is the only reason it was caught.
+The first two were consistent, and consistency reads as reliability.
+
+What the fourth version can actually do, measured against deliberate writers:
+85 passes per second, a one-second writer named 5 of 5 with its parent, a 300 ms
+writer named, a 15 ms writer named 0 of 5. That last row is a property of
+polling, not a bug to fix later: naming a writer shorter than a sampling tick
+needs `fanotify` with `FAN_REPORT_PID`, which needs root. A real installer —
+hundreds of milliseconds in interpreter startup alone — is comfortably inside
+range. The heartbeat is in the log for one reason: so that a frozen sampler can
+never again be read as a calm machine.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -285,6 +327,13 @@ of this page. The day the repro exists, it gets filed.
    name. A subtree that vanishes without an error is the same defect as a
    version string that describes another build: a system claiming, by saying
    nothing, that there is nothing to say.
+8. **An instrument that can be silent must report that it is running.** A
+   sampler that died and a machine where nothing happened produce the same log,
+   and one of them is lying. The fix is not more care in the sampler; it is a
+   line that says how many passes it made in the last five seconds, so that
+   silence has to be either corroborated or contradicted. The same applies to
+   the negative result generally: "nothing found" is only evidence when the
+   instrument also says it looked.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
