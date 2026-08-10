@@ -363,19 +363,38 @@ func TestEveryShippedWidgetInstallsSomething(t *testing.T) {
 // was. The client's sidebar is an ordered column whose own sections claim round
 // numbers: Context 100, MCP 200, LSP 300, Todo 400, Files 500.
 //
-// Each widget's place in that column is a decision and gets pinned here. The
-// share reads the session, so it belongs against the Context box it continues;
-// the service light is standing state and belongs at the bottom, past everything
-// the client itself adds. This reads the file that ships, because the file is the
-// contract: a plugin naming a slot that does not exist registers nothing and draws
-// nothing, which looks exactly like a plugin that never loaded.
+// Below that column, outside its scroll, sits the client's footer: the project
+// path and the client's version. That is a `sidebar_footer` slot declared
+// `mode:"single_winner"` -- the lowest registered order wins it outright and
+// draws it alone. The atenea widget takes it at 50, which is how its line ends up
+// adjacent to the client's version instead of a gap above it, and it keeps the
+// column registration for the case where it declines the footer: a machine with
+// no paid provider, whose footer the host is using for an onboarding card.
+//
+// Every placement is a decision and gets pinned here, slot by slot. This reads the
+// file that ships, because the file is the contract: a plugin naming a slot that
+// does not exist registers nothing and draws nothing, which looks exactly like a
+// plugin that never loaded.
 func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
-	// Bounds are exclusive on both ends.
-	place := map[string]struct{ after, before int }{
-		"session-share": {after: 100, before: 200},
-		"atenea":        {after: 500, before: 1000},
+	// Bounds are exclusive on both ends. A footer registration that is not below
+	// the host's own 100 loses the slot and draws nothing at all.
+	type placement struct {
+		slot   string
+		after  int
+		before int
 	}
-	order := regexp.MustCompile(`order:\s*(\d+)`)
+	place := map[string][]placement{
+		"session-share": {
+			{slot: "sidebar_content", after: 100, before: 200},
+		},
+		"atenea": {
+			{slot: "sidebar_footer", after: 0, before: 100},
+			{slot: "sidebar_content", after: 500, before: 1000},
+		},
+	}
+	// A comment is free to sit between the slot map and the first slot name, and one
+	// does in both widgets today.
+	registration := regexp.MustCompile(`order:\s*(\d+),\s*slots:\s*\{\s*(?://[^\n]*\n\s*)*(\w+):`)
 
 	for _, widget := range statusline.Widgets() {
 		t.Run(widget.Name, func(t *testing.T) {
@@ -406,16 +425,29 @@ func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
 			if !known {
 				t.Fatalf("a shipped widget with no declared place in the column: add %q to this table", widget.Name)
 			}
-			found := order.FindStringSubmatch(body)
-			if found == nil {
-				t.Fatal("no order in the registration: the host would place this by load order")
+			found := registration.FindAllStringSubmatch(body, -1)
+			if len(found) != len(want) {
+				t.Fatalf("registers %d placements, want %d: %v", len(found), len(want), found)
 			}
-			n, err := strconv.Atoi(found[1])
-			if err != nil {
-				t.Fatalf("order %q: %v", found[1], err)
+			// Keyed by slot, not by position: which registration comes first in the
+			// file is not a decision anybody made.
+			orders := map[string]int{}
+			for _, got := range found {
+				n, err := strconv.Atoi(got[1])
+				if err != nil {
+					t.Fatalf("order %q: %v", got[1], err)
+				}
+				orders[got[2]] = n
 			}
-			if n <= want.after || n >= want.before {
-				t.Errorf("order = %d, want strictly between %d and %d", n, want.after, want.before)
+			for _, wanted := range want {
+				n, registered := orders[wanted.slot]
+				if !registered {
+					t.Errorf("does not register %s, so that placement is not on screen", wanted.slot)
+					continue
+				}
+				if n <= wanted.after || n >= wanted.before {
+					t.Errorf("%s order = %d, want strictly between %d and %d", wanted.slot, n, wanted.after, wanted.before)
+				}
 			}
 		})
 	}

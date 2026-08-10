@@ -34,6 +34,15 @@ pre-commit:
           exit 1
         fi
         "$bin" run
+
+    host-footer:
+      # No glob and no staged-file filter on purpose: this gate does not watch
+      # our files, it watches somebody else's. Atenea's widget wins opencode's
+      # `sidebar_footer` slot outright, so a client upgrade that adds a line
+      # there deletes it from the screen with no error anywhere. The check costs
+      # half a second and it skips on a machine with no client installed, which
+      # is every CI runner -- the scheduled host-footer workflow covers those.
+      run: go test -count=1 ./internal/statusline/ -run HostFooter
 pre-push:
   commands:
     test:

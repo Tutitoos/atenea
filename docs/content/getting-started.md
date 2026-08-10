@@ -436,8 +436,9 @@ still runs on the floor that file sets.
 ## Put a section in the client's sidebar
 
 `atenea status` answers when you ask it. These answer without being asked: two
-sections in opencode's sidebar, under the `Context` box it draws itself. They are
-installed separately on purpose, because they read different things.
+widgets in opencode's sidebar — one a section under the `Context` box it draws
+itself, one the footer at the bottom of that column. They are installed
+separately on purpose, because they read different things.
 
 ```text
 $ atenea statusline widgets
@@ -465,6 +466,9 @@ gemini-3.1-pro-preview 699k (<1%)
 LSP
 LSPs will activate as files are read
 
+~/Desktop/atenea
+
+• OpenCode 1.18.16
 ⊙ Atenea 0.10.1+751972f
 ```
 
@@ -477,36 +481,54 @@ command of ours can tell you so: the placement is the client's.
 
 The column is ordered, and the client's own sections claim round numbers —
 `Context` 100, `MCP` 200, `LSP` 300, `Todo` 400, `Files` 500. `Models` sits at 150
-so it continues the `Context` box it answers next to; the Atenea line sits at 900
-so it stays last, past anything the client adds. A test pins both, and refuses a
-registration naming a slot outside the sidebar.
+so it continues the `Context` box it answers next to. A test pins that, and
+refuses a registration naming a slot outside the sidebar.
 
-Two placements are **not** available, and both were measured rather than assumed:
+The last three lines are not in that column at all. They are the client's footer,
+a box **outside** the scroll, pinned to the bottom — and Atenea draws it. The
+client publishes it as a `sidebar_footer` slot declared `mode:"single_winner"`:
+the lowest registered order wins it outright and the host's own lines are slot
+children used **only** if the winner draws nothing. So there is no arrangement in
+which both draw, and adding a line under the version means owning every line
+there. This widget registers at 50, beating the client's 100, and renders the
+project path, the client's version, and Atenea's line — which is the whole point,
+since a line reporting a service belongs beside the version of the thing it runs
+under, not a gap above it.
 
-- **Inside the `Context` box.** There is no slot there. The client offers twelve —
-  `app`, `app_bottom`, `home_logo`, `home_prompt`, `home_prompt_right`,
-  `home_bottom`, `home_footer`, `session_prompt`, `session_prompt_right`,
-  `sidebar_title`, `sidebar_content`, `sidebar_footer` — and a section of one's own
-  directly beneath it is as close as it allows.
-- **Directly under the client's own `• OpenCode 1.18.16` line.** Structurally the
-  two cannot be adjacent: that line lives in a box **outside** the scrolling
-  content, pinned to the bottom, and every plugin section lives inside it. The
-  footer box is a `sidebar_footer` slot declared `mode:"single_winner"`, so it does
-  take plugin content — but as a replacement, not an addition. The lowest registered
-  order wins outright, the winner is invoked with exactly `(context, {session_id})`,
-  and the host's own lines are its slot children, used **only** if the winner
-  renders nothing. Registering there at order 50 did not put a line under the
-  version: it deleted the project path and the version and drew the probe instead.
-  Sitting under that line would mean reimplementing the client's footer — path,
-  branch, version — and owning the job of keeping it true. The Atenea line is the
-  last thing in the scrolling column above it instead, one line and a visible gap.
+Three rules come with owning it, and each one is a check rather than a promise:
+
+- **The two versions come from two places and neither is remembered.** The
+  client's is read from the host on every paint; Atenea's from its socket. An
+  unreadable one prints `sin lectura` **in its own slot** — a version line that
+  keeps showing the last good value is the one failure it cannot survive.
+- **The widget hands the slot back rather than deleting something.** On a machine
+  with no paid provider the client uses that same footer for a `Getting started`
+  card with a `/connect` prompt. Both halves of its condition are readable at
+  registration time, so the widget checks, declines the footer, and sits in the
+  column at 900 instead. Anything it cannot read counts as onboarding: declining
+  costs one line's placement, guessing wrong costs a first-run user the only
+  prompt that tells them how to connect a provider.
+- **A client that changes its footer breaks a build.** The shape of that
+  component — every string it draws, every field it reads, how many elements it
+  builds — is pinned in `testdata/opencode-footer.json` and compared against the
+  client installed on the machine. The pre-commit hook runs it here; a scheduled
+  workflow installs the newest published client each morning and runs it there.
+  When they add a line, that fails and names it, instead of the line quietly
+  disappearing from your screen.
+
+One placement is genuinely **not** available: **inside the `Context` box**. There
+is no slot there. The client offers twelve — `app`, `app_bottom`, `home_logo`,
+`home_prompt`, `home_prompt_right`, `home_bottom`, `home_footer`,
+`session_prompt`, `session_prompt_right`, `sidebar_title`, `sidebar_content`,
+`sidebar_footer` — and a section of one's own directly beneath it is as close as
+it allows.
 
 **When a section outgrows the room, the column scrolls rather than clipping, and
 the footer stays pinned.** The content sits in a 42-column `scrollbox`: a probe with
-24 rows rendered all 24 and pushed the client's own `LSP` body and our Atenea line
-below the fold, while the project path and version line stayed put. Nothing was
-dropped — the same screen at a taller pane showed all of it again — but content
-below the fold is content nobody reads, which is why the model list is capped.
+24 rows rendered all 24 and pushed the client's own `LSP` body below the fold,
+while the footer stayed exactly where it was. Nothing was dropped — the same
+screen at a taller pane showed all of it again — but content below the fold is
+content nobody reads, which is why the model list is capped.
 
 ### The traffic light
 

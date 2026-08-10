@@ -18,11 +18,11 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 ### Added
 
 - **`atenea statusline install` puts Atenea's own light in opencode's sidebar.**
-  A section under the client's own `Context` box: the traffic light, the version
-  actually running, and unread incidents, read from the service's unix socket —
-  the same door the CLI knocks on, so it needs no key, no port and no network.
-  `uninstall` takes it off, `status` says where it stands, the same three verbs as
-  `service`.
+  The traffic light, the version actually running, and unread incidents, read from
+  the service's unix socket — the same door the CLI knocks on, so it needs no key,
+  no port and no network. It draws the client's footer, beside the client's own
+  version. `uninstall` takes it off, `status` says where it stands, the same three
+  verbs as `service`.
 
   That column is the client's and it is 42 columns wide: in its default `auto`
   state it appears only above 120 columns of terminal, and never for a child
@@ -77,20 +77,51 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   `sidebar_title`, `sidebar_content` and `sidebar_footer`, and its own `Context`,
   `MCP`, `LSP`, `Todo` and `Files` sections are themselves `sidebar_content`
   registrations at orders 100 to 500. `Models` now sits at 150, continuing the box
-  it answers next to, and the Atenea line at 900, last in the column. A test pins
-  both and refuses a registration naming a slot outside the sidebar.
+  it answers next to. A test pins that and refuses a registration naming a slot
+  outside the sidebar.
 
-  Two placements were asked for and are not reachable, both measured rather than
-  assumed. There is no slot inside the `Context` box. And the Atenea line cannot sit
-  directly under the client's `• OpenCode 1.18.16` line, because that line is in a
-  box outside the scrolling content, pinned to the bottom, while every plugin
-  section is inside it. That footer box is a `sidebar_footer` slot declared
-  `mode:"single_winner"`: it takes plugin content as a replacement, never an
-  addition. The lowest order wins outright, the winner is invoked with exactly
-  `(context, {session_id})`, and the host's own lines are slot children used only if
-  the winner renders nothing — so registering there deletes the project path and the
-  version rather than sitting beneath them. Getting one line below that version
-  would mean reimplementing the client's footer and owning the truth of it.
+  **Atenea draws the client's footer now.** The line reporting a service belongs
+  beside the version of the thing it runs under, and that turned out to be
+  reachable — as ownership, not as an addition. The footer is a box outside the
+  scrolling column, published as a `sidebar_footer` slot declared
+  `mode:"single_winner"`: the lowest order wins outright, the winner is invoked
+  with exactly `(context, {session_id})`, and the host's own lines are slot
+  children used only if the winner draws nothing. So this widget registers at 50,
+  beats the client's 100, and renders all three lines itself — the project path,
+  the client's version, and Atenea's.
+
+  The project path follows the rules of the line it replaces: the session's own
+  directory when it has one, else the directory the client started in, `$HOME`
+  shortened to `~`, and `:branch` only when the session is the one the client is
+  standing in. Verified against the host's own render on a session whose directory
+  differs from the launch cwd rather than against the minified helper, because
+  three functions in that bundle answer to the name the footer calls and none of
+  them is identifiable.
+
+  **Neither version is remembered.** The client's is read from the host on every
+  paint, Atenea's from its socket, and an unreadable one prints `sin lectura` in
+  its own slot. A version line that keeps showing the last good value is the one
+  failure it cannot survive.
+
+  **The slot is handed back rather than emptied.** On a machine with no paid
+  provider the client uses that same footer for a `Getting started` card with a
+  `/connect` prompt, and winning the slot would delete it. Both halves of its
+  condition are readable at registration time, measured, so the widget checks,
+  declines, and sits in the column at 900 instead. Anything unreadable counts as
+  onboarding: declining costs one line's placement, guessing wrong costs a
+  first-run user the only prompt that says how to connect a provider.
+
+  **And a client that changes that footer now breaks a build.** Its shape — every
+  string it draws, every field it reads, how many elements it builds — is pinned
+  in `internal/statusline/testdata/opencode-footer.json` and compared against the
+  client installed on the machine: the pre-commit hook runs it here, and a
+  scheduled workflow installs the newest published client each morning and runs it
+  there. Without that, a release adding a line to its footer would delete it from
+  the screen with no error anywhere — the same class of silent loss as an enum
+  renamed under a wire format, and it gets the same treatment.
+
+  One placement is genuinely unreachable, measured: there is no slot inside the
+  `Context` box.
 
   When a section outgrows the room the column **scrolls**; it does not clip, and the
   footer stays pinned. The content sits in a 42-column `scrollbox`, and a 24-row
