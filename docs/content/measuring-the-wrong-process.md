@@ -290,6 +290,41 @@ hundreds of milliseconds in interpreter startup alone — is comfortably inside
 range. The heartbeat is in the log for one reason: so that a frozen sampler can
 never again be read as a calm machine.
 
+## A fifth instrument: the tracer that stopped the exchange
+
+Measured on 2026-08-10, answering a question the whole page had been circling
+from the wrong side: which endpoint does a client actually contact, and with what
+model. Every previous answer had been read from configuration or inferred from a
+counter. `strace -f -e trace=connect,sendto,write` answers it from the process:
+the destination address of every connection, and — for anything not wrapped in
+TLS — the request itself.
+
+It worked, and it produced the two facts config could not: a request carrying its
+real upstream in a header, so routing needs no inference at all; and a local
+bridge on a port that the configuration file does not mention, because the file
+names a long-lived listener while each run spawns its own ephemeral one.
+
+The instrument failure was in the second attempt. The first pass truncated
+payloads at 700 bytes, which showed the headers and cut the body — so the model
+name, the one field the question was about, was missing. The obvious fix was a
+bigger buffer, and `-s 60000` made the tracer slow enough that the traced program
+never finished: a 300 s run consumed a 420 s ceiling with no answer. The setting
+that made the evidence legible destroyed the event that was to be evidenced.
+
+`-s 4000` captured the request whole — 3074 bytes, ending in its closing brace —
+and left the exchange fast enough to complete. That is the entire lesson: an
+observer sits inside the system it observes, and its cost is part of the
+measurement. A tracer that changes an outcome is not measuring that outcome, and
+the failure is quiet in the usual way — the run does not report that it was
+slowed, it just times out, which reads like a broken subject rather than a
+heavy-handed instrument.
+
+One value in that session's table is still unnamed on purpose: a remote address
+whose TLS `ClientHello` was not captured. It resolves, today, to the same pair of
+A records as the client's own gateway names, and the certificate it serves says
+so — but which name that connection asked for was not measured, so it is not
+written down as though it were.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -334,6 +369,12 @@ never again be read as a calm machine.
    silence has to be either corroborated or contradicted. The same applies to
    the negative result generally: "nothing found" is only evidence when the
    instrument also says it looked.
+9. **The observer's cost is part of the measurement.** Turning a tracer's detail
+   up far enough to read a request body slowed the traced program past its own
+   timeout: the setting that made the evidence legible destroyed the event to be
+   evidenced. Nothing announced it — the run simply did not finish, which reads
+   as a broken subject. Where an instrument sits inside the system it watches,
+   the reading is only trustworthy at a detail level the system survives.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
