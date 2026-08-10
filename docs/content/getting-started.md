@@ -447,19 +447,25 @@ session-share  which model did what share of this session's tokens
 
 ```text
 Context
-448,618 tokens
-45% used
-$3.08 spent
+217,811 tokens
+22% used
+$13.04 spent
 
-Share
-MiniMax-M3 98% · glm-5.2 1%
-+3 · 408M tokens
-
-⊙ Atenea
-0.10.1+751972f
+Models
+MiniMax-M3 86M (60%)
+deepseek-v4-pro 42M (30%)
+glm-5.2 10M (7%)
+qwen3.7-max 3M (2%)
+gemini-3.1-pro-preview 699k (<1%)
++2 otros 836k (1%)
 
 ▼ MCP
 • atenea  Connected
+
+LSP
+LSPs will activate as files are read
+
+⊙ Atenea 0.10.1+751972f
 ```
 
 **That column has to be on screen for either to appear.** It is 42 columns wide,
@@ -470,14 +476,32 @@ terminal these widgets are installed, declared, loaded, and invisible, and no
 command of ours can tell you so: the placement is the client's.
 
 The column is ordered, and the client's own sections claim round numbers —
-`Context` 100, `MCP` 200, `LSP` 300, `Todo` 400, `Files` 500. Ours sit at 150 and
-160, which is why they land between the first two, and a test refuses any widget
-whose registration drifts outside that gap or onto a slot outside the sidebar.
-There is **no slot inside the `Context` box**: the twelve the client offers are
-`app`, `app_bottom`, `home_logo`, `home_prompt`, `home_prompt_right`,
-`home_bottom`, `home_footer`, `session_prompt`, `session_prompt_right`,
-`sidebar_title`, `sidebar_content` and `sidebar_footer`. A section of one's own
-directly beneath it is as close as the client allows.
+`Context` 100, `MCP` 200, `LSP` 300, `Todo` 400, `Files` 500. `Models` sits at 150
+so it continues the `Context` box it answers next to; the Atenea line sits at 900
+so it stays last, past anything the client adds. A test pins both, and refuses a
+registration naming a slot outside the sidebar.
+
+Two placements are **not** available, and both were measured rather than assumed:
+
+- **Inside the `Context` box.** There is no slot there. The client offers twelve —
+  `app`, `app_bottom`, `home_logo`, `home_prompt`, `home_prompt_right`,
+  `home_bottom`, `home_footer`, `session_prompt`, `session_prompt_right`,
+  `sidebar_title`, `sidebar_content`, `sidebar_footer` — and a section of one's own
+  directly beneath it is as close as it allows.
+- **Directly under the client's own `• OpenCode 1.18.16` line.** That line is the
+  *children* of a `sidebar_footer` slot declared `mode:"single_winner"`: the lowest
+  registered order wins the slot outright and the rest never render. Registering
+  there at order 50 does not add a line under the version — it deletes the version
+  and draws ours instead, which is what the probe did. A winning callback is handed
+  only `{session_id}`; `children` is `undefined`, so it cannot re-draw what it
+  replaced. Sitting under that line would mean reimplementing the client's footer
+  and inheriting the job of keeping it true. The Atenea line is the last thing in
+  the column above it instead.
+
+**When a section outgrows the room, the column grows and evicts its neighbours.**
+It does not scroll and it does not clip: a probe with 24 rows rendered all 24 and
+pushed the client's own `LSP` section off the bottom of the screen. That is why the
+model list is capped rather than complete.
 
 ### The traffic light
 
@@ -494,18 +518,18 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ Atenea
-0.10.1+751972f  2 sin leer
+⊙ Atenea 0.10.1+751972f  2 sin leer
 ```
 
-The dot carries the light: green, amber, red, and muted grey when nothing is
-running. That last state says `apagado` rather than warning, because a service you
-stopped on purpose is not a fault — and the two are told apart by whether the
-socket file exists, not by the connection error, which arrives as `ENOENT`
-whether the path is missing, stale, or unreadable. The unread count is only there
-when something is unread, and it sits beside the version rather than under it: in
-this column an empty line of its own would cost a visible blank row, measured
-against the real sidebar before the shape was chosen.
+One line, written the way the client writes its own version line: a coloured
+bullet, the name, the version. The bullet carries the light: green, amber, red, and
+muted grey when nothing is running. That last state says `apagado` rather than
+warning, because a service you stopped on purpose is not a fault — and the two are
+told apart by whether the socket file exists, not by the connection error, which
+arrives as `ENOENT` whether the path is missing, stale, or unreadable. The unread
+count is only there when something is unread, and it sits beside the version rather
+than under it: in this column an empty line of its own would cost a visible blank
+row, measured against the real sidebar before the shape was chosen.
 
 The version is printed exactly as the service reports it, build metadata and all.
 Trimming `0.10.1+751972f.modified` down to `0.10.1` would hide the part that says
@@ -517,9 +541,13 @@ The second widget answers a question about the session in front of you, and it
 never talks to Atenea at all:
 
 ```text
-Share
-MiniMax-M3 98% · glm-5.2 1%
-+3 · 408M tokens
+Models
+MiniMax-M3 86M (60%)
+deepseek-v4-pro 42M (30%)
+glm-5.2 10M (7%)
+qwen3.7-max 3M (2%)
+gemini-3.1-pro-preview 699k (<1%)
++2 otros 836k (1%)
 ```
 
 Shares, not money. opencode does store a `cost` per message, and adding it up is
@@ -537,20 +565,32 @@ are work the model was actually handed. Rows with no tokens at all are dropped
 rather than printed as `0 %`: a model you opened and abandoned did no share of
 anything.
 
-Two models are named, the rest collapse into `+3`, and the total carries a
-magnitude so the section does not grow with the session. `408M tokens` is the sum
-across every model, not just the two named ones.
+**Both numbers on a line come from that one sum.** The tokens printed are exactly
+the ones the percentage divides, so the pair cannot disagree — a cache-excluded
+count beside a cache-included share would read as consistent and be wrong by the
+nine points those bases differ by here.
+
+**Five models get a line; the rest are summed, not dropped.** `+2 otros 836k (1%)`
+is there so the shares still account for the session: a list that stops at five
+without saying what it left out reads as complete, which is the same omission as a
+percentage with no visible base. A share that rounds to nothing prints `<1%`
+instead of `0%`, because `699k (0%)` states two things that contradict each other.
+Rounding still lets the column sum to 99 or 101, and that is left visible rather
+than fudged.
+
+There is no combined total: the `Context` box directly above already reports the
+session's tokens, and a second total invites reconciling two numbers that answer
+different questions.
 
 It reads opencode's own SQLite store, opened **read-only**, for the session id
 the client hands the plugin — no socket, no network, and nothing of yours leaves
 the machine. The store is 3 GB here and the query costs 2 ms, because it lands on
 an index the client already keeps on `(session_id, time_created, id)`.
 
-Every state names both of its lines, because a blank one is a visible empty row
-in that column: a session with nothing in it reads `sin modelos todavia` over
-`0 tokens`, and a store that will not answer reads `sin lectura` over `el store no
-respondio` rather than the last good percentages, which would otherwise keep
-showing numbers that had stopped arriving.
+Every state says something, because a blank line is a visible empty row in that
+column: a session with nothing in it reads `sin modelos todavia`, and a store that
+will not answer reads `sin lectura` rather than the last good percentages, which
+would otherwise keep showing numbers that had stopped arriving.
 
 ### Either widget, same three verbs
 

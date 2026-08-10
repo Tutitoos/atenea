@@ -179,20 +179,21 @@ function AteneaSection(props: { api: StatusApi }) {
 
 	const unreadWords = () => (unread() > 0 ? `${unread()} sin leer` : "");
 
-	// The second row is a row box on purpose. In this column an empty <text> costs
-	// a visible blank line -- measured with a probe against the real sidebar -- and
-	// an empty one beside a sibling costs nothing, which is how the unread count
-	// disappears when there is nothing unread.
+	// One line, the way the client writes its own version line: a coloured bullet,
+	// the name, then the version. The bullet is the traffic light, so it keeps the
+	// colour and the name does not.
+	//
+	// The unread count is a sibling in a row box rather than a line of its own. In
+	// this column an empty <text> costs a visible blank row -- measured -- and an
+	// empty one beside a sibling costs nothing, which is how the count disappears
+	// when there is nothing unread.
 	return (
-		<box>
+		<box flexDirection="row" gap={1}>
 			<text fg={theme().text}>
 				<span style={{ fg: dot() }}>{glyph()}</span>
-				<b>Atenea</b>
+				Atenea <span style={{ fg: theme().textMuted }}>{words()}</span>
 			</text>
-			<box flexDirection="row" gap={1}>
-				<text fg={theme().textMuted}>{words()}</text>
-				<text fg={theme().error}>{unreadWords()}</text>
-			</box>
+			<text fg={theme().error}>{unreadWords()}</text>
 		</box>
 	);
 }
@@ -201,11 +202,19 @@ export default {
 	id: "atenea.status",
 	tui: async (api: StatusApi) => {
 		api.slots.register({
-			// Below the share section, both between the host's Context (100) and its
-			// MCP list (200). The light belongs in the sidebar with the rest of the
-			// standing state, not on the prompt line where it was first put because
-			// that was the slot this code happened to know about.
-			order: 160,
+			// Last in the column. The client's own sections claim 100 to 500, so 900
+			// leaves room for it to add more and still keeps this at the bottom, which
+			// is where a standing service line belongs -- next to the client's own
+			// version rather than above the reading for this session.
+			//
+			// Directly *under* the client's `OpenCode <version>` line is not reachable:
+			// that line is the children of a `sidebar_footer` slot declared
+			// `mode:"single_winner"`, the lowest registered order wins it outright, and
+			// a winning callback is handed only `{session_id}` -- `children` is
+			// undefined, measured. Sitting under that line would mean winning the slot
+			// and reimplementing the client's footer, which would delete the real
+			// version line the moment our copy of it drifted.
+			order: 900,
 			slots: {
 				sidebar_content: () => <AteneaSection api={api} />,
 			},

@@ -48,15 +48,27 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   by hand. Uninstall removes the config only when taking our entry out leaves
   nothing behind.
 
-- **A second sidebar section: which model did what share of this session.**
+- **A second sidebar section, `Models`: which model did what share of this session.**
   `atenea statusline widgets` lists what the binary carries, and the three verbs
-  now take a name: `install session-share` draws `Share` over
-  `MiniMax-M3 98% · glm-5.2 1%` and `+3 · 408M tokens`, directly under the
-  client's `Context` box. Omitting the name still means `atenea`, and every screen
-  prints which widget it acted on, because with two installed the paths differ by
-  one word. A name this binary does not carry is refused with the list of the ones
-  it does, rather than resolving to the default — installing a traffic light when
-  somebody asked for a share is the failure that check exists for.
+  now take a name: `install session-share` draws one model per line under the
+  client's own `Context` box —
+  `MiniMax-M3 86M (60%)`, `deepseek-v4-pro 42M (30%)`, and so on. Omitting the name
+  still means `atenea`, and every screen prints which widget it acted on, because
+  with two installed the paths differ by one word. A name this binary does not carry
+  is refused with the list of the ones it does, rather than resolving to the
+  default — installing a traffic light when somebody asked for a share is the
+  failure that check exists for.
+
+  Both numbers on a line come from one sum: the tokens printed are exactly the ones
+  the percentage divides. A cache-excluded count beside a cache-included share would
+  read as consistent and be wrong by the nine points those bases differ by here.
+
+  Five models get a line and the rest are summed into `+2 otros 836k (1%)` rather
+  than dropped, because a list that stops at five without saying what it left out
+  reads as complete. A share that rounds away prints `<1%`, not `0%`: `699k (0%)` is
+  two statements that contradict each other. No combined total — the `Context` box
+  above it already reports one, and a second invites reconciling two numbers that
+  answer different questions.
 
   **Both sections were first put where they fit, not where they belonged.** The
   light went to `app_bottom` and the share to `session_prompt_right` because those
@@ -64,11 +76,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   checked. It takes plugin content: the client offers twelve slots, three of them
   `sidebar_title`, `sidebar_content` and `sidebar_footer`, and its own `Context`,
   `MCP`, `LSP`, `Todo` and `Files` sections are themselves `sidebar_content`
-  registrations at orders 100 to 500. Ours now sit at 150 and 160, between the
-  first two, and a test refuses any widget whose order leaves that gap or whose
-  registration names a slot outside the sidebar. There is no slot inside the
-  `Context` box; a section immediately beneath it is as close as the client
-  allows.
+  registrations at orders 100 to 500. `Models` now sits at 150, continuing the box
+  it answers next to, and the Atenea line at 900, last in the column. A test pins
+  both and refuses a registration naming a slot outside the sidebar.
+
+  Two placements were asked for and are not reachable, both measured rather than
+  assumed. There is no slot inside the `Context` box. And directly under the
+  client's `• OpenCode 1.18.16` line is not a place a plugin can add to: that line
+  is the children of a `sidebar_footer` slot declared `mode:"single_winner"`, the
+  lowest registered order wins it outright, and a winner is handed only
+  `{session_id}` with `children` undefined — so registering there deletes the
+  version line rather than sitting under it. Reimplementing the client's footer to
+  get one line below it would mean owning the truth of that line, and it is not
+  worth it.
+
+  When a section outgrows the room the column **grows and evicts its neighbours** —
+  no scrolling, no clipping: a 24-row probe pushed the client's own `LSP` section
+  off the screen. That is why the model list is capped.
 
   **Shares, not currency.** opencode stores a `cost` per message and summing it
   is one line of SQL, but on a subscription that figure is list price for traffic

@@ -360,16 +360,21 @@ func TestEveryShippedWidgetInstallsSomething(t *testing.T) {
 // Where a widget lands was asked for and then got lost: the first version of both
 // of these registered whichever slot this code already knew about -- one on the
 // prompt line, one at the bottom of the app -- and neither is where the question
-// was. The client's sidebar is an ordered column and its own sections claim round
-// numbers, Context at 100 and MCP at 200, so a widget of ours belongs strictly
-// between them. This reads the source that ships, because the source is the
-// contract: a plugin compiled from a file with the wrong slot name registers
-// nothing and draws nothing, which looks exactly like a plugin that never loaded.
-func TestEveryWidgetLandsInTheSidebarBetweenContextAndMCP(t *testing.T) {
-	const (
-		context = 100
-		mcp     = 200
-	)
+// was. The client's sidebar is an ordered column whose own sections claim round
+// numbers: Context 100, MCP 200, LSP 300, Todo 400, Files 500.
+//
+// Each widget's place in that column is a decision and gets pinned here. The
+// share reads the session, so it belongs against the Context box it continues;
+// the service light is standing state and belongs at the bottom, past everything
+// the client itself adds. This reads the file that ships, because the file is the
+// contract: a plugin naming a slot that does not exist registers nothing and draws
+// nothing, which looks exactly like a plugin that never loaded.
+func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
+	// Bounds are exclusive on both ends.
+	place := map[string]struct{ after, before int }{
+		"session-share": {after: 100, before: 200},
+		"atenea":        {after: 500, before: 1000},
+	}
 	order := regexp.MustCompile(`order:\s*(\d+)`)
 
 	for _, widget := range statusline.Widgets() {
@@ -397,6 +402,10 @@ func TestEveryWidgetLandsInTheSidebarBetweenContextAndMCP(t *testing.T) {
 				}
 			}
 
+			want, known := place[widget.Name]
+			if !known {
+				t.Fatalf("a shipped widget with no declared place in the column: add %q to this table", widget.Name)
+			}
 			found := order.FindStringSubmatch(body)
 			if found == nil {
 				t.Fatal("no order in the registration: the host would place this by load order")
@@ -405,8 +414,8 @@ func TestEveryWidgetLandsInTheSidebarBetweenContextAndMCP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("order %q: %v", found[1], err)
 			}
-			if n <= context || n >= mcp {
-				t.Errorf("order = %d, want strictly between Context (%d) and MCP (%d)", n, context, mcp)
+			if n <= want.after || n >= want.before {
+				t.Errorf("order = %d, want strictly between %d and %d", n, want.after, want.before)
 			}
 		})
 	}

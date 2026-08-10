@@ -31,14 +31,19 @@ import { createSignal, onCleanup, onMount } from "solid-js";
 
 const POLL_MS = 5000;
 
-// How many models are named before the rest collapse into a count. Two fits the
-// space next to a prompt; the overflow marker keeps the line honest about the
-// ones it is not showing.
-const NAMED = 2;
+// How many models get a line of their own. The cap is not decoration: this column
+// grows with its content and pushes the sections under it off the screen rather
+// than scrolling or clipping -- measured with a 24-row probe, which evicted the
+// client's own LSP section.
+//
+// Five, and the rest are summed into a final line rather than dropped. A list of
+// shares that stops at five and does not reach 100 is the same omission as a
+// percentage with no visible base: it reads as complete.
+const NAMED = 5;
 
 type Slice = { model: string; tokens: number };
 type Reading =
-	| { kind: "share"; slices: Slice[]; hidden: number; total: number }
+	| { kind: "share"; slices: Slice[]; hidden: number; hiddenTokens: number; total: number }
 	| { kind: "empty" }
 	| { kind: "unreadable" };
 
@@ -106,7 +111,19 @@ function read(sessionID: string): Reading {
 		if (slices.length === 0) return { kind: "empty" };
 
 		const total = slices.reduce((sum, s) => sum + s.tokens, 0);
-		return { kind: "share", slices: slices.slice(0, NAMED), hidden: Math.max(0, slices.length - NAMED), total };
+		const named = slices.slice(0, NAMED);
+		// The remainder travels as tokens, not as a count. A dropped tail turns the
+		// column into a list of shares that do not reach 100, which is the omission
+		// this widget exists to refuse: the last line has to be able to say how much
+		// it stands for.
+		const rest = slices.slice(NAMED);
+		return {
+			kind: "share",
+			slices: named,
+			hidden: rest.length,
+			hiddenTokens: rest.reduce((sum, s) => sum + s.tokens, 0),
+			total,
+		};
 	} catch {
 		// A store that cannot be read is said, never drawn as a share. The failure
 		// this avoids is a line that keeps showing the last good percentages while
@@ -143,21 +160,44 @@ function magnitude(tokens: number): string {
 
 // Percentages are rounded for width and can therefore sum to 99 or 101. That is
 // left visible rather than fudged: the alternative is inventing a point to make
-// the row add up, which is a number nobody measured.
-function percent(part: number, total: number): number {
-	return Math.round((100 * part) / total);
+// the column add up, which is a number nobody measured.
+//
+// A share that rounds to zero is printed as `<1%` instead. Measured on a
+// seven-model session, `gemini-3.1-pro-preview` holds 0.5% -- and a line reading
+// `699k (0%)` states two things that contradict each other, which is worse than
+// either being imprecise.
+function percent(part: number, total: number): string {
+	const share = Math.round((100 * part) / total);
+	if (share === 0 && part > 0) return "<1%";
+	return `${share}%`;
 }
 
-// Every line in the column has to say something. An empty <text> costs a visible
-// blank row -- measured with a probe against the real sidebar before this was
-// written -- so each state names two non-empty lines rather than hiding one.
-function lines(reading: Reading | undefined): [string, string] {
-	if (!reading) return ["…", "leyendo el store"];
-	if (reading.kind === "unreadable") return ["sin lectura", "el store no respondio"];
-	if (reading.kind === "empty") return ["sin modelos todavia", "0 tokens"];
-	const named = reading.slices.map((s) => `${short(s.model)} ${percent(s.tokens, reading.total)}%`);
-	const rest = reading.hidden > 0 ? `+${reading.hidden} · ` : "";
-	return [named.join(" · "), `${rest}${magnitude(reading.total)} tokens`];
+// One model per line: name, tokens, share. Both numbers on a line come from the
+// same sum -- the tokens printed are exactly the ones the percentage divides -- so
+// the two cannot disagree. Mixing a cache-excluded token count with a
+// cache-included percentage would read as consistent and be wrong by the 9 points
+// those two bases differ by on this machine.
+//
+// The whole list is one string with newlines. A <Show> is dropped silently by this
+// renderer, a mapped array is built once and never updates, and a fixed set of
+// <text> slots pays a visible blank row for every model a session does not have.
+// A newline in one <text> draws as a line -- measured -- and costs nothing when
+// there is no next model.
+//
+// No combined total: the client's own Context box, directly above this one, is
+// already reporting the session's tokens. Printing a second total invites the
+// reader to reconcile two numbers that answer different questions.
+function body(reading: Reading | undefined): string {
+	if (!reading) return "…";
+	if (reading.kind === "unreadable") return "sin lectura";
+	if (reading.kind === "empty") return "sin modelos todavia";
+	const rows = reading.slices.map(
+		(s) => `${short(s.model)} ${magnitude(s.tokens)} (${percent(s.tokens, reading.total)})`,
+	);
+	if (reading.hidden > 0) {
+		rows.push(`+${reading.hidden} otros ${magnitude(reading.hiddenTokens)} (${percent(reading.hiddenTokens, reading.total)})`);
+	}
+	return rows.join("\n");
 }
 
 type SlotContext = { theme: { current: Record<string, string> } };
@@ -183,18 +223,15 @@ function ShareSection(props: { ctx: SlotContext; slot: SlotProps }) {
 
 	const colour = () => (reading()?.kind === "unreadable" ? theme().warning : theme().textMuted);
 
-	const rows = () => lines(reading());
-
 	// The shape is the one the section above it uses: a bold name in the body
 	// colour, muted values under it. Sitting beside `Context` and reading nothing
 	// like it would make this look like a second opinion about the same number.
 	return (
 		<box>
 			<text fg={theme().text}>
-				<b>Share</b>
+				<b>Models</b>
 			</text>
-			<text fg={colour()}>{rows()[0]}</text>
-			<text fg={theme().textMuted}>{rows()[1]}</text>
+			<text fg={colour()}>{body(reading())}</text>
 		</box>
 	);
 }
