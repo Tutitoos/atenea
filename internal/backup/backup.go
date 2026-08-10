@@ -47,6 +47,18 @@ const (
 	partialSuffix = ".partial"
 )
 
+// Extra is a single file from outside the source tree that every snapshot
+// includes alongside the state it copies. It follows the same hardlink
+// optimisation as the main tree: a file that has not changed since the
+// previous snapshot costs no bytes.
+type Extra struct {
+	// Source is the absolute path to the file to protect.
+	Source string
+	// Dest is where it lands inside the snapshot, relative to the snapshot
+	// root. Parent directories are created as needed.
+	Dest string
+}
+
 // Options says what to copy, where to put it, and how many copies survive.
 type Options struct {
 	// Source is the tree to protect. It does not have to exist yet.
@@ -55,6 +67,10 @@ type Options struct {
 	Dir string
 	// Keep is how many snapshots a rotation leaves behind. At least one.
 	Keep int
+	// Extras are individual files from outside the source tree to include in
+	// every snapshot. A source that does not exist at snapshot time is skipped
+	// silently: a file that has not been commissioned yet must not break a run.
+	Extras []Extra
 }
 
 // Snapshot is one complete copy of the source, and what making it cost.
@@ -83,6 +99,7 @@ type Store struct {
 	source string
 	dir    string
 	keep   int
+	extras []Extra
 }
 
 // New checks the arrangement makes sense and returns the store.
@@ -119,7 +136,21 @@ func New(opts Options) (*Store, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"backup: folder %s is inside the source %s it would copy", dir, source)
 	}
-	return &Store{source: source, dir: dir, keep: opts.Keep}, nil
+	for i, e := range opts.Extras {
+		if e.Source == "" {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"backup: extra %d has no source path", i)
+		}
+		if e.Dest == "" {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"backup: extra %d has no destination path", i)
+		}
+		if filepath.IsAbs(e.Dest) {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"backup: extra %d destination must be a relative path, got %s", i, e.Dest)
+		}
+	}
+	return &Store{source: source, dir: dir, keep: opts.Keep, extras: opts.Extras}, nil
 }
 
 // Dir reports where snapshots are written.
@@ -261,6 +292,17 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 	if err != nil {
 		_ = os.RemoveAll(partial)
 		return Snapshot{}, err
+	}
+	for _, extra := range s.extras {
+		counts, err := copyExtra(ctx, extra, partial, base)
+		if err != nil {
+			_ = os.RemoveAll(partial)
+			return Snapshot{}, err
+		}
+		snapshot.Files += counts.Files
+		snapshot.Linked += counts.Linked
+		snapshot.Copied += counts.Copied
+		snapshot.Bytes += counts.Bytes
 	}
 	// A second run inside the same second answers to the same name. The later
 	// one holds the fresher state so it replaces: its copy is already on disk,
@@ -433,6 +475,43 @@ func (s *Store) copyTree(ctx context.Context, root, target, base string) (Snapsh
 	}
 	snapshot.Files = snapshot.Linked + snapshot.Copied
 	return snapshot, nil
+}
+
+// copyExtra copies one extra file into target/extra.Dest, sharing with the
+// previous snapshot if the file has not changed since. A source that does not
+// exist is skipped silently: a file that has not yet been commissioned must
+// not prevent a run from completing.
+func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, contract.Fail(contract.FailureTimeout,
+			"backup: copy stopped: %v", err)
+	}
+	info, err := os.Stat(extra.Source)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Snapshot{}, nil
+	}
+	if err != nil {
+		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot read %s: %v", extra.Source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return Snapshot{}, contract.Fail(contract.FailureInvalidInput,
+			"backup: extra %s is not a regular file", extra.Source)
+	}
+	destination := filepath.Join(target, extra.Dest)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot create parent directory for %s: %v", destination, err)
+	}
+	if base != "" && link(filepath.Join(base, extra.Dest), destination, info) {
+		return Snapshot{Files: 1, Linked: 1}, nil
+	}
+	written, err := copyFile(extra.Source, destination, info)
+	if err != nil {
+		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot copy %s: %v", extra.Source, err)
+	}
+	return Snapshot{Files: 1, Copied: 1, Bytes: written}, nil
 }
 
 // copyLink copies a symlink by making the same symlink, and reports the bytes

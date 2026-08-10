@@ -525,6 +525,106 @@ func TestAFileThatCannotBeReadStopsTheRun(t *testing.T) {
 	}
 }
 
+func TestAnExtraFileIsIncludedInEachSnapshot(t *testing.T) {
+	home := t.TempDir()
+	source := filepath.Join(home, "state")
+	writeFile(t, filepath.Join(source, "state.db"), "rows")
+	extra := filepath.Join(home, "config", "atenea.toml")
+	writeFile(t, extra, "version = 1")
+
+	store, err := backup.New(backup.Options{
+		Source: source,
+		Dir:    filepath.Join(home, "backups"),
+		Keep:   5,
+		Extras: []backup.Extra{{Source: extra, Dest: "config/atenea.toml"}},
+	})
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	first := mustSnapshot(t, store, base)
+	if got := readFile(t, filepath.Join(first.Path, "config", "atenea.toml")); got != "version = 1" {
+		t.Errorf("first snapshot holds %q for the extra, want the original content", got)
+	}
+
+	second := mustSnapshot(t, store, base.Add(6*time.Hour))
+	if got := readFile(t, filepath.Join(second.Path, "config", "atenea.toml")); got != "version = 1" {
+		t.Errorf("second snapshot holds %q for the extra, want the original content", got)
+	}
+	older := statFile(t, filepath.Join(first.Path, "config", "atenea.toml"))
+	newer := statFile(t, filepath.Join(second.Path, "config", "atenea.toml"))
+	if !os.SameFile(older, newer) {
+		t.Error("the unchanged extra was copied instead of shared with the previous snapshot")
+	}
+
+	writeFile(t, extra, "version = 2")
+	third := mustSnapshot(t, store, base.Add(12*time.Hour))
+	if got := readFile(t, filepath.Join(third.Path, "config", "atenea.toml")); got != "version = 2" {
+		t.Errorf("third snapshot holds %q for the edited extra, want the new content", got)
+	}
+	if os.SameFile(
+		statFile(t, filepath.Join(second.Path, "config", "atenea.toml")),
+		statFile(t, filepath.Join(third.Path, "config", "atenea.toml")),
+	) {
+		t.Error("the edited extra was shared instead of copied fresh")
+	}
+}
+
+func TestAnExtraFileThatDoesNotExistIsSkipped(t *testing.T) {
+	home := t.TempDir()
+	source := filepath.Join(home, "state")
+	writeFile(t, filepath.Join(source, "state.db"), "rows")
+
+	store, err := backup.New(backup.Options{
+		Source: source,
+		Dir:    filepath.Join(home, "backups"),
+		Keep:   5,
+		Extras: []backup.Extra{{Source: filepath.Join(home, "config", "never.toml"), Dest: "config/atenea.toml"}},
+	})
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	snapshot, err := store.Snapshot(context.Background(), base)
+	if err != nil {
+		t.Fatalf("a missing extra must not fail the run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot.Path, "config", "atenea.toml")); !errors.Is(err, fs.ErrNotExist) {
+		t.Error("a missing extra must not appear in the snapshot")
+	}
+}
+
+func TestAnExtraFileCountsInTheFileTally(t *testing.T) {
+	home := t.TempDir()
+	source := filepath.Join(home, "state")
+	writeFile(t, filepath.Join(source, "state.db"), "rows")
+	extra := filepath.Join(home, "config", "atenea.toml")
+	writeFile(t, extra, "version = 1")
+
+	store, err := backup.New(backup.Options{
+		Source: source,
+		Dir:    filepath.Join(home, "backups"),
+		Keep:   5,
+		Extras: []backup.Extra{{Source: extra, Dest: "config/atenea.toml"}},
+	})
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	first := mustSnapshot(t, store, base)
+	second := mustSnapshot(t, store, base.Add(6*time.Hour))
+
+	for _, snapshot := range []backup.Snapshot{first, second} {
+		if snapshot.Linked+snapshot.Copied != snapshot.Files {
+			t.Errorf("%s: %d shared + %d copied != %d files reported",
+				snapshot.Name, snapshot.Linked, snapshot.Copied, snapshot.Files)
+		}
+		if got := countEntries(t, snapshot.Path); got != snapshot.Files {
+			t.Errorf("%s: reported %d files, tree holds %d", snapshot.Name, snapshot.Files, got)
+		}
+	}
+}
+
 func newStore(t *testing.T, keep int) (*backup.Store, string) {
 	t.Helper()
 	home := t.TempDir()

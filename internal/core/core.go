@@ -256,7 +256,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			return nil, err
 		}
 	}
-	copies, err := openCopies(cfg.Backup, platform.StateDir())
+	copies, err := openCopies(cfg.Backup, platform.StateDir(), config.DefaultPath())
 	if err != nil {
 		return nil, err
 	}

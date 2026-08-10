@@ -159,11 +159,16 @@ func openBase(cfg config.Metrics) (*metrics.Store, string, error) {
 // a rotation that keeps nothing -- is a settings mistake and stops the core.
 // Copying is the one maintenance task whose absence is invisible until the day
 // it is needed, so a broken setup must not degrade quietly into no backups.
-func openCopies(cfg config.Backup, source string) (*backup.Store, error) {
+func openCopies(cfg config.Backup, source, configPath string) (*backup.Store, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
-	return backup.New(backup.Options{Source: source, Dir: cfg.Dir, Keep: cfg.Keep})
+	return backup.New(backup.Options{
+		Source: source,
+		Dir:    cfg.Dir,
+		Keep:   cfg.Keep,
+		Extras: []backup.Extra{{Source: configPath, Dest: "config/atenea.toml"}},
+	})
 }
 
 // buildLanes registers every background rhythm in the one clock.
