@@ -309,7 +309,14 @@ func (r *Runner) locationsFrom(root string, symbols []symbol, a ask) []location 
 			}
 		}
 		if a.snippet {
-			loc.Snippet = trimToLines(s.Body, a.lines)
+			body := s.Body
+			if body == "" && s.Path != "" {
+				start := toContractLine(s.Location.StartLine)
+				if window, err := readLinesFrom(r, root, s.Path, start, a.lines); err == nil {
+					body = strings.Join(window, "\n")
+				}
+			}
+			loc.Snippet = trimToLines(body, a.lines)
 		}
 		out = append(out, loc)
 	}
