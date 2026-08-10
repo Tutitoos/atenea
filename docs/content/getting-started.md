@@ -436,9 +436,9 @@ still runs on the floor that file sets.
 ## Put a section in the client's sidebar
 
 `atenea status` answers when you ask it. These answer without being asked: three
-widgets in opencode's sidebar — two sections under the `Context` box it draws
-itself, and the footer at the bottom of that column. They are installed
-separately on purpose, because they read different things.
+widgets in opencode's sidebar, drawing four things — three sections under the
+`Context` box it draws itself, and the footer at the bottom of that column. They
+are installed separately on purpose, because they read different things.
 
 ```text
 $ atenea statusline widgets
@@ -455,7 +455,9 @@ $13.04 spent
 
 ▶ Models (MiniMax-M3 60%, +6)
 
-Claude 7d 29% · hace 1d
+▶ Claude (5h 78% · 7d 56%)
+
+▶ Codex (7d 91%)
 
 ▼ MCP
 • atenea  Connected
@@ -469,17 +471,22 @@ LSPs will activate as files are read
 ⊙ Atenea 0.10.1+751972f
 ```
 
-**That column has to be on screen for any of them to appear.** It is 42 columns wide,
-and its default state is `auto`, which shows it only when the terminal is wider
-than 120 columns — and never for a child session. Read out of the shipped client
-(1.18.16), which also carries `show` and `hide` for that state. On a narrow
-terminal these widgets are installed, declared, loaded, and invisible, and no
-command of ours can tell you so: the placement is the client's.
+**That column has to be on screen for any of them to appear.** It is 42 columns
+wide — of which a section's own text gets **37**, measured with rulers drawn inside
+it at 200, 130 and 121 columns of terminal, and the renderer **wraps** rather than
+clips, so a 38-column line becomes a second row nobody asked for. Its default state
+is `auto`, which shows it only when the terminal is wider than 120 columns — and
+never for a child session. Read out of the shipped client (1.18.16), which also
+carries `show` and `hide` for that state. On a narrow terminal these widgets are
+installed, declared, loaded, and invisible, and no command of ours can tell you so:
+the placement is the client's.
 
 The column is ordered, and the client's own sections claim round numbers —
 `Context` 100, `MCP` 200, `LSP` 300, `Todo` 400, `Files` 500. `Models` sits at 150
-so it continues the `Context` box it answers next to. A test pins that, and
-refuses a registration naming a slot outside the sidebar.
+so it continues the `Context` box it answers next to, and the two rate-limit
+sections at 151 and 152 directly under it. A test pins every one of those, reads
+them out of the file that ships, and refuses a registration naming a slot outside
+the sidebar.
 
 The last three lines are not in that column at all. They are the client's footer,
 a box **outside** the scroll, pinned to the bottom — and Atenea draws it. The
@@ -639,56 +646,90 @@ would otherwise keep showing numbers that had stopped arriving.
 
 ### How much of the window is left
 
-The third widget is a **line, not a section**, and most of the time it is nothing
-at all:
+One collapsible section per provider, collapsed on every launch, and nothing at
+all when no window is live:
 
 ```text
-Claude 7d 29% · hace 1d
+▶ Claude (5h 78% · 7d 56%)
+▶ Codex (7d 91%)
 ```
 
-One line per rate-limit window that is **live**, with its age always attached, and
-nothing whatsoever when no window is live — no header, no placeholder, not even
-the blank row the host puts between sections. Two providers with live readings at
-once would be two lines.
+Open, each window gets a bar and a line saying when it comes back:
 
-**The shape came out of measuring the mechanism, not the data.** These figures
-refresh only when a human runs a command. Claude's come from `~/.claude.json`,
-which the `claude` CLI rewrites on `/status` or `/usage`; codex's arrive inside a
-session rollout, which only a real model turn appends to. Measured here: two
-Claude refreshes in twelve days — with the client itself running for 24 hours
-after the last one without touching it — and codex readings on three days out of
-thirty-one, which leaves a five-hour window live about **4 %** of the time.
+```text
+▼ Claude
+5h  ████░░░░░░░░░░░░░░░░  78% free
+    resets in 2h42m
+7d  █████████░░░░░░░░░░░  56% free
+    resets in 3d0h
+7d  ░░░░░░░░░░░░░░░░░░░░ 100% free
+    Fable only
+```
 
-So a section with a row per provider would read `sin ventana viva` almost always,
-which teaches you to skip that part of the screen — and then the day the weekly
-figure matters, you do not see it either. The unread counter already follows the
-same rule by being absent at zero.
+The closed header carries **both** account windows, fastest first, and drops from
+the right if it ever will not fit — so the five-hour figure is the one that
+survives a narrow line. That is deliberate: the question a closed section has to
+answer is "is something about to stop me", which the five-hour window answers and
+the weekly one does not. A window belonging to one model rather than the account
+(`Fable`) is never in the header, because two rows reading `7d` there would invite
+you to reconcile them; it is one click away in the body.
 
-**The age is not decoration.** A limit figure without one is worse than no figure:
-a plan made against a percentage that expired yesterday is a plan made against
-nothing, and it reads exactly like a fresh one.
+**Where the numbers come from — and the measurement that was wrong.** The first
+version of this widget read `~/.claude.json` and a codex session rollout, and was
+a single line for a measured reason: those files are refreshed only by a human, so
+a five-hour window looked live about 4 % of the time and a section with a body
+would have said `sin ventana viva` almost always.
 
-**Live is the vendor's word, not a rule invented here.** Claude publishes
-`utilization.limits`, a list carrying `kind`, `percent`, `severity`, `resets_at`
-and `is_active` per bucket — measured on this machine, the session bucket at 4 %
-with `is_active: false` because its window had closed, and the weekly one at 29 %
-with `is_active: true`. The `severity` field is what turns a line amber, so no
-threshold is guessed. codex has no settings field at all: its `primary` and
-`secondary` buckets carry `used_percent`, `window_minutes` and `resets_at`, and
-rollouts are read newest first and only while they are young enough for a reading
-to still be inside a window — one 54 KB file here, out of fourteen.
+That measured the *client that rewrites a file* and then reported on *the number
+inside it*. This machine had, the whole time, a source that refreshes itself: omp
+keeps one usage report per provider in its own store and refreshes each roughly
+every ten minutes while it runs. Measured on 2026-08-11 — readings one minute old
+for both providers, a median gap of one hour. With a reading that refreshes itself,
+a section that answers on a click is the honest shape.
 
-A turn that failed for depleted credits writes `primary: null`, and that is
-reported as nothing rather than by reaching back for an older number that would
-please the reader more.
+Not the `usage_history` table in the same store, which looks like the obvious
+source and is a trap: it prunes — 7 029 rows while its maximum advances — and
+writes one, two or three of a provider's limits per reading, so "the newest row per
+provider" silently loses whichever window was not in the last write. A row read at
+01:01 was gone eight minutes later. The cached report is the whole thing, written
+at once, and it carries what a rule here would otherwise guess: `window.durationMs`,
+`window.id` already short as `5h` and `7d`, `amount.usedFraction`, a vendor
+`status`, and `scope.tier`.
+
+**Two halves to staleness, and the second is not a threshold.** Past 90 minutes —
+the measured p90 gap plus slack — every row shows its age, because a limit figure
+without one reads exactly like a fresh one. But when the reading is older than the
+window it describes, that window is **over**: a new one opened while nobody was
+looking, and its usage starts from a number this machine never saw. Such a row is
+not old, it is about a different window, so it is dropped rather than shown with an
+age attached.
+
+That is the morning path, not an edge case. Measured here, gaps between readings
+run to 14.5 hours overnight and 17 of the last 30 days had one longer than five
+hours, so opening a laptop after any of them puts the 5h window in exactly that
+state:
+
+```text
+▶ Claude (7d 56% · hace 14h)
+▶ Codex (7d 91% · hace 14h)
+```
+
+The five-hour row is gone, not aged. Eight days away and neither section draws at
+all.
+
+**Amber is the vendor's word, not a threshold invented here.** Each window carries
+its own `status`, and that — plus a reading old enough to show its age — is what
+turns a section amber. Providers reporting in units with no whole to divide by are
+not drawn as bars rather than drawn as invented ones: four others publish into the
+same store, and none is on screen.
 
 **Whether it draws is decided once, when the client loads plugins.** A slot
 callback is invoked a single time — measured with a counter that stayed at 1 across
 repaints — and neither a callback nor a component that returned `null` is ever
-asked again. So a figure refreshed in another terminal mid-session appears on the
-next restart. That is also why nothing is faked to hold a place: `null` costs zero
-rows, while an empty `<text>` costs a blank one and an empty `<box>` costs the
-separator.
+asked again. A provider with no live window at startup therefore stays absent until
+the client is restarted; it takes a reading older than the longest window to land
+there. That is also why nothing is faked to hold a place: `null` costs zero rows,
+while an empty `<text>` costs a blank one and an empty `<box>` costs the separator.
 
 ### Any widget, same three verbs
 

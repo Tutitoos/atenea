@@ -161,45 +161,66 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   `messages()` returned 100 of that session's 1,578 rows, which is what sent this
   to the store instead.
 
-- **A third sidebar widget, `limits`: one line per live rate-limit window, and
-  nothing at all when none is live.** `Claude 7d 29% · hace 1d`, with the age
-  always attached, and two lines if both providers ever have live readings at once.
+- **A third widget, `limits`: one collapsible section per provider — `Claude` and
+  `Codex` — showing how much of each live rate-limit window is left.** Collapsed on
+  every launch, both account windows in the closed header (`▶ Claude (5h 78% · 7d
+  56%)`), and a bar per window with its reset when opened. Nothing at all when no
+  window is live: no header, no placeholder, not even the separator.
 
-  The shape came out of measuring the mechanism rather than the data. Nothing
-  refreshes these figures except a human running a command: Claude's come from
-  `~/.claude.json`, rewritten by its CLI on `/status` or `/usage`, and codex's from
-  a session rollout, appended only by a real model turn. Measured: two Claude
-  refreshes in twelve days, with the client running 24 hours after the last one
-  without touching it, and codex readings on three days out of thirty-one — a
-  five-hour window is live about 4% of the time. A section with a row per provider
-  would therefore say `sin ventana viva` almost always, which teaches a reader to
-  skip that part of the screen, and then the day the weekly figure matters they do
-  not see it either. The unread counter already follows that rule by being absent
-  at zero.
+  The closed header carries both windows rather than the tightest, and drops from
+  the right when it will not fit, so the five-hour figure is the one that survives.
+  The question a closed section answers is "is something about to stop me", which
+  the five-hour window answers and the weekly one does not. A window scoped to one
+  model (`Fable`) never appears there — two rows reading `7d` in one header invite
+  reconciling them — and is one click away in the body.
 
-  The age is the point, not decoration: a percentage that expired yesterday reads
-  exactly like a fresh one and is planned against just as confidently.
+  **This shipped as one line first, and the correction is the entry.** That version
+  read `~/.claude.json` and a codex session rollout, and was a line because those
+  files are refreshed only by a human: two Claude refreshes in twelve days, codex
+  readings on three days out of thirty-one, a five-hour window live about 4% of the
+  time. The measurement was of the *client that rewrites a file*, reported as a fact
+  about *the number inside it*. This machine had a self-refreshing source all along:
+  omp keeps one usage report per provider in its own store and refreshes each about
+  every ten minutes. Measured 2026-08-11 — readings one minute old for both
+  providers, median gap one hour, and it covers six providers.
 
-  Live is the vendor's own word. Claude publishes `utilization.limits` with
-  `is_active` and `severity` per bucket — the session bucket measured at 4% and
-  inactive, the weekly at 29% and active — so activity is read off the flag and
-  the amber comes from `severity`, with no threshold invented here. codex has no
-  settings field: `primary`/`secondary` carry `used_percent`, `window_minutes` and
-  `resets_at`, and rollouts are read newest first, only while young enough for a
-  reading to still be inside a window. A turn that failed for depleted credits
-  writes `primary: null`, and that is reported as nothing rather than by reaching
-  back for an older number.
+  Not the `usage_history` table beside it, which looks like the obvious source and
+  prunes: 7,029 rows while its maximum advances, one to three of a provider's limits
+  per write, so "newest row per provider" silently drops whichever window was not in
+  the last write. A row read at 01:01 was gone eight minutes later. The cached report
+  is written whole and carries `window.durationMs`, `window.id` already short as
+  `5h`/`7d`, `amount.usedFraction`, a vendor `status` and `scope.tier`.
 
-  Silence is measured, not assumed: with nothing live, the gap between the section
-  above and the client's `MCP` section is exactly the gap the host puts between any
-  two sections, plugin loaded. Returning `null` costs zero rows; an empty `<text>`
-  costs a blank row and an empty `<box>` costs the separator. Whether anything
-  draws is decided once, when the client loads plugins — a slot callback is invoked
-  a single time, and neither a callback nor a component that returned `null` is ever
-  asked again — so a figure refreshed in another terminal appears on the next
-  restart.
+  **Staleness has two halves and the second is not a threshold.** Past 90 minutes —
+  measured p90 gap plus slack — every row shows its age. But a reading older than the
+  window it describes is not old: that window is over, a new one opened unobserved,
+  and its usage starts from a number never seen here. Those rows are dropped, not
+  aged. Measured as the normal path, not an edge case: overnight gaps reach 14.5
+  hours and 17 of the last 30 days had one longer than five hours. Verified on screen
+  from a doctored store — at 14 hours the five-hour row is gone and the rest read
+  `· hace 14h`; at eight days neither section draws.
+
+  Amber is the vendor's `status` plus a reading old enough to show its age; no
+  threshold on the percentage is invented here. Four other providers publish into the
+  same store and none is drawn: two report in units with no whole to divide by, one
+  has said 100% free every time it was measured, one had not been read for two days.
+
+  Whether anything draws is still decided once, when the client loads plugins, so a
+  provider with no live window at startup stays absent until restart — it takes a
+  reading older than the longest window to land there.
 
 ### Fixed
+
+- **The `Models` header was shipped one column too wide and wrapped in silence.**
+  A `sidebar_content` text gets 37 columns, not the 42 the column is wide, and the
+  renderer wraps rather than clips — measured with rulers drawn inside the column at
+  200, 130 and 121 columns of terminal. The worst real case on this machine,
+  `▶ Models (deepseek-v4-flash-free 100%)`, is 38 and was quietly costing a second
+  row: a collapsed section that takes two rows is not collapsed. The model name now
+  gives way, marked with an ellipsis, because it is the only part of that header
+  whose length is unknown and the full name is one click away in the body. The
+  budget is a named constant in both widgets, and the earlier claim that the column
+  gives a widget 42 columns is corrected in the docs.
 
 - **The status light travelled as a number, which pinned its meaning to
   declaration order.** `Light` is an iota, so the wire carried `1` for amber —

@@ -31,6 +31,19 @@ import { createSignal, onCleanup, onMount } from "solid-js";
 
 const POLL_MS = 5000;
 
+// Measured, not chosen: a `sidebar_content` <text> gets 37 columns, and the
+// renderer WRAPS rather than clips -- a 38-column line becomes two rows in
+// silence. Rulers of known length drawn inside the column reported 37 at 200, 130
+// and 121 columns of terminal, so this is the column's own width and not a share
+// of the window's.
+//
+// This constant arrived after the fact, which is the defect it exists to stop
+// repeating: the closed header below was shipped at 38 columns in the worst real
+// case measured on this machine, and it was wrapping into a second row without
+// anybody noticing -- a collapsed section that quietly costs two rows is not
+// collapsed.
+const BUDGET = 37;
+
 // Every model gets a line of its own, and the list is collapsed until asked for.
 //
 // There used to be a cap of five here, for a real reason: this column is a
@@ -195,6 +208,18 @@ function body(reading: Reading): string {
 // A failure is deliberately louder closed than open. If a collapsed section could
 // hide `sin lectura`, closing it once would turn a broken reading into an absence
 // nobody notices -- which is the failure mode this whole widget was built against.
+// The name is the only part of this header that can be any length, so it is the
+// part that gives way. Cutting a name is a real loss -- this file already reverted
+// a rule that shortened `MiniMax-M3` to `M3`, on the grounds that shortening a
+// name until it stops naming the thing is worse than a long line -- but a wrapped
+// header is worse than both: it is a silent second row in a section whose whole
+// point is to cost one. The cut is marked, and the full name is one click away in
+// the body, where the list is free to be as wide as it needs.
+function clip(name: string, room: number): string {
+	if (room <= 1) return "\u2026";
+	return name.length <= room ? name : `${name.slice(0, room - 1)}\u2026`;
+}
+
 function headline(reading: Reading | undefined): string {
 	if (!reading) return " …";
 	if (reading.kind === "unreadable") return " sin lectura";
@@ -202,7 +227,10 @@ function headline(reading: Reading | undefined): string {
 	const top = reading.slices[0];
 	const rest = reading.slices.length - 1;
 	const tail = rest > 0 ? `, +${rest}` : "";
-	return ` (${short(top.model)} ${percent(top.tokens, reading.total)}${tail})`;
+	const share = percent(top.tokens, reading.total);
+	// `▶ Models` is eight columns; the rest of the frame is ` (`, one space and `)`.
+	const room = BUDGET - 8 - 2 - 1 - share.length - tail.length - 1;
+	return ` (${clip(short(top.model), room)} ${share}${tail})`;
 }
 
 type SlotContext = { theme: { current: Record<string, string> } };

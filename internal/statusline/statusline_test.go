@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -387,8 +388,12 @@ func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
 		"session-share": {
 			{slot: "sidebar_content", after: 100, before: 200},
 		},
+		// Two sections, one per provider, both in the column and adjacent. The bounds
+		// overlap by one on purpose: they pin Claude above Codex, which is a decision
+		// -- the account that stops work first sits nearer the question above it.
 		"limits": {
-			{slot: "sidebar_content", after: 100, before: 200},
+			{slot: "sidebar_content", after: 150, before: 152},
+			{slot: "sidebar_content", after: 151, before: 200},
 		},
 		"atenea": {
 			{slot: "sidebar_footer", after: 0, before: 100},
@@ -432,23 +437,32 @@ func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
 			if len(found) != len(want) {
 				t.Fatalf("registers %d placements, want %d: %v", len(found), len(want), found)
 			}
-			// Keyed by slot, not by position: which registration comes first in the
-			// file is not a decision anybody made.
-			orders := map[string]int{}
+			// Grouped by slot rather than by position: which registration comes first
+			// in the file is not a decision anybody made. Within one slot the orders
+			// are compared in ascending order, which is what makes two sections in the
+			// same slot pin their sequence and not merely their range.
+			orders := map[string][]int{}
 			for _, got := range found {
 				n, err := strconv.Atoi(got[1])
 				if err != nil {
 					t.Fatalf("order %q: %v", got[1], err)
 				}
-				orders[got[2]] = n
+				orders[got[2]] = append(orders[got[2]], n)
 			}
+			for slot := range orders {
+				sort.Ints(orders[slot])
+			}
+			seen := map[string]int{}
 			for _, wanted := range want {
-				n, registered := orders[wanted.slot]
-				if !registered {
-					t.Errorf("does not register %s, so that placement is not on screen", wanted.slot)
+				registered := orders[wanted.slot]
+				i := seen[wanted.slot]
+				if i >= len(registered) {
+					t.Errorf("registers %d placements in %s, want at least %d: that placement is not on screen",
+						len(registered), wanted.slot, i+1)
 					continue
 				}
-				if n <= wanted.after || n >= wanted.before {
+				seen[wanted.slot]++
+				if n := registered[i]; n <= wanted.after || n >= wanted.before {
 					t.Errorf("%s order = %d, want strictly between %d and %d", wanted.slot, n, wanted.after, wanted.before)
 				}
 			}

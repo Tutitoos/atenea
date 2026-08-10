@@ -3,247 +3,323 @@
 // Package-adjacent note: this file is embedded in the Atenea binary and written
 // into the client's plugin directory by `atenea statusline install limits`.
 //
-// One line per live rate-limit window, and nothing at all when none is live.
+// One collapsible section per provider: how much of each live rate-limit window
+// is left, as a bar, and nothing at all when no window is live.
 //
-// It is a line rather than a section, and that shape was decided by measurement
-// rather than taste. These figures refresh only when a human runs a command:
-// Claude's come from `~/.claude.json`, which the `claude` CLI rewrites on
-// `/status` or `/usage`, and codex's come from a session rollout, which only a
-// real model turn appends to. Measured on this machine: two Claude refreshes in
-// twelve days, with the client itself running for 24 hours after the last one
-// without touching it; codex readings on three days out of thirty-one. A
-// five-hour window is therefore live about 4% of the time.
+// WHERE THE NUMBERS COME FROM, AND THE MISTAKE THIS FILE USED TO MAKE. The first
+// version of this widget read `~/.claude.json` for Claude and a codex session
+// rollout for codex, and printed one line per window because those two files are
+// refreshed only by a human: two Claude refreshes in twelve days, codex readings
+// on three days out of thirty-one. Measuring the *client that rewrites a file*
+// and then reporting on *the number inside it* is how that conclusion came out
+// backwards -- the machine had, the whole time, a source that refreshes itself.
 //
-// So a section with a header and a row per provider would say "sin ventana viva"
-// almost always, which teaches the reader to skip that part of the screen -- and
-// then the day the weekly figure matters, they do not see it either. The same
-// reasoning the unread counter already follows by being absent at zero.
+// omp keeps one usage report per provider in its own store, under a `cache` key
+// of `usage_cache:report:*`, and refreshes each roughly every ten minutes while
+// it runs. Measured on 2026-08-11: readings one minute old for both providers,
+// median gap between readings one hour, and the report carries what a
+// hand-rolled rule would otherwise have to guess -- `window.durationMs`,
+// `window.id` already short as `5h` and `7d`, `amount.usedFraction`, a vendor
+// `status`, and `scope.tier` marking a window that belongs to one model rather
+// than to the account.
 //
-// Every line carries its age, always. A limit figure without one is worse than no
-// figure: a plan made against a number that expired yesterday is a plan made
-// against nothing, and it reads exactly like a fresh one.
+// Not `usage_history` in the same store, which looks like the obvious table and
+// is a trap: it prunes -- 7 029 rows while its maximum advances -- and writes one,
+// two or three of a provider's limits per reading, so "the newest row per
+// provider" silently loses whichever window was not in the last write. A row read
+// at 01:01 was gone eight minutes later. The `cache` row is the whole report,
+// written at once.
 //
-// Whether anything renders is decided ONCE, when the client loads plugins.
-// Measured: a slot callback is invoked a single time -- a counter in one stayed at
-// 1 across repaints -- and neither a callback nor a component that returned null
-// is ever asked again. So a null here is permanent until the client restarts,
-// which is also why nothing is faked to hold a place: `null` costs zero rows, not
-// even the separator the host puts between sections, while an empty <text> costs
-// a blank row and an empty <box> costs the separator.
+// WHY A SECTION AND NOT A LINE. The first version was one line, and the argument
+// for it was that a section whose body is empty almost always teaches the reader
+// to skip that part of the screen. That argument was built on the 4%-live figure
+// above, which was an artefact of the wrong source. With a reading that refreshes
+// itself the body has something to say whenever the client is open, so the shape
+// that costs one row closed and answers on a click is the honest one.
 
 import { createSignal, onCleanup, onMount } from "solid-js";
 
-// Quotas move in hours, and nothing in a session refreshes them anyway. This poll
-// exists to age the line honestly and to notice a file somebody refreshed in
-// another terminal, not to watch a number climb.
+// The report refreshes about every ten minutes; this poll exists to pick that up
+// and to age the reading honestly, not to watch a number climb.
 const POLL_MS = 60_000;
 
-type Live = {
-	// provider is how the reader knows whose quota this is.
-	provider: string;
-	// window is the bucket: `5h`, `7d`, or whatever the vendor's own name shortens
-	// to. It is never invented from a percentage.
-	window: string;
-	percent: number;
-	// readAt is when the figure was fetched, not when it was read off disk. The age
-	// printed is the age of the measurement.
-	readAt: number;
-	// loud is the vendor's own severity, not a threshold invented here.
-	loud: boolean;
+// Measured, not chosen: a `sidebar_content` <text> gets 37 columns, and the
+// renderer WRAPS rather than clips -- a 38-column line becomes two rows in
+// silence. Rulers of known length drawn inside the column reported 37 at 200, 130
+// and 121 columns of terminal, so this is the column's own width and not a share
+// of the window's.
+const BUDGET = 37;
+
+// Twenty cells leaves the widest row at 34 of the 37, which is the whole reason
+// the bar is not wider: the three columns of slack absorb a `100%` and a
+// three-digit reset without wrapping.
+const BAR = 20;
+
+// A reading older than this shows its age on every row it produced. The figure is
+// the measured p90 gap between refreshes (65 min) plus slack: below it, an absent
+// age means "current", and above it the reader is told how old the number is
+// before they plan against it.
+const STALE_MS = 90 * 60_000;
+
+type Win = {
+	id: string;
+	usedFraction: number;
+	left: number;
+	resetsAt: number | null;
+	durationMs: number | null;
+	tier: string | null;
+	ok: boolean;
 };
+
+type Reading = { kind: "live"; wins: Win[]; readAt: number } | { kind: "none" };
 
 function home(): string {
 	return process.env.HOME ?? "";
 }
 
-// Claude publishes its own list of limits, and it is authoritative in a way a
-// hand-rolled rule is not: `utilization.limits` carries `kind`, `percent`,
-// `severity`, `resets_at` and `is_active` per bucket. Measured here: the session
-// bucket at 4% with `is_active: false` because its window closed two hours after
-// the reading, and the weekly one at 29% with `is_active: true`. Reading activity
-// off that flag is the difference between reporting what the vendor says and
-// second-guessing it from a timestamp.
-//
-// The older shape is the fallback: `utilization.five_hour` and
-// `utilization.seven_day`, judged live by `resets_at` alone.
-const KINDS: Record<string, string> = {
-	session: "5h",
-	weekly_all: "7d",
-	weekly_scoped: "7d",
-};
+// omp's own store. Read-only, and while omp is writing: the store runs in WAL, so
+// a reader does not block a writer and does not see a half-written report.
+function ompStore(): string {
+	return `${home()}/.omp/agent/agent.db`;
+}
 
-function claudeLive(now: number): Live[] {
+// Six reports live here, one per provider, and the key carries a numeric prefix
+// and the provider's endpoint URL. The provider is read out of the JSON instead of
+// parsed off the key, because the key's shape is omp's business and the field is
+// the contract. Six rows on a 3.9 MB store: the query measured 0.97 ms.
+const QUERY = `SELECT value FROM cache WHERE key LIKE 'usage_cache:report:%'`;
+
+// The client bundles its own sqlite; nothing in this checkout carries types for
+// it, so the module surface this file uses is named once here -- the same single
+// assertion session-share.tsx makes, covering a builtin whose shape is fixed by
+// the runtime rather than the rows it returns.
+type SqliteRows = { all(...params: unknown[]): unknown[] };
+type SqliteHandle = { query(sql: string): SqliteRows; close(): void };
+type SqliteModule = { Database: new (path: string, options: { readonly: boolean }) => SqliteHandle };
+
+function num(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+// Cached values are wrapped as `{ value, expiresAt }`, and the inner report
+// arrives as an object here and as a string on other rows, so both are accepted.
+function unwrap(raw: unknown): Record<string, unknown> {
+	if (typeof raw !== "string") return {};
+	let outer: unknown;
 	try {
-		const raw = require("fs").readFileSync(`${home()}/.claude.json`, "utf8");
-		const cached = JSON.parse(raw)?.cachedUsageUtilization;
-		const readAt = cached?.fetchedAtMs;
-		if (typeof readAt !== "number" || !Number.isFinite(readAt)) return [];
-		const util = cached?.utilization;
-		if (!util || typeof util !== "object") return [];
-
-		const out: Live[] = [];
-		const limits = util.limits;
-		if (Array.isArray(limits)) {
-			for (const limit of limits) {
-				if (!limit || typeof limit !== "object") continue;
-				if (limit.is_active !== true) continue;
-				const percent = limit.percent;
-				if (typeof percent !== "number" || !Number.isFinite(percent)) continue;
-				const kind = typeof limit.kind === "string" ? limit.kind : "";
-				// A scoped weekly limit is a different limit from the account's weekly
-				// one, so it says which model it scopes rather than reading as a second
-				// opinion about the same number.
-				const model = limit.scope?.model?.display_name;
-				const scope = kind === "weekly_scoped" && typeof model === "string" ? ` ${model}` : "";
-				out.push({
-					provider: "Claude",
-					window: `${KINDS[kind] ?? kind}${scope}`,
-					percent,
-					readAt,
-					loud: typeof limit.severity === "string" && limit.severity !== "normal",
-				});
-			}
-			return out;
-		}
-
-		for (const [key, window] of [
-			["five_hour", "5h"],
-			["seven_day", "7d"],
-		] as const) {
-			const bucket = util[key];
-			if (!bucket || typeof bucket !== "object") continue;
-			const percent = bucket.utilization;
-			if (typeof percent !== "number" || !Number.isFinite(percent)) continue;
-			const resets = Date.parse(String(bucket.resets_at));
-			if (!Number.isFinite(resets) || resets <= now) continue;
-			out.push({ provider: "Claude", window, percent, readAt, loud: false });
-		}
-		return out;
+		outer = JSON.parse(raw);
 	} catch {
-		// A missing or unreadable file is not a fault worth a line: a machine with no
-		// Claude CLI has no Claude quota, and that is the silent case.
-		return [];
+		return {};
+	}
+	let inner = record(outer).value;
+	if (typeof inner === "string") {
+		try {
+			inner = JSON.parse(inner);
+		} catch {
+			return {};
+		}
+	}
+	return record(inner);
+}
+
+// THE STALENESS RULE, BOTH HALVES.
+//
+// The first half is a threshold: past STALE_MS the age is printed beside the
+// figure, because a limit figure without one reads exactly like a fresh figure,
+// and a plan made against a number that expired is a plan made against nothing.
+//
+// The second half is not a threshold and is the one that matters. When the
+// reading is older than the window it describes, the window it described is
+// OVER -- a new one opened while nobody was looking, and its usage starts from a
+// number this machine never saw. Such a row is not old, it is about a different
+// window, so printing it with an age attached would still be printing a wrong
+// number politely. It is dropped entirely.
+//
+// This is the morning path, not an edge case: measured on this machine, the gaps
+// between readings run to 14.5 hours overnight, and 17 of the last 30 days had a
+// gap longer than five hours. Opening a laptop after one of those means the 5h
+// window is always in exactly this state, while the 7d windows are merely old.
+function windows(report: Record<string, unknown>, age: number): Win[] {
+	const raw = report.limits;
+	if (!Array.isArray(raw)) return [];
+	const out: Win[] = [];
+	for (const entry of raw) {
+		const limit = record(entry);
+		const amount = record(limit.amount);
+		const window = record(limit.window);
+		const scope = record(limit.scope);
+
+		// A bar needs a fraction of a known whole. `percent` is the only unit here
+		// that has one; the providers reporting `requests` or `unknown` are not
+		// drawn as bars rather than drawn as invented ones.
+		if (amount.unit !== "percent") continue;
+		const used = num(amount.usedFraction);
+		const left = num(amount.remaining);
+		if (used === null || left === null) continue;
+
+		const duration = num(window.durationMs);
+		if (duration !== null && age > duration) continue;
+
+		const id = typeof window.id === "string" && window.id !== "" ? window.id : "?";
+		// `scope.tier` arrives lowercase (`fable`) while the vendor's own label for
+		// the same window is `Claude 7 Day (Fable)`. The first letter is raised to
+		// match what the provider prints, rather than inventing a display name.
+		const raw = typeof scope.tier === "string" && scope.tier !== "" ? scope.tier : null;
+		const tier = raw === null ? null : raw.charAt(0).toUpperCase() + raw.slice(1);
+		out.push({
+			id,
+			usedFraction: used,
+			left,
+			resetsAt: num(window.resetsAt),
+			durationMs: duration,
+			tier,
+			ok: limit.status === "ok" || limit.status === undefined,
+		});
+	}
+	// Fastest window first, which is also the drop order for the closed header:
+	// the 5h one can stop you within the hour, the 7d one moves slowly enough to
+	// be noticed in passing.
+	out.sort((a, b) => (a.durationMs ?? Number.MAX_SAFE_INTEGER) - (b.durationMs ?? Number.MAX_SAFE_INTEGER));
+	return out;
+}
+
+function read(provider: string, now: number): Reading {
+	let db: SqliteHandle | undefined;
+	try {
+		const sqlite = require("bun:sqlite") as SqliteModule;
+		db = new sqlite.Database(ompStore(), { readonly: true });
+		let best: Record<string, unknown> | undefined;
+		let bestAt = -1;
+		for (const row of db.query(QUERY).all()) {
+			const report = unwrap(record(row).value);
+			if (report.provider !== provider) continue;
+			const at = num(report.fetchedAt);
+			if (at === null || at <= bestAt) continue;
+			best = report;
+			bestAt = at;
+		}
+		if (!best) return { kind: "none" };
+		const wins = windows(best, now - bestAt);
+		if (wins.length === 0) return { kind: "none" };
+		return { kind: "live", wins, readAt: bestAt };
+	} catch {
+		// An unreadable store is reported as nothing to say rather than as a
+		// failure line: unlike the session store, this one belongs to another tool
+		// that need not be installed at all, and a machine without omp is not a
+		// machine with a broken widget.
+		return { kind: "none" };
+	} finally {
+		try {
+			db?.close();
+		} catch {
+			// Closing is best effort: a leaked read handle on a WAL database blocks
+			// nobody, and throwing here would turn a good reading into silence.
+		}
 	}
 }
 
-// codex keeps no settings field for this. The figure arrives inside a session
-// rollout -- `payload.rate_limits`, with `primary` and `secondary` carrying
-// `used_percent`, `window_minutes` and `resets_at` as epoch seconds -- and only a
-// real model turn appends one.
-//
-// Rollouts are scanned newest first, and only those young enough for their reading
-// to still be inside a window. That bound is what keeps this cheap: 14 files here,
-// one of them recent enough to open, 54 KB. A reading older than the longest window
-// cannot be live, so opening the rest could only ever produce a number this line
-// refuses to print.
-const MAX_FILES = 8;
-const MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000;
-
-function windowName(minutes: unknown): string {
-	if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) return "?";
-	if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)}d`;
-	if (minutes % 60 === 0) return `${minutes / 60}h`;
-	return `${minutes}m`;
-}
-
-function codexLive(now: number): Live[] {
-	try {
-		const fs = require("fs");
-		const root = `${home()}/.codex/sessions`;
-		const names: string[] = fs.readdirSync(root, { recursive: true });
-		const files = names
-			.filter((name) => {
-				const base = name.split("/").pop() ?? "";
-				return base.startsWith("rollout-") && base.endsWith(".jsonl");
-			})
-			.map((name) => `${root}/${name}`)
-			.map((path) => ({ path, at: fs.statSync(path).mtimeMs as number }))
-			.filter((file) => now - file.at < MAX_AGE_MS)
-			.sort((a, b) => b.at - a.at)
-			.slice(0, MAX_FILES);
-
-		for (const file of files) {
-			// Last occurrence in the file, not the first: a session's newest turn is the
-			// one whose numbers are current.
-			const lines = fs.readFileSync(file.path, "utf8").split("\n");
-			for (let i = lines.length - 1; i >= 0; i -= 1) {
-				if (!lines[i].includes('"rate_limits"')) continue;
-				let entry: Record<string, any>;
-				try {
-					entry = JSON.parse(lines[i]);
-				} catch {
-					continue;
-				}
-				const limits = entry?.payload?.rate_limits;
-				if (!limits || typeof limits !== "object") continue;
-				const readAt = Date.parse(String(entry.timestamp));
-				const out: Live[] = [];
-				for (const key of ["primary", "secondary"]) {
-					const bucket = limits[key];
-					if (!bucket || typeof bucket !== "object") continue;
-					const percent = bucket.used_percent;
-					if (typeof percent !== "number" || !Number.isFinite(percent)) continue;
-					const resets = bucket.resets_at;
-					if (typeof resets !== "number" || !Number.isFinite(resets)) continue;
-					if (resets * 1000 <= now) continue;
-					out.push({
-						provider: "codex",
-						window: windowName(bucket.window_minutes),
-						percent,
-						readAt: Number.isFinite(readAt) ? readAt : file.at,
-						loud: false,
-					});
-				}
-				// The newest reading in the newest file is the answer, even when it holds
-				// nothing live: a turn that failed for depleted credits writes
-				// `primary: null`, and that is the current state rather than a reason to
-				// go looking for an older number that would please the reader more.
-				return out;
-			}
-		}
-		return [];
-	} catch {
-		return [];
-	}
-}
-
-// Rounded down, and the unit is the one that keeps the number small: a reader who
-// sees `hace 23h` knows the shape of the staleness, and `hace 1380m` does not read
-// faster for being more precise.
+// Rounded down, and in the unit that keeps the figure short: `hace 14h` carries
+// the shape of the staleness and `hace 840m` does not read faster for being more
+// precise.
 function age(ms: number): string {
-	if (ms < 0) return "recien";
-	const minutes = Math.floor(ms / 60_000);
-	if (minutes < 1) return "hace <1m";
+	const minutes = Math.max(0, Math.floor(ms / 60_000));
 	if (minutes < 60) return `hace ${minutes}m`;
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `hace ${hours}h`;
 	return `hace ${Math.floor(hours / 24)}d`;
 }
 
-// Percentages arrive as whole numbers from Claude and as floats from codex.
-// Rounding is for width; a figure that rounds to zero on a live window is printed
-// as `0%` rather than hidden, because a window you have not touched is a real
-// answer to how much of it is left.
-function line(live: Live, now: number): string {
-	return `${live.provider} ${live.window} ${Math.round(live.percent)}% · ${age(now - live.readAt)}`;
+// Coarse on purpose: the reader is deciding whether to wait, and `3d0h` answers
+// that while `3d 0h 14m` spends three columns on a minute nobody waits for.
+function until(ms: number): string {
+	const minutes = Math.floor(ms / 60_000);
+	const hours = Math.floor(minutes / 60);
+	if (hours < 1) return `${minutes}m`;
+	if (hours < 24) return `${hours}h${minutes % 60}m`;
+	return `${Math.floor(hours / 24)}d${hours % 24}h`;
 }
 
-function read(now: number): Live[] {
-	return [...claudeLive(now), ...codexLive(now)];
+// Filled cells are what has been spent, so the bar empties as the window fills --
+// the same direction as the number beside it, which reads `free`. A percentage
+// with no visible base is the defect this whole widget was built against, so the
+// base is in the word.
+function bar(usedFraction: number): string {
+	const full = Math.max(0, Math.min(BAR, Math.round(usedFraction * BAR)));
+	return "\u2588".repeat(full) + "\u2591".repeat(BAR - full);
+}
+
+function row(win: Win): string {
+	return `${win.id.padEnd(2)}  ${bar(win.usedFraction)} ${String(Math.round(win.left)).padStart(3)}% free`;
+}
+
+// The second line of a window: when it comes back, or -- for a window that belongs
+// to one model rather than to the account -- whose window it is. The age rides
+// here rather than on the bar row, which is already 34 of 37 columns.
+function detail(win: Win, now: number, stale: string): string {
+	const parts: string[] = [];
+	if (win.tier) parts.push(`${win.tier} only`);
+	else if (win.resetsAt !== null && win.resetsAt > now) parts.push(`resets in ${until(win.resetsAt - now)}`);
+	if (stale) parts.push(stale);
+	return parts.length === 0 ? "" : `    ${parts.join(" \u00B7 ")}`;
+}
+
+function body(reading: Reading, now: number, stale: string): string {
+	if (reading.kind !== "live") return "";
+	const lines: string[] = [];
+	for (const win of reading.wins) {
+		lines.push(row(win));
+		const second = detail(win, now, stale);
+		if (second) lines.push(second);
+	}
+	return lines.join("\n");
+}
+
+// What the closed header carries: every account-wide window, fastest first.
+//
+// Not just the tightest one. The tightest is usually the weekly figure, and the
+// question a closed section has to answer is "is something about to stop me",
+// which the five-hour window answers and the weekly one does not -- hiding the
+// fast number behind a click gets that backwards. Both fit: measured at 30 of the
+// 37 columns.
+//
+// Windows are dropped from the right until they fit, so the fastest is the one
+// that survives a narrow line. A tier-scoped window never appears here: it
+// describes one model, not the account, and two rows reading `7d` in one header
+// invite the reader to reconcile them. It is one click away in the body.
+function headline(name: string, reading: Reading | undefined, stale: string): string {
+	if (!reading) return " \u2026";
+	if (reading.kind !== "live") return "";
+	const shown = reading.wins.filter((w) => !w.tier).map((w) => `${w.id} ${Math.round(w.left)}%`);
+	if (stale) shown.push(stale);
+	while (shown.length > 0) {
+		const text = ` (${shown.join(" \u00B7 ")})`;
+		// Two for the glyph and its space, and the name is the section's own.
+		if (2 + name.length + text.length <= BUDGET) return text;
+		// The age is dropped last: a figure whose age is unknown is the one thing
+		// this widget refuses to print, so the window count gives way first.
+		if (shown.length > 1 && stale && shown[shown.length - 1] === stale) shown.splice(shown.length - 2, 1);
+		else shown.pop();
+	}
+	return "";
 }
 
 type SlotContext = { theme: { current: Record<string, string> } };
 
-function LimitsLine(props: { ctx: SlotContext; initial: Live[] }) {
-	const [live, setLive] = createSignal<Live[]>(props.initial);
+function LimitsSection(props: { ctx: SlotContext; name: string; provider: string; initial: Reading }) {
+	const [reading, setReading] = createSignal<Reading>(props.initial);
 	const [now, setNow] = createSignal(Date.now());
+	const [open, setOpen] = createSignal(false);
 	const theme = () => props.ctx.theme.current;
 
 	onMount(() => {
 		const poll = () => {
 			const at = Date.now();
 			setNow(at);
-			setLive(read(at));
+			setReading(read(props.provider, at));
 		};
 		// Paired by hand: a bare timer is not one of the registrations this runtime
 		// disposes on unmount.
@@ -251,43 +327,99 @@ function LimitsLine(props: { ctx: SlotContext; initial: Live[] }) {
 		onCleanup(() => clearInterval(timer));
 	});
 
-	// One string with newlines, which is how a list of unknown length is drawn here:
-	// a <Show> is dropped silently by this renderer and a mapped array is built once
-	// and never updates.
-	//
-	// When a window closes mid-session the string goes empty and this pays one blank
-	// row until the client restarts. That is deliberate: the node exists, so the
-	// choice is between a row that says nothing and a row that repeats a percentage
-	// whose window has closed. A stale limit is the failure this line was built to
-	// avoid, and a blank row is at least not read as news.
-	const body = () => live().map((l) => line(l, now())).join("\n");
-	const colour = () => (live().some((l) => l.loud) ? theme().warning : theme().textMuted);
+	const current = () => reading();
+	const stale = () => {
+		const r = current();
+		if (r.kind !== "live") return "";
+		const gap = now() - r.readAt;
+		return gap > STALE_MS ? age(gap) : "";
+	};
 
-	return <text fg={colour()}>{body()}</text>;
+	// Amber for what the vendor itself flags, and for a reading old enough to carry
+	// its age. Nothing here invents a threshold on the percentage: the provider
+	// publishes a `status` per window and it is the one figure in this file nobody
+	// on this side had to guess.
+	const colour = () => {
+		const r = current();
+		const loud = r.kind === "live" && (stale() !== "" || r.wins.some((w) => !w.ok));
+		return loud ? theme().warning : theme().textMuted;
+	};
+
+	// Mouse only, which is parity with the client's own MCP section rather than a
+	// shortfall: it collapses with `onMouseDown` and a local signal, with no command
+	// and no key binding anywhere near it. Collapsed is the state this section wants
+	// on every launch, so the open state is deliberately not persisted.
+	//
+	// Header and body share one <text>: an empty <text> costs a visible blank row,
+	// so a separate body node would leave a gap in the column whenever this is shut.
+	return (
+		<box onMouseDown={() => setOpen((v) => !v)}>
+			<text fg={colour()}>
+				<span style={{ fg: theme().text }}>
+					{open() ? "\u25BC " : "\u25B6 "}
+					<b>{props.name}</b>
+				</span>
+				<span style={{ fg: colour() }}>{open() ? "" : headline(props.name, current(), stale())}</span>
+				{open() ? `\n${body(current(), now(), stale())}` : ""}
+			</text>
+		</box>
+	);
 }
 
+type Api = {
+	theme: { current: Record<string, string> };
+	slots: { register(plugin: { order: number; slots: Record<string, unknown> }): string };
+};
+
+// The slot callback for one provider.
+//
+// The reading happens here, before anything is returned, because this callback is
+// invoked exactly once -- measured, with a counter that stayed at 1 across
+// repaints. With no live window there is nothing to draw, and returning null draws
+// nothing at all: no header, no placeholder, not even the separator the host puts
+// between sections.
+//
+// The cost of that measurement is stated rather than hidden: a provider with no
+// live window when the client starts stays absent until the client is restarted,
+// even if a reading arrives ten minutes later. It takes a reading older than the
+// longest window -- eight days away from the machine -- to land there, and the
+// alternative is a row that exists to say nothing.
+function mount(api: Api, name: string, provider: string) {
+	return () => {
+		const initial = read(provider, Date.now());
+		if (initial.kind !== "live") return null;
+		return <LimitsSection ctx={api} name={name} provider={provider} initial={initial} />;
+	};
+}
+
+// Two providers, and only the two this machine pays for. Four others publish live
+// readings into the same store -- google-antigravity, github-copilot, xai-oauth,
+// minimax-code -- and none is drawn: two report in units with no whole to divide by
+// (`requests`, `unknown`), one has said 100% free on all three of its windows every
+// time it has been measured, and one had not been read for two days. Adding a
+// provider here is a decision about what is worth a row, not a capability.
+//
+// Both registrations are written out with their order as a literal, rather than
+// looped over a table, because the order is the one thing about a widget that this
+// repository has already lost twice and now pins in a test that reads the shipped
+// file.
 export default {
 	id: "opencode.limits",
-	tui: async (api: {
-		theme: { current: Record<string, string> };
-		slots: { register(plugin: { order: number; slots: Record<string, unknown> }): string };
-	}) => {
+	tui: async (api: Api) => {
 		api.slots.register({
-			// Directly under the model share, which sits at 150: both answer "what has
-			// this cost", one for the session in front of you and one for the account
-			// behind it. The client's own sections claim round numbers -- Context 100,
-			// MCP 200, LSP 300 -- so this lands between the first two.
-			order: 160,
-			slots: {
-				sidebar_content: () => {
-					// Read before returning, because this callback is invoked once. With
-					// nothing live there is nothing to draw, and returning null draws
-					// nothing at all -- no header, no placeholder, no separator.
-					const initial = read(Date.now());
-					if (initial.length === 0) return null;
-					return <LimitsLine ctx={api} initial={initial} />;
-				},
-			},
+			// Under the model share at 150, which answers the same question for the
+			// session in front of you rather than the account behind it. The client's
+			// own sections claim round numbers -- Context 100, MCP 200, LSP 300 -- so
+			// these land between the first two.
+			order: 151,
+			slots: { sidebar_content: mount(api, "Claude", "anthropic") },
+		});
+		api.slots.register({
+			// Directly under Claude. Both sections are the same shape, so the column
+			// reads as one answer in two parts, and the account that stops work first
+			// is the one nearer the question above it.
+			order: 152,
+			slots: { sidebar_content: mount(api, "Codex", "openai-codex") },
 		});
 	},
 };
