@@ -387,6 +387,9 @@ func TestEveryWidgetLandsWhereItWasAskedFor(t *testing.T) {
 		"session-share": {
 			{slot: "sidebar_content", after: 100, before: 200},
 		},
+		"limits": {
+			{slot: "sidebar_content", after: 100, before: 200},
+		},
 		"atenea": {
 			{slot: "sidebar_footer", after: 0, before: 100},
 			{slot: "sidebar_content", after: 500, before: 1000},

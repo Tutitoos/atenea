@@ -30,7 +30,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-//go:embed opencode/atenea.tsx opencode/session-share.tsx
+//go:embed opencode/atenea.tsx opencode/session-share.tsx opencode/limits.tsx
 var shipped embed.FS
 
 const (
@@ -52,10 +52,10 @@ const (
 
 // Widget is one line this binary can hang on a client's screen.
 //
-// There are two, and they are installed separately on purpose: somebody who
+// There are three, and they are installed separately on purpose: somebody who
 // wants Atenea's traffic light has not thereby asked for a per-model share of
-// their session, and the second one reads no Atenea at all. Bundling them under
-// one verb would make "install the status line" mean two unrelated readings.
+// their session, and two of the three read no Atenea at all. Bundling them under
+// one verb would make "install the status line" mean three unrelated readings.
 type Widget struct {
 	// Name is how the widget is asked for on the command line.
 	Name string
@@ -78,6 +78,12 @@ var widgets = []Widget{
 		Summary: "which model did what share of this session's tokens",
 		source:  "opencode/session-share.tsx",
 		file:    "session-share.tsx",
+	},
+	{
+		Name:    "limits",
+		Summary: "how much of each provider's live rate-limit window is used",
+		source:  "opencode/limits.tsx",
+		file:    "limits.tsx",
 	},
 }
 

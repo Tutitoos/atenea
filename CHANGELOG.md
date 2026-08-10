@@ -161,6 +161,44 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   `messages()` returned 100 of that session's 1,578 rows, which is what sent this
   to the store instead.
 
+- **A third sidebar widget, `limits`: one line per live rate-limit window, and
+  nothing at all when none is live.** `Claude 7d 29% · hace 1d`, with the age
+  always attached, and two lines if both providers ever have live readings at once.
+
+  The shape came out of measuring the mechanism rather than the data. Nothing
+  refreshes these figures except a human running a command: Claude's come from
+  `~/.claude.json`, rewritten by its CLI on `/status` or `/usage`, and codex's from
+  a session rollout, appended only by a real model turn. Measured: two Claude
+  refreshes in twelve days, with the client running 24 hours after the last one
+  without touching it, and codex readings on three days out of thirty-one — a
+  five-hour window is live about 4% of the time. A section with a row per provider
+  would therefore say `sin ventana viva` almost always, which teaches a reader to
+  skip that part of the screen, and then the day the weekly figure matters they do
+  not see it either. The unread counter already follows that rule by being absent
+  at zero.
+
+  The age is the point, not decoration: a percentage that expired yesterday reads
+  exactly like a fresh one and is planned against just as confidently.
+
+  Live is the vendor's own word. Claude publishes `utilization.limits` with
+  `is_active` and `severity` per bucket — the session bucket measured at 4% and
+  inactive, the weekly at 29% and active — so activity is read off the flag and
+  the amber comes from `severity`, with no threshold invented here. codex has no
+  settings field: `primary`/`secondary` carry `used_percent`, `window_minutes` and
+  `resets_at`, and rollouts are read newest first, only while young enough for a
+  reading to still be inside a window. A turn that failed for depleted credits
+  writes `primary: null`, and that is reported as nothing rather than by reaching
+  back for an older number.
+
+  Silence is measured, not assumed: with nothing live, the gap between the section
+  above and the client's `MCP` section is exactly the gap the host puts between any
+  two sections, plugin loaded. Returning `null` costs zero rows; an empty `<text>`
+  costs a blank row and an empty `<box>` costs the separator. Whether anything
+  draws is decided once, when the client loads plugins — a slot callback is invoked
+  a single time, and neither a callback nor a component that returned `null` is ever
+  asked again — so a figure refreshed in another terminal appears on the next
+  restart.
+
 ### Fixed
 
 - **The status light travelled as a number, which pinned its meaning to

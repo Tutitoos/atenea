@@ -435,15 +435,16 @@ still runs on the floor that file sets.
 
 ## Put a section in the client's sidebar
 
-`atenea status` answers when you ask it. These answer without being asked: two
-widgets in opencode's sidebar — one a section under the `Context` box it draws
-itself, one the footer at the bottom of that column. They are installed
+`atenea status` answers when you ask it. These answer without being asked: three
+widgets in opencode's sidebar — two sections under the `Context` box it draws
+itself, and the footer at the bottom of that column. They are installed
 separately on purpose, because they read different things.
 
 ```text
 $ atenea statusline widgets
 atenea         Atenea's traffic light, the version running and unread incidents
 session-share  which model did what share of this session's tokens
+limits         how much of each provider's live rate-limit window is used
 ```
 
 ```text
@@ -453,6 +454,8 @@ Context
 $13.04 spent
 
 ▶ Models (MiniMax-M3 60%, +6)
+
+Claude 7d 29% · hace 1d
 
 ▼ MCP
 • atenea  Connected
@@ -466,7 +469,7 @@ LSPs will activate as files are read
 ⊙ Atenea 0.10.1+751972f
 ```
 
-**That column has to be on screen for either to appear.** It is 42 columns wide,
+**That column has to be on screen for any of them to appear.** It is 42 columns wide,
 and its default state is `auto`, which shows it only when the terminal is wider
 than 120 columns — and never for a child session. Read out of the shipped client
 (1.18.16), which also carries `show` and `hide` for that state. On a narrow
@@ -634,7 +637,60 @@ column: a session with nothing in it reads `sin modelos todavia`, and a store th
 will not answer reads `sin lectura` rather than the last good percentages, which
 would otherwise keep showing numbers that had stopped arriving.
 
-### Either widget, same three verbs
+### How much of the window is left
+
+The third widget is a **line, not a section**, and most of the time it is nothing
+at all:
+
+```text
+Claude 7d 29% · hace 1d
+```
+
+One line per rate-limit window that is **live**, with its age always attached, and
+nothing whatsoever when no window is live — no header, no placeholder, not even
+the blank row the host puts between sections. Two providers with live readings at
+once would be two lines.
+
+**The shape came out of measuring the mechanism, not the data.** These figures
+refresh only when a human runs a command. Claude's come from `~/.claude.json`,
+which the `claude` CLI rewrites on `/status` or `/usage`; codex's arrive inside a
+session rollout, which only a real model turn appends to. Measured here: two
+Claude refreshes in twelve days — with the client itself running for 24 hours
+after the last one without touching it — and codex readings on three days out of
+thirty-one, which leaves a five-hour window live about **4 %** of the time.
+
+So a section with a row per provider would read `sin ventana viva` almost always,
+which teaches you to skip that part of the screen — and then the day the weekly
+figure matters, you do not see it either. The unread counter already follows the
+same rule by being absent at zero.
+
+**The age is not decoration.** A limit figure without one is worse than no figure:
+a plan made against a percentage that expired yesterday is a plan made against
+nothing, and it reads exactly like a fresh one.
+
+**Live is the vendor's word, not a rule invented here.** Claude publishes
+`utilization.limits`, a list carrying `kind`, `percent`, `severity`, `resets_at`
+and `is_active` per bucket — measured on this machine, the session bucket at 4 %
+with `is_active: false` because its window had closed, and the weekly one at 29 %
+with `is_active: true`. The `severity` field is what turns a line amber, so no
+threshold is guessed. codex has no settings field at all: its `primary` and
+`secondary` buckets carry `used_percent`, `window_minutes` and `resets_at`, and
+rollouts are read newest first and only while they are young enough for a reading
+to still be inside a window — one 54 KB file here, out of fourteen.
+
+A turn that failed for depleted credits writes `primary: null`, and that is
+reported as nothing rather than by reaching back for an older number that would
+please the reader more.
+
+**Whether it draws is decided once, when the client loads plugins.** A slot
+callback is invoked a single time — measured with a counter that stayed at 1 across
+repaints — and neither a callback nor a component that returned `null` is ever
+asked again. So a figure refreshed in another terminal mid-session appears on the
+next restart. That is also why nothing is faked to hold a place: `null` costs zero
+rows, while an empty `<text>` costs a blank one and an empty `<box>` costs the
+separator.
+
+### Any widget, same three verbs
 
 The plugin source travels inside the `atenea` binary, so `status` can answer the
 question that matters after an upgrade — is the file on disk the one this binary

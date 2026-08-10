@@ -656,12 +656,13 @@ step redispatched, and a second resume of the same run correctly doing nothing a
 all. Both are in the documented examples, which are output the binary actually
 printed today.
 
-## Two sidebar sections, dropped on measurement — 2026-08-11
+## Three sidebar sections, cut down to one line — 2026-08-11
 
-Both were designed, both were measured before a line was written, and the
-measurement killed them. Each is here with the condition that would revive it,
-because a feature dropped without its condition gets re-proposed every few
-months.
+All three were designed, and all three were measured before a line was written.
+Two of them the measurement killed outright; the third it cut down to one line
+that is absent most days. Each is here with the condition that would revive the
+full thing, because a feature dropped without its condition gets re-proposed every
+few months.
 
 ### Per-server MCP context cost
 
@@ -723,3 +724,31 @@ own `--project` flag does it: `LIKE '%atenea%'` also matches
 
 **Condition to revisit:** rtk is hooked into opencode, so that the rows describe
 the client the panel is drawn in.
+
+### A rate-limit section, reduced to a line that is usually absent
+
+The design was a section with a row per provider and window: tightest window
+first, percentage used, when it resets. What shipped instead is a single line per
+**live** window and nothing at all otherwise — `Claude 7d 29% · hace 1d` — because
+the measurement moved the shape rather than the answer.
+
+What killed the section is the **mechanism**, not the data. Nothing refreshes
+these figures except a human running a command. Claude's live in
+`~/.claude.json`, rewritten by its own CLI on `/status` or `/usage`: two refreshes
+in twelve days here, and the client itself ran for 24 hours after the last one
+without touching it. codex's arrive inside `~/.codex/sessions/**/rollout-*.jsonl`,
+appended only by a real model turn: readings on three days out of thirty-one, and
+the newest one carries `primary: null` because that turn failed on depleted
+credits. A five-hour window is therefore live about 4% of the time, and the honest
+figure most days is none.
+
+A section of three rows where two read `sin ventana viva` almost always is worse
+than nothing: it teaches the reader to skip that part of the screen, and then the
+day the weekly figure matters they do not see it either.
+
+**Condition to revisit:** something refreshes those figures without a command
+being typed by hand — a background refresh in a provider's CLI, a status endpoint
+that costs no quota, or a client that records its own limit state per turn. The day
+the numbers arrive on their own, a section with a row per window becomes worth the
+space, because the rows would be full. Today the mechanism is what makes it
+useless, and no amount of care in the layout fixes that.
