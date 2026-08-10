@@ -43,6 +43,41 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   by hand. Uninstall removes the config only when taking our entry out leaves
   nothing behind.
 
+- **A second status-line widget: which model did what share of this session.**
+  `atenea statusline widgets` lists what the binary carries, and the three verbs
+  now take a name: `install session-share` draws
+  `◴ MiniMax-M3 98% · glm-5.2 1% · +3 · 408M tok` in opencode's TUI. Omitting the
+  name still means `atenea`, and every screen prints which widget it acted on,
+  because with two installed the paths differ by one word. A name this binary
+  does not carry is refused with the list of the ones it does, rather than
+  resolving to the default — installing a traffic light when somebody asked for
+  a share is the failure that check exists for.
+
+  **Shares, not currency.** opencode stores a `cost` per message and summing it
+  is one line of SQL, but on a subscription that figure is list price for traffic
+  nobody itemised, so printing `$42.78` would state as fact something no invoice
+  said. The share is true under either billing.
+
+  The base is every token the model handled — `tokens.total` per assistant
+  message, input, output, reasoning and cache reads together, falling back to the
+  sum of the parts on older rows. It is written down because the answer moves
+  with it: on a 1,578-message session MiniMax-M3 is 97.8 % of all tokens and
+  88.4 % of input-plus-output alone. Models with no tokens are dropped rather
+  than printed as `0 %`.
+
+  It reads the client's own SQLite store read-only, for the session id the host
+  hands the plugin: no socket, no network, nothing leaving the machine. 2 ms on a
+  3 GB store, because it lands on an index opencode already keeps. An unreadable
+  store draws `sin lectura` rather than the last good percentages, which would
+  otherwise keep showing numbers that had stopped arriving.
+
+  This widget was built against a measured API, not an assumed one. A probe
+  plugin printed what a slot is actually handed before a line of it was written:
+  the host passes `session_id` and a full `api` — `api.session.messages(id)`
+  works from inside a slot — while `api.route.current` does not exist, and
+  `messages()` returned 100 of that session's 1,578 rows, which is what sent this
+  to the store instead.
+
 ### Fixed
 
 - **The status light travelled as a number, which pinned its meaning to

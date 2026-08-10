@@ -39,8 +39,8 @@ func TestInstallWritesThePluginAndDeclaresIt(t *testing.T) {
 		t.Errorf("the installed plugin does not read the status socket:\n%s", firstLines(string(body)))
 	}
 
-	if got := declared(t, line); len(got) != 1 || got[0] != statusline.Declaration() {
-		t.Errorf("declared = %q, want exactly [%q]", got, statusline.Declaration())
+	if got := declared(t, line); len(got) != 1 || got[0] != line.Declaration() {
+		t.Errorf("declared = %q, want exactly [%q]", got, line.Declaration())
 	}
 }
 
@@ -154,7 +154,7 @@ func TestInstallKeepsWhatSomebodyElsePutInTheConfig(t *testing.T) {
 		t.Errorf("keybinds = %v, want leader ctrl+x", keybinds)
 	}
 
-	want := []string{"./plugins/mine.tsx", "@someone/plugin@1.2.3", statusline.Declaration()}
+	want := []string{"./plugins/mine.tsx", "@someone/plugin@1.2.3", line.Declaration()}
 	if got := declared(t, line); !equal(got, want) {
 		t.Errorf("declared = %q, want %q", got, want)
 	}
@@ -174,7 +174,7 @@ func TestInstallRefusesAConfigItCannotParse(t *testing.T) {
 	if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
 		t.Errorf("failure kind = %v, want %v", kind, contract.FailureInvalidInput)
 	}
-	if !strings.Contains(err.Error(), statusline.Declaration()) {
+	if !strings.Contains(err.Error(), line.Declaration()) {
 		t.Errorf("the refusal should name the line to add by hand: %v", err)
 	}
 
@@ -289,6 +289,110 @@ func TestStatusSeparatesPresentFromDeclared(t *testing.T) {
 	}
 	if state.Declared {
 		t.Errorf("nothing declares it any more")
+	}
+}
+
+// Both widgets are asked for by name, and the names are the contract the command
+// prints. A typo must not quietly resolve to the default: installing Atenea's
+// traffic light when somebody asked for a share is the failure this refuses.
+func TestForRefusesAWidgetThisBinaryDoesNotCarry(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if _, err := statusline.For("session-shares"); err == nil {
+		t.Fatal("a name that does not exist should be refused, not resolved")
+	} else {
+		if kind := contract.KindOf(err); kind != contract.FailureInvalidInput {
+			t.Errorf("kind = %v, want %v", kind, contract.FailureInvalidInput)
+		}
+		// The message has to name the choices: this error is read by somebody who
+		// just guessed at a name.
+		for _, name := range statusline.Names() {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error does not name %q: %v", name, err)
+			}
+		}
+	}
+
+	for _, name := range statusline.Names() {
+		if _, err := statusline.For(name); err != nil {
+			t.Errorf("For(%q): %v", name, err)
+		}
+	}
+}
+
+// Every shipped widget has to carry a real embedded source. A widget added to the
+// list without adding it to the embed pattern installs an empty file, and the
+// client draws nothing -- which looks exactly like a plugin that never loaded.
+func TestEveryShippedWidgetInstallsSomething(t *testing.T) {
+	for _, widget := range statusline.Widgets() {
+		t.Run(widget.Name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			line, err := statusline.For(widget.Name)
+			if err != nil {
+				t.Fatalf("For: %v", err)
+			}
+			if _, err := line.Install(); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+
+			body, err := os.ReadFile(line.Plugin)
+			if err != nil {
+				t.Fatalf("plugin: %v", err)
+			}
+			if len(body) == 0 {
+				t.Fatal("installed an empty file")
+			}
+			if !strings.Contains(string(body), "export default") {
+				t.Errorf("what landed is not a plugin:\n%s", firstLines(string(body)))
+			}
+			if !line.Status().Current {
+				t.Error("a fresh install does not match the binary")
+			}
+			if widget.Summary == "" {
+				t.Error("a widget with no summary cannot be listed by the command")
+			}
+		})
+	}
+}
+
+// The two widgets share a directory and a config file, so the risk is that one
+// verb moves the other's entry. Installing both and removing one is the shape
+// that catches it.
+func TestWidgetsDoNotDisturbEachOther(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	atenea, err := statusline.For("atenea")
+	if err != nil {
+		t.Fatalf("For(atenea): %v", err)
+	}
+	share, err := statusline.For("session-share")
+	if err != nil {
+		t.Fatalf("For(session-share): %v", err)
+	}
+	if atenea.Plugin == share.Plugin || atenea.Declaration() == share.Declaration() {
+		t.Fatalf("two widgets resolved to one file: %s and %s", atenea.Plugin, share.Plugin)
+	}
+
+	if _, err := atenea.Install(); err != nil {
+		t.Fatalf("install atenea: %v", err)
+	}
+	if _, err := share.Install(); err != nil {
+		t.Fatalf("install share: %v", err)
+	}
+	if got := declared(t, atenea); len(got) != 2 {
+		t.Fatalf("declared = %q, want both widgets", got)
+	}
+
+	if _, err := share.Uninstall(); err != nil {
+		t.Fatalf("uninstall share: %v", err)
+	}
+	if got := declared(t, atenea); len(got) != 1 || got[0] != atenea.Declaration() {
+		t.Errorf("declared = %q, want only %q", got, atenea.Declaration())
+	}
+	if !atenea.Status().Present {
+		t.Error("removing one widget took the other's file with it")
+	}
+	if share.Status().Present {
+		t.Error("the uninstalled widget is still on disk")
 	}
 }
 

@@ -1915,16 +1915,48 @@ func runningBinaryService(stopGrace time.Duration) (platform.Service, error) {
 	return platform.NewService(binary, stopGrace)
 }
 
-// cmdStatusLine puts Atenea's own line on a client's screen, takes it off, and
-// says which of those is true -- the same three verbs as `service`, because it
-// is the same kind of job: writing something outside Atenea that reports on it.
+// cmdStatusLine puts a line on a client's screen, takes it off, and says which of
+// those is true -- the same three verbs as `service`, because it is the same kind
+// of job: writing something outside Atenea that reports on something.
+//
+// Two widgets ship. `atenea` is the default because it is the one this repository
+// is about; `session-share` reads only the client's own store and is asked for by
+// name, since installing it as a side effect of wanting the traffic light would
+// put a reading on the screen nobody requested.
 func cmdStatusLine(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return contract.Fail(contract.FailureInvalidInput,
 			"statusline needs a subcommand: install, uninstall or status")
 	}
-	line := statusline.New()
-	switch args[0] {
+
+	verb, rest := args[0], args[1:]
+	if verb == "widgets" {
+		for _, w := range statusline.Widgets() {
+			fmt.Fprintf(out, "%-14s %s\n", w.Name, w.Summary)
+		}
+		return nil
+	}
+
+	// `status` with no name reports every widget: the question it answers is what
+	// is on the screen, and answering it for one of two would be a partial truth
+	// printed as a whole one.
+	if verb == "status" && len(rest) == 0 {
+		for i, line := range statusline.All() {
+			if i > 0 {
+				fmt.Fprintln(out)
+			}
+			if err := statusLineStatus(line, out); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	line, err := widgetLine(rest)
+	if err != nil {
+		return err
+	}
+	switch verb {
 	case "install":
 		return statusLineInstall(line, out)
 	case "uninstall":
@@ -1932,7 +1964,22 @@ func cmdStatusLine(args []string, out io.Writer) error {
 	case "status":
 		return statusLineStatus(line, out)
 	default:
-		return contract.Fail(contract.FailureInvalidInput, "unknown statusline subcommand %q", args[0])
+		return contract.Fail(contract.FailureInvalidInput, "unknown statusline subcommand %q", verb)
+	}
+}
+
+// widgetLine resolves the widget a verb applies to: the default when nothing is
+// named, and an error on anything past the first name so a typo is refused
+// instead of being installed as the default.
+func widgetLine(rest []string) (statusline.Line, error) {
+	switch len(rest) {
+	case 0:
+		return statusline.New(), nil
+	case 1:
+		return statusline.For(rest[0])
+	default:
+		return statusline.Line{}, contract.Fail(contract.FailureInvalidInput,
+			"statusline takes one widget at a time: %s", strings.Join(statusline.Names(), " or "))
 	}
 }
 
@@ -1941,6 +1988,9 @@ func statusLineInstall(line statusline.Line, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Both screens name the widget before the paths, because with two installed
+	// the paths differ by one word and the name is what the other verbs take.
+	fmt.Fprintf(out, "widget    %s\n", line.Widget.Name)
 	fmt.Fprintf(out, "plugin    %s\n", report.Plugin)
 	fmt.Fprintf(out, "declared  %s\n", report.TUIConfig)
 	if !report.Declared {
@@ -1966,6 +2016,7 @@ func statusLineUninstall(line statusline.Line, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(out, "widget    %s\n", line.Widget.Name)
 	fmt.Fprintf(out, "plugin    %s\n", removedOrAbsent(report.Removed, report.Plugin))
 	switch {
 	case report.ConfigRemoved:
@@ -1982,6 +2033,10 @@ func statusLineUninstall(line statusline.Line, out io.Writer) error {
 // output is read on the machine where something is already wrong.
 func statusLineStatus(line statusline.Line, out io.Writer) error {
 	state := line.Status()
+	// The widget is named first and the fix commands carry that name, because this
+	// screen is read with two widgets installed and a hint that says `install`
+	// without saying which one would repair the wrong line.
+	fmt.Fprintf(out, "widget    %s\n", state.Widget.Name)
 	fmt.Fprintf(out, "client    %s\n", statusline.Client())
 	fmt.Fprintf(out, "plugin    %s\n", state.Plugin)
 	fmt.Fprintf(out, "installed %s\n", yesNo(state.Present))
@@ -1996,12 +2051,12 @@ func statusLineStatus(line statusline.Line, out io.Writer) error {
 		// process that is not the one running: the reading is about a copy.
 		fmt.Fprintf(out, "\nthe installed line is not the one this binary carries.\n")
 		fmt.Fprintf(out, "run this to replace it:\n")
-		fmt.Fprintf(out, "  atenea statusline install\n")
+		fmt.Fprintf(out, "  atenea statusline install %s\n", state.Widget.Name)
 	}
 	if state.Present && !state.Declared {
 		fmt.Fprintf(out, "\nthe file is there but %s does not list it, so nothing loads it.\n", state.TUIConfig)
 		fmt.Fprintf(out, "run this to declare it:\n")
-		fmt.Fprintf(out, "  atenea statusline install\n")
+		fmt.Fprintf(out, "  atenea statusline install %s\n", state.Widget.Name)
 	}
 	return nil
 }

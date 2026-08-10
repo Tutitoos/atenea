@@ -24,12 +24,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-//go:embed opencode/atenea.tsx
+//go:embed opencode/atenea.tsx opencode/session-share.tsx
 var shipped embed.FS
 
 const (
@@ -38,23 +39,64 @@ const (
 	// a flag with one value is a promise the code cannot keep.
 	clientName = "opencode"
 
-	sourcePath = "opencode/atenea.tsx"
-
-	// Where the plugin lands, and how it is named in the config. The client
-	// resolves a relative entry against its own config directory, so the
-	// declaration stays relative: an absolute path would break the moment a
-	// config directory is copied or XDG_CONFIG_HOME moves.
-	pluginDir   = "plugins-tui"
-	pluginFile  = "atenea.tsx"
-	declaration = "./" + pluginDir + "/" + pluginFile
+	// Where the plugin lands. Each widget names its own file inside it, and the
+	// declaration stays relative: the client resolves a relative entry against
+	// its own config directory, so an absolute path would break the moment that
+	// directory is copied or XDG_CONFIG_HOME moves.
+	pluginDir = "plugins-tui"
 
 	// The client's TUI configuration, and the key inside it that lists plugins.
 	tuiConfigFile = "tui.json"
 	pluginKey     = "plugin"
 )
 
-// Line is where the status line goes on this machine.
+// Widget is one line this binary can hang on a client's screen.
+//
+// There are two, and they are installed separately on purpose: somebody who
+// wants Atenea's traffic light has not thereby asked for a per-model share of
+// their session, and the second one reads no Atenea at all. Bundling them under
+// one verb would make "install the status line" mean two unrelated readings.
+type Widget struct {
+	// Name is how the widget is asked for on the command line.
+	Name string
+	// Summary is the one line the command prints beside the name.
+	Summary string
+
+	source string
+	file   string
+}
+
+var widgets = []Widget{
+	{
+		Name:    "atenea",
+		Summary: "Atenea's traffic light, the version running and unread incidents",
+		source:  "opencode/atenea.tsx",
+		file:    "atenea.tsx",
+	},
+	{
+		Name:    "session-share",
+		Summary: "which model did what share of this session's tokens",
+		source:  "opencode/session-share.tsx",
+		file:    "session-share.tsx",
+	},
+}
+
+// Widgets is what this binary carries, in the order the command lists them.
+func Widgets() []Widget { return slices.Clone(widgets) }
+
+// Names is every widget name, for messages that have to spell out the choices.
+func Names() []string {
+	out := make([]string, 0, len(widgets))
+	for _, w := range widgets {
+		out = append(out, w.Name)
+	}
+	return out
+}
+
+// Line is where one widget goes on this machine.
 type Line struct {
+	// Widget is which line this is: what gets written, and under what name.
+	Widget Widget
 	// ConfigDir is the client's configuration directory, not Atenea's.
 	ConfigDir string
 	// Plugin is the absolute path of the file this package writes.
@@ -62,6 +104,10 @@ type Line struct {
 	// TUIConfig is the absolute path of the file that declares it.
 	TUIConfig string
 }
+
+// Declaration is how this widget is named inside the client's config, printed by
+// the command so somebody editing the file by hand copies the same string.
+func (l Line) Declaration() string { return "./" + pluginDir + "/" + l.Widget.file }
 
 // State is what is on the machine right now.
 type State struct {
@@ -81,12 +127,37 @@ type State struct {
 	Installed string
 }
 
-// New resolves where the status line lives for the user running this binary.
-func New() Line {
+// New resolves where Atenea's own line lives for the user running this binary.
+// It is the default because it is the one this repository is about.
+func New() Line { return lineFor(widgets[0]) }
+
+// For resolves a named widget, and refuses a name it does not carry rather than
+// installing something the caller did not ask for.
+func For(name string) (Line, error) {
+	for _, w := range widgets {
+		if w.Name == name {
+			return lineFor(w), nil
+		}
+	}
+	return Line{}, contract.Fail(contract.FailureInvalidInput,
+		"unknown widget %q: this binary carries %s", name, strings.Join(Names(), " and "))
+}
+
+// All is every widget's line, for a command that reports on the whole screen.
+func All() []Line {
+	out := make([]Line, 0, len(widgets))
+	for _, w := range widgets {
+		out = append(out, lineFor(w))
+	}
+	return out
+}
+
+func lineFor(w Widget) Line {
 	dir := filepath.Join(platform.ConfigHome(), clientName)
 	return Line{
+		Widget:    w,
 		ConfigDir: dir,
-		Plugin:    filepath.Join(dir, pluginDir, pluginFile),
+		Plugin:    filepath.Join(dir, pluginDir, w.file),
 		TUIConfig: filepath.Join(dir, tuiConfigFile),
 	}
 }
@@ -95,7 +166,7 @@ func New() Line {
 // is replaced with the shipped copy and the declaration is added only if it is
 // not already there.
 func (l Line) Install() (Report, error) {
-	source, err := shipped.ReadFile(sourcePath)
+	source, err := shipped.ReadFile(l.Widget.source)
 	if err != nil {
 		// Unreachable while the embed directive above matches a real file, and
 		// worth reporting rather than panicking: a binary built with a broken
@@ -155,7 +226,7 @@ func (l Line) Uninstall() (Report, error) {
 func (l Line) Status() State {
 	state := State{Line: l}
 
-	if source, err := shipped.ReadFile(sourcePath); err == nil {
+	if source, err := shipped.ReadFile(l.Widget.source); err == nil {
 		state.Shipped = digest(source)
 	}
 	if installed, err := os.ReadFile(l.Plugin); err == nil {
@@ -166,7 +237,7 @@ func (l Line) Status() State {
 
 	entries, _, err := l.entries()
 	if err == nil {
-		state.Declared = slices.Contains(entries, declaration)
+		state.Declared = slices.Contains(entries, l.Declaration())
 	}
 	return state
 }
@@ -206,7 +277,7 @@ func (l Line) entries() ([]string, map[string]json.RawMessage, error) {
 		// a partial parse would destroy work to save a keystroke.
 		return nil, nil, contract.Fail(contract.FailureInvalidInput,
 			"%s is not readable as JSON, so it will not be edited: %v\nadd %q to its %q list by hand",
-			l.TUIConfig, err, declaration, pluginKey)
+			l.TUIConfig, err, l.Declaration(), pluginKey)
 	}
 
 	listed, ok := keys[pluginKey]
@@ -228,10 +299,10 @@ func (l Line) declare() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if slices.Contains(entries, declaration) {
+	if slices.Contains(entries, l.Declaration()) {
 		return false, nil
 	}
-	entries = append(entries, declaration)
+	entries = append(entries, l.Declaration())
 	if err := l.writeConfig(entries, keys); err != nil {
 		return false, err
 	}
@@ -247,7 +318,7 @@ func (l Line) undeclare() (undeclared bool, removedConfig bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
-	kept := slices.DeleteFunc(slices.Clone(entries), func(entry string) bool { return entry == declaration })
+	kept := slices.DeleteFunc(slices.Clone(entries), func(entry string) bool { return entry == l.Declaration() })
 	if len(kept) == len(entries) {
 		return false, false, nil
 	}
@@ -299,10 +370,6 @@ func (l Line) writeConfig(entries []string, keys map[string]json.RawMessage) err
 
 // Client is the name of the client this line is for, for messages.
 func Client() string { return clientName }
-
-// Declaration is how the plugin is named inside the client's config, printed by
-// the command so somebody editing the file by hand copies the same string.
-func Declaration() string { return declaration }
 
 func digest(body []byte) string {
 	sum := sha256.Sum256(body)

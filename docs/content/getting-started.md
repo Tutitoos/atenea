@@ -433,14 +433,23 @@ chats
 file — not everything it may do. A dash means it asked for nothing extra, and it
 still runs on the floor that file sets.
 
-## Put the light on the client's screen
+## Put a line on the client's screen
 
-`atenea status` answers when you ask it. The status line answers without being
-asked: one always-visible line in opencode's terminal UI, carrying the traffic
-light, the version actually running, and unread incidents.
+`atenea status` answers when you ask it. A status line answers without being
+asked: one always-visible line in opencode's terminal UI. Two of them ship, and
+they are installed separately on purpose, because they read different things.
 
 ```text
-$ atenea statusline install
+$ atenea statusline widgets
+atenea         Atenea's traffic light, the version running and unread incidents
+session-share  which model did what share of this session's tokens
+```
+
+### The traffic light
+
+```text
+$ atenea statusline install atenea
+widget    atenea
 plugin    ~/.config/opencode/plugins-tui/atenea.tsx
 declared  ~/.config/opencode/tui.json
 
@@ -464,24 +473,70 @@ The version is printed exactly as the service reports it, build metadata and all
 Trimming `0.10.1+751972f.modified` down to `0.10.1` would hide the part that says
 this binary is not the one that was tagged.
 
+### Which model did the work
+
+The second widget answers a question about the session in front of you, and it
+never talks to Atenea at all:
+
+```text
+◴ MiniMax-M3 98% · glm-5.2 1% · +3 · 408M tok
+```
+
+Shares, not money. opencode does store a `cost` per message, and adding it up is
+one line of SQL — but on a subscription that figure is list price for traffic
+that was never itemised, so a panel printing `$42.78` would be stating as fact
+something no invoice ever said. The share is true under either billing.
+
+**The base is every token the model handled**, which is the `tokens.total` the
+client records per assistant message — input, output, reasoning and cache reads
+together — falling back to the sum of those parts when an older row has no
+total. Two models, one session, and the answer moves with the base: measured on
+a 1,578-message session, MiniMax-M3 is **97.8 %** of all tokens but **88.4 %**
+of input-plus-output alone, because cache reads dominate a long session and they
+are work the model was actually handed. Rows with no tokens at all are dropped
+rather than printed as `0 %`: a model you opened and abandoned did no share of
+anything.
+
+Two models are named, the rest collapse into `+3`, and the total carries a
+magnitude so the line does not grow with the session. `408M tok` is the sum
+across every model, not just the two named ones.
+
+It reads opencode's own SQLite store, opened **read-only**, for the session id
+the client hands the plugin — no socket, no network, and nothing of yours leaves
+the machine. The store is 3 GB here and the query costs 2 ms, because it lands on
+an index the client already keeps on `(session_id, time_created, id)`. A session
+with nothing in it draws nothing rather than a zero, and an unreadable store
+draws `sin lectura` rather than the last good percentages, which would otherwise
+keep showing numbers that stopped arriving.
+
+### Either widget, same three verbs
+
 The plugin source travels inside the `atenea` binary, so `status` can answer the
 question that matters after an upgrade — is the file on disk the one this binary
 ships?
 
 ```text
-$ atenea statusline status
+$ atenea statusline status session-share
+widget    session-share
 client    opencode
-plugin    ~/.config/opencode/plugins-tui/atenea.tsx
+plugin    ~/.config/opencode/plugins-tui/session-share.tsx
 installed yes
 declared  yes
-shipped   1b32d8df990c
-on disk   1b32d8df990c
+shipped   0807eddc0834
+on disk   0807eddc0834
 ```
 
-Different digests print the remedy. `atenea statusline uninstall` takes both the
-file and the declaration away, and leaves any other plugin in that config
-untouched. A `tui.json` this command cannot parse cleanly — one carrying
-comments, say — is refused rather than rewritten, with the line to add by hand.
+Different digests print the remedy, naming the widget so the command you are
+handed repairs the line you were reading. `atenea statusline uninstall
+session-share` takes both the file and the declaration away, and leaves the
+other widget — and any other plugin in that config — untouched. A name this
+binary does not carry is refused with the list of the ones it does, rather than
+quietly resolving to the default: installing a traffic light when somebody asked
+for a share is the failure that check exists for. Omitting the name still means
+`atenea`, and the output says so.
+
+A `tui.json` this command cannot parse cleanly — one carrying comments, say — is
+refused rather than rewritten, with the line to add by hand.
 
 ## Day to day
 
