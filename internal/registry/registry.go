@@ -8,6 +8,7 @@ package registry
 
 import (
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -238,16 +239,44 @@ func (r *Registry) ImplementationsFor(capabilityID string) ([]contract.Implement
 	return out, nil
 }
 
-// Repository looks one up by id.
+// Repository looks one up by id. If id is not a registered name but is an
+// absolute path, the repository whose configured path is the longest prefix
+// of id is returned instead, so a caller can pass its working directory
+// without knowing the registered name.
 func (r *Registry) Repository(id string) (contract.Repository, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	repo, ok := r.repositories[id]
+	if !ok && filepath.IsAbs(id) {
+		repo, ok = r.repositoryForCWD(id)
+	}
 	if !ok {
 		return contract.Repository{}, contract.Fail(contract.FailureNotFound,
 			"unknown repository %s", id)
 	}
 	return repo.Clone(), nil
+}
+
+// repositoryForCWD returns the repository whose configured path is the
+// longest absolute-path prefix of cwd. Called under r.mu.RLock.
+func (r *Registry) repositoryForCWD(cwd string) (contract.Repository, bool) {
+	clean := filepath.Clean(cwd)
+	var best contract.Repository
+	bestLen := -1
+	for _, repo := range r.repositories {
+		abs, err := filepath.Abs(repo.Path)
+		if err != nil {
+			continue
+		}
+		abs = filepath.Clean(abs)
+		if clean == abs || strings.HasPrefix(clean, abs+string(filepath.Separator)) {
+			if len(abs) > bestLen {
+				best = repo
+				bestLen = len(abs)
+			}
+		}
+	}
+	return best, bestLen >= 0
 }
 
 // Repositories lists every repository, sorted by id.

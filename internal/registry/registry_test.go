@@ -140,6 +140,51 @@ func TestUnknownLookupsAreNotFound(t *testing.T) {
 	}
 }
 
+// A caller knows where it is working, not what the operator called that place
+// in the settings file. An absolute path resolves to the repository holding
+// it, and the longest configured path wins so a repository nested inside
+// another is not swallowed by its parent. A registered id is still matched
+// first: a name is never guessed at as a path.
+func TestRepositoryResolvesAnAbsolutePathToItsRepository(t *testing.T) {
+	reg := seeded(t)
+	for _, r := range []contract.Repository{
+		contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		contract.NewRepository("frontend", "/srv/web/frontend", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		contract.NewRepository("sibling", "/srv/web-two", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+	} {
+		if err := reg.AddRepository(r); err != nil {
+			t.Fatalf("AddRepository %s: %v", r.ID, err)
+		}
+	}
+
+	for _, tc := range []struct{ ask, want string }{
+		{"web", "web"},                        // a registered id, not a path
+		{"/srv/web", "web"},                   // the root itself
+		{"/srv/web/internal/core", "web"},     // a directory under it
+		{"/srv/web/frontend", "frontend"},     // the nested repository, not its parent
+		{"/srv/web/frontend/src", "frontend"}, // longest prefix wins
+		{"/srv/web-two/app", "sibling"},       // a prefix in text is not a prefix in path
+		{"/srv/web/../web/internal", "web"},   // cleaned before it is compared
+	} {
+		repo, err := reg.Repository(tc.ask)
+		if err != nil {
+			t.Fatalf("Repository(%q): %v", tc.ask, err)
+		}
+		if repo.ID != tc.want {
+			t.Errorf("Repository(%q) = %s, want %s", tc.ask, repo.ID, tc.want)
+		}
+	}
+
+	// Outside every configured path, and a relative path that happens to look
+	// like one, are both still not_found: the fallback widens what resolves,
+	// not what is accepted.
+	for _, ask := range []string{"/srv/other", "/", "srv/web"} {
+		if _, err := reg.Repository(ask); contract.KindOf(err) != contract.FailureNotFound {
+			t.Errorf("Repository(%q): kind = %v, want not_found", ask, contract.KindOf(err))
+		}
+	}
+}
+
 // A typo close enough to a real id is named in the error, so the second
 // attempt does not have to be another guess.
 func TestUnknownCapabilitySuggestsTheClosestMatch(t *testing.T) {

@@ -73,6 +73,36 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   the key's tests: all of them passed, because each one handed `Open` the
   grant it then asked about.
 
+- **One symbol Serena could name but not place failed the whole file.**
+  `get_symbols_overview` reports bare names and `find_symbol` is then asked
+  where each one is. Anonymous callbacks and generated names are named by the
+  first tool and locatable by neither its own `find_symbol` nor any language
+  server, and a single one of them turned an overview of a real file into
+  `not_found` — the caller lost every symbol in the file over one it had not
+  asked about. Unplaceable names are now skipped and counted in the discovery
+  notes, the reading the adapter already had for "Serena answered, but not
+  about this". A name that is missing for any other reason is still a failure,
+  and the count stops a skip from being silent.
+
+- **A snippet was empty whenever Serena returned a symbol without a body.**
+  The adapter trimmed whatever body came back to the requested line count, so
+  a symbol reported with a path and a line but no body produced a location
+  with nothing to read beside it, on the capability whose entire point is the
+  fragment. The lines are now read from the file at the reported position when
+  the body is absent, through the same reader the rest of the adapter uses —
+  so a path the settings file marks sensitive is still refused out loud rather
+  than quietly widened by the new route.
+
+- **A caller had to know what the operator named the directory it was already
+  working in.** `Repository` matched registered ids alone, so a client or a
+  commission naming an absolute path — the one thing every caller does know
+  about itself — was answered `unknown repository`. An absolute path now
+  resolves to the repository containing it, longest configured path first, so
+  a repository nested inside another wins over its parent. A registered id is
+  still matched before anything is treated as a path, and a path outside every
+  configured repository is still `not_found`: this widens what resolves, not
+  what is accepted.
+
 ### Added
 
 - **`wrap` supports Claude Code and codex**, alongside OpenCode. Both take
