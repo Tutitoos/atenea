@@ -1313,19 +1313,24 @@ func TestOverviewAmbiguousMatchIsRefused(t *testing.T) {
 }
 
 // get_symbols_overview named it; find_symbol, asked right after, cannot find
-// it. Two different tools disagreeing about the same file is not this
-// adapter's to paper over by silently dropping the name.
+// it. Names that no language server can locate (anonymous callbacks, generated
+// names) are dropped and counted in the discovery notes rather than causing
+// the whole overview to fail.
 func TestOverviewNotFoundWhenFindSymbolCannotLocateAnOverviewName(t *testing.T) {
 	s, endpoint := newStub(t)
 	s.answers["get_symbols_overview"] = `{"Function": ["ghost"]}`
 	s.answers["find_symbol"] = "[]"
 	runner := newRunner(t, endpoint)
 
-	_, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
+	out, err := run(t, runner, CapabilityOverview, repo(t, map[string]string{
 		"pkg/shapes.go": "package pkg\n",
 	}), map[string]any{"file": "pkg/shapes.go"})
-	if contract.KindOf(err) != contract.FailureNotFound {
-		t.Fatalf("kind = %v, want not_found; err = %v", contract.KindOf(err), err)
+	if err != nil {
+		t.Fatalf("Run: %v (want success: unlocatable names are skipped, not errors)", err)
+	}
+	syms, _ := out.Result["symbols"].([]any)
+	if len(syms) != 0 {
+		t.Errorf("symbols = %v, want empty: ghost is unplaceable and must be skipped", syms)
 	}
 }
 

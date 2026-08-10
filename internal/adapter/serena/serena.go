@@ -869,8 +869,7 @@ func (r *Runner) locateOne(ctx context.Context, c *conn, root string, a overview
 		found = exact
 	}
 	if len(found) == 0 {
-		return overviewEntry{}, contract.Fail(contract.FailureNotFound,
-			"serena's own overview named %q in %s, but find_symbol cannot locate it", n.queryPath, a.file)
+		return overviewEntry{}, errNameNotLocated
 	}
 	if len(found) > 1 {
 		return overviewEntry{}, contract.Fail(contract.FailureInvalidInput,
