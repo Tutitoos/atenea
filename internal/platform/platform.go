@@ -41,16 +41,24 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", dirName)
 }
 
-// ConfigDir is where the one settings file lives.
-func ConfigDir() string {
+// ConfigHome is the root every tool's configuration hangs off: Atenea's own and,
+// for the status line, the client's. It exists so the walk from environment to
+// home directory is written once -- a second copy of it is how two parts of the
+// same binary end up disagreeing about where a file lives.
+func ConfigHome() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, dirName)
+		return dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", dirName)
+		return ".config"
 	}
-	return filepath.Join(home, ".config", dirName)
+	return filepath.Join(home, ".config")
+}
+
+// ConfigDir is where the one settings file lives.
+func ConfigDir() string {
+	return filepath.Join(ConfigHome(), dirName)
 }
 
 // BackupDir is where copies of the history go: a folder of its own, beside the

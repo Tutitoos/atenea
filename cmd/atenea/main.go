@@ -29,6 +29,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/statusline"
 	"github.com/Tutitoos/atenea/internal/wrap"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -64,6 +65,9 @@ Commands:
   config path            Print where settings are read from
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
                          moment ago; dead ones are named and left out
+  statusline install     Put Atenea's status line on opencode's screen;
+                         'uninstall' takes it off, 'status' says whether the
+                         installed copy is the one this binary ships
   version                Print the product and contract versions
 
 Global flags:
@@ -177,6 +181,21 @@ without going through a client at all.
 
 Install atenea as a background service that starts with the system;
 'uninstall' undoes it, 'status' says where it stands.
+`,
+	"statusline": `Usage: atenea statusline install
+       atenea statusline uninstall
+       atenea statusline status
+
+Put Atenea's status line on opencode's screen: one always-visible line
+reporting the traffic light, the version actually running, and unread
+incidents. It reads the service's own socket, so it needs no key and no
+network, and it says "apagado" rather than warning when nothing is running.
+
+The plugin source travels inside this binary. 'status' compares what is
+installed against what this binary carries, because a line reporting a
+version is worth nothing if the file drawing it is a copy nobody updated.
+
+A running TUI loads plugins at startup: after install, restart opencode.
 `,
 	"incidents": `Usage: atenea incidents [clear] [--all]
 
@@ -374,6 +393,8 @@ func run(args []string, out io.Writer) error {
 		// of ours. An operator still sees the report -- stderr is the
 		// terminal too -- and a pipeline no longer has to.
 		return cmdWrap(settingsPath, commandArgs, os.Stderr)
+	case "statusline":
+		return cmdStatusLine(commandArgs, out)
 	case "help", "-h", "--help":
 		fmt.Fprint(out, usage)
 		return nil
@@ -1892,6 +1913,125 @@ func runningBinaryService(stopGrace time.Duration) (platform.Service, error) {
 			"cannot find the running atenea binary to point the service at: %v", err)
 	}
 	return platform.NewService(binary, stopGrace)
+}
+
+// cmdStatusLine puts Atenea's own line on a client's screen, takes it off, and
+// says which of those is true -- the same three verbs as `service`, because it
+// is the same kind of job: writing something outside Atenea that reports on it.
+func cmdStatusLine(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"statusline needs a subcommand: install, uninstall or status")
+	}
+	line := statusline.New()
+	switch args[0] {
+	case "install":
+		return statusLineInstall(line, out)
+	case "uninstall":
+		return statusLineUninstall(line, out)
+	case "status":
+		return statusLineStatus(line, out)
+	default:
+		return contract.Fail(contract.FailureInvalidInput, "unknown statusline subcommand %q", args[0])
+	}
+}
+
+func statusLineInstall(line statusline.Line, out io.Writer) error {
+	report, err := line.Install()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "plugin    %s\n", report.Plugin)
+	fmt.Fprintf(out, "declared  %s\n", report.TUIConfig)
+	if !report.Declared {
+		fmt.Fprintf(out, "          already listed; only the file was replaced\n")
+	}
+	if !onPath(statusline.Client()) {
+		// Not a failure: a config written before the client is installed is
+		// waiting, not broken. Saying nothing would leave somebody looking for a
+		// line on a screen that does not exist yet.
+		fmt.Fprintf(out, "\n%s is not on PATH: the line is installed and will appear\n", statusline.Client())
+		fmt.Fprintf(out, "the first time you run it.\n")
+		return nil
+	}
+	// A TUI reads its plugins once, at startup. Every measurement behind this
+	// command was taken on a fresh process for that reason, and an operator who
+	// looks at the session already open will see nothing and conclude wrongly.
+	fmt.Fprintf(out, "\na running %s loads plugins at startup: restart it to see the line.\n", statusline.Client())
+	return nil
+}
+
+func statusLineUninstall(line statusline.Line, out io.Writer) error {
+	report, err := line.Uninstall()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "plugin    %s\n", removedOrAbsent(report.Removed, report.Plugin))
+	switch {
+	case report.ConfigRemoved:
+		fmt.Fprintf(out, "config    removed %s (it held nothing else)\n", report.TUIConfig)
+	case report.Undeclared:
+		fmt.Fprintf(out, "config    %s no longer lists it\n", report.TUIConfig)
+	default:
+		fmt.Fprintf(out, "config    %s never listed it\n", report.TUIConfig)
+	}
+	return nil
+}
+
+// statusLineStatus reports and never fails, the same as the service screen: this
+// output is read on the machine where something is already wrong.
+func statusLineStatus(line statusline.Line, out io.Writer) error {
+	state := line.Status()
+	fmt.Fprintf(out, "client    %s\n", statusline.Client())
+	fmt.Fprintf(out, "plugin    %s\n", state.Plugin)
+	fmt.Fprintf(out, "installed %s\n", yesNo(state.Present))
+	fmt.Fprintf(out, "declared  %s\n", yesNo(state.Declared))
+	fmt.Fprintf(out, "shipped   %s\n", shortDigest(state.Shipped))
+	if state.Present {
+		fmt.Fprintf(out, "on disk   %s\n", shortDigest(state.Installed))
+	}
+	if state.Present && !state.Current {
+		// The whole reason the source is embedded. A version on the screen drawn
+		// by a file this binary never shipped is the same defect as measuring a
+		// process that is not the one running: the reading is about a copy.
+		fmt.Fprintf(out, "\nthe installed line is not the one this binary carries.\n")
+		fmt.Fprintf(out, "run this to replace it:\n")
+		fmt.Fprintf(out, "  atenea statusline install\n")
+	}
+	if state.Present && !state.Declared {
+		fmt.Fprintf(out, "\nthe file is there but %s does not list it, so nothing loads it.\n", state.TUIConfig)
+		fmt.Fprintf(out, "run this to declare it:\n")
+		fmt.Fprintf(out, "  atenea statusline install\n")
+	}
+	return nil
+}
+
+func removedOrAbsent(removed bool, path string) string {
+	if removed {
+		return "removed " + path
+	}
+	return "was not there: " + path
+}
+
+// shortDigest keeps a digest readable on a status screen. Twelve hex characters
+// are plenty to tell two builds apart by eye, and the full value is one
+// sha256sum away for anybody who wants to compare properly.
+func shortDigest(sum string) string {
+	if sum == "" {
+		return "-"
+	}
+	if len(sum) > 12 {
+		return sum[:12]
+	}
+	return sum
+}
+
+// onPath answers whether a client binary is installed. The lookup returns an
+// error, but a missing client is a fact about the machine here and not a fault
+// to report, so it is turned into the fact the caller actually wants.
+func onPath(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func cmdConfig(settingsPath string, args []string, out io.Writer) error {

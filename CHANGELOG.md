@@ -15,6 +15,34 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Added
+
+- **`atenea statusline install` puts Atenea's own light on opencode's screen.**
+  One always-visible line in the client's terminal UI: the traffic light, the
+  version actually running, and unread incidents, read from the service's unix
+  socket — the same door the CLI knocks on, so it needs no key, no port and no
+  network. `uninstall` takes it off, `status` says where it stands, the same
+  three verbs as `service`.
+
+  The plugin source is embedded in the binary, so `status` can answer the only
+  question worth asking after an upgrade: whether the file on disk is the one
+  this binary ships. A drift prints both digests and the remedy. Installing from
+  a checkout path would have made that unanswerable, which is the defect this
+  repository has now paid for twice.
+
+  Two states are told apart deliberately: nothing running prints `atenea
+  apagado` in muted grey, a socket that exists and would not answer prints
+  `atenea sin lectura` in amber. The connection error cannot separate them —
+  Bun reports `ENOENT` for a missing path, a socket left by a crash, and one it
+  is not allowed to open alike — so the distinction comes from whether the
+  socket file exists. Without it, a service stopped on purpose was reported as
+  a fault.
+
+  A `tui.json` holding somebody else's plugins keeps them; one this command
+  cannot parse cleanly is refused rather than rewritten, naming the line to add
+  by hand. Uninstall removes the config only when taking our entry out leaves
+  nothing behind.
+
 ### Fixed
 
 - **The status light travelled as a number, which pinned its meaning to

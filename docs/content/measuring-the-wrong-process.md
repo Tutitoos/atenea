@@ -199,6 +199,55 @@ when nothing changed. That is the correct answer, not a false alarm. The process
 is holding the old file, and the only thing that makes the two agree is a
 restart.
 
+## A third instrument: a renderer that draws nothing and says nothing
+
+Measured on 2026-08-10, building Atenea's status line as a TUI plugin for
+opencode 1.18.16, whose renderer is `@opentui/solid`.
+
+The line would not appear. The first hypothesis was the obvious one — the plugin
+was not being loaded — and it was wrong, in the way this page keeps being about:
+it was a hypothesis about the instrument's subject when the instrument was the
+problem.
+
+Three readings settled it, none of them the screen:
+
+1. `~/.local/state/opencode/plugin-meta.json` carries a `load_count` per plugin
+   id. It incremented on the run in question. The module was imported.
+2. A write from the slot callback, one from the component body, and one from
+   `onMount` all landed, within 6 ms of each other. The slot was registered, the
+   component was constructed, and it mounted.
+3. The terminal's own bytes, captured with `script` into a file and searched
+   there, contained no trace of the line.
+
+So the plugin loaded, registered, ran, mounted — and drew nothing. The cause was
+a `<Show>` from `solid-js` wrapping the subtree. Both of its forms behave the
+same way here: the function-child form, `{(value) => <box .../>}`, and plain
+children under a truthy `when`. In each case the whole subtree is absent from the
+frame, with no error, no log line, and no warning at `--log-level DEBUG`.
+
+An earlier version of the same file had a second instance of the shape: a
+`<span>` placed as a direct child of `<box>` instead of inside a `<text>`. Also
+dropped, also silently. Two different mistakes, one indistinguishable symptom.
+
+**This is why that symptom is worth writing down rather than filing.** A plugin
+that fails to load produces exactly the same nothing — that failure is
+[opencode#41574](https://github.com/anomalyco/opencode/issues/41574), filed the
+same day from this repository, after a probe proved a module throwing at import
+time yields no log, no toast, no stderr and no entry in `plugin-meta.json`. When
+two unrelated faults share one appearance, the appearance stops being evidence.
+What separated them was a counter that increments on load, three marks written by
+the code under test, and reading the frame instead of a log.
+
+The status line therefore contains no conditional elements at all. Its dot and
+its incident counter are strings that go empty, and the element tree never
+changes shape. That is not a style preference: a tree that cannot change shape
+cannot lose a branch to this.
+
+No issue is filed for the renderer yet, deliberately. There is a measurement but
+not a minimal reproduction against a stock slot, and a report that cannot be run
+by the person receiving it is a claim, not a finding — which is the whole subject
+of this page. The day the repro exists, it gets filed.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -228,6 +277,14 @@ restart.
    identifies a running program is the inode it holds, not the name it reports
    — and on a machine where the binary is installed by copying over a live
    path, they come apart silently and stay apart until a restart.
+7. **Nothing on the screen is not a diagnosis.** A component that never loaded,
+   one that threw at import, and one that ran perfectly and was dropped by the
+   renderer all look identical from the outside. Where a fault is silent, the
+   only way forward is to instrument the stages you can prove — a load counter,
+   a mark per stage, the frame itself — and to keep them until the symptom has a
+   name. A subtree that vanishes without an error is the same defect as a
+   version string that describes another build: a system claiming, by saying
+   nothing, that there is nothing to say.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

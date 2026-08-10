@@ -433,6 +433,56 @@ chats
 file — not everything it may do. A dash means it asked for nothing extra, and it
 still runs on the floor that file sets.
 
+## Put the light on the client's screen
+
+`atenea status` answers when you ask it. The status line answers without being
+asked: one always-visible line in opencode's terminal UI, carrying the traffic
+light, the version actually running, and unread incidents.
+
+```text
+$ atenea statusline install
+plugin    ~/.config/opencode/plugins-tui/atenea.tsx
+declared  ~/.config/opencode/tui.json
+
+a running opencode loads plugins at startup: restart it to see the line.
+```
+
+It reads the service's own unix socket — the same door this CLI knocks on — so it
+needs no key, no port and no network. What it draws:
+
+```text
+⊙ atenea 0.10.1+751972f · 2 sin leer
+```
+
+The dot carries the light: green, amber, red, and muted grey when nothing is
+running. That last state says `atenea apagado` rather than warning, because a
+service you stopped on purpose is not a fault — and the two are told apart by
+whether the socket file exists, not by the connection error, which arrives as
+`ENOENT` whether the path is missing, stale, or unreadable.
+
+The version is printed exactly as the service reports it, build metadata and all.
+Trimming `0.10.1+751972f.modified` down to `0.10.1` would hide the part that says
+this binary is not the one that was tagged.
+
+The plugin source travels inside the `atenea` binary, so `status` can answer the
+question that matters after an upgrade — is the file on disk the one this binary
+ships?
+
+```text
+$ atenea statusline status
+client    opencode
+plugin    ~/.config/opencode/plugins-tui/atenea.tsx
+installed yes
+declared  yes
+shipped   1b32d8df990c
+on disk   1b32d8df990c
+```
+
+Different digests print the remedy. `atenea statusline uninstall` takes both the
+file and the declaration away, and leaves any other plugin in that config
+untouched. A `tui.json` this command cannot parse cleanly — one carrying
+comments, say — is refused rather than rewritten, with the line to add by hand.
+
 ## Day to day
 
 Three things happen on their own once it is installed, and one line tells you
