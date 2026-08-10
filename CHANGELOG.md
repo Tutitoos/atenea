@@ -81,18 +81,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   both and refuses a registration naming a slot outside the sidebar.
 
   Two placements were asked for and are not reachable, both measured rather than
-  assumed. There is no slot inside the `Context` box. And directly under the
-  client's `• OpenCode 1.18.16` line is not a place a plugin can add to: that line
-  is the children of a `sidebar_footer` slot declared `mode:"single_winner"`, the
-  lowest registered order wins it outright, and a winner is handed only
-  `{session_id}` with `children` undefined — so registering there deletes the
-  version line rather than sitting under it. Reimplementing the client's footer to
-  get one line below it would mean owning the truth of that line, and it is not
-  worth it.
+  assumed. There is no slot inside the `Context` box. And the Atenea line cannot sit
+  directly under the client's `• OpenCode 1.18.16` line, because that line is in a
+  box outside the scrolling content, pinned to the bottom, while every plugin
+  section is inside it. That footer box is a `sidebar_footer` slot declared
+  `mode:"single_winner"`: it takes plugin content as a replacement, never an
+  addition. The lowest order wins outright, the winner is invoked with exactly
+  `(context, {session_id})`, and the host's own lines are slot children used only if
+  the winner renders nothing — so registering there deletes the project path and the
+  version rather than sitting beneath them. Getting one line below that version
+  would mean reimplementing the client's footer and owning the truth of it.
 
-  When a section outgrows the room the column **grows and evicts its neighbours** —
-  no scrolling, no clipping: a 24-row probe pushed the client's own `LSP` section
-  off the screen. That is why the model list is capped.
+  When a section outgrows the room the column **scrolls**; it does not clip, and the
+  footer stays pinned. The content sits in a 42-column `scrollbox`, and a 24-row
+  probe pushed the client's own `LSP` body below the fold while the footer stayed —
+  the same screen at a taller pane showed everything again, so nothing is dropped.
+  Content below the fold is still content nobody reads, which is why the list is
+  capped.
 
   **Shares, not currency.** opencode stores a `cost` per message and summing it
   is one line of SQL, but on a subscription that figure is list price for traffic

@@ -488,20 +488,25 @@ Two placements are **not** available, and both were measured rather than assumed
   `home_bottom`, `home_footer`, `session_prompt`, `session_prompt_right`,
   `sidebar_title`, `sidebar_content`, `sidebar_footer` — and a section of one's own
   directly beneath it is as close as it allows.
-- **Directly under the client's own `• OpenCode 1.18.16` line.** That line is the
-  *children* of a `sidebar_footer` slot declared `mode:"single_winner"`: the lowest
-  registered order wins the slot outright and the rest never render. Registering
-  there at order 50 does not add a line under the version — it deletes the version
-  and draws ours instead, which is what the probe did. A winning callback is handed
-  only `{session_id}`; `children` is `undefined`, so it cannot re-draw what it
-  replaced. Sitting under that line would mean reimplementing the client's footer
-  and inheriting the job of keeping it true. The Atenea line is the last thing in
-  the column above it instead.
+- **Directly under the client's own `• OpenCode 1.18.16` line.** Structurally the
+  two cannot be adjacent: that line lives in a box **outside** the scrolling
+  content, pinned to the bottom, and every plugin section lives inside it. The
+  footer box is a `sidebar_footer` slot declared `mode:"single_winner"`, so it does
+  take plugin content — but as a replacement, not an addition. The lowest registered
+  order wins outright, the winner is invoked with exactly `(context, {session_id})`,
+  and the host's own lines are its slot children, used **only** if the winner
+  renders nothing. Registering there at order 50 did not put a line under the
+  version: it deleted the project path and the version and drew the probe instead.
+  Sitting under that line would mean reimplementing the client's footer — path,
+  branch, version — and owning the job of keeping it true. The Atenea line is the
+  last thing in the scrolling column above it instead, one line and a visible gap.
 
-**When a section outgrows the room, the column grows and evicts its neighbours.**
-It does not scroll and it does not clip: a probe with 24 rows rendered all 24 and
-pushed the client's own `LSP` section off the bottom of the screen. That is why the
-model list is capped rather than complete.
+**When a section outgrows the room, the column scrolls rather than clipping, and
+the footer stays pinned.** The content sits in a 42-column `scrollbox`: a probe with
+24 rows rendered all 24 and pushed the client's own `LSP` body and our Atenea line
+below the fold, while the project path and version line stayed put. Nothing was
+dropped — the same screen at a taller pane showed all of it again — but content
+below the fold is content nobody reads, which is why the model list is capped.
 
 ### The traffic light
 

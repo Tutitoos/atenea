@@ -204,16 +204,22 @@ export default {
 		api.slots.register({
 			// Last in the column. The client's own sections claim 100 to 500, so 900
 			// leaves room for it to add more and still keeps this at the bottom, which
-			// is where a standing service line belongs -- next to the client's own
-			// version rather than above the reading for this session.
+			// is where a standing service line belongs -- as close to the client's own
+			// version line as a plugin can get.
 			//
-			// Directly *under* the client's `OpenCode <version>` line is not reachable:
-			// that line is the children of a `sidebar_footer` slot declared
-			// `mode:"single_winner"`, the lowest registered order wins it outright, and
-			// a winning callback is handed only `{session_id}` -- `children` is
-			// undefined, measured. Sitting under that line would mean winning the slot
-			// and reimplementing the client's footer, which would delete the real
-			// version line the moment our copy of it drifted.
+			// Adjacent to that version line is not reachable, and the reason is
+			// structural rather than a matter of ordering: the client's footer is a box
+			// OUTSIDE the scrolling content, pinned to the bottom, and every plugin
+			// section renders inside that scrollbox. The footer box is a
+			// `sidebar_footer` slot declared `mode:"single_winner"`, so it does take
+			// plugin content -- as a replacement. The lowest registered order wins it
+			// outright, the winner is invoked with exactly `(context, {session_id})`,
+			// and the host's own path and version lines are the slot's children, used
+			// only when the winner renders nothing. Registering there deletes them and
+			// draws ours in their place: measured with a probe, which is how the
+			// version line vanished. Sitting under it would mean reimplementing the
+			// client's footer -- path, branch, version -- and owning the truth of it.
+			// A visible gap beats a copy that goes stale in silence.
 			order: 900,
 			slots: {
 				sidebar_content: () => <AteneaSection api={api} />,

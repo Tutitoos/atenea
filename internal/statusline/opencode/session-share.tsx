@@ -32,9 +32,10 @@ import { createSignal, onCleanup, onMount } from "solid-js";
 const POLL_MS = 5000;
 
 // How many models get a line of their own. The cap is not decoration: this column
-// grows with its content and pushes the sections under it off the screen rather
-// than scrolling or clipping -- measured with a 24-row probe, which evicted the
-// client's own LSP section.
+// is a scrollbox, so a long list does not clip -- it pushes what follows below the
+// fold, where it is still rendered and nobody reads it. Measured with a 24-row
+// probe: the client's own LSP body and the Atenea line went under, and came back
+// when the pane got taller.
 //
 // Five, and the rest are summed into a final line rather than dropped. A list of
 // shares that stops at five and does not reach 100 is the same omission as a
