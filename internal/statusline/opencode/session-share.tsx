@@ -31,20 +31,23 @@ import { createSignal, onCleanup, onMount } from "solid-js";
 
 const POLL_MS = 5000;
 
-// How many models get a line of their own. The cap is not decoration: this column
-// is a scrollbox, so a long list does not clip -- it pushes what follows below the
+// Every model gets a line of its own, and the list is collapsed until asked for.
+//
+// There used to be a cap of five here, for a real reason: this column is a
+// scrollbox, so a long list does not clip -- it pushes what follows below the
 // fold, where it is still rendered and nobody reads it. Measured with a 24-row
 // probe: the client's own LSP body and the Atenea line went under, and came back
 // when the pane got taller.
 //
-// Five, and the rest are summed into a final line rather than dropped. A list of
-// shares that stops at five and does not reach 100 is the same omission as a
-// percentage with no visible base: it reads as complete.
-const NAMED = 5;
+// Collapsing answers that better than a cap did. Closed, the section is one line
+// and cannot push anything anywhere; open, the reader asked for the length they
+// got. A cap made that decision for them, and had to keep a summed remainder line
+// so the visible shares still reached 100 -- a line that existed only because of
+// the cap.
 
 type Slice = { model: string; tokens: number };
 type Reading =
-	| { kind: "share"; slices: Slice[]; hidden: number; hiddenTokens: number; total: number }
+	| { kind: "share"; slices: Slice[]; total: number }
 	| { kind: "empty" }
 	| { kind: "unreadable" };
 
@@ -111,20 +114,11 @@ function read(sessionID: string): Reading {
 		}
 		if (slices.length === 0) return { kind: "empty" };
 
+		// Ordered by tokens descending in SQL, and the order is load-bearing twice:
+		// the list reads as a ranking, and the closed header quotes the first row as
+		// the session's dominant model.
 		const total = slices.reduce((sum, s) => sum + s.tokens, 0);
-		const named = slices.slice(0, NAMED);
-		// The remainder travels as tokens, not as a count. A dropped tail turns the
-		// column into a list of shares that do not reach 100, which is the omission
-		// this widget exists to refuse: the last line has to be able to say how much
-		// it stands for.
-		const rest = slices.slice(NAMED);
-		return {
-			kind: "share",
-			slices: named,
-			hidden: rest.length,
-			hiddenTokens: rest.reduce((sum, s) => sum + s.tokens, 0),
-			total,
-		};
+		return { kind: "share", slices, total };
 	} catch {
 		// A store that cannot be read is said, never drawn as a share. The failure
 		// this avoids is a line that keeps showing the last good percentages while
@@ -188,17 +182,27 @@ function percent(part: number, total: number): string {
 // No combined total: the client's own Context box, directly above this one, is
 // already reporting the session's tokens. Printing a second total invites the
 // reader to reconcile two numbers that answer different questions.
-function body(reading: Reading | undefined): string {
-	if (!reading) return "…";
-	if (reading.kind === "unreadable") return "sin lectura";
-	if (reading.kind === "empty") return "sin modelos todavia";
-	const rows = reading.slices.map(
-		(s) => `${short(s.model)} ${magnitude(s.tokens)} (${percent(s.tokens, reading.total)})`,
-	);
-	if (reading.hidden > 0) {
-		rows.push(`+${reading.hidden} otros ${magnitude(reading.hiddenTokens)} (${percent(reading.hiddenTokens, reading.total)})`);
-	}
-	return rows.join("\n");
+function body(reading: Reading): string {
+	return reading.slices
+		.map((s) => `${short(s.model)} ${magnitude(s.tokens)} (${percent(s.tokens, reading.total)})`)
+		.join("\n");
+}
+
+// What the closed header carries. A section that says only its own name when shut
+// is a line spent on a label, so the state that is never worth hiding is stated
+// here instead: the dominant model and its share, or the reason there is no list.
+//
+// A failure is deliberately louder closed than open. If a collapsed section could
+// hide `sin lectura`, closing it once would turn a broken reading into an absence
+// nobody notices -- which is the failure mode this whole widget was built against.
+function headline(reading: Reading | undefined): string {
+	if (!reading) return " …";
+	if (reading.kind === "unreadable") return " sin lectura";
+	if (reading.kind === "empty") return " sin modelos todavia";
+	const top = reading.slices[0];
+	const rest = reading.slices.length - 1;
+	const tail = rest > 0 ? `, +${rest}` : "";
+	return ` (${short(top.model)} ${percent(top.tokens, reading.total)}${tail})`;
 }
 
 type SlotContext = { theme: { current: Record<string, string> } };
@@ -206,6 +210,7 @@ type SlotProps = { session_id?: unknown };
 
 function ShareSection(props: { ctx: SlotContext; slot: SlotProps }) {
 	const [reading, setReading] = createSignal<Reading | undefined>();
+	const [open, setOpen] = createSignal(false);
 	const theme = () => props.ctx.theme.current;
 	const sessionID = () => (typeof props.slot.session_id === "string" ? props.slot.session_id : "");
 
@@ -224,15 +229,42 @@ function ShareSection(props: { ctx: SlotContext; slot: SlotProps }) {
 
 	const colour = () => (reading()?.kind === "unreadable" ? theme().warning : theme().textMuted);
 
-	// The shape is the one the section above it uses: a bold name in the body
-	// colour, muted values under it. Sitting beside `Context` and reading nothing
-	// like it would make this look like a second opinion about the same number.
+	// A list to open, or nothing behind the arrow. Drawn only when opening would
+	// show something, which is how the client's own MCP section behaves: it wears
+	// the arrow above two servers and not below, because an arrow that opens onto
+	// the line already on screen is an invitation to press it for nothing.
+	const foldable = () => reading()?.kind === "share";
+	const glyph = () => (foldable() ? (open() ? "\u25BC " : "\u25B6 ") : "");
+
+	// Mouse only, and that is parity rather than a shortfall: the client collapses
+	// its own MCP section with `onMouseDown` and a local signal, with no command
+	// and no key binding anywhere near it. Measured from the inside, by sending a
+	// real SGR click at the header cell and watching the arrow turn over.
+	//
+	// Open state is not remembered across restarts. `api.kv` does round-trip -- it
+	// was measured -- but collapsed is the default this section wants on every
+	// launch, so persisting it would only ever preserve a decision the reader made
+	// about one session.
+	//
+	// The header and the list share one <text> on purpose: an empty <text> costs a
+	// visible blank row, so a separate body node would leave a gap in the column
+	// whenever this is shut. The name keeps the body colour off it with a span; the
+	// rows inherit the node's colour, which is how a failed reading turns the whole
+	// thing amber.
 	return (
-		<box>
-			<text fg={theme().text}>
-				<b>Models</b>
+		<box
+			onMouseDown={() => {
+				if (foldable()) setOpen((v) => !v);
+			}}
+		>
+			<text fg={colour()}>
+				<span style={{ fg: theme().text }}>
+					{glyph()}
+					<b>Models</b>
+				</span>
+				<span style={{ fg: colour() }}>{open() ? "" : headline(reading())}</span>
+				{open() && reading()?.kind === "share" ? `\n${body(reading() as Reading)}` : ""}
 			</text>
-			<text fg={colour()}>{body(reading())}</text>
 		</box>
 	);
 }

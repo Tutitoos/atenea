@@ -63,12 +63,18 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   the percentage divides. A cache-excluded count beside a cache-included share would
   read as consistent and be wrong by the nine points those bases differ by here.
 
-  Five models get a line and the rest are summed into `+2 otros 836k (1%)` rather
-  than dropped, because a list that stops at five without saying what it left out
-  reads as complete. A share that rounds away prints `<1%`, not `0%`: `699k (0%)` is
-  two statements that contradict each other. No combined total — the `Context` box
-  above it already reports one, and a second invites reconciling two numbers that
-  answer different questions.
+  Every model gets a line, and the section arrives **collapsed**: one click on the
+  header opens it. Closed, the header carries the dominant model, its share and how
+  many others there were — `▶ Models (MiniMax-M3 60%, +6)` — and a failure is louder
+  shut than open, because `sin lectura` is printed in the header itself rather than
+  in a body nobody can see. This retired a cap of five and the summed `+2 otros`
+  line that existed only to keep the capped shares accounting for the session: shut,
+  the section cannot push anything below the fold, and open, the length is the one
+  the reader asked for. It folds on a mouse click and has no key binding, which is
+  parity with the client's own `MCP` section rather than a shortfall. A share that
+  rounds away prints `<1%`, not `0%`: `699k (0%)` is two statements that contradict
+  each other. No combined total — the `Context` box above it already reports one,
+  and a second invites reconciling two numbers that answer different questions.
 
   **Both sections were first put where they fit, not where they belonged.** The
   light went to `app_bottom` and the share to `session_prompt_right` because those
@@ -127,8 +133,8 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   footer stays pinned. The content sits in a 42-column `scrollbox`, and a 24-row
   probe pushed the client's own `LSP` body below the fold while the footer stayed —
   the same screen at a taller pane showed everything again, so nothing is dropped.
-  Content below the fold is still content nobody reads, which is why the list is
-  capped.
+  Content below the fold is still content nobody reads, which is why the list
+  arrives collapsed.
 
   **Shares, not currency.** opencode stores a `cost` per message and summing it
   is one line of SQL, but on a subscription that figure is list price for traffic

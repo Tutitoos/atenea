@@ -655,3 +655,71 @@ ctrl-c, resumed, the closed explore step read off the receipt and only the work
 step redispatched, and a second resume of the same run correctly doing nothing at
 all. Both are in the documented examples, which are output the binary actually
 printed today.
+
+## Two sidebar sections, dropped on measurement — 2026-08-11
+
+Both were designed, both were measured before a line was written, and the
+measurement killed them. Each is here with the condition that would revive it,
+because a feature dropped without its condition gets re-proposed every few
+months.
+
+### Per-server MCP context cost
+
+The design was one row per MCP server: status icon, name, error, tool count, and
+the context tokens its schemas consume with its share — the number that would
+make somebody trim an allow-list.
+
+**It cannot be read from the client.** What opencode exposes about MCP is
+`{name, status, error}` and nothing else: `api.state.mcp()` and the `/mcp` route
+return exactly that, and the only other MCP routes are auth, connect and
+disconnect. The one route that serves JSON schemas —
+`/experimental/tool?provider&model`, 14 tools and 22,057 bytes on this machine —
+lists built-in and *plugin* tools only. Measured: of those 14, the two that look
+like servers, `claude_mem_search` and `headroom_retrieve`, come from opencode
+plugins, while the servers themselves advertise 14 and 3 tools. MCP tool schemas
+do reach the model — this project's history has 271 calls to `agent-device_find`
+and 41 to `serena_activate_project`, so they are named `<server>_<tool>`
+somewhere in that payload — but no client surface publishes them, and nothing
+stores a decomposition: `session_context_epoch` is empty and a message's tokens
+are `{total, input, output, reasoning, cache}`.
+
+The denominator was never the problem: the provider reports `limit.context` per
+model, so a share of the whole context window is one division away. The numerator
+is what does not exist.
+
+Atenea could measure the servers itself by connecting to them, and that is
+exactly why this is dropped rather than deferred: it would spawn second copies of
+every server and report the cost of *Atenea's* context, not the client's. A
+section that could only fill in Atenea's own row — one server of three, the one
+whose surface this project already controls — is a line, not a section.
+
+**Condition to revisit:** opencode publishes MCP tools with their schemas, or
+records a per-server share of the context it sends. Either makes the numerator
+real and the section honest.
+
+### RTK usage for the project
+
+The design was a panel of what rtk saves on this project. The state is real:
+`~/.local/share/rtk/history.db`, 60 MB, WAL, `commands(timestamp, original_cmd,
+rtk_cmd, input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms,
+project_path)`, 21,330 rows across 263 projects. Scoped to this repository by
+path prefix: 3,606 commands, 66.3M input tokens, 59.8M saved, 120 minutes of
+execution.
+
+**It is not this client's data.** rtk has exactly one automatic wiring on this
+machine — `PreToolUse[Bash]` → `rtk hook claude`, in Claude Code's settings — and
+no hook or plugin in opencode or codex references it at all. A panel in
+opencode's sidebar showing those savings would read as "this is what I am saving
+here", and it is another client's work. The database cannot correct the
+impression either: it has `project_path` and `timestamp`, and no client, session
+or account dimension anywhere.
+
+Two traps recorded for whoever builds this later. The percentage has two bases
+that disagree by a factor of three on the same rows: token-weighted savings are
+90.2%, the average of the per-row percentages is 26.7%, and the honest headline
+is the weighted one. And the project filter must be a path prefix, the way rtk's
+own `--project` flag does it: `LIKE '%atenea%'` also matches
+`~/.local/state/atenea`, which is not this project.
+
+**Condition to revisit:** rtk is hooked into opencode, so that the rows describe
+the client the panel is drawn in.

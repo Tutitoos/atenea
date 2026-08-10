@@ -452,13 +452,7 @@ Context
 22% used
 $13.04 spent
 
-Models
-MiniMax-M3 86M (60%)
-deepseek-v4-pro 42M (30%)
-glm-5.2 10M (7%)
-qwen3.7-max 3M (2%)
-gemini-3.1-pro-preview 699k (<1%)
-+2 otros 836k (1%)
+▶ Models (MiniMax-M3 60%, +6)
 
 ▼ MCP
 • atenea  Connected
@@ -528,7 +522,7 @@ the footer stays pinned.** The content sits in a 42-column `scrollbox`: a probe 
 24 rows rendered all 24 and pushed the client's own `LSP` body below the fold,
 while the footer stayed exactly where it was. Nothing was dropped — the same
 screen at a taller pane showed all of it again — but content below the fold is
-content nobody reads, which is why the model list is capped.
+content nobody reads, which is why the model list arrives collapsed.
 
 ### The traffic light
 
@@ -568,13 +562,20 @@ The second widget answers a question about the session in front of you, and it
 never talks to Atenea at all:
 
 ```text
-Models
+▶ Models (MiniMax-M3 60%, +6)
+```
+
+Closed, which is how it arrives, and one click on the header opens it:
+
+```text
+▼ Models
 MiniMax-M3 86M (60%)
 deepseek-v4-pro 42M (30%)
 glm-5.2 10M (7%)
 qwen3.7-max 3M (2%)
 gemini-3.1-pro-preview 699k (<1%)
-+2 otros 836k (1%)
+qwen3.7-plus 442k (<1%)
+minimax-m3 394k (<1%)
 ```
 
 Shares, not money. opencode does store a `cost` per message, and adding it up is
@@ -597,13 +598,27 @@ the ones the percentage divides, so the pair cannot disagree — a cache-exclude
 count beside a cache-included share would read as consistent and be wrong by the
 nine points those bases differ by here.
 
-**Five models get a line; the rest are summed, not dropped.** `+2 otros 836k (1%)`
-is there so the shares still account for the session: a list that stops at five
-without saying what it left out reads as complete, which is the same omission as a
-percentage with no visible base. A share that rounds to nothing prints `<1%`
-instead of `0%`, because `699k (0%)` states two things that contradict each other.
-Rounding still lets the column sum to 99 or 101, and that is left visible rather
-than fudged.
+**Every model gets a line, and the section is collapsed until you ask.** There was
+a cap of five here, with a summed `+2 otros` line under it so the visible shares
+still accounted for the session. Collapsing retires both: shut, this is one line
+that cannot push anything below the fold; open, the length is the length you asked
+for. A share that rounds to nothing prints `<1%` instead of `0%`, because
+`699k (0%)` states two things that contradict each other. Rounding still lets the
+column sum to 99 or 101, and that is left visible rather than fudged.
+
+**Closed, the header still answers something.** It carries the dominant model with
+its share and how many others there were — `(MiniMax-M3 60%, +6)` — because a
+collapsed section that shows only its own name is a line spent on a label. A
+failure is louder shut than open: `sin lectura` and `sin modelos todavia` are
+printed in the header itself, so closing this can never turn a broken reading into
+an absence nobody notices. There is no arrow when there is no list behind it,
+which is how the client's own `MCP` section behaves above two servers.
+
+It folds on a **mouse click** on its header, and that is parity rather than a
+shortfall: the client collapses its own `MCP` section with the same handler and a
+local signal, with no command and no key binding anywhere near it. The open state
+is not remembered across restarts — collapsed is the state this section wants on
+every launch.
 
 There is no combined total: the `Context` box directly above already reports the
 session's tokens, and a second total invites reconciling two numbers that answer
