@@ -230,6 +230,15 @@ func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 // capability's -- so the tool has to add it, or a model has no way to express
 // what a caller at a terminal expresses with `--repo`.
 func TestAToolIsAimableAtARepository(t *testing.T) {
+	// Tools that intentionally carry no repository argument.
+	// Every entry here must be justified: these tools answer a question that
+	// makes no sense to scope to a single repository.
+	// Adding an entry is a deliberate edit that must be explained here —
+	// not a quiet skip appended to a growing list.
+	exemptFromAimable := map[string]string{
+		"catalog.repositories": "answers 'which repositories exist' — the question you ask before you know the name",
+	}
+
 	atenea := buildService(t, mcpSettings(t))
 	defer serve(t, atenea)()
 
@@ -238,17 +247,34 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 	got := result(t, c.call("tools/list", nil), "tools/list")
 
 	tools, _ := got["tools"].([]any)
+	exemptSeen := make(map[string]bool)
 	for _, entry := range tools {
 		tool, _ := entry.(map[string]any)
+		name, _ := tool["name"].(string)
 		schema, _ := tool["inputSchema"].(map[string]any)
 		props, _ := schema["properties"].(map[string]any)
+
+		if _, exempt := exemptFromAimable[name]; exempt {
+			exemptSeen[name] = true
+			if _, hasRepo := props["repository"].(map[string]any); hasRepo {
+				t.Errorf("%v is in the exempt list but has a repository argument — remove it from the list", name)
+			}
+			continue
+		}
+
 		repo, ok := props["repository"].(map[string]any)
 		if !ok {
-			t.Errorf("%v cannot be aimed at a repository: %v", tool["name"], props)
+			t.Errorf("%v cannot be aimed at a repository: %v", name, props)
 			continue
 		}
 		if repo["description"] == "" || repo["description"] == nil {
-			t.Errorf("%v: the repository argument does not say which ones exist", tool["name"])
+			t.Errorf("%v: the repository argument does not say which ones exist", name)
+		}
+	}
+
+	for name := range exemptFromAimable {
+		if !exemptSeen[name] {
+			t.Errorf("exempt list names %v but that tool was not in tools/list — remove the stale entry", name)
 		}
 	}
 }
