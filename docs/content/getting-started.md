@@ -433,17 +433,51 @@ chats
 file — not everything it may do. A dash means it asked for nothing extra, and it
 still runs on the floor that file sets.
 
-## Put a line on the client's screen
+## Put a section in the client's sidebar
 
-`atenea status` answers when you ask it. A status line answers without being
-asked: one always-visible line in opencode's terminal UI. Two of them ship, and
-they are installed separately on purpose, because they read different things.
+`atenea status` answers when you ask it. These answer without being asked: two
+sections in opencode's sidebar, under the `Context` box it draws itself. They are
+installed separately on purpose, because they read different things.
 
 ```text
 $ atenea statusline widgets
 atenea         Atenea's traffic light, the version running and unread incidents
 session-share  which model did what share of this session's tokens
 ```
+
+```text
+Context
+448,618 tokens
+45% used
+$3.08 spent
+
+Share
+MiniMax-M3 98% · glm-5.2 1%
++3 · 408M tokens
+
+⊙ Atenea
+0.10.1+751972f
+
+▼ MCP
+• atenea  Connected
+```
+
+**That column has to be on screen for either to appear.** It is 42 columns wide,
+and its default state is `auto`, which shows it only when the terminal is wider
+than 120 columns — and never for a child session. Read out of the shipped client
+(1.18.16), which also carries `show` and `hide` for that state. On a narrow
+terminal these widgets are installed, declared, loaded, and invisible, and no
+command of ours can tell you so: the placement is the client's.
+
+The column is ordered, and the client's own sections claim round numbers —
+`Context` 100, `MCP` 200, `LSP` 300, `Todo` 400, `Files` 500. Ours sit at 150 and
+160, which is why they land between the first two, and a test refuses any widget
+whose registration drifts outside that gap or onto a slot outside the sidebar.
+There is **no slot inside the `Context` box**: the twelve the client offers are
+`app`, `app_bottom`, `home_logo`, `home_prompt`, `home_prompt_right`,
+`home_bottom`, `home_footer`, `session_prompt`, `session_prompt_right`,
+`sidebar_title`, `sidebar_content` and `sidebar_footer`. A section of one's own
+directly beneath it is as close as the client allows.
 
 ### The traffic light
 
@@ -460,14 +494,18 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ atenea 0.10.1+751972f · 2 sin leer
+⊙ Atenea
+0.10.1+751972f  2 sin leer
 ```
 
 The dot carries the light: green, amber, red, and muted grey when nothing is
-running. That last state says `atenea apagado` rather than warning, because a
-service you stopped on purpose is not a fault — and the two are told apart by
-whether the socket file exists, not by the connection error, which arrives as
-`ENOENT` whether the path is missing, stale, or unreadable.
+running. That last state says `apagado` rather than warning, because a service you
+stopped on purpose is not a fault — and the two are told apart by whether the
+socket file exists, not by the connection error, which arrives as `ENOENT`
+whether the path is missing, stale, or unreadable. The unread count is only there
+when something is unread, and it sits beside the version rather than under it: in
+this column an empty line of its own would cost a visible blank row, measured
+against the real sidebar before the shape was chosen.
 
 The version is printed exactly as the service reports it, build metadata and all.
 Trimming `0.10.1+751972f.modified` down to `0.10.1` would hide the part that says
@@ -479,7 +517,9 @@ The second widget answers a question about the session in front of you, and it
 never talks to Atenea at all:
 
 ```text
-◴ MiniMax-M3 98% · glm-5.2 1% · +3 · 408M tok
+Share
+MiniMax-M3 98% · glm-5.2 1%
++3 · 408M tokens
 ```
 
 Shares, not money. opencode does store a `cost` per message, and adding it up is
@@ -498,16 +538,19 @@ rather than printed as `0 %`: a model you opened and abandoned did no share of
 anything.
 
 Two models are named, the rest collapse into `+3`, and the total carries a
-magnitude so the line does not grow with the session. `408M tok` is the sum
+magnitude so the section does not grow with the session. `408M tokens` is the sum
 across every model, not just the two named ones.
 
 It reads opencode's own SQLite store, opened **read-only**, for the session id
 the client hands the plugin — no socket, no network, and nothing of yours leaves
 the machine. The store is 3 GB here and the query costs 2 ms, because it lands on
-an index the client already keeps on `(session_id, time_created, id)`. A session
-with nothing in it draws nothing rather than a zero, and an unreadable store
-draws `sin lectura` rather than the last good percentages, which would otherwise
-keep showing numbers that stopped arriving.
+an index the client already keeps on `(session_id, time_created, id)`.
+
+Every state names both of its lines, because a blank one is a visible empty row
+in that column: a session with nothing in it reads `sin modelos todavia` over
+`0 tokens`, and a store that will not answer reads `sin lectura` over `el store no
+respondio` rather than the last good percentages, which would otherwise keep
+showing numbers that had stopped arriving.
 
 ### Either widget, same three verbs
 

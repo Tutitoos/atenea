@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -350,6 +352,61 @@ func TestEveryShippedWidgetInstallsSomething(t *testing.T) {
 			}
 			if widget.Summary == "" {
 				t.Error("a widget with no summary cannot be listed by the command")
+			}
+		})
+	}
+}
+
+// Where a widget lands was asked for and then got lost: the first version of both
+// of these registered whichever slot this code already knew about -- one on the
+// prompt line, one at the bottom of the app -- and neither is where the question
+// was. The client's sidebar is an ordered column and its own sections claim round
+// numbers, Context at 100 and MCP at 200, so a widget of ours belongs strictly
+// between them. This reads the source that ships, because the source is the
+// contract: a plugin compiled from a file with the wrong slot name registers
+// nothing and draws nothing, which looks exactly like a plugin that never loaded.
+func TestEveryWidgetLandsInTheSidebarBetweenContextAndMCP(t *testing.T) {
+	const (
+		context = 100
+		mcp     = 200
+	)
+	order := regexp.MustCompile(`order:\s*(\d+)`)
+
+	for _, widget := range statusline.Widgets() {
+		t.Run(widget.Name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			line, err := statusline.For(widget.Name)
+			if err != nil {
+				t.Fatalf("For: %v", err)
+			}
+			if _, err := line.Install(); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			raw, err := os.ReadFile(line.Plugin)
+			if err != nil {
+				t.Fatalf("plugin: %v", err)
+			}
+			body := string(raw)
+
+			if !strings.Contains(body, "sidebar_content:") {
+				t.Errorf("does not register sidebar_content, so it cannot appear in the sidebar:\n%s", firstLines(body))
+			}
+			for _, elsewhere := range []string{"app_bottom:", "session_prompt_right:", "session_prompt:", "home_bottom:"} {
+				if strings.Contains(body, elsewhere) {
+					t.Errorf("registers %s: that is a slot outside the sidebar", elsewhere)
+				}
+			}
+
+			found := order.FindStringSubmatch(body)
+			if found == nil {
+				t.Fatal("no order in the registration: the host would place this by load order")
+			}
+			n, err := strconv.Atoi(found[1])
+			if err != nil {
+				t.Fatalf("order %q: %v", found[1], err)
+			}
+			if n <= context || n >= mcp {
+				t.Errorf("order = %d, want strictly between Context (%d) and MCP (%d)", n, context, mcp)
 			}
 		})
 	}

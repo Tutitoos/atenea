@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-// A single always-visible line reporting the Atenea service: its traffic light,
-// the version it is actually running, and unread incidents.
+// A section in the client's sidebar reporting the Atenea service: its traffic
+// light, the version it is actually running, and unread incidents.
 //
 // The reading comes from Atenea's own unix socket -- the same door its CLI knocks
 // on -- because it answers without a handshake and needs no model in the loop.
@@ -113,7 +113,7 @@ type StatusApi = {
 	slots: { register(plugin: { order: number; slots: Record<string, () => unknown> }): string };
 };
 
-function AteneaLine(props: { api: StatusApi }) {
+function AteneaSection(props: { api: StatusApi }) {
 	// Undefined until the first answer lands. Starting at "unreadable" would paint
 	// an amber warning for the ~100 ms before anything had been asked, which is a
 	// false alarm: not having read yet is not the same as failing to read.
@@ -155,12 +155,15 @@ function AteneaLine(props: { api: StatusApi }) {
 	// The version is printed exactly as the service reports it, build metadata and
 	// all. Trimming `+751972f.modified` down to `0.10.1` would hide precisely the
 	// part that says this binary is not the one that was tagged.
+	//
+	// The name is not repeated here: it is the section title now, so this line
+	// carries only what changes.
 	const words = () => {
 		const now = reading();
-		if (!now) return "";
-		if (now.kind === "off") return "atenea apagado";
-		if (now.kind === "unreadable") return "atenea sin lectura";
-		return `atenea ${now.version}`;
+		if (!now) return "…";
+		if (now.kind === "off") return "apagado";
+		if (now.kind === "unreadable") return "sin lectura";
+		return now.version;
 	};
 
 	// Both halves collapse to an empty string rather than to a conditional element.
@@ -174,15 +177,22 @@ function AteneaLine(props: { api: StatusApi }) {
 		return now?.kind === "light" ? now.unread : 0;
 	};
 
-	const unreadWords = () => (unread() > 0 ? `· ${unread()} sin leer` : "");
+	const unreadWords = () => (unread() > 0 ? `${unread()} sin leer` : "");
 
+	// The second row is a row box on purpose. In this column an empty <text> costs
+	// a visible blank line -- measured with a probe against the real sidebar -- and
+	// an empty one beside a sibling costs nothing, which is how the unread count
+	// disappears when there is nothing unread.
 	return (
-		<box width="100%" paddingLeft={2} paddingRight={2} flexDirection="row" flexShrink={0} gap={1}>
-			<text fg={theme().textMuted}>
+		<box>
+			<text fg={theme().text}>
 				<span style={{ fg: dot() }}>{glyph()}</span>
-				{words()}
+				<b>Atenea</b>
 			</text>
-			<text fg={theme().error}>{unreadWords()}</text>
+			<box flexDirection="row" gap={1}>
+				<text fg={theme().textMuted}>{words()}</text>
+				<text fg={theme().error}>{unreadWords()}</text>
+			</box>
 		</box>
 	);
 }
@@ -191,9 +201,13 @@ export default {
 	id: "atenea.status",
 	tui: async (api: StatusApi) => {
 		api.slots.register({
-			order: 0,
+			// Below the share section, both between the host's Context (100) and its
+			// MCP list (200). The light belongs in the sidebar with the rest of the
+			// standing state, not on the prompt line where it was first put because
+			// that was the slot this code happened to know about.
+			order: 160,
 			slots: {
-				app_bottom: () => <AteneaLine api={api} />,
+				sidebar_content: () => <AteneaSection api={api} />,
 			},
 		});
 	},

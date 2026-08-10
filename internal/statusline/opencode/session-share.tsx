@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 
-// Which model did what share of the session you are looking at, next to the
-// prompt. Nothing here reads Atenea, and nothing here reads the proxy: the
-// numbers come from the client's own store, opened read-only.
+// Which model did what share of the session you are looking at, as a section in
+// the client's sidebar under its Context box. Nothing here reads Atenea, and
+// nothing here reads the proxy: the numbers come from the client's own store,
+// opened read-only.
 //
 // Why not currency. The store keeps a `cost` per message, and it is computed
 // from a list-price table, not from a bill. On this machine most traffic reaches
@@ -147,19 +148,22 @@ function percent(part: number, total: number): number {
 	return Math.round((100 * part) / total);
 }
 
-function words(reading: Reading | undefined): string {
-	if (!reading) return "";
-	if (reading.kind === "unreadable") return "reparto sin lectura";
-	if (reading.kind === "empty") return "";
+// Every line in the column has to say something. An empty <text> costs a visible
+// blank row -- measured with a probe against the real sidebar before this was
+// written -- so each state names two non-empty lines rather than hiding one.
+function lines(reading: Reading | undefined): [string, string] {
+	if (!reading) return ["…", "leyendo el store"];
+	if (reading.kind === "unreadable") return ["sin lectura", "el store no respondio"];
+	if (reading.kind === "empty") return ["sin modelos todavia", "0 tokens"];
 	const named = reading.slices.map((s) => `${short(s.model)} ${percent(s.tokens, reading.total)}%`);
-	if (reading.hidden > 0) named.push(`+${reading.hidden}`);
-	return `${named.join(" · ")} · ${magnitude(reading.total)} tok`;
+	const rest = reading.hidden > 0 ? `+${reading.hidden} · ` : "";
+	return [named.join(" · "), `${rest}${magnitude(reading.total)} tokens`];
 }
 
 type SlotContext = { theme: { current: Record<string, string> } };
 type SlotProps = { session_id?: unknown };
 
-function ShareLine(props: { ctx: SlotContext; slot: SlotProps }) {
+function ShareSection(props: { ctx: SlotContext; slot: SlotProps }) {
 	const [reading, setReading] = createSignal<Reading | undefined>();
 	const theme = () => props.ctx.theme.current;
 	const sessionID = () => (typeof props.slot.session_id === "string" ? props.slot.session_id : "");
@@ -177,14 +181,21 @@ function ShareLine(props: { ctx: SlotContext; slot: SlotProps }) {
 		onCleanup(() => clearInterval(timer));
 	});
 
-	const glyph = () => (reading()?.kind === "share" ? "◴ " : "");
 	const colour = () => (reading()?.kind === "unreadable" ? theme().warning : theme().textMuted);
 
+	const rows = () => lines(reading());
+
+	// The shape is the one the section above it uses: a bold name in the body
+	// colour, muted values under it. Sitting beside `Context` and reading nothing
+	// like it would make this look like a second opinion about the same number.
 	return (
-		<text fg={colour()}>
-			<span style={{ fg: theme().textMuted }}>{glyph()}</span>
-			{words(reading())}
-		</text>
+		<box>
+			<text fg={theme().text}>
+				<b>Share</b>
+			</text>
+			<text fg={colour()}>{rows()[0]}</text>
+			<text fg={theme().textMuted}>{rows()[1]}</text>
+		</box>
 	);
 }
 
@@ -192,13 +203,17 @@ export default {
 	id: "opencode.session-share",
 	tui: async (api: { slots: { register(plugin: { order: number; slots: Record<string, unknown> }): string } }) => {
 		api.slots.register({
-			order: 10,
+			// The sidebar column is ordered, and the host's own sections claim round
+			// numbers: Context 100, MCP 200, LSP 300, Todo 400, Files 500. 150 puts
+			// this directly under the Context box, which is where the question was
+			// asked, and above MCP. Read out of the shipped bundle, not guessed.
+			order: 150,
 			slots: {
 				// Two arguments, measured: the host passes its context first and the
 				// slot's own props second. The declared type puts `session_id` among
 				// the props of this slot and that part holds; the arity does not
 				// appear in the type at all.
-				session_prompt_right: (ctx: SlotContext, slot: SlotProps) => <ShareLine ctx={ctx} slot={slot ?? {}} />,
+				sidebar_content: (ctx: SlotContext, slot: SlotProps) => <ShareSection ctx={ctx} slot={slot ?? {}} />,
 			},
 		});
 	},

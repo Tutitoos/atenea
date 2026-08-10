@@ -17,12 +17,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
-- **`atenea statusline install` puts Atenea's own light on opencode's screen.**
-  One always-visible line in the client's terminal UI: the traffic light, the
-  version actually running, and unread incidents, read from the service's unix
-  socket — the same door the CLI knocks on, so it needs no key, no port and no
-  network. `uninstall` takes it off, `status` says where it stands, the same
-  three verbs as `service`.
+- **`atenea statusline install` puts Atenea's own light in opencode's sidebar.**
+  A section under the client's own `Context` box: the traffic light, the version
+  actually running, and unread incidents, read from the service's unix socket —
+  the same door the CLI knocks on, so it needs no key, no port and no network.
+  `uninstall` takes it off, `status` says where it stands, the same three verbs as
+  `service`.
+
+  That column is the client's and it is 42 columns wide: in its default `auto`
+  state it appears only above 120 columns of terminal, and never for a child
+  session. Below that width the section is installed, declared, loaded and
+  invisible, and no command here can say so.
 
   The plugin source is embedded in the binary, so `status` can answer the only
   question worth asking after an upgrade: whether the file on disk is the one
@@ -43,15 +48,27 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   by hand. Uninstall removes the config only when taking our entry out leaves
   nothing behind.
 
-- **A second status-line widget: which model did what share of this session.**
+- **A second sidebar section: which model did what share of this session.**
   `atenea statusline widgets` lists what the binary carries, and the three verbs
-  now take a name: `install session-share` draws
-  `◴ MiniMax-M3 98% · glm-5.2 1% · +3 · 408M tok` in opencode's TUI. Omitting the
-  name still means `atenea`, and every screen prints which widget it acted on,
-  because with two installed the paths differ by one word. A name this binary
-  does not carry is refused with the list of the ones it does, rather than
-  resolving to the default — installing a traffic light when somebody asked for
-  a share is the failure that check exists for.
+  now take a name: `install session-share` draws `Share` over
+  `MiniMax-M3 98% · glm-5.2 1%` and `+3 · 408M tokens`, directly under the
+  client's `Context` box. Omitting the name still means `atenea`, and every screen
+  prints which widget it acted on, because with two installed the paths differ by
+  one word. A name this binary does not carry is refused with the list of the ones
+  it does, rather than resolving to the default — installing a traffic light when
+  somebody asked for a share is the failure that check exists for.
+
+  **Both sections were first put where they fit, not where they belonged.** The
+  light went to `app_bottom` and the share to `session_prompt_right` because those
+  were the two slots this code had already measured; the sidebar was never
+  checked. It takes plugin content: the client offers twelve slots, three of them
+  `sidebar_title`, `sidebar_content` and `sidebar_footer`, and its own `Context`,
+  `MCP`, `LSP`, `Todo` and `Files` sections are themselves `sidebar_content`
+  registrations at orders 100 to 500. Ours now sit at 150 and 160, between the
+  first two, and a test refuses any widget whose order leaves that gap or whose
+  registration names a slot outside the sidebar. There is no slot inside the
+  `Context` box; a section immediately beneath it is as close as the client
+  allows.
 
   **Shares, not currency.** opencode stores a `cost` per message and summing it
   is one line of SQL, but on a subscription that figure is list price for traffic
