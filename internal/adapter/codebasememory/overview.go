@@ -104,7 +104,7 @@ func (r *Runner) runSymbolOverview(ctx context.Context, req contract.RunRequest,
 		// second holds is the failure this capability would be least able
 		// to recover from: an empty list reads as a finished answer.
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
-			"%s is not in this repository's graph: atenea ask repository.index --repo %s builds one",
+			"%s is not in this repository's graph: atenea ask repository.index --repo %s --allow write --allow process builds one",
 			ask.file, req.Repository.ID)
 	}
 
@@ -208,14 +208,14 @@ func (r *Runner) columnsFor(root, file string, rows []overviewRow) ([]int, error
 		if !ok {
 			return nil, contract.Fail(contract.FailureUnavailable,
 				"%s has fewer than %d line(s) but the graph puts %s there: "+
-					"the index is behind the file, and atenea ask repository.index rebuilds it",
+					"the index is behind the file, and atenea ask repository.index --allow write --allow process rebuilds it",
 				file, row.start, row.name)
 		}
 		column, ok := columnOf(line, row.name)
 		if !ok {
 			return nil, contract.Fail(contract.FailureUnavailable,
 				"%s:%d does not declare %s as a whole word: "+
-					"the index is behind the file, and atenea ask repository.index rebuilds it",
+					"the index is behind the file, and atenea ask repository.index --allow write --allow process rebuilds it",
 				file, row.start, row.name)
 		}
 		out[i] = column
