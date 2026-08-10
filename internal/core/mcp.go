@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ const (
 // orchestrator's question. A caller at a terminal answers it with `--repo`. A
 // model has no equivalent unless the tool asks, so the tool asks.
 const repositoryArg = "repository"
+
+// toolListRepositories is Atenea's own discovery tool: no repository required,
+// no capability backing it, and no orchestrator in the path.
+const toolListRepositories = "catalog.repositories"
 
 // conversation is one connection's worth of state, which is exactly one chat.
 //
@@ -196,8 +201,9 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 			"version": buildinfo.Version,
 		},
 		"instructions": "Atenea decides and delegates: each tool is a capability, " +
-			"and the implementation that answers it is chosen per call. The unit " +
-			"of work is the repository, so every tool takes one.",
+			"and the implementation that answers it is chosen per call. Most tools " +
+			"take a repository. Call catalog.repositories first to discover what is " +
+			"registered, the absolute path of each, and what each can answer.",
 	}, nil
 }
 
@@ -211,7 +217,8 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		return nil, notInitialized()
 	}
 	capabilities := v.core.catalog.Capabilities()
-	tools := make([]map[string]any, 0, len(capabilities))
+	tools := make([]map[string]any, 0, 1+len(capabilities))
+	tools = append(tools, v.repositoriesTool())
 	for _, capability := range capabilities {
 		input, err := capability.InputSchema()
 		if err != nil {
@@ -274,7 +281,8 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 	for _, repo := range repos {
 		ids = append(ids, repo.ID)
 	}
-	description := "Repository to work in. Registered: " + strings.Join(ids, ", ")
+	description := "Repository to work in. Registered: " + strings.Join(ids, ", ") +
+		" — call catalog.repositories for absolute paths and per-repo capability details."
 	if len(ids) == 0 {
 		description = "Repository to work in. None are registered on this machine."
 	}
@@ -337,6 +345,9 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	// real problem is that its backend is not declared here.
 	if server, tool, ok := passthrough.Split(params.Name); ok {
 		return v.rawCall(ctx, server, tool, params)
+	}
+	if params.Name == toolListRepositories {
+		return v.listRepositories()
 	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
@@ -474,6 +485,52 @@ func toolFailure(message string) map[string]any {
 		"content": []any{map[string]any{"type": "text", "text": message}},
 		"isError": true,
 	}
+}
+
+// repositoriesTool is the schema entry for catalog.repositories, inserted
+// before all capabilities so a client reading top-to-bottom sees it first.
+func (v *conversation) repositoriesTool() map[string]any {
+	return map[string]any{
+		"name": toolListRepositories,
+		"description": "List every repository registered with Atenea: name, absolute path on disk, " +
+			"languages present, and which providers hold a ready index. " +
+			"Call this before any code or symbol tool when you do not already know the repository name. " +
+			"Symbol tools (symbol.*) require serena and a language server for the repo's languages; " +
+			"Dart does not currently have a serena language server, so symbol tools are refused for " +
+			"Dart-only repositories. Code-search and impact tools require the repository to be " +
+			"indexed by codebase-memory (check indexed_by).",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+	}
+}
+
+// listRepositories answers catalog.repositories inline, with no orchestrator
+// and no repository argument: it is the question you ask before you know
+// which repository to name.
+func (v *conversation) listRepositories() (any, *rpcError) {
+	repos := v.core.catalog.Repositories()
+	entries := make([]map[string]any, 0, len(repos))
+	for _, repo := range repos {
+		abs, err := filepath.Abs(repo.Path)
+		if err != nil {
+			abs = repo.Path
+		}
+		entries = append(entries, map[string]any{
+			"id":         repo.ID,
+			"path":       abs,
+			"languages":  repo.Languages,
+			"indexed_by": repo.Indexes(),
+		})
+	}
+	result := map[string]any{"repositories": entries}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: "serializing repositories: " + err.Error()}
+	}
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": string(body)}},
+		"structuredContent": result,
+		"isError":           false,
+	}, nil
 }
 
 // notInitialized refuses work to a client that never said who it was.
