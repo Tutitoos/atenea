@@ -135,9 +135,12 @@ over that path while the service is up and nothing fails, nothing is logged,
 the CLI you type are now two different builds:
 
 ```
-~/.local/bin/atenea   inode 7014823
-/proc/<pid>/exe       inode 66173514
+~/.local/bin/atenea                    inode 7015723
+/proc/<pid>/maps, executable mapping   inode 7024105
 ```
+
+Those two are a real drift, measured on 2026-08-10: a build copied over the
+live path while the service stayed up.
 
 Both answer `atenea version` with the same string, because the version is
 stamped at link time and both came from the same tree. Nothing on any screen
@@ -147,13 +150,54 @@ be entirely absent from the other for as long as nobody restarts.
 
 This is the same shape as the three defects above, one layer lower: the earlier
 ones measured the wrong *process*, this one measures the wrong *build* of the
-right process. The check costs one line and no tooling:
+right process.
+
+**And the check first published here was itself another one, in the document
+arguing against it.** It compared `stat -Lc %i` on the path against
+`stat -Lc %i` on
+`/proc/<pid>/exe`, which cannot be equal on any Linux: that magic symlink is
+resolved inside procfs, so `stat` answers with procfs's own device and inode
+numbers rather than the file's. Measured on 2026-08-10, `/proc/self/exe` and
+the very same `bash` binary named by its path report `dev=26 inode=71303137`
+and `dev=64513 inode=4980754` — one file, two numbers. The check therefore
+said "stale" every time it was run, including on a service started seconds
+earlier, and the two numbers printed as evidence above this paragraph in the
+first version of this page were that artefact rather than a real drift. A check
+that always fires carries the same information as a check that never does.
+
+The inode the kernel actually mapped is in `/proc/<pid>/maps`, beside the
+device and the path, and that one compares — with two details that both bit the
+first attempt at writing it:
 
 ```sh
 pid=$(systemctl --user show atenea -p MainPID --value)
-[ "$(stat -Lc %i ~/.local/bin/atenea)" = "$(stat -Lc %i /proc/$pid/exe)" ] \
+running=$(awk '$6 ~ /\/atenea$/ {print $5; exit}' /proc/$pid/maps)
+[ -n "$running" ] || { echo "cannot read the mapping for pid $pid"; exit 1; }
+[ "$running" = "$(stat -c %i ~/.local/bin/atenea)" ] \
   || echo "the service is running a build that is no longer at that path"
 ```
+
+The match is on the sixth *field*, not the whole line, because the moment the
+file is replaced the kernel renders that mapping as
+`/home/tutitoos/.local/bin/atenea (deleted)` — a pattern anchored with `$` on
+the line stops matching in exactly the case the check exists to catch. And the
+empty answer is refused out loud, because a shell comparison against an empty
+string is not a measurement: the version anchored on the line printed the
+warning for the drift, correctly, while having read nothing at all.
+
+All three outcomes were measured on 2026-08-10 before this was written: equal
+(`7015723 = 7015723`) on a service restarted after the install, unequal
+(`7024105` running against `7015723` on disk) after copying a different build
+over the live path, and the guard firing on a pid with no such mapping.
+`readlink /proc/<pid>/exe` is the other honest reading — it appends
+` (deleted)` once the inode has no name left — but it stays silent for the case
+that matters here, where the path exists and holds something else.
+
+Note what this means for identical bytes: installing the same artefact twice
+creates a new inode, so the check reports a drift the moment you reinstall, even
+when nothing changed. That is the correct answer, not a false alarm. The process
+is holding the old file, and the only thing that makes the two agree is a
+restart.
 
 ## The general lesson
 

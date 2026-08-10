@@ -13,6 +13,26 @@ Two numbers are versioned here and they move independently:
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
+## [Unreleased]
+
+### Fixed
+
+- **The stale-build check in `measuring-the-wrong-process` could only ever say
+  "stale".** It compared `stat -Lc %i` on `~/.local/bin/atenea` against the same
+  on `/proc/<pid>/exe`, and that magic symlink is resolved inside procfs, so
+  `stat` answers with procfs's own device and inode rather than the file's — one
+  `bash`, named both ways, reports `dev=26 inode=71303137` and `dev=64513
+  inode=4980754`. The two numbers the page printed as evidence of a real drift
+  were that artefact. The check now reads the inode the kernel mapped, from
+  `/proc/<pid>/maps`, matching the path *field* because a replaced file renders
+  as `… /atenea (deleted)` and an anchored line pattern stops matching in
+  exactly the case being checked for; an unreadable mapping is refused out loud
+  instead of comparing against an empty string. Equal, unequal and unreadable
+  were all three exercised before it was written down.
+
+  Found by running the check once after tagging 0.10.1, which is the only reason
+  it was ever run against a service that had just been restarted.
+
 ## [0.10.1] - 2026-08-10
 
 A patch: seven defects fixed and five additions, no contract change.
