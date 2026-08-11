@@ -196,11 +196,55 @@ type jsonIndexReport struct {
 	Err        string `json:"error,omitempty"`
 }
 
-// printIndexReportsJSON is the machine-readable twin of printIndexReports.
-func printIndexReportsJSON(out io.Writer, reports []core.IndexReport) {
-	js := make([]jsonIndexReport, len(reports))
+type jsonServerProbe struct {
+	ID         string `json:"id"`
+	Transport  string `json:"transport"`
+	Where      string `json:"where"`
+	Expose     string `json:"expose"`
+	Reachable  bool   `json:"reachable"`
+	Name       string `json:"name,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TookMS     int64  `json:"took_ms"`
+	PinnedPath bool   `json:"pinned_path"`
+}
+
+// jsonDetection is what `atenea detect --json` answers.
+//
+// An object with two keys, where this used to be a bare array of index
+// reports. The array could not grow a second kind of row without every reader
+// having to guess which kind it was holding, and a detection that reported
+// indexes while staying silent about whether the providers behind them are
+// even reachable is the shape of report this whole change exists to end. The
+// break is deliberate and belongs to a 0.x CLI, not to the contract in
+// pkg/contract, which is untouched.
+type jsonDetection struct {
+	Servers []jsonServerProbe `json:"servers"`
+	Indexes []jsonIndexReport `json:"indexes"`
+}
+
+// printDetectionJSON is the machine-readable twin of the two prose sections.
+func printDetectionJSON(out io.Writer, servers []core.ServerProbe, reports []core.IndexReport) {
+	js := jsonDetection{
+		Servers: make([]jsonServerProbe, len(servers)),
+		Indexes: make([]jsonIndexReport, len(reports)),
+	}
+	for i, server := range servers {
+		js.Servers[i] = jsonServerProbe{
+			ID:         server.ID,
+			Transport:  server.Transport,
+			Where:      server.Where,
+			Expose:     server.Expose,
+			Reachable:  server.OK,
+			Name:       server.Name,
+			Version:    server.Version,
+			Reason:     server.Reason,
+			TookMS:     server.Took.Milliseconds(),
+			PinnedPath: server.PinnedPath,
+		}
+	}
 	for i, report := range reports {
-		js[i] = jsonIndexReport{
+		js.Indexes[i] = jsonIndexReport{
 			Repository: report.Repository,
 			Provider:   report.Provider,
 			Ready:      report.Ready,

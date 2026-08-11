@@ -138,10 +138,11 @@ func TestDetectJSONReportsReadyAndNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
-	var reports []jsonIndexReport
-	if err := json.Unmarshal([]byte(out), &reports); err != nil {
+	var detection jsonDetection
+	if err := json.Unmarshal([]byte(out), &detection); err != nil {
 		t.Fatalf("--json wrote invalid json: %v\n%s", err, out)
 	}
+	reports := detection.Indexes
 	if len(reports) != 2 {
 		t.Fatalf("reports = %+v, want two", reports)
 	}
@@ -157,12 +158,14 @@ func TestDetectJSONReportsReadyAndNotReady(t *testing.T) {
 	}
 }
 
-// The empty sweep still has to be valid, parseable json -- an empty array,
-// not a bare "no provider" sentence meant for an eye.
-func TestDetectJSONOnAnEmptySweepIsAnEmptyArray(t *testing.T) {
+// The empty sweep still has to be valid, parseable json: both keys present and
+// empty, never null and never a sentence meant for an eye. A reader that has to
+// distinguish "no servers declared" from "the key is missing" is back to
+// guessing, which is the failure mode this command is about.
+func TestDetectJSONOnAnEmptySweepHasBothKeysEmpty(t *testing.T) {
 	var out bytes.Buffer
-	printIndexReportsJSON(&out, nil)
-	if strings.TrimSpace(out.String()) != "[]" {
-		t.Fatalf("out = %q, want an empty json array", out.String())
+	printDetectionJSON(&out, nil, nil)
+	if got := strings.Join(strings.Fields(out.String()), " "); got != `{ "servers": [], "indexes": [] }` {
+		t.Fatalf("out = %q, want both keys as empty arrays", got)
 	}
 }

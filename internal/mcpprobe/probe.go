@@ -171,6 +171,33 @@ func Probe(ctx context.Context, s Server) Result {
 	return out
 }
 
+// ProbeAll checks every server at once and returns one Result per input, in
+// the same order.
+//
+// The concurrency lives here rather than in each caller because it is a
+// property of probing, not of any one command: the checks are independent and
+// whoever asked is waiting on all of them, so running eleven servers one after
+// another would add up their timeouts. `atenea wrap` had the only copy of this
+// loop and `atenea detect` needs the same one; two copies would be two places
+// to get the index-capture wrong and one of them would drift.
+//
+// Order is preserved rather than sorted. Callers pair a Result with the
+// declaration it came from by index, and a helper that reordered them would
+// silently reattribute every verdict.
+func ProbeAll(ctx context.Context, servers []Server) []Result {
+	results := make([]Result, len(servers))
+	var wg sync.WaitGroup
+	for i, s := range servers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = Probe(ctx, s)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
 func initializeBody() ([]byte, error) {
 	return json.Marshal(rpcRequest{
 		Version: "2.0",

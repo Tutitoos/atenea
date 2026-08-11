@@ -1064,11 +1064,18 @@ func printFields(out io.Writer, indent string, fields []contract.Field) {
 	}
 }
 
-// cmdDetect asks every attached provider that can tell whether it already
-// holds a ready index, and corrects indexed_by in memory with whatever it
-// finds. Unlike select and ask it defaults to every repository rather than
-// requiring one: sweeping the whole catalog is the common case, a single
-// dispatch target is not.
+// cmdDetect answers two questions an operator has at the same moment: are the
+// declared servers actually there, and does any attached provider already hold
+// a ready index.
+//
+// The servers come first because they are underneath. An index that cannot be
+// reported because the provider never started is one fact, not two, and
+// reading the reachability line first is what turns the second line from a
+// puzzle into a consequence.
+//
+// Unlike select and ask it defaults to every repository rather than requiring
+// one: sweeping the whole catalog is the common case, a single dispatch target
+// is not.
 func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 	var repository string
 	var jsonOut bool
@@ -1089,16 +1096,79 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	servers, err := atenea.DetectServers(ctx)
+	if err != nil {
+		return err
+	}
 	reports, err := atenea.DetectIndexes(ctx, repository)
 	if err != nil {
 		return err
 	}
 	if jsonOut {
-		printIndexReportsJSON(out, reports)
+		printDetectionJSON(out, servers, reports)
 		return nil
 	}
+	printServerProbes(out, servers)
 	printIndexReports(out, reports)
 	return nil
+}
+
+// printServerProbes reports every declared server with a verdict and a reason.
+//
+// Every declaration gets a line, including the ones no capability and no raw
+// namespace ever reaches: headroom on this machine is declared, is not raw and
+// is named as provider by no implementation, so the status screen can only ever
+// call it unknown and this command is the only place it can be given a real
+// verdict. That is also the server that was invisible when this started.
+//
+// The pinned/inherited column is not decoration. A verdict earned under the
+// caller's PATH does not transfer to a service started by systemd with a
+// minimal one, and that difference is exactly how three servers stayed dead
+// for hours while every hand-run check passed.
+func printServerProbes(out io.Writer, servers []core.ServerProbe) {
+	if len(servers) == 0 {
+		fmt.Fprintln(out, "no [[mcp_server]] is declared")
+		return
+	}
+	fmt.Fprintf(out, "servers\n")
+	for _, s := range servers {
+		verdict := "UNREACHABLE"
+		detail := s.Reason
+		if s.OK {
+			verdict = "reachable"
+			detail = strings.TrimSpace(s.Name + " " + s.Version)
+		}
+		path := "inherited PATH"
+		if s.PinnedPath {
+			path = "own PATH"
+		}
+		fmt.Fprintf(out, "  %-11s %-16s %-5s expose=%-4s %-14s %6s  %s\n",
+			verdict, s.ID, s.Transport, s.Expose, path,
+			s.Took.Truncate(time.Millisecond), orDash(detail))
+		fmt.Fprintf(out, "  %-11s %-16s where=%s\n", "", "", orDash(s.Where))
+	}
+	// The note is not a disclaimer, it is the finding. Measured on this machine:
+	// a service started with a minimal PATH reported context7 as failed with
+	// "env: 'node': No such file or directory" on its status screen while this
+	// command, run from a shell seconds later, called the same server
+	// reachable. Both were right about their own environment. A reader who is
+	// not told which environment answered will take the cheerful one.
+	if inherited := inheritedPATH(servers); inherited > 0 {
+		fmt.Fprintf(out, "  probed in this command's environment; %d server(s) marked\n"+
+			"  \"inherited PATH\" can answer differently inside the service\n", inherited)
+	}
+	fmt.Fprintln(out)
+}
+
+// inheritedPATH counts the servers whose verdict depends on who ran the probe.
+func inheritedPATH(servers []core.ServerProbe) int {
+	count := 0
+	for _, s := range servers {
+		if !s.PinnedPath {
+			count++
+		}
+	}
+	return count
 }
 
 // cmdIntent reads the client configuration a team keeps in this repository and

@@ -25,6 +25,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
@@ -941,6 +942,85 @@ func (c *Core) DetectIndexes(ctx context.Context, repositoryID string) ([]IndexR
 		return strings.Compare(a.Provider, b.Provider)
 	})
 	return reports, nil
+}
+
+// ServerProbe is one declared [[mcp_server]] as a probe just found it.
+//
+// This is the opposite half of ServerStatus and the two must not be confused:
+// that one reports what is remembered and costs nothing, this one asks now and
+// pays a process per stdio server. Both exist because the operator's question
+// and the screen's question are different -- "is it there right now" versus
+// "what is the last thing we learned".
+type ServerProbe struct {
+	ID        string
+	Transport string
+	Where     string
+	Expose    string
+	OK        bool
+	// Name and Version are who answered, from the handshake. Empty when
+	// nobody did, which is the only case Reason is set.
+	Name    string
+	Version string
+	Reason  string
+	Took    time.Duration
+	// PinnedPath says the declaration carries a PATH of its own, so this
+	// verdict does not depend on the environment of whoever ran the command.
+	//
+	// It is on the report because it is the difference between a verdict that
+	// transfers to the service and one that does not. Three servers died at
+	// boot because they inherited a PATH without their binaries in it; the two
+	// that still inherit one can pass here, run from a rich shell, and fail
+	// inside a service started by systemd -- and a report that hid that would
+	// be a new way to say "everything is fine" about a dead server.
+	PinnedPath bool
+}
+
+// DetectServers probes every declared server at once and reports a verdict per
+// declaration, in declaration order.
+//
+// Probing is right here and wrong in Status, and the split is deliberate: this
+// runs because an operator asked the question, which is the one moment the cost
+// of a spawn per server buys something. It reuses mcpprobe.ProbeAll -- the same
+// parallel probe `atenea wrap` runs -- rather than a second implementation, so
+// two commands cannot disagree about whether one server is up.
+//
+// It deliberately does not write what it learns into the remembered state the
+// screen reads. A command's probe happens in the command's environment, and
+// filing it as the service's knowledge would let a verdict earned under one
+// PATH be reported later as though the service had earned it.
+func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
+	if err := c.enter(); err != nil {
+		return nil, err
+	}
+	defer c.inflight.Done()
+
+	servers := c.settings.MCPServers
+	probes := make([]mcpprobe.Server, len(servers))
+	for i, server := range servers {
+		probes[i] = server.Probe()
+	}
+	results := mcpprobe.ProbeAll(ctx, probes)
+
+	out := make([]ServerProbe, 0, len(servers))
+	for i, server := range servers {
+		_, pinned := server.Env["PATH"]
+		entry := ServerProbe{
+			ID:         server.ID,
+			Transport:  probes[i].Transport(),
+			Where:      probes[i].Where(),
+			Expose:     string(server.Expose),
+			OK:         results[i].OK,
+			Name:       results[i].Name,
+			Version:    results[i].Version,
+			Took:       results[i].Took,
+			PinnedPath: pinned,
+		}
+		if results[i].Err != nil {
+			entry.Reason = results[i].Err.Error()
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
 // enter registers a unit of in-flight work, refusing it once a stop is under

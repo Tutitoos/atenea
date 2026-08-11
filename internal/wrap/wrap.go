@@ -25,7 +25,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
@@ -96,17 +95,12 @@ func Check(ctx context.Context, servers []config.MCPServer, served map[string]bo
 		held[i] = raw[i] || served[s.ID]
 	}
 	probes := make([]mcpprobe.Server, len(servers))
-	results := make([]mcpprobe.Result, len(servers))
-	var wg sync.WaitGroup
 	for i, s := range servers {
 		probes[i] = toProbe(s)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = mcpprobe.Probe(ctx, probes[i])
-		}()
 	}
-	wg.Wait()
+	// The parallelism moved to mcpprobe.ProbeAll, which detect now shares. The
+	// reasoning above is unchanged and lives with the loop it describes.
+	results := mcpprobe.ProbeAll(ctx, probes)
 
 	var plan Plan
 	for i := range probes {
