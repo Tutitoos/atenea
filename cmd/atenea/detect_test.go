@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Tutitoos/atenea/internal/core"
 )
 
 // TestDetectReportsWhenNoAttachedProviderCanTell uses the package's own
@@ -158,14 +160,16 @@ func TestDetectJSONReportsReadyAndNotReady(t *testing.T) {
 	}
 }
 
-// The empty sweep still has to be valid, parseable json: both keys present and
-// empty, never null and never a sentence meant for an eye. A reader that has to
-// distinguish "no servers declared" from "the key is missing" is back to
-// guessing, which is the failure mode this command is about.
-func TestDetectJSONOnAnEmptySweepHasBothKeysEmpty(t *testing.T) {
+// The empty sweep still has to be valid, parseable json: every key present,
+// the two lists empty rather than null, and the source of the answer stated.
+// A reader that has to distinguish "no servers declared" from "the key is
+// missing" is back to guessing, which is the failure mode this command is
+// about -- and so is a reader who cannot tell whose environment answered.
+func TestDetectJSONOnAnEmptySweepHasEveryKey(t *testing.T) {
 	var out bytes.Buffer
-	printDetectionJSON(&out, nil, nil)
-	if got := strings.Join(strings.Fields(out.String()), " "); got != `{ "servers": [], "indexes": [] }` {
-		t.Fatalf("out = %q, want both keys as empty arrays", got)
+	printDetectionJSON(&out, core.Detection{}, answeredBy{})
+	want := `{ "answered_by": { "by": "command" }, "servers": [], "indexes": [] }`
+	if got := strings.Join(strings.Fields(out.String()), " "); got != want {
+		t.Fatalf("out  = %q\nwant = %q", got, want)
 	}
 }

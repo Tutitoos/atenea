@@ -528,15 +528,17 @@ func printStatus(out io.Writer, status core.Status) error {
 	fmt.Fprintf(out, "atenea %s  contract %s  %s\n",
 		status.Version, status.Contract, strings.ToUpper(status.Light.String()))
 	fmt.Fprintf(out, "settings  %s\n", status.Settings)
-	// Whose screen this is. It used to mean "the process printing it", and now
-	// it means the process the numbers came FROM: a command that reached the
-	// service prints the service's, and a command that found nobody prints its
-	// own. That is the same line doing the same job -- a reader who sees
+	// Who answered, not what is printing. The label used to read `process`,
+	// which invited "the process running this command" -- and the value has
+	// meant the opposite of that since the door existed: a command that
+	// reached the service shows the service's numbers, and one that found
+	// nobody shows what it could work out from disk alone. A reader who sees
 	// `service` is looking at a clock that is really ticking, chats that are
-	// really open and a `recovered` line that really swept something, and a
-	// reader who sees `command` is looking at what could be worked out from
-	// disk by a process that maintains none of it.
-	fmt.Fprintf(out, "process   %s\n", status.Role)
+	// really open and a `recovered` line that really swept something.
+	//
+	// `atenea detect` prints the same claim in the same words, one screen
+	// over, because it is the same question about a different kind of answer.
+	fmt.Fprintf(out, "answered  %s\n", status.Role)
 	if len(status.Missing) > 0 {
 		// Beside the settings line, because that file is the thing to edit.
 		// Not a light and not an incident: nothing is broken yet, and the
@@ -1087,30 +1089,82 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 
-	atenea, err := load(settingsPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = atenea.Shutdown() }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	servers, err := atenea.DetectServers(ctx)
-	if err != nil {
-		return err
-	}
-	reports, err := atenea.DetectIndexes(ctx, repository)
+	detection, by, err := detectVia(ctx, settingsPath, repository)
 	if err != nil {
 		return err
 	}
 	if jsonOut {
-		printDetectionJSON(out, servers, reports)
+		printDetectionJSON(out, detection, by)
 		return nil
 	}
-	printServerProbes(out, servers)
-	printIndexReports(out, reports)
+	printServerProbes(out, detection.Servers, by)
+	printIndexReports(out, detection.Indexes)
 	return nil
+}
+
+// answeredBy is who earned the verdicts a detect is about to print.
+//
+// It is part of the answer rather than a decoration. Two probes of the same
+// declaration from two environments disagree honestly -- that is the fault this
+// command was rebuilt for -- so a reader who is not told which one ran has been
+// handed a verdict they cannot use.
+type answeredBy struct {
+	Service bool
+	// PID is the service that answered, zero when this command did.
+	PID int
+	// Elsewhere names the settings file a live service is running when that
+	// service did not answer this question. Falling back without saying so is
+	// how a caller ends up believing no service exists, or that the wrong file
+	// was probed.
+	Elsewhere string
+	// Refused separates "a service answered about another file" from "a
+	// service is there and would not answer at all". The second is what an
+	// older build looks like from here -- it does not know this method -- and
+	// reporting it as "nobody answered" would send the reader looking for a
+	// service that is running in front of them.
+	Refused bool
+}
+
+// detectVia asks the running service to probe and falls back to probing here.
+//
+// The precedence is the one `atenea status` already uses, including its guard:
+// only a service running the same settings file may answer, because naming a
+// file asks what that file gives. The fallback is not a nicety -- detect is the
+// command you run when things are broken, and needing a healthy service to
+// diagnose a sick one would be backwards.
+func detectVia(ctx context.Context, settingsPath, repository string) (core.Detection, answeredBy, error) {
+	cfg, err := config.Load(settingsPath)
+	if err != nil {
+		return core.Detection{}, answeredBy{}, err
+	}
+	var by answeredBy
+	switch detection, ok := core.AskedDetect(ctx, repository); {
+	case ok && detection.Settings == cfg.Source:
+		return detection, answeredBy{Service: true, PID: detection.PID}, nil
+	case ok:
+		by.Elsewhere = detection.Settings
+	default:
+		// The door may still be open even though this question came back
+		// unanswered: an older service does not know the method. Asking the
+		// oldest method there is separates the two, and it is the same call
+		// `atenea status` makes.
+		if status, alive := core.Asked(); alive {
+			by.Elsewhere, by.Refused = status.Settings, true
+		}
+	}
+	atenea, err := core.New(cfg, core.Command)
+	if err != nil {
+		return core.Detection{}, answeredBy{}, err
+	}
+	defer func() { _ = atenea.Shutdown() }()
+	detection, err := atenea.Detect(ctx, repository)
+	if err != nil {
+		return core.Detection{}, answeredBy{}, err
+	}
+	return detection, by, nil
 }
 
 // printServerProbes reports every declared server with a verdict and a reason.
@@ -1125,9 +1179,14 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 // caller's PATH does not transfer to a service started by systemd with a
 // minimal one, and that difference is exactly how three servers stayed dead
 // for hours while every hand-run check passed.
-func printServerProbes(out io.Writer, servers []core.ServerProbe) {
+func printServerProbes(out io.Writer, servers []core.ServerProbe, by answeredBy) {
 	if len(servers) == 0 {
+		// "Nothing is declared" is a claim about a file, so it owes the same
+		// signature as a verdict does: read from the service's declarations it
+		// means something different than read from this command's, and a
+		// reader cannot tell those apart from the sentence alone.
 		fmt.Fprintln(out, "no [[mcp_server]] is declared")
+		fmt.Fprintln(out, "  "+answeredLine(by))
 		return
 	}
 	fmt.Fprintf(out, "servers\n")
@@ -1147,17 +1206,40 @@ func printServerProbes(out io.Writer, servers []core.ServerProbe) {
 			s.Took.Truncate(time.Millisecond), orDash(detail))
 		fmt.Fprintf(out, "  %-11s %-16s where=%s\n", "", "", orDash(s.Where))
 	}
-	// The note is not a disclaimer, it is the finding. Measured on this machine:
-	// a service started with a minimal PATH reported context7 as failed with
-	// "env: 'node': No such file or directory" on its status screen while this
-	// command, run from a shell seconds later, called the same server
-	// reachable. Both were right about their own environment. A reader who is
-	// not told which environment answered will take the cheerful one.
-	if inherited := inheritedPATH(servers); inherited > 0 {
-		fmt.Fprintf(out, "  probed in this command's environment; %d server(s) marked\n"+
-			"  \"inherited PATH\" can answer differently inside the service\n", inherited)
+	fmt.Fprintln(out, "  "+answeredLine(by))
+	// The caveat belongs to one branch only. When the service answered, these
+	// verdicts were earned in the environment that matters, and repeating the
+	// old warning would teach a reader to ignore warnings. When this command
+	// answered, the difference is the whole finding: measured on this machine,
+	// a service with a minimal PATH had context7 dead while a shell called the
+	// same server reachable in the same minute.
+	if !by.Service {
+		if inherited := inheritedPATH(servers); inherited > 0 {
+			fmt.Fprintf(out, "  %d server(s) marked \"inherited PATH\" can answer differently\n"+
+				"  inside the service; start it and ask again to be sure\n", inherited)
+		}
 	}
 	fmt.Fprintln(out)
+}
+
+// answeredLine says who probed, in one line, always printed.
+//
+// Always, including the ordinary case, because the alternative is a reader
+// inferring it from the absence of a warning. The pid is there so the claim can
+// be checked rather than believed.
+func answeredLine(by answeredBy) string {
+	if by.Service {
+		return fmt.Sprintf("answered by the service (pid %d), in its environment", by.PID)
+	}
+	const here = "answered by this command, in its own environment"
+	switch {
+	case by.Refused:
+		return here + " (a service is running on " + by.Elsewhere +
+			" and did not answer atenea/detect)"
+	case by.Elsewhere != "":
+		return here + " (a service is running, on " + by.Elsewhere + ")"
+	}
+	return here + " (no service answered)"
 }
 
 // inheritedPATH counts the servers whose verdict depends on who ran the probe.

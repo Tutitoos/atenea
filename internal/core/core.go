@@ -9,6 +9,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -1021,6 +1022,48 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// Detection is both halves of a detect sweep plus the identity of whoever ran
+// it, and the last part is the point.
+//
+// Both halves travel together because both spawn: the server probes spawn a
+// process per stdio declaration, and the index reports spawn the provider's own
+// CLI. Fixing one and leaving the other would answer half the command from one
+// environment and half from another, which is worse than the fault being fixed.
+//
+// PID and Settings are what a caller cannot know about a process it only
+// reached through a socket: which process earned these verdicts, and which
+// declarations it read to earn them.
+type Detection struct {
+	Servers  []ServerProbe
+	Indexes  []IndexReport
+	PID      int
+	Settings string
+}
+
+// Detect runs both halves of a sweep and signs the result.
+//
+// It exists so the service can answer the whole of `atenea detect` in one
+// exchange. A command that probes locally learns whether the servers are
+// reachable from a shell, which is not the question when the thing that cannot
+// reach them is the service: measured on this machine, a service with a minimal
+// PATH had context7 dead while a shell called it reachable in the same minute.
+func (c *Core) Detect(ctx context.Context, repositoryID string) (Detection, error) {
+	servers, err := c.DetectServers(ctx)
+	if err != nil {
+		return Detection{}, err
+	}
+	indexes, err := c.DetectIndexes(ctx, repositoryID)
+	if err != nil {
+		return Detection{}, err
+	}
+	return Detection{
+		Servers:  servers,
+		Indexes:  indexes,
+		PID:      os.Getpid(),
+		Settings: c.settings.Source,
+	}, nil
 }
 
 // enter registers a unit of in-flight work, refusing it once a stop is under

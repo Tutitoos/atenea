@@ -219,15 +219,41 @@ type jsonServerProbe struct {
 // break is deliberate and belongs to a 0.x CLI, not to the contract in
 // pkg/contract, which is untouched.
 type jsonDetection struct {
-	Servers []jsonServerProbe `json:"servers"`
-	Indexes []jsonIndexReport `json:"indexes"`
+	AnsweredBy jsonAnsweredBy    `json:"answered_by"`
+	Servers    []jsonServerProbe `json:"servers"`
+	Indexes    []jsonIndexReport `json:"indexes"`
+}
+
+// jsonAnsweredBy is an object rather than a bare string so a third source of
+// answers can arrive without breaking a reader that already parses this one.
+type jsonAnsweredBy struct {
+	// By is "service" or "command".
+	By string `json:"by"`
+	// PID is the service that answered; absent when this command did.
+	PID int `json:"pid,omitempty"`
+	// Settings appears when a live service did not answer this question, so a
+	// reader knows the fallback was not for want of a service.
+	Settings string `json:"service_settings,omitempty"`
+	// Refused separates a service that answered about another file from one
+	// that would not answer at all -- an older build, from here, looks like
+	// the latter.
+	Refused bool `json:"service_refused,omitempty"`
 }
 
 // printDetectionJSON is the machine-readable twin of the two prose sections.
-func printDetectionJSON(out io.Writer, servers []core.ServerProbe, reports []core.IndexReport) {
+func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) {
+	servers, reports := detection.Servers, detection.Indexes
 	js := jsonDetection{
+		AnsweredBy: jsonAnsweredBy{
+			By:       "command",
+			Settings: by.Elsewhere,
+			Refused:  by.Refused,
+		},
 		Servers: make([]jsonServerProbe, len(servers)),
 		Indexes: make([]jsonIndexReport, len(reports)),
+	}
+	if by.Service {
+		js.AnsweredBy = jsonAnsweredBy{By: "service", PID: by.PID}
 	}
 	for i, server := range servers {
 		js.Servers[i] = jsonServerProbe{

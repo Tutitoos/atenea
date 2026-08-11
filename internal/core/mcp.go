@@ -88,6 +88,9 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	switch req.Method {
 	case MethodStatus:
 		out.Result = v.core.Status()
+	case MethodDetect:
+		result, rpcErr := v.detect(ctx, req.Params)
+		out.Result, out.Error = result, rpcErr
 	case MethodInitialize:
 		result, rpcErr := v.initialize(req.Params)
 		out.Result, out.Error = result, rpcErr
@@ -101,6 +104,26 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		out.Error = &rpcError{Code: codeMethodUnknown, Message: "unknown method " + req.Method}
 	}
 	return out
+}
+
+// detect answers a probe request on the service's behalf, in the service's
+// environment. That last clause is the entire reason this method exists.
+//
+// Params are optional: an empty body is every repository, the same default the
+// command's --repo flag has. A malformed body is refused rather than read as
+// "everything", because a caller that sent something meant something.
+func (v *conversation) detect(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+	var params detectParams
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, &rpcError{Code: codeInvalid, Message: "params: " + err.Error()}
+		}
+	}
+	out, err := v.core.Detect(ctx, params.Repository)
+	if err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
+	}
+	return out, nil
 }
 
 type initializeParams struct {

@@ -49,17 +49,37 @@ const askTimeout = 2 * time.Second
 //
 // JSON-RPC 2.0 because that is what MCP is, and this socket is where the MCP
 // server will answer. Choosing the envelope now costs four struct fields and
-// means the next protocol method is a case in a switch rather than a second
 // framing beside the first.
 const (
 	rpcVersion = "2.0"
 	// MethodStatus asks the service for its own view of itself.
 	MethodStatus = "atenea/status"
+	// MethodDetect asks the service to probe, now, in its own environment.
+	//
+	// Separate from MethodStatus rather than a flag on it, because the two
+	// cost different things: a status is built from memory and is served to
+	// every `atenea status` and every client bridge that starts, while this
+	// one spawns a process per declared stdio server. Folding them together
+	// would put six spawns behind the most frequently called method on this
+	// socket.
+	MethodDetect = "atenea/detect"
 
 	codeParse         = -32700
 	codeInvalid       = -32600
 	codeMethodUnknown = -32601
 )
+
+// probeAskTimeout is the backstop for a detect over the socket when the caller
+// brought no deadline of its own. Generous against six servers spawning in
+// parallel -- measured at about four seconds on this machine -- and still short
+// enough that a wedged service does not hold a person there.
+const probeAskTimeout = 60 * time.Second
+
+// detectParams is what a detect asks about: one repository, or every one when
+// empty. The same filter `atenea detect --repo` already took.
+type detectParams struct {
+	Repository string `json:"repository"`
+}
 
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -216,6 +236,52 @@ func Asked() (Status, bool) {
 	}
 	if err := json.NewDecoder(conn).Decode(&out); err != nil || out.Error != nil {
 		return Status{}, false
+	}
+	return out.Result, true
+}
+
+// AskedDetect asks the running service to probe on the caller's behalf.
+//
+// The deadline comes from the caller's context rather than askTimeout, and that
+// is the difference between this and Asked: a status is memory and answers in
+// microseconds, while this spawns a process per stdio server. Measured on this
+// machine, six servers take about four seconds and semgrep alone takes two, so
+// the two-second bound that makes Asked safe would make this fail every time.
+//
+// Connecting is still bounded tightly. A door with nobody behind it is the
+// ordinary state of a machine, and the caller has a local sweep ready.
+func AskedDetect(ctx context.Context, repository string) (Detection, bool) {
+	conn, err := net.DialTimeout("unix", SocketPath(), askTimeout)
+	if err != nil {
+		return Detection{}, false
+	}
+	defer func() { _ = conn.Close() }()
+	// A context with no deadline leaves the read unbounded, which is the one
+	// thing this must not do: the reason to ask is that a local answer is
+	// already available.
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(probeAskTimeout)
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return Detection{}, false
+	}
+
+	params, err := json.Marshal(detectParams{Repository: repository})
+	if err != nil {
+		return Detection{}, false
+	}
+	if err := json.NewEncoder(conn).Encode(rpcRequest{
+		JSONRPC: rpcVersion, ID: 1, Method: MethodDetect, Params: params,
+	}); err != nil {
+		return Detection{}, false
+	}
+	var out struct {
+		Result Detection `json:"result"`
+		Error  *rpcError `json:"error"`
+	}
+	if err := json.NewDecoder(conn).Decode(&out); err != nil || out.Error != nil {
+		return Detection{}, false
 	}
 	return out.Result, true
 }

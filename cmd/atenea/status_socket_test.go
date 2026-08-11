@@ -30,7 +30,7 @@ func TestStatusAsksTheServiceWhenOneIsListening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status with no service: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "process   command") {
+	if !strings.Contains(out, "answered  command") {
 		t.Fatalf("with nobody listening the screen is not the command's own:\n%s", out)
 	}
 
@@ -41,7 +41,7 @@ func TestStatusAsksTheServiceWhenOneIsListening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status with a service up: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "process   service") {
+	if !strings.Contains(out, "answered  service") {
 		t.Errorf("a listening service was not asked:\n%s", out)
 	}
 }
@@ -60,7 +60,7 @@ func TestStatusFallsBackWhenTheDoorAnswersNonsense(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status against a broken door: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "process   command") {
+	if !strings.Contains(out, "answered  command") {
 		t.Errorf("nonsense on the socket was taken for a service:\n%s", out)
 	}
 }
@@ -88,7 +88,7 @@ func TestStatusDoesNotHangOnADoorThatNeverAnswers(t *testing.T) {
 
 	select {
 	case out := <-done:
-		if !strings.Contains(out, "process   command") {
+		if !strings.Contains(out, "answered  command") {
 			t.Errorf("a silent door was taken for a service:\n%s", out)
 		}
 	case <-time.After(30 * time.Second):
@@ -110,7 +110,7 @@ func TestStatusIgnoresAServiceRunningADifferentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "process   command") {
+	if !strings.Contains(out, "answered  command") {
 		t.Errorf("a service on another file answered for this one:\n%s", out)
 	}
 	if !strings.Contains(out, other) {

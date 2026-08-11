@@ -24,6 +24,15 @@ import (
 // That already happened once. A test that wants its own state still calls
 // t.Setenv and wins; this only decides where the ones that say nothing land.
 func TestMain(m *testing.M) {
+	// The service helper is not a test. It is this binary re-executed as a
+	// real process so that its environment can differ from its caller's,
+	// which is the only way to prove whose environment a verdict came from.
+	// Overwriting the state root here would put its socket somewhere the
+	// parent does not look, and the parent would report "no service" about a
+	// service that is running -- the exact confusion under test.
+	if os.Getenv(serviceHelperEnv) == "1" {
+		os.Exit(m.Run())
+	}
 	root, err := os.MkdirTemp("", "atenea-cli-suite")
 	if err != nil {
 		panic(err)
