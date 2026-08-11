@@ -167,7 +167,7 @@ func LoadEffective(explicit string) (Config, error) {
 // one. Split from LoadEffective so a test can name the directory instead of
 // changing the process's own.
 func withLocal(cfg Config, dir string) (Config, error) {
-	root, ok := repoRoot(dir)
+	root, ok := RepoRoot(dir)
 	if !ok {
 		// Not in a repository. Nothing to overlay, and nothing wrong: the
 		// unit of work here is the repository, so outside one there is no
@@ -196,7 +196,7 @@ func withLocal(cfg Config, dir string) (Config, error) {
 	}
 }
 
-// repoRoot walks up from dir to the first directory holding a .git, and that
+// RepoRoot walks up from dir to the first directory holding a .git, and that
 // is the active repository.
 //
 // It stops at the first one rather than continuing to an outer repository on
@@ -205,7 +205,12 @@ func withLocal(cfg Config, dir string) (Config, error) {
 // depending on where it happens to be checked out. It is also the boundary
 // already measured on this machine for the harnesses' own context files, and
 // one boundary to remember beats two.
-func repoRoot(dir string) (string, bool) {
+//
+// Exported because the overlay is not the only thing that has to agree on
+// what "this repository" means: reading the client configuration a team keeps
+// in the repository has to resolve the same root, and two walks that could
+// drift is one more thing that can be subtly wrong.
+func RepoRoot(dir string) (string, bool) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", false

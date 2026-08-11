@@ -1131,3 +1131,71 @@ of printing one built from settings that are not the ones in force here.
 `.atenea/` present with no `config.toml` inside is refused rather than ignored.
 The mistake it catches is `.atenea/atenea.toml`, and left quiet it is a whole
 settings file that never takes effect and never says so.
+
+## What the repository asks for
+
+The layer above is the settings a repository carries *for Atenea*. This one is
+different in every way that matters: it is the configuration a team keeps for
+**its own clients** — `.mcp.json` and `.claude/` for Claude Code, `opencode.json`
+and `.opencode/` for opencode — and Atenea has no authority over it at all.
+
+`atenea intent` reads it and answers one question: for each thing this project
+asks for, what happens here?
+
+```
+asked for
+  funnel     serena (local)
+             -> provider serena: code.search, symbol.definition, symbol.references
+                via serena.definition, serena.references, serena.search
+  vouched    context7 (local)
+             declared by Atenea and handed to clients by `atenea wrap`
+  unmatched  dart (local, off in the project's settings)
+             nothing registered here provides it
+
+1 unmatched: this project asks for them and nothing here provides them
+  dart (.mcp.json)
+```
+
+### It reads and it never runs
+
+A `.mcp.json` is a list of commands somebody else wrote, and it arrives with a
+git clone. The whole value of Atenea sitting between a client and its backends
+disappears the moment reading such a file can start a process.
+
+So the guarantee is not a policy, it is the shape of the code: a declaration's
+command, arguments, environment and URL are **dropped at the parse boundary**.
+They are not stored, not printed, not passed on. Nothing downstream can run
+them because nothing downstream has them. A test walks every field of the
+parsed result and fails if any of those strings is reachable from it.
+
+That is the same trust model as the `.atenea/config.toml` allow-list one
+section up, arrived at from the other side: there, a cloned repository may
+adjust settings but may never name a command to launch; here, a cloned
+repository may say what it wants but may never be the reason something starts.
+
+### The unmatched list is the point
+
+It is printed last, counted, and never abbreviated. A translator that quietly
+dropped what it could not map would produce a report where "everything is
+answered" and "half of it vanished" look identical, and the reader would learn
+only that the command ran.
+
+### One backend, two clients, one ask
+
+A project that uses both clients declares the same backend twice. Those
+collapse into one row, with both files named on it, because the count is what
+the report is read for and a two-client repository does not want twice as much
+as a one-client one.
+
+Two declarations of one name that **disagree** — different transports — are
+reported as inconsistent rather than resolved. A convenience that hides a
+contradiction in somebody's own configuration has stopped being one. Enabled is
+the exception and is a union: switched off for one client and on for another is
+on, because reporting it as off would describe a machine nobody is running.
+
+### It writes nothing
+
+Not to `.claude/`, not to `.opencode/`, not anywhere. Measured the way the
+overlay layer was: 30,956 files under the clients' own directories, snapshotted
+before and after six invocations — nothing created, nothing removed, nothing
+modified.

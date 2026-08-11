@@ -17,6 +17,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`atenea intent` reads the client config a repository carries and says how
+  each thing it asks for is answered.** `.mcp.json` and `.claude/` for Claude
+  Code, `opencode.json` and `.opencode/` for opencode, mapped onto registered
+  providers: `funnel` when a provider answers it, `vouched` when Atenea
+  declares the backend itself, `prose` for a skill, `unmatched` when nothing
+  here provides it. The unmatched list is printed last and counted, because a
+  translator that silently drops what it cannot map produces a report in which
+  absence and satisfaction look the same.
+
+  It reads and it never runs. A declaration's command, arguments, environment
+  and URL are dropped at the parse boundary — not stored, not printed, not
+  passed on — so a file arriving with a git clone cannot hand this machine a
+  process. A test walks every field of the parse result and fails if one of
+  those strings is reachable from it.
+
+  Two measurements changed the design. A real repository using both clients
+  reported `3 unmatched` while asking for two things, so declarations of one
+  backend now collapse into one row with both files named on it; two that
+  disagree on transport are reported as inconsistent rather than resolved, and
+  `enabled` is a union. Then the pointer at the foot of `config show` and the
+  report itself answered "how much is this asking for" with 13 and 11 on the
+  same repository, so both now count through one function.
+
 - **A repository can carry its own settings, in `.atenea/config.toml` at its root.**
   A partial overlay on the global file: what it declares wins, what it omits
   falls back, and a repository without one changes nothing. The active

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
+	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -50,6 +52,8 @@ Commands:
                          --budget USD replaces what remains of the grant.
                          resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
+  intent [--json]        Read the client config this repo carries and say how
+                         Atenea answers it; launches nothing from it
   detect [--repo ID]     Ask attached providers whether they already hold a
                          ready index; corrects indexed_by in memory when they do
   run                    Run as a service until interrupted
@@ -198,6 +202,30 @@ installed against what this binary carries, because a line reporting a
 version is worth nothing if the file drawing it is a copy nobody updated.
 
 A running TUI loads plugins at startup: after install, restart opencode.
+`,
+	"intent": `Usage: atenea intent [--json]
+
+Reads the client configuration this repository carries -- .mcp.json and
+.claude/ for Claude Code, opencode.json and .opencode/ for opencode -- and
+says, for each thing the project asks for, how Atenea answers it:
+
+  funnel     a registered provider answers it; the capabilities are named
+  vouched    Atenea declares that backend itself and hands it to clients
+             through 'wrap', having checked it first
+  unmatched  the project asks for it and nothing here provides it
+  prose      a skill: instructions for a client, not a capability
+
+Nothing in those files is launched, and nothing is trusted. A declaration's
+command, arguments, environment and URL are dropped when the file is parsed:
+they are never carried past the reader, so nothing downstream can run them.
+A file that arrives with a git clone may not hand this machine a process.
+
+The unmatched list is printed last and counted. A translator that quietly
+dropped what it could not map would produce a report in which absence and
+satisfaction look identical.
+
+Reads only. It writes nothing, anywhere, and never into .claude/ or
+.opencode/.
 `,
 	"incidents": `Usage: atenea incidents [clear] [--all]
 
@@ -375,6 +403,8 @@ func run(args []string, out io.Writer) error {
 		return cmdCatalog(settingsPath, out)
 	case "detect":
 		return cmdDetect(settingsPath, commandArgs, out)
+	case "intent":
+		return cmdIntent(settingsPath, commandArgs, out)
 	case "select":
 		return cmdSelect(settingsPath, commandArgs, out)
 	case "task":
@@ -1025,6 +1055,193 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 	}
 	printIndexReports(out, reports)
 	return nil
+}
+
+// cmdIntent reads the client configuration a team keeps in this repository and
+// says how Atenea answers each thing it asks for.
+//
+// Settings only, no Core, for the reason `wrap` gives: a Core opens the
+// measurement base and may start a managed backend, and this command reads
+// files and prints. It is also the whole point of the feature -- a command
+// that launched something while reporting on a file that arrived by git clone
+// would be the failure it exists to prevent.
+func cmdIntent(settingsPath string, args []string, out io.Writer) error {
+	var jsonOut bool
+	flags := flag.NewFlagSet("intent", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+
+	cfg, err := config.LoadEffective(settingsPath)
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"cannot read the working directory: %v", err)
+	}
+	root, ok := config.RepoRoot(cwd)
+	if !ok {
+		return contract.Fail(contract.FailureNotFound,
+			"%s is not inside a repository: the unit of work is the repository, and client config lives at its root", cwd)
+	}
+
+	reading, err := clientconfig.Read(root)
+	if err != nil {
+		return err
+	}
+	vouched := make([]string, 0, len(cfg.MCPServers))
+	for _, server := range cfg.MCPServers {
+		vouched = append(vouched, server.ID)
+	}
+	report := clientconfig.Translate(reading, clientconfig.Catalog{
+		Implementations: cfg.Implementations,
+		Vouched:         vouched,
+	})
+
+	if jsonOut {
+		return printIntentJSON(out, report)
+	}
+	printIntent(out, report)
+	return nil
+}
+
+func printIntent(out io.Writer, report clientconfig.Report) {
+	reading := report.Reading
+	fmt.Fprintf(out, "repository %s\n", reading.Root)
+	if reading.Empty() {
+		fmt.Fprintln(out, "  no client configuration here: nothing is being asked for")
+		return
+	}
+	fmt.Fprintf(out, "read       %s\n", strings.Join(reading.Files, ", "))
+	// Before the answers, not after: a file that could not be parsed changes
+	// what the list below is worth, and a reader who meets it at the bottom
+	// has already believed the list.
+	for _, bad := range reading.Unreadable {
+		fmt.Fprintf(out, "unreadable %s\n", bad)
+	}
+	if len(report.Matches) == 0 {
+		// The files are here and they ask for nothing. Printing the banner
+		// below over an empty space would read as a list that failed to
+		// render, which is a worse answer than the true one.
+		fmt.Fprintln(out, "  these files declare nothing to answer: no servers, no skills")
+		return
+	}
+	fmt.Fprintln(out, "\nnothing below is launched. Atenea reads these declarations and answers")
+	fmt.Fprintln(out, "from its own providers; the commands they carry are dropped when parsed.")
+
+	servers, skills := 0, 0
+	for _, match := range report.Matches {
+		if match.Request.Kind != clientconfig.KindServer {
+			skills++
+			continue
+		}
+		if servers == 0 {
+			fmt.Fprintln(out, "\nasked for")
+		}
+		servers++
+		state := ""
+		if !match.Request.Enabled {
+			state = ", off in the project's settings"
+		}
+		fmt.Fprintf(out, "  %-10s %s (%s%s)\n",
+			match.Answer, match.Request.Name, match.Request.Transport, state)
+		if len(match.Sources) > 1 {
+			// Two clients asking for one backend. Said out loud, because the
+			// row above collapsed them, and a count that quietly differs from
+			// the file list is the thing this command exists not to do.
+			fmt.Fprintf(out, "             declared in %s\n", strings.Join(match.Sources, " and "))
+		}
+		if match.Disagreement != "" {
+			fmt.Fprintf(out, "             inconsistent: %s\n", match.Disagreement)
+		}
+		if len(match.Capabilities) > 0 {
+			fmt.Fprintf(out, "             -> provider %s: %s\n",
+				match.Provider, strings.Join(match.Capabilities, ", "))
+			fmt.Fprintf(out, "                via %s\n", strings.Join(match.Implementations, ", "))
+		}
+		if match.Note != "" {
+			fmt.Fprintf(out, "             %s\n", match.Note)
+		}
+	}
+
+	if skills > 0 {
+		fmt.Fprintf(out, "\nalso carried: %d skill(s), prose a client loads\n", skills)
+		for _, match := range report.Matches {
+			if match.Request.Kind != clientconfig.KindSkill {
+				continue
+			}
+			suffix := ""
+			if len(match.Sources) > 1 {
+				suffix = fmt.Sprintf(" (in %s)", strings.Join(match.Sources, " and "))
+			}
+			fmt.Fprintf(out, "  %s%s\n", match.Request.Name, suffix)
+		}
+	}
+
+	// Last and counted. The whole point of the report is that this list is
+	// visible rather than implied by the absence of a line.
+	unmatched := report.Unmatched()
+	if len(unmatched) == 0 {
+		if servers > 0 {
+			fmt.Fprintln(out, "\nevery server this project asks for has an answer here.")
+		}
+		return
+	}
+	fmt.Fprintf(out, "\n%d unmatched: this project asks for them and nothing here provides them\n", len(unmatched))
+	for _, match := range unmatched {
+		fmt.Fprintf(out, "  %s (%s)\n", match.Request.Name, strings.Join(match.Sources, ", "))
+	}
+}
+
+func printIntentJSON(out io.Writer, report clientconfig.Report) error {
+	type item struct {
+		Kind            string   `json:"kind"`
+		Name            string   `json:"name"`
+		Sources         []string `json:"sources"`
+		Enabled         bool     `json:"enabled"`
+		Transport       string   `json:"transport,omitempty"`
+		Answer          string   `json:"answer"`
+		Provider        string   `json:"provider,omitempty"`
+		Capabilities    []string `json:"capabilities,omitempty"`
+		Implementations []string `json:"implementations,omitempty"`
+		Note            string   `json:"note,omitempty"`
+		Disagreement    string   `json:"disagreement,omitempty"`
+	}
+	payload := struct {
+		Repository string   `json:"repository"`
+		Files      []string `json:"files"`
+		Unreadable []string `json:"unreadable,omitempty"`
+		Items      []item   `json:"items"`
+		Unmatched  int      `json:"unmatched"`
+	}{
+		Repository: report.Reading.Root,
+		Files:      report.Reading.Files,
+		Unreadable: report.Reading.Unreadable,
+		Items:      make([]item, 0, len(report.Matches)),
+		Unmatched:  len(report.Unmatched()),
+	}
+	for _, match := range report.Matches {
+		payload.Items = append(payload.Items, item{
+			Kind:            string(match.Request.Kind),
+			Name:            match.Request.Name,
+			Sources:         match.Sources,
+			Enabled:         match.Request.Enabled,
+			Transport:       string(match.Request.Transport),
+			Answer:          string(match.Answer),
+			Provider:        match.Provider,
+			Capabilities:    match.Capabilities,
+			Implementations: match.Implementations,
+			Note:            match.Note,
+			Disagreement:    match.Disagreement,
+		})
+	}
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(payload)
 }
 
 func printIndexReports(out io.Writer, reports []core.IndexReport) {
@@ -2210,6 +2427,20 @@ func cmdConfigShow(settingsPath string, out io.Writer) error {
 		origin = fmt.Sprintf("+%d local", added)
 	}
 	fmt.Fprintf(out, "\nsecurity\n  %-8s sensitive   %d pattern(s)\n", origin, len(cfg.Security.Sensitive))
+
+	// Two different questions, so two commands -- but a reader who has just
+	// been shown what settings apply here is exactly the reader who wants to
+	// know the repository is also asking for things, and would otherwise
+	// never learn the second command exists.
+	if cwd, err := os.Getwd(); err == nil {
+		if root, ok := config.RepoRoot(cwd); ok {
+			if reading, err := clientconfig.Read(root); err == nil && !reading.Empty() {
+				fmt.Fprintf(out, "\nclient config\n  this repository also asks for %d thing(s), across %d file(s)\n",
+					reading.Asks(), len(reading.Files))
+				fmt.Fprintln(out, "  `atenea intent` says how each one is answered")
+			}
+		}
+	}
 	return nil
 }
 

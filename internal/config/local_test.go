@@ -173,7 +173,7 @@ func TestTheNearestRepositoryRootWins(t *testing.T) {
 		if err := os.MkdirAll(tc.from, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		got, ok := repoRoot(tc.from)
+		got, ok := RepoRoot(tc.from)
 		if !ok {
 			t.Fatalf("no repository root found from %s", tc.from)
 		}
