@@ -71,7 +71,27 @@ type Win = {
 	ok: boolean;
 };
 
-type Reading = { kind: "live"; wins: Win[]; readAt: number } | { kind: "none" };
+// Three states, and the split between the last two is the point.
+//
+// `quiet` is a legitimate answer: the store was read, the report was understood,
+// and it has nothing live to say -- either every window's reading is older than
+// the window itself, or this machine does not use that provider at all. That draws
+// nothing.
+//
+// `unreadable` is a defect: the store would not open, or it opened and this file
+// did not recognise what was inside. That draws one amber line.
+//
+// They were the same state until 2026-08-11, and that was the worst defect in this
+// widget. Every other panel here already separates them -- `Models` says
+// `sin lectura` rather than showing stale shares -- and this one, alone, let a
+// broken reading render as the most ordinary answer on the screen: an absent
+// section, which is exactly what a quiet provider looks like. The source is another
+// product's private store, reached by a fixed path with no declared schema, so the
+// day it moves is a question of when.
+type Reading =
+	| { kind: "live"; wins: Win[]; readAt: number }
+	| { kind: "quiet" }
+	| { kind: "unreadable" };
 
 function home(): string {
 	return process.env.HOME ?? "";
@@ -143,9 +163,15 @@ function unwrap(raw: unknown): Record<string, unknown> {
 // between readings run to 14.5 hours overnight, and 17 of the last 30 days had a
 // gap longer than five hours. Opening a laptop after one of those means the 5h
 // window is always in exactly this state, while the 7d windows are merely old.
-function windows(report: Record<string, unknown>, age: number): Win[] {
+// The count of windows this file recognised but dropped for being out of their own
+// window travels back with the survivors, because it is what separates a report
+// that said nothing live from a report this file no longer understands.
+type Scan = { wins: Win[]; aged: number; entries: number };
+
+function windows(report: Record<string, unknown>, age: number): Scan {
 	const raw = report.limits;
-	if (!Array.isArray(raw)) return [];
+	if (!Array.isArray(raw)) return { wins: [], aged: 0, entries: -1 };
+	let aged = 0;
 	const out: Win[] = [];
 	for (const entry of raw) {
 		const limit = record(entry);
@@ -162,7 +188,10 @@ function windows(report: Record<string, unknown>, age: number): Win[] {
 		if (used === null || left === null) continue;
 
 		const duration = num(window.durationMs);
-		if (duration !== null && age > duration) continue;
+		if (duration !== null && age > duration) {
+			aged++;
+			continue;
+		}
 
 		const id = typeof window.id === "string" && window.id !== "" ? window.id : "?";
 		// `scope.tier` arrives lowercase (`fable`) while the vendor's own label for
@@ -184,7 +213,7 @@ function windows(report: Record<string, unknown>, age: number): Win[] {
 	// the 5h one can stop you within the hour, the 7d one moves slowly enough to
 	// be noticed in passing.
 	out.sort((a, b) => (a.durationMs ?? Number.MAX_SAFE_INTEGER) - (b.durationMs ?? Number.MAX_SAFE_INTEGER));
-	return out;
+	return { wins: out, aged, entries: raw.length };
 }
 
 function read(provider: string, now: number): Reading {
@@ -194,24 +223,41 @@ function read(provider: string, now: number): Reading {
 		db = new sqlite.Database(ompStore(), { readonly: true });
 		let best: Record<string, unknown> | undefined;
 		let bestAt = -1;
+		let named = false;
 		for (const row of db.query(QUERY).all()) {
 			const report = unwrap(record(row).value);
 			if (report.provider !== provider) continue;
+			named = true;
 			const at = num(report.fetchedAt);
 			if (at === null || at <= bestAt) continue;
 			best = report;
 			bestAt = at;
 		}
-		if (!best) return { kind: "none" };
-		const wins = windows(best, now - bestAt);
-		if (wins.length === 0) return { kind: "none" };
-		return { kind: "live", wins, readAt: bestAt };
+		// No report for this provider is not a failure: a machine that does not use
+		// codex has no codex report, and saying `sin lectura` there would be a
+		// permanent complaint about an absence nobody asked about.
+		//
+		// A report that names the provider and carries no readable `fetchedAt` is the
+		// opposite: the row is there and this file cannot date it, which is the shape
+		// changing. Without a date there is no age, and an undated limit figure is
+		// the one thing this widget refuses to print.
+		if (!best) return named ? { kind: "unreadable" } : { kind: "quiet" };
+
+		const scan = windows(best, now - bestAt);
+		if (scan.wins.length > 0) return { kind: "live", wins: scan.wins, readAt: bestAt };
+
+		// Understood and quiet: every window this file recognised was older than
+		// itself, or the provider published an empty list.
+		if (scan.aged > 0 || scan.entries === 0) return { kind: "quiet" };
+
+		// A report with entries in it and not one this file could read. That is the
+		// shape changing under us, and it is the case this state exists for.
+		return { kind: "unreadable" };
 	} catch {
-		// An unreadable store is reported as nothing to say rather than as a
-		// failure line: unlike the session store, this one belongs to another tool
-		// that need not be installed at all, and a machine without omp is not a
-		// machine with a broken widget.
-		return { kind: "none" };
+		// The store would not open or would not answer. Unlike a missing report,
+		// this is a defect worth a row: a fixed path into another product's private
+		// store is exactly the thing that moves without telling anybody.
+		return { kind: "unreadable" };
 	} finally {
 		try {
 			db?.close();
@@ -335,14 +381,41 @@ function LimitsSection(props: { ctx: SlotContext; name: string; provider: string
 		return gap > STALE_MS ? age(gap) : "";
 	};
 
-	// Amber for what the vendor itself flags, and for a reading old enough to carry
-	// its age. Nothing here invents a threshold on the percentage: the provider
-	// publishes a `status` per window and it is the one figure in this file nobody
-	// on this side had to guess.
+	// Amber for what the vendor itself flags, for a reading old enough to carry its
+	// age, and for a reading this file could not make sense of. Nothing here invents
+	// a threshold on the percentage: the provider publishes a `status` per window and
+	// it is the one figure in this file nobody on this side had to guess.
 	const colour = () => {
 		const r = current();
+		if (r.kind === "unreadable") return theme().warning;
 		const loud = r.kind === "live" && (stale() !== "" || r.wins.some((w) => !w.ok));
 		return loud ? theme().warning : theme().textMuted;
+	};
+
+	// One element tree, and only strings inside it change. That is not style: this
+	// renderer drops a `<Show>` subtree in silence and builds a mapped array once,
+	// so a component that swapped its own shape per state would draw the first state
+	// it ever had, forever.
+	//
+	// So the three states are three sets of strings:
+	//
+	//   live        `▶ Claude (5h 78% · 7d 56%)`, or the bars when open
+	//   unreadable  `Claude sin lectura`, amber, no arrow -- there is nothing to open
+	//   quiet       every string empty, which draws a blank row
+	//
+	// That last row is the one compromise here, and it is only reachable by going
+	// quiet AFTER having been live -- five hours of a client left open while omp
+	// never runs. A section that has already drawn cannot un-draw itself: the node
+	// exists. The choice is a blank row or a label saying nothing, and a blank row
+	// is at least not read as news. At startup the same state costs nothing at all,
+	// because the slot returns null before any node exists.
+	const glyph = () => (current().kind === "live" ? (open() ? "\u25BC " : "\u25B6 ") : "");
+	const label = () => (current().kind === "quiet" ? "" : props.name);
+	const tail = () => {
+		const r = current();
+		if (r.kind === "unreadable") return " sin lectura";
+		if (r.kind !== "live" || open()) return "";
+		return headline(props.name, r, stale());
 	};
 
 	// Mouse only, which is parity with the client's own MCP section rather than a
@@ -353,13 +426,17 @@ function LimitsSection(props: { ctx: SlotContext; name: string; provider: string
 	// Header and body share one <text>: an empty <text> costs a visible blank row,
 	// so a separate body node would leave a gap in the column whenever this is shut.
 	return (
-		<box onMouseDown={() => setOpen((v) => !v)}>
+		<box
+			onMouseDown={() => {
+				if (current().kind === "live") setOpen((v) => !v);
+			}}
+		>
 			<text fg={colour()}>
 				<span style={{ fg: theme().text }}>
-					{open() ? "\u25BC " : "\u25B6 "}
-					<b>{props.name}</b>
+					{glyph()}
+					<b>{label()}</b>
 				</span>
-				<span style={{ fg: colour() }}>{open() ? "" : headline(props.name, current(), stale())}</span>
+				<span style={{ fg: colour() }}>{tail()}</span>
 				{open() ? `\n${body(current(), now(), stale())}` : ""}
 			</text>
 		</box>
@@ -375,19 +452,25 @@ type Api = {
 //
 // The reading happens here, before anything is returned, because this callback is
 // invoked exactly once -- measured, with a counter that stayed at 1 across
-// repaints. With no live window there is nothing to draw, and returning null draws
-// nothing at all: no header, no placeholder, not even the separator the host puts
-// between sections.
+// repaints. A `quiet` reading draws nothing at all: no header, no placeholder, not
+// even the separator the host puts between sections.
 //
-// The cost of that measurement is stated rather than hidden: a provider with no
-// live window when the client starts stays absent until the client is restarted,
-// even if a reading arrives ten minutes later. It takes a reading older than the
-// longest window -- eight days away from the machine -- to land there, and the
-// alternative is a row that exists to say nothing.
+// An `unreadable` one draws, and that asymmetry is the whole point of the split. A
+// provider that has nothing live to say and a store this file can no longer read
+// are the same absence on screen, and one of them is a defect. Once the node
+// exists it keeps polling, so the day the store comes back the line turns into the
+// section by itself -- measured: a store rewritten under a running client was
+// picked up on the next poll, without a restart.
+//
+// The cost of the single invocation is stated rather than hidden: a provider that
+// is quiet when the client starts stays absent until the client is restarted, even
+// if a reading arrives ten minutes later. It takes a reading older than the longest
+// window -- eight days away from the machine -- to land there, and the alternative
+// is a row that exists to say nothing.
 function mount(api: Api, name: string, provider: string) {
 	return () => {
 		const initial = read(provider, Date.now());
-		if (initial.kind !== "live") return null;
+		if (initial.kind === "quiet") return null;
 		return <LimitsSection ctx={api} name={name} provider={provider} initial={initial} />;
 	};
 }

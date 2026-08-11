@@ -723,6 +723,24 @@ turns a section amber. Providers reporting in units with no whole to divide by a
 not drawn as bars rather than drawn as invented ones: four others publish into the
 same store, and none is on screen.
 
+**A failure does not look like an answer.** Silence is the legitimate state here —
+no live window, or a provider this machine does not use — and it is also what a
+broken reading would produce, because the source is another product's private store
+reached by a fixed path with no declared schema. Those were the same absence until
+they were split: a report that is read and understood but has nothing live draws
+nothing, while a store that will not open, or opens and says something this widget
+cannot parse, draws one amber line — `Claude sin lectura` — exactly as the `Models`
+section does. The line keeps reading, so when the store comes back it becomes the
+section again on the next poll, with no restart. Measured both ways: a store with
+one field renamed produced the line, and repairing it under the running client
+produced the section.
+
+A Go test guards the other end of that: it opens omp's real store and fails if an
+`anthropic` or `openai-codex` report stops carrying `fetchedAt`, a percentage with
+`usedFraction`, or a window with an `id` and a `durationMs`. It skips where there is
+no omp — which is every CI runner — so it shouts only on a machine that has the
+thing it checks, which is also the only machine where the widget could be wrong.
+
 **Whether it draws is decided once, when the client loads plugins.** A slot
 callback is invoked a single time — measured with a counter that stayed at 1 across
 repaints — and neither a callback nor a component that returned `null` is ever

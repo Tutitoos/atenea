@@ -325,6 +325,60 @@ A records as the client's own gateway names, and the certificate it serves says
 so — but which name that connection asked for was not measured, so it is not
 written down as though it were.
 
+## A sixth instrument: a correct measurement of a file that was not the source
+
+Measured on 2026-08-10, and it cost a phase of work and a widget that had already
+shipped.
+
+The question was whether a sidebar could honestly show how much of a provider's
+rate-limit window is left. That turns on one thing: how often the number is
+refreshed. So the refresh rate was measured, carefully and correctly. Claude's
+figures live in `~/.claude.json`, rewritten by its CLI on `/status` or `/usage`:
+two refreshes in twelve days, with the client itself running for 24 hours after
+the last one without touching it. codex's arrive inside a session rollout,
+appended only by a real model turn: readings on three days out of thirty-one. A
+five-hour window is therefore live about **4 %** of the time.
+
+From that, a design argument followed, and it was a good one. A section with a row
+per provider would read "no live window" almost always, which teaches a reader to
+skip that part of the screen — and then the day the weekly figure matters, they do
+not see it either. So the feature was cut down to a single line that is absent most
+days, the reasoning was written into the code, the docs and the changelog, and the
+cut version was recorded on the not-built-yet page with the condition that would
+revive it: *something refreshes those figures without a command being typed by
+hand*.
+
+Every number in that paragraph is correct. The file is refreshed exactly that
+rarely. What none of them establishes is the thing the design rested on, because
+`~/.claude.json` was **not the source** — it is one client's cache of it. This
+machine already had another: omp keeps a usage report per provider in its own
+store and refreshes each about every ten minutes on its own. Measured the next day:
+readings one minute old for both providers, a median gap of one hour, six providers
+covered, and the same numbers the first version was scraping out of two files by
+hand — plus the window durations the first version had to infer from labels.
+
+The correction is not "the measurement was sloppy". It is that the measurement
+answered **how often does this client rewrite this file** and was reported as **how
+often does this number change**. Those are different questions with the same units,
+and nothing in the output distinguishes them.
+
+**Why it was so hard to catch.** A broken sampler announces itself eventually:
+numbers stop, or contradict something. This produced a long, internally consistent,
+well-evidenced argument, with a real measurement under every clause, that reached
+the wrong shape. Everything about it reads as rigour — which is exactly what makes
+it durable: nobody re-opens a question that was answered with figures.
+
+What did catch it, in the end, was writing the revival condition down. Stating
+"something refreshes those figures without a command being typed" is a testable
+claim about the machine, and it took ten minutes to discover that something already
+did. Had the feature been cut without recording its condition, the wrong shape would
+have survived until somebody re-proposed the section from scratch.
+
+The cheap check, for next time: before measuring how a number behaves, ask who else
+on this machine already reads it. A number worth putting on a screen is usually
+worth something to another program too, and that program's copy is often fresher,
+wider and already parsed.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -375,6 +429,19 @@ written down as though it were.
    evidenced. Nothing announced it — the run simply did not finish, which reads
    as a broken subject. Where an instrument sits inside the system it watches,
    the reading is only trustworthy at a detail level the system survives.
+10. **Find the source before measuring the shape.** A refresh rate was measured
+    correctly on `~/.claude.json` and reported as a fact about the number inside
+    it — but that file is one client's cache, and another program on the same
+    machine held a copy refreshed every ten minutes instead of twice in twelve
+    days. The design built on it was cut to fit a scarcity that did not exist, and
+    shipped. This failure mode is sharper than a broken instrument: a broken
+    sampler eventually contradicts something, while this produces a long, correct,
+    convincing argument with a real measurement under every clause. Everything
+    about it reads as rigour, and nobody re-opens a question that was answered with
+    figures. The cheap defence is one question asked before the first measurement —
+    who else on this machine already reads this number? — and one habit after:
+    write down the condition that would revive whatever you just cut, because a
+    condition is a testable claim and a conclusion is not.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

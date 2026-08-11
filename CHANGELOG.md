@@ -222,6 +222,30 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   budget is a named constant in both widgets, and the earlier claim that the column
   gives a widget 42 columns is corrected in the docs.
 
+- **The rate-limit sections let a broken reading render as the most ordinary answer
+  on the screen.** Every other panel here separates a failure from a silence —
+  `Models` says `sin lectura` rather than showing stale shares — and this one, alone,
+  did not: an unreadable store and a provider with nothing live both drew nothing at
+  all, which is the normal state of that part of the column. The source is another
+  product's private store, reached by a fixed path with no declared schema, so the
+  day it moves is a question of when, not if, and the answer would have been an
+  absence nobody could distinguish from a quiet Tuesday.
+
+  Now three states, not two: a report read and understood with nothing live draws
+  nothing; a store that will not open, or opens with a shape this file cannot parse,
+  or names a provider without a readable `fetchedAt`, draws one amber
+  `Claude sin lectura`; and a provider absent from the store draws nothing, because
+  a machine that does not use codex is not a machine with a broken widget. The
+  failure line keeps polling, so a store repaired under a running client turns back
+  into the section on the next poll — measured, along with the line itself, from a
+  store with one field renamed.
+
+  Paired with a test that reads omp's **real** store and fails if an `anthropic` or
+  `openai-codex` report stops carrying `fetchedAt`, a percentage with `usedFraction`,
+  or a window with an `id` and a `durationMs`. It skips where there is no omp, which
+  is every CI runner, and it was verified to fail on a renamed field and on a missing
+  table rather than only to pass on a good one.
+
 - **The status light travelled as a number, which pinned its meaning to
   declaration order.** `Light` is an iota, so the wire carried `1` for amber —
   and inserting a state between two existing ones would have silently
