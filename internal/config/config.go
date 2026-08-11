@@ -27,6 +27,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -138,6 +139,25 @@ func (m MCPServer) EffectsOf(tool string) []contract.Effect {
 		return narrowed
 	}
 	return m.Effects
+}
+
+// Probe describes this declaration the way internal/mcpprobe wants it, and is
+// the one place that conversion lives.
+//
+// It sits here rather than in either caller because there are two of them now
+// and they must not disagree. `atenea wrap` and `atenea detect` build one to
+// actually probe; the status screen builds one only to answer "how would this
+// be reached, and where" -- Server.Transport and Server.Where already own
+// those two sentences, and a second copy of the URL-or-command rule is how a
+// screen ends up naming a transport the prober would not have used.
+func (m MCPServer) Probe() mcpprobe.Server {
+	return mcpprobe.Server{
+		ID:      m.ID,
+		URL:     m.URL,
+		Command: m.Command,
+		Env:     m.Env,
+		Timeout: m.Timeout,
+	}
 }
 
 // Expose is how a declared backend may be reached.

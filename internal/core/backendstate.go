@@ -75,6 +75,88 @@ func (m *backendMemory) record(id string, reading backendReading) {
 	m.readings[id] = reading
 }
 
+// reading answers with the last reading and whether there is one at all.
+//
+// The second return is not a convenience: absent and BackendUnknown are the
+// same fact told by two layers, and collapsing them here would let a caller
+// that forgot to check hand a screen a reading dated the zero time.
+func (m *backendMemory) reading(id string) (backendReading, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	found, ok := m.readings[id]
+	return found, ok
+}
+
+// providerHealth is one provider's worst implementation and the health that
+// made it the worst. The implementation id travels with it because a provider
+// carrying five of them owes the reader the name of the one that spoke.
+type providerHealth struct {
+	implementation string
+	health         contract.Health
+}
+
+// serverStatus renders every declared server, in declaration order.
+//
+// The precedence is deliberate and only ever falls one way. A backend Atenea
+// speaks to itself has a reading of its own, and nothing beats first-hand
+// knowledge of the exchange that just happened. A server behind a capability
+// has none -- it is never asked for tools -- so the catalog's remembered
+// health for its implementations answers instead. A server neither path has
+// touched keeps "unknown", which includes the honest case of a declaration
+// nothing in the Core reaches at all: headroom on this machine is not raw and
+// no implementation names it as provider, so nothing but `atenea detect` can
+// ever give it a verdict, and inventing one here would be the same lie in a
+// new place.
+func (c *Core) serverStatus(byProvider map[string]providerHealth) []ServerStatus {
+	out := make([]ServerStatus, 0, len(c.settings.MCPServers))
+	for _, server := range c.settings.MCPServers {
+		probe := server.Probe()
+		entry := ServerStatus{
+			ID:        server.ID,
+			Transport: probe.Transport(),
+			Where:     probe.Where(),
+			Expose:    string(server.Expose),
+			State:     BackendUnknown,
+		}
+		switch found, ok := c.readings.reading(server.ID); {
+		case ok:
+			entry.State = found.State
+			entry.Reason = found.Reason
+			entry.LastChecked = found.At
+		default:
+			if provider, serves := byProvider[server.ID]; serves {
+				entry.State = stateOf(provider.health.State)
+				if provider.health.Reason != "" {
+					entry.Reason = provider.implementation + " " + provider.health.Reason
+				}
+				// No timestamp: the catalog remembers the verdict, not the
+				// minute. Borrowing time.Now() here would date a reading to
+				// the moment somebody opened a screen.
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// stateOf maps a provider's health onto the three words a server state has.
+//
+// Degraded lands on ok on purpose: a degraded provider is answering, and the
+// state field answers "is it there" while Reason carries what is wrong with
+// it. Calling it failed would put a red row against a server that is serving,
+// which is the same crime as the silence -- a reading that does not match the
+// world -- committed in the other direction.
+func stateOf(state contract.HealthState) BackendState {
+	switch state {
+	case contract.HealthAlive, contract.HealthDegraded:
+		return BackendOK
+	case contract.HealthDown:
+		return BackendFailed
+	default:
+		return BackendUnknown
+	}
+}
+
 // recordBackendListing remembers what happened when a backend was asked for
 // its tools.
 //

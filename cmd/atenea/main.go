@@ -577,6 +577,7 @@ func printStatus(out io.Writer, status core.Status) error {
 	printChats(out, status)
 	printBackground(out, status)
 	printProcesses(out, status)
+	printServers(out, status)
 
 	fmt.Fprintf(out, "\ncapabilities\n")
 	for _, capability := range status.Capabilities {
@@ -707,6 +708,49 @@ func printProcesses(out io.Writer, status core.Status) {
 			line += "  (" + p.LastReason + ")"
 		}
 		fmt.Fprintln(out, line)
+	}
+}
+
+// printServers is the section for every [[mcp_server]] the settings file
+// declares, whether or not anything has touched it.
+//
+// Unlike processes it lists a row per declaration rather than per live thing,
+// because the fault it exists to catch is a declaration with nothing behind
+// it. Three servers were dead for hours on this machine and the only visible
+// symptom was that their tools were not in tools/list: an absence, and an
+// absence is exactly what a screen cannot show.
+//
+// The three states are never printed as bare interchangeable words. "ok" is
+// the only one that carries an age, "failed" is upper-cased and carries the
+// cause, and "unknown" always carries the sentence that says nobody has asked
+// -- because a reader taking grey for green is the whole bug, one layer up.
+func printServers(out io.Writer, status core.Status) {
+	if len(status.Servers) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nservers\n")
+	for _, s := range status.Servers {
+		state := string(s.State)
+		if s.State == core.BackendFailed {
+			state = strings.ToUpper(state)
+		}
+		note := ""
+		switch {
+		case s.State == core.BackendUnknown:
+			note = "(nobody has asked yet)"
+		case s.Reason != "":
+			note = "(" + s.Reason + ")"
+		}
+		age := "-"
+		if !s.LastChecked.IsZero() {
+			age = time.Since(s.LastChecked).Truncate(time.Second).String() + " ago"
+		}
+		line := fmt.Sprintf("  %-7s %-16s %-5s expose=%-4s checked=%-12s %s",
+			state, s.ID, s.Transport, s.Expose, age, orDash(s.Where))
+		if note != "" {
+			line += "  " + note
+		}
+		fmt.Fprintln(out, strings.TrimRight(line, " "))
 	}
 }
 

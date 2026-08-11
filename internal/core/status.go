@@ -140,6 +140,12 @@ type Status struct {
 	// as this process's own Supervisor sees it right now. Empty when the
 	// settings file manages nothing, which is not a degraded state.
 	Processes []ProcessStatus
+	// Servers is every [[mcp_server]] the settings file declares, with what
+	// the last exchange left behind. Every declared server is here on every
+	// screen, including ones nothing has touched: a server missing from this
+	// list is the exact failure this field exists to end, so absence is not
+	// an available state -- "unknown" is.
+	Servers []ServerStatus
 	// Backups is what protects the history, and whether it is actually
 	// happening. A copy nobody can see the state of is a copy nobody trusts.
 	Backups BackupStatus
@@ -188,6 +194,46 @@ type ProcessStatus struct {
 	// LastReason is what the most recent failed attempt said, empty when
 	// the server has never failed to start or stay up.
 	LastReason string
+}
+
+// ServerStatus is one declared [[mcp_server]] and the last thing known about
+// it, for the status screen.
+//
+// It is built from remembered state and never probes. Probing on every status
+// call would pay one spawn per stdio server per screen and would reintroduce
+// exactly the cost core.New refuses to pay at startup; `atenea detect` is the
+// command that exists for the operator who wants the question asked now.
+//
+// Two different memories feed State, because two different paths can lose a
+// server and only one of them was ever visible. A raw backend answers this
+// process directly, so its reading comes from the exchange that just happened.
+// A server behind a capability is never asked for its tools at all -- it is
+// reached through an implementation -- so its state is read from the health
+// the catalog already remembers for the implementations whose provider is
+// this id. A server that neither path has touched is "unknown", and that is
+// an answer rather than a gap.
+type ServerStatus struct {
+	ID string
+	// Transport and Where are the prober's own two sentences about how this
+	// server would be reached and at what address, so a screen and a probe
+	// cannot describe one server differently.
+	Transport string
+	Where     string
+	// Expose separates a pointer from a passthrough, and is on the screen
+	// because it is what decides which of the two memories above can ever
+	// say anything about this row.
+	Expose string
+	State  BackendState
+	// Reason is the cause in the words the process itself used -- env: 'node':
+	// No such file or directory, not a generic "failed". When the reading came
+	// from the capability path it is prefixed with the implementation that
+	// reported it, because "which of my five implementations said this" is the
+	// next question a reader has.
+	Reason string
+	// LastChecked is when the reading was taken, and is the zero time when the
+	// state is unknown. A timestamp on a state nobody established would be a
+	// date attached to nothing.
+	LastChecked time.Time
 }
 
 // BackupStatus is the history's insurance in one line.
@@ -443,6 +489,12 @@ func (c *Core) Status() Status {
 	located := len(c.catalog.Repositories()) > 1
 
 	total := 0
+	// byProvider is the reconciled health of the worst implementation each
+	// provider carries, collected here rather than recomputed later: the
+	// screen must not report a server by a different rule than the one it
+	// reports that server's implementations by, and the reconciliation above
+	// is that rule.
+	byProvider := make(map[string]providerHealth)
 	for _, capability := range c.catalog.Capabilities() {
 		entry := CapabilityStatus{
 			ID:      capability.ID,
@@ -487,6 +539,10 @@ func (c *Core) Status() Status {
 				Light:    light,
 				Health:   impl.Health,
 			})
+			if prior, seen := byProvider[impl.Provider]; !seen ||
+				impl.Health.State.Rank() > prior.health.State.Rank() {
+				byProvider[impl.Provider] = providerHealth{implementation: impl.ID, health: impl.Health}
+			}
 			status.Light = worst(status.Light, light)
 		}
 		// A capability nobody can answer is a red light regardless of how
@@ -544,6 +600,12 @@ func (c *Core) Status() Status {
 	for _, p := range status.Processes {
 		status.Light = worst(status.Light, p.Light)
 	}
+	// Deliberately not folded into status.Light. A raw stdio backend is spawned
+	// on demand, so "failed" here can mean nobody has started chrome-devtools
+	// today, and turning the whole screen amber for that would teach an
+	// operator to ignore the top line. The capability path already moves the
+	// light where a failure actually costs a capability, above.
+	status.Servers = c.serverStatus(byProvider)
 	status.Backups = c.backups()
 	status.Backups.Stale = status.Backups.stale()
 	if status.Backups.Stale {

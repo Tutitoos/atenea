@@ -71,9 +71,11 @@ type Plan struct {
 	Held []Checked
 }
 
-func toProbe(s config.MCPServer) mcpprobe.Server {
-	return mcpprobe.Server{ID: s.ID, URL: s.URL, Command: s.Command, Env: s.Env, Timeout: s.Timeout}
-}
+// toProbe is kept as a name for what this conversion means here, and delegates
+// to the declaration's own method: the status screen needs the same conversion
+// and two copies of the URL-or-command rule would let a screen and a probe
+// describe one server differently.
+func toProbe(s config.MCPServer) mcpprobe.Server { return s.Probe() }
 
 // Check probes every declared server and sorts them into the three piles.
 //
