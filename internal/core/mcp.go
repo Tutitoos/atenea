@@ -247,6 +247,11 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	for _, id := range slices.Sorted(maps.Keys(v.core.backends)) {
 		backend := v.core.backends[id]
 		offered, err := backend.Tools(ctx)
+		// The client is still told nothing -- see the paragraph above, which
+		// has not changed. What changed is that the Core now remembers why,
+		// so `atenea status` can name this server and this cause instead of
+		// the operator having to notice an absence.
+		v.core.recordBackendListing(id, err)
 		if err != nil {
 			continue
 		}
@@ -434,6 +439,10 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	}
 	result, err := backend.Call(ctx, tool, params.Arguments)
 	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
+	// A call is the other place a backend's state becomes known for free.
+	// Only an unavailable or timed-out one counts against it; see
+	// recordBackendCall for why a refusal must not.
+	v.core.recordBackendCall(server, err)
 	if err != nil {
 		// A backend's refusal is an answer, not a protocol error: the model
 		// asked for something real and can read why it did not work. The

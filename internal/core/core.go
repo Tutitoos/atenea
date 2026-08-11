@@ -60,6 +60,12 @@ type Core struct {
 	// answers a capability, so there is nothing for the funnel to rank and
 	// nothing for the measurement base to learn.
 	backends map[string]rawBackend
+	// readings is what the last exchange with each backend left behind, so a
+	// backend that dropped out of tools/list can be named on the status screen
+	// instead of just being absent from it. Written from the seams that talk
+	// to a backend, never at startup: nothing here probes anything, which is
+	// what keeps the three promises documented at the backends map above.
+	readings *backendMemory
 	chooser  *selector.Selector
 	// runners are the live client adapters, kept as a list because the status
 	// screen names each of them; the orchestrator behind them sees one seam.
@@ -328,6 +334,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	return &Core{
 		settings:     cfg,
 		backends:     backends,
+		readings:     newBackendMemory(),
 		catalog:      catalog,
 		chooser:      chooser,
 		runners:      runners,
