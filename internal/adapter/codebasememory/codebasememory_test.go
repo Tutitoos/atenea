@@ -627,6 +627,37 @@ func TestProbeIndexReturnsTheErrorForAnythingElse(t *testing.T) {
 	}
 }
 
+// The literal incident, at the layer that can see it: this machine's service
+// booted with a PATH that had no ~/.local/bin, so the bare name never
+// resolved and four capabilities went quiet. The bin has to be unavailable --
+// it is the one the funnel treats as "try somebody else" and the one the Core
+// records against the server's row -- and the message has to say PATH, because
+// the alternative is another afternoon spent reading settings files.
+func TestABareNameThatIsNotOnPATHIsUnavailableAndSaysSo(t *testing.T) {
+	runner, err := New(Options{
+		Implementations: []string{ImplOverview},
+		Binary:          "codebase-memory-mcp-that-is-not-installed",
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := osexec.LookPath(runner.binary); err == nil {
+		t.Skipf("%s exists on this machine, so the premise of this test is gone", runner.binary)
+	}
+
+	_, err = runner.invoke(context.Background(), "query_graph", map[string]any{}, &meter{})
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable (err = %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "PATH") {
+		t.Errorf("err = %q, want PATH named in it", err.Error())
+	}
+	if !strings.Contains(err.Error(), runner.binary) {
+		t.Errorf("err = %q, want the command it looked for", err.Error())
+	}
+}
+
 // --- helpers ------------------------------------------------------------
 
 func newTestRunner(t *testing.T) *Runner {
