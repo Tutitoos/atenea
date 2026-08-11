@@ -17,6 +17,47 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A repository can carry its own settings, in `.atenea/config.toml` at its root.**
+  A partial overlay on the global file: what it declares wins, what it omits
+  falls back, and a repository without one changes nothing. The active
+  repository is the first `.git` above the working directory, and the walk stops
+  there — a nested repository does not inherit the workspace above it, because
+  it is cloned and published on its own and would otherwise behave differently
+  depending on where it was checked out.
+
+  It may declare three things: what the repository is (`[[repository]]` —
+  `languages`, `scale`, `vcs`, `indexed_by`), which implementation to prefer for
+  it, and further files to treat as delicate. Every other key is refused naming
+  the block and the reason. The file arrives with a `git clone`, so the trust
+  question is not the global file's: `[[mcp_server]]` and every `process` block
+  carry a command to launch, and a shortened `[security] sensitive` would disarm
+  the secret skip for the machine that cloned it. `sensitive` is unioned, never
+  replaced — tightening is offered and loosening is not. `repository.path` is
+  refused because the path is the directory the file was found in, which is the
+  only thing keeping this layer inside its own tree.
+
+  The obvious implementation is wrong, and it was measured before it was
+  written. Decoding the local file onto the global one and letting TOML merge is
+  correct for scalars and tables and silently broken for arrays of tables:
+  against `toml v1.6.0`, a global with two `[[repository]]` blocks overlaid by a
+  local file declaring one comes back with a single repository, and that
+  survivor keeps the **first** global block's path while taking the local
+  block's scale. The library merges by position, not by identity. A file naming
+  its own repository would have inherited another repository's path and dropped
+  the rest of the catalog, with no error. So the local file is decoded into its
+  own shape and merged by key, and the measurement is pinned by a test that
+  fails if anyone reaches for the shorter version.
+
+  `atenea config show` prints the effective settings with the origin of every
+  field, which is the only way to tell an inherited value from a declared one
+  that happens to agree. `ATENEA_LOCAL_CONFIG=0` ignores the layer.
+
+  `atenea run` and `service install` read the global file alone: one process
+  answering about every repository must not bake in the overlay of the directory
+  it started in. A consequence that falls out for free — when an overlay
+  applies, `settings` names both files, so the check `status` already makes
+  before trusting the running service's screen now correctly declines to.
+
 - **`atenea statusline install` puts Atenea's own light in opencode's sidebar.**
   The traffic light, the version actually running, and unread incidents, read from
   the service's unix socket — the same door the CLI knocks on, so it needs no key,

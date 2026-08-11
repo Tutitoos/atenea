@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,6 +64,7 @@ Commands:
                          --implementation or --repository, or --all for the lot
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
+  config show            Print the settings that apply here, and from where
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
                          moment ago; dead ones are named and left out
   statusline install     Put Atenea's status line on opencode's screen;
@@ -216,9 +218,24 @@ Flags:
 `,
 	"config": `Usage: atenea config init [--force]
        atenea config path
+       atenea config show
 
 'init' writes the built-in settings file to disk; --force overwrites one
 that already exists. 'path' prints where settings are read from.
+
+'show' prints the settings that actually apply in this directory, and for
+everything a repository is allowed to declare, whether the value came from
+the repository's own .atenea/config.toml or from the global file.
+
+A repository may carry .atenea/config.toml at its root. It is a partial
+overlay: what it declares wins, what it omits falls back to the global
+file, and a repository without one changes nothing. It may declare what
+the repository is ([[repository]]: languages, scale, vcs, indexed_by),
+which implementation to prefer for it ([[selector.rule]]) and further
+files to treat as delicate ([security] sensitive, added to the global list
+and never removed from it). Every other key is refused by name: a file
+that arrives with a git clone may not hand this machine a command to run.
+Set ATENEA_LOCAL_CONFIG=0 to ignore the layer entirely.
 `,
 	"wrap": `Usage: atenea wrap CLIENT [client args...]
 
@@ -424,7 +441,16 @@ func loadService(settingsPath string) (*core.Core, error) {
 }
 
 func build(settingsPath string, role core.Role) (*core.Core, error) {
-	cfg, err := config.Load(settingsPath)
+	// A one-shot command runs in a working tree and answers about it, so the
+	// repository's own overlay applies. The service does not: it is one
+	// process answering about every repository on the machine, and the
+	// overlay of whichever directory it was started in would be wrong for
+	// all the others.
+	load := config.LoadEffective
+	if role == core.Service {
+		load = config.Load
+	}
+	cfg, err := load(settingsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +464,7 @@ func cmdVersion(out io.Writer) error {
 }
 
 func cmdStatus(settingsPath string, out io.Writer) error {
-	cfg, err := config.Load(settingsPath)
+	cfg, err := config.LoadEffective(settingsPath)
 	if err != nil {
 		return err
 	}
@@ -2091,12 +2117,14 @@ func onPath(name string) bool {
 
 func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return contract.Fail(contract.FailureInvalidInput, "config needs a subcommand: init or path")
+		return contract.Fail(contract.FailureInvalidInput, "config needs a subcommand: init, path or show")
 	}
 	switch args[0] {
 	case "path":
 		fmt.Fprintln(out, config.ResolvePath(settingsPath))
 		return nil
+	case "show":
+		return cmdConfigShow(settingsPath, out)
 	case "init":
 		var force bool
 		flags := flag.NewFlagSet("config init", flag.ContinueOnError)
@@ -2114,6 +2142,125 @@ func cmdConfig(settingsPath string, args []string, out io.Writer) error {
 	default:
 		return contract.Fail(contract.FailureInvalidInput, "unknown config subcommand %q", args[0])
 	}
+}
+
+// cmdConfigShow prints the effective settings and, for everything a
+// repository is allowed to say, where the value came from.
+//
+// It exists because the overlay is otherwise only visible in its effects. A
+// layer that changes an answer without being able to say so is the kind of
+// configuration that gets blamed for the wrong thing, and the question it
+// answers -- "is this coming from my repository or from the machine?" -- has
+// no other way to be asked.
+func cmdConfigShow(settingsPath string, out io.Writer) error {
+	global, err := config.Load(settingsPath)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.LoadEffective(settingsPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "global   %s\n", global.Source)
+	if cfg.Local == nil {
+		fmt.Fprintf(out, "overlay  none (no %s at the root of this repository)\n",
+			filepath.Join(config.LocalDir, config.LocalFile))
+	} else {
+		verb := "patches"
+		if cfg.Local.Added {
+			verb = "adds"
+		}
+		fmt.Fprintf(out, "overlay  %s\n", cfg.Local.Path)
+		fmt.Fprintf(out, "         root %s, %s repository %s\n",
+			cfg.Local.Root, verb, cfg.Local.Repository)
+		fmt.Fprintf(out, "         declares %s\n", strings.Join(cfg.Local.Keys, ", "))
+	}
+
+	// Only the repository the overlay is about. The other declared ones are
+	// not what this command was asked, and printing forty would bury it.
+	for _, repo := range cfg.Repositories {
+		if cfg.Local == nil || repo.ID != cfg.Local.Repository {
+			continue
+		}
+		fmt.Fprintf(out, "\nrepository %s  %s\n", repo.ID, repo.Path)
+		origin := repositoryOrigin(global, cfg.Local)
+		fmt.Fprintf(out, "  %-8s languages   %s\n", origin("languages"), orNone(repo.Languages))
+		fmt.Fprintf(out, "  %-8s scale       %s\n", origin("scale"), orUnset(repo.Scale.String()))
+		fmt.Fprintf(out, "  %-8s vcs         %s\n", origin("vcs"), orUnset(repo.VCS.String()))
+		fmt.Fprintf(out, "  %-8s indexed_by  %s\n", origin("indexed_by"), orNone(repo.Indexes()))
+	}
+
+	if len(cfg.Selector.Rules) > 0 {
+		fmt.Fprintf(out, "\nselector rules\n")
+		for _, rule := range cfg.Selector.Rules {
+			origin := "global"
+			if cfg.Local != nil && rule.Repository == cfg.Local.Repository &&
+				slices.Contains(cfg.Local.Keys, "selector.rule") {
+				origin = "local"
+			}
+			fmt.Fprintf(out, "  %-8s %s in %s -> %s\n",
+				origin, rule.Capability, orAny(rule.Repository), rule.Prefer)
+		}
+	}
+
+	added := len(cfg.Security.Sensitive) - len(global.Security.Sensitive)
+	origin := "global"
+	if added > 0 {
+		origin = fmt.Sprintf("+%d local", added)
+	}
+	fmt.Fprintf(out, "\nsecurity\n  %-8s sensitive   %d pattern(s)\n", origin, len(cfg.Security.Sensitive))
+	return nil
+}
+
+// repositoryOrigin answers, per field, whether the effective value was
+// declared by the overlay or inherited. A field the overlay did not name is
+// the global file's answer, or the compiled fallback when the global file did
+// not name it either -- and the difference between those two matters to a
+// reader deciding where to edit.
+func repositoryOrigin(global config.Config, local *config.Local) func(string) string {
+	declared := make(map[string]bool, len(local.Keys))
+	for _, key := range local.Keys {
+		declared[strings.TrimPrefix(key, "repository.")] = true
+	}
+	return func(field string) string {
+		if declared[field] {
+			return "local"
+		}
+		if local.Added {
+			// The global file never declared this repository, so an
+			// inherited value came from neither: it is what an undeclared
+			// field means.
+			return "unset"
+		}
+		for _, repo := range global.Repositories {
+			if repo.ID == local.Repository {
+				return "global"
+			}
+		}
+		return "unset"
+	}
+}
+
+func orNone(values []string) string {
+	if len(values) == 0 {
+		return "(none)"
+	}
+	return strings.Join(values, ", ")
+}
+
+func orUnset(value string) string {
+	if value == "" {
+		return "(unspecified)"
+	}
+	return value
+}
+
+func orAny(repository string) string {
+	if repository == "" {
+		return "every repository"
+	}
+	return repository
 }
 
 // clients maps a client name to how Atenea hands it a configuration that was

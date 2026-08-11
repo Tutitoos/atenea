@@ -1000,3 +1000,134 @@ refused rather than resolved by file order.
 A rule pointing at something the catalog does not have stops the boot. A rule
 that quietly matches nothing is a preference the user believes is in force and
 is not.
+
+## A repository's own settings
+
+A repository may carry `.atenea/config.toml` at its root. It is a partial
+overlay on the global file: what it declares wins, what it leaves out falls
+back, and a repository without one changes nothing at all. Nothing in it is
+required.
+
+```toml
+# /home/you/work/api/.atenea/config.toml
+[[repository]]
+scale = "medium"           # this repository is medium here, whatever the global file says
+                           # languages, vcs and indexed_by are not named, so they inherit
+
+[[selector.rule]]
+capability = "code.search"
+prefer = "ripgrep"         # in this repository only
+```
+
+`atenea config show` prints the result with the origin of every field, which is
+the only way to tell an inherited value from a declared one that happens to
+match:
+
+```
+global   /home/you/.config/atenea/atenea.toml
+overlay  /home/you/work/api/.atenea/config.toml
+         root /home/you/work/api, patches repository api
+         declares repository, repository.scale
+
+repository api  /home/you/work/api
+  global   languages   go
+  local    scale       medium
+  global   vcs         present
+  global   indexed_by  serena
+```
+
+### Which file applies
+
+The active repository is found by walking up from the working directory to the
+first `.git`, and the overlay is the one at that root. The walk stops there: a
+repository nested inside a workspace does **not** inherit the workspace's
+overlay. A nested repository is cloned and published on its own, so inheriting
+would make it behave differently depending on where it happens to be checked
+out — and it is the same boundary the client harnesses on this machine already
+stop at, so there is one rule to remember rather than two.
+
+Measured in a workspace holding a nested repository, with an overlay in each:
+
+| working directory | overlay that applies |
+| --- | --- |
+| `kena-workspace` | `kena-workspace/.atenea/` |
+| `kena-workspace/cli` | `kena-workspace/.atenea/` |
+| `kena-workspace/libraries` (own `.git`) | `libraries/.atenea/` |
+| `kena-workspace/libraries/packages/env` | `libraries/.atenea/` |
+
+From inside `libraries`, the workspace's own declared scale is still what the
+global file says. The outer overlay is not consulted, not merged and not
+partially applied.
+
+A `[[repository]]` block is matched to the global catalog **by path**, not by
+id: the subject of the file is the directory it was found in. When the global
+file already declares that path, the block patches it field by field. When it
+does not, the repository is added, taking its id from the directory name — and
+a clash with an id the global file already uses for a different path is refused
+rather than resolved.
+
+### What a repository may not declare
+
+The file travels inside the repository, so cloning somebody's repository is
+accepting their settings. That is a different trust question from the global
+file, where the machine's owner is the only author, and most of this schema
+answers it badly: `[[mcp_server]]` and every `process` block carry a command to
+launch, `[[implementation]]` decides what runs behind a capability, and a
+shortened `[security] sensitive` disarms the skip that keeps secrets out of a
+search.
+
+So the overlay accepts three things and refuses the rest **by name**, with the
+reason:
+
+| allowed | what it says |
+| --- | --- |
+| `[[repository]]` — `languages`, `scale`, `vcs`, `indexed_by` | what this repository is |
+| `[[selector.rule]]` | which implementation to prefer, for this repository only |
+| `[security] sensitive` | further files to treat as delicate |
+
+`sensitive` is **unioned** with the global list, never replaced: a repository
+may tighten the guard and may not loosen it, so an empty local list adds
+nothing rather than clearing anything.
+
+A selector rule is scoped to the overlay's own repository whether or not it
+says so, and naming a different one is refused. `prefer` must name an
+implementation the global settings declare — a rule pointing at something this
+binary does not have would be a preference the reader believes is in force and
+is not, which is the same refusal the global file already makes.
+
+`repository.path` and `repository.id` are refused too. The path is the
+directory the file was found in; letting the file name another one is the only
+way this layer could reach outside its own tree.
+
+Everything else — `contract`, `[core]`, `[orchestrator]`, `[metrics]`,
+`[backup]`, `[[capability]]`, `[[implementation]]`, `[[mcp_server]]` — is
+refused naming the block and why:
+
+```
+atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:
+  mcp_server: it carries a command to launch, so a cloned repository would be
+  handing this machine a process to run; repository.path: the path is the
+  directory this file was found in; naming another one is the one way this
+  layer could reach outside its own tree
+```
+
+Set `ATENEA_LOCAL_CONFIG=0` to ignore the layer entirely.
+
+### Where it does not apply
+
+`atenea run` — the service — reads the global file alone. It is one process
+answering about every repository on the machine, and the overlay of whichever
+directory it was started in would be wrong for all the others. `service
+install` is the same, for the same reason.
+
+One consequence is worth knowing rather than discovering: when an overlay
+applies, `settings` names both files, joined by ` + `. `atenea status` compares
+that string against the running service's before trusting its answer, so a
+command run inside a repository with an overlay computes its own screen instead
+of printing one built from settings that are not the ones in force here.
+
+### A directory that declares nothing
+
+`.atenea/` present with no `config.toml` inside is refused rather than ignored.
+The mistake it catches is `.atenea/atenea.toml`, and left quiet it is a whole
+settings file that never takes effect and never says so.

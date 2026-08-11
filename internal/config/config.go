@@ -42,8 +42,14 @@ const BuiltIn = "built-in defaults"
 
 // Config is the decoded, validated settings file.
 type Config struct {
-	// Source is the file it came from, or BuiltIn.
+	// Source is the file it came from, or BuiltIn. When a repository's own
+	// overlay applied, it names both, joined by " + ".
 	Source string
+	// Local records the repository overlay that applied, or nil when none
+	// did. Nothing reads it to decide behavior -- the overlay is already
+	// merged into the fields above by the time it is set -- it is here so a
+	// reader can be told which half of the effective settings is whose.
+	Local *Local
 	// Contract is the contract version the file targets.
 	Contract        contract.Version
 	Core            Core
