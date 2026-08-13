@@ -1301,6 +1301,35 @@ max_tokens = 1            # it spends no tokens; the ceiling still has to be a r
   required = true
   summary = "How many bytes it has"
 
+[[agent]]
+name = "reviewer"
+kind = "specialized"
+summary = "Re-reads what another agent answered about and says whether the answer holds"
+command = "$atenea"
+args = ["agent-exec", "reviewer"]
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+max_tokens = 1
+# Reviews are scheduled in their own lane. A single pool holding both would
+# starve the auditing exactly when the machine is busiest -- every slot full
+# of agents and the reviewer queued behind the answers it is meant to judge.
+# Nothing schedules anything yet; the lane belongs to the type, not to
+# whoever dispatches it, so it is declared here rather than inferred later.
+pool = "review"
+
+  [[agent.result]]
+  name = "checked"
+  type = "int"
+  required = true
+  summary = "How many claims in the answer this review verified against the file"
+
+  [[agent.result]]
+  name = "subject"
+  type = "string"
+  required = false
+  summary = "The run that was audited"
+
 # ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it
 # spawn its own copy.

@@ -29,7 +29,14 @@ const (
 )
 
 // StateDir is where Atenea keeps what it has learned: the measurement base, the
-// run receipts and the crash notebook.
+// run receipts, the crash notebook and the agent traces.
+//
+// One root, because internal/backup copies this one and a second root would be
+// a directory nothing protects. The trace database sat outside it for exactly
+// one commit on the theory that a trace is not re-derivable and therefore not
+// worth copying -- which is backwards: a measurement can be earned again by
+// re-running the call, and a record of what happened at 03:00 last Tuesday
+// cannot be earned again by anything.
 func StateDir() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
 		return filepath.Join(dir, dirName)
@@ -39,30 +46,6 @@ func StateDir() string {
 		return filepath.Join(".local", "state", dirName)
 	}
 	return filepath.Join(home, ".local", "state", dirName)
-}
-
-// DataDir is where the agent trace database lives.
-//
-// Deliberately a second root beside StateDir, and worth knowing why before
-// putting anything else here. StateDir holds what Atenea LEARNED -- the
-// measurement base, the receipts, the crash notebook -- and internal/backup
-// copies all of it, because losing a baseline means re-earning it call by
-// call. The trace database is not that: it is a record of what happened,
-// nothing in it is re-derivable and nothing in it makes the next run better.
-// It is written once per agent and read by a human debugging one.
-//
-// The two do not share a root because they do not share a fate. A backup
-// that swept the traces in would grow without bound copying rows nobody
-// would ever restore.
-func DataDir() string {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
-		return filepath.Join(dir, dirName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".local", "share", dirName)
-	}
-	return filepath.Join(home, ".local", "share", dirName)
 }
 
 // ConfigHome is the root every tool's configuration hangs off: Atenea's own and,

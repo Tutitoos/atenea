@@ -252,9 +252,14 @@ Flags:
   --repository ID       repository to serve at the repository context level
   --traces PATH         trace database (default: the one atenea traces reads)
   --quiet               print the verdict line only
+  --review TYPE         audit the answer with this agent type
 
 An agent that exits zero without writing a report has not answered: it is
 recorded as incomplete, not as success.
+
+--review hands the answer to a second agent. A refusal relaunches the work
+once, carrying the rejected answer and the reason it was rejected; a second
+refusal ends it. Each attempt and each review is its own trace row.
 `,
 	"traces": `Usage: atenea traces [flags]
 

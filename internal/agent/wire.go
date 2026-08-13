@@ -41,12 +41,30 @@ type assignmentWire struct {
 	// the agent can be told rather than having to know. A model agent needs
 	// it in the prompt; a scripted one can ignore it.
 	ResultSchema map[string]any `json:"result_schema"`
+	// Subject is the run this agent was asked to judge, absent on ordinary
+	// work. A reviewer reads its whole case from here: what was asked, what
+	// came back, and which attempt it was.
+	Subject *subjectWire `json:"subject,omitempty"`
 }
 
 type taskWire struct {
 	Objective string   `json:"objective"`
 	Files     []string `json:"files,omitempty"`
 	Criterion string   `json:"criterion"`
+}
+
+type subjectWire struct {
+	RunID   string         `json:"run_id"`
+	Type    string         `json:"type"`
+	Attempt int            `json:"attempt"`
+	Task    taskWire       `json:"task"`
+	Result  map[string]any `json:"result,omitempty"`
+	Verdict string         `json:"verdict"`
+	Reason  *reasonWire    `json:"reason,omitempty"`
+	// Set only on a relaunch: the review that refused this answer, and the
+	// sentence it refused it with.
+	ReviewID  string      `json:"review_id,omitempty"`
+	Rejection *reasonWire `json:"rejection,omitempty"`
 }
 
 type limitsWire struct {
@@ -92,6 +110,34 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 		},
 		Context:      ctxPayload,
 		ResultSchema: schema,
+	}
+	if s := a.Subject; s != nil {
+		subject := &subjectWire{
+			RunID:   s.RunID,
+			Type:    s.TypeName,
+			Attempt: s.Attempt,
+			Task: taskWire{
+				Objective: s.Task.Objective,
+				Files:     s.Task.Files,
+				Criterion: s.Task.Criterion,
+			},
+			Result:  s.Result,
+			Verdict: s.Verdict.String(),
+		}
+		// The reason travels whenever there is one. A reviewer told only
+		// that the run came back `incomplete` has to guess at what stopped
+		// it, and guessing is the one thing a review may not do.
+		if s.Reason.Kind != contract.FailureUnspecified || s.Reason.Text != "" {
+			subject.Reason = &reasonWire{Kind: s.Reason.Kind.String(), Text: s.Reason.Text}
+		}
+		if s.ReviewID != "" {
+			subject.ReviewID = s.ReviewID
+			subject.Rejection = &reasonWire{
+				Kind: s.Rejection.Kind.String(),
+				Text: s.Rejection.Text,
+			}
+		}
+		out.Subject = subject
 	}
 	for _, effect := range a.Effects {
 		out.Effects = append(out.Effects, effect.String())

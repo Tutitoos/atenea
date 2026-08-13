@@ -741,6 +741,7 @@ context = ["repository"]  # the levels the assignment may carry
 effects = ["read"]        # the ceiling on what it may cause
 max_duration = "30s"      # wall clock for one run
 max_tokens = 1            # what one run may spend
+pool = "agent"            # which parallel lane this type belongs to: agent or review
 
   [[agent.result]]
   name = "path"
@@ -786,13 +787,49 @@ boundary rather than believed. A refused answer is `incomplete`, not `failed`:
 the run got somewhere and stopped short, which is a different fact from a run
 that reached a judgement and the judgement was no.
 
-Every run is written to the trace database at `~/.local/share/atenea/traces.db`
+Every run is written to the trace database at `~/.local/state/atenea/traces.db`
 before the spawn and closed after the report validates. `atenea traces` reads
 it. A row left open is a run nobody saw finish; the next Atenea closes it as
 `incomplete` with reason `unavailable`, but only after checking that the
 process that opened it is really gone -- another Atenea may be mid-run right
 now, and closing a live run would be the sweep inventing the very thing it
 exists to record honestly.
+
+### Review
+
+```
+atenea agent filereader --review reviewer sample.txt
+```
+
+A reviewer is an agent like any other -- same wire, same declaration, same
+trace row. What makes it a reviewer is being named in `--review`: it is handed
+the answer another agent gave, the task that produced it, and the same files,
+and it answers `ok`, `failed` or `incomplete` about that answer.
+
+A refusal relaunches the work **once**, and the relaunch is handed the rejected
+answer and the sentence that rejected it, because an agent told only "try
+again" reruns the same mistake. A second refusal ends it: the caller gets an
+error carrying the reviewer's own reason kind, and no third attempt is made.
+
+Every attempt is its own trace row, and the rows say which is which. The
+relaunch carries `retry_of` naming the attempt it redoes and `attempt = 2`; a
+review carries `reviews` naming the run it audits. `atenea traces` prints both
+columns, so "passed" and "passed on the second try" never read the same.
+
+Two things are deliberately not reviewed. A run that **died** -- no report, a
+timeout, a crash -- is not handed to a reviewer, because there is no answer to
+judge and re-running a crashed process is a retry policy, not an audit. And a
+reviewer that dies itself does not accept: the answer is returned unjudged with
+the reviewer's death as the error, never quietly passed off as reviewed.
+
+`pool` is which parallel lane a type belongs to, `agent` or `review`, and it
+defaults to `agent`. Reviews are separated because one lane holding both would
+starve auditing exactly when the machine is busiest -- every slot full of
+agents, the reviewer queued behind them, answers piling up unjudged.
+**Nothing schedules anything today:** `atenea agent` runs one agent at a time
+and there is no cap to compete for. The field is declared now because the
+distinction belongs to the type, and a lane inferred at dispatch time is a
+lane two callers will infer differently.
 
 ## MCP servers
 

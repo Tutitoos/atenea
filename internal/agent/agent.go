@@ -160,6 +160,26 @@ func (r *Runner) Declared() []string {
 	return out
 }
 
+// Dispatch is one run to make: which type, what work, and how this run
+// relates to others. Everything past TypeName and Task is a relationship, and
+// they are set by the caller that knows about it -- an agent never declares
+// itself a retry or a review of anything.
+type Dispatch struct {
+	TypeName string
+	Task     contract.Task
+	// Parent is the assignment handing this work down, nil for a root.
+	Parent *contract.Assignment
+	// Subject is the run being judged, or the rejected attempt being handed
+	// back for a second try.
+	Subject *contract.Subject
+	// Attempt counts this run within its retry chain, from 1.
+	Attempt int
+	// RetryOf is the run this one redoes, empty on a first attempt.
+	RetryOf string
+	// Reviews is the run this one audits, empty when it is not a review.
+	Reviews string
+}
+
 // Run dispatches one agent and returns what it answered.
 //
 // The returned Report is always meaningful, including when err is non-nil: a
@@ -167,13 +187,25 @@ func (r *Runner) Declared() []string {
 // that gets only an error has lost the distinction this package is about.
 func (r *Runner) Run(ctx context.Context, typeName string, task contract.Task,
 	parent *contract.Assignment) (contract.Report, contract.Assignment, error) {
-	declared, err := r.resolve(typeName)
+	return r.Dispatch(ctx, Dispatch{TypeName: typeName, Task: task, Parent: parent})
+}
+
+// Dispatch is Run with the relationships spelled out.
+func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, contract.Assignment, error) {
+	declared, err := r.resolve(d.TypeName)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
 	}
-	assignment, err := r.assign(declared, task, parent)
+	assignment, err := r.assign(declared, d.Task, d.Parent)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
+	}
+	if d.Subject != nil {
+		subject := d.Subject.Clone()
+		assignment.Subject = &subject
+		if err := assignment.Validate(); err != nil {
+			return contract.Report{}, assignment, err
+		}
 	}
 
 	started := r.now()
@@ -185,6 +217,9 @@ func (r *Runner) Run(ctx context.Context, typeName string, task contract.Task,
 		Objective: assignment.Task.Objective,
 		Depth:     assignment.Depth,
 		StartedAt: started,
+		Attempt:   d.Attempt,
+		RetryOf:   d.RetryOf,
+		Reviews:   d.Reviews,
 	}
 	// Before the spawn, always. A row written afterwards would miss exactly
 	// the runs worth tracing.
@@ -201,7 +236,7 @@ func (r *Runner) Run(ctx context.Context, typeName string, task contract.Task,
 		}
 		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death},
 			assignment, contract.Fail(death.Kind, "agent %s (%s): %s",
-				assignment.ID, typeName, death.Text)
+				assignment.ID, d.TypeName, death.Text)
 	}
 	if err := r.store.Complete(ctx, assignment.ID, r.now(),
 		report.Verdict, report.Reason); err != nil {

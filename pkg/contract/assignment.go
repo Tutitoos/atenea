@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -208,6 +209,11 @@ type Assignment struct {
 	// Effects are the consequences this agent is allowed to cause. A child
 	// never holds one its parent did not, which is enforced in Child.
 	Effects []Effect
+	// Subject is the run this one has been asked to judge, nil on ordinary
+	// work. A reviewer is an agent like any other -- same card, same report,
+	// same trace row -- and this is the only field that says what it is
+	// looking at.
+	Subject *Subject
 }
 
 // RootAssignment builds a depth-1 card, the only kind with no parent.
@@ -258,6 +264,15 @@ func (a Assignment) Validate() error {
 	}
 	if err := a.Limits.Validate(); err != nil {
 		return err
+	}
+	if a.Subject != nil {
+		if a.Subject.RunID == a.ID {
+			return Fail(FailureInvalidInput,
+				"assignment %s: reviews itself", a.ID)
+		}
+		if err := a.Subject.Validate(); err != nil {
+			return Fail(FailureInvalidInput, "assignment %s: %s", a.ID, err.Error())
+		}
 	}
 	return a.validateGrants()
 }
@@ -367,7 +382,94 @@ func (a Assignment) Clone() Assignment {
 	a.Task = a.Task.Clone()
 	a.Context = slices.Clone(a.Context)
 	a.Effects = slices.Clone(a.Effects)
+	if a.Subject != nil {
+		subject := a.Subject.Clone()
+		a.Subject = &subject
+	}
 	return a
+}
+
+// Subject is the run an agent has been asked to judge: what was asked, what
+// came back, and how it ended.
+//
+// It exists because a reviewer needs the answer in front of it and cannot be
+// told to go and find it. Handing the report over is also what keeps a review
+// checkable: two reviewers given the same subject are looking at the same
+// thing, and a disagreement between them is about judgement rather than about
+// what they happened to read.
+//
+// Nil on an ordinary assignment. Present means "this run is about that run",
+// which is a different relationship from parenthood -- a reviewer is
+// dispatched by whoever dispatched the work, not by the work.
+type Subject struct {
+	// RunID is the execution being judged. It is what the trace row's
+	// `reviews` column points at.
+	RunID string
+	// TypeName is the agent type that produced the answer.
+	TypeName string
+	// Task is what that run was asked, criterion included: a review with no
+	// criterion is an opinion.
+	Task Task
+	// Attempt is which try this was, counting from 1, so a reviewer can see
+	// it is looking at a relaunch.
+	Attempt int
+	// Result, Verdict and Reason are the report as it was validated. A
+	// reviewer judges what the parent would have consumed, not a summary of
+	// it.
+	Result  map[string]any
+	Verdict Verdict
+	Reason  Reason
+	// ReviewID and Rejection are set when this subject is being handed back
+	// to the agent that produced it for a second attempt: which review
+	// refused the answer, and why.
+	//
+	// One shape, two uses. A reviewer is given the subject with these empty
+	// -- it is judging, not reacting to a judgement -- and the relaunch is
+	// given the same subject with them filled in, so the agent sees its own
+	// previous answer next to the sentence that rejected it. A retry told
+	// only "try again" is a retry that reruns the same mistake.
+	ReviewID  string
+	Rejection Reason
+}
+
+// Validate checks the subject can be judged at all.
+func (s Subject) Validate() error {
+	if !slugID.MatchString(s.RunID) {
+		return Fail(FailureInvalidInput, "subject: run id %q must be lowercase", s.RunID)
+	}
+	if !slugID.MatchString(s.TypeName) {
+		return Fail(FailureInvalidInput,
+			"subject %s: type name %q must be lowercase", s.RunID, s.TypeName)
+	}
+	if s.Verdict == VerdictUnspecified {
+		return Fail(FailureInvalidInput,
+			"subject %s: verdict is required; a review of a run with no verdict is a review of nothing",
+			s.RunID)
+	}
+	if s.Attempt < 1 {
+		return Fail(FailureInvalidInput,
+			"subject %s: attempt starts at 1, got %d", s.RunID, s.Attempt)
+	}
+	if s.ReviewID != "" && !slugID.MatchString(s.ReviewID) {
+		return Fail(FailureInvalidInput,
+			"subject %s: review id %q must be lowercase", s.RunID, s.ReviewID)
+	}
+	if s.ReviewID != "" && strings.TrimSpace(s.Rejection.Text) == "" {
+		// A rejection with no sentence is the shape this whole design is
+		// against: the agent is told it failed and not told what failed.
+		return Fail(FailureInvalidInput,
+			"subject %s: review %s rejected it without saying why", s.RunID, s.ReviewID)
+	}
+	return s.Task.Validate()
+}
+
+// Clone returns a deep copy.
+func (s Subject) Clone() Subject {
+	s.Task = s.Task.Clone()
+	if s.Result != nil {
+		s.Result = maps.Clone(s.Result)
+	}
+	return s
 }
 
 // Reason is why a verdict came out the way it did: one of the common bins,

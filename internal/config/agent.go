@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,55 @@ type AgentType struct {
 	Effects []contract.Effect
 	// Limits is the ceiling on one run.
 	Limits contract.Limits
+	// Pool is which parallel lane this type is scheduled in.
+	//
+	// Reviews do not compete with the work they judge. A machine that let one
+	// pool hold both would starve its own auditing exactly when it is busiest
+	// -- every slot full of agents, the reviewer queued behind them, and the
+	// answers piling up unjudged. Declaring the lane here is what will let a
+	// scheduler size the two separately.
+	//
+	// Nothing schedules anything today: `atenea agent` runs one agent at a
+	// time and there is no cap to compete for. The field is here because the
+	// distinction belongs to the TYPE rather than to whoever dispatches it,
+	// and a lane inferred at dispatch time is a lane two callers will infer
+	// differently.
+	Pool Pool
+}
+
+// Pool is a parallel lane. A closed set: an unknown lane in a settings file
+// is a typo that would otherwise create a third pool nothing sizes.
+type Pool uint8
+
+// The lanes that exist.
+const (
+	// PoolAgent is the default: work that produces answers.
+	PoolAgent Pool = iota
+	// PoolReview is auditing, sized separately so it cannot be crowded out
+	// by the work it audits.
+	PoolReview
+)
+
+var poolNames = map[Pool]string{PoolAgent: "agent", PoolReview: "review"}
+
+func (p Pool) String() string {
+	if name, ok := poolNames[p]; ok {
+		return name
+	}
+	return "pool(" + strconv.Itoa(int(p)) + ")"
+}
+
+// ParsePool reads a lane name. Empty means the default lane, because most
+// types are ordinary work and should not have to say so.
+func ParsePool(s string) (Pool, error) {
+	switch strings.TrimSpace(s) {
+	case "", "agent":
+		return PoolAgent, nil
+	case "review":
+		return PoolReview, nil
+	}
+	return PoolAgent, contract.Fail(contract.FailureInvalidInput,
+		"unknown pool %q: agent or review", s)
 }
 
 // Validate checks the declaration.
@@ -105,6 +155,7 @@ type fileAgent struct {
 	Effects     []string    `toml:"effects"`
 	MaxDuration string      `toml:"max_duration"`
 	MaxTokens   int         `toml:"max_tokens"`
+	Pool        string      `toml:"pool"`
 	Result      []fileField `toml:"result"`
 }
 
@@ -124,6 +175,9 @@ func (a fileAgent) build(source string) (AgentType, error) {
 		Args:    a.Args,
 		Env:     a.Env,
 		Limits:  contract.Limits{MaxTokens: a.MaxTokens},
+	}
+	if out.Pool, err = ParsePool(a.Pool); err != nil {
+		return fail("%v", err)
 	}
 	if out.Spec.Result, err = buildFields(a.Result); err != nil {
 		return fail("%v", err)

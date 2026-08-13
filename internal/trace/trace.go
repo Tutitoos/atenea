@@ -48,7 +48,7 @@ import (
 const FileName = "traces.db"
 
 // DefaultPath is where the trace database lives.
-func DefaultPath() string { return filepath.Join(platform.DataDir(), FileName) }
+func DefaultPath() string { return filepath.Join(platform.StateDir(), FileName) }
 
 // Row is one agent execution as the store holds it.
 type Row struct {
@@ -75,6 +75,22 @@ type Row struct {
 	// itself. Both read `incomplete`, and a reader has to be able to tell
 	// "the agent said it stopped short" from "nobody ever heard back".
 	Swept bool
+	// Attempt counts this run within its retry chain, starting at 1. It is
+	// materialized rather than derived so a listing does not need a
+	// recursive query, and it is computed from the row RetryOf names, never
+	// typed by a caller.
+	Attempt int
+	// RetryOf is the run this one redoes, empty on a first attempt. A
+	// relaunch is a second real process with its own cost and its own
+	// answer, so it is a second row -- folding it into the first would make
+	// the trace understate what the machine actually ran. This is the link
+	// that keeps the two from reading as unrelated runs of the same type.
+	RetryOf string
+	// Reviews is the run this one audits, empty when it is not a review. A
+	// reviewer is dispatched by whoever dispatched the work, not by the work
+	// itself, so it is not a child of what it judges: ParentID would be the
+	// wrong word for it and this is the right one.
+	Reviews string
 }
 
 // Open reports whether this row is still waiting for its ending.
@@ -161,11 +177,21 @@ CREATE TABLE IF NOT EXISTS agent_trace (
     verdict     TEXT,
     reason_kind TEXT    NOT NULL DEFAULT '',
     reason_text TEXT    NOT NULL DEFAULT '',
+    -- A relaunch is a second process, so it is a second row. attempt counts
+    -- it within its chain and retry_of names the exact row it redoes: two
+    -- runs of one type an hour apart and two attempts at one piece of work
+    -- must not read the same.
+    attempt     INTEGER NOT NULL DEFAULT 1,
+    retry_of    TEXT    NOT NULL DEFAULT '',
+    -- The run this one audits. A review is about another run, not under it.
+    reviews     TEXT    NOT NULL DEFAULT '',
     swept       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS agent_trace_open ON agent_trace(ended_at);
 CREATE INDEX IF NOT EXISTS agent_trace_started ON agent_trace(started_at);
 CREATE INDEX IF NOT EXISTS agent_trace_type ON agent_trace(type_name);
+CREATE INDEX IF NOT EXISTS agent_trace_retry ON agent_trace(retry_of);
+CREATE INDEX IF NOT EXISTS agent_trace_reviews ON agent_trace(reviews);
 `
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -197,12 +223,26 @@ func (s *Store) Begin(ctx context.Context, row Row) error {
 	if writer == 0 {
 		writer = os.Getpid()
 	}
+	attempt := row.Attempt
+	if attempt < 1 {
+		attempt = 1
+	}
+	if row.RetryOf == row.ID && row.RetryOf != "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"trace %s: is its own retry", row.ID)
+	}
+	if row.Reviews == row.ID && row.Reviews != "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"trace %s: reviews itself", row.ID)
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO agent_trace
-		   (id, parent_id, type_name, kind, objective, depth, started_at, writer_pid)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		   (id, parent_id, type_name, kind, objective, depth, started_at,
+		    writer_pid, attempt, retry_of, reviews)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.ID, row.ParentID, row.TypeName, row.Kind.String(),
-		row.Objective, row.Depth, stamp(row.StartedAt), writer)
+		row.Objective, row.Depth, stamp(row.StartedAt), writer,
+		attempt, row.RetryOf, row.Reviews)
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable,
 			"trace: opening row %s: %v", row.ID, err)
@@ -296,6 +336,10 @@ type Filter struct {
 	OpenOnly bool
 	// Since keeps rows started at or after this instant.
 	Since time.Time
+	// RetryOf keeps only the runs redoing this one.
+	RetryOf string
+	// Reviews keeps only the runs auditing this one.
+	Reviews string
 	// Limit caps the result, newest first. Zero means DefaultLimit.
 	Limit int
 }
@@ -326,13 +370,21 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Row, error) {
 		where = append(where, "started_at >= ?")
 		args = append(args, stamp(f.Since))
 	}
+	if f.RetryOf != "" {
+		where = append(where, "retry_of = ?")
+		args = append(args, f.RetryOf)
+	}
+	if f.Reviews != "" {
+		where = append(where, "reviews = ?")
+		args = append(args, f.Reviews)
+	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 	query := `SELECT id, parent_id, type_name, kind, objective, depth,
 	                 started_at, ended_at, verdict, reason_kind, reason_text,
-	                 swept, writer_pid
+	                 swept, writer_pid, attempt, retry_of, reviews
 	            FROM agent_trace`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -372,7 +424,8 @@ func scan(rows *sql.Rows) (Row, error) {
 	)
 	if err := rows.Scan(&row.ID, &row.ParentID, &row.TypeName, &kind, &row.Objective,
 		&row.Depth, &startedAt, &endedAt, &verdictName, &reasonKindName,
-		&row.Reason.Text, &swept, &row.WriterPID); err != nil {
+		&row.Reason.Text, &swept, &row.WriterPID,
+		&row.Attempt, &row.RetryOf, &row.Reviews); err != nil {
 		return Row{}, contract.Fail(contract.FailureUnavailable, "trace: list: %v", err)
 	}
 	if parsed, err := contract.ParseAgentType(kind); err == nil {

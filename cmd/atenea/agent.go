@@ -12,6 +12,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/agent/filereader"
+	"github.com/Tutitoos/atenea/internal/agent/reviewer"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/trace"
@@ -44,6 +45,7 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	tracePath := flags.String("traces", "", "trace database (default "+trace.DefaultPath()+")")
 	repository := flags.String("repository", "", "repository id to serve at the repository level")
 	quiet := flags.Bool("quiet", false, "print the verdict line only")
+	review := flags.String("review", "", "agent type that audits the answer; a refusal relaunches the work once")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -99,6 +101,12 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	}
 	if task.Criterion == "" {
 		task.Criterion = "the answer matches the shape " + typeName + " declares"
+	}
+
+	if *review != "" {
+		audited, err := runner.RunReviewed(ctx, typeName, *review, task)
+		printReviewed(out, audited, *quiet)
+		return err
 	}
 
 	report, assignment, runErr := runner.Run(ctx, typeName, task, nil)
@@ -181,6 +189,33 @@ func printReport(out io.Writer, assignment contract.Assignment,
 	}
 }
 
+// printReviewed prints every attempt and its review, in the order they ran.
+//
+// All of them, not just the last: "passed on the second try" and "passed" are
+// different facts about an agent, and printing only the accepted answer would
+// hide the relaunch that produced it -- along with the reason the first one
+// was refused, which is the most useful line on the screen.
+func printReviewed(out io.Writer, run agent.ReviewedRun, quiet bool) {
+	for i, attempt := range run.Attempts {
+		fmt.Fprintf(out, "attempt %d/%d\n", i+1, agent.MaxAttempts)
+		printReport(out, attempt.Work, attempt.Report, quiet)
+		if attempt.Review.ID == "" {
+			fmt.Fprintln(out, "  not reviewed: the run did not answer")
+			continue
+		}
+		fmt.Fprint(out, "review ")
+		printReport(out, attempt.Review, attempt.ReviewReport, quiet)
+	}
+	switch {
+	case run.Accepted():
+		fmt.Fprintln(out, "accepted")
+	case len(run.Attempts) >= agent.MaxAttempts:
+		fmt.Fprintf(out, "refused on both attempts; no third was run\n")
+	default:
+		fmt.Fprintln(out, "not accepted")
+	}
+}
+
 func sortedKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -214,9 +249,11 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 	switch kind {
 	case "filereader":
 		return filereader.Main(stdin, stdout)
+	case "reviewer":
+		return reviewer.Main(stdin, stdout)
 	default:
 		return contract.Fail(contract.FailureNotFound,
-			"no built-in agent %q: this binary ships filereader", kind)
+			"no built-in agent %q: this binary ships filereader and reviewer", kind)
 	}
 }
 
@@ -280,15 +317,19 @@ func printTraces(out io.Writer, rows []trace.Row, path string) {
 		fmt.Fprintf(out, "no traces in %s\n", path)
 		return
 	}
-	fmt.Fprintf(out, "%-22s  %-16s  %-10s  %-9s  %s\n",
-		"STARTED", "TYPE", "VERDICT", "TOOK", "OBJECTIVE")
+	fmt.Fprintf(out, "%-22s  %-16s  %-10s  %-9s  %-8s  %s\n",
+		"STARTED", "TYPE", "VERDICT", "TOOK", "RUN", "OBJECTIVE")
 	for _, row := range rows {
-		fmt.Fprintf(out, "%-22s  %-16s  %-10s  %-9s  %s\n",
+		fmt.Fprintf(out, "%-22s  %-16s  %-10s  %-9s  %-8s  %s\n",
 			row.StartedAt.Local().Format("2006-01-02 15:04:05"),
 			truncate(row.TypeName, 16),
 			verdictLabel(row),
 			took(row),
-			truncate(row.Objective, 60))
+			runLabel(row),
+			truncate(row.Objective, 50))
+		if link := linkLine(row); link != "" {
+			fmt.Fprintf(out, "%24s%s\n", "", link)
+		}
 		if !row.Reason.Empty() {
 			fmt.Fprintf(out, "%24s%s: %s\n", "", row.Reason.Kind, truncate(row.Reason.Text, 90))
 		}
@@ -307,6 +348,31 @@ func verdictLabel(row trace.Row) string {
 		return row.Verdict.String() + "*"
 	}
 	return row.Verdict.String()
+}
+
+// runLabel says which try this is. A relaunch is a second row on purpose, so
+// the column that tells two attempts at one piece of work apart from two
+// separate asks has to be on the screen, not derived by the reader.
+func runLabel(row trace.Row) string {
+	if row.Reviews != "" {
+		return "review"
+	}
+	if row.Attempt > 1 {
+		return fmt.Sprintf("try %d", row.Attempt)
+	}
+	return ""
+}
+
+// linkLine names what this row is about: the attempt it redoes, or the run it
+// audits. The id is printed in full because it is what --id takes.
+func linkLine(row trace.Row) string {
+	switch {
+	case row.RetryOf != "":
+		return "redoes " + row.RetryOf
+	case row.Reviews != "":
+		return "reviews " + row.Reviews
+	}
+	return ""
 }
 
 func took(row trace.Row) string {
