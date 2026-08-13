@@ -825,11 +825,115 @@ the reviewer's death as the error, never quietly passed off as reviewed.
 `pool` is which parallel lane a type belongs to, `agent` or `review`, and it
 defaults to `agent`. Reviews are separated because one lane holding both would
 starve auditing exactly when the machine is busiest -- every slot full of
-agents, the reviewer queued behind them, answers piling up unjudged.
-**Nothing schedules anything today:** `atenea agent` runs one agent at a time
-and there is no cap to compete for. The field is declared now because the
-distinction belongs to the type, and a lane inferred at dispatch time is a
-lane two callers will infer differently.
+agents, the reviewer queued behind them, answers piling up unjudged. The
+scheduler that honours it is the workflow engine below; `atenea agent` runs one
+agent at a time and has no cap to compete for, so the lane only starts to
+matter once a graph is running.
+
+## Workflows
+
+```toml
+[workflow]
+max_parallel_agent = 4    # steps in the agent lane at once; 0 lifts the ceiling
+max_parallel_review = 4   # the review lane, sized apart from it
+```
+
+A workflow is a DAG of agent steps handed to Atenea whole:
+
+```
+atenea workflow run plan.toml
+atenea workflow list
+atenea workflow show <id>
+atenea workflow resume <id> [--redo STEP]
+```
+
+```toml
+task = "count what the docs say"          # the commission every step is a slice of
+budget_usd = 0.50                         # the grant; step shares divide it
+
+[[step]]
+id = "read-readme"
+agent = "filereader"                      # a declared [[agent]], not a capability
+objective = "read README.md and answer"
+files = ["README.md"]
+criterion = "the counts match the file"
+effects = ["read"]                        # ceiling for this step, within its type's
+budget_usd = 0.25                         # this step's share
+
+[[step]]
+id = "read-changelog"
+agent = "filereader"
+needs = ["read-readme"]                   # an edge means AFTER
+objective = "read CHANGELOG.md and answer"
+files = ["CHANGELOG.md"]
+criterion = "the counts match the file"
+effects = ["read"]
+budget_usd = 0.25
+```
+
+Nothing in Atenea writes one of these yet. There is no orchestrator, no model
+picking steps and no growth mid-run: the graph arrives complete and is executed
+exactly as written, which is why every refusal below happens before anything
+spawns.
+
+Nothing passes between steps either. An edge is an order, not a pipe: a step is
+handed the task written in the file and nothing the step before it found. One
+consequence worth knowing before you try it -- **`reviewer` is not usable as a
+graph step yet.** A reviewer reads its case from the `subject` on its
+assignment, a graph step has no subject to give it, and it answers `incomplete`
+saying exactly that. Auditing today goes through `atenea agent --review`, which
+hands over the answer itself.
+
+Steps with no unmet dependency run together, up to the ceiling of their lane.
+Ready steps beyond it wait: the queue is the pending set in declaration order,
+not a second list, so the same graph makes the same choices on a slower
+machine. A step whose dependency did not end `ok` never runs and reads as
+`blocked`; its siblings are untouched, which is the point of the graph being a
+graph.
+
+**Two steps that can run at once may not both touch a file when one of them
+writes it.** That is refused when the graph compiles, naming both steps and the
+path -- not serialized quietly at run time, which would make the order depend
+on how busy the machine was and hide the conflict until the day it lands
+differently. "Can run at once" means neither waits on the other, whatever the
+ceilings happen to be; order them with `needs` or give them different files.
+
+### What survives
+
+The record lives in two tables in the trace database -- the graph, each step's
+status, its answer, and the trace row it ran as -- because a resumed workflow
+has to report steps it did not re-run, and because the only honest answer to
+"was this step running?" is a pid to check. Everything derivable stays in
+memory: the ready set, the queue, the lane counts and the write claims are all
+functions of the graph and the statuses, and a stored copy is a second truth
+that can disagree with the first.
+
+A step is `pending`, `running`, `ok`, `failed`, `incomplete` or `interrupted`.
+The last is a step **nobody judged**: it was running when the operator cut it
+or when Atenea died, and no report was ever read. It is not `failed` -- that is
+a judgement, and nothing here made one -- and not `incomplete`, which is the
+agent's own word for stopping short.
+
+`atenea workflow resume` continues a run that was cut or orphaned. It refuses
+while the pid on the record is still alive, because a record saying `running`
+is not evidence that anything runs and taking over a live run would double
+every step in flight. Interrupted steps that only read are dispatched again as
+a second attempt whose trace row says which run it redoes; interrupted steps
+that may `write` or reach `external` are **left alone**, because nobody saw how
+far they got and repeating them could land the same effect twice. Those wait
+for `--redo <step>`, and a run holding one is `unjudged` rather than finished.
+
+### Money
+
+`budget_usd` on the graph is the grant; the shares on the steps divide it and
+are refused if they add up to more, because money is split rather than copied.
+
+What was **spent** reads as `unmeasured`, and will until something can report a
+charge: the agent report wire carries no cost and no token count, so there is
+no number to add up. That is why the column is empty rather than zero. A
+receipt printing `$0.00 spent` for a real run would be the same lie as list
+price on subscription traffic, and worse for looking audited.
+
 
 ## MCP servers
 

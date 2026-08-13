@@ -261,6 +261,31 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
+	"workflow": `Usage: atenea workflow run|resume|list|show [flags]
+
+Run a graph of agent steps. The graph comes from a TOML file and is executed
+exactly as written: nothing here plans, splits or grows it.
+
+Steps with no unmet dependency run together, up to the ceiling of their lane
+(workflow.max_parallel_agent and max_parallel_review). A step that fails takes
+only its dependents with it. Two steps that can run at once may not both touch
+a file when one writes it -- that is refused before anything spawns.
+
+  run PATH              run the graph in PATH
+  resume ID             continue a run that was cut, or whose atenea died
+  list                  the runs on record
+  show ID               one run, step by step
+
+Flags:
+  --traces PATH         state database (workflows live beside the traces)
+  --repository ID       repository to serve at the repository context level
+  --redo STEP           with resume: dispatch a step nobody judged; repeatable
+  --limit N             with list: how many runs
+
+Ctrl-C cuts the running agents and spawns nothing queued. What was cut is
+recorded as interrupted -- nobody judged it -- and resume redoes the read-only
+ones by itself. A step that may have written something waits for --redo.
+`,
 	"traces": `Usage: atenea traces [flags]
 
 What agents ran and how they ended. A row with no ending is a run nobody saw
@@ -482,6 +507,8 @@ func run(args []string, out io.Writer) error {
 				"agent-exec takes one built-in agent name")
 		}
 		return cmdAgentRun(commandArgs[0], os.Stdin, out)
+	case "workflow":
+		return cmdWorkflow(settingsPath, commandArgs, out)
 	case "traces":
 		return cmdTraces(commandArgs, out)
 	case "metrics":

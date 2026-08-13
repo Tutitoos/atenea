@@ -167,6 +167,10 @@ func (r *Runner) Declared() []string {
 type Dispatch struct {
 	TypeName string
 	Task     contract.Task
+	// ID is the execution id to run as. Empty mints one, which is what
+	// every caller that does not have to know it in advance does; a caller
+	// that recorded the id before the spawn passes the one it wrote down.
+	ID string
 	// Parent is the assignment handing this work down, nil for a root.
 	Parent *contract.Assignment
 	// Subject is the run being judged, or the rejected attempt being handed
@@ -179,6 +183,15 @@ type Dispatch struct {
 	// Reviews is the run this one audits, empty when it is not a review.
 	Reviews string
 }
+
+// NextID mints an execution id without dispatching anything.
+//
+// It exists for a caller that has to write down what it is about to start
+// before starting it -- the workflow engine records a step as running, with
+// the id of the run, so that a crash leaves a record pointing at the trace
+// instead of a step that looks like it never began. Same reason the trace row
+// itself is written before the spawn.
+func (r *Runner) NextID() string { return r.ids() }
 
 // Run dispatches one agent and returns what it answered.
 //
@@ -196,7 +209,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
 	}
-	assignment, err := r.assign(declared, d.Task, d.Parent)
+	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
 	}
@@ -228,9 +241,16 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	}
 
 	report, runErr := r.execute(ctx, declared, assignment)
+	// The closing write does NOT ride the caller's context. Canceling a run
+	// is the one case where the record matters most and the caller's context
+	// is already dead: a Complete on it fails, the row stays open, and the
+	// only thing that would ever close it is a sweep on some later start --
+	// after a liveness check against a pid that is still very much alive,
+	// which never passes. The agent is cut; the accounting of it is not.
+	closing := context.WithoutCancel(ctx)
 	if runErr != nil {
 		death := died(runErr)
-		if err := r.store.Complete(ctx, assignment.ID, r.now(),
+		if err := r.store.Complete(closing, assignment.ID, r.now(),
 			contract.VerdictIncomplete, death); err != nil {
 			return contract.Report{}, assignment, err
 		}
@@ -238,7 +258,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 			assignment, contract.Fail(death.Kind, "agent %s (%s): %s",
 				assignment.ID, d.TypeName, death.Text)
 	}
-	if err := r.store.Complete(ctx, assignment.ID, r.now(),
+	if err := r.store.Complete(closing, assignment.ID, r.now(),
 		report.Verdict, report.Reason); err != nil {
 		return report, assignment, err
 	}
@@ -263,8 +283,10 @@ func (r *Runner) resolve(name string) (config.AgentType, error) {
 // subset and the depth cap are enforced by the contract rather than here --
 // this package must not be a second place those rules are written.
 func (r *Runner) assign(declared config.AgentType, task contract.Task,
-	parent *contract.Assignment) (contract.Assignment, error) {
-	id := r.ids()
+	parent *contract.Assignment, id string) (contract.Assignment, error) {
+	if id == "" {
+		id = r.ids()
+	}
 	if parent == nil {
 		out := contract.RootAssignment(id, declared.Spec.Name, declared.Spec.Kind,
 			task, declared.Limits)

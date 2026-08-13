@@ -238,6 +238,22 @@ runners = ["omp"]
   # build/ that omp searched, and returned two .gitignore'd files omp did not.
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
+[workflow]
+# How a graph of agent steps is scheduled. One ceiling per lane, and a lane is
+# declared on the agent type itself (`pool`, further down).
+#
+# Two lanes rather than one so that auditing cannot be crowded out by the work
+# it audits: a single ceiling fills every slot with agents exactly when the
+# machine is busiest, leaving reviewers queued behind them and answers piling
+# up unjudged. 0 lifts a ceiling, the same reading as max_parallel above.
+max_parallel_agent = 4
+
+# The review lane, sized the same by default. Nobody has measured what
+# reviewing costs against the work it audits on this machine, and a smaller
+# number here would be a story with no reading behind it. What the split buys
+# is that the two cannot starve each other, not that one is cheaper.
+max_parallel_review = 4
+
 [metrics]
 # The measurement base: what every attempt cost, on three axes -- time, tokens
 # and memory -- filed under the capability asked for and the implementation

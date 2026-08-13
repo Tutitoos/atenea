@@ -52,9 +52,11 @@ type Config struct {
 	// reader can be told which half of the effective settings is whose.
 	Local *Local
 	// Contract is the contract version the file targets.
-	Contract        contract.Version
-	Core            Core
-	Orchestrator    Orchestrator
+	Contract     contract.Version
+	Core         Core
+	Orchestrator Orchestrator
+	// Workflow is how a graph of agent steps is scheduled.
+	Workflow        Workflow
 	Metrics         Metrics
 	Backup          Backup
 	Security        Security
@@ -569,6 +571,7 @@ type file struct {
 	Contract        string           `toml:"contract"`
 	Core            fileCore         `toml:"core"`
 	Orchestrator    fileOrchestrator `toml:"orchestrator"`
+	Workflow        fileWorkflow     `toml:"workflow"`
 	Metrics         fileMetrics      `toml:"metrics"`
 	Backup          fileBackup       `toml:"backup"`
 	Security        fileSecurity     `toml:"security"`
@@ -999,6 +1002,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
+		return Config{}, err
+	}
+	if cfg.Workflow, err = decoded.Workflow.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
