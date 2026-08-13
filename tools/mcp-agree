@@ -67,6 +67,7 @@ Exit:   0 file surface agrees and the account surface was measured in THIS
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -423,6 +424,21 @@ def group_tools(names):
     return groups
 
 
+def mem_routes(body):
+    """Distinct claude-mem route names anywhere in the request body.
+
+    Not read off `tools[]` on purpose. omp does not put its MCP tools there -
+    it mounts them as xd:// routes named in the system prompt - so a census
+    that only walks `tools[]` sees zero claude-mem for omp and cannot notice
+    the backend being mounted twice. Measured 2026-08-13: 28 distinct routes
+    for 14 tools, two spellings of one server.
+    """
+    blob = json.dumps(body, ensure_ascii=False)
+    names = set(re.findall(r"mcp__[A-Za-z0-9_-]+", blob))
+    return len({n for n in names
+                if "claudemem" in n.lower().replace("_", "").replace("-", "")})
+
+
 def probe_wire(client, timeout=90):
     """Spawn one client at a recorder and return what it put on the wire.
 
@@ -458,7 +474,7 @@ def probe_wire(client, timeout=90):
     if not bodies:
         if seen:
             return {"names": [], "groups": {}, "account": 0, "bytes": 0,
-                    "seconds": seconds}
+                    "claude_mem": mem_routes(seen[-1]), "seconds": seconds}
         fail("wire", f"{client}: no llego ninguna peticion a la sonda",
              "el cliente no honro la variable de base URL, o murio antes")
         return None
@@ -474,6 +490,7 @@ def probe_wire(client, timeout=90):
         "groups": group_tools(names),
         "account": sum(1 for n in names if str(n).startswith(ACCOUNT_PREFIX)),
         "bytes": wire_bytes(body["tools"]),
+        "claude_mem": mem_routes(body),
         "seconds": seconds,
     }
 
@@ -494,14 +511,19 @@ def render_wire(client, surface):
              if not k.startswith(ACCOUNT_GROUP_PREFIX)]
     tail = f" · cuenta {account}" if account else ""
     total = len(surface["names"])
-    return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}"
+    mem = surface.get("claude_mem", 0)
+    mem_part = f" · claude-mem rutas {mem}" if mem else ""
+    return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}{mem_part}"
             f"  [{surface['bytes']} B compact, {surface['seconds']}s]")
 
 
 # The surface as measured 2026-08-13, per client, on the wire. `groups` is
-# checked exactly where a client carries MCP tools; everywhere else only the
-# account rule applies. Update these WITH a dated measurement, never to make a
-# red run go quiet.
+# checked exactly where a client carries MCP tools; `claude_mem` is checked
+# everywhere, because that backend is DECLARED TWICE on this machine and one
+# declaration is only silenced by a name list - exactly the kind of list that
+# went missing from ~/.omp/agent/mcp.json on 2026-08-11 at 18:06 and was not
+# noticed for two days. Suppressed is not removed. Update these WITH a dated
+# measurement, never to make a red run go quiet.
 WIRE_INVARIANTS = {
     "claude": {"builtin": 32, "mcp:atenea": 28,
                "mcp:plugin_claude-mem_mcp-search": 14, "mcp:headroom": 3},
@@ -509,6 +531,10 @@ WIRE_INVARIANTS = {
     "opencode": {"builtin": 29},
     "codex": {},          # its body carries no tools at all
 }
+
+# Distinct claude-mem route names each client may carry. 14 is one mount of a
+# 14-tool server; 28 is both declarations back on the wire.
+MEM_ROUTES = {"claude": 14, "omp": 14, "opencode": 0, "codex": 0}
 
 
 def check_wire_invariants(client, surface):
@@ -524,11 +550,9 @@ def check_wire_invariants(client, surface):
              "vive en ~/.claude/settings.json permissions.deny como "
              '"mcp__claude_ai_*"; si sigue ahi, es que dejo de aplicarse')
     expected = WIRE_INVARIANTS.get(client)
-    if not expected:
-        return
     got = {k: v for k, v in surface["groups"].items()
            if not k.startswith(ACCOUNT_GROUP_PREFIX)}
-    if got != expected:
+    if expected is not None and got != expected:
         moved = sorted(set(expected) | set(got))
         detail = ", ".join(f"{k} {expected.get(k, 0)}->{got.get(k, 0)}"
                            for k in moved if expected.get(k) != got.get(k))
@@ -536,6 +560,19 @@ def check_wire_invariants(client, surface):
              "un servidor entro, se cayo o cambio de tamano. Si es un cambio "
              "querido - atenea gana una capacidad, por ejemplo - actualiza "
              "WIRE_INVARIANTS y la fecha del docstring en el mismo commit")
+    want_mem = MEM_ROUTES.get(client)
+    got_mem = surface.get("claude_mem", 0)
+    if want_mem is not None and got_mem != want_mem:
+        why = ("las dos declaraciones estan sirviendo a la vez: el plugin de "
+               "Claude Code (claude-mem@thedotmack -> mcp-search) y el nombre "
+               "'claude-mem' que omp descubre desde opencode. La lista "
+               "disabledServers de ~/.omp/agent/mcp.json es lo unico que calla "
+               "la segunda, y ya se perdio una vez"
+               if got_mem > want_mem else
+               "claude-mem dejo de montar; si no fue a proposito, el backend "
+               "no arranco y el cliente no lo dira")
+        fail("wire", f"{client} lleva {got_mem} rutas claude-mem, esperaba "
+                     f"{want_mem}", why)
 
 
 def run_wire(clients):
@@ -671,6 +708,7 @@ def save_surface(measured):
             "groups": surface["groups"],
             "account": surface["account"],
             "bytes": surface["bytes"],
+            "claude_mem": surface.get("claude_mem", 0),
             "measured_at": now,
             "fingerprint": fp,
             "session": session_token(),
