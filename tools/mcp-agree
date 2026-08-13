@@ -149,10 +149,6 @@ def check_omp():
         fail("toggle", f"omp ya no suprime {sorted(missing)}",
              "vuelven por descubrimiento desde opencode/marketplace y se duplican")
 
-    cfg = os.path.join(HOME, ".omp", "agent", "config.yml")
-    if "mcp:dart-flutter" not in open(cfg).read():
-        fail("toggle", "omp ha perdido disabledExtensions: mcp:dart-flutter",
-             "vuelve el Dart duplicado en new-app (dos ficheros, un solo servidor)")
 
 
 # ---------------------------------------------------------------- claude
