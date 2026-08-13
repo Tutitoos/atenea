@@ -442,6 +442,25 @@ wider and already parsed.
     who else on this machine already reads this number? — and one habit after:
     write down the condition that would revive whatever you just cut, because a
     condition is a testable claim and a conclusion is not.
+11. **A file-based auditor cannot see what never travels through files.** On
+    2026-08-13 `mcp-agree` reported four clients in agreement. It reads
+    declarations, and the declarations were correct: 45 tools provable from
+    config — atenea 28, claude-mem 14, headroom 3. The wire carried **126**.
+    The missing 81 were 32 Claude Code built-ins, which no config declares, and
+    49 `mcp__claude_ai_*` connectors — Gmail, Google Calendar, Google Drive,
+    Spotify — attached to the claude_max OAuth session and named in no file on
+    the machine. Not a bug in the reading: a channel the instrument has no
+    organ for. What makes it worse than a wrong number is that the auditor's
+    green was *earned* on everything it could see, so its confidence scaled
+    with its blindness. The correction is not a better file parser. It is that
+    an instrument must know which of its claims its evidence can reach, and
+    declare itself blind on the rest: the tool now prints two lines, one
+    green-or-red and fingerprinted over the files that can move it, and one
+    that only ever says `measured <date>` — because there is no file behind
+    the account surface, no hash can cover it, and the honest states are
+    *measured recently* and *unknown*, never *fine*. Where a fingerprint cannot
+    reach, a clock is the only remaining guard: a stale measurement of a
+    channel that leaves no trace on disk must expire and say so.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
