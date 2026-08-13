@@ -59,7 +59,9 @@ Usage:  mcp-agree [--live] [--quiet]
         mcp-agree --wire [--client=claude|omp|opencode|codex]
                                       measure the surface that actually reaches
                                       the model (~2.5 s per client, 0 tokens)
-Exit:   0 file surface agrees · 1 drift, or warned · 2 could not read something
+Exit:   0 file surface agrees and the account surface was measured recently
+        1 drift, or warned · 2 could not read something
+        3 file surface agrees, account surface unverified - never call this green
 """
 
 import json
@@ -484,7 +486,7 @@ def render_wire(client, surface):
 
 
 def run_wire(clients):
-    """Measure the real surface of each client and print it."""
+    """Measure the real surface of each client, print it, and remember it."""
     measured = {}
     for client in clients:
         surface = probe_wire(client)
@@ -493,7 +495,125 @@ def run_wire(clients):
         note = WIRE_PROBES[client]["note"]
         if note and surface is not None:
             print(f"  {'':<9} {note}")
+    save_surface(measured)
     return measured
+
+
+# ---------------------------------------------------- remembering a measurement
+# A wire measurement is expensive, so it is cached - but a cache that outlives
+# its subject is a lie with a timestamp. Two guards, and they cover different
+# things on purpose:
+#
+#   fingerprint  every FILE that can change the surface. Cheap: six stats.
+#   TTL          the one input that has no file. The mcp__claude_ai_* connectors
+#                live on the claude.ai account; attaching a fifth one changes
+#                nothing on this disk, so no fingerprint can notice. After
+#                WIRE_TTL_DAYS the account line says so instead of pretending.
+SURFACE_CACHE = os.path.join(HOME, ".claude", ".mcp-agree-surface.json")
+WIRE_TTL_DAYS = 7
+STAT_INPUTS = [
+    os.path.join(HOME, ".claude", "settings.json"),
+    os.path.join(HOME, ".omp", "agent", "mcp.json"),
+    os.path.join(HOME, ".codex", "config.toml"),
+    os.path.join(HOME, ".config", "opencode", "opencode.json"),
+    os.path.join(HOME, ".config", "atenea", "atenea.toml"),
+    CLAUDE_BIN,
+]
+
+
+def fingerprint():
+    """Hash of everything on disk that can move the surface.
+
+    ~/.claude.json is deliberately NOT stat'ed: every claude start rewrites it
+    (measured 2026-08-10), so its mtime changes hourly while the surface does
+    not. Its CONTENT contributes instead - the user-scope servers and the
+    account identity, which are the two parts of that file the surface depends
+    on.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for path in STAT_INPUTS:
+        try:
+            st = os.stat(path)
+            h.update(f"{path}:{st.st_mtime_ns}:{st.st_size}\n".encode())
+        except OSError:
+            h.update(f"{path}:missing\n".encode())
+    try:
+        d = load_json(os.path.join(HOME, ".claude.json"))
+        h.update(json.dumps(sorted((d.get("mcpServers") or {}))).encode())
+        h.update(str((d.get("oauthAccount") or {}).get("accountUuid")).encode())
+    except (OSError, ValueError):
+        h.update(b"claude.json:unreadable")
+    return h.hexdigest()[:16]
+
+
+def save_surface(measured):
+    """Write the measurement with the fingerprint that was true when it ran."""
+    import datetime
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    fp = fingerprint()
+    try:
+        stored = load_json(SURFACE_CACHE)
+    except (OSError, ValueError):
+        stored = {}
+    clients = stored.get("clients") or {}
+    for client, surface in measured.items():
+        if surface is None:
+            continue
+        clients[client] = {
+            "count": len(surface["names"]),
+            "groups": surface["groups"],
+            "account": surface["account"],
+            "bytes": surface["bytes"],
+            "measured_at": now,
+            "fingerprint": fp,
+        }
+    try:
+        with open(SURFACE_CACHE, "w") as fh:
+            json.dump({"version": 1, "clients": clients}, fh, indent=2, sort_keys=True)
+    except OSError as exc:
+        notes.append(f"no pude guardar la medicion: {exc}")
+
+
+def load_surface():
+    try:
+        return (load_json(SURFACE_CACHE).get("clients") or {})
+    except (OSError, ValueError):
+        return {}
+
+
+def account_line(cached, fp):
+    """The account surface, which is never green - only measured, or unknown.
+
+    Returns (text, verified). `verified` false means the run cannot claim a
+    number; it never means the file surface failed, and it can never make the
+    whole verdict green on its own.
+    """
+    import datetime
+
+    entry = cached.get("claude")
+    if not entry:
+        return ("sin medir nunca · corre `mcp-agree --wire`", False)
+    when = entry.get("measured_at", "?")
+    day = when[:10]
+    total = entry.get("count", "?")
+    account = entry.get("account", "?")
+    body = f"medida {day} · {total} tools en el cable · mcp__claude_ai_* = {account}"
+    if entry.get("fingerprint") != fp:
+        return (f"{body} — CADUCA: la config cambio desde entonces", False)
+    try:
+        stamp = datetime.datetime.fromisoformat(when)
+        age = (datetime.datetime.now(datetime.timezone.utc) - stamp).days
+    except ValueError:
+        return (f"{body} — fecha ilegible", False)
+    if age > WIRE_TTL_DAYS:
+        return (f"{body} — {age} dias: la cuenta no deja rastro en disco, "
+                "vuelve a medir", False)
+    return (body, True)
+
+
 
 
 # ---------------------------------------------------------------- live
@@ -673,6 +793,9 @@ def main():
     if live:
         check_live()
 
+    fp = fingerprint()
+    account_text, account_verified = account_line(load_surface(), fp)
+
     if fails:
         print()
         print("  NO COINCIDEN  ".center(74, "="))
@@ -683,6 +806,8 @@ def main():
         for client, names, src in rows:
             print(f"  {client:<9} {', '.join(names) or '(ninguno)':<34} {src}")
         print()
+        print(f"  ficheros  ROJO      fingerprint {fp}")
+        print(f"  cuenta    {account_text}")
         print("=" * 74)
         return 1
 
@@ -691,7 +816,12 @@ def main():
             print(f"  {client:<9} {', '.join(names):<34} {src}")
         for note in notes:
             print(f"  nota: {note}")
-        print("  los cuatro coinciden")
+        print(f"  ficheros  VERDE     los cuatro coinciden · fingerprint {fp}")
+        print(f"  cuenta    {account_text}")
+    if not account_verified:
+        # Deliberately not 0: the file surface agrees, and that is all this run
+        # can say. The account surface has no file to agree with.
+        return 3
     return 0
 
 
