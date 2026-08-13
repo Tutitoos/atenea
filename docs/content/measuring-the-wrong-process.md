@@ -458,9 +458,31 @@ wider and already parsed.
     green-or-red and fingerprinted over the files that can move it, and one
     that only ever says `measured <date>` — because there is no file behind
     the account surface, no hash can cover it, and the honest states are
-    *measured recently* and *unknown*, never *fine*. Where a fingerprint cannot
-    reach, a clock is the only remaining guard: a stale measurement of a
-    channel that leaves no trace on disk must expire and say so.
+    *measured recently* and *unknown*, never *fine*. The first version of that
+    second line was guarded by a clock, on the reasoning that where a
+    fingerprint cannot reach an expiry is the only remaining guard. Two days
+    later the channel moved a tool in fifteen minutes and the clock was deleted
+    rather than shortened — see 12.
+12. **An instrument's default failure direction must be *unknown*, not *fine*.**
+    Every guard is wrong sometimes; the design question is which way. On
+    2026-08-13 the account line stopped being guarded by a TTL and started
+    being guarded by the identity of the shell session that took the
+    measurement. The first implementation keyed that identity on `getsid()` —
+    correct on a terminal, useless under the agent harness it was running in,
+    which `setsid`s every command: three consecutive invocations reported
+    sessions 2497260, 2497261 and 2497264 over one unchanged shell. Keyed that
+    way the cache could *never* be current. That is a real bug, and it was the
+    safe way to have it: its cost was a re-measurement — 2.5 s per client, zero
+    tokens — and its output was `unknown`, which is true. Compare the two
+    guards retired the same day. The TTL failed toward *fine*: it asserted
+    currency about a channel it had stopped watching, and would have served a
+    stale green for a week. The Dart toggle check failed toward *broken*: it
+    asserted a duplicate that could no longer exist, because its subject had
+    been deleted from the binary. Both spend something that is not the
+    instrument's to spend — trust in the first case, attention in the second.
+    A wrong `unknown` costs work. A wrong `fine` costs the reason the tool
+    exists. When the two cannot be had at once, choose the one that fails into
+    more measuring.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
