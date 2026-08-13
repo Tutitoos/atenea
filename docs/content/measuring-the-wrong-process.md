@@ -507,6 +507,42 @@ leading `_` before the comparison, or gating on client, would fix omp and leave
 Claude Code untouched. The only switch that exists today, `HEADROOM_TOOL_SEARCH=0`,
 is global — it would remove Claude Code's saving along with omp's penalty.
 
+## A ninth instrument: a client's local arithmetic read as the server's limit
+
+On 2026-08-13 I stated twice that omp's real context ceiling was 200,000
+tokens, because omp never sends `anthropic-beta: context-1m-2025-08-07` — 0
+occurrences in its 176 MB binary, 0 of 19 requests on the wire, against
+2,972 of 2,972 from interactive Claude Code. The beta exists to unlock 1M, so
+its absence looked like the wall.
+
+The ladder says otherwise. Direct to `api.anthropic.com`, no beta anywhere:
+
+| sent | model | result |
+| --- | --- | --- |
+| 231,050 | claude-opus-5 | 200 |
+| 231,054 | claude-opus-4-8 | billed, then a *content* refusal — `Refusal (bio)`, not a length error |
+| 340,019 | claude-opus-5 | 200 |
+| 1,031,017 | claude-opus-5 | `400 prompt is too long: 1031017 tokens > 1000000 maximum` |
+
+**The ceiling is 1,000,000 and the beta does not gate it on this account.**
+What the header gates is the *client's own* window arithmetic: Claude Code's
+`o_f()` returns `1e6` when the model is tagged `[1m]` or the beta is present,
+and falls to the `nEr = 200000` default otherwise. That constant is what a
+client uses to decide when to compact and when to refuse locally — it is not a
+report about the API, and it was read as one.
+
+The two failures in the ladder are each worth keeping. The 1.03M attempt cost
+nothing: an over-limit request is refused before it is billed, so probing a
+ceiling from above is free and probing it from below is not. The opus-4-8
+refusal cost $1.44 and was not a limit at all — 200k of random dictionary words
+trips the usage-policy classifier, so the filler used to measure a length
+ceiling has to be benign prose or the instrument measures the wrong refusal.
+
+Same shape as the sixth and the seventh: a real number, correctly read, about
+something adjacent to the question. Here the adjacency is *whose* limit — the
+client's model table and the server's enforcement are two different claims, and
+only one of them 400s.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -628,6 +664,17 @@ is global — it would remove Claude Code's saving along with omp's penalty.
     be changed after the source is written, the source is documentation, not
     measurement. Ask the running thing what it is doing — here, one request and a
     look at `transforms_applied`.
+14. **A limit a client enforces is not a limit the server enforces.** Both are
+    real; they are different numbers about different machines, and only one of
+    them can refuse you. On 2026-08-13 the same model, on the same account,
+    accepted 340,019 tokens from omp and refused 215,000 from OpenCode — because
+    OpenCode's path runs the Claude Code CLI under an alias with no `[1m]` tag,
+    so the CLI blocked locally at its own `200,000 − 20,000 − 3,000` while the
+    API's wall stood at 1,000,000 the whole time. Read a ceiling out of a binary
+    and you have learned when that binary will stop; you have not learned when
+    the endpoint will. The endpoint answers only when asked, and asking is
+    cheap in exactly one direction: an over-limit request is refused before it
+    is billed, so probe a wall from above.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
