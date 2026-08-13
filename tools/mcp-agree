@@ -59,7 +59,8 @@ Usage:  mcp-agree [--live] [--quiet]
         mcp-agree --wire [--client=claude|omp|opencode|codex]
                                       measure the surface that actually reaches
                                       the model (~2.5 s per client, 0 tokens)
-Exit:   0 file surface agrees and the account surface was measured recently
+Exit:   0 file surface agrees and the account surface was measured in THIS
+          shell session
         1 drift, or warned · 2 could not read something
         3 file surface agrees, account surface unverified - never call this green
 """
@@ -551,12 +552,17 @@ def run_wire(clients):
 # things on purpose:
 #
 #   fingerprint  every FILE that can change the surface. Cheap: six stats.
-#   TTL          the one input that has no file. The mcp__claude_ai_* connectors
-#                live on the claude.ai account; attaching a fifth one changes
-#                nothing on this disk, so no fingerprint can notice. After
-#                WIRE_TTL_DAYS the account line says so instead of pretending.
+#   session      the inputs that have no file. The mcp__claude_ai_* connectors
+#                live on the claude.ai account, and on 2026-08-13 an unrelated
+#                built-in (ListAgents) appeared on the wire inside a FIFTEEN
+#                MINUTE window with no local file changed, no binary upgraded
+#                and identical flags. A channel that moves in fifteen minutes
+#                cannot be bounded by a clock: any expiry long enough to be
+#                useful is long enough to be wrong. So there is no TTL. A
+#                measurement counts as current only inside the shell session
+#                that took it; everywhere else it is reported with its date and
+#                treated as unverified (exit 3).
 SURFACE_CACHE = os.path.join(HOME, ".claude", ".mcp-agree-surface.json")
-WIRE_TTL_DAYS = 7
 STAT_INPUTS = [
     os.path.join(HOME, ".claude", "settings.json"),
     os.path.join(HOME, ".omp", "agent", "mcp.json"),
@@ -565,6 +571,51 @@ STAT_INPUTS = [
     os.path.join(HOME, ".config", "atenea", "atenea.toml"),
     CLAUDE_BIN,
 ]
+
+
+SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"}
+
+
+def proc_stat(pid):
+    """(comm, ppid, starttime) for a pid. comm can hold spaces and parens, so
+    split on the LAST ')' - the usual first-')' bug misreads `(sh -c)`."""
+    with open(f"/proc/{pid}/stat") as fh:
+        raw = fh.read()
+    head, _, rest = raw.rpartition(")")
+    fields = rest.split()
+    return head.partition("(")[2], int(fields[1]), fields[19]
+
+
+def session_token():
+    """Identify the shell session, so a measurement cannot outlive it.
+
+    The nearest ancestor shell, as pid:starttime - the pair survives pid reuse
+    and changes the moment another terminal, or a nested shell, opens.
+
+    NOT the session id, which was the first attempt and was wrong here:
+    measured 2026-08-13, this agent harness runs every command under its own
+    setsid, so three consecutive invocations reported sids 2497260, 2497261,
+    2497264 while the shell above them stayed 2151557. Keyed on getsid() the
+    cache could never be current and --wire would have been unusable from any
+    such runner. Under an interactive terminal both readings agree; the
+    ancestor walk is the one that also survives a wrapper.
+
+    No shell above us (daemon, cron): fall back to the session id, and if /proc
+    cannot answer at all return a unique token - unverified, never current.
+    """
+    try:
+        pid = proc_stat(os.getpid())[1]
+        for _ in range(24):
+            comm, ppid, starttime = proc_stat(pid)
+            if comm in SHELLS:
+                return f"{pid}:{starttime}"
+            if ppid <= 1:
+                break
+            pid = ppid
+        sid = os.getsid(0)
+        return f"sid{sid}:{proc_stat(sid)[2]}"
+    except (OSError, IndexError, ValueError):
+        return f"unknown:{os.urandom(8).hex()}"
 
 
 def fingerprint():
@@ -615,6 +666,7 @@ def save_surface(measured):
             "bytes": surface["bytes"],
             "measured_at": now,
             "fingerprint": fp,
+            "session": session_token(),
         }
     try:
         with open(SURFACE_CACHE, "w") as fh:
@@ -633,30 +685,23 @@ def load_surface():
 def account_line(cached, fp):
     """The account surface, which is never green - only measured, or unknown.
 
-    Returns (text, verified). `verified` false means the run cannot claim a
-    number; it never means the file surface failed, and it can never make the
-    whole verdict green on its own.
+    Returns (text, verified). `verified` is true only for a measurement taken
+    in THIS shell session: the channel moved by one tool in fifteen minutes on
+    2026-08-13 with nothing on disk to show for it, so a measurement from an
+    earlier session is a fact about an earlier session. It never means the file
+    surface failed, and it can never make the whole verdict green on its own.
     """
-    import datetime
-
     entry = cached.get("claude")
     if not entry:
         return ("sin medir nunca · corre `mcp-agree --wire`", False)
     when = entry.get("measured_at", "?")
-    day = when[:10]
-    total = entry.get("count", "?")
-    account = entry.get("account", "?")
-    body = f"medida {day} · {total} tools en el cable · mcp__claude_ai_* = {account}"
+    body = (f"medida {when[:10]} · {entry.get('count', '?')} tools en el cable "
+            f"· mcp__claude_ai_* = {entry.get('account', '?')}")
     if entry.get("fingerprint") != fp:
         return (f"{body} — CADUCA: la config cambio desde entonces", False)
-    try:
-        stamp = datetime.datetime.fromisoformat(when)
-        age = (datetime.datetime.now(datetime.timezone.utc) - stamp).days
-    except ValueError:
-        return (f"{body} — fecha ilegible", False)
-    if age > WIRE_TTL_DAYS:
-        return (f"{body} — {age} dias: la cuenta no deja rastro en disco, "
-                "vuelve a medir", False)
+    if entry.get("session") != session_token():
+        return (f"{body} — otra sesion: la cuenta no deja rastro en disco, "
+                "mide en esta", False)
     return (body, True)
 
 
