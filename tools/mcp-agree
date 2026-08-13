@@ -8,11 +8,33 @@ It guards the three ways this stack drifts without erroring:
   1. omp's toggle       /mcp enable|disable writes ~/.omp/agent/mcp.json behind you.
   2. the installer      `kena agent setup` fillMissing()s serena, context7, semgrep
                         and codebase-memory back into omp AND claude as enabled:true.
-                        43 -> ~80 tools, with atenea's own backends running twice.
+                        45 -> ~80 tools, with atenea's own backends running twice.
                         disabledServers does NOT stop it: that list only covers
                         DISCOVERED servers, not ones declared at user scope.
   3. claude's approval  ~/.claude.json project entries decide which project-scope
                         .mcp.json servers may load.
+
+Two surfaces, and only one of them can be green:
+
+  - FILE surface     what the four clients DECLARE. Provable from disk, so it
+                     gets a verdict: green or red, backed by a stat fingerprint.
+  - ACCOUNT surface  what actually reaches the model. It includes Claude Code's
+                     built-ins and the mcp__claude_ai_* connectors attached to
+                     the claude_max OAuth session. NO FILE ON THIS MACHINE
+                     DECLARES THEM, so no fingerprint can cover them and no
+                     reading of them is ever reported as green: the account line
+                     says "measured <date>" or it says it does not know.
+
+Measured 2026-08-13 on this box: 45 tools provable from config (atenea 28 +
+claude-mem 14 + headroom 3), 126 on the wire, 81 invisible to any file-based
+check by construction - 32 Claude Code built-ins and 49 account connectors
+(Gmail 24, Google Calendar 9, Google Drive 8, Spotify 8).
+
+Where 43 came from, so nobody re-derives it: ~/.config/atenea/CLIENTS.md:80
+recorded "atenea 26 + headroom 3 + claude-mem 14 = 43" when atenea exposed 26
+capabilities. atenea exposes 28 today, so the same sum is 45. The number moves
+whenever atenea gains a capability - which is why the count now comes from a
+measurement with a date on it, not from a constant in a docstring.
 
 Design notes, so the next reader does not mistake a choice for an accident:
 
@@ -22,13 +44,19 @@ Design notes, so the next reader does not mistake a choice for an accident:
   - It never shells out to `claude mcp list`. Measured 2026-08-10: any claude
     start rewrites ~/.claude.json, and in an untrusted project it PRUNES the
     approval keys. A check must not damage what it inspects.
-  - `--live` handshakes atenea and headroom over stdio. That spawns nothing a
-    client would not spawn anyway, and writes nothing.
+  - `--live` handshakes atenea, headroom and serena over stdio. That spawns
+    nothing a client would not spawn anyway, and writes nothing. It sees only
+    the servers it launches itself, which is why it is not allowed to speak for
+    the whole surface.
+  - `--trust-warning` runs in front of every `claude` launch and must stay
+    under ~30 ms. It reads files, warns about the trust dialog, and claims no
+    tool count at all. A real wire measurement costs ~2.5 s; that belongs in
+    `--wire`, on demand, never here.
 
 Usage:  mcp-agree [--live] [--quiet]
         mcp-agree --trust-warning     what accepting Claude's trust dialog in
                                       the current tree would switch on (stderr)
-Exit:   0 all four agree · 1 drift, or warned · 2 could not read something
+Exit:   0 file surface agrees · 1 drift, or warned · 2 could not read something
 """
 
 import json
