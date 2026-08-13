@@ -379,6 +379,66 @@ on this machine already reads it. A number worth putting on a screen is usually
 worth something to another program too, and that program's copy is often fresher,
 wider and already parsed.
 
+## A seventh instrument: a ledger column that named a transport, not a client
+
+`~/.headroom/savings_events.jsonl` carries a `client` field, and it reads like
+an attribution: `opencode` 9,879 rows, `claude-code` 2,420. It is not one. The
+value comes from `CLIENT_UA_MAP` in `headroom/proxy/auth_policy.py`, which
+matches the *prefix* `claude-cli/` and never looks at the rest of the string.
+Every harness that speaks through the Claude CLI SDK profile lands in one
+bucket, whatever product it is.
+
+That went from harmless to wrong on 2026-08-13, when omp was routed through the
+proxy. omp does not spawn a `claude` child — measured, watching `/proc` across a
+full run: no child appears, and the request arrives from omp's own process
+wearing `claude-cli/2.1.220 (external, claude-desktop)`. Three of its requests
+were filed as Claude Code before anybody looked at the column.
+
+**The fix was already in the code, unused.** `classify_client_signals` returns
+an explicit `x-client` header before it consults the UA table. Both clients
+forward `ANTHROPIC_CUSTOM_HEADERS`, so one env var per shell function states the
+name instead of inferring it:
+
+```bash
+omp()    { ANTHROPIC_BASE_URL=… ANTHROPIC_CUSTOM_HEADERS="x-client: omp" … }
+claude() { ANTHROPIC_BASE_URL=… ANTHROPIC_CUSTOM_HEADERS="x-client: claude-code" … }
+```
+
+Verified on the wire against a loopback recorder, and then live: omp's row came
+out `omp` while its user-agent still said `claude-cli/`, which is the proof that
+the header decided and not the prefix. Status 200, warm cost unchanged to the
+cent — `$0.013349`, billed input 26,479, `cache_hit_pct=100` — so the header sits
+outside the cached prefix.
+
+**The boundary, because a column that changed meaning needs a date.** The
+`client` label in `savings_events.jsonl` is authoritative **from
+2026-08-13T16:34:46Z forward, and only for `omp` and `claude-code`**. Before that
+timestamp it is a transport bucket keyed on the `claude-cli/` prefix. Three rows
+— `16:17:29`, `16:17:39`, `16:17:47Z` — are omp mislabelled as `claude-code`, and
+are **left as they are on purpose**: the row's own fields cannot prove the
+correction (`pid` is the proxy's, not the client's), and a hand-edited ledger is
+worth less than a documented one. The retained `proxy.log` set, which does record
+raw user-agents, only reaches back to 2026-07-30 10:20 — the 344 rows from 07-26
+and 07-29 have no evidence behind them at all.
+
+Two clients are still unnamed on the wire, each for its own reason, and neither
+is an oversight:
+
+- **codex** speaks the OpenAI protocol. `POST /v1/responses` on the proxy answers
+  `401`, not `404`, so the route exists and is ChatGPT-session aware — but that
+  path is annotated *always routes direct*, and codex has never been pointed at
+  it here. Untried, not unsupported.
+- **OpenCode** is out of the traffic path deliberately. Routing it is not a
+  transport change: its `anthropic` provider is a loopback marker for an
+  in-process bridge, so the only real target is the `headroom` provider already
+  declared in `opencode.json` — `@ai-sdk/openai-compatible`, an API key, and
+  4.6-era model names. That swaps the claude_max subscription session for
+  metered billing. A provider decision wearing a transport decision's clothes.
+
+Until either sends `x-client`, `claude-code` remains the fallback for anything
+wearing that SDK profile, and the column should be read as "the Claude CLI wire",
+not "the Claude Code product".
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
