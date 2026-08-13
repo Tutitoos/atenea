@@ -468,13 +468,24 @@ def probe_wire(client, timeout=90):
         return None
     body = max(bodies, key=lambda b: len(b["tools"]))
     names = [t.get("name") for t in body["tools"]]
+    # Byte-for-byte what a JSON client puts on the wire. Python's defaults add
+    # ", "/": " and \uXXXX-escape non-ASCII: on the 77-tool body measured
+    # 2026-08-13 that is 133,336 bytes against the capture's 129,225 - a 3.2%
+    # phantom that reads exactly like a surface change. Compact + raw UTF-8
+    # reproduces the capture to within one byte.
     return {
         "names": names,
         "groups": group_tools(names),
         "account": sum(1 for n in names if str(n).startswith(ACCOUNT_PREFIX)),
-        "bytes": len(json.dumps(body["tools"])),
+        "bytes": wire_bytes(body["tools"]),
         "seconds": seconds,
     }
+
+
+def wire_bytes(tools):
+    """Size of the tools array as a client serialises it: compact, raw UTF-8."""
+    return len(json.dumps(tools, separators=(",", ":"),
+                          ensure_ascii=False).encode("utf-8"))
 
 
 def render_wire(client, surface):
@@ -488,7 +499,7 @@ def render_wire(client, surface):
     tail = f" · cuenta {account}" if account else ""
     total = len(surface["names"])
     return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}"
-            f"  [{surface['bytes']} B, {surface['seconds']}s]")
+            f"  [{surface['bytes']} B compact, {surface['seconds']}s]")
 
 
 # The surface as measured 2026-08-13, per client, on the wire. `groups` is
