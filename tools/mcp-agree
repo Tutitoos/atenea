@@ -485,6 +485,46 @@ def render_wire(client, surface):
             f"  [{surface['bytes']} B, {surface['seconds']}s]")
 
 
+# The surface as measured 2026-08-13, per client, on the wire. `groups` is
+# checked exactly where a client carries MCP tools; everywhere else only the
+# account rule applies. Update these WITH a dated measurement, never to make a
+# red run go quiet.
+WIRE_INVARIANTS = {
+    "claude": {"builtin": 32, "mcp:atenea": 28,
+               "mcp:plugin_claude-mem_mcp-search": 14, "mcp:headroom": 3},
+    "omp": {"builtin": 12},
+    "opencode": {"builtin": 29},
+    "codex": {},          # its body carries no tools at all
+}
+
+
+def check_wire_invariants(client, surface):
+    """The rules a measurement must satisfy. Violations are red, not notes."""
+    if surface is None:
+        return
+    if surface["account"]:
+        offenders = sorted({str(n).split("__")[1] for n in surface["names"]
+                            if str(n).startswith(ACCOUNT_PREFIX)})
+        fail("wire", f"{client} lleva {surface['account']} herramientas de cuenta "
+                     f"({', '.join(offenders)})",
+             "los conectores de la sesion OAuth volvieron al cable. La negacion "
+             "vive en ~/.claude/settings.json permissions.deny como "
+             '"mcp__claude_ai_*"; si sigue ahi, es que dejo de aplicarse')
+    expected = WIRE_INVARIANTS.get(client)
+    if not expected:
+        return
+    got = {k: v for k, v in surface["groups"].items()
+           if not k.startswith("mcp:" + ACCOUNT_PREFIX.rstrip("_"))}
+    if got != expected:
+        moved = sorted(set(expected) | set(got))
+        detail = ", ".join(f"{k} {expected.get(k, 0)}->{got.get(k, 0)}"
+                           for k in moved if expected.get(k) != got.get(k))
+        fail("wire", f"{client} ya no sirve el conjunto acordado: {detail}",
+             "un servidor entro, se cayo o cambio de tamano. Si es un cambio "
+             "querido - atenea gana una capacidad, por ejemplo - actualiza "
+             "WIRE_INVARIANTS y la fecha del docstring en el mismo commit")
+
+
 def run_wire(clients):
     """Measure the real surface of each client, print it, and remember it."""
     measured = {}
@@ -495,6 +535,7 @@ def run_wire(clients):
         note = WIRE_PROBES[client]["note"]
         if note and surface is not None:
             print(f"  {'':<9} {note}")
+        check_wire_invariants(client, surface)
     save_surface(measured)
     return measured
 
@@ -665,20 +706,23 @@ def handshake(name, cmd, args, env_extra=None, want_names=False):
 
 
 def check_live():
+    """Handshake the servers this stack launches, and report what they serve.
+
+    It no longer FAILS on those two counts. `--live` sees only the servers it
+    spawns itself - never the client's built-ins, never a plugin's server,
+    never the account connectors - so "atenea 28, headroom 3" was a green light
+    for 31 tools out of a 77-tool surface. Counting is now the wire's job
+    (WIRE_INVARIANTS); what stays here is the thing a handshake can prove and a
+    file cannot: which tools serena is serving right now.
+    """
     counts = {}
     n = handshake("atenea", os.path.join(BIN, "atenea"), ["mcp"])
     if n is not None:
         counts["atenea"] = n
-        if n < 20:
-            fail("live", f"atenea expone {n} herramientas, no las 26 esperadas",
-                 "capacidades caidas o settings a medio cargar")
     n = handshake("headroom", os.path.join(BIN, "headroom"), ["mcp", "serve"],
                   {"HEADROOM_NO_MEMORY_TOOLS": "1", "HEADROOM_NO_MEMORY_CONTEXT": "1"})
     if n is not None:
         counts["headroom"] = n
-        if n != 3:
-            fail("live", f"headroom expone {n} herramientas, no 3",
-                 "si son mas, su memoria volvio a encenderse (regla 2)")
 
     # The declaration is not the surface: ask serena what it actually serves,
     # launched exactly as atenea launches it.
