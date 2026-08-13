@@ -240,8 +240,17 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		return nil, notInitialized()
 	}
 	capabilities := v.core.catalog.Capabilities()
-	tools := make([]map[string]any, 0, 1+len(capabilities))
+	tools := make([]map[string]any, 0, 3+len(capabilities))
 	tools = append(tools, v.repositoriesTool())
+	for _, tool := range v.workflowTools() {
+		// Aimed like every capability: the agents a graph spawns run at a
+		// repository context level, and a workflow that silently picked one
+		// would put the answer somewhere the caller never named.
+		if schema, ok := tool["inputSchema"].(map[string]any); ok {
+			tool["inputSchema"] = v.aimable(schema)
+		}
+		tools = append(tools, tool)
+	}
 	for _, capability := range capabilities {
 		input, err := capability.InputSchema()
 		if err != nil {
@@ -376,6 +385,12 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	}
 	if params.Name == toolListRepositories {
 		return v.listRepositories()
+	}
+	switch params.Name {
+	case toolWorkflowCreate:
+		return v.workflowCreate(ctx, params.Arguments)
+	case toolWorkflowLaunch:
+		return v.workflowLaunch(ctx, params.Arguments)
 	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
@@ -553,10 +568,16 @@ func (v *conversation) listRepositories() (any, *rpcError) {
 			"indexed_by": repo.Indexes(),
 		})
 	}
-	result := map[string]any{"repositories": entries}
+	return toolResult(map[string]any{"repositories": entries})
+}
+
+// toolResult is the shape every tools/call answer takes: the text a client
+// renders and the same thing structured, which are one payload written twice
+// rather than two payloads that could disagree.
+func toolResult(result map[string]any) (any, *rpcError) {
 	body, err := json.Marshal(result)
 	if err != nil {
-		return nil, &rpcError{Code: codeInternal, Message: "serializing repositories: " + err.Error()}
+		return nil, &rpcError{Code: codeInternal, Message: "serializing the answer: " + err.Error()}
 	}
 	return map[string]any{
 		"content":           []any{map[string]any{"type": "text", "text": string(body)}},

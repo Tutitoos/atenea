@@ -991,6 +991,113 @@ no number to add up. That is why the column is empty rather than zero. A
 receipt printing `$0.00 spent` for a real run would be the same lie as list
 price on subscription traffic, and worse for looking audited.
 
+### Gates
+
+A plan is a thing to read before it is a thing to run, so those are two acts
+and two commands.
+
+```
+atenea workflow create plan.toml   # writes it down, spawns nothing
+atenea workflow launch <id>        # commits the grant and runs it
+```
+
+`atenea workflow run plan.toml` is both at once, and honest about it: the
+person typed the path, so the reading and the commissioning are the same act.
+Over MCP there is no such shortcut -- `workflow.create` and `workflow.launch`
+are separate tools, because a plan and the permission to run it arriving in
+one message is the arrangement a gate exists to prevent.
+
+The graph may grow mid-run, three times at most. Nothing proposes an
+expansion yet: it comes from a file, the same as the first graph did.
+
+```
+atenea workflow propose <id> next.toml --replaces old-step
+atenea workflow approve <id>
+atenea workflow reject <id> --reason "reads two files it should not"
+```
+
+**Launch** and **approve** are the same mechanism and different words.
+Launching commits a grant that nothing had claimed; approving an expansion
+extends one already in flight. `atenea workflow show` prints the log, and a
+reader can tell which happened without counting ordinals.
+
+#### What a waiting gate does to the run
+
+**The queue freezes; what is already spawned finishes.** No step is cut and no
+new step is dispatched. A gate waiting overnight holds no processes at all --
+the running ones end on their own and are not replaced. Waiting has no
+deadline: nothing times out, because a question that expires into a default is
+not a question.
+
+A proposal may only replace steps that **have not started**. Not "not
+executed" -- a running step has begun to touch the world, and replanning it
+would be a decision about work already underway.
+
+Those two rules are one design. The only thing that moves a step out of
+`pending` is a dispatch, and dispatch is frozen while a gate is open, so no
+step a proposal names can change state while somebody reads it. **Staleness
+stops being a race to detect and becomes impossible to construct.** The digest
+below is the check on that reasoning, not a substitute for it: if the freeze
+ever had a hole, the digest is what refuses the plan that fell through it.
+
+Ctrl-C during a gate cuts the running steps and records the run as `aborted`,
+and **the gate stays open**. The question was never answered, and closing it
+on the way out would answer it.
+
+#### How the answer arrives
+
+**The gate is a row, not a reply.** It lives in the trace database beside the
+graph, which is what lets it outlive the Atenea that asked: if that process
+dies mid-wait, the record still says `waiting`, the pid on it is dead, and
+`atenea workflow resume <id>` takes the run over and finds the question
+exactly where it was left. The CLI and the MCP surface write the same row.
+
+#### What the record keeps
+
+The proposal verbatim, a digest of it, when it was asked, when it was
+answered, the decision, the reason on a rejection, and the hand.
+
+The digest is what an approval is an approval **of**. The engine recomputes it
+over what it is about to apply, immediately before applying, and refuses on
+any difference: an approval names an artifact, not a moment. Reordering the
+steps of a proposal is a different plan; listing the replaced steps in another
+order is not.
+
+**The hand is what this machine can tell, and it is not an identity.** It
+records an operating-system user and the surface the answer arrived through --
+`tutitoos via cli`, `tutitoos via mcp session 0da8`. Nothing here
+authenticates anybody, so a field named for a person holding only `$USER`
+would be a claim backed by nothing, the same shape as a receipt reporting a
+charge nobody measured. A real identity needs something that verifies one, and
+there is nothing on this machine that does.
+
+#### Where it stops
+
+Two ceilings, and they run out for different reasons, so they say so
+differently:
+
+```
+expansions exhausted (3 of 3)
+grant fully allocated ($0.50 of $0.50); this proposal asks for $0.25 more
+this proposal asks for $0.80 and the grant has $0.50 left ($0.50 of $1.00 allocated)
+```
+
+The last two are the same refusal and different facts: a grant with room left
+that this proposal overruns is not a grant that is spent, and saying the
+stronger sentence would send a reader looking for steps that do not exist.
+
+**Allocated, never spent.** The second is the sum of what the steps claim,
+refused when it passes the grant. Nothing on this machine can report a charge
+-- see Money above -- so there is no spend to compare against and there will
+not be one until an agent can measure what it used. An expansion past the
+grant is refused when it is proposed, not when it is approved: a person should
+not be asked to bless a plan that cannot run.
+
+A rejected **launch** stops the run: nothing ran, and it reads `rejected`
+rather than `aborted` (nobody cut anything) or `finished`. A rejected
+**expansion** is not a rejected run -- the graph already approved carries on
+and finishes, because that graph is one somebody did approve.
+
 
 ## MCP servers
 

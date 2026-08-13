@@ -105,6 +105,11 @@ const (
 	// waiting for a person to say --redo, and calling it finished would put
 	// a completed run on the record with a hole in the middle of it.
 	StopUnjudged Stop = "unjudged"
+	// StopRejected is a plan a person read and refused. Nothing ran: it is
+	// not aborted, because nobody cut anything, and it is certainly not
+	// finished. A run that never got permission to exist should not look
+	// like one that did its work.
+	StopRejected Stop = "rejected"
 )
 
 // Run is one workflow as the record holds it.
@@ -237,6 +242,30 @@ CREATE TABLE IF NOT EXISTS workflow_step (
 );
 CREATE INDEX IF NOT EXISTS workflow_step_status ON workflow_step(status);
 CREATE INDEX IF NOT EXISTS workflow_open ON workflow(closed);
+
+CREATE TABLE IF NOT EXISTS workflow_gate (
+    workflow_id TEXT    NOT NULL,
+    -- Gates are numbered within a run from 0, and 0 is always the launch.
+    ordinal     INTEGER NOT NULL,
+    kind        TEXT    NOT NULL,
+    -- The proposal exactly as it was put, and a digest of it. The approval
+    -- binds to the digest: the engine recomputes it over what it is about to
+    -- apply and refuses on any difference, so an approval names an artifact
+    -- rather than a moment.
+    proposal    TEXT    NOT NULL,
+    digest      TEXT    NOT NULL,
+    decision    TEXT    NOT NULL DEFAULT 'waiting',
+    asked_at    TEXT    NOT NULL,
+    answered_at TEXT    NOT NULL DEFAULT '',
+    -- Who answered, as far as this machine can tell: an OS user and the
+    -- surface it arrived through. Nothing authenticates anybody here, so this
+    -- is a description and not a credential.
+    hand        TEXT    NOT NULL DEFAULT '',
+    reason      TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (workflow_id, ordinal),
+    FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS workflow_gate_open ON workflow_gate(decision);
 `
 
 // DefaultPath is the trace database: the workflow tables live beside the agent

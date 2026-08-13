@@ -47,18 +47,28 @@ type Options struct {
 	// Alive reports whether a pid is still running. Defaults to the real
 	// check; the resume path is the only caller and it must not guess.
 	Alive func(pid int) bool
+	// Poll is how often a gate's row is re-read while waiting. Defaults to a
+	// quarter second. It is a poll and not a subscription because the answer
+	// may come from another process entirely, and a channel only reaches the
+	// one holding it.
+	Poll time.Duration
+	// Surface names where this engine's own answers come from, for the gate
+	// log. Defaults to "cli".
+	Surface string
 }
 
 // Engine runs graphs.
 type Engine struct {
-	runner Dispatcher
-	store  *Store
-	types  []config.AgentType
-	lanes  config.Workflow
-	now    func() time.Time
-	ids    func() string
-	pid    int
-	alive  func(pid int) bool
+	runner  Dispatcher
+	store   *Store
+	types   []config.AgentType
+	lanes   config.Workflow
+	now     func() time.Time
+	ids     func() string
+	pid     int
+	alive   func(pid int) bool
+	poll    time.Duration
+	surface string
 }
 
 // New builds an engine.
@@ -72,14 +82,16 @@ func New(opts Options) (*Engine, error) {
 			"workflow: a store is required: a run nobody wrote down cannot be resumed")
 	}
 	e := &Engine{
-		runner: opts.Runner,
-		store:  opts.Store,
-		types:  opts.Types,
-		lanes:  opts.Lanes,
-		now:    opts.Now,
-		ids:    opts.IDs,
-		pid:    opts.PID,
-		alive:  opts.Alive,
+		runner:  opts.Runner,
+		store:   opts.Store,
+		types:   opts.Types,
+		lanes:   opts.Lanes,
+		now:     opts.Now,
+		ids:     opts.IDs,
+		pid:     opts.PID,
+		alive:   opts.Alive,
+		poll:    opts.Poll,
+		surface: opts.Surface,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -93,34 +105,114 @@ func New(opts Options) (*Engine, error) {
 	if e.alive == nil {
 		e.alive = pidlock.Alive
 	}
+	if e.poll <= 0 {
+		e.poll = 250 * time.Millisecond
+	}
+	if e.surface == "" {
+		e.surface = "cli"
+	}
 	return e, nil
 }
 
-// Start compiles a graph, writes it down, and runs it.
+// Create compiles a graph, writes it down, and stops.
 //
-// The returned Run is the record as it stands when the loop ends, whatever
-// happened -- including when err is non-nil. A caller that gets only an error
-// has lost every step that did work before the one that did not.
-func (e *Engine) Start(ctx context.Context, graph Graph) (Run, error) {
+// Nothing spawns. The run is left holding an unanswered launch gate, which is
+// the whole point of the split: a plan is a thing to read before it is a
+// thing to run, and the reading is a separate act from the commissioning.
+//
+// The returned Gate carries the digest the launch will be checked against.
+func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	plan, err := Compile(graph, e.types)
+	if err != nil {
+		return Run{}, Gate{}, err
+	}
+	id := e.ids()
+	at := e.now()
+	if err := e.store.Create(ctx, id, plan, at, 0); err != nil {
+		return Run{}, Gate{}, err
+	}
+	gate, err := e.store.Ask(ctx, id, KindLaunch,
+		Proposal{Steps: plan.Graph.Steps}, at)
+	if err != nil {
+		return Run{}, Gate{}, err
+	}
+	run, err := e.store.Load(ctx, id)
+	if err != nil {
+		return Run{}, Gate{}, err
+	}
+	return run, gate, nil
+}
+
+// Launch answers a run's launch gate and drives it.
+//
+// The two halves are one call because they are one act: the person saying yes
+// is the person committing the grant, and a launch recorded by somebody who
+// then did not run it would leave an approval with nothing behind it.
+func (e *Engine) Launch(ctx context.Context, id string) (Run, error) {
+	gate, ok, err := e.store.OpenGate(ctx, id)
 	if err != nil {
 		return Run{}, err
 	}
-	id := e.ids()
-	if err := e.store.Create(ctx, id, plan, e.now(), e.pid); err != nil {
+	if !ok {
+		// Nothing waiting has two causes, and they are not the same news.
+		// Reading gate 0 rather than assuming: a plan somebody refused is
+		// not a plan that already ran, and telling its author it was
+		// launched would send them looking for work that never happened.
+		launch, gateErr := e.store.Gate(ctx, id, 0)
+		if gateErr == nil && launch.Decision == DecisionRejected {
+			return Run{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow %s was rejected at %s by %s: %s",
+				id, launch.Answered.Local().Format(time.RFC3339), launch.Hand, launch.Reason)
+		}
+		return Run{}, contract.Fail(contract.FailureInvalidInput,
+			"workflow %s has nothing waiting: it was launched already", id)
+	}
+	if gate.Kind != KindLaunch {
+		return Run{}, contract.Fail(contract.FailureInvalidInput,
+			"workflow %s is waiting on an expansion, not a launch: approve it with `atenea workflow approve %s`",
+			id, id)
+	}
+	if _, err := e.store.Answer(ctx, id, gate.Ordinal, DecisionApproved,
+		Hand(e.surface), "", e.now()); err != nil {
 		return Run{}, err
+	}
+	return e.Run(ctx, id)
+}
+
+// Run drives a workflow that is already on disk: it takes the run over and
+// executes whatever the graph and the gates say to do next.
+func (e *Engine) Run(ctx context.Context, id string) (Run, error) {
+	run, err := e.takeOver(ctx, id)
+	if err != nil {
+		return run, err
+	}
+	plan, err := e.replan(run)
+	if err != nil {
+		return run, err
+	}
+	if err := e.store.Own(ctx, id, e.pid); err != nil {
+		return run, err
 	}
 	return e.execute(ctx, id, plan)
 }
 
-// Resume continues a run that was cut or whose Atenea died.
+// Start compiles a graph, launches it, and runs it, as one command from one
+// hand.
 //
-// redo names steps to dispatch again even though this would not otherwise
-// touch them: the interrupted ones that may have written something. Naming a
-// step that is not interrupted is refused rather than ignored, because
-// silently doing nothing to a step somebody asked about reads as having
-// redone it.
-func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, error) {
+// This is `atenea workflow run PATH`: the person typed the path, so the
+// reading and the commissioning are the same act and the gate log says so.
+// The MCP surface does not have this -- there a model must call create, and a
+// person must call launch.
+func (e *Engine) Start(ctx context.Context, graph Graph) (Run, error) {
+	_, gate, err := e.Create(ctx, graph)
+	if err != nil {
+		return Run{}, err
+	}
+	return e.Launch(ctx, gate.RunID)
+}
+
+// takeOver refuses a run that is finished or that another live Atenea holds.
+func (e *Engine) takeOver(ctx context.Context, id string) (Run, error) {
 	run, err := e.store.Load(ctx, id)
 	if err != nil {
 		return Run{}, err
@@ -131,10 +223,27 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 	}
 	// The two-Ateneas case. A record saying running is not evidence that
 	// anything runs; the pid is. Taking a live run over would double every
-	// step still in flight.
+	// step still in flight -- and a run parked on a gate holds its pid the
+	// same way, so this is also what keeps two processes from racing to
+	// apply one answer.
 	if run.WriterPID != 0 && run.WriterPID != e.pid && e.alive(run.WriterPID) {
 		return run, contract.Fail(contract.FailureUnavailable,
 			"workflow %s is running under pid %d", id, run.WriterPID)
+	}
+	return run, nil
+}
+
+// Resume continues a run that was cut or whose Atenea died.
+//
+// redo names steps to dispatch again even though this would not otherwise
+// touch them: the interrupted ones that may have written something. Naming a
+// step that is not interrupted is refused rather than ignored, because
+// silently doing nothing to a step somebody asked about reads as having
+// redone it.
+func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, error) {
+	run, err := e.takeOver(ctx, id)
+	if err != nil {
+		return run, err
 	}
 
 	plan, err := e.replan(run)
@@ -219,6 +328,58 @@ func (e *Engine) replan(run Run) (Plan, error) {
 	return Compile(graph, e.types)
 }
 
+// grow compiles the graph an approved proposal would produce, without writing
+// anything.
+//
+// Compiled before it is applied, so a proposal that would make an
+// uncompilable graph -- a cycle, two concurrent writers of one file, shares
+// past the grant -- is refused with nothing half-written behind it.
+func (e *Engine) grow(run Run, p Proposal) (Plan, error) {
+	replaced := make(map[string]bool, len(p.Replaces))
+	for _, id := range p.Replaces {
+		replaced[id] = true
+	}
+	graph := Graph{Task: run.Task, GrantUSD: run.GrantUSD}
+	for _, step := range run.Steps {
+		if replaced[step.Step.ID] {
+			continue
+		}
+		graph.Steps = append(graph.Steps, step.Step)
+	}
+	graph.Steps = append(graph.Steps, p.Steps...)
+	return Compile(graph, e.types)
+}
+
+// await blocks until a gate is answered, however long that takes.
+//
+// Nothing times out. A question that expires into a default is not a
+// question, and the whole point of the gate is that a person decided.
+//
+// It polls the row rather than waiting on a channel because the answer
+// arrives from another process -- the CLI, or a second Atenea serving MCP --
+// and because a process that dies here must leave the question standing. The
+// record is the only thing both of those have in common.
+func (e *Engine) await(ctx context.Context, id string, ordinal int) (Gate, error) {
+	read := context.WithoutCancel(ctx)
+	ticker := time.NewTicker(e.poll)
+	defer ticker.Stop()
+	for {
+		gate, err := e.store.Gate(read, id, ordinal)
+		if err != nil {
+			return Gate{}, err
+		}
+		if !gate.Waiting() {
+			return gate, nil
+		}
+		select {
+		case <-ctx.Done():
+			return Gate{}, contract.Fail(contract.FailureCanceled,
+				"workflow %s: cut while waiting on gate %d", id, ordinal)
+		case <-ticker.C:
+		}
+	}
+}
+
 // done is one finished dispatch, handed back to the single writer.
 type done struct {
 	stepID string
@@ -246,12 +407,23 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	// dispatches reviewers of steps that finished under an Atenea that is
 	// gone, and the answer they audit has to be the one that was given.
 	answers := make(map[string]StepRow, len(run.Steps))
-	for _, step := range run.Steps {
-		status[step.Step.ID] = step.Status
-		attempts[step.Step.ID] = step.Attempt
-		traces[step.Step.ID] = step.TraceID
-		answers[step.Step.ID] = step
+	// seed rebuilds the four maps from the record. It runs again after a
+	// graph grows, so an expansion's steps arrive the same way a resumed
+	// run's do -- from disk, not from a second construction path that could
+	// disagree with it.
+	seed := func(from Run) {
+		clear(status)
+		clear(attempts)
+		clear(traces)
+		clear(answers)
+		for _, step := range from.Steps {
+			status[step.Step.ID] = step.Status
+			attempts[step.Step.ID] = step.Attempt
+			traces[step.Step.ID] = step.TraceID
+			answers[step.Step.ID] = step
+		}
 	}
+	seed(run)
 
 	lanes := make(map[config.Pool]int)
 	running := make(map[string]bool)
@@ -266,11 +438,75 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	write := context.WithoutCancel(ctx)
 
 	aborted := false
+	// A refused launch is refused for good, and not only in the process that
+	// heard the refusal. Read off gate 0 rather than off the wait below: the
+	// answer may have arrived while nothing was running, and an execute that
+	// only consulted OPEN gates would find none and dispatch the graph
+	// somebody had just turned down.
+	rejected := false
+	if launch, err := e.store.Gate(write, id, 0); err == nil &&
+		launch.Kind == KindLaunch && launch.Decision == DecisionRejected {
+		rejected = true
+	}
 	for {
 		if ctx.Err() != nil {
 			aborted = true
 		}
+		// The freeze. While a gate is open nothing new is dispatched: what
+		// is already spawned runs to completion and is not replaced. This is
+		// what makes the scope rule hold rather than merely state it -- a
+		// proposal may only touch steps that have not started, and with
+		// dispatch stopped no step it names can start while somebody reads
+		// it. Staleness stops being a race to detect.
+		frozen := false
 		if !aborted {
+			gate, waiting, err := e.store.OpenGate(write, id)
+			if err != nil {
+				cancel()
+				wg.Wait()
+				return run, err
+			}
+			switch {
+			case !waiting:
+			case len(running) > 0:
+				// Let the running steps land first. Asking now would be
+				// asking about a graph that is still moving.
+				frozen = true
+			default:
+				answered, err := e.await(ctx, id, gate.Ordinal)
+				if err != nil {
+					aborted = true
+					break
+				}
+				if answered.Decision == DecisionRejected {
+					// A refused launch never ran. A refused expansion
+					// leaves the run with the graph it already has, which
+					// is the graph somebody did approve, so the loop goes
+					// on and finishes it.
+					if answered.Kind == KindLaunch {
+						rejected = true
+					}
+					continue
+				}
+				grown, err := e.grow(run, answered.Proposal)
+				if err != nil {
+					return run, err
+				}
+				if err := e.store.Apply(write, id, answered, grown); err != nil {
+					return run, err
+				}
+				if run, err = e.store.Load(write, id); err != nil {
+					return run, err
+				}
+				plan = grown
+				seed(run)
+				continue
+			}
+		}
+		if rejected {
+			break
+		}
+		if !aborted && !frozen {
 			for _, step := range plan.Graph.Steps {
 				if status[step.ID] != StatusPending || running[step.ID] {
 					continue
@@ -380,7 +616,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 
 	stop := StopNone
 	switch {
+	case rejected:
+		stop = StopRejected
 	case aborted:
+		// A gate left open by an abort stays open. The question was never
+		// answered, and closing it on the way out would answer it.
 		stop = StopAborted
 	case anyInterrupted(status):
 		// Nothing is running, nothing is runnable, and what is left was
@@ -398,6 +638,10 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	if aborted {
 		return out, contract.Fail(contract.FailureCanceled,
 			"workflow %s was cut: %s", id, out.Summary())
+	}
+	if rejected {
+		return out, contract.Fail(contract.FailureInvalidInput,
+			"workflow %s was not launched: the plan was rejected", id)
 	}
 	return out, nil
 }

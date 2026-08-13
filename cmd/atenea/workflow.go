@@ -10,9 +10,10 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -26,12 +27,22 @@ import (
 func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"workflow needs a subcommand: run, resume, list or show")
+			"workflow needs a subcommand: create, launch, run, propose, approve, reject, resume, list or show")
 	}
 	sub, rest := strings.TrimSpace(args[0]), args[1:]
 	switch sub {
+	case "create":
+		return workflowCreate(settingsPath, rest, out)
+	case "launch":
+		return workflowLaunch(settingsPath, rest, out)
 	case "run":
 		return workflowRun(settingsPath, rest, out)
+	case "propose":
+		return workflowPropose(rest, out)
+	case "approve":
+		return workflowAnswer(rest, out, workflow.DecisionApproved)
+	case "reject":
+		return workflowAnswer(rest, out, workflow.DecisionRejected)
 	case "resume":
 		return workflowResume(settingsPath, rest, out)
 	case "list":
@@ -40,8 +51,165 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowShow(rest, out)
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"unknown workflow subcommand %q: run, resume, list or show", sub)
+			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, resume, list or show", sub)
 	}
+}
+
+func workflowCreate(settingsPath string, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow create", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	repository := flags.String("repository", "", "repository id to serve at the repository level")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow create takes one graph file, e.g. atenea workflow create plan.toml")
+	}
+	graph, err := workflow.ReadFile(flags.Arg(0))
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	engine, closers, err := openWorkflow(ctx, settingsPath, *tracePath, *repository, out)
+	if err != nil {
+		return err
+	}
+	defer closers()
+
+	run, gate, err := engine.Create(ctx, graph)
+	if err != nil {
+		return err
+	}
+	printGate(out, run, gate)
+	return nil
+}
+
+func workflowLaunch(settingsPath string, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow launch", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	repository := flags.String("repository", "", "repository id to serve at the repository level")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow launch takes one workflow id, e.g. atenea workflow launch wf1786-1")
+	}
+	ctx, stop := interruptible()
+	defer stop()
+
+	engine, closers, err := openWorkflow(ctx, settingsPath, *tracePath, *repository, out)
+	if err != nil {
+		return err
+	}
+	defer closers()
+
+	run, runErr := engine.Launch(ctx, flags.Arg(0))
+	if run.ID != "" {
+		printRun(out, run)
+	}
+	return runErr
+}
+
+// workflowPropose puts an expansion to the person running the workflow.
+//
+// It writes the question and returns. Nothing here proposes anything on its
+// own: the graph comes from a file, the same as the first one did, and until
+// there is an orchestrator this is where a proposal enters the system.
+func workflowPropose(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow propose", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	var replaces stringList
+	flags.Var(&replaces, "replaces", "step this proposal removes; repeatable, and only steps that have not started")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 2 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow propose takes a workflow id and a graph file, e.g. atenea workflow propose wf1786-1 next.toml")
+	}
+	graph, err := workflow.ReadFile(flags.Arg(1))
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	store, err := workflow.Open(ctx, *tracePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+
+	id := flags.Arg(0)
+	gate, err := store.Ask(ctx, id, workflow.KindApprove,
+		workflow.Proposal{Steps: graph.Steps, Replaces: replaces}, time.Now())
+	if err != nil {
+		return err
+	}
+	run, err := store.Load(ctx, id)
+	if err != nil {
+		return err
+	}
+	printGate(out, run, gate)
+	return nil
+}
+
+// workflowAnswer records a decision on whatever gate is open.
+//
+// The answer is a row, not a reply on a channel: the Atenea that asked may be
+// gone, and the next one to take the run over reads the same record.
+func workflowAnswer(args []string, out io.Writer, decision workflow.Decision) error {
+	name := "workflow approve"
+	if decision == workflow.DecisionRejected {
+		name = "workflow reject"
+	}
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	reason := flags.String("reason", "", "why, on a rejection: required")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"%s takes one workflow id", name)
+	}
+	ctx := context.Background()
+	store, err := workflow.Open(ctx, *tracePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+
+	id := flags.Arg(0)
+	gate, ok, err := store.OpenGate(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return contract.Fail(contract.FailureNotFound,
+			"workflow %s has nothing waiting", id)
+	}
+	if gate.Kind == workflow.KindLaunch && decision == workflow.DecisionApproved {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow %s is waiting to be launched, not approved: `atenea workflow launch %s` reads the plan "+
+				"and runs it, because whoever commits the grant is whoever spends it", id, id)
+	}
+	answered, err := store.Answer(ctx, id, gate.Ordinal, decision,
+		workflow.Hand("cli"), *reason, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "gate %d %s  %s  %s\n", answered.Ordinal, answered.Kind,
+		answered.Decision, workflow.Short(answered.Digest))
+	fmt.Fprintf(out, "by %s\n", answered.Hand)
+	if answered.Reason != "" {
+		fmt.Fprintf(out, "%s\n", answered.Reason)
+	}
+	return nil
 }
 
 func workflowRun(settingsPath string, args []string, out io.Writer) error {
@@ -168,6 +336,11 @@ func workflowShow(args []string, out io.Writer) error {
 		return err
 	}
 	printRun(out, run)
+	gates, err := store.Gates(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	printGates(out, gates)
 	return nil
 }
 
@@ -179,43 +352,7 @@ func openWorkflow(ctx context.Context, settingsPath, tracePath, repository strin
 	if err != nil {
 		return nil, nil, err
 	}
-	traces, err := openTraces(ctx, tracePath, out, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	state, err := workflow.Open(ctx, traces.Path())
-	if err != nil {
-		_ = traces.Close()
-		return nil, nil, err
-	}
-	runner, err := agent.New(agent.Options{
-		Types:     cfg.Agents,
-		Store:     traces,
-		Workspace: workspaceFor(cfg, repository),
-		History: func(ctx context.Context, name string, limit int) ([]trace.Row, error) {
-			return traces.List(ctx, trace.Filter{TypeName: name, Limit: limit})
-		},
-	})
-	if err != nil {
-		_ = state.Close()
-		_ = traces.Close()
-		return nil, nil, err
-	}
-	engine, err := workflow.New(workflow.Options{
-		Runner: runner,
-		Store:  state,
-		Types:  cfg.Agents,
-		Lanes:  cfg.Workflow,
-	})
-	if err != nil {
-		_ = state.Close()
-		_ = traces.Close()
-		return nil, nil, err
-	}
-	return engine, func() {
-		_ = state.Close()
-		_ = traces.Close()
-	}, nil
+	return workflow.Serve(ctx, cfg, tracePath, repository, "cli", out)
 }
 
 // interruptible cuts the run on the first ctrl-c and leaves the second one to
@@ -232,10 +369,20 @@ func runState(run workflow.Run) string {
 		return "finished"
 	case run.Stop != workflow.StopNone:
 		return string(run.Stop)
-	case run.WriterPID != 0:
+	case run.WriterPID != 0 && pidlock.Alive(run.WriterPID):
 		return "running"
+	case run.WriterPID != 0:
+		// The record names an owner and that owner is gone. Printing
+		// "running" here would be the same unmeasured claim the resume path
+		// refuses to make: a record saying running is not evidence that
+		// anything runs, and the pid is what settles it.
+		return "orphaned"
 	default:
-		return "interrupted"
+		// Closed runs and stopped runs are caught above, and End zeroes the
+		// pid, so what is left is a run nobody has ever owned: a plan
+		// waiting to be launched. Calling that interrupted would put a
+		// casualty on the record where there is a question.
+		return "unlaunched"
 	}
 }
 
@@ -262,6 +409,61 @@ func printRun(out io.Writer, run workflow.Run) {
 			plural(len(interrupted), "step", "steps"))
 		for _, step := range interrupted {
 			fmt.Fprintf(out, "  %s (%s)\n", step.Step.ID, step.Reason.Text)
+		}
+	}
+}
+
+// printGate shows a plan somebody has to read before it runs.
+//
+// It prints the digest, because the digest is what the approval binds to: the
+// engine recomputes it over what it is about to apply and refuses on any
+// difference. Two printed plans with the same short digest are the same plan.
+func printGate(out io.Writer, run workflow.Run, gate workflow.Gate) {
+	fmt.Fprintf(out, "%s  %s\n", run.ID, run.Task)
+	fmt.Fprintf(out, "gate %d %s  waiting  %s\n", gate.Ordinal, gate.Kind, workflow.Short(gate.Digest))
+	// Allocated, never spent. Nothing on this machine can report a charge
+	// yet, so this line is what the plan claims of the grant and not what
+	// running it will cost.
+	fmt.Fprintf(out, "$%.2f of $%.2f allocated by this plan\n",
+		gate.Proposal.AllocatedUSD(), run.GrantUSD)
+	fmt.Fprintln(out)
+
+	fmt.Fprintf(out, "%-16s %-14s %-8s %s\n", "STEP", "AGENT", "SHARE", "OBJECTIVE")
+	for _, step := range gate.Proposal.Steps {
+		fmt.Fprintf(out, "%-16s %-14s $%-7.2f %s\n",
+			truncate(step.ID, 16), truncate(step.TypeName, 14),
+			step.Permission.BudgetUSD, truncate(step.Task.Objective, 44))
+	}
+	for _, id := range gate.Proposal.Replaces {
+		fmt.Fprintf(out, "  replaces %s\n", id)
+	}
+	fmt.Fprintln(out)
+
+	verb := "launch"
+	if gate.Kind == workflow.KindApprove {
+		verb = "approve"
+	}
+	fmt.Fprintf(out, "atenea workflow %s %s\n", verb, run.ID)
+}
+
+// printGates is the log: which questions were put, and how each was answered.
+func printGates(out io.Writer, gates []workflow.Gate) {
+	if len(gates) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%-4s %-8s %-9s %-14s %-24s %s\n",
+		"GATE", "KIND", "DECISION", "DIGEST", "WHEN", "HAND")
+	for _, gate := range gates {
+		when := gate.Asked
+		if !gate.Answered.IsZero() {
+			when = gate.Answered
+		}
+		fmt.Fprintf(out, "%-4d %-8s %-9s %-14s %-24s %s\n",
+			gate.Ordinal, gate.Kind, gate.Decision, workflow.Short(gate.Digest),
+			when.Local().Format("2006-01-02 15:04:05"), gate.Hand)
+		if gate.Reason != "" {
+			fmt.Fprintf(out, "     %s\n", gate.Reason)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -574,4 +575,103 @@ func handshakeGrant(t *testing.T, out map[string]any) []string {
 		got = append(got, v.(string))
 	}
 	return got
+}
+
+// planFixture is a settings body with one declared agent and a plan file that
+// names it. Nothing here ever spawns: compiling a graph checks the types it
+// declares, which is the whole reason create can be safe to call.
+func planFixture(t *testing.T) (settings, plan string) {
+	t.Helper()
+	repo := t.TempDir()
+	plan = filepath.Join(repo, "plan.toml")
+	body := "task = \"a plan nobody runs\"\nbudget_usd = 1.00\n\n" +
+		"[[step]]\nid = \"look\"\nagent = \"reader\"\n" +
+		"objective = \"read the file\"\ncriterion = \"it read it\"\n" +
+		"effects = [\"read\"]\nbudget_usd = 0.25\n"
+	if err := os.WriteFile(plan, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	settings = strings.Replace(socketSettings, `path = "/tmp"`, fmt.Sprintf("path = %q", repo), 1) +
+		"\n[[agent]]\nname = \"reader\"\nkind = \"specialized\"\n" +
+		"summary = \"Reads, and never runs in this test\"\ncommand = \"/bin/true\"\n" +
+		"context = [\"repository\"]\neffects = [\"read\"]\nmax_duration = \"5s\"\nmax_tokens = 100\n\n" +
+		"  [[agent.result]]\n  name = \"ok\"\n  type = \"bool\"\n  required = true\n  summary = \"it read\"\n"
+	return settings, plan
+}
+
+// Every tools/call answer wears MCP's envelope. The workflow tools shipped
+// without it: they returned their payload as the bare result, which a client
+// reading `result.content` sees as an empty answer rather than as an error --
+// the worst way to be wrong. Asserted over the wire, on the shape a client
+// actually reads.
+func TestEveryToolAnswersInTheEnvelope(t *testing.T) {
+	settings, plan := planFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("omp"), "initialize")
+
+	for _, probe := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"catalog.repositories", map[string]any{}},
+		{"workflow.create", map[string]any{"file": plan}},
+	} {
+		got := result(t, c.call("tools/call",
+			map[string]any{"name": probe.tool, "arguments": probe.args}), probe.tool)
+
+		content, ok := got["content"].([]any)
+		if !ok || len(content) == 0 {
+			t.Errorf("%s: no content; a client reading the rendered answer finds nothing: %v", probe.tool, got)
+			continue
+		}
+		first, _ := content[0].(map[string]any)
+		text, _ := first["text"].(string)
+		if first["type"] != "text" || text == "" {
+			t.Errorf("%s: content is not readable text: %v", probe.tool, first)
+			continue
+		}
+		structured, ok := got["structuredContent"].(map[string]any)
+		if !ok || len(structured) == 0 {
+			t.Errorf("%s: no structuredContent beside the text: %v", probe.tool, got)
+			continue
+		}
+		// The two halves are one payload written twice, so they must agree.
+		var reparsed map[string]any
+		if err := json.Unmarshal([]byte(text), &reparsed); err != nil {
+			t.Errorf("%s: the text is not the structured answer: %v", probe.tool, err)
+		} else if !reflect.DeepEqual(reparsed, structured) {
+			t.Errorf("%s: the text and the structured answer disagree", probe.tool)
+		}
+	}
+}
+
+// A step that waits on nothing is the ordinary case. Writing it as
+// "needs": null tells a reader a field failed to be filled in rather than
+// that there is no edge.
+func TestAPlanDoesNotReportAbsentEdgesAsNull(t *testing.T) {
+	settings, plan := planFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("omp"), "initialize")
+	got := result(t, c.call("tools/call", map[string]any{
+		"name":      "workflow.create",
+		"arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+
+	structured, _ := got["structuredContent"].(map[string]any)
+	steps, _ := structured["steps"].([]any)
+	if len(steps) != 1 {
+		t.Fatalf("steps = %v, want the one this plan declares", structured["steps"])
+	}
+	step, _ := steps[0].(map[string]any)
+	for _, field := range []string{"needs", "subject"} {
+		if raw, present := step[field]; present && raw == nil {
+			t.Errorf("a step with no %s reports it as null: %v", field, step)
+		}
+	}
 }

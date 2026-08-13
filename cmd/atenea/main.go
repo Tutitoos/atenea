@@ -261,7 +261,7 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow run|resume|list|show [flags]
+	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|resume|list|show
 
 Run a graph of agent steps. The graph comes from a TOML file and is executed
 exactly as written: nothing here plans, splits or grows it.
@@ -283,15 +283,36 @@ no subject is refused, and so is a subject handed to a type that never reads
 one. A step nobody judged clears no bar: what depended on it reads blocked and
 says which command would clear it.
 
-  run PATH              run the graph in PATH
+A plan is read before it is run, so those are two commands. "run PATH" is both
+at once: the person typed the path. Over MCP there is no shortcut -- a plan and
+the permission to run it must not arrive in one message.
+
+The graph may grow mid-run, three times at most. While a gate waits nothing new
+is dispatched and what is already spawned finishes; waiting never times out. A
+proposal may only replace steps that have NOT STARTED, which is what makes a
+stale approval impossible to construct rather than a race to catch. The answer
+is a row, so a gate outlives the atenea that opened it.
+
+Flags come before the ids -- Go's parser stops at the first word that is not a
+flag, so anything after one is read as an id.
+
+  create PATH           write the graph down and print the plan; spawn nothing
+  launch ID             commit the grant and run it
+  run PATH              create and launch in one command
+  propose ID PATH       put an expansion to whoever is running it
+  approve ID            let a waiting expansion in
+  reject --reason W ID  turn it down; a refused launch stops the run, a refused
+                        expansion leaves the approved graph to finish
   resume ID             continue a run that was cut, or whose atenea died
   list                  the runs on record
-  show ID               one run, step by step
+  show ID               one run, step by step, and its gate log
 
 Flags:
   --traces PATH         state database (workflows live beside the traces)
   --repository ID       repository to serve at the repository context level
   --redo STEP           with resume: dispatch a step nobody judged; repeatable
+  --replaces STEP       with propose: a step it removes; repeatable
+  --reason WHY          with reject: required
   --limit N             with list: how many runs
 
 Ctrl-C cuts the running agents and spawns nothing queued. What was cut is
