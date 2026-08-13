@@ -439,6 +439,48 @@ Until either sends `x-client`, `claude-code` remains the fallback for anything
 wearing that SDK profile, and the column should be read as "the Claude CLI wire",
 not "the Claude Code product".
 
+## An eighth instrument: a benchmark whose workload omitted the feature under test
+
+omp was admitted to the headroom path on 2026-08-13 on a measured −39.6%: warm
+billed input 44,019 → 26,479, cost `$0.022118` → `$0.013349`, verified twice and
+byte-identical between runs. The number was correct. The prompt was *"Reply with
+exactly: ok"* — a turn that calls no tools, measured against a proxy whose main
+transform is deferring tool schemas. The benchmark left out the one thing the
+optimisation acts on.
+
+**On real tool work the sign flips.** Fixed prompt, two small files that must
+both be read to answer, five runs per path:
+
+| omp, warm | tool executions | uncached `input`/exchange | cheapest run |
+|---|---|---|---|
+| direct | 2 (5/5) | 4–6 | **$0.050359** |
+| through headroom | 1 (5/5) | **9,488 (5/5)** | **$0.078518** |
+
+A constant 9,488-token block is billed at full input price on every exchange
+through the proxy, against 4–6 direct; the proxy's own log shows several of those
+calls at `cache_read=0 cache_write=0 cache_hit_pct=0`. Behaviour changed too:
+one tool execution instead of two, every run, answers still correct. That second
+finding is **unexplained** and is written here unexplained rather than rounded
+off.
+
+**omp stays in the path anyway, and this is the entry that says why.** The reason
+is uniform routing across clients — one place where model traffic can be seen,
+labelled and measured — not economy. It is a **deliberate cost, not a saving**,
+and any later reader quoting the −39.6% should quote this paragraph instead.
+
+**Claude Code's numbers are real, and they decay.** Same tool-using prompt: 3
+turns and 2 API calls on both paths, 51,434 billed input direct against 24,554
+through headroom — **−46%**, no extra round trip from deferral. Then six
+sequential turns in one session, growing to ~125k tokens per call, against an
+identical direct control: **$2.1912 vs $2.2377, −2.1% overall, −4.0% across the
+steady turns**. Nothing broke — `cacheWrite` stayed pinned at ~22,4xx per turn on
+both paths from turn 3 on, so the prefix held and was never rewritten as history
+grew. The saving simply stops mattering: what headroom removes is a flat ~13k of
+system prefix inside the *cached* region, and a constant offset against a cost
+base that grows with history shrinks to noise. A percentage measured at cold
+start is not a property of the proxy; it is a property of the context size it was
+measured at.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
