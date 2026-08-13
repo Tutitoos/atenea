@@ -198,7 +198,22 @@ type Version struct {
 // An adapter that never read the field goes on compiling. One that set it was
 // pointing the core at a Serena with a second owner, which is the arrangement
 // this removes.
-var Current = Version{Major: 3, Minor: 0, Patch: 0}
+//
+// 3.1.0 added the agent contract proper: `Assignment`, the card one agent
+// carries for one execution, and `Report`, the three things it hands back.
+// With them came `AgentSpecialized`, `VerdictIncomplete`, `Task`, `Limits`,
+// `Reason` and `AgentTypeSpec`. Additive: every existing type is untouched,
+// and an adapter built against 3.0.0 goes on compiling because none of this
+// is on the Runner seam -- it is the seam between a parent agent and its
+// child, which had no type before.
+//
+// The two enum values are the ones worth reading twice. `specialized` is a
+// value on the existing kind rather than a second card, so there is still
+// exactly one agent contract. `incomplete` is a verdict a core can now reach
+// that it could not before, and it is deliberately not a shade of `failed`:
+// failed says discard this, incomplete says keep it and continue, and an
+// adapter built against 3.0.0 never sends either.
+var Current = Version{Major: 3, Minor: 1, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

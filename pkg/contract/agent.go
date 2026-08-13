@@ -5,30 +5,35 @@ import (
 	"strings"
 )
 
-// AgentType names the kind of agent a card describes. Orchestrator is the
-// only kind that exists: it explores, splits a commission and hands out the
-// pieces, deciding everything a run needs decided.
+// AgentType names the kind of agent a card describes. Two kinds exist: the
+// orchestrator, which explores, splits a commission and hands out the pieces,
+// deciding everything a run needs decided; and the specialized agent, which
+// is handed one objective already decided and answers in the shape its type
+// declares.
 //
-// A specialist that would only execute, never decide, was drawn up early in
-// the design and dropped once "tools do not decide" landed: every dispatch
-// the orchestrator makes already ends in one implementation call and one
-// review, which is all a specialist would ever have done. The type stays an
-// enum so a real second kind, if one is ever needed, slots in as a value
-// here -- a field, not a fork, so two agent contracts never drift apart.
+// A field, not a fork. Both kinds carry the same Assignment and hand back the
+// same Report, so there is one agent contract and no pair of them to drift
+// apart. What differs between the kinds is authority -- who may split work --
+// and that is a value here, checked where it matters, rather than a second
+// struct with its own rules.
 type AgentType uint8
 
-// The one kind of agent that exists today.
+// The kinds of agent.
 const (
 	// AgentUnspecified is the zero value and is never valid on a real agent.
 	AgentUnspecified AgentType = iota
 	// AgentOrchestrator explores, splits the commission and hands out the
 	// pieces. It decides; it does not do the work itself.
 	AgentOrchestrator
+	// AgentSpecialized executes one objective it was handed and answers in
+	// the shape its declared type promises. It never splits work.
+	AgentSpecialized
 )
 
 var agentTypeNames = map[AgentType]string{
 	AgentUnspecified:  "",
 	AgentOrchestrator: "orchestrator",
+	AgentSpecialized:  "specialized",
 }
 
 func (t AgentType) String() string {
@@ -184,6 +189,19 @@ const (
 	// to be different words on the screen, because a reader acts on them
 	// differently: one is worth investigating and the other is not.
 	VerdictCanceled
+
+	// VerdictIncomplete is work that got somewhere and stopped short: part of
+	// the objective is done, the rest is not, and nothing about what came
+	// back is wrong.
+	//
+	// It is not a softer Failed and must never be folded into one. Failed
+	// says the answer cannot be trusted, so the right move is to discard it
+	// and investigate. Incomplete says the answer is sound as far as it goes,
+	// so the right move is to keep it and continue -- and a caller that reads
+	// the two as one bin throws away work that was fine, or trusts work that
+	// was not. The distinction is what the reason field is for: an incomplete
+	// report says which part is missing and why it stopped.
+	VerdictIncomplete
 )
 
 var verdictNames = map[Verdict]string{
@@ -191,6 +209,7 @@ var verdictNames = map[Verdict]string{
 	VerdictOK:          "ok",
 	VerdictFailed:      "failed",
 	VerdictCanceled:    "canceled",
+	VerdictIncomplete:  "incomplete",
 }
 
 func (v Verdict) String() string {
