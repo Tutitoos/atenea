@@ -428,6 +428,38 @@ on what the repository in front of it found, and `atenea status` names the
 repository that found the failure — `health=down (on web: ...)`. A verdict
 from one repository never refuses work on another.
 
+## The model client
+
+```toml
+[model]
+binary = "claude"    # the CLI that answers a turn; a bare name is looked up on PATH
+timeout = "90s"      # per turn, the same ceiling orchestrator.claudecode uses
+explore = ""         # model for the agent that explores a repository
+plan = ""            # model for the agent that turns a discovery graph into a plan
+```
+
+This is the seam the two model-backed built-in agents, `explore` and `plan`,
+call a model of their own through. It is not a capability provider: nothing
+in the catalog dispatches to it, and `[orchestrator]`'s adapters are a
+different kind of far side entirely — theirs answer a search, this one
+thinks.
+
+`explore` and `plan` name the model for each role, and both ship empty. A
+fresh install spending real money the first time either agent is dispatched
+would be exactly the surprise `orchestrator.claudecode` ships off the runner
+list to avoid, so a role with no model configured is refused at dispatch
+rather than defaulted to whichever model looks cheapest today — there is no
+cost data yet to choose one by, and a knob nobody can tune correctly is
+worse than a fixed default that is visible in this file and changed by hand
+once it is wrong. Fill in a model name or an alias your CLI resolves on its
+own (`sonnet`, `opus`, or a full name) to turn either agent on.
+
+Both roles read from the same `binary` and `timeout`: one CLI, one ceiling,
+whichever role is asking. `timeout` matches
+`orchestrator.claudecode.timeout` for the same reason it is set there — it
+is the same client, on the same machine, so the same measured ceiling
+applies.
+
 ## The measurement base
 
 ```toml
@@ -773,6 +805,13 @@ a hard-coded path there survives exactly until the next reinstall. Any other
 harness -- differs only in what it does between reading stdin and writing
 stdout.
 
+Five agents ship declared. `filereader` reads one file, `reviewer` audits an
+answer against the files it named, and `plan-check` compiles a plan and says
+whether the engine accepts it -- none of the three spends a token, and their
+`max_tokens = 1` is the honest ceiling of an agent that never calls a model.
+`explore` and `plan` do call one, through `[model]` above: they are the two
+halves of planning, and they are off until you name a model for each role.
+
 `context` is a permission, not a delivery. Only the levels named here are ever
 sent, and a level nobody asked for is absent from the payload rather than
 present and empty, so an agent cannot read a blank field as an answer about
@@ -780,6 +819,14 @@ the world. `effects` is a ceiling a child may only narrow. Both limits are
 required: an unset ceiling is not "no ceiling", it is a ceiling nobody decided,
 and `max_duration` is what turns a hung agent into a `timeout` verdict instead
 of a process nobody is waiting on.
+
+The `history` level serves past runs of the same agent type, and each of those
+rows now carries what that run **discovered**: the short facts a report marked
+as worth outliving its task. Only rows whose own verdict was `ok` contribute,
+because a fact found by a run that then fell short was never checked, and the
+same note found twice is served once. This is why `explore` declares
+`history`: those facts were paid for, and a commission that rediscovers them
+pays for them again.
 
 `[[agent.result]]` compiles to a strict JSON schema -- `additionalProperties`
 is false -- so an answer carrying a field nobody declared is refused at the
@@ -830,6 +877,17 @@ scheduler that honours it is the workflow engine below; `atenea agent` runs one
 agent at a time and has no cap to compete for, so the lane only starts to
 matter once a graph is running.
 
+`reads_subject` says a type is handed another step's whole answer. It is a
+separate word from `pool` because reviewing and reading a subject are two
+different facts that only looked like one while reviewers were the only
+consumers: the shipped `plan` agent reads the exploration `explore` produced,
+and it is ordinary work, not an audit. Declaring it as a lane would have put a
+planner in the pool sized for auditing, competing with the reviews. A
+`review`-pool type has it whether or not it says so -- a review with nothing
+to review is refused anyway -- so it is only ever written on an agent-lane
+type. Hand a subject to a type that declares neither and the graph is refused
+before anything spawns.
+
 ## Workflows
 
 ```toml
@@ -871,10 +929,19 @@ effects = ["read"]
 budget_usd = 0.25
 ```
 
-Nothing in Atenea writes one of these yet. There is no orchestrator, no model
-picking steps and no growth mid-run: the graph arrives complete and is executed
-exactly as written, which is why every refusal below happens before anything
-spawns.
+Atenea can now write one of these, and it is still the same file. Two shipped
+agents do it: `explore` looks at the project through Atenea's own capabilities
+and reports what it found, and `plan` reads that exploration and answers with
+a graph as TOML text. What comes back is an artifact a person can read, edit
+and keep -- not a hidden structure -- and the engine executes it exactly as
+written afterwards, through `atenea workflow create` like any other plan.
+
+There is still no orchestrator inside a run: no model picks steps while the
+engine works, and a graph does not grow mid-run. Planning happens before the
+run, in a run of its own that is recorded, judged and paid for like any other
+work. That is why every refusal below happens before anything spawns -- and
+why a plan a model wrote is compiled by `plan-check`, the shipped reviewer
+that hands the planner the engine's own refusal sentence to correct.
 
 Steps with no unmet dependency run together, up to the ceiling of their lane.
 Ready steps beyond it wait: the queue is the pending set in declaration order,
@@ -901,11 +968,24 @@ constructor, so one answer cannot get two different reviews depending on which
 door the caller came through. The reviewer's trace row records `reviews <id>`
 either way.
 
+A review inside a graph carries the same correction rule as `atenea agent
+--review`: a `failed` verdict sends its subject back **once**, and the second
+attempt is handed its own refused answer beside the input it was working
+from, plus the sentence that refused it. A second refusal stands. Only a
+judgement relaunches -- a reviewer that could not judge (`incomplete`, a
+death, a timeout) has said nothing about the work, and re-running it because
+its auditor broke spends the commission on somebody else's outage.
+
+Both attempts are on the receipt. The refused run cost real money, and a
+total that keeps only the accepted half understates the bill by exactly what
+the correction cost.
+
 Two refusals at compile time, both naming the step:
 
 - a **review-pool type with no `subject`** -- it would spawn, read an empty
   card and answer `incomplete` saying so, after the earlier steps had run
-- a **`subject` on a type that does not review** -- nothing in it reads one
+- a **`subject` on a type that does not read one** -- neither a review-pool
+  type nor one declaring `reads_subject`
 
 ### What an edge demands
 

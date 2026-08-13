@@ -56,7 +56,7 @@ type Clock func() time.Time
 type Store interface {
 	Begin(ctx context.Context, row trace.Row) error
 	Complete(ctx context.Context, id string, at time.Time,
-		verdict contract.Verdict, reason contract.Reason) error
+		verdict contract.Verdict, reason contract.Reason, discovered []contract.Discovery) error
 }
 
 // Options configure the runner.
@@ -173,15 +173,23 @@ type Dispatch struct {
 	ID string
 	// Parent is the assignment handing this work down, nil for a root.
 	Parent *contract.Assignment
-	// Subject is the run being judged, or the rejected attempt being handed
-	// back for a second try.
+	// Subject is another run's answer handed to this one: the run a reviewer
+	// judges, or the input an agent's work takes.
 	Subject *contract.Subject
+	// Rejected is this run's own previous attempt, refused by a review. It
+	// travels beside Subject rather than replacing it, so an agent that had
+	// an input keeps it on the second try.
+	Rejected *contract.Subject
 	// Attempt counts this run within its retry chain, from 1.
 	Attempt int
 	// RetryOf is the run this one redoes, empty on a first attempt.
 	RetryOf string
 	// Reviews is the run this one audits, empty when it is not a review.
 	Reviews string
+	// BudgetUSD is the share of a grant this run may draw against. Nil is
+	// what every caller outside a workflow passes: nobody granted money,
+	// which is not the same as granting none.
+	BudgetUSD *float64
 }
 
 // NextID mints an execution id without dispatching anything.
@@ -209,13 +217,19 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
 	}
-	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID)
+	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID, d.BudgetUSD)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
 	}
 	if d.Subject != nil {
 		subject := d.Subject.Clone()
 		assignment.Subject = &subject
+	}
+	if d.Rejected != nil {
+		rejected := d.Rejected.Clone()
+		assignment.Rejected = &rejected
+	}
+	if d.Subject != nil || d.Rejected != nil {
 		if err := assignment.Validate(); err != nil {
 			return contract.Report{}, assignment, err
 		}
@@ -250,8 +264,11 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	closing := context.WithoutCancel(ctx)
 	if runErr != nil {
 		death := died(runErr)
+		// execute never returns a populated report alongside an error, so
+		// report.Discovered is empty here: there is nothing to persist from
+		// a run nobody watched finish.
 		if err := r.store.Complete(closing, assignment.ID, r.now(),
-			contract.VerdictIncomplete, death); err != nil {
+			contract.VerdictIncomplete, death, report.Discovered); err != nil {
 			return contract.Report{}, assignment, err
 		}
 		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death},
@@ -259,7 +276,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 				assignment.ID, d.TypeName, death.Text)
 	}
 	if err := r.store.Complete(closing, assignment.ID, r.now(),
-		report.Verdict, report.Reason); err != nil {
+		report.Verdict, report.Reason, report.Discovered); err != nil {
 		return report, assignment, err
 	}
 	return report, assignment, nil
@@ -283,7 +300,7 @@ func (r *Runner) resolve(name string) (config.AgentType, error) {
 // subset and the depth cap are enforced by the contract rather than here --
 // this package must not be a second place those rules are written.
 func (r *Runner) assign(declared config.AgentType, task contract.Task,
-	parent *contract.Assignment, id string) (contract.Assignment, error) {
+	parent *contract.Assignment, id string, budgetUSD *float64) (contract.Assignment, error) {
 	if id == "" {
 		id = r.ids()
 	}
@@ -292,6 +309,7 @@ func (r *Runner) assign(declared config.AgentType, task contract.Task,
 			task, declared.Limits)
 		out.Context = declared.Context
 		out.Effects = declared.Effects
+		out.BudgetUSD = budgetUSD
 		if err := out.Validate(); err != nil {
 			return contract.Assignment{}, err
 		}
@@ -305,6 +323,7 @@ func (r *Runner) assign(declared config.AgentType, task contract.Task,
 	// The declared levels are this type's, narrowed by what the parent may
 	// see: a child cannot be shown a level its parent was never entitled to.
 	child.Context = intersectLevels(declared.Context, parent.Context)
+	child.BudgetUSD = budgetUSD
 	if err := child.Validate(); err != nil {
 		return contract.Assignment{}, err
 	}
@@ -423,6 +442,8 @@ func (r *Runner) serve(ctx context.Context, assignment contract.Assignment) (map
 	return served, nil
 }
 
+// pastRuns serves up to HistoryDepth rows of this agent type's own trace,
+// each carrying what it discovered.
 func (r *Runner) pastRuns(ctx context.Context, typeName string) ([]map[string]any, error) {
 	if r.history == nil {
 		return []map[string]any{}, nil
@@ -431,6 +452,10 @@ func (r *Runner) pastRuns(ctx context.Context, typeName string) ([]map[string]an
 	if err != nil {
 		return nil, err
 	}
+	// One dedupe pool across every row, not one per row: two runs reporting
+	// the same fact are not two facts, and showing it a second time teaches
+	// a reader nothing the first copy did not already say.
+	seen := make(map[string]struct{}, len(rows))
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		entry := map[string]any{
@@ -443,6 +468,30 @@ func (r *Runner) pastRuns(ctx context.Context, typeName string) ([]map[string]an
 		}
 		if row.Reason.Kind != contract.FailureUnspecified {
 			entry["reason"] = row.Reason.Kind.String()
+		}
+		// The gate is the discovering row's own verdict, never its
+		// parent's: a step that ended ok inside a run that later failed
+		// still discovered a fact somebody paid for. A row that answered
+		// badly is withheld for the same reason a bad answer is withheld
+		// anywhere else -- it is not a source the next run should build on
+		// without checking it again.
+		if row.Verdict == contract.VerdictOK {
+			// "level: note" strings rather than the {level, note} objects
+			// the wire uses elsewhere: the reader here is a model-backed
+			// agent's prompt, not a second parser, and a line it can drop
+			// straight into a prompt as prose is more useful to it than a
+			// structure it would only flatten right back down.
+			var discovered []string
+			for _, d := range row.Discovered {
+				if _, dup := seen[d.Note]; dup {
+					continue
+				}
+				seen[d.Note] = struct{}{}
+				discovered = append(discovered, d.Level.String()+": "+d.Note)
+			}
+			if len(discovered) > 0 {
+				entry["discovered"] = discovered
+			}
 		}
 		out = append(out, entry)
 	}

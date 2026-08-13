@@ -263,13 +263,20 @@ to turn one sentence from the user into finished work, and that somebody is an
 **agent**, deliberately not part of the core. The core owns the catalog and the
 funnel and says who should act; the orchestrator is the one that acts.
 
-There is **one** agent contract, and today exactly one kind of agent: the
-orchestrator. A specialist that would only execute, never decide, was drawn
-up early in the design and never built — once "tools do not decide" landed,
-there was nothing left for it to do that the orchestrator's own dispatch does
-not already do in one call and one review. The contract still takes a second
-kind as a field, not a fork, so nothing here forecloses one if a real need
-ever shows up.
+There is **one** agent contract and two kinds under it. The **orchestrator**
+decides and splits; a **specialized** agent executes one objective it was
+handed and answers in the shape its type declares. The specialist was drawn up
+early, left unbuilt for a while, and is now the kind every shipped agent uses:
+`filereader`, `reviewer`, `plan-check`, `explore` and `plan`. They are one
+contract and one wire -- two JSON objects on stdin and stdout -- which is why
+a script and a model-backed agent differ only in what they do between reading
+and writing.
+
+No orchestrator process exists yet, and the two kinds are a field rather than
+a fork so that adding one does not split the contract. What planning needed
+turned out not to need one: `explore` and `plan` are specialists whose answer
+is a graph, and the engine that runs the graph is the machinery that was
+already there.
 
 ### One capability, directly
 

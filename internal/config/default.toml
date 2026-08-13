@@ -238,6 +238,29 @@ runners = ["omp"]
   # build/ that omp searched, and returned two .gitignore'd files omp did not.
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
+[model]
+# The seam through which the two model-backed built-in agents, explore and
+# plan, call a model of their own. Unlike the client adapters above, this is
+# not a capability provider Atenea dispatches searches to -- it is what an
+# agent itself calls to think.
+
+# binary is the CLI executable that answers a turn. A bare name is looked up
+# on PATH.
+binary = "claude"
+# timeout caps one turn, the same measured ceiling as
+# orchestrator.claudecode.timeout: it is the same CLI, on the same machine.
+timeout = "90s"
+# explore and plan name the model for each role, and both are deliberately
+# left unset. A fresh install spending real money on its first dispatch
+# would be exactly the bad surprise orchestrator.claudecode ships off for;
+# a role with no model configured is refused at dispatch rather than
+# defaulted to whichever model looks cheapest today, because there is no
+# cost data yet to choose one by. Fill these in with a model name or alias
+# your CLI resolves ("sonnet", "opus", or a full name) to turn either agent
+# on.
+explore = ""
+plan = ""
+
 [workflow]
 # How a graph of agent steps is scheduled. One ceiling per lane, and a lane is
 # declared on the agent type itself (`pool`, further down).
@@ -1345,6 +1368,83 @@ pool = "review"
   type = "string"
   required = false
   summary = "The run that was audited"
+
+[[agent]]
+name = "plan-check"
+kind = "specialized"
+summary = "Reads a plan as TOML and says whether the engine would accept it"
+command = "$atenea"
+args = ["agent-exec", "plan-check"]
+context = ["repository"]
+effects = ["read"]        # it compiles a graph in memory; nothing is written
+max_duration = "30s"
+max_tokens = 1            # it spends no tokens: the compiler is the reviewer
+# A review-pool type, because it is one: it audits what `plan` answered, and
+# it is the cheapest reviewer in the file -- the engine's own compiler,
+# quoted back at the planner in the compiler's own words.
+pool = "review"
+
+  [[agent.result]]
+  name = "steps"
+  type = "int"
+  required = true
+  summary = "How many steps the accepted graph declares"
+
+  [[agent.result]]
+  name = "subject"
+  type = "string"
+  required = true
+  summary = "The run whose plan was compiled"
+
+[[agent]]
+name = "explore"
+kind = "specialized"
+summary = "Looks at the project through Atenea's own capabilities and reports what is there"
+command = "$atenea"
+args = ["agent-exec", "explore"]
+# The whole point of this one: it reaches code.search, symbol.* and
+# repository.index through the service, so it needs the repository level and
+# the history of what earlier runs of it already found.
+context = ["repository", "history"]
+effects = ["read"]
+max_duration = "10m"      # a real model turn, not a file read
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "summary"
+  type = "string"
+  required = true
+  summary = "One paragraph: what this project is and how it is arranged"
+
+  [[agent.result]]
+  name = "findings"
+  type = "string"
+  required = true
+  summary = "What was found, in prose, naming files"
+
+[[agent]]
+name = "plan"
+kind = "specialized"
+summary = "Reads an exploration and returns a graph of agent steps as TOML"
+command = "$atenea"
+args = ["agent-exec", "plan"]
+# It is handed the exploration as its subject, which is an input, not an
+# audit: `reads_subject` says so without putting this type in the review
+# lane, where it would compete for slots sized for auditing.
+reads_subject = true
+# It plans from what `explore` handed it, not from a fresh look of its own:
+# the exploration arrives as the subject, and re-reading the repository here
+# would pay for the expensive half twice.
+context = ["repository"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "plan"
+  type = "string"
+  required = true
+  summary = "The graph, as TOML, in the format `atenea workflow create` reads"
 
 # ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it

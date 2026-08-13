@@ -108,6 +108,7 @@ func (s StepRow) Report() contract.Report {
 		Verdict:    s.Verdict,
 		Reason:     s.Reason,
 		Discovered: s.Discovered,
+		Spent:      s.Spent,
 	}
 }
 
@@ -169,22 +170,53 @@ func (r Run) Summary() string {
 
 // Budget is the money line.
 //
-// It says `unmeasured` rather than $0.00 whenever nothing could report a
-// charge, which today is always: the agent report wire carries no money and
-// no token count, so there is no number to add up. A receipt printing a
-// measured-looking zero for a run that really did cost something upstream is
-// the same lie as list price on subscription traffic -- worse, because it
-// looks audited.
+// It never blends a run's steps into one figure unless that figure is
+// honest about every one of them. Nothing measured reads `unmeasured` -- a
+// receipt printing a measured-looking zero for a run that really did cost
+// something upstream is the same lie as list-price cost on subscription
+// traffic, worse, because it looks audited. Every step measured reports the
+// tokens, and a dollar figure only once every one of them named a price,
+// with that price's source attached: an unattributed dollar amount is the
+// same unsupported claim contract.Charge refuses to carry. Some steps
+// measured and some not is the shape a single total would misrepresent as a
+// complete accounting, so [Run.Spend] is asked for the split and the line
+// says which steps counted instead of folding the silent half in.
 func (r Run) Budget() string {
-	spent, measured := r.Spent()
 	granted := fmt.Sprintf("$%.2f granted", r.GrantUSD)
 	if r.GrantUSD == 0 {
 		granted = "no grant"
 	}
-	if !measured {
-		return granted + "; spent unmeasured (no agent reports a charge yet)"
+	spend := r.Spend()
+	if spend.MeasuredSteps == 0 {
+		// Not "no agent reports a charge yet": they can now, and a run whose
+		// steps all refused before spending is a different fact from a
+		// machine that cannot meter. Both read as unmeasured, and neither
+		// reads as zero.
+		return granted + "; spent unmeasured (nothing on this run reported a charge)"
 	}
-	return fmt.Sprintf("%s; $%.2f spent, $%.2f left", granted, spent, r.GrantUSD-spent)
+
+	tokens := plural(spend.Tokens, "token", "tokens")
+	detail := tokens + " spent"
+	if spend.USD != nil {
+		detail = fmt.Sprintf("%s and $%.2f spent (priced by %s)",
+			tokens, *spend.USD, strings.Join(spend.PricedBy, ", "))
+		if spend.UnmeasuredSteps == 0 {
+			detail += fmt.Sprintf(", $%.2f left", r.GrantUSD-*spend.USD)
+		}
+	}
+	if spend.UnmeasuredSteps == 0 {
+		return fmt.Sprintf("%s; %s", granted, detail)
+	}
+	return fmt.Sprintf("%s; %d of %d steps measured (%s)", granted,
+		spend.MeasuredSteps, spend.MeasuredSteps+spend.UnmeasuredSteps, detail)
+}
+
+// plural picks the word that agrees with n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // Done reports whether nothing is left that this run could do: every step has

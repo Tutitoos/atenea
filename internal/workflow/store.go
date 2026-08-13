@@ -154,27 +154,66 @@ type StepRow struct {
 	// succeeded.
 	Result     map[string]any
 	Discovered []contract.Discovery
-	// SpentUSD is what this step was charged. Nil means UNMEASURED, and that
-	// is the ordinary case today: the agent report wire carries no money and
-	// nothing on this machine can report a charge. It is a pointer rather
-	// than a float so that unmeasured cannot be written as 0.00 and read back
-	// as a measurement -- a receipt saying a real run cost nothing is the
+	// Spent is what this step was charged. Its zero value reads as
+	// unmeasured -- see [contract.Charge.Measured] -- which is the ordinary
+	// case today: the agent report wire carries no money and nothing on
+	// this machine can report a charge. A step that did report, even a real
+	// zero (a $0.00 turn with a priced_by beside it), is measured, and the
+	// two must never collapse into the same "$0.00" on a receipt -- the
 	// same lie as list-price cost on subscription traffic.
-	SpentUSD *float64
+	Spent contract.Charge
 }
 
-// Spent is what the run has been charged so far, and whether anything could
-// say. Remaining budget is this subtracted from the grant at the moment it is
-// asked for, never a column: a stored counter and the rows it summarizes are
-// two truths that can disagree, and the rows are the one with the evidence.
-func (r Run) Spent() (total float64, measured bool) {
+// Spend is what a run's steps have been charged, split by whether anything
+// could say.
+//
+// One number blending measured and unmeasured steps is the exact mistake
+// this project keeps finding: a run half of whose steps can report a cost
+// and half of which cannot has to say so, not launder the silent half into
+// the total. MeasuredSteps and UnmeasuredSteps are that split. Tokens sums
+// only the steps that measured -- a step that reported nothing contributes
+// nothing, not a zero, and folding it in as zero would understate a run
+// that may have cost real money nobody could see. USD is nil unless every
+// measured step named a price: a partial dollar figure implies a complete
+// one, and this project has already found list-price arithmetic on
+// subscription traffic to disagree with what was actually billed. PricedBy
+// is every distinct source behind USD, because a total blending two
+// providers' price lists is not one bill.
+type Spend struct {
+	MeasuredSteps   int
+	UnmeasuredSteps int
+	Tokens          int
+	USD             *float64
+	PricedBy        []string
+}
+
+// Spend totals what this run's steps were charged. See [Spend] for why a run
+// with both measured and unmeasured steps comes back as a split rather than
+// one number.
+func (r Run) Spend() Spend {
+	var out Spend
+	var usd float64
+	fullyPriced := true
+	labels := map[string]bool{}
 	for _, step := range r.Steps {
-		if step.SpentUSD != nil {
-			total += *step.SpentUSD
-			measured = true
+		if !step.Spent.Measured() {
+			out.UnmeasuredSteps++
+			continue
 		}
+		out.MeasuredSteps++
+		out.Tokens += step.Spent.Tokens()
+		if step.Spent.USD == nil {
+			fullyPriced = false
+			continue
+		}
+		usd += *step.Spent.USD
+		labels[step.Spent.PricedBy] = true
 	}
-	return total, measured
+	if out.MeasuredSteps > 0 && fullyPriced {
+		out.USD = &usd
+	}
+	out.PricedBy = sortedKeys(labels)
+	return out
 }
 
 // Store is the workflow record.
@@ -237,6 +276,17 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     -- can report a charge. NOT NULL DEFAULT 0 here would turn every free run
     -- into a receipt claiming it was weighed and came to nothing.
     spent_usd   REAL,
+    -- Same nullability, same reason: a turn nobody could meter must not
+    -- collapse into a turn that used none. contract.Charge treats a zero
+    -- charge as unmeasured for the identical reason.
+    spent_input_tokens       INTEGER,
+    spent_output_tokens      INTEGER,
+    spent_cache_read_tokens  INTEGER,
+    spent_cache_write_tokens INTEGER,
+    -- Whose price produced spent_usd. contract.Charge.Validate refuses a
+    -- report where the two disagree before it ever reaches here; this
+    -- column only has to keep what it was handed.
+    priced_by   TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (workflow_id, id),
     FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
 );
@@ -360,7 +410,10 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 		`UPDATE workflow_step
 		 SET status = ?, trace_id = ?, attempt = ?, writer_pid = ?, started_at = ?,
 		     ended_at = '', verdict = '', reason_kind = '', reason_text = '',
-		     result = '', discovered = ''
+		     result = '', discovered = '', spent_usd = NULL,
+		     spent_input_tokens = NULL, spent_output_tokens = NULL,
+		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
+		     priced_by = ''
 		 WHERE workflow_id = ? AND id = ?`,
 		StatusRunning.String(), traceID, attempt, pid, stamp(at), id, stepID)
 	if err != nil {
@@ -377,18 +430,35 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 		return contract.Fail(contract.FailureInvalidInput,
 			"workflow: %s step %s: result cannot be recorded: %v", id, stepID, err)
 	}
+	input, output, cacheRead, cacheWrite, usd, pricedBy := spentColumns(report.Spent)
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?,
-		     result = ?, discovered = ?, writer_pid = 0
+		     result = ?, discovered = ?, writer_pid = 0, spent_usd = ?,
+		     spent_input_tokens = ?, spent_output_tokens = ?,
+		     spent_cache_read_tokens = ?, spent_cache_write_tokens = ?, priced_by = ?
 		 WHERE workflow_id = ? AND id = ?`,
 		status.String(), stamp(at), report.Verdict.String(),
 		report.Reason.Kind.String(), report.Reason.Text,
-		result, jsonDiscoveries(report.Discovered), id, stepID)
+		result, jsonDiscoveries(report.Discovered), usd,
+		input, output, cacheRead, cacheWrite, pricedBy, id, stepID)
 	if err != nil {
 		return unavailable(err, "workflow: closing %s step %s", id, stepID)
 	}
 	return nil
+}
+
+// spentColumns turns a Charge into the six values Finish writes. Nil
+// everywhere is the unmeasured row: writing real zeros in its place would
+// turn a step nobody could meter into a receipt claiming it cost nothing.
+func spentColumns(spent contract.Charge) (input, output, cacheRead, cacheWrite, usd any, pricedBy string) {
+	if !spent.Measured() {
+		return nil, nil, nil, nil, nil, ""
+	}
+	if spent.USD != nil {
+		usd = *spent.USD
+	}
+	return spent.InputTokens, spent.OutputTokens, spent.CacheReadTokens, spent.CacheWriteTokens, usd, spent.PricedBy
 }
 
 // Interrupt marks a step as one nobody judged, with the reason it was left
@@ -480,7 +550,8 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 		`SELECT id, type_name, pool, objective, files, criterion, needs, subject,
 		        on_outcome, effects, grant_usd, status, trace_id, attempt, writer_pid,
 		        started_at, ended_at, verdict, reason_kind, reason_text, result,
-		        discovered, spent_usd
+		        discovered, spent_usd, spent_input_tokens, spent_output_tokens,
+		        spent_cache_read_tokens, spent_cache_write_tokens, priced_by
 		 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
 	if err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
@@ -548,14 +619,18 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		reasonKind, reasonText      string
 		result, discovered          string
 		started, ended              string
-		spent                       sql.NullFloat64
+		usd                         sql.NullFloat64
+		inputTok, outputTok         sql.NullInt64
+		cacheReadTok, cacheWriteTok sql.NullInt64
+		pricedBy                    string
 	)
 	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &pool,
 		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs,
 		&out.Step.Subject, &onOutcome, &effects,
 		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.Attempt,
 		&out.WriterPID, &started, &ended, &verdict, &reasonKind, &reasonText,
-		&result, &discovered, &spent); err != nil {
+		&result, &discovered, &usd,
+		&inputTok, &outputTok, &cacheReadTok, &cacheWriteTok, &pricedBy); err != nil {
 		return StepRow{}, unavailable(err, "workflow: reading a step")
 	}
 	var err error
@@ -591,9 +666,16 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 	}
 	out.Result = readMap(result)
 	out.Discovered = readDiscoveries(discovered)
-	if spent.Valid {
-		value := spent.Float64
-		out.SpentUSD = &value
+	out.Spent = contract.Charge{
+		InputTokens:      int(inputTok.Int64),
+		OutputTokens:     int(outputTok.Int64),
+		CacheReadTokens:  int(cacheReadTok.Int64),
+		CacheWriteTokens: int(cacheWriteTok.Int64),
+		PricedBy:         pricedBy,
+	}
+	if usd.Valid {
+		value := usd.Float64
+		out.Spent.USD = &value
 	}
 	return out, nil
 }

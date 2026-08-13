@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -52,24 +53,35 @@ func declared(command string, args ...string) config.AgentType {
 	}
 }
 
-func runner(t *testing.T, declared config.AgentType) (*agent.Runner, *trace.Store) {
+// runnerOver builds a Runner over an existing store rather than a fresh one,
+// wired the same way cmd/atenea/agent.go and workflow.Serve wire it -- for a
+// test that has to seed trace rows before the first real dispatch, which a
+// store built fresh every time could never have.
+func runnerOver(t *testing.T, store *trace.Store, declared config.AgentType) *agent.Runner {
 	t.Helper()
-	ctx := t.Context()
-	store, err := trace.Open(ctx, filepath.Join(t.TempDir(), "traces.db"))
-	if err != nil {
-		t.Fatalf("opening the trace store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
 	r, err := agent.New(agent.Options{
 		Types:     []config.AgentType{declared},
 		Store:     store,
 		Self:      "/nonexistent/atenea",
 		Workspace: agent.Workspace{RepositoryID: "current", RepositoryRoot: t.TempDir()},
+		History: func(ctx context.Context, name string, limit int) ([]trace.Row, error) {
+			return store.List(ctx, trace.Filter{TypeName: name, Limit: limit})
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return r, store
+	return r
+}
+
+func runner(t *testing.T, declared config.AgentType) (*agent.Runner, *trace.Store) {
+	t.Helper()
+	store, err := trace.Open(t.Context(), filepath.Join(t.TempDir(), "traces.db"))
+	if err != nil {
+		t.Fatalf("opening the trace store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return runnerOver(t, store, declared), store
 }
 
 func task() contract.Task {
@@ -359,5 +371,179 @@ func TestDeclaredListsEveryType(t *testing.T) {
 	r, _ := runner(t, declared("/bin/true"))
 	if got := r.Declared(); len(got) != 1 || got[0] != "reader" {
 		t.Fatalf("Declared() = %v, want [reader]", got)
+	}
+}
+
+// openStore opens a bare trace store a test can seed rows into directly,
+// standing in for the earlier dispatches pastRuns reads back -- seeding
+// through Begin/Complete is what the store itself would have written, and
+// it does not need a second process spawned just to produce a closed row.
+func openStore(t *testing.T) *trace.Store {
+	t.Helper()
+	s, err := trace.Open(t.Context(), filepath.Join(t.TempDir(), "traces.db"))
+	if err != nil {
+		t.Fatalf("opening the trace store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// seedClosedRun writes one closed "reader" row directly to store, the way
+// an earlier `atenea agent reader` would have left it.
+func seedClosedRun(t *testing.T, store *trace.Store, id string, at time.Time,
+	verdict contract.Verdict, discovered []contract.Discovery) {
+	t.Helper()
+	if err := store.Begin(t.Context(), trace.Row{
+		ID: id, TypeName: "reader", Kind: contract.AgentSpecialized,
+		Objective: "an earlier run", Depth: 1, StartedAt: at,
+	}); err != nil {
+		t.Fatalf("seeding %s: Begin: %v", id, err)
+	}
+	if err := store.Complete(t.Context(), id, at.Add(time.Second),
+		verdict, contract.Reason{}, discovered); err != nil {
+		t.Fatalf("seeding %s: Complete: %v", id, err)
+	}
+}
+
+// dispatchWithHistory runs one real dispatch of "reader", declaring the
+// given context levels, against store, and returns the raw assignment JSON
+// the agent process was handed on stdin -- what pastRuns actually served,
+// not a second-hand description of it.
+func dispatchWithHistory(t *testing.T, store *trace.Store, levels []contract.ContextLevel) []byte {
+	t.Helper()
+	captured := filepath.Join(t.TempDir(), "assignment.json")
+	spec := declared(stub(t, "cat >"+captured+"\ncat <<'REPORT'\n"+
+		`{"result":{"path":"a.txt"},"verdict":"ok"}`+"\nREPORT"))
+	spec.Context = levels
+	r := runnerOver(t, store, spec)
+	if _, _, err := r.Run(t.Context(), "reader", task(), nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("reading what the agent was handed: %v", err)
+	}
+	return raw
+}
+
+// historyRuns parses the "runs" pastRuns served at the history level out of
+// one captured assignment.
+func historyRuns(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var payload struct {
+		Context struct {
+			History struct {
+				Runs []map[string]any `json:"runs"`
+			} `json:"history"`
+		} `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("the assignment is not json: %v", err)
+	}
+	return payload.Context.History.Runs
+}
+
+// findRun returns the served entry for one past run id. A real dispatch's
+// own row is opened before it serves its own history (Begin runs before
+// serve), so that row is always present too -- a test looks its target row
+// up by id rather than assume a count or a position.
+func findRun(runs []map[string]any, id string) map[string]any {
+	for _, run := range runs {
+		if run["id"] == id {
+			return run
+		}
+	}
+	return nil
+}
+
+// A discovery is not the work's result -- it is a fact the row's own verdict
+// backs. An ok row's discovery is exactly what the next dispatch of the same
+// type should be able to build on without paying to learn it again.
+func TestADiscoveryFromAnOKRowReachesTheNextRunsHistory(t *testing.T) {
+	store := openStore(t)
+	seedClosedRun(t, store, "past-ok", time.Now(), contract.VerdictOK,
+		[]contract.Discovery{
+			{Level: contract.ContextRepository, Note: "the loader lives at internal/config/config.go"},
+		})
+
+	runs := historyRuns(t, dispatchWithHistory(t, store, []contract.ContextLevel{contract.ContextHistory}))
+	run := findRun(runs, "past-ok")
+	if run == nil {
+		t.Fatalf("runs = %+v, want the seeded ok row present", runs)
+	}
+	found, _ := run["discovered"].([]any)
+	if len(found) != 1 || found[0] != "repository: the loader lives at internal/config/config.go" {
+		t.Fatalf("discovered = %v, want the ok row's one discovery", found)
+	}
+}
+
+// The gate is the discovering row's own verdict: a row that answered badly
+// is not a source the next run should build on without checking it again, so
+// what it found stays off the wire even though it is genuinely on the row.
+func TestADiscoveryFromAFailedRowDoesNotReachHistory(t *testing.T) {
+	store := openStore(t)
+	seedClosedRun(t, store, "past-failed", time.Now(), contract.VerdictFailed,
+		[]contract.Discovery{
+			{Level: contract.ContextRepository, Note: "a fact a failed run still noticed"},
+		})
+
+	raw := dispatchWithHistory(t, store, []contract.ContextLevel{contract.ContextHistory})
+	run := findRun(historyRuns(t, raw), "past-failed")
+	if run == nil {
+		t.Fatalf("runs missing the seeded failed row")
+	}
+	if _, present := run["discovered"]; present {
+		t.Fatalf("run = %v, a failed row must carry no discovered key", run)
+	}
+	if strings.Contains(string(raw), "a fact a failed run still noticed") {
+		t.Fatalf("assignment = %s, a failed row's discovery leaked onto the wire", raw)
+	}
+}
+
+// Two rows hitting the same fact are not two facts. The served history must
+// not repeat one sentence once per row that happened to report it.
+func TestTwoRowsReportingTheSameNoteServeItOnce(t *testing.T) {
+	store := openStore(t)
+	now := time.Now()
+	seedClosedRun(t, store, "past-1", now, contract.VerdictOK,
+		[]contract.Discovery{{Level: contract.ContextRepository, Note: "shared fact"}})
+	seedClosedRun(t, store, "past-2", now.Add(time.Minute), contract.VerdictOK,
+		[]contract.Discovery{{Level: contract.ContextRepository, Note: "shared fact"}})
+
+	runs := historyRuns(t, dispatchWithHistory(t, store, []contract.ContextLevel{contract.ContextHistory}))
+	count := 0
+	for _, run := range runs {
+		found, _ := run["discovered"].([]any)
+		for _, d := range found {
+			if d == "repository: shared fact" {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("runs = %+v, want the shared discovery served exactly once, got %d", runs, count)
+	}
+}
+
+// A level a type never declared is not sent at all -- discoveries included.
+// Real history sitting in the trace store must not leak onto the wire just
+// because it exists; it leaks only to a type that asked for it.
+func TestAnAgentTypeThatDidNotDeclareHistoryIsServedNothing(t *testing.T) {
+	store := openStore(t)
+	seedClosedRun(t, store, "past-ok", time.Now(), contract.VerdictOK,
+		[]contract.Discovery{{Level: contract.ContextRepository, Note: "should never cross the wire"}})
+
+	raw := dispatchWithHistory(t, store, []contract.ContextLevel{contract.ContextRepository})
+	var payload struct {
+		Context map[string]any `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("the assignment is not json: %v", err)
+	}
+	if _, present := payload.Context["history"]; present {
+		t.Fatalf("context = %v, want no history key for a type that never declared it", payload.Context)
+	}
+	if strings.Contains(string(raw), "should never cross the wire") {
+		t.Fatalf("assignment = %s, a withheld discovery leaked onto the wire", raw)
 	}
 }

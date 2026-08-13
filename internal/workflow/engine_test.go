@@ -466,8 +466,12 @@ func TestSpendIsUnmeasuredRatherThanZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if spent, measured := run.Spent(); measured || spent != 0 {
-		t.Fatalf("Spent() = %v, %v; want nothing measured", spent, measured)
+	spend := run.Spend()
+	if spend.MeasuredSteps != 0 || spend.UnmeasuredSteps != 1 {
+		t.Fatalf("Spend = %+v, want nothing measured", spend)
+	}
+	if spend.USD != nil {
+		t.Fatalf("USD = %v, want nil: nothing reported a price", spend.USD)
 	}
 	if got := run.Budget(); !strings.Contains(got, "unmeasured") {
 		t.Fatalf("budget line = %q, want it to say unmeasured", got)
@@ -480,6 +484,87 @@ func TestSpendIsUnmeasuredRatherThanZero(t *testing.T) {
 	}
 	if run.GrantUSD != 2 {
 		t.Fatalf("grant = %v, want what the graph opened with", run.GrantUSD)
+	}
+}
+
+// Money: every step measured reports the tokens and a dollar total, and the
+// total never appears without saying whose price produced it.
+func TestARunWhereEveryStepIsMeasuredReportsTokensAndAPricedTotal(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, noCeiling(),
+		declared("claude", charged(t, dir, "claude", 30, 10, 0.05, "anthropic"), config.PoolAgent),
+		declared("gpt", charged(t, dir, "gpt", 20, 5, 0.03, "openai"), config.PoolAgent),
+	)
+	graph := graphOf(step("a", "claude", nil), step("b", "gpt", nil))
+	graph.GrantUSD = 1
+
+	run, err := h.engine.Start(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	spend := run.Spend()
+	if spend.MeasuredSteps != 2 || spend.UnmeasuredSteps != 0 {
+		t.Fatalf("Spend = %+v, want both steps measured", spend)
+	}
+	if spend.Tokens != 65 {
+		t.Fatalf("Tokens = %d, want 65 across both steps", spend.Tokens)
+	}
+	if spend.USD == nil {
+		t.Fatalf("USD is nil, want a total: every measured step named a price")
+	}
+	if diff := *spend.USD - 0.08; diff > 0.0001 || diff < -0.0001 {
+		t.Fatalf("USD = %v, want approximately 0.08", *spend.USD)
+	}
+
+	got := run.Budget()
+	if !strings.Contains(got, "65 tokens") {
+		t.Fatalf("budget line = %q, want the token total", got)
+	}
+	if !strings.Contains(got, "$0.08") {
+		t.Fatalf("budget line = %q, want the dollar total", got)
+	}
+	if !strings.Contains(got, "priced by anthropic, openai") {
+		t.Fatalf("budget line = %q, want the dollar figure to name both prices behind it", got)
+	}
+	if !strings.Contains(got, "$0.92 left") {
+		t.Fatalf("budget line = %q, want what remains of the grant", got)
+	}
+}
+
+// A mixed run must not average its measured and unmeasured steps into one
+// figure: the split is named, and nothing implies the whole run is priced.
+func TestAMixedRunDoesNotReportItsTotalAsMeasured(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, noCeiling(),
+		declared("priced", charged(t, dir, "priced", 40, 8, 0.10, "anthropic"), config.PoolAgent),
+		declared("silent", answers(t, dir, "silent"), config.PoolAgent),
+	)
+	graph := graphOf(step("a", "priced", nil), step("b", "silent", nil))
+	graph.GrantUSD = 5
+
+	run, err := h.engine.Start(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	spend := run.Spend()
+	if spend.MeasuredSteps != 1 || spend.UnmeasuredSteps != 1 {
+		t.Fatalf("Spend = %+v, want one step measured and one not", spend)
+	}
+
+	got := run.Budget()
+	if !strings.Contains(got, "1 of 2 steps measured") {
+		t.Fatalf("budget line = %q, want the split named", got)
+	}
+	if !strings.Contains(got, "48 tokens") {
+		t.Fatalf("budget line = %q, want the measured step's tokens", got)
+	}
+	if !strings.Contains(got, "priced by anthropic") {
+		t.Fatalf("budget line = %q, want the measured step's price named", got)
+	}
+	if strings.Contains(got, "left") {
+		t.Fatalf("budget line = %q: a run with an unmeasured step must not claim to know what remains", got)
 	}
 }
 

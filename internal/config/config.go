@@ -55,6 +55,9 @@ type Config struct {
 	Contract     contract.Version
 	Core         Core
 	Orchestrator Orchestrator
+	// Model fixes which model backs each of the two model-backed built-in
+	// agents, explore and plan, by role.
+	Model Model
 	// Workflow is how a graph of agent steps is scheduled.
 	Workflow        Workflow
 	Metrics         Metrics
@@ -284,6 +287,36 @@ type Orchestrator struct {
 	ClaudeCode     ClaudeCodeAdapter
 	Serena         SerenaAdapter
 	CodebaseMemory CodebaseMemoryAdapter
+}
+
+// Model fixes which model backs each of the two model-backed built-in
+// agents, explore and plan, by role. Its fields mirror
+// internal/agent/model.Options -- same names, same types, same order --
+// because internal/config cannot import that package without a cycle
+// (internal/core, which the model client dials for Atenea's own tools,
+// already imports internal/config); the caller that holds both packages
+// converts with a plain model.Options(cfg.Model) instead.
+//
+// Model choice is fixed here, per role, and not chosen per task: there is
+// no cost data yet a per-task choice could be justified against, and a knob
+// nobody can tune correctly is worse than one fixed default that is visible
+// in a file and changed by hand once it is wrong.
+type Model struct {
+	// Binary is the CLI executable that answers a model turn. A bare name
+	// is looked up on PATH.
+	Binary string
+	// Timeout caps one turn. A model turn is slower than a tool call by
+	// nature; see ClaudeCodeAdapter.Timeout for the same reasoning.
+	Timeout time.Duration
+	// Explore is the model name for the agent that explores a repository:
+	// an alias the CLI resolves itself ("sonnet", "opus") or a full name.
+	// Empty means the role has no model configured, so a dispatch to it is
+	// refused rather than silently spending against a hardcoded default --
+	// the same reason ClaudeCodeAdapter ships out of Runners.
+	Explore string
+	// Plan is the model name for the agent that turns a discovery graph
+	// into a plan.
+	Plan string
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -571,6 +604,7 @@ type file struct {
 	Contract        string           `toml:"contract"`
 	Core            fileCore         `toml:"core"`
 	Orchestrator    fileOrchestrator `toml:"orchestrator"`
+	Model           fileModel        `toml:"model"`
 	Workflow        fileWorkflow     `toml:"workflow"`
 	Metrics         fileMetrics      `toml:"metrics"`
 	Backup          fileBackup       `toml:"backup"`
@@ -581,6 +615,14 @@ type file struct {
 	Repositories    []fileRepository `toml:"repository"`
 	Agents          []fileAgent      `toml:"agent"`
 	MCPServers      []fileMCPServer  `toml:"mcp_server"`
+}
+
+// fileModel is [model] as written.
+type fileModel struct {
+	Binary  string `toml:"binary"`
+	Timeout string `toml:"timeout"`
+	Explore string `toml:"explore"`
+	Plan    string `toml:"plan"`
 }
 
 type fileCore struct {
@@ -1002,6 +1044,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Orchestrator, err = decoded.Orchestrator.build(source); err != nil {
+		return Config{}, err
+	}
+	if cfg.Model, err = decoded.Model.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Workflow, err = decoded.Workflow.build(source); err != nil {
@@ -1650,6 +1695,42 @@ func (c fileCore) build(source string) (Core, error) {
 			"settings %s: core.shutdown_grace must be positive", source)
 	}
 	out.ShutdownGrace = grace
+	return out, nil
+}
+
+// defaultModelTimeout mirrors claudecode's own DefaultTimeout: a model turn
+// through internal/agent/model runs the same CLI, on the same machine, so
+// the same measured ceiling applies. Duplicated rather than imported --
+// internal/config cannot import internal/agent/model without a cycle
+// (internal/core, which that package dials for Atenea's own tools, already
+// imports internal/config) -- so the two constants are kept in sync by hand.
+const (
+	defaultModelBinary  = "claude"
+	defaultModelTimeout = 90 * time.Second
+)
+
+func (m fileModel) build(source string) (Model, error) {
+	out := Model{Binary: defaultModelBinary, Timeout: defaultModelTimeout}
+	if strings.TrimSpace(m.Binary) != "" {
+		out.Binary = strings.TrimSpace(m.Binary)
+	}
+	if m.Timeout != "" {
+		timeout, err := time.ParseDuration(m.Timeout)
+		if err != nil {
+			return Model{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.timeout %q: %v", source, m.Timeout, err)
+		}
+		if timeout <= 0 {
+			return Model{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.timeout must be positive, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	// Empty is a valid, deliberate answer for a role: see Model.Explore's
+	// own doc for why an unconfigured role is refused at dispatch rather
+	// than defaulted here to some model that costs money by surprise.
+	out.Explore = strings.TrimSpace(m.Explore)
+	out.Plan = strings.TrimSpace(m.Plan)
 	return out, nil
 }
 

@@ -38,7 +38,7 @@ func TestBeginThenCompleteClosesTheRow(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 	if err := s.Complete(t.Context(), "a", at.Add(time.Second),
-		contract.VerdictOK, contract.Reason{}); err != nil {
+		contract.VerdictOK, contract.Reason{}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	rows, err := s.List(t.Context(), trace.Filter{ID: "a"})
@@ -61,11 +61,11 @@ func TestCompleteRefusesASecondEnding(t *testing.T) {
 	if err := s.Begin(t.Context(), row("a", at)); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}); err != nil {
+	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	err := s.Complete(t.Context(), "a", at, contract.VerdictFailed,
-		contract.Reason{Kind: contract.FailureInvalidInput, Text: "second opinion"})
+		contract.Reason{Kind: contract.FailureInvalidInput, Text: "second opinion"}, nil)
 	if err == nil {
 		t.Fatal("Complete: a row must not be closed twice")
 	}
@@ -151,7 +151,7 @@ func TestFilters(t *testing.T) {
 			t.Fatalf("Begin: %v", err)
 		}
 	}
-	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}); err != nil {
+	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 
@@ -185,5 +185,53 @@ func TestBeginNeedsAnIDAndAStart(t *testing.T) {
 	}
 	if err := s.Begin(t.Context(), trace.Row{ID: "a"}); err == nil {
 		t.Fatal("Begin: a row with no start must be refused")
+	}
+}
+
+// What Complete is handed is what List hands back: level and note both, in
+// the order the run reported them.
+func TestCompleteRecordsWhatARunDiscoveredAndListServesItBack(t *testing.T) {
+	s := store(t)
+	at := time.Now()
+	if err := s.Begin(t.Context(), row("a", at)); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	found := []contract.Discovery{
+		{Level: contract.ContextRepository, Note: "the config loader lives at internal/config/config.go"},
+		{Level: contract.ContextWorkspace, Note: "three repositories share the same catalog"},
+	}
+	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}, found); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	rows, err := s.List(t.Context(), trace.Filter{ID: "a"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want exactly one", rows)
+	}
+	if got := rows[0].Discovered; len(got) != 2 || got[0] != found[0] || got[1] != found[1] {
+		t.Fatalf("discovered = %+v, want %+v in order", got, found)
+	}
+}
+
+// A row closed with nothing to report must read back empty, never a single
+// discovery manufactured out of a stray empty object -- the same way an open
+// row reads back empty today.
+func TestCompleteWithNoDiscoveriesReadsBackEmpty(t *testing.T) {
+	s := store(t)
+	at := time.Now()
+	if err := s.Begin(t.Context(), row("a", at)); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := s.Complete(t.Context(), "a", at, contract.VerdictOK, contract.Reason{}, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	rows, err := s.List(t.Context(), trace.Filter{ID: "a"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].Discovered) != 0 {
+		t.Fatalf("discovered = %+v, want none", rows[0].Discovered)
 	}
 }

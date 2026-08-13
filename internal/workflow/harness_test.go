@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,16 @@ func stub(t *testing.T, dir, name, body string) string {
 func answers(t *testing.T, dir, name string) string {
 	t.Helper()
 	return stub(t, dir, name, `echo '{"result":{"ok":true},"verdict":"ok"}'`)
+}
+
+// charged is a stub that answers ok with a charge attached: input and output
+// tokens, a dollar figure, and who priced it.
+func charged(t *testing.T, dir, name string, inputTokens, outputTokens int, usd float64, pricedBy string) string {
+	t.Helper()
+	body := fmt.Sprintf(`echo '{"result":{"ok":true},"verdict":"ok",`+
+		`"spent":{"input_tokens":%d,"output_tokens":%d,"usd":%v,"priced_by":%q}}'`,
+		inputTokens, outputTokens, usd, pricedBy)
+	return stub(t, dir, name, body)
 }
 
 // declared builds an agent type over a stub.

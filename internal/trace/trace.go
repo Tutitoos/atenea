@@ -26,11 +26,23 @@
 // trace is read while something is wrong, which is the worst moment to be
 // paging through megabytes -- and a store that keeps answers is a store that
 // grows without bound and leaks whatever the agent happened to read.
+//
+// # Discovered facts, filed on the row that earned them
+//
+// One exception to "no payloads": Discovered rides on the row it closed
+// with. It is not the work's result -- pkg/contract already caps one note at
+// MaxDiscoveryLength characters, so what a row can carry here is small and
+// fixed, never the megabytes the rest of this comment is written against.
+// It belongs here because the row IS the fact's home: the next dispatch of
+// the same agent type reads the trace back rather than pay to learn it
+// again, and a second table for the same handful of sentences would just be
+// a second place for them to drift from this one.
 package trace
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -67,6 +79,13 @@ type Row struct {
 	EndedAt time.Time
 	Verdict contract.Verdict
 	Reason  contract.Reason
+	// Discovered is what this run reported finding when it closed. Empty on
+	// a row still open and on one that reported nothing. It travels with the
+	// row rather than a table of its own because the row is the only reason
+	// to keep it at all: the next dispatch of this agent type reads the
+	// trace back so the fact is paid for once, not on every run that could
+	// have used it.
+	Discovered []contract.Discovery
 	// WriterPID is the Atenea that opened the row. Zero on a row written
 	// before this column existed, which reads as "not alive" and so is
 	// sweepable -- the right answer for a row that old.
@@ -177,6 +196,10 @@ CREATE TABLE IF NOT EXISTS agent_trace (
     verdict     TEXT,
     reason_kind TEXT    NOT NULL DEFAULT '',
     reason_text TEXT    NOT NULL DEFAULT '',
+    -- What this run reported finding, as a JSON array. NULL exactly when
+    -- ended_at is NULL: a discovery is part of the answer, and there is no
+    -- answer before the row closes.
+    discovered  TEXT,
     -- A relaunch is a second process, so it is a second row. attempt counts
     -- it within its chain and retry_of names the exact row it redoes: two
     -- runs of one type an hour apart and two attempts at one piece of work
@@ -250,18 +273,21 @@ func (s *Store) Begin(ctx context.Context, row Row) error {
 	return nil
 }
 
-// Complete closes a row with the verdict the run reached.
+// Complete closes a row with the verdict the run reached, and records what
+// it reported finding along the way.
 //
 // It refuses to close a row twice. A second close would mean two things
 // claimed to be the end of one run, and the store cannot know which is the
 // truth -- so it keeps the first and says so.
 func (s *Store) Complete(ctx context.Context, id string, at time.Time,
-	verdict contract.Verdict, reason contract.Reason) error {
+	verdict contract.Verdict, reason contract.Reason, discovered []contract.Discovery) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE agent_trace
-		    SET ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?, swept = 0
+		    SET ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?,
+		        discovered = ?, swept = 0
 		  WHERE id = ? AND ended_at IS NULL`,
-		stamp(at), verdict.String(), reasonKind(reason), reason.Text, id)
+		stamp(at), verdict.String(), reasonKind(reason), reason.Text,
+		encodeDiscovered(discovered), id)
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable,
 			"trace: closing row %s: %v", id, err)
@@ -384,7 +410,7 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Row, error) {
 	}
 	query := `SELECT id, parent_id, type_name, kind, objective, depth,
 	                 started_at, ended_at, verdict, reason_kind, reason_text,
-	                 swept, writer_pid, attempt, retry_of, reviews
+	                 discovered, swept, writer_pid, attempt, retry_of, reviews
 	            FROM agent_trace`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -420,11 +446,12 @@ func scan(rows *sql.Rows) (Row, error) {
 		endedAt        sql.NullString
 		verdictName    sql.NullString
 		reasonKindName string
+		discovered     sql.NullString
 		swept          int
 	)
 	if err := rows.Scan(&row.ID, &row.ParentID, &row.TypeName, &kind, &row.Objective,
 		&row.Depth, &startedAt, &endedAt, &verdictName, &reasonKindName,
-		&row.Reason.Text, &swept, &row.WriterPID,
+		&row.Reason.Text, &discovered, &swept, &row.WriterPID,
 		&row.Attempt, &row.RetryOf, &row.Reviews); err != nil {
 		return Row{}, contract.Fail(contract.FailureUnavailable, "trace: list: %v", err)
 	}
@@ -439,6 +466,9 @@ func scan(rows *sql.Rows) (Row, error) {
 		row.Verdict = parseVerdictName(verdictName.String)
 	}
 	row.Reason.Kind = parseFailureName(reasonKindName)
+	if discovered.Valid {
+		row.Discovered = parseDiscovered(discovered.String)
+	}
 	row.Swept = swept != 0
 	return row, nil
 }
@@ -481,4 +511,59 @@ func parseFailureName(s string) contract.FailureKind {
 		return contract.FailureUnspecified
 	}
 	return kind
+}
+
+// discoveredWire is the JSON shape one discovery takes in the column: the
+// same {level, note} pair pkg/contract validates, so a row this store wrote
+// and a row read back need only agree on those two names.
+type discoveredWire struct {
+	Level string `json:"level"`
+	Note  string `json:"note"`
+}
+
+// encodeDiscovered renders what a run reported as one JSON array, or nil --
+// which the driver writes as SQL NULL -- when it reported nothing. An open
+// row and a closed row that discovered nothing have to read back the same
+// way, and NULL is the value that already means "nothing here" everywhere
+// else in this table.
+func encodeDiscovered(found []contract.Discovery) any {
+	if len(found) == 0 {
+		return nil
+	}
+	wire := make([]discoveredWire, len(found))
+	for i, d := range found {
+		wire[i] = discoveredWire{Level: d.Level.String(), Note: d.Note}
+	}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		// Never happens for a slice of two plain strings. A row closed
+		// without its discoveries is still an honest ending; refusing the
+		// close over a field this store could not even read back would not
+		// be.
+		return nil
+	}
+	return string(raw)
+}
+
+// parseDiscovered reads discoveries back, tolerating a row a newer Atenea
+// wrote: an entry naming a level this binary does not know is dropped
+// rather than failing the whole row, the same tolerance parseVerdictName and
+// parseFailureName give the columns next to it.
+func parseDiscovered(raw string) []contract.Discovery {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var wire []discoveredWire
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
+		return nil
+	}
+	out := make([]contract.Discovery, 0, len(wire))
+	for _, d := range wire {
+		level, err := contract.ParseContextLevel(d.Level)
+		if err != nil {
+			continue
+		}
+		out = append(out, contract.Discovery{Level: level, Note: d.Note})
+	}
+	return out
 }

@@ -195,11 +195,32 @@ func TestAReviewerWithNoSubjectIsRefused(t *testing.T) {
 }
 
 // The other direction: an answer handed to something that never reads one.
-func TestASubjectOnANonReviewerIsRefused(t *testing.T) {
+// The predicate is the type's declared input, not its lane -- a planner reads
+// a subject and is not a reviewer.
+func TestASubjectOnATypeThatNeverReadsOneIsRefused(t *testing.T) {
 	refuses(t, graphOf(
 		step("look", "reader", nil),
 		reviewing(step("other", "reader", nil), "look"),
-	), "does not review")
+	), "never reads one")
+}
+
+// And a type that declares the input takes one without being a reviewer.
+func TestATypeThatDeclaresItReadsASubjectTakesOneOutsideTheReviewLane(t *testing.T) {
+	planner := declared("planner", "/bin/true", config.PoolAgent)
+	planner.ReadsSubject = true
+	types := append(compileTypes(), planner)
+
+	graph := graphOf(
+		step("look", "reader", nil),
+		reviewing(step("plan", "planner", nil), "look"),
+	)
+	plan, err := workflow.Compile(graph, types)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if plan.Pool("plan") != config.PoolAgent {
+		t.Errorf("lane = %v, want the agent lane: reading a subject is not reviewing", plan.Pool("plan"))
+	}
 }
 
 func TestASubjectNamingNothingIsRefused(t *testing.T) {

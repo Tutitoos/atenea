@@ -182,8 +182,8 @@ func TestShippedKnobsAgreeWithTheCompiledFallbacks(t *testing.T) {
 		t.Fatalf("Defaults: %v", err)
 	}
 	// minimal declares a catalog and nothing else: no [core], [orchestrator],
-	// [metrics], [backup] or [security]. What comes back for those is purely
-	// what the binary falls back to.
+	// [model], [metrics], [backup] or [security]. What comes back for those
+	// is purely what the binary falls back to.
 	fallback, err := config.Load(write(t, minimal))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -200,6 +200,9 @@ func TestShippedKnobsAgreeWithTheCompiledFallbacks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(shipped.Security, fallback.Security) {
 		t.Errorf("[security] shipped %+v, fallback %+v", shipped.Security, fallback.Security)
+	}
+	if !reflect.DeepEqual(shipped.Model, fallback.Model) {
+		t.Errorf("[model] shipped %+v, fallback %+v", shipped.Model, fallback.Model)
 	}
 
 	// Standing effects are the documented exception, and the reason this test
@@ -1170,6 +1173,37 @@ func TestAnUnusableAdapterTimeoutIsRefused(t *testing.T) {
 	}
 }
 
+func TestAnUnusableModelTimeoutIsRefused(t *testing.T) {
+	for _, timeout := range []string{"never", "0s", "-5s"} {
+		_, err := config.Load(write(t, minimal+"\n[model]\ntimeout = \""+timeout+"\"\n"))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("timeout = %q -> %v, want invalid_input", timeout, got)
+		}
+	}
+}
+
+// Model's fields have to keep the same names, types and order as
+// model.Options: internal/agent/planner converts cfg.Model to it with a
+// plain struct conversion, which the compiler only accepts when the two
+// shapes are identical. This is the read half of that contract -- the file
+// values have to reach the struct unchanged, per role.
+func TestTheModelBlockIsReadPerRole(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+`
+[model]
+binary = "claude-custom"
+timeout = "45s"
+explore = "haiku"
+plan = "opus"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := config.Model{Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "opus"}
+	if cfg.Model != want {
+		t.Errorf("Model = %+v, want %+v", cfg.Model, want)
+	}
+}
+
 func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
 	// The misspellings below are the subject of the test, not an accident.
 	for _, body := range []string{
@@ -1178,6 +1212,7 @@ func TestAnUnknownKeyInTheNewBlocksIsRefused(t *testing.T) {
 		"\n[orchestrator.omp]\nbinry = \"omp\"\n",
 		"\n[orchestrator.omp]\nmatch_limt = 5\n",
 		"\n[security]\nsensitiv = []\n",
+		"\n[model]\ntimeot = \"90s\"\n",
 	} {
 		_, err := config.Load(write(t, minimal+body))
 		if err == nil || !strings.Contains(err.Error(), "unknown key") {
@@ -1800,5 +1835,94 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A key that parses into a struct field nobody assigns is read and thrown
+// away: the file says one thing, the loaded settings say another, and no
+// error is raised anywhere. That happened to `reads_subject` while it was
+// being added and no existing test noticed, so the round trip is asserted
+// here, in both of its readings.
+func TestAnAgentThatDeclaresItReadsASubjectKeepsIt(t *testing.T) {
+	body := minimal + `
+[[agent]]
+name = "planner"
+kind = "specialized"
+summary = "Reads an exploration and returns a graph"
+command = "/bin/true"
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+max_tokens = 1
+reads_subject = true
+
+  [[agent.result]]
+  name = "plan"
+  type = "string"
+  required = true
+  summary = "The graph"
+
+[[agent]]
+name = "reader"
+kind = "specialized"
+summary = "Reads a file"
+command = "/bin/true"
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+max_tokens = 1
+
+  [[agent.result]]
+  name = "ok"
+  type = "bool"
+  required = true
+  summary = "it read"
+
+[[agent]]
+name = "critic"
+kind = "specialized"
+summary = "Audits an answer"
+command = "/bin/true"
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+max_tokens = 1
+pool = "review"
+
+  [[agent.result]]
+  name = "checked"
+  type = "int"
+  required = true
+  summary = "how many claims"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	byName := map[string]config.AgentType{}
+	for _, a := range cfg.Agents {
+		byName[a.Spec.Name] = a
+	}
+
+	planner := byName["planner"]
+	if !planner.ReadsSubject {
+		t.Error("reads_subject = true was read and dropped")
+	}
+	if !planner.ReadsASubject() {
+		t.Error("a type that declares the input does not read one")
+	}
+	if planner.Pool != config.PoolAgent {
+		t.Errorf("pool = %v: declaring the input must not move the lane", planner.Pool)
+	}
+
+	if byName["reader"].ReadsASubject() {
+		t.Error("a plain agent reads a subject")
+	}
+	// The implication, which is why the flag is never written on a reviewer.
+	if !byName["critic"].ReadsASubject() {
+		t.Error("a reviewer does not read a subject")
+	}
+	if byName["critic"].ReadsSubject {
+		t.Error("the reviewer's declared value was invented rather than implied")
 	}
 }

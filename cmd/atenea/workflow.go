@@ -392,13 +392,15 @@ func printRun(out io.Writer, run workflow.Run) {
 	fmt.Fprintf(out, "%s\n", run.Budget())
 	fmt.Fprintln(out)
 
-	fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %s\n", "STEP", "AGENT", "LANE", "STATE", "DETAIL")
+	fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %s\n",
+		"STEP", "AGENT", "LANE", "STATE", "COST", "DETAIL")
 	for _, step := range run.Steps {
-		fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %s\n",
+		fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %s\n",
 			truncate(step.Step.ID, 16),
 			truncate(step.Step.TypeName, 14),
 			step.Pool,
 			run.Label(step),
+			stepCost(step),
 			stepDetail(run, step))
 	}
 
@@ -466,6 +468,20 @@ func printGates(out io.Writer, gates []workflow.Gate) {
 			fmt.Fprintf(out, "     %s\n", gate.Reason)
 		}
 	}
+}
+
+// stepCost is the one word for what a step was charged: the dollar figure
+// once one exists, the tokens when something measured but nobody priced it,
+// and `unmeasured` when nothing could say. Never $0.00 or a dash for that
+// last case -- either would print a measurement nothing took.
+func stepCost(step workflow.StepRow) string {
+	if !step.Spent.Measured() {
+		return "unmeasured"
+	}
+	if step.Spent.USD != nil {
+		return fmt.Sprintf("$%.2f", *step.Spent.USD)
+	}
+	return fmt.Sprintf("%d tok", step.Spent.Tokens())
 }
 
 // stepDetail is the most useful sentence about one step: why it ended badly,

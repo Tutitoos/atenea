@@ -209,11 +209,36 @@ type Assignment struct {
 	// Effects are the consequences this agent is allowed to cause. A child
 	// never holds one its parent did not, which is enforced in Child.
 	Effects []Effect
-	// Subject is the run this one has been asked to judge, nil on ordinary
-	// work. A reviewer is an agent like any other -- same card, same report,
-	// same trace row -- and this is the only field that says what it is
-	// looking at.
+	// BudgetUSD is the share of a grant this run may draw against. Nil is
+	// not zero, and the difference is load-bearing: nil is "nobody granted
+	// money here", which is every dispatch outside a workflow, and zero is
+	// "you were considered and given none", which an agent that spends must
+	// refuse rather than read as freedom. It is here rather than in Limits
+	// for the reason written there: time and tokens are guards a caller
+	// sets, and money is an authorization a person gave.
+	//
+	// Nothing subdivides it in the agent tree today, because every dispatch
+	// that carries money is a workflow step and the engine dispatches those
+	// at the root. Compile is what checks the shares against the grant,
+	// before anything spawns. The day an agent hands money to a child, the
+	// narrowing belongs in Child beside the other three.
+	BudgetUSD *float64
+	// Subject is another run's whole answer, handed to this one. Nil on
+	// ordinary work. Two kinds of agent read it: a reviewer, whose job is to
+	// judge it, and an agent whose work takes another's answer as its input
+	// -- the shipped planner reads the exploration it plans from this way.
 	Subject *Subject
+	// Rejected is THIS agent's own previous attempt, refused by a review,
+	// with ReviewID and Rejection saying which review and why. Nil on a
+	// first attempt.
+	//
+	// Separate from Subject because they are two different things that were
+	// one field until an agent had both: a planner relaunched after its
+	// graph was refused needs the exploration it planned from AND the graph
+	// that was refused. Folding the second into the first cost it the first,
+	// and a planner handed only the complaint writes a new plan with a new
+	// set of mistakes.
+	Rejected *Subject
 }
 
 // RootAssignment builds a depth-1 card, the only kind with no parent.
@@ -274,6 +299,18 @@ func (a Assignment) Validate() error {
 			return Fail(FailureInvalidInput, "assignment %s: %s", a.ID, err.Error())
 		}
 	}
+	if a.Rejected != nil {
+		if err := a.Rejected.Validate(); err != nil {
+			return Fail(FailureInvalidInput, "assignment %s: rejected: %s", a.ID, err.Error())
+		}
+		if strings.TrimSpace(a.Rejected.Rejection.Text) == "" {
+			// The card exists to say what was wrong. Handing an agent its
+			// own answer back with no sentence attached tells it only that
+			// it failed, which is the retry that reruns the same mistake.
+			return Fail(FailureInvalidInput,
+				"assignment %s: a rejected attempt with no rejection to answer", a.ID)
+		}
+	}
 	return a.validateGrants()
 }
 
@@ -311,6 +348,10 @@ func (a Assignment) validateGrants() error {
 		if _, ok := effectNames[effect]; !ok {
 			return Fail(FailureInvalidInput, "assignment %s: unknown effect", a.ID)
 		}
+	}
+	if a.BudgetUSD != nil && *a.BudgetUSD < 0 {
+		return Fail(FailureInvalidInput,
+			"assignment %s: budget is negative ($%.2f)", a.ID, *a.BudgetUSD)
 	}
 	return nil
 }
@@ -419,15 +460,9 @@ type Subject struct {
 	Result  map[string]any
 	Verdict Verdict
 	Reason  Reason
-	// ReviewID and Rejection are set when this subject is being handed back
-	// to the agent that produced it for a second attempt: which review
-	// refused the answer, and why.
-	//
-	// One shape, two uses. A reviewer is given the subject with these empty
-	// -- it is judging, not reacting to a judgement -- and the relaunch is
-	// given the same subject with them filled in, so the agent sees its own
-	// previous answer next to the sentence that rejected it. A retry told
-	// only "try again" is a retry that reruns the same mistake.
+	// ReviewID and Rejection are set on the card in [Assignment.Rejected]:
+	// which review refused the answer, and why. They are empty on a subject
+	// handed to a reviewer -- it is judging, not reacting to a judgement.
 	ReviewID  string
 	Rejection Reason
 }
@@ -506,11 +541,126 @@ func (r Reason) Empty() bool {
 	return r.Kind == FailureUnspecified && strings.TrimSpace(r.Text) == ""
 }
 
-// Report is what an agent hands back: three things with three destinations.
+// Charge is what one run of an agent cost, in the units the far side actually
+// reported.
+//
+// Two fields and not one, because the two are not equally trustworthy. Tokens
+// are counted by whoever served the request and are the same number whatever
+// contract the account is on. A dollar figure is arithmetic somebody did with
+// a price list, and on subscription traffic the price list is not what was
+// billed -- measured on this machine, a proxy's own ledger and the billed
+// figure disagreed by a wide margin for the same request. So USD is optional
+// and never travels without PricedBy naming whose price produced it, and a
+// reader that cannot say whose price it is looking at should show the tokens.
+type Charge struct {
+	// InputTokens and OutputTokens are what the turn consumed and produced.
+	InputTokens  int
+	OutputTokens int
+	// CacheReadTokens and CacheWriteTokens are counted separately because
+	// they are priced differently everywhere, and folding them into the
+	// input count would make a warm repository look cheap rather than
+	// cached.
+	CacheReadTokens  int
+	CacheWriteTokens int
+	// USD is nil unless the far side priced the turn itself. Nil is not
+	// zero: it means nobody said, and a run that cost real money must never
+	// read as one that cost nothing.
+	USD *float64
+	// PricedBy names where USD came from -- which provider, which list, at
+	// what moment. Required whenever USD is set, refused when it is not,
+	// because a dollar figure with no provenance is the exact claim this
+	// project keeps finding to be false.
+	PricedBy string
+}
+
+// Measured reports whether this charge says anything at all. A zero Charge is
+// what an agent that spends no tokens hands back, and it must read as
+// unmeasured rather than as a free run.
+func (c Charge) Measured() bool {
+	return c.Tokens() > 0 || c.USD != nil
+}
+
+// Tokens is everything the turn moved. Cache reads are in it because they
+// were paid for, even if cheaply.
+func (c Charge) Tokens() int {
+	return c.InputTokens + c.OutputTokens + c.CacheReadTokens + c.CacheWriteTokens
+}
+
+// Plus adds a charge to this one: what two runs of the same work cost
+// together, which is what a person paying for a relaunch actually owes.
+//
+// The dollar figure survives only when both halves carry one. A priced turn
+// added to an unpriced one is not the priced figure -- that would print the
+// smaller number as the total, which is the same partial-measurement lie a
+// half-measured workflow refuses to tell. Tokens always add: they are counted
+// by whoever served the request and never guessed.
+func (c Charge) Plus(o Charge) Charge {
+	if !o.Measured() {
+		return c
+	}
+	if !c.Measured() {
+		return o
+	}
+	out := Charge{
+		InputTokens:      c.InputTokens + o.InputTokens,
+		OutputTokens:     c.OutputTokens + o.OutputTokens,
+		CacheReadTokens:  c.CacheReadTokens + o.CacheReadTokens,
+		CacheWriteTokens: c.CacheWriteTokens + o.CacheWriteTokens,
+	}
+	if c.USD == nil || o.USD == nil {
+		return out
+	}
+	total := *c.USD + *o.USD
+	out.USD = &total
+	out.PricedBy = c.PricedBy
+	if o.PricedBy != c.PricedBy {
+		// Two sources priced the two halves, and the sum belongs to both.
+		// Naming one would attribute a figure to a source that never said
+		// it.
+		out.PricedBy = c.PricedBy + " and " + o.PricedBy
+	}
+	return out
+}
+
+// Validate refuses the two shapes that would put an unsupported number on a
+// receipt: a negative count, and a price nobody will stand behind.
+func (c Charge) Validate() error {
+	for _, pair := range []struct {
+		name  string
+		value int
+	}{
+		{"input_tokens", c.InputTokens},
+		{"output_tokens", c.OutputTokens},
+		{"cache_read_tokens", c.CacheReadTokens},
+		{"cache_write_tokens", c.CacheWriteTokens},
+	} {
+		if pair.value < 0 {
+			return Fail(FailureInvalidInput, "charge: %s is negative (%d)", pair.name, pair.value)
+		}
+	}
+	if c.USD == nil {
+		if strings.TrimSpace(c.PricedBy) != "" {
+			return Fail(FailureInvalidInput,
+				"charge: priced_by is %q with no amount beside it", c.PricedBy)
+		}
+		return nil
+	}
+	if *c.USD < 0 {
+		return Fail(FailureInvalidInput, "charge: amount is negative ($%.4f)", *c.USD)
+	}
+	if strings.TrimSpace(c.PricedBy) == "" {
+		return Fail(FailureInvalidInput,
+			"charge: $%.4f with no priced_by: a dollar figure has to say whose price it used", *c.USD)
+	}
+	return nil
+}
+
+// Report is what an agent hands back: four things with four destinations.
 //
 // The result goes to whoever asked, in the shape the agent type declared. The
 // verdict is consumed by the reviewing parent. The discovered facts feed the
-// history, so the next task does not pay to learn them again.
+// history, so the next task does not pay to learn them again. The charge goes
+// on the receipt.
 type Report struct {
 	// Result is the answer, in the shape the agent type declares.
 	Result map[string]any
@@ -526,6 +676,9 @@ type Report struct {
 	// writes here when it has to shorten a discovery, so a truncated fact is
 	// never silently truncated.
 	Notices []string
+	// Spent is what this run cost. The zero value means unmeasured, which is
+	// the ordinary case for an agent that spends no tokens.
+	Spent Charge
 }
 
 // Validate judges the report against the type that produced it.
@@ -542,6 +695,9 @@ func (r Report) Validate(spec AgentTypeSpec) error {
 	}
 	if _, ok := verdictNames[r.Verdict]; !ok {
 		return Fail(FailureInvalidInput, "report: unknown verdict")
+	}
+	if err := r.Spent.Validate(); err != nil {
+		return err
 	}
 	if err := r.validateReason(); err != nil {
 		return err
@@ -669,5 +825,12 @@ func (r Report) Clone() Report {
 	}
 	out.Discovered = slices.Clone(r.Discovered)
 	out.Notices = slices.Clone(r.Notices)
+	if r.Spent.USD != nil {
+		// The pointer is what distinguishes "unmeasured" from "$0.00", so a
+		// shallow copy would let two reports share the one number that must
+		// never be edited in place.
+		amount := *r.Spent.USD
+		out.Spent.USD = &amount
+	}
 	return out
 }

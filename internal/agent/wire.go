@@ -33,6 +33,11 @@ type assignmentWire struct {
 	Task     taskWire   `json:"task"`
 	Limits   limitsWire `json:"limits"`
 	Effects  []string   `json:"effects"`
+	// BudgetUSD is what this run may spend. Absent when nobody granted
+	// money, which a model-backed agent has to be able to tell from a grant
+	// of zero: the first means run without a ceiling of your own, and the
+	// second means do not spend.
+	BudgetUSD *float64 `json:"budget_usd,omitempty"`
 	// Context carries only the levels the type declared, keyed by level name.
 	// A level that was not declared is absent, not empty: absent says nobody
 	// offered it, and empty would say it was offered and had nothing in it.
@@ -45,6 +50,9 @@ type assignmentWire struct {
 	// work. A reviewer reads its whole case from here: what was asked, what
 	// came back, and which attempt it was.
 	Subject *subjectWire `json:"subject,omitempty"`
+	// Rejected is this agent's own refused attempt, present only on a
+	// relaunch. Same shape as subject: a whole report somebody else read.
+	Rejected *subjectWire `json:"rejected,omitempty"`
 }
 
 type taskWire struct {
@@ -78,6 +86,24 @@ type reportWire struct {
 	Verdict    string          `json:"verdict"`
 	Reason     *reasonWire     `json:"reason,omitempty"`
 	Discovered []discoveryWire `json:"discovered,omitempty"`
+	// Spent is absent on the agents that spend nothing, which is what
+	// unmeasured looks like on the wire. An agent writing `"spent": {}` says
+	// the same thing: a charge nobody filled in.
+	Spent *chargeWire `json:"spent,omitempty"`
+}
+
+// chargeWire is what a far side reports about its own cost.
+//
+// The dollar field is a pointer for the reason the column is: absent and zero
+// have to stay different, because a turn that really was free and a turn
+// nobody priced are not the same fact.
+type chargeWire struct {
+	InputTokens      int      `json:"input_tokens"`
+	OutputTokens     int      `json:"output_tokens"`
+	CacheReadTokens  int      `json:"cache_read_tokens"`
+	CacheWriteTokens int      `json:"cache_write_tokens"`
+	USD              *float64 `json:"usd,omitempty"`
+	PricedBy         string   `json:"priced_by,omitempty"`
 }
 
 type reasonWire struct {
@@ -111,34 +137,12 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 		Context:      ctxPayload,
 		ResultSchema: schema,
 	}
-	if s := a.Subject; s != nil {
-		subject := &subjectWire{
-			RunID:   s.RunID,
-			Type:    s.TypeName,
-			Attempt: s.Attempt,
-			Task: taskWire{
-				Objective: s.Task.Objective,
-				Files:     s.Task.Files,
-				Criterion: s.Task.Criterion,
-			},
-			Result:  s.Result,
-			Verdict: s.Verdict.String(),
-		}
-		// The reason travels whenever there is one. A reviewer told only
-		// that the run came back `incomplete` has to guess at what stopped
-		// it, and guessing is the one thing a review may not do.
-		if s.Reason.Kind != contract.FailureUnspecified || s.Reason.Text != "" {
-			subject.Reason = &reasonWire{Kind: s.Reason.Kind.String(), Text: s.Reason.Text}
-		}
-		if s.ReviewID != "" {
-			subject.ReviewID = s.ReviewID
-			subject.Rejection = &reasonWire{
-				Kind: s.Rejection.Kind.String(),
-				Text: s.Rejection.Text,
-			}
-		}
-		out.Subject = subject
+	if a.BudgetUSD != nil {
+		budget := *a.BudgetUSD
+		out.BudgetUSD = &budget
 	}
+	out.Subject = encodeSubject(a.Subject)
+	out.Rejected = encodeSubject(a.Rejected)
 	for _, effect := range a.Effects {
 		out.Effects = append(out.Effects, effect.String())
 	}
@@ -156,6 +160,40 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 // answer, and a caller cannot tell an agent that answered badly from one that
 // never answered by looking at a parse error. The distinction is made by the
 // caller, which is why this returns a plain error and takes no position.
+// encodeSubject writes one card. Both `subject` and `rejected` are the same
+// shape on the wire because they are the same thing seen from two sides: a
+// whole validated report somebody else already read. What differs is whose
+// it is, and that is said by which key it arrives under, not by a second
+// shape an agent would have to learn twice.
+func encodeSubject(s *contract.Subject) *subjectWire {
+	if s == nil {
+		return nil
+	}
+	out := &subjectWire{
+		RunID:   s.RunID,
+		Type:    s.TypeName,
+		Attempt: s.Attempt,
+		Task: taskWire{
+			Objective: s.Task.Objective,
+			Files:     s.Task.Files,
+			Criterion: s.Task.Criterion,
+		},
+		Result:  s.Result,
+		Verdict: s.Verdict.String(),
+	}
+	// The reason travels whenever there is one. A reviewer told only that
+	// the run came back `incomplete` has to guess at what stopped it, and
+	// guessing is the one thing a review may not do.
+	if s.Reason.Kind != contract.FailureUnspecified || s.Reason.Text != "" {
+		out.Reason = &reasonWire{Kind: s.Reason.Kind.String(), Text: s.Reason.Text}
+	}
+	if s.ReviewID != "" {
+		out.ReviewID = s.ReviewID
+		out.Rejection = &reasonWire{Kind: s.Rejection.Kind.String(), Text: s.Rejection.Text}
+	}
+	return out
+}
+
 func decodeReport(raw []byte) (contract.Report, error) {
 	var wire reportWire
 	decoder := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(raw)))
@@ -187,6 +225,19 @@ func decodeReport(raw []byte) (contract.Report, error) {
 				"unreadable report: %v", err)
 		}
 		out.Discovered = append(out.Discovered, contract.Discovery{Level: level, Note: d.Note})
+	}
+	if c := wire.Spent; c != nil {
+		out.Spent = contract.Charge{
+			InputTokens:      c.InputTokens,
+			OutputTokens:     c.OutputTokens,
+			CacheReadTokens:  c.CacheReadTokens,
+			CacheWriteTokens: c.CacheWriteTokens,
+			PricedBy:         c.PricedBy,
+		}
+		if c.USD != nil {
+			amount := *c.USD
+			out.Spent.USD = &amount
+		}
 	}
 	return out, nil
 }

@@ -407,6 +407,17 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	// dispatches reviewers of steps that finished under an Atenea that is
 	// gone, and the answer they audit has to be the one that was given.
 	answers := make(map[string]StepRow, len(run.Steps))
+	// rejections holds the card for a step a review refused and this loop is
+	// about to run again. It is process-local on purpose: it exists between
+	// a refusal and the relaunch it causes, and a run resumed after that
+	// window is a run a person is steering, not one still mid-correction.
+	rejections := make(map[string]contract.Subject, len(run.Steps))
+	// carried is what an abandoned attempt already cost. A step's own row
+	// holds one attempt -- Claim clears it on every re-claim, so a redo does
+	// not inherit a charge it did not incur -- but the run paid for both,
+	// and a receipt that drops the refused half understates the bill by
+	// exactly the amount the correction cost.
+	carried := make(map[string]contract.Charge, len(run.Steps))
 	// seed rebuilds the four maps from the record. It runs again after a
 	// graph grows, so an expansion's steps arrive the same way a resumed
 	// run's do -- from disk, not from a second construction path that could
@@ -535,6 +546,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					Task:     step.Task,
 					Attempt:  attempts[step.ID],
 					RetryOf:  redoOf(traces[step.ID], attempts[step.ID]),
+					// The share the plan cut for this step, which Compile
+					// already checked against the grant. An agent that spends
+					// has to be told its ceiling, or the only thing bounding
+					// it is the provider's patience.
+					BudgetUSD: &step.Permission.BudgetUSD,
 				}
 				if step.Subject != "" {
 					subject, err := subjectFrom(answers[step.Subject])
@@ -542,12 +558,26 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 						return run, err
 					}
 					dispatch.Subject = &subject
-					// The same link `atenea agent --review` writes: the trace
-					// row says which run this one audits, so the chain walks
-					// from either end. Recording the relationship in the
-					// workflow tables only would make the graph's reviews
-					// invisible to every reader of the traces.
-					dispatch.Reviews = subject.RunID
+					// The same link `atenea agent --review` writes, so the
+					// chain walks from either end: recording the
+					// relationship in the workflow tables only would make
+					// the graph's reviews invisible to every reader of the
+					// traces.
+					//
+					// Only for a step that actually audits. A planner reads
+					// its input; recording that as a review would put an
+					// audit on the record nobody performed, and the
+					// exploration would read as judged by the graph built
+					// out of it.
+					if plan.Pool(step.ID) == config.PoolReview {
+						dispatch.Reviews = subject.RunID
+					}
+				}
+				if card, ok := rejections[step.ID]; ok {
+					// Its own refused answer, beside the input it keeps. The
+					// same card `atenea agent --review` writes, built by the
+					// same constructor so the two callers cannot drift.
+					dispatch.Rejected = &card
 				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
 					attempts[step.ID], e.now(), e.pid); err != nil {
@@ -592,6 +622,9 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			status[finished.stepID] = StatusInterrupted
 			continue
 		}
+		if before, ok := carried[finished.stepID]; ok {
+			finished.report.Spent = finished.report.Spent.Plus(before)
+		}
 		if err := e.store.Finish(write, id, finished.stepID, finished.status,
 			finished.report, e.now()); err != nil {
 			return run, err
@@ -610,6 +643,26 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			Reason:     finished.report.Reason,
 			Result:     finished.report.Result,
 			Discovered: finished.report.Discovered,
+			Spent:      finished.report.Spent,
+		}
+
+		// A review that judged and said no sends the work back, once. Same
+		// rule as `atenea agent --review`: the second attempt is handed the
+		// sentence that refused the first, and a third is not offered --
+		// an agent told the same thing twice writes the same answer twice.
+		//
+		// Only a `failed` review relaunches. A review that came back
+		// `incomplete` did not judge -- it timed out, it could not read the
+		// file, the service was down -- and re-running the work because its
+		// auditor broke spends money on somebody else's outage.
+		if redo, ok := e.refused(plan, finished, attempts, answers); ok {
+			rejections[redo] = agent.RejectedCard(
+				mustSubject(answers[redo]), traces[finished.stepID], finished.report.Reason)
+			carried[redo] = answers[redo].Spent.Plus(carried[redo])
+			status[redo] = StatusPending
+			status[finished.stepID] = StatusPending
+			delete(answers, redo)
+			delete(answers, finished.stepID)
 		}
 	}
 	wg.Wait()
@@ -654,6 +707,49 @@ func redoOf(previous string, attempt int) string {
 		return ""
 	}
 	return previous
+}
+
+// refused reports whether a finished step was a review that judged its
+// subject and said no, and names the step to run again.
+//
+// Three things have to hold, and each is a bug someone would otherwise pay
+// for: the finished step must actually be a review of something (a step with
+// a subject edge), its verdict must be `failed` rather than any of the ways
+// a review can fail to happen, and the work must not already have had its
+// second attempt.
+func (e *Engine) refused(plan Plan, finished done, attempts map[string]int,
+	answers map[string]StepRow) (string, bool) {
+	step, ok := plan.Step(finished.stepID)
+	if !ok || step.Subject == "" {
+		return "", false
+	}
+	if finished.status != StatusFailed || finished.report.Verdict != contract.VerdictFailed {
+		return "", false
+	}
+	if strings.TrimSpace(finished.report.Reason.Text) == "" {
+		// A refusal with no sentence cannot be answered, and handing it back
+		// would be the "try again" this design refuses to send.
+		return "", false
+	}
+	if attempts[step.Subject] >= agent.MaxAttempts {
+		return "", false
+	}
+	if _, ok := answers[step.Subject]; !ok {
+		return "", false
+	}
+	return step.Subject, true
+}
+
+// mustSubject packs a finished step for the relaunch card. The row came off
+// this engine's own answers map, so it is a report that already validated;
+// an error here would be a bug in this file rather than bad input, and the
+// zero card is refused by the assignment's own Validate before it can spawn.
+func mustSubject(row StepRow) contract.Subject {
+	subject, err := subjectFrom(row)
+	if err != nil {
+		return contract.Subject{}
+	}
+	return subject
 }
 
 // outcome sorts what came back into a status.

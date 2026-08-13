@@ -184,12 +184,17 @@ func TestTheRelaunchCarriesTheRejection(t *testing.T) {
 	if len(cards) != 2 {
 		t.Fatalf("the work was handed %d cards, want 2", len(cards))
 	}
-	if cards[0].Subject != nil {
-		t.Fatalf("the first attempt was handed a subject: %+v", cards[0].Subject)
+	if cards[0].Rejected != nil {
+		t.Fatalf("the first attempt was handed a rejection: %+v", cards[0].Rejected)
 	}
-	subject := cards[1].Subject
+	// The refused answer arrives as `rejected`, not as `subject`: subject is
+	// what an agent was handed to work on, and this work was handed nothing.
+	if cards[1].Subject != nil {
+		t.Fatalf("the relaunch was given a subject it never had: %+v", cards[1].Subject)
+	}
+	subject := cards[1].Rejected
 	if subject == nil {
-		t.Fatal("the relaunch was handed no subject; it cannot know what it failed")
+		t.Fatal("the relaunch was handed no rejected attempt; it cannot know what it failed")
 	}
 	if subject.RunID != run.Attempts[0].Work.ID {
 		t.Fatalf("subject run id = %q, want the first attempt %q",
@@ -355,6 +360,20 @@ type cardWire struct {
 			Text string `json:"text"`
 		} `json:"rejection"`
 	} `json:"subject"`
+	Rejected *struct {
+		RunID   string         `json:"run_id"`
+		Attempt int            `json:"attempt"`
+		Result  map[string]any `json:"result"`
+		Verdict string         `json:"verdict"`
+		Task    struct {
+			Criterion string `json:"criterion"`
+		} `json:"task"`
+		ReviewID  string `json:"review_id"`
+		Rejection *struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		} `json:"rejection"`
+	} `json:"rejected"`
 }
 
 // readCards reads every assignment a stub captured, in the order they were

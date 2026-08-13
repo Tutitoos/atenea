@@ -287,10 +287,10 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 					"name the step it audits with subject = \"<step>\"",
 				step.ID, step.TypeName)
 		}
-		if agentType.Pool != config.PoolReview && step.Subject != "" {
+		if !agentType.ReadsASubject() && step.Subject != "" {
 			return Plan{}, contract.Fail(contract.FailureInvalidInput,
-				"workflow: step %s: subject %q is handed to agent type %s, which does not "+
-					"review and never reads one",
+				"workflow: step %s: subject %q is handed to agent type %s, which never "+
+					"reads one: declare `reads_subject = true` on that type, or drop the edge",
 				step.ID, step.Subject, step.TypeName)
 		}
 		if step.Subject == "" && step.On != OnAnswered {

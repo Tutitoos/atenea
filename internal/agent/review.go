@@ -127,10 +127,12 @@ func (r *Runner) attempt(ctx context.Context, typeName, reviewerName string,
 		// run of the same type: two attempts at one piece of work and two
 		// separate asks an hour apart must not read the same in the trace.
 		work.RetryOf = previous.Work.ID
-		subject := subjectOf(*previous, number-1)
-		subject.ReviewID = previous.Review.ID
-		subject.Rejection = previous.ReviewReport.Reason
-		work.Subject = &subject
+		// Its input, unchanged, and its refused answer beside it. Both, or
+		// the second try is worse informed than the first.
+		work.Subject = previous.Work.Subject
+		rejected := RejectedCard(subjectOf(*previous, number-1),
+			previous.Review.ID, previous.ReviewReport.Reason)
+		work.Rejected = &rejected
 	}
 
 	report, assignment, err := r.Dispatch(ctx, work)
@@ -170,6 +172,19 @@ func (r *Runner) attempt(ctx context.Context, typeName, reviewerName string,
 // depending on which caller assembled it.
 func subjectOf(a Attempt, attempt int) contract.Subject {
 	return a.Report.Subject(a.Work.ID, a.Work.TypeName, attempt, a.Work.Task)
+}
+
+// RejectedCard is the refused attempt an agent is handed on a relaunch: its
+// own last answer, the review that refused it, and the sentence.
+//
+// Exported and here rather than written twice because a workflow relaunches
+// the same way `atenea agent --review` does. Two copies of this rule would
+// eventually disagree, and the disagreement would be an agent told what was
+// wrong by one caller and not by the other.
+func RejectedCard(refused contract.Subject, reviewID string, why contract.Reason) contract.Subject {
+	refused.ReviewID = reviewID
+	refused.Rejection = why
+	return refused
 }
 
 // reviewTask states what the reviewer is being asked, in the same shape as

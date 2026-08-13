@@ -52,7 +52,29 @@ type AgentType struct {
 	// and a lane inferred at dispatch time is a lane two callers will infer
 	// differently.
 	Pool Pool
+	// ReadsSubject says this type is handed another step's whole answer.
+	//
+	// Separate from Pool, because reviewing and reading a subject are two
+	// different facts that happened to coincide while reviewers were the
+	// only consumers. A reviewer reads a subject AND is scheduled in the
+	// audit lane; the planner reads one and is ordinary work. Inferring the
+	// input from the lane forced the choice of putting a planner in the
+	// review pool, where it would compete with auditing for slots sized for
+	// auditing.
+	//
+	// Read it through [AgentType.ReadsASubject], which is where the review
+	// implication lives.
+	ReadsSubject bool
 }
+
+// ReadsASubject reports whether this type is handed another step's answer.
+//
+// A review-pool type does whether or not it declared so: a review with
+// nothing to review is refused anyway, so requiring the flag as well would
+// only be a second way to write the same settings wrong. The implication is
+// here rather than at parse time so that it holds for a type built in code
+// too -- a test's fixture and a shipped declaration answer the same.
+func (a AgentType) ReadsASubject() bool { return a.ReadsSubject || a.Pool == PoolReview }
 
 // Pool is a parallel lane. A closed set: an unknown lane in a settings file
 // is a typo that would otherwise create a third pool nothing sizes.
@@ -145,18 +167,19 @@ func (c Config) AgentTypeByName(name string) (AgentType, error) {
 
 // fileAgent is the TOML shape of AgentType.
 type fileAgent struct {
-	Name        string      `toml:"name"`
-	Kind        string      `toml:"kind"`
-	Summary     string      `toml:"summary"`
-	Command     string      `toml:"command"`
-	Args        []string    `toml:"args"`
-	Env         []string    `toml:"env"`
-	Context     []string    `toml:"context"`
-	Effects     []string    `toml:"effects"`
-	MaxDuration string      `toml:"max_duration"`
-	MaxTokens   int         `toml:"max_tokens"`
-	Pool        string      `toml:"pool"`
-	Result      []fileField `toml:"result"`
+	Name         string      `toml:"name"`
+	Kind         string      `toml:"kind"`
+	Summary      string      `toml:"summary"`
+	Command      string      `toml:"command"`
+	Args         []string    `toml:"args"`
+	Env          []string    `toml:"env"`
+	Context      []string    `toml:"context"`
+	Effects      []string    `toml:"effects"`
+	MaxDuration  string      `toml:"max_duration"`
+	MaxTokens    int         `toml:"max_tokens"`
+	Pool         string      `toml:"pool"`
+	ReadsSubject bool        `toml:"reads_subject"`
+	Result       []fileField `toml:"result"`
 }
 
 func (a fileAgent) build(source string) (AgentType, error) {
@@ -175,6 +198,10 @@ func (a fileAgent) build(source string) (AgentType, error) {
 		Args:    a.Args,
 		Env:     a.Env,
 		Limits:  contract.Limits{MaxTokens: a.MaxTokens},
+		// Declared, not derived: ReadsASubject adds the review implication
+		// where it is read, so a round-trip through this file preserves what
+		// the settings actually said.
+		ReadsSubject: a.ReadsSubject,
 	}
 	if out.Pool, err = ParsePool(a.Pool); err != nil {
 		return fail("%v", err)

@@ -179,7 +179,7 @@ func Short(digest string) string {
 //
 // Allocated, never spent. Nothing on this machine can report a charge, so a
 // number called spend here would be a measurement nobody took -- see
-// [StepRow.SpentUSD], which stays NULL for the same reason.
+// [StepRow.Spent], which reads unmeasured for the same reason.
 func (p Proposal) AllocatedUSD() float64 {
 	var out float64
 	for _, step := range p.Steps {

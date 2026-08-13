@@ -12,6 +12,8 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/agent/filereader"
+	"github.com/Tutitoos/atenea/internal/agent/plancheck"
+	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/agent/reviewer"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -251,9 +253,22 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		return filereader.Main(stdin, stdout)
 	case "reviewer":
 		return reviewer.Main(stdin, stdout)
+	case "plan-check":
+		return plancheck.Main(stdin, stdout)
+	case "explore", "plan":
+		// These two call a model, so they are the only built-ins that can
+		// be waiting on somebody else when a person gives up. A signal has
+		// to reach the turn, or the parent's kill leaves a request billing
+		// against a run nobody is reading.
+		ctx, stop := interruptible()
+		defer stop()
+		if kind == "explore" {
+			return planner.Explore(ctx, stdin, stdout)
+		}
+		return planner.Plan(ctx, stdin, stdout)
 	default:
 		return contract.Fail(contract.FailureNotFound,
-			"no built-in agent %q: this binary ships filereader and reviewer", kind)
+			"no built-in agent %q: this binary ships filereader, reviewer, plan-check, explore and plan", kind)
 	}
 }
 
