@@ -56,6 +56,9 @@ Design notes, so the next reader does not mistake a choice for an accident:
 Usage:  mcp-agree [--live] [--quiet]
         mcp-agree --trust-warning     what accepting Claude's trust dialog in
                                       the current tree would switch on (stderr)
+        mcp-agree --wire [--client=claude|omp|opencode|codex]
+                                      measure the surface that actually reaches
+                                      the model (~2.5 s per client, 0 tokens)
 Exit:   0 file surface agrees · 1 drift, or warned · 2 could not read something
 """
 
@@ -311,6 +314,188 @@ def check_serena():
         notes.append(f"serena: {len(excluded)} exclusiones, contexto '{ctx}' "
                      "no single-project (un .serena/project.yml no puede ampliarla)")
 
+# ---------------------------------------------------------------- wire
+# What actually reaches the model, read off a real request body instead of a
+# config file. Measured 2026-08-13: Claude Code ships 126 tool definitions of
+# which 49 are mcp__claude_ai_* connectors carried by the OAuth session and
+# declared nowhere on disk. No file-based check can see them; this one can.
+#
+# The probe costs one spawned client and ~2.5 s, and it costs NO TOKENS: the
+# recorder answers 400 invalid_request, so the request dies on loopback and
+# never reaches a provider. That is why it is a subcommand and not something
+# the launch path may call.
+ACCOUNT_PREFIX = "mcp__claude_ai_"
+CLAUDE_BIN = os.path.join(BIN, "claude")
+
+# opencode has no anthropic socket of its own: it drives the Claude Code CLI
+# with these exact flags (read off the live process tree 2026-08-13), so its
+# surface is claude's under --strict-mcp-config --setting-sources=.
+OPENCODE_BRIDGE_FLAGS = ["--strict-mcp-config", "--setting-sources=",
+                         "--model", "claude-haiku-4-5-20251001",
+                         "--permission-mode", "dontAsk", "--no-session-persistence"]
+
+WIRE_PROBES = {
+    "claude": {
+        "argv": [CLAUDE_BIN, "-p", "hi"],
+        "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:{port}"},
+        "note": None,
+    },
+    "omp": {
+        "argv": [os.path.join(BIN, "omp"), "-p", "hi"],
+        "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:{port}"},
+        "note": None,
+    },
+    "opencode": {
+        "argv": [CLAUDE_BIN, "-p", "hi"] + OPENCODE_BRIDGE_FLAGS,
+        "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:{port}"},
+        "note": "via su puente: claude CLI con --strict-mcp-config --setting-sources=",
+    },
+    "codex": {
+        "argv": ["codex", "exec", "--skip-git-repo-check",
+                 "-c", 'model_providers.probe={name="probe",'
+                       'base_url="http://127.0.0.1:{port}/v1",'
+                       'wire_api="responses",env_key="OPENAI_API_KEY"}',
+                 "-c", "model_provider=probe", "hi"],
+        "env": {"OPENAI_API_KEY": "mcp-agree-probe"},
+        "note": "OpenAI: su cuerpo no lleva tools, y los conectores de Anthropic "
+                "no pueden alcanzarle",
+    },
+}
+
+
+def _recorder():
+    """A loopback endpoint that records one request body and refuses it.
+
+    Port 0: the kernel picks it, so two probes can never collide and nothing
+    has to be reserved. Every answer is 400 - a probe that succeeded would be
+    a model call somebody pays for.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):  # silence: this runs in front of a report
+            pass
+
+        def _refuse(self):
+            body = (b'{"type":"error","error":{"type":"invalid_request_error",'
+                    b'"message":"mcp-agree probe"}}')
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._refuse()
+
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                seen.append(payload)
+            self._refuse()
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, seen
+
+
+def group_tools(names):
+    """builtin, or mcp:<server>, from the mcp__<server>__<tool> convention."""
+    groups = {}
+    for name in names:
+        name = str(name)
+        if name.startswith("mcp__"):
+            key = "mcp:" + name[len("mcp__"):].split("__")[0]
+        else:
+            key = "builtin"
+        groups[key] = groups.get(key, 0) + 1
+    return groups
+
+
+def probe_wire(client, timeout=90):
+    """Spawn one client at a recorder and return what it put on the wire.
+
+    Returns {names, groups, account, bytes, seconds} or None, having said why.
+    """
+    import time
+
+    spec = WIRE_PROBES[client]
+    srv, seen = _recorder()
+    port = str(srv.server_address[1])
+    argv = [a.replace("{port}", port) for a in spec["argv"]]
+    env = dict(os.environ)
+    env.update({k: v.replace("{port}", port) for k, v in spec["env"].items()})
+    started = time.monotonic()
+    try:
+        subprocess.run(argv, env=env, cwd=HOME, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=timeout)
+    except FileNotFoundError:
+        fail("wire", f"{client}: no encuentro {argv[0]}",
+             "sin el binario no hay superficie que medir")
+        return None
+    except subprocess.TimeoutExpired:
+        fail("wire", f"{client}: la sonda no termino en {timeout}s",
+             "el cliente se quedo esperando algo; la medicion no vale")
+        return None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    seconds = round(time.monotonic() - started, 1)
+
+    bodies = [b for b in seen if isinstance(b.get("tools"), list)]
+    if not bodies:
+        if seen:
+            return {"names": [], "groups": {}, "account": 0, "bytes": 0,
+                    "seconds": seconds}
+        fail("wire", f"{client}: no llego ninguna peticion a la sonda",
+             "el cliente no honro la variable de base URL, o murio antes")
+        return None
+    body = max(bodies, key=lambda b: len(b["tools"]))
+    names = [t.get("name") for t in body["tools"]]
+    return {
+        "names": names,
+        "groups": group_tools(names),
+        "account": sum(1 for n in names if str(n).startswith(ACCOUNT_PREFIX)),
+        "bytes": len(json.dumps(body["tools"])),
+        "seconds": seconds,
+    }
+
+
+def render_wire(client, surface):
+    """One line per client: the total, then who contributed it."""
+    if surface is None:
+        return f"  {client:<9} (sin medir)"
+    groups = surface["groups"]
+    account = surface["account"]
+    parts = [f"{k.replace('mcp:', '')} {v}" for k, v in sorted(groups.items())
+             if not k.startswith("mcp:" + ACCOUNT_PREFIX.rstrip('_'))]
+    tail = f" · cuenta {account}" if account else ""
+    total = len(surface["names"])
+    return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}"
+            f"  [{surface['bytes']} B, {surface['seconds']}s]")
+
+
+def run_wire(clients):
+    """Measure the real surface of each client and print it."""
+    measured = {}
+    for client in clients:
+        surface = probe_wire(client)
+        measured[client] = surface
+        print(render_wire(client, surface))
+        note = WIRE_PROBES[client]["note"]
+        if note and surface is not None:
+            print(f"  {'':<9} {note}")
+    return measured
+
+
 # ---------------------------------------------------------------- live
 def handshake(name, cmd, args, env_extra=None, want_names=False):
     """Speak MCP at a server the way a client would. Writes nothing.
@@ -445,12 +630,36 @@ def trust_warning():
 
 
 # ---------------------------------------------------------------- main
+def wire_clients_from_argv():
+    """--client=NAME, repeatable; absent means all four."""
+    picked = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--client=")]
+    unknown = [c for c in picked if c not in WIRE_PROBES]
+    if unknown:
+        print(f"mcp-agree: cliente desconocido: {', '.join(unknown)}. "
+              f"Conocidos: {', '.join(sorted(WIRE_PROBES))}", file=sys.stderr)
+        return None
+    return picked or ["claude", "omp", "opencode", "codex"]
+
+
 def main():
     live = "--live" in sys.argv
     quiet = "--quiet" in sys.argv
 
     if "--trust-warning" in sys.argv:
         return trust_warning()
+
+    if "--wire" in sys.argv:
+        clients = wire_clients_from_argv()
+        if clients is None:
+            return 2
+        run_wire(clients)
+        if fails:
+            for case, what, why in fails:
+                print(f"\n  [{case}] {what}")
+                print(f"          {why}")
+            return 1
+        return 0
+
 
     for fn in (check_omp, check_claude, check_codex, check_opencode, check_serena):
         try:
