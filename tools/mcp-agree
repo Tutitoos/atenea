@@ -327,6 +327,11 @@ def check_serena():
 # never reaches a provider. That is why it is a subcommand and not something
 # the launch path may call.
 ACCOUNT_PREFIX = "mcp__claude_ai_"
+# group_tools turns mcp__claude_ai_Gmail__x into the group key mcp:claude_ai_Gmail,
+# so the group-side prefix is NOT derived from ACCOUNT_PREFIX: deriving it produced
+# "mcp:mcp__claude_ai", which matches nothing and let connectors count twice - once
+# as groups, once as `cuenta`.
+ACCOUNT_GROUP_PREFIX = "mcp:claude_ai_"
 CLAUDE_BIN = os.path.join(BIN, "claude")
 
 # opencode has no anthropic socket of its own: it drives the Claude Code CLI
@@ -478,7 +483,7 @@ def render_wire(client, surface):
     groups = surface["groups"]
     account = surface["account"]
     parts = [f"{k.replace('mcp:', '')} {v}" for k, v in sorted(groups.items())
-             if not k.startswith("mcp:" + ACCOUNT_PREFIX.rstrip('_'))]
+             if not k.startswith(ACCOUNT_GROUP_PREFIX)]
     tail = f" · cuenta {account}" if account else ""
     total = len(surface["names"])
     return (f"  {client:<9} {total:>3} tools  {' · '.join(parts)}{tail}"
@@ -514,7 +519,7 @@ def check_wire_invariants(client, surface):
     if not expected:
         return
     got = {k: v for k, v in surface["groups"].items()
-           if not k.startswith("mcp:" + ACCOUNT_PREFIX.rstrip("_"))}
+           if not k.startswith(ACCOUNT_GROUP_PREFIX)}
     if got != expected:
         moved = sorted(set(expected) | set(got))
         detail = ", ".join(f"{k} {expected.get(k, 0)}->{got.get(k, 0)}"
