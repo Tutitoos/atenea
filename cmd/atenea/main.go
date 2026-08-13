@@ -271,6 +271,18 @@ Steps with no unmet dependency run together, up to the ceiling of their lane
 only its dependents with it. Two steps that can run at once may not both touch
 a file when one writes it -- that is refused before anything spawns.
 
+An edge carries order; a subject carries the answer:
+
+  needs = ["read-a"]    run after read-a, and only if it ended ok
+  subject = "read-a"    hand this step read-a's whole report -- implies the edge
+  on = "answered"       what the subject must have reached: answered (the
+                        default: ok, failed or incomplete) or ok
+
+A subject is for review-pool agent types, one upstream each. A reviewer with
+no subject is refused, and so is a subject handed to a type that never reads
+one. A step nobody judged clears no bar: what depended on it reads blocked and
+says which command would clear it.
+
   run PATH              run the graph in PATH
   resume ID             continue a run that was cut, or whose atenea died
   list                  the runs on record

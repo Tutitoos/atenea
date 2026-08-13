@@ -241,10 +241,16 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	status := make(map[string]Status, len(run.Steps))
 	attempts := make(map[string]int, len(run.Steps))
 	traces := make(map[string]string, len(run.Steps))
+	// answers is what a subject edge hands over. Seeded from the record
+	// rather than only from this process's own results: a resumed run
+	// dispatches reviewers of steps that finished under an Atenea that is
+	// gone, and the answer they audit has to be the one that was given.
+	answers := make(map[string]StepRow, len(run.Steps))
 	for _, step := range run.Steps {
 		status[step.Step.ID] = step.Status
 		attempts[step.Step.ID] = step.Attempt
 		traces[step.Step.ID] = step.TraceID
+		answers[step.Step.ID] = step
 	}
 
 	lanes := make(map[config.Pool]int)
@@ -294,6 +300,19 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					Attempt:  attempts[step.ID],
 					RetryOf:  redoOf(traces[step.ID], attempts[step.ID]),
 				}
+				if step.Subject != "" {
+					subject, err := subjectFrom(answers[step.Subject])
+					if err != nil {
+						return run, err
+					}
+					dispatch.Subject = &subject
+					// The same link `atenea agent --review` writes: the trace
+					// row says which run this one audits, so the chain walks
+					// from either end. Recording the relationship in the
+					// workflow tables only would make the graph's reviews
+					// invisible to every reader of the traces.
+					dispatch.Reviews = subject.RunID
+				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
 					attempts[step.ID], e.now(), e.pid); err != nil {
 					cancel()
@@ -342,6 +361,20 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			return run, err
 		}
 		status[finished.stepID] = finished.status
+		// Kept for whoever reads this answer next. The same fields the store
+		// just wrote, so a subject built here and one built after a resume
+		// are the same card.
+		step, _ := plan.Step(finished.stepID)
+		answers[finished.stepID] = StepRow{
+			Step:       step,
+			Status:     finished.status,
+			TraceID:    traces[finished.stepID],
+			Attempt:    attempts[finished.stepID],
+			Verdict:    finished.report.Verdict,
+			Reason:     finished.report.Reason,
+			Result:     finished.report.Result,
+			Discovered: finished.report.Discovered,
+		}
 	}
 	wg.Wait()
 
@@ -422,15 +455,18 @@ func reportOf(report contract.Report, err error) contract.Report {
 	return report
 }
 
-// ready reports whether every step this one waits on has finished OK.
+// ready reports whether everything this step waits on has cleared the bar it
+// set.
 //
-// OK, not merely finished: a step whose input failed has nothing to work from,
-// and running it anyway would produce an answer about a state that never
-// existed. Its siblings are untouched -- that is the whole point of the graph
-// being a graph.
+// An ordering edge demands OK, and merely finished will not do: a step whose
+// input failed has nothing to work from, and running it anyway would produce
+// an answer about a state that never existed. A subject edge demands what the
+// step declared -- by default an answer of any verdict, because a failure is
+// an answer and auditing it is the point. Neither is cleared by a step nobody
+// judged.
 func ready(step Step, status map[string]Status) bool {
-	for _, need := range step.Needs {
-		if status[need] != StatusOK {
+	for _, edge := range step.Edges() {
+		if !edge.On.satisfiedBy(status[edge.ID]) {
 			return false
 		}
 	}

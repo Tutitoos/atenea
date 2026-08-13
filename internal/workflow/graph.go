@@ -41,10 +41,100 @@ type Step struct {
 	// Needs lists the step ids that must finish OK before this one starts.
 	// Empty means it can start immediately.
 	Needs []string
+	// Subject is the step whose answer this one is handed, empty when this
+	// step is handed nothing. It is an edge as well as a pipe: a step reading
+	// another's answer runs after it, and saying so twice would let the two
+	// halves disagree.
+	//
+	// One upstream, not a list. The card a subject fills is a review's, and a
+	// review is of one run.
+	Subject string
+	// On is how much of the subject's outcome this step demands. It is only
+	// meaningful with Subject, and the zero value is [OnAnswered].
+	On Requirement
 	// Permission is the slice of the commission this step acts under: the
 	// effects it may cause and its share of the money. It is stamped by
 	// whoever drew the graph, never decided by the step.
 	Permission contract.Permission
+}
+
+// Requirement is how much of an upstream outcome a subject edge demands.
+//
+// It exists as a declared word rather than as the presence of a second
+// `needs` line naming the same step. Those two lines look redundant, and a
+// reader tidying one away would leave a graph that still runs and quietly
+// reviews things it was meant to skip -- silent, and clean-looking, which is
+// the pair of properties worth spending a keyword to avoid.
+type Requirement uint8
+
+const (
+	// OnAnswered runs the dependent whenever the subject produced a report
+	// somebody validated: ok, failed or incomplete. It is the default because
+	// "it says it failed" is the claim most worth auditing, and a reviewer
+	// that only ever sees successes audits the half that needs it least.
+	OnAnswered Requirement = iota
+	// OnOK runs the dependent only if the subject succeeded.
+	OnOK
+)
+
+var requirementNames = map[Requirement]string{OnAnswered: "answered", OnOK: "ok"}
+
+func (r Requirement) String() string {
+	if name, ok := requirementNames[r]; ok {
+		return name
+	}
+	return "unspecified"
+}
+
+// ParseRequirement reads the word a graph file spells.
+func ParseRequirement(s string) (Requirement, error) {
+	switch strings.TrimSpace(s) {
+	case "answered":
+		return OnAnswered, nil
+	case "ok":
+		return OnOK, nil
+	}
+	return OnAnswered, contract.Fail(contract.FailureInvalidInput,
+		"unknown requirement %q: answered or ok", s)
+}
+
+// satisfiedBy reports whether an upstream status clears this requirement.
+//
+// The line is judged versus unjudged, not good versus bad. `interrupted` is
+// the one that never clears anything: nobody read a report, so there is no
+// verdict to hand over, and a subject built from it would be a card claiming
+// an answer that was never given.
+func (r Requirement) satisfiedBy(s Status) bool {
+	if r == OnOK {
+		return s == StatusOK
+	}
+	return s == StatusOK || s == StatusFailed || s == StatusIncomplete
+}
+
+// Edge is one thing a step waits on, and how much of it the step demands.
+type Edge struct {
+	ID string
+	On Requirement
+	// Subject reports whether the answer travels along this edge, or only the
+	// order.
+	Subject bool
+}
+
+// Edges is everything this step waits on: its ordering edges, which always
+// demand OK, and its subject edge, which demands what it declared.
+//
+// Every reader of the graph goes through here -- readiness, the cycle check,
+// the concurrency check and the blocked reason -- so a new kind of edge is
+// added in one place instead of four that can drift.
+func (s Step) Edges() []Edge {
+	out := make([]Edge, 0, len(s.Needs)+1)
+	for _, need := range s.Needs {
+		out = append(out, Edge{ID: need, On: OnOK})
+	}
+	if s.Subject != "" {
+		out = append(out, Edge{ID: s.Subject, On: s.On, Subject: true})
+	}
+	return out
 }
 
 // Clone returns a deep copy.
@@ -187,6 +277,27 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 					step.ID, effect, step.TypeName)
 			}
 		}
+		// A reviewer with nothing to review, and a step handed an answer
+		// nothing in it will read: both are visible here, and both used to
+		// be found at run time -- the first as an `incomplete` from an
+		// agent doing the only honest thing it could with an empty card.
+		if agentType.Pool == config.PoolReview && step.Subject == "" {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: step %s: agent type %s reviews, and a review needs a subject: "+
+					"name the step it audits with subject = \"<step>\"",
+				step.ID, step.TypeName)
+		}
+		if agentType.Pool != config.PoolReview && step.Subject != "" {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: step %s: subject %q is handed to agent type %s, which does not "+
+					"review and never reads one",
+				step.ID, step.Subject, step.TypeName)
+		}
+		if step.Subject == "" && step.On != OnAnswered {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: step %s: on = %q with no subject to apply it to",
+				step.ID, step.On)
+		}
 		out.Pools[step.ID] = agentType.Pool
 	}
 
@@ -226,21 +337,36 @@ func names(declared map[string]config.AgentType) []string {
 // reachable returns, for each step, every step it transitively waits on. It
 // is also the cycle check: a graph with a loop has a step that waits on
 // itself, and there is no order in which to run it.
+//
+// Subject edges count. A step reading another's answer is ordered after it as
+// surely as one that only declared `needs`, and leaving the pipe out of the
+// graph would let a reviewer be scheduled beside the run it audits.
 func (p Plan) reachable() (map[string]map[string]bool, error) {
 	needs := make(map[string][]string, len(p.Graph.Steps))
 	for _, step := range p.Graph.Steps {
-		for _, need := range step.Needs {
-			if _, ok := p.order[need]; !ok {
+		ids := make([]string, 0, len(step.Needs)+1)
+		for _, edge := range step.Edges() {
+			if _, ok := p.order[edge.ID]; !ok {
+				if edge.Subject {
+					return nil, contract.Fail(contract.FailureInvalidInput,
+						"workflow: step %s reads the answer of %q, which no step declares",
+						step.ID, edge.ID)
+				}
 				return nil, contract.Fail(contract.FailureInvalidInput,
 					"workflow: step %s waits on %q, which no step declares",
-					step.ID, need)
+					step.ID, edge.ID)
 			}
-			if need == step.ID {
+			if edge.ID == step.ID {
+				if edge.Subject {
+					return nil, contract.Fail(contract.FailureInvalidInput,
+						"workflow: step %s reviews itself", step.ID)
+				}
 				return nil, contract.Fail(contract.FailureInvalidInput,
 					"workflow: step %s waits on itself", step.ID)
 			}
+			ids = append(ids, edge.ID)
 		}
-		needs[step.ID] = step.Needs
+		needs[step.ID] = ids
 	}
 
 	out := make(map[string]map[string]bool, len(needs))

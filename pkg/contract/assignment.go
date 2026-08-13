@@ -635,6 +635,29 @@ func (r Report) Failed() bool { return r.Verdict == VerdictFailed }
 // what it did produce still stands.
 func (r Report) Incomplete() bool { return r.Verdict == VerdictIncomplete }
 
+// Subject turns this report into the case handed to whoever reads it next:
+// a reviewer auditing it, or the agent itself on a relaunch.
+//
+// One constructor, because there are two callers -- `atenea agent --review`
+// and a workflow's subject edge -- and a subject assembled twice is two
+// different reviews of one answer, decided by which door the caller came
+// through.
+//
+// The whole validated report travels, never a projection of it. A subject
+// narrowed to the interesting fields is a summary, and a review of a summary
+// is a review of something the parent never consumed.
+func (r Report) Subject(runID, typeName string, attempt int, work Task) Subject {
+	return Subject{
+		RunID:    runID,
+		TypeName: typeName,
+		Task:     work,
+		Attempt:  attempt,
+		Result:   r.Result,
+		Verdict:  r.Verdict,
+		Reason:   r.Reason,
+	}
+}
+
 // Clone returns a deep copy.
 func (r Report) Clone() Report {
 	out := r

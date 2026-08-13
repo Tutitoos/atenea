@@ -279,8 +279,10 @@ func stepDetail(run workflow.Run, step workflow.StepRow) string {
 		}
 		return took(traceLike(step))
 	case workflow.StatusPending:
-		if run.Blocked(step.Step.ID) {
-			return "waits on " + strings.Join(step.Needs(), ", ")
+		// Not truncated. The subject form of this line carries the command
+		// that clears it, and a cure cut off at sixty columns is not one.
+		if reason := run.BlockReason(step.Step.ID); reason != "" {
+			return reason
 		}
 		if len(step.Needs()) > 0 {
 			return "after " + strings.Join(step.Needs(), ", ")

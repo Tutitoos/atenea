@@ -74,14 +74,27 @@ type harness struct {
 
 func newHarness(t *testing.T, lanes config.Workflow, types ...config.AgentType) *harness {
 	t.Helper()
-	return newHarnessWith(t, workflow.Options{Lanes: lanes}, types...)
+	return newHarnessWith(t, workflow.Options{Lanes: lanes}, "", types...)
+}
+
+// newHarnessOver builds a second engine over a database that already exists.
+// Nothing in the first engine's memory reaches it, which is the point: what
+// it can do, it does from the record.
+func newHarnessOver(t *testing.T, dir string, lanes config.Workflow,
+	types ...config.AgentType) *harness {
+	t.Helper()
+	return newHarnessWith(t, workflow.Options{Lanes: lanes}, dir, types...)
 }
 
 // newHarnessWith is newHarness with the engine's own seams open: the pid it
-// runs as, and how it decides whether another pid is alive.
-func newHarnessWith(t *testing.T, opts workflow.Options, types ...config.AgentType) *harness {
+// runs as, and how it decides whether another pid is alive. An empty dir gets
+// a fresh one.
+func newHarnessWith(t *testing.T, opts workflow.Options, dir string,
+	types ...config.AgentType) *harness {
 	t.Helper()
-	dir := t.TempDir()
+	if dir == "" {
+		dir = t.TempDir()
+	}
 	path := filepath.Join(dir, "traces.db")
 
 	traces, err := trace.Open(t.Context(), path)
@@ -131,6 +144,19 @@ func step(id, typeName string, needs []string, effects ...contract.Effect) workf
 // withFiles puts a file list on a step, which is what the write rule reads.
 func withFiles(s workflow.Step, files ...string) workflow.Step {
 	s.Task.Files = files
+	return s
+}
+
+// reviewing points a step at the answer it audits, with the default bar.
+func reviewing(s workflow.Step, subject string) workflow.Step {
+	s.Subject = subject
+	return s
+}
+
+// reviewingOnly is the same edge with the stricter bar: successes only.
+func reviewingOnly(s workflow.Step, subject string, on workflow.Requirement) workflow.Step {
+	s.Subject = subject
+	s.On = on
 	return s
 }
 

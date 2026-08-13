@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // Blocked reports whether this step never ran because something it needs did
@@ -14,38 +16,120 @@ import (
 // record: writing it down as a third status would be a second copy of a fact
 // that can go stale the moment a resume redoes the step that blocked it.
 func (r Run) Blocked(id string) bool {
+	_, _, blocked := r.blockedBy(id)
+	return blocked
+}
+
+// BlockReason says why a step never ran, and what would clear it.
+//
+// A step held up by one nobody judged gets the cure in the sentence. "waits
+// on read-a" is true there and useless: it leaves the reader to already know
+// that an unjudged run cannot be handed on, and that `--redo` is what judges
+// one. Both facts are in the line instead, for ordering edges as much as for
+// subject edges -- `--redo` clears either.
+//
+// A step held up by a failure is a different sentence, because a failure was
+// judged and nothing here will change it.
+func (r Run) BlockReason(id string) string {
+	edge, upstream, blocked := r.blockedBy(id)
+	if !blocked {
+		return ""
+	}
+	if upstream != StatusInterrupted {
+		return "waits on " + edge.ID
+	}
+	what := "nothing to hand on"
+	if edge.Subject {
+		what = "no answer to review"
+	}
+	// The minimal cure, not the heaviest one. A resume redoes an interrupted
+	// step that only read, by itself; `--redo` is for the ones it deliberately
+	// leaves alone. Printing --redo for both would teach the bigger hammer
+	// and quietly suggest that resume on its own does not work here.
+	cure := "atenea workflow resume " + r.ID
+	if row, ok := stepRow(r, edge.ID); ok && touchesTheWorld(row.Step.Permission.Effects) {
+		cure += " --redo " + edge.ID
+	}
+	return fmt.Sprintf("%s was never judged, so there is %s: %s", edge.ID, what, cure)
+}
+
+// blockedBy finds the edge that shut this step out, and how the step on the
+// far side of it ended.
+func (r Run) blockedBy(id string) (Edge, Status, bool) {
 	status := make(map[string]Status, len(r.Steps))
 	for _, step := range r.Steps {
 		status[step.Step.ID] = step.Status
 	}
 	seen := make(map[string]bool, len(r.Steps))
-	var blocked func(string) bool
-	blocked = func(id string) bool {
+	var walk func(string) (Edge, Status, bool)
+	walk = func(id string) (Edge, Status, bool) {
 		if seen[id] {
-			return false
+			return Edge{}, StatusPending, false
 		}
 		seen[id] = true
 		step, ok := stepRow(r, id)
 		if !ok || step.Status != StatusPending {
-			return false
+			return Edge{}, StatusPending, false
 		}
-		for _, need := range step.Needs() {
-			switch status[need] {
-			case StatusFailed, StatusIncomplete, StatusInterrupted:
-				return true
-			case StatusPending:
-				if blocked(need) {
-					return true
+		for _, edge := range step.Step.Edges() {
+			upstream := status[edge.ID]
+			if upstream == StatusPending {
+				if found, was, blocked := walk(edge.ID); blocked {
+					return found, was, true
 				}
+				continue
 			}
+			// Still running, or finished in a way this edge accepts.
+			if upstream == StatusRunning || edge.On.satisfiedBy(upstream) {
+				continue
+			}
+			return edge, upstream, true
 		}
-		return false
+		return Edge{}, StatusPending, false
 	}
-	return blocked(id)
+	return walk(id)
 }
 
-// Needs is what this step waits on.
-func (s StepRow) Needs() []string { return s.Step.Needs }
+// Needs is what this step waits on, answer-carrying edge included.
+func (s StepRow) Needs() []string {
+	out := make([]string, 0, len(s.Step.Needs)+1)
+	for _, edge := range s.Step.Edges() {
+		out = append(out, edge.ID)
+	}
+	return out
+}
+
+// Report reassembles what the agent handed back. The store keeps the fields
+// apart because they are queried apart; a reader wanting the answer wants it
+// whole.
+func (s StepRow) Report() contract.Report {
+	return contract.Report{
+		Result:     s.Result,
+		Verdict:    s.Verdict,
+		Reason:     s.Reason,
+		Discovered: s.Discovered,
+	}
+}
+
+// subjectFrom packs a finished step into the card its reader is handed.
+//
+// It goes through [contract.Report.Subject], the same constructor
+// `atenea agent --review` uses, so one answer cannot get two different
+// reviews depending on which door the caller came through.
+//
+// The validation is the load-bearing part. A step nobody judged has no
+// verdict, and the contract refuses to build a card from it -- so a subject
+// fabricated from a run nobody watched cannot reach an agent even if a gate
+// upstream of here were wrong. Reaching this error is a bug in the readiness
+// rule, and it says so.
+func subjectFrom(up StepRow) (contract.Subject, error) {
+	subject := up.Report().Subject(up.TraceID, up.Step.TypeName, up.Attempt, up.Step.Task)
+	if err := subject.Validate(); err != nil {
+		return contract.Subject{}, contract.Fail(contract.FailureInvalidInput,
+			"workflow: nothing reviewable from step %s: %v", up.Step.ID, err)
+	}
+	return subject, nil
+}
 
 // Label is what to call this step in a listing: its status, or `blocked` for a
 // pending step whose way is shut.

@@ -88,28 +88,34 @@ func TestTheLaneCeilingCapsParallelSteps(t *testing.T) {
 	}
 }
 
-// The lanes are separate. With one slot each, an agent and a reviewer overlap
-// -- which is the whole point of declaring a pool -- and two of either never
-// do.
+// The lanes are separate. With one slot each, an agent and a reviewer run at
+// the same time -- which is the whole point of declaring a pool -- and two of
+// either never do.
+//
+// Both reviewers audit one quick seed step rather than the slow work beside
+// them: a reviewer is ordered after the answer it reads, so pointing them at
+// the slow steps would test the edge instead of the lane.
 func TestTheLanesDoNotShareTheirCeilings(t *testing.T) {
 	dir := t.TempDir()
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1, MaxParallelReview: 1},
+		declared("seed", answers(t, dir, "seed"), config.PoolAgent),
 		declared("work", counter(t, dir, "work", "agent", 250*time.Millisecond), config.PoolAgent),
 		declared("audit", counter(t, dir, "audit", "review", 250*time.Millisecond), config.PoolReview),
 	)
 
 	started := time.Now()
 	run, err := h.engine.Start(t.Context(), graphOf(
+		step("seed", "seed", nil),
 		step("w1", "work", nil),
 		step("w2", "work", nil),
-		step("r1", "audit", nil),
-		step("r2", "audit", nil),
+		reviewing(step("r1", "audit", nil), "seed"),
+		reviewing(step("r2", "audit", nil), "seed"),
 	))
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	elapsed := time.Since(started)
-	if got := statuses(t, run); len(got) != 4 {
+	if got := statuses(t, run); len(got) != 5 {
 		t.Fatalf("statuses = %v", got)
 	}
 	if got := peak(t, dir, "agent"); got != 1 {
@@ -383,7 +389,7 @@ func TestARunOwnedByALiveProcessIsNotTakenOver(t *testing.T) {
 		Lanes: noCeiling(),
 		PID:   4242,
 		Alive: func(pid int) bool { return pid == 9999 },
-	}, declared("good", answers(t, dir, "good"), config.PoolAgent))
+	}, "", declared("good", answers(t, dir, "good"), config.PoolAgent))
 
 	plan, err := workflow.Compile(graphOf(step("a", "good", nil)),
 		[]config.AgentType{declared("good", "/bin/true", config.PoolAgent)})
@@ -416,7 +422,7 @@ func TestARunLeftByADeadProcessResumes(t *testing.T) {
 		Lanes: noCeiling(),
 		PID:   4242,
 		Alive: func(int) bool { return false },
-	}, declared("good", answers(t, dir, "good"), config.PoolAgent))
+	}, "", declared("good", answers(t, dir, "good"), config.PoolAgent))
 
 	plan, err := workflow.Compile(graphOf(
 		step("a", "good", nil),

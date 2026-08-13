@@ -39,7 +39,7 @@ func refuses(t *testing.T, graph workflow.Graph, want string) {
 func TestAGraphCompiles(t *testing.T) {
 	plan, err := compile(t, graphOf(
 		step("look", "reader", nil),
-		step("judge", "critic", []string{"look"}),
+		reviewing(step("judge", "critic", nil), "look"),
 	))
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -180,4 +180,76 @@ func TestAGraphWithNoStepsIsRefused(t *testing.T) {
 
 func TestAGraphWithNoTaskIsRefused(t *testing.T) {
 	refuses(t, workflow.Graph{Steps: []workflow.Step{step("a", "reader", nil)}}, "task is required")
+}
+
+// --- subject edges -------------------------------------------------------
+
+// The refusal that replaces the previous version's run-time `incomplete`: a
+// reviewer with no subject used to spawn, read an empty card, and say so
+// itself. Nothing about that was visible until the earlier steps had run.
+func TestAReviewerWithNoSubjectIsRefused(t *testing.T) {
+	refuses(t, graphOf(
+		step("look", "reader", nil),
+		step("judge", "critic", []string{"look"}),
+	), "a review needs a subject")
+}
+
+// The other direction: an answer handed to something that never reads one.
+func TestASubjectOnANonReviewerIsRefused(t *testing.T) {
+	refuses(t, graphOf(
+		step("look", "reader", nil),
+		reviewing(step("other", "reader", nil), "look"),
+	), "does not review")
+}
+
+func TestASubjectNamingNothingIsRefused(t *testing.T) {
+	refuses(t, graphOf(
+		step("look", "reader", nil),
+		reviewing(step("judge", "critic", nil), "ghost"),
+	), `reads the answer of "ghost"`)
+}
+
+func TestAStepThatReviewsItselfIsRefused(t *testing.T) {
+	refuses(t, graphOf(reviewing(step("judge", "critic", nil), "judge")), "reviews itself")
+}
+
+// `on` is only meaningful with a subject. Ignoring a stray one would leave a
+// line its author believes is doing something.
+func TestOnWithNoSubjectIsRefused(t *testing.T) {
+	stray := step("look", "reader", nil)
+	stray.On = workflow.OnOK
+	refuses(t, graphOf(stray), "no subject to apply it to")
+}
+
+// A subject is an edge as well as a pipe, so it closes a loop like any other.
+func TestACycleThroughASubjectIsRefused(t *testing.T) {
+	refuses(t, graphOf(
+		step("look", "reader", []string{"judge"}),
+		reviewing(step("judge", "critic", nil), "look"),
+	), "cycle")
+}
+
+// The write rule reads the same edges the scheduler does. A reviewer ordered
+// after the writer it audits is not concurrent with it, so sharing the file
+// is fine -- and if the subject edge were invisible here, this graph would be
+// refused for a conflict that cannot happen.
+func TestASubjectEdgeOrdersAgainstTheWriteRule(t *testing.T) {
+	if _, err := compile(t, graphOf(
+		withFiles(step("edit", "writer", nil, contract.EffectRead, contract.EffectWrite), "notes.md"),
+		withFiles(reviewing(step("judge", "critic", nil), "edit"), "notes.md"),
+	)); err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+}
+
+func TestRequirementParsing(t *testing.T) {
+	for _, want := range []workflow.Requirement{workflow.OnAnswered, workflow.OnOK} {
+		got, err := workflow.ParseRequirement(want.String())
+		if err != nil || got != want {
+			t.Fatalf("round trip of %s = %v, %v", want, got, err)
+		}
+	}
+	if _, err := workflow.ParseRequirement("maybe"); err == nil {
+		t.Fatal("accepted a requirement that is not a word")
+	}
 }

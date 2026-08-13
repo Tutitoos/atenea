@@ -164,16 +164,12 @@ func (r *Runner) attempt(ctx context.Context, typeName, reviewerName string,
 // attempt number is passed in rather than read off the card: the loop is what
 // knows which try this is, and a card that counted its own attempts would be
 // a second place that fact lives.
+//
+// The packing itself belongs to the report -- a workflow's subject edge hands
+// over the same card, and one answer must not get two different reviews
+// depending on which caller assembled it.
 func subjectOf(a Attempt, attempt int) contract.Subject {
-	return contract.Subject{
-		RunID:    a.Work.ID,
-		TypeName: a.Work.TypeName,
-		Task:     a.Work.Task,
-		Attempt:  attempt,
-		Result:   a.Report.Result,
-		Verdict:  a.Report.Verdict,
-		Reason:   a.Report.Reason,
-	}
+	return a.Report.Subject(a.Work.ID, a.Work.TypeName, attempt, a.Work.Task)
 }
 
 // reviewTask states what the reviewer is being asked, in the same shape as

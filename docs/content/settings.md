@@ -861,12 +861,12 @@ effects = ["read"]                        # ceiling for this step, within its ty
 budget_usd = 0.25                         # this step's share
 
 [[step]]
-id = "read-changelog"
-agent = "filereader"
-needs = ["read-readme"]                   # an edge means AFTER
-objective = "read CHANGELOG.md and answer"
-files = ["CHANGELOG.md"]
-criterion = "the counts match the file"
+id = "audit-readme"
+agent = "reviewer"                        # a review-pool type; it needs a subject
+subject = "read-readme"                   # hand it that step's answer -- implies the edge
+objective = "audit what the reader answered"
+files = ["README.md"]
+criterion = "the answer holds"
 effects = ["read"]
 budget_usd = 0.25
 ```
@@ -876,20 +876,71 @@ picking steps and no growth mid-run: the graph arrives complete and is executed
 exactly as written, which is why every refusal below happens before anything
 spawns.
 
-Nothing passes between steps either. An edge is an order, not a pipe: a step is
-handed the task written in the file and nothing the step before it found. One
-consequence worth knowing before you try it -- **`reviewer` is not usable as a
-graph step yet.** A reviewer reads its case from the `subject` on its
-assignment, a graph step has no subject to give it, and it answers `incomplete`
-saying exactly that. Auditing today goes through `atenea agent --review`, which
-hands over the answer itself.
-
 Steps with no unmet dependency run together, up to the ceiling of their lane.
 Ready steps beyond it wait: the queue is the pending set in declaration order,
 not a second list, so the same graph makes the same choices on a slower
 machine. A step whose dependency did not end `ok` never runs and reads as
 `blocked`; its siblings are untouched, which is the point of the graph being a
 graph.
+
+### What an edge carries
+
+`needs` carries order and nothing else: a step is handed the task written in
+the file, never what the step before it found.
+
+`subject` carries the answer. It names **one** upstream step, and it is an
+edge as well as a pipe -- a step reading another's answer runs after it, and
+declaring that twice would let the two halves disagree. What travels is the
+whole validated report: the result, the verdict, the reason, and the task the
+upstream was actually asked, criterion included. Never a projection of it. A
+subject narrowed to the interesting fields is a summary, and a review of a
+summary is a review of something the parent never consumed.
+
+It is the same card `atenea agent --review` hands over, built by the same
+constructor, so one answer cannot get two different reviews depending on which
+door the caller came through. The reviewer's trace row records `reviews <id>`
+either way.
+
+Two refusals at compile time, both naming the step:
+
+- a **review-pool type with no `subject`** -- it would spawn, read an empty
+  card and answer `incomplete` saying so, after the earlier steps had run
+- a **`subject` on a type that does not review** -- nothing in it reads one
+
+### What an edge demands
+
+```toml
+on = "answered"   # default: ok, failed or incomplete -- anything judged
+on = "ok"         # only a success
+```
+
+The line is **judged versus unjudged, not good versus bad**:
+
+| the subject ended | the dependent |
+|---|---|
+| `ok` | runs |
+| `failed` | runs -- a failure is an answer, and "it says it failed" is the claim most worth auditing |
+| `incomplete` | runs -- the agent's own word for stopping short is still an answer |
+| `interrupted` | **blocked**: nobody judged it, so there is no verdict to hand over |
+| `blocked` / `skipped` | blocked, transitively |
+
+Never a partial subject. Either the whole validated report or nothing: a card
+claiming an answer that was never given is the same class of mistake as a
+green verdict on an unmeasured surface -- it would look fine and be wrong.
+That one is not a rule layered on top, either. A subject with no verdict is
+refused by the contract itself, so it cannot be built even if a gate above it
+were wrong.
+
+A step blocked by an unjudged subject prints the command that clears it, which
+is `atenea workflow resume <id>` when the subject only read, and the same with
+`--redo <step>` when it may have written -- the one a resume deliberately
+leaves alone.
+
+`on` is a declared word rather than a second `needs` line naming the same
+step. Those two lines look redundant, and a reader tidying one away would
+leave a graph that still runs and quietly reviews things it was meant to
+skip: silent, and clean-looking. `on` with no `subject` is refused rather than
+ignored.
 
 **Two steps that can run at once may not both touch a file when one of them
 writes it.** That is refused when the graph compiles, naming both steps and the
@@ -922,6 +973,12 @@ a second attempt whose trace row says which run it redoes; interrupted steps
 that may `write` or reach `external` are **left alone**, because nobody saw how
 far they got and repeating them could land the same effect twice. Those wait
 for `--redo <step>`, and a run holding one is `unjudged` rather than finished.
+
+A subject survives all of this. The card handed to a reviewer on a resume is
+rebuilt from the record, so it is the answer the upstream really gave, even
+when the Atenea that heard it is gone -- and if that upstream was itself
+redone, the review audits the attempt that stands rather than the one that was
+cut.
 
 ### Money
 

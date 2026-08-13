@@ -28,8 +28,14 @@ type fileStep struct {
 	Files     []string `toml:"files"`
 	Criterion string   `toml:"criterion"`
 	Needs     []string `toml:"needs"`
-	Effects   []string `toml:"effects"`
-	GrantUSD  *float64 `toml:"budget_usd"`
+	Subject   string   `toml:"subject"`
+	// On is a pointer so that writing it at all can be told from leaving it
+	// out. The default is the same either way; what differs is that `on`
+	// declared beside no subject is a line the author believes is doing
+	// something, and it is refused rather than ignored.
+	On       *string  `toml:"on"`
+	Effects  []string `toml:"effects"`
+	GrantUSD *float64 `toml:"budget_usd"`
 }
 
 // ReadFile reads a graph from a TOML file.
@@ -83,7 +89,21 @@ func ReadFile(path string) (Graph, error) {
 				Criterion: strings.TrimSpace(step.Criterion),
 			},
 			Needs:      step.Needs,
+			Subject:    strings.TrimSpace(step.Subject),
 			Permission: contract.Permission{Effects: effects},
+		}
+		if step.On != nil {
+			if converted.Subject == "" {
+				return Graph{}, contract.Fail(contract.FailureInvalidInput,
+					"workflow %s: step %s: on = %q with no subject to apply it to",
+					path, step.ID, *step.On)
+			}
+			on, err := ParseRequirement(*step.On)
+			if err != nil {
+				return Graph{}, contract.Fail(contract.FailureInvalidInput,
+					"workflow %s: step %s: %v", path, step.ID, err)
+			}
+			converted.On = on
 		}
 		if step.GrantUSD != nil {
 			converted.Permission.BudgetUSD = *step.GrantUSD

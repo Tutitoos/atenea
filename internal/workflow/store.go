@@ -209,6 +209,12 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     files       TEXT    NOT NULL DEFAULT '[]',
     criterion   TEXT    NOT NULL DEFAULT '',
     needs       TEXT    NOT NULL DEFAULT '[]',
+    -- The step whose answer this one is handed, and how much of that outcome
+    -- it demanded. Empty subject is the ordinary case: most steps are handed
+    -- nothing. The bar is stored with it because a resumed run must apply the
+    -- same one the author wrote, not today's default.
+    subject     TEXT    NOT NULL DEFAULT '',
+    on_outcome  TEXT    NOT NULL DEFAULT 'answered',
     effects     TEXT    NOT NULL DEFAULT '[]',
     grant_usd   REAL    NOT NULL DEFAULT 0,
     status      TEXT    NOT NULL,
@@ -301,11 +307,12 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, at time.Time, 
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO workflow_step
 			 (workflow_id, id, ordinal, type_name, pool, objective, files,
-			  criterion, needs, effects, grant_usd, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  criterion, needs, subject, on_outcome, effects, grant_usd, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, step.ID, i, step.TypeName, plan.Pools[step.ID].String(),
 			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion,
-			jsonList(step.Needs), jsonEffects(step.Permission.Effects),
+			jsonList(step.Needs), step.Subject, step.On.String(),
+			jsonEffects(step.Permission.Effects),
 			step.Permission.BudgetUSD, StatusPending.String()); err != nil {
 			return unavailable(err, "workflow: opening %s step %s", id, step.ID)
 		}
@@ -441,9 +448,10 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	out.Stop = Stop(stop)
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type_name, pool, objective, files, criterion, needs, effects,
-		        grant_usd, status, trace_id, attempt, writer_pid, started_at,
-		        ended_at, verdict, reason_kind, reason_text, result, discovered, spent_usd
+		`SELECT id, type_name, pool, objective, files, criterion, needs, subject,
+		        on_outcome, effects, grant_usd, status, trace_id, attempt, writer_pid,
+		        started_at, ended_at, verdict, reason_kind, reason_text, result,
+		        discovered, spent_usd
 		 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
 	if err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
@@ -506,6 +514,7 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 	var (
 		out                         StepRow
 		pool, files, needs, effects string
+		onOutcome                   string
 		status, verdict             string
 		reasonKind, reasonText      string
 		result, discovered          string
@@ -513,7 +522,8 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		spent                       sql.NullFloat64
 	)
 	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &pool,
-		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs, &effects,
+		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs,
+		&out.Step.Subject, &onOutcome, &effects,
 		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.Attempt,
 		&out.WriterPID, &started, &ended, &verdict, &reasonKind, &reasonText,
 		&result, &discovered, &spent); err != nil {
@@ -524,6 +534,11 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		return StepRow{}, err
 	}
 	if out.Status, err = ParseStatus(status); err != nil {
+		return StepRow{}, err
+	}
+	// The bar the author wrote, applied again on resume. Defaulting it here
+	// would silently widen a graph that asked for successes only.
+	if out.Step.On, err = ParseRequirement(onOutcome); err != nil {
 		return StepRow{}, err
 	}
 	out.Step.Task.Files = readList(files)
