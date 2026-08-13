@@ -236,55 +236,55 @@ func (c Capability) Validate() error {
 			c.ID, ReservedNamespace)
 	}
 	if c.Version == (Version{}) {
-		return Fail(FailureInvalidInput, "capability %s: version is required", c.ID)
+		return Fail(FailureInvalidInput, "%s: version is required", c.ID)
 	}
 	if strings.TrimSpace(c.Summary) == "" {
-		return Fail(FailureInvalidInput, "capability %s: summary is required", c.ID)
+		return Fail(FailureInvalidInput, "%s: summary is required", c.ID)
 	}
-	if err := validateFields("input", c.ID, c.Inputs); err != nil {
+	if err := validateFields("input", "capability "+c.ID, c.Inputs); err != nil {
 		return err
 	}
-	if err := validateFields("output", c.ID, c.Outputs); err != nil {
+	if err := validateFields("output", "capability "+c.ID, c.Outputs); err != nil {
 		return err
 	}
 	for _, e := range c.Effects {
 		if _, ok := effectNames[e]; !ok {
-			return Fail(FailureInvalidInput, "capability %s: unknown effect %d", c.ID, e)
+			return Fail(FailureInvalidInput, "%s: unknown effect %d", c.ID, e)
 		}
 	}
 	return nil
 }
 
-func validateFields(kind, capID string, fields []Field) error {
+func validateFields(kind, subject string, fields []Field) error {
 	seen := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
 		if !fieldName.MatchString(f.Name) {
 			return Fail(FailureInvalidInput,
-				"capability %s: %s name %q must be lowercase snake_case", capID, kind, f.Name)
+				"%s: %s name %q must be lowercase snake_case", subject, kind, f.Name)
 		}
 		if _, dup := seen[f.Name]; dup {
 			return Fail(FailureInvalidInput,
-				"capability %s: duplicate %s %q", capID, kind, f.Name)
+				"%s: duplicate %s %q", subject, kind, f.Name)
 		}
 		seen[f.Name] = struct{}{}
 		if _, ok := typeNames[f.Type]; !ok {
 			return Fail(FailureInvalidInput,
-				"capability %s: %s %q has unknown type %d", capID, kind, f.Name, f.Type)
+				"%s: %s %q has unknown type %d", subject, kind, f.Name, f.Type)
 		}
 		nested := f.Type == TypeRecord || f.Type == TypeRecordList
 		switch {
 		case nested && len(f.Fields) == 0:
 			return Fail(FailureInvalidInput,
-				"capability %s: %s %q is a %s and needs nested fields", capID, kind, f.Name, f.Type)
+				"%s: %s %q is a %s and needs nested fields", subject, kind, f.Name, f.Type)
 		case !nested && len(f.Fields) > 0:
 			return Fail(FailureInvalidInput,
-				"capability %s: %s %q is a %s and cannot have nested fields", capID, kind, f.Name, f.Type)
+				"%s: %s %q is a %s and cannot have nested fields", subject, kind, f.Name, f.Type)
 		}
-		if err := validateEnum(kind, capID, f); err != nil {
+		if err := validateEnum(kind, subject, f); err != nil {
 			return err
 		}
 		if nested {
-			if err := validateFields(kind, capID, f.Fields); err != nil {
+			if err := validateFields(kind, subject, f.Fields); err != nil {
 				return err
 			}
 		}
@@ -293,23 +293,23 @@ func validateFields(kind, capID string, fields []Field) error {
 }
 
 // validateEnum checks an enum declaration, not a value against one.
-func validateEnum(kind, capID string, f Field) error {
+func validateEnum(kind, subject string, f Field) error {
 	if len(f.Enum) == 0 {
 		return nil
 	}
 	if f.Type != TypeString && f.Type != TypeStringList {
 		return Fail(FailureInvalidInput,
-			"capability %s: %s %q is a %s and cannot have an enum", capID, kind, f.Name, f.Type)
+			"%s: %s %q is a %s and cannot have an enum", subject, kind, f.Name, f.Type)
 	}
 	seen := make(map[string]struct{}, len(f.Enum))
 	for _, value := range f.Enum {
 		if value == "" {
 			return Fail(FailureInvalidInput,
-				"capability %s: %s %q has an empty enum value", capID, kind, f.Name)
+				"%s: %s %q has an empty enum value", subject, kind, f.Name)
 		}
 		if _, dup := seen[value]; dup {
 			return Fail(FailureInvalidInput,
-				"capability %s: %s %q lists enum value %q twice", capID, kind, f.Name, value)
+				"%s: %s %q lists enum value %q twice", subject, kind, f.Name, value)
 		}
 		seen[value] = struct{}{}
 	}
@@ -320,16 +320,16 @@ func validateEnum(kind, capID string, f Field) error {
 // refused: a caller passing a field the capability never promised is a caller
 // relying on one particular implementation.
 func (c Capability) ValidateInput(payload map[string]any) error {
-	return checkPayload(c.ID, "input", c.Inputs, payload)
+	return checkPayload("capability "+c.ID, "input", c.Inputs, payload)
 }
 
 // ValidateOutput checks a payload against the declared outputs. Adapters use it
 // to prove a translation is complete before handing it back to the core.
 func (c Capability) ValidateOutput(payload map[string]any) error {
-	return checkPayload(c.ID, "output", c.Outputs, payload)
+	return checkPayload("capability "+c.ID, "output", c.Outputs, payload)
 }
 
-func checkPayload(capID, kind string, fields []Field, payload map[string]any) error {
+func checkPayload(subject, kind string, fields []Field, payload map[string]any) error {
 	known := make(map[string]Field, len(fields))
 	for _, f := range fields {
 		known[f.Name] = f
@@ -343,28 +343,28 @@ func checkPayload(capID, kind string, fields []Field, payload map[string]any) er
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return Fail(FailureInvalidInput,
-			"capability %s: unknown %s field(s): %s", capID, kind, strings.Join(unknown, ", "))
+			"%s: unknown %s field(s): %s", subject, kind, strings.Join(unknown, ", "))
 	}
 	for _, f := range fields {
 		value, present := payload[f.Name]
 		if !present || value == nil {
 			if f.Required {
 				return Fail(FailureInvalidInput,
-					"capability %s: %s %q is required", capID, kind, f.Name)
+					"%s: %s %q is required", subject, kind, f.Name)
 			}
 			continue
 		}
-		if err := checkValue(capID, kind, f.Name, f, value); err != nil {
+		if err := checkValue(subject, kind, f.Name, f, value); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func checkValue(capID, kind, path string, f Field, value any) error {
+func checkValue(subject, kind, path string, f Field, value any) error {
 	typeErr := func() error {
 		return Fail(FailureInvalidInput,
-			"capability %s: %s %q must be %s, got %T", capID, kind, path, f.Type, value)
+			"%s: %s %q must be %s, got %T", subject, kind, path, f.Type, value)
 	}
 	switch f.Type {
 	case TypeString:
@@ -372,7 +372,7 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 		if !ok {
 			return typeErr()
 		}
-		return checkEnum(capID, kind, path, f, text)
+		return checkEnum(subject, kind, path, f, text)
 	case TypeBool:
 		if _, ok := value.(bool); !ok {
 			return typeErr()
@@ -390,9 +390,9 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 			text, ok := item.(string)
 			if !ok {
 				return Fail(FailureInvalidInput,
-					"capability %s: %s %q[%d] must be string, got %T", capID, kind, path, i, item)
+					"%s: %s %q[%d] must be string, got %T", subject, kind, path, i, item)
 			}
-			if err := checkEnum(capID, kind, fmt.Sprintf("%s[%d]", path, i), f, text); err != nil {
+			if err := checkEnum(subject, kind, fmt.Sprintf("%s[%d]", path, i), f, text); err != nil {
 				return err
 			}
 		}
@@ -401,7 +401,7 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 		if !ok {
 			return typeErr()
 		}
-		return checkPayload(capID, kind+" "+path, f.Fields, record)
+		return checkPayload(subject, kind+" "+path, f.Fields, record)
 	case TypeRecordList:
 		items, ok := asList(value)
 		if !ok {
@@ -411,28 +411,28 @@ func checkValue(capID, kind, path string, f Field, value any) error {
 			record, ok := asRecord(item)
 			if !ok {
 				return Fail(FailureInvalidInput,
-					"capability %s: %s %q[%d] must be record, got %T", capID, kind, path, i, item)
+					"%s: %s %q[%d] must be record, got %T", subject, kind, path, i, item)
 			}
-			if err := checkPayload(capID, fmt.Sprintf("%s %s[%d]", kind, path, i), f.Fields, record); err != nil {
+			if err := checkPayload(subject, fmt.Sprintf("%s %s[%d]", kind, path, i), f.Fields, record); err != nil {
 				return err
 			}
 		}
 	default:
 		return Fail(FailureInvalidInput,
-			"capability %s: %s %q has unknown type %d", capID, kind, path, f.Type)
+			"%s: %s %q has unknown type %d", subject, kind, path, f.Type)
 	}
 	return nil
 }
 
 // checkEnum refuses a value outside a closed set, and names the set in the
 // refusal. A caller that guessed wrong needs the list, not the verdict.
-func checkEnum(capID, kind, path string, f Field, value string) error {
+func checkEnum(subject, kind, path string, f Field, value string) error {
 	if len(f.Enum) == 0 || slices.Contains(f.Enum, value) {
 		return nil
 	}
 	return Fail(FailureInvalidInput,
-		"capability %s: %s %q must be one of %s, got %q",
-		capID, kind, path, strings.Join(f.Enum, ", "), value)
+		"%s: %s %q must be one of %s, got %q",
+		subject, kind, path, strings.Join(f.Enum, ", "), value)
 }
 
 // isInteger accepts the float64 that a JSON decoder produces for whole numbers,

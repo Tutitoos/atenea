@@ -154,7 +154,7 @@ func TestEverySubcommandHasHelp(t *testing.T) {
 // -- "-h" landing there would otherwise be swallowed as the capability id or
 // commission text rather than recognized as a request for help.
 func TestHelpWinsEvenWhereAPositionalArgumentComesFirst(t *testing.T) {
-	for _, command := range []string{"ask", "select", "task", "resume"} {
+	for _, command := range []string{"ask", "select", "task", "resume", "agent"} {
 		t.Run(command, func(t *testing.T) {
 			out, err := cli(t, command, "-h")
 			if err != nil {

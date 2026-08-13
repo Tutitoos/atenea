@@ -41,6 +41,30 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", dirName)
 }
 
+// DataDir is where the agent trace database lives.
+//
+// Deliberately a second root beside StateDir, and worth knowing why before
+// putting anything else here. StateDir holds what Atenea LEARNED -- the
+// measurement base, the receipts, the crash notebook -- and internal/backup
+// copies all of it, because losing a baseline means re-earning it call by
+// call. The trace database is not that: it is a record of what happened,
+// nothing in it is re-derivable and nothing in it makes the next run better.
+// It is written once per agent and read by a human debugging one.
+//
+// The two do not share a root because they do not share a fate. A backup
+// that swept the traces in would grow without bound copying rows nobody
+// would ever restore.
+func DataDir() string {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return filepath.Join(dir, dirName)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".local", "share", dirName)
+	}
+	return filepath.Join(home, ".local", "share", dirName)
+}
+
 // ConfigHome is the root every tool's configuration hangs off: Atenea's own and,
 // for the status line, the client's. It exists so the walk from environment to
 // home directory is written once -- a second copy of it is how two parts of the

@@ -62,6 +62,8 @@ type Config struct {
 	Capabilities    []contract.Capability
 	Implementations []contract.Implementation
 	Repositories    []contract.Repository
+	// Agents are the declared agent types, resolved by name at dispatch.
+	Agents []AgentType
 	// Missing names implementations the shipped catalog declares and this
 	// settings file does not.
 	//
@@ -574,6 +576,7 @@ type file struct {
 	Capabilities    []fileCapability `toml:"capability"`
 	Implementations []fileImpl       `toml:"implementation"`
 	Repositories    []fileRepository `toml:"repository"`
+	Agents          []fileAgent      `toml:"agent"`
 	MCPServers      []fileMCPServer  `toml:"mcp_server"`
 }
 
@@ -1032,6 +1035,22 @@ func parse(raw []byte, source string) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Repositories = append(cfg.Repositories, repo)
+	}
+	// Two agent types under one name would make the resolver's answer depend
+	// on declaration order, and a caller asking by name would silently get
+	// whichever came first. Refusing is how the file says which it meant.
+	named := make(map[string]bool, len(decoded.Agents))
+	for _, raw := range decoded.Agents {
+		agent, err := raw.build(source)
+		if err != nil {
+			return Config{}, err
+		}
+		if named[agent.Spec.Name] {
+			return Config{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: agent %s is declared twice", source, agent.Spec.Name)
+		}
+		named[agent.Spec.Name] = true
+		cfg.Agents = append(cfg.Agents, agent)
 	}
 	// Two blocks under one id would silently make one of them dead: the
 	// payload is a map keyed by id, so the later would win and the earlier

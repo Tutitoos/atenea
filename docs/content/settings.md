@@ -728,6 +728,72 @@ what is declared here. When a provider genuinely has nothing to detect,
 `process` effects, gated the same as any other capability that touches the
 machine rather than only answering from it.
 
+## Agents
+
+```toml
+[[agent]]
+name = "filereader"       # what `atenea agent <name>` resolves
+kind = "specialized"      # specialized executes one objective; orchestrator splits work
+summary = "Reads one file and reports its size, its line count and its contents"
+command = "$atenea"       # the one placeholder: this binary
+args = ["agent-exec", "filereader"]
+context = ["repository"]  # the levels the assignment may carry
+effects = ["read"]        # the ceiling on what it may cause
+max_duration = "30s"      # wall clock for one run
+max_tokens = 1            # what one run may spend
+
+  [[agent.result]]
+  name = "path"
+  type = "string"         # string, string_list, int, bool, record, record_list
+  required = true
+  summary = "The file that was read, as it was asked for"
+```
+
+An agent is not a provider. A provider answers a capability and the funnel
+picks between several of them on cost, health and what the repository is; an
+agent is asked for by name, runs once as its own process, and answers in the
+shape declared here. Nothing ranks agents and nothing falls back between them:
+`atenea agent filereader` runs that one or fails saying it is not declared.
+
+The wire is two JSON objects and it is the whole interface. Atenea writes the
+assignment to the agent's stdin -- ids, task, the declared context levels, the
+limits, the effects, and the result schema built from `[[agent.result]]` -- and
+reads one report from stdout: `result`, `verdict`, and for anything that is not
+a plain `ok`, a `reason` of `{kind, text}`. Stderr is diagnostics and is kept
+only on a failure. **Exit status is not the channel.** An agent that exits zero
+without writing a report has not answered, and is recorded as having died
+rather than as having succeeded -- the distinction the whole thing exists for,
+because those two are the same number to anything counting exit codes.
+
+`command = "$atenea"` means this binary. It is the only placeholder and it
+exists because the shipped agent is Atenea run with a different first argument;
+a hard-coded path there survives exactly until the next reinstall. Any other
+`command` is used literally, so an agent of your own -- a script, a model
+harness -- differs only in what it does between reading stdin and writing
+stdout.
+
+`context` is a permission, not a delivery. Only the levels named here are ever
+sent, and a level nobody asked for is absent from the payload rather than
+present and empty, so an agent cannot read a blank field as an answer about
+the world. `effects` is a ceiling a child may only narrow. Both limits are
+required: an unset ceiling is not "no ceiling", it is a ceiling nobody decided,
+and `max_duration` is what turns a hung agent into a `timeout` verdict instead
+of a process nobody is waiting on.
+
+`[[agent.result]]` compiles to a strict JSON schema -- `additionalProperties`
+is false -- so an answer carrying a field nobody declared is refused at the
+boundary rather than believed. A refused answer is `incomplete`, not `failed`:
+the run got somewhere and stopped short, which is a different fact from a run
+that reached a judgement and the judgement was no.
+
+Every run is written to the trace database at `~/.local/share/atenea/traces.db`
+before the spawn and closed after the report validates. `atenea traces` reads
+it. A row left open is a run nobody saw finish; the next Atenea closes it as
+`incomplete` with reason `unavailable`, but only after checking that the
+process that opened it is really gone -- another Atenea may be mid-run right
+now, and closing a live run would be the sweep inventing the very thing it
+exists to record honestly.
+
 ## MCP servers
 
 ```toml

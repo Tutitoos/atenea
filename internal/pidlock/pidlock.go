@@ -55,6 +55,20 @@ func Holder(path string) int {
 	return pid
 }
 
+// Alive reports whether a pid still exists on this machine.
+//
+// Exported because the trace store asks the same question about a different
+// artifact: a row left open names the Atenea that opened it, and closing it
+// while that process is still working would be worse than leaving it open.
+// One probe, written once -- a second copy of a signal-0 check is how two
+// parts of the same binary end up disagreeing about what "gone" means.
+//
+// It answers about a pid, not about a run. A pid recycled after a reboot
+// reads as alive, which leaves a stale row open longer than it should; that
+// is the harmless direction, and the loud one, because an open row is
+// visible.
+func Alive(pid int) bool { return pid > 0 && alive(pid) }
+
 func claim(path string, retryStale bool) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err == nil {

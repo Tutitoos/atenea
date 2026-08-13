@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,21 @@ func (k FailureKind) String() string {
 	return "unspecified"
 }
 
+// ParseFailureKind reads a bin name, the way String() wrote it.
+//
+// The round trip has to exist because these names leave the process: a
+// reason on an agent's report, a row in the trace database. Reading one back
+// by hand somewhere else is how the two spellings of a bin drift apart.
+func ParseFailureKind(s string) (FailureKind, error) {
+	name := strings.ToLower(strings.TrimSpace(s))
+	for value, known := range failureNames {
+		if known == name {
+			return value, nil
+		}
+	}
+	return FailureUnspecified, Fail(FailureInvalidInput, "unknown failure kind %q", s)
+}
+
 // Failure is the error type crossing the contract boundary.
 type Failure struct {
 	Kind FailureKind
@@ -131,6 +147,25 @@ func RawOf(err error) string {
 		return f.Raw
 	}
 	return ""
+}
+
+// MessageOf recovers Atenea's own wording from an arbitrary error, without
+// the bin prefix Error() puts in front of it.
+//
+// The prefix is right when the error is printed on its own and wrong when it
+// is being folded into a sentence that already names the bin -- which is what
+// a caller wrapping one failure in another is always doing. Without this the
+// second wrapping reads `unavailable: unavailable: ...`, and every call site
+// grows its own type assertion to avoid it.
+func MessageOf(err error) string {
+	var f *Failure
+	if errors.As(err, &f) {
+		return f.Message
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // StopKind sorts a context error into its bin.

@@ -1233,6 +1233,75 @@ vcs = ""                  # unknown until declared; unspecified never disqualifi
 indexed_by = []           # providers holding a ready index for this repository
 
 # ---------------------------------------------------------------------------
+# Agents: a program Atenea spawns with one task, which answers and dies.
+#
+# An agent is not a provider. A provider answers a capability and the funnel
+# chooses between several of them; an agent is asked for by name, runs once,
+# and hands back an answer in the shape declared here. Nothing ranks agents
+# and nothing falls back between them.
+#
+# The wire is two JSON objects. Atenea writes the assignment to the agent's
+# stdin -- ids, task, the context levels declared below, the limits, the
+# effects it may cause, and the result schema built from `[[agent.result]]`.
+# The agent writes one report to stdout: `result`, `verdict` (ok, failed,
+# incomplete or canceled) and, for anything that is not a plain ok, a
+# `reason` of `{kind, text}`. Exit status is not the channel: an agent that
+# exits zero without a report has not answered, and is recorded as having
+# died rather than as having succeeded.
+#
+# `command = "$atenea"` means this binary. It is the one placeholder, and it
+# exists because the shipped agent is Atenea itself under another argument --
+# a hard-coded path there would survive exactly until the next reinstall.
+# Point `command` at any program to declare an agent of your own; a
+# model-backed one differs only in what happens between reading stdin and
+# writing stdout.
+#
+# `context` is a permission, not a delivery: only the levels named here are
+# ever sent, and a level nobody declared is absent from the payload rather
+# than present and empty. `effects` is a ceiling that a child agent can only
+# narrow. Both limits are required -- an unset ceiling is not "no ceiling",
+# it is a ceiling nobody decided.
+# ---------------------------------------------------------------------------
+
+[[agent]]
+name = "filereader"
+kind = "specialized"      # orchestrator decides and splits; specialized executes one objective
+summary = "Reads one file and reports its size, its line count and its contents"
+command = "$atenea"       # this binary
+args = ["agent-exec", "filereader"]
+context = ["repository"]  # enough to resolve a relative path; nothing else is sent
+effects = ["read"]        # it reads a file and does nothing else
+max_duration = "30s"
+max_tokens = 1            # it spends no tokens; the ceiling still has to be a real number
+
+  # The shape every answer is checked against. It becomes a strict JSON
+  # schema -- additionalProperties false -- so an agent that invents a field
+  # is refused rather than quietly believed.
+  [[agent.result]]
+  name = "path"
+  type = "string"
+  required = true
+  summary = "The file that was read, as it was asked for"
+
+  [[agent.result]]
+  name = "content"
+  type = "string"
+  required = true
+  summary = "What the file contains, empty when it was too large or not text"
+
+  [[agent.result]]
+  name = "lines"
+  type = "int"
+  required = true
+  summary = "How many lines it has"
+
+  [[agent.result]]
+  name = "bytes"
+  type = "int"
+  required = true
+  summary = "How many bytes it has"
+
+# ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it
 # spawn its own copy.
 #

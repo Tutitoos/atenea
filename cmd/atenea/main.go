@@ -63,6 +63,10 @@ Commands:
                          with the system; 'uninstall' undoes it, 'status'
                          says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
+  agent TYPE [FILE]      Run one declared agent type as a process, once;
+                         --objective and --criterion set the task
+  traces                 What agents ran and how they ended; filter with
+                         --type, --verdict, --open, --since, --id, --limit
   metrics                What the base measured, per capability and provider;
                          'clear' empties it, narrowed by --capability,
                          --implementation or --repository, or --all for the lot
@@ -232,6 +236,40 @@ Reads only. It writes nothing, anywhere, and never into .claude/ or
 Read the crash notebook. With no arguments, shows what has not been read
 yet. --all shows the whole notebook, read or not. 'clear' marks the shown
 entries read.
+`,
+	"agent": `Usage: atenea agent TYPE [flags] [files...]
+
+Run one declared [[agent]] type as a real process, once. The type is
+resolved by name against the settings file; nothing ranks agents and nothing
+falls back to another one.
+
+Flags come before file names -- Go's parser stops at the first word that is
+not a flag, so a flag after a file name would be read as another file.
+
+Flags:
+  --objective TEXT      what the agent is being asked to do
+  --criterion TEXT      what done looks like
+  --repository ID       repository to serve at the repository context level
+  --traces PATH         trace database (default: the one atenea traces reads)
+  --quiet               print the verdict line only
+
+An agent that exits zero without writing a report has not answered: it is
+recorded as incomplete, not as success.
+`,
+	"traces": `Usage: atenea traces [flags]
+
+What agents ran and how they ended. A row with no ending is a run nobody saw
+finish; the next atenea closes it as incomplete once it has checked that the
+process which opened it is really gone.
+
+Flags:
+  --type NAME           narrow to one agent type
+  --verdict V           ok, failed, incomplete or canceled
+  --open                only runs still waiting for an ending
+  --id ID               one run
+  --since DURATION      only runs started within it, e.g. 2h
+  --limit N             how many rows at most
+  --traces PATH         trace database to read
 `,
 	"metrics": `Usage: atenea metrics [clear] [flags]
 
@@ -428,6 +466,19 @@ func run(args []string, out io.Writer) error {
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
 		return cmdIncidents(settingsPath, commandArgs, out)
+	case "agent":
+		return cmdAgent(settingsPath, commandArgs, out)
+	case "agent-exec":
+		// The far side of a spawn, not something a person types. Atenea
+		// names it in the shipped agent declaration and starts it with an
+		// assignment on stdin.
+		if len(commandArgs) != 1 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"agent-exec takes one built-in agent name")
+		}
+		return cmdAgentRun(commandArgs[0], os.Stdin, out)
+	case "traces":
+		return cmdTraces(commandArgs, out)
 	case "metrics":
 		return cmdMetrics(settingsPath, commandArgs, out)
 	case "config":

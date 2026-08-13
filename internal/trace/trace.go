@@ -1,0 +1,431 @@
+// Package trace is the record of which agents ran, when, and how they ended.
+//
+// It is written by Atenea and by nothing else. An agent that filed its own
+// trace could file a clean one and exit, or die before filing anything at
+// all, and the row a reader most needs -- the one for the run that went wrong
+// -- is exactly the row that would be missing. So the writer is the process
+// that outlives the agent.
+//
+// # Two writes, and the gap between them is the point
+//
+// A row is opened before the process starts and closed after its answer has
+// been validated. Nothing the agent does touches it. That gap is not an
+// implementation detail: it is how "it died" is detected at all. Atenea does
+// not have to notice a crash, a kill, a machine losing power, or its own
+// death -- any of them simply leaves a row with no ending, which the next
+// start finds and closes.
+//
+// An orphan is closed as INCOMPLETE, never as failed. Failed is a claim about
+// the work, and nobody watched this work: it may have read every file it was
+// asked for and died on the way to saying so. Recording that as failure would
+// be inventing evidence.
+//
+// # Metadata only
+//
+// Who, when, and how it ended. No results, no payloads, no file contents. A
+// trace is read while something is wrong, which is the worst moment to be
+// paging through megabytes -- and a store that keeps answers is a store that
+// grows without bound and leaks whatever the agent happened to read.
+package trace
+
+import (
+	"context"
+	"database/sql"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite" // database/sql driver "sqlite"
+
+	"github.com/Tutitoos/atenea/internal/pidlock"
+	"github.com/Tutitoos/atenea/internal/platform"
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// FileName is the database, one per machine.
+const FileName = "traces.db"
+
+// DefaultPath is where the trace database lives.
+func DefaultPath() string { return filepath.Join(platform.DataDir(), FileName) }
+
+// Row is one agent execution as the store holds it.
+type Row struct {
+	ID       string
+	ParentID string
+	TypeName string
+	Kind     contract.AgentType
+	// Objective is the one sentence the agent was asked, kept because a
+	// trace nobody can tell apart from the next one answers nothing. It is
+	// the only free text on the row and it is what was ASKED, never what
+	// came back.
+	Objective string
+	Depth     int
+	StartedAt time.Time
+	// EndedAt is zero while the row is open.
+	EndedAt time.Time
+	Verdict contract.Verdict
+	Reason  contract.Reason
+	// WriterPID is the Atenea that opened the row. Zero on a row written
+	// before this column existed, which reads as "not alive" and so is
+	// sweepable -- the right answer for a row that old.
+	WriterPID int
+	// Swept marks a row closed by the orphan sweep rather than by the run
+	// itself. Both read `incomplete`, and a reader has to be able to tell
+	// "the agent said it stopped short" from "nobody ever heard back".
+	Swept bool
+}
+
+// Open reports whether this row is still waiting for its ending.
+func (r Row) Open() bool { return r.EndedAt.IsZero() }
+
+// Duration is how long the run took, or zero while it is still open.
+func (r Row) Duration() time.Duration {
+	if r.Open() {
+		return 0
+	}
+	return r.EndedAt.Sub(r.StartedAt)
+}
+
+// Store is the trace database.
+type Store struct {
+	db   *sql.DB
+	path string
+}
+
+// Open opens (creating if needed) the database at path and migrates it.
+//
+// WAL, because the reader is a person running `atenea traces` while an agent
+// is mid-run, and the default journal makes that reader wait on a writer or
+// the writer wait on the reader. A busy timeout on top: two Ateneas starting
+// at once is ordinary on a machine where this is a CLI as often as a service.
+func Open(ctx context.Context, path string) (*Store, error) {
+	if strings.TrimSpace(path) == "" {
+		path = DefaultPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"trace: cannot create %s: %v", filepath.Dir(path), err)
+	}
+	dsn := "file:" + url.PathEscape(path) +
+		"?_pragma=journal_mode(WAL)" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"trace: open %s: %v", path, err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"trace: open %s: %v", path, err)
+	}
+	store := &Store{db: db, path: path}
+	if err := store.migrate(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+// Path is the file this store is backed by.
+func (s *Store) Path() string { return s.path }
+
+// Close releases the database.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+const schema = `
+CREATE TABLE IF NOT EXISTS agent_trace (
+    id          TEXT    NOT NULL PRIMARY KEY,
+    parent_id   TEXT    NOT NULL,
+    type_name   TEXT    NOT NULL,
+    kind        TEXT    NOT NULL,
+    objective   TEXT    NOT NULL,
+    depth       INTEGER NOT NULL,
+    started_at  TEXT    NOT NULL,
+    -- The Atenea that opened this row. The sweep asks whether it is still
+    -- alive before closing anything: another Atenea may be mid-run right
+    -- now, and closing a live run as incomplete would be the sweep inventing
+    -- the very thing it exists to record honestly.
+    writer_pid  INTEGER NOT NULL DEFAULT 0,
+    -- NULL is the whole mechanism: a row with no ending is a run nobody saw
+    -- finish, whether the agent died, the machine did, or Atenea did.
+    ended_at    TEXT,
+    verdict     TEXT,
+    reason_kind TEXT    NOT NULL DEFAULT '',
+    reason_text TEXT    NOT NULL DEFAULT '',
+    swept       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS agent_trace_open ON agent_trace(ended_at);
+CREATE INDEX IF NOT EXISTS agent_trace_started ON agent_trace(started_at);
+CREATE INDEX IF NOT EXISTS agent_trace_type ON agent_trace(type_name);
+`
+
+func (s *Store) migrate(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "trace: schema: %v", err)
+	}
+	return nil
+}
+
+// Begin opens a row for a run that is about to start.
+//
+// Call it BEFORE spawning. A row written after the process starts would miss
+// exactly the runs worth tracing: the ones that died in their first second.
+//
+// WriterPID left at zero means this process, which is the only honest answer
+// for a normal run: whoever opens the row is the one whose disappearance
+// makes it an orphan. It is settable so a test can stand a row up behind a
+// pid it controls -- the sweep's liveness gate cannot be exercised any other
+// way without killing the test binary.
+func (s *Store) Begin(ctx context.Context, row Row) error {
+	if strings.TrimSpace(row.ID) == "" {
+		return contract.Fail(contract.FailureInvalidInput, "trace: id is required")
+	}
+	if row.StartedAt.IsZero() {
+		return contract.Fail(contract.FailureInvalidInput,
+			"trace %s: started_at is required", row.ID)
+	}
+	writer := row.WriterPID
+	if writer == 0 {
+		writer = os.Getpid()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO agent_trace
+		   (id, parent_id, type_name, kind, objective, depth, started_at, writer_pid)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ID, row.ParentID, row.TypeName, row.Kind.String(),
+		row.Objective, row.Depth, stamp(row.StartedAt), writer)
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"trace: opening row %s: %v", row.ID, err)
+	}
+	return nil
+}
+
+// Complete closes a row with the verdict the run reached.
+//
+// It refuses to close a row twice. A second close would mean two things
+// claimed to be the end of one run, and the store cannot know which is the
+// truth -- so it keeps the first and says so.
+func (s *Store) Complete(ctx context.Context, id string, at time.Time,
+	verdict contract.Verdict, reason contract.Reason) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE agent_trace
+		    SET ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?, swept = 0
+		  WHERE id = ? AND ended_at IS NULL`,
+		stamp(at), verdict.String(), reasonKind(reason), reason.Text, id)
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"trace: closing row %s: %v", id, err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"trace: closing row %s: %v", id, err)
+	}
+	if changed == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"trace: row %s is not open", id)
+	}
+	return nil
+}
+
+// SweepOrphans closes every row left open by a run nobody saw finish, and
+// returns how many it closed.
+//
+// Called at start, before anything new is dispatched. Incomplete, never
+// failed: an orphan is the absence of a judgement, not a bad one. The reason
+// bin is `unavailable`, which is the one thing actually known -- whatever was
+// going to answer is not there.
+//
+// A row whose writer is still alive is left alone. On this machine Atenea is
+// a CLI as often as a service, so a second Atenea starting while the first is
+// mid-run is ordinary, and a sweep that closed those rows would manufacture
+// incompletes for agents that were working perfectly. The check is per row
+// and it errs toward leaving a row open: an open row is visible and can be
+// swept later, while a wrongly closed one is a lie already written down.
+func (s *Store) SweepOrphans(ctx context.Context, at time.Time) (int, error) {
+	rows, err := s.List(ctx, Filter{OpenOnly: true, Limit: sweepCeiling})
+	if err != nil {
+		return 0, err
+	}
+	closed := 0
+	for _, row := range rows {
+		if pidlock.Alive(row.WriterPID) {
+			continue
+		}
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE agent_trace
+			    SET ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?, swept = 1
+			  WHERE id = ? AND ended_at IS NULL`,
+			stamp(at), contract.VerdictIncomplete.String(),
+			contract.FailureUnavailable.String(),
+			"the agent never reported back; closed by the sweep at "+stamp(at),
+			row.ID)
+		if err != nil {
+			return closed, contract.Fail(contract.FailureUnavailable,
+				"trace: sweep %s: %v", row.ID, err)
+		}
+		if n, err := res.RowsAffected(); err == nil && n > 0 {
+			closed++
+		}
+	}
+	return closed, nil
+}
+
+// sweepCeiling bounds one sweep. A machine that somehow accumulated more open
+// rows than this closes the oldest batch now and the rest on the next start,
+// which is better than one start doing unbounded work before it answers.
+const sweepCeiling = 10_000
+
+// Filter narrows a listing. Every field is optional and they compose.
+type Filter struct {
+	ID       string
+	TypeName string
+	// Verdict selects one verdict. VerdictUnspecified means any.
+	Verdict contract.Verdict
+	// OpenOnly keeps only rows still waiting for an ending.
+	OpenOnly bool
+	// Since keeps rows started at or after this instant.
+	Since time.Time
+	// Limit caps the result, newest first. Zero means DefaultLimit.
+	Limit int
+}
+
+// DefaultLimit is how many rows a listing returns when nobody says.
+const DefaultLimit = 50
+
+// List returns matching rows, newest first.
+func (s *Store) List(ctx context.Context, f Filter) ([]Row, error) {
+	where := make([]string, 0, 5)
+	args := make([]any, 0, 5)
+	if f.ID != "" {
+		where = append(where, "id = ?")
+		args = append(args, f.ID)
+	}
+	if f.TypeName != "" {
+		where = append(where, "type_name = ?")
+		args = append(args, f.TypeName)
+	}
+	if f.Verdict != contract.VerdictUnspecified {
+		where = append(where, "verdict = ?")
+		args = append(args, f.Verdict.String())
+	}
+	if f.OpenOnly {
+		where = append(where, "ended_at IS NULL")
+	}
+	if !f.Since.IsZero() {
+		where = append(where, "started_at >= ?")
+		args = append(args, stamp(f.Since))
+	}
+	limit := f.Limit
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	query := `SELECT id, parent_id, type_name, kind, objective, depth,
+	                 started_at, ended_at, verdict, reason_kind, reason_text,
+	                 swept, writer_pid
+	            FROM agent_trace`
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY started_at DESC, id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "trace: list: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Row, 0, limit)
+	for rows.Next() {
+		row, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "trace: list: %v", err)
+	}
+	return out, nil
+}
+
+func scan(rows *sql.Rows) (Row, error) {
+	var (
+		row            Row
+		kind           string
+		startedAt      string
+		endedAt        sql.NullString
+		verdictName    sql.NullString
+		reasonKindName string
+		swept          int
+	)
+	if err := rows.Scan(&row.ID, &row.ParentID, &row.TypeName, &kind, &row.Objective,
+		&row.Depth, &startedAt, &endedAt, &verdictName, &reasonKindName,
+		&row.Reason.Text, &swept, &row.WriterPID); err != nil {
+		return Row{}, contract.Fail(contract.FailureUnavailable, "trace: list: %v", err)
+	}
+	if parsed, err := contract.ParseAgentType(kind); err == nil {
+		row.Kind = parsed
+	}
+	row.StartedAt = parseStamp(startedAt)
+	if endedAt.Valid {
+		row.EndedAt = parseStamp(endedAt.String)
+	}
+	if verdictName.Valid {
+		row.Verdict = parseVerdictName(verdictName.String)
+	}
+	row.Reason.Kind = parseFailureName(reasonKindName)
+	row.Swept = swept != 0
+	return row, nil
+}
+
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+func parseStamp(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
+}
+
+// reasonKind renders the bin, or the empty string when there is no reason at
+// all -- which is the ordinary shape of a plain ok.
+func reasonKind(r contract.Reason) string {
+	if r.Empty() {
+		return ""
+	}
+	return r.Kind.String()
+}
+
+// parseKind reads a verdict or failure name back, tolerating a row written by
+// a newer Atenea than the one reading it.
+func parseVerdictName(s string) contract.Verdict {
+	if s == "" {
+		return contract.VerdictUnspecified
+	}
+	v, err := contract.ParseVerdict(s)
+	if err != nil {
+		return contract.VerdictUnspecified
+	}
+	return v
+}
+
+func parseFailureName(s string) contract.FailureKind {
+	kind, err := contract.ParseFailureKind(s)
+	if err != nil {
+		return contract.FailureUnspecified
+	}
+	return kind
+}

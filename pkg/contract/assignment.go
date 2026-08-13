@@ -142,7 +142,7 @@ func (s AgentTypeSpec) Validate() error {
 		return Fail(FailureInvalidInput,
 			"agent type %s: declares no result shape, so no answer could be checked", s.Name)
 	}
-	return validateFields("result", s.Name, s.Result)
+	return validateFields("result", "agent "+s.Name, s.Result)
 }
 
 // ResultSchema states the declared result shape as JSON Schema.
@@ -157,7 +157,7 @@ func (s AgentTypeSpec) ResultSchema() (map[string]any, error) {
 
 // ValidateResult judges a result payload against the declared shape.
 func (s AgentTypeSpec) ValidateResult(payload map[string]any) error {
-	return checkPayload(s.Name, "result", s.Result, payload)
+	return checkPayload("agent "+s.Name, "result", s.Result, payload)
 }
 
 // Clone returns a deep copy.
