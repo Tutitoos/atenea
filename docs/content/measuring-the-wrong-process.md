@@ -481,6 +481,32 @@ base that grows with history shrinks to noise. A percentage measured at cold
 start is not a property of the proxy; it is a property of the context size it was
 measured at.
 
+**The mechanism, found afterwards: a leading underscore.** `inject_tool_search_deferral`
+prepends a `tool_search_tool_regex` stub and marks every *non-core* tool
+`defer_loading: true`. The core exemption is an exact, case-insensitive match
+against `_TOOL_SEARCH_CORE_TOOLS` — `bash`, `read`, `edit`, `write`, `glob`… omp
+names its tools `_read`, `_bash`, `_edit`, so not one of them matches. Run the
+real function against both clients' captured bodies and the asymmetry is total:
+
+| client | tools sent | resident after transform | deferred |
+|---|---|---|---|
+| Claude Code | 77 | **7** — the stub plus `Bash`, `Edit`, `Read`, `Skill`, `WebFetch`, `Write` | 71 |
+| omp | 12 | **1 — the stub, and nothing else** | 12 |
+
+With no resident tool, omp cannot call anything until the server runs a tool
+search — which is the one-execution-instead-of-two, and it is not a mystery any
+more. What the search pulls back then lands *outside the cached prefix*, because
+omp writes exactly one `cache_control: ephemeral`, on the final user message,
+and none on tools or system; Claude Code carries two breakpoints inside
+`system[]`, so its tool surface caches on its own. Hence 9,488 tokens billed
+fresh on every tool-using exchange and **2** on a no-tool control.
+
+**Fixable upstream, not from configuration.** The function takes a `core_tools`
+parameter, but the call site passes no override, so there is no knob: stripping a
+leading `_` before the comparison, or gating on client, would fix omp and leave
+Claude Code untouched. The only switch that exists today, `HEADROOM_TOOL_SEARCH=0`,
+is global — it would remove Claude Code's saving along with omp's penalty.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -585,6 +611,23 @@ measured at.
     A wrong `unknown` costs work. A wrong `fine` costs the reason the tool
     exists. When the two cannot be had at once, choose the one that fails into
     more measuring.
+13. **A process's environment is not its configuration.** `/proc/<pid>/environ`
+    is a snapshot taken at `exec`, and a program is free to write its own
+    settings into `os.environ` afterwards. On 2026-08-13 the headroom proxy had
+    **no** `HEADROOM_TOOL_SEARCH` in its environ, no config file naming it, and
+    nothing in the systemd unit — while the feature it gates was active on every
+    single request. It is seeded at startup from the savings profile (`coding`,
+    whose `tool_search = True`) through `seed_proxy_env_defaults`, which uses
+    `setdefault` so an explicit user setting still wins. Reading the process
+    environment — the obvious source, one step better than reading a config file
+    — reported *off* for something that was *on*. This is the third instrument in
+    one day to answer a question about live state from a place the state does not
+    have to pass through: config files that describe intent, a clock that guards
+    a channel it stopped watching, and now an environment that describes only how
+    a process started. The rule generalises past this stack: when the subject can
+    be changed after the source is written, the source is documentation, not
+    measurement. Ask the running thing what it is doing — here, one request and a
+    look at `transforms_applied`.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

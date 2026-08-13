@@ -40,3 +40,16 @@ omp creates one `dart-analyze` and one `dart-test` per detected root
 that directory is excluded; if it is not, stale copies of an app are analysed
 on every run. Cost is processes and wall clock, not tokens. Noticed while
 retiring the Dart MCP check, which defended against a different failure.
+
+## omp's prompt prefix moves between identical runs
+
+Two consecutive `omp -p "Reply with exactly: ok" --no-session` runs, one second
+apart through headroom on 2026-08-13, both wrote cache and read none:
+`cache_write` 25,909 then 25,943, `cache_read` 0 both times. Thirty-four tokens
+differ between two invocations of the same prompt, which is enough to miss the
+prefix cache every time. Earlier the same day the same pair warmed cleanly, so
+this is not constant. Cause unchased: something in omp's system blocks — a
+timestamp, a session id, a rules or skills listing — is not stable across
+invocations. Cost is a full cache write per run instead of a read, roughly 12×
+on the input side of a cold turn. Not headroom's: the churn is in the body omp
+hands over.
