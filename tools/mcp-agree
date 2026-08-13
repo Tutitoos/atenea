@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""mcp-agree - do the four clients still agree about MCP?
+
+One command, one verdict. Silent-ish when green, loud and specific when not.
+
+It guards the three ways this stack drifts without erroring:
+
+  1. omp's toggle       /mcp enable|disable writes ~/.omp/agent/mcp.json behind you.
+  2. the installer      `kena agent setup` fillMissing()s serena, context7, semgrep
+                        and codebase-memory back into omp AND claude as enabled:true.
+                        43 -> ~80 tools, with atenea's own backends running twice.
+                        disabledServers does NOT stop it: that list only covers
+                        DISCOVERED servers, not ones declared at user scope.
+  3. claude's approval  ~/.claude.json project entries decide which project-scope
+                        .mcp.json servers may load.
+
+Design notes, so the next reader does not mistake a choice for an accident:
+
+  - The fast path reads files only. That is deliberate, not lazy: the installer
+    and the toggle both drift by changing a DECLARATION, so the declaration is
+    the sharper instrument - it names the cause, not just the effect.
+  - It never shells out to `claude mcp list`. Measured 2026-08-10: any claude
+    start rewrites ~/.claude.json, and in an untrusted project it PRUNES the
+    approval keys. A check must not damage what it inspects.
+  - `--live` handshakes atenea and headroom over stdio. That spawns nothing a
+    client would not spawn anyway, and writes nothing.
+
+Usage:  mcp-agree [--live] [--quiet]
+        mcp-agree --trust-warning     what accepting Claude's trust dialog in
+                                      the current tree would switch on (stderr)
+Exit:   0 all four agree · 1 drift, or warned · 2 could not read something
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tomllib
+
+try:
+    import yaml
+except ImportError:  # serena's config is yaml; guessing at it is worse than stopping
+    sys.exit("mcp-agree: falta pyyaml, y sin el no puedo verificar las "
+             "exclusiones de serena. `uv tool install pyyaml` o `pip install pyyaml`")
+
+HOME = os.path.expanduser("~")
+BIN = os.path.join(HOME, ".local", "bin")
+
+# The agreed state, as measured on 2026-08-09/10. atenea is the core; headroom is
+# the context auditor; claude-mem arrives through each client's own plugin and is
+# therefore named differently in every one of them - the count can be unified,
+# the name cannot.
+CORE = {"atenea", "headroom"}
+BACKENDS = {"serena", "context7", "semgrep", "codebase-memory"}  # atenea owns these
+OMP_SUPPRESSED = {"chrome-devtools", "claude-mem", "codebase-memory",
+                  "context7", "semgrep", "serena"}
+KENA_WS = os.path.join(HOME, "kena-workspace")
+
+fails = []
+notes = []
+rows = []
+
+
+def fail(case, what, why):
+    fails.append((case, what, why))
+
+
+def load_json(path):
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def load_toml(path):
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
+# ---------------------------------------------------------------- omp
+def check_omp():
+    path = os.path.join(HOME, ".omp", "agent", "mcp.json")
+    d = load_json(path)
+    servers = d.get("mcpServers", {}) or {}
+    names = set(servers)
+    rows.append(("omp", sorted(names), path.replace(HOME, "~")))
+
+    extra = names - CORE
+    reintroduced = extra & BACKENDS
+    if reintroduced:
+        fail("installer", f"omp declara {sorted(reintroduced)} ademas del core",
+             "firma de `kena agent setup`: fillMissing() los repone con enabled:true. "
+             "Son los backends que atenea ya ejecuta -> motores duplicados, ~43 -> ~80 "
+             "herramientas. Borralos de mcpServers; disabledServers NO los tapa.")
+    for name in sorted(extra - BACKENDS):
+        fail("toggle", f"omp declara un servidor inesperado: {name}",
+             "no estaba en el acuerdo; alguien lo anadio")
+    for name in sorted(CORE - names):
+        fail("toggle", f"omp ha perdido {name}", "borrado del fichero")
+
+    for name in sorted(CORE & names):
+        s = servers[name]
+        if s.get("enabled") is not True:
+            fail("toggle", f"omp tiene {name} con enabled={s.get('enabled')!r}",
+                 "`/mcp disable` escribe esto sin avisar; sin enabled:true no arranca")
+        cmd = s.get("command", "")
+        if not os.path.isabs(cmd):
+            fail("toggle", f"omp lanza {name} con un comando no absoluto: {cmd!r}",
+                 "regla 28: depende del PATH que omp pase; si no resuelve es una "
+                 "herramienta que falta, no un error")
+        elif not os.access(cmd, os.X_OK):
+            fail("toggle", f"omp apunta {name} a {cmd}, que no es ejecutable",
+                 "el servidor no arrancara y el cliente no lo dira")
+
+    missing = OMP_SUPPRESSED - set(d.get("disabledServers") or [])
+    if missing:
+        fail("toggle", f"omp ya no suprime {sorted(missing)}",
+             "vuelven por descubrimiento desde opencode/marketplace y se duplican")
+
+    cfg = os.path.join(HOME, ".omp", "agent", "config.yml")
+    if "mcp:dart-flutter" not in open(cfg).read():
+        fail("toggle", "omp ha perdido disabledExtensions: mcp:dart-flutter",
+             "vuelve el Dart duplicado en new-app (dos ficheros, un solo servidor)")
+
+
+# ---------------------------------------------------------------- claude
+def check_claude():
+    path = os.path.join(HOME, ".claude.json")
+    d = load_json(path)
+    names = set(d.get("mcpServers", {}) or {})
+    rows.append(("claude", sorted(names), "~/.claude.json (usuario)"))
+
+    reintroduced = names & BACKENDS
+    if reintroduced:
+        fail("installer", f"claude declara {sorted(reintroduced)} a nivel usuario",
+             "`kena agent setup` tambien escribe cc.mcpServers -> los mismos motores "
+             "dos veces, ahora en Claude")
+    for name in sorted(CORE - names):
+        fail("toggle", f"claude ha perdido {name} a nivel usuario", "borrado del fichero")
+
+    proj = (d.get("projects") or {}).get(KENA_WS)
+    if proj is None:
+        notes.append("claude no tiene entrada para kena-workspace todavia (inocuo)")
+        return
+    enabled = set(proj.get("enabledMcpjsonServers") or [])
+    leaked = enabled & BACKENDS
+    if leaked:
+        fail("approval", f"kena-workspace aprueba {sorted(leaked)} desde su .mcp.json",
+             "el fichero del equipo declara los cinco pre-atenea; aprobarlos los sube "
+             "al lado de atenea")
+    if proj.get("hasTrustDialogAccepted") and not proj.get("disabledMcpjsonServers"):
+        notes.append("kena-workspace ya esta confiado y sin lista de rechazo: la "
+                     "proxima sesion puede ofrecerte cargar los cinco del equipo")
+
+
+# ---------------------------------------------------------------- codex
+def check_codex():
+    path = os.path.join(HOME, ".codex", "config.toml")
+    d = load_toml(path)
+    names = set(d.get("mcp_servers", {}) or {})
+    rows.append(("codex", sorted(names), "~/.codex/config.toml"))
+
+    reintroduced = names & BACKENDS
+    if reintroduced:
+        fail("installer", f"codex declara {sorted(reintroduced)}", "mismos motores, otra vez")
+    for name in sorted(CORE - names):
+        fail("toggle", f"codex ha perdido {name}", "borrado del fichero")
+
+    plugins = d.get("plugins", {}) or {}
+    dupes = [k for k, v in plugins.items()
+             if "claude-mem" in k and v.get("enabled") is not False]
+    if len(dupes) > 1:
+        fail("toggle", f"codex habilita claude-mem por {len(dupes)} vias: {sorted(dupes)}",
+             "es el duplicado que quitamos el 2026-08-10: sobrevive el plugin "
+             "(19 skills, 36 modos), no la entrada manual")
+
+
+# ---------------------------------------------------------------- opencode
+def check_opencode():
+    path = os.path.join(HOME, ".config", "opencode", "opencode.json")
+    d = load_json(path)
+    names = set(d.get("mcp", {}) or {})
+    rows.append(("opencode", sorted(names), "~/.config/opencode/opencode.json"))
+
+    reintroduced = names & BACKENDS
+    if reintroduced:
+        fail("installer", f"opencode declara {sorted(reintroduced)}", "mismos motores, otra vez")
+    for name in sorted(CORE - names):
+        fail("toggle", f"opencode ha perdido {name}", "borrado del fichero")
+
+
+# ---------------------------------------------------------------- serena
+# Two tools that must never reach a client: arbitrary shell execution and
+# file creation. They are withheld in ~/.serena/serena_config.yml, which is
+# where ToolHive's --tools filter went when the containers were retired.
+WITHHELD = {"execute_shell_command", "create_text_file"}
+SERENA_CFG = os.path.join(HOME, ".serena", "serena_config.yml")
+
+
+def serena_launch_context():
+    """The --context atenea starts serena with, read from atenea's own settings."""
+    cfg = load_toml(os.path.join(HOME, ".config", "atenea", "atenea.toml"))
+    for srv in cfg.get("mcp_server", []) or []:
+        if srv.get("id") != "serena":
+            continue
+        cmd = srv.get("command") or []
+        if "--context" in cmd:
+            return cmd[cmd.index("--context") + 1]
+        return "agent"  # serena's own default
+    return None
+
+
+def context_is_single_project(name):
+    """True if that context lets a project's .serena/project.yml add tools back.
+
+    Returns None when the context file cannot be found - unknown is not safe,
+    and the caller says so out loud rather than assuming.
+    """
+    import glob as _glob
+    candidates = [os.path.join(HOME, ".serena", "contexts", f"{name}.yml")]
+    candidates += _glob.glob(os.path.join(
+        HOME, ".local", "share", "uv", "tools", "serena-agent", "lib", "python*",
+        "site-packages", "serena", "resources", "config", "contexts", f"{name}.yml"))
+    for path in candidates:
+        if os.path.isfile(path):
+            with open(path) as fh:
+                return bool((yaml.safe_load(fh) or {}).get("single_project"))
+    return None
+
+
+def check_serena():
+    """Serena's dangerous tools stay withheld - by the file AND by the context.
+
+    Measured 2026-08-10 with one hostile ~/.serena/project.yml and one global
+    config: `--context agent` served 23 tools with neither dangerous tool,
+    `--context claude-code` served 24 WITH BOTH. Same exclusions, both times.
+    So the file is only half the guarantee: in a single-project context the
+    project config is folded into the exposed tool set and its
+    `included_optional_tools` adds excluded tools straight back
+    (serena/agent.py:810 feeding ToolSet.apply at :168).
+    """
+    if not os.path.isfile(SERENA_CFG):
+        fail("serena", "no existe ~/.serena/serena_config.yml",
+             "sin ese fichero serena sirve las 29 herramientas, incluidas "
+             "execute_shell_command y create_text_file. `kena agent setup` NO lo "
+             "escribe: en una maquina recien montada esto es el estado por defecto")
+        return
+    with open(SERENA_CFG) as fh:
+        cfg = yaml.safe_load(fh) or {}
+
+    if cfg.get("fixed_tools"):
+        fail("serena", f"serena tiene fixed_tools: {cfg['fixed_tools']}",
+             "fixed_tools REEMPLAZA el conjunto entero e ignora excluded_tools "
+             "(serena/agent.py:158). Revisa que no reintroduzca lo retirado")
+
+    excluded = set(cfg.get("excluded_tools") or ())
+    exposed = WITHHELD - excluded
+    if exposed:
+        fail("serena", f"serena ya no retiene {sorted(exposed)}",
+             "ejecucion de shell y/o escritura de ficheros arbitraria, servidas a "
+             "cualquier cliente que llegue a serena")
+    readded = WITHHELD & set(cfg.get("included_optional_tools") or ())
+    if readded:
+        fail("serena", f"serena reincluye {sorted(readded)} como opcional",
+             "included_optional_tools se aplica ANTES que las exclusiones y las "
+             "deshace para ese nombre")
+
+    ctx = serena_launch_context()
+    if ctx is None:
+        fail("serena", "atenea.toml ya no declara el backend serena",
+             "o cambio de forma; sin saber con que contexto arranca no puedo "
+             "afirmar que las exclusiones aguanten")
+        return
+    single = context_is_single_project(ctx)
+    if single is None:
+        fail("serena", f"no encuentro el contexto '{ctx}' de serena",
+             "desconocido no es seguro: si fuera single-project, cualquier repo "
+             "con .serena/project.yml podria reexponer lo retirado")
+    elif single:
+        fail("serena", f"atenea arranca serena con --context {ctx}, que es single-project",
+             "en ese modo la config del proyecto entra en el conjunto EXPUESTO y su "
+             "included_optional_tools reañade lo excluido. Medido: 23 tools con "
+             "`agent`, 24 con `claude-code` y las dos peligrosas dentro")
+    else:
+        notes.append(f"serena: {len(excluded)} exclusiones, contexto '{ctx}' "
+                     "no single-project (un .serena/project.yml no puede ampliarla)")
+
+# ---------------------------------------------------------------- live
+def handshake(name, cmd, args, env_extra=None, want_names=False):
+    """Speak MCP at a server the way a client would. Writes nothing.
+
+    Turn-taking, not a batch dump: measured 2026-08-10, atenea answers
+    `initialize` and then ignores anything that arrived in the same write.
+    A client sends one request and waits, so this does too.
+    """
+    env = dict(os.environ)
+    env.update(env_extra or {})
+    p = None
+    try:
+        p = subprocess.Popen([cmd] + args, stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, bufsize=1, env=env)
+
+        def send(obj):
+            p.stdin.write(json.dumps(obj) + "\n")
+            p.stdin.flush()
+
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                         "clientInfo": {"name": "mcp-agree", "version": "1"}}})
+        p.stdout.readline()
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        for _ in range(20):
+            line = p.stdout.readline()
+            if not line:
+                break
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("id") == 2 and "result" in msg:
+                served = msg["result"].get("tools", [])
+                return [t["name"] for t in served] if want_names else len(served)
+    except OSError as exc:
+        fail("live", f"{name} no arranca", str(exc))
+        return None
+    finally:
+        if p and p.poll() is None:
+            p.terminate()
+    fail("live", f"{name} arranco pero no devolvio tools/list",
+         "sin respuesta a tools/list en 20 lineas")
+    return None
+
+
+def check_live():
+    counts = {}
+    n = handshake("atenea", os.path.join(BIN, "atenea"), ["mcp"])
+    if n is not None:
+        counts["atenea"] = n
+        if n < 20:
+            fail("live", f"atenea expone {n} herramientas, no las 26 esperadas",
+                 "capacidades caidas o settings a medio cargar")
+    n = handshake("headroom", os.path.join(BIN, "headroom"), ["mcp", "serve"],
+                  {"HEADROOM_NO_MEMORY_TOOLS": "1", "HEADROOM_NO_MEMORY_CONTEXT": "1"})
+    if n is not None:
+        counts["headroom"] = n
+        if n != 3:
+            fail("live", f"headroom expone {n} herramientas, no 3",
+                 "si son mas, su memoria volvio a encenderse (regla 2)")
+
+    # The declaration is not the surface: ask serena what it actually serves,
+    # launched exactly as atenea launches it.
+    ctx = serena_launch_context() or "agent"
+    served = handshake("serena", os.path.join(BIN, "serena"),
+                       ["start-mcp-server", "--transport", "stdio", "--project-from-cwd",
+                        "--context", ctx, "--open-web-dashboard", "False"],
+                       {"SERENA_LOG_LEVEL": "WARNING"}, want_names=True)
+    if served is not None:
+        counts["serena"] = len(served)
+        leaked = WITHHELD & set(served)
+        if leaked:
+            fail("serena", f"serena SIRVE {sorted(leaked)} ahora mismo",
+                 f"medido por handshake desde {os.getcwd()}, no leido de un fichero")
+    notes.append("handshake: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+
+
+# ------------------------------------------------------- warning before the click
+DOC = os.path.join(HOME, ".config", "atenea", "CLIENTS.md")
+
+
+def trust_warning():
+    """Say what accepting Claude's trust dialog would switch on, before it is asked.
+
+    A project .mcp.json is inert until the project is trusted. That makes the
+    trust dialog - not any config file - the real trigger, and a dialog is
+    answered in a hurry. So the warning has to arrive with the launch, which is
+    why the `claude` shell function calls this before handing over to the wrap.
+    """
+    d = os.getcwd()
+    seen = []
+    while d.startswith(HOME) and len(d) >= len(HOME):
+        seen.append(d)
+        if d == HOME:
+            break
+        d = os.path.dirname(d)
+    try:
+        projects = load_json(os.path.join(HOME, ".claude.json")).get("projects") or {}
+    except (OSError, ValueError):
+        return 0
+    for root in seen:
+        mcp = os.path.join(root, ".mcp.json")
+        if not os.path.isfile(mcp):
+            continue
+        try:
+            declared = set(json.load(open(mcp)).get("mcpServers", {}) or {})
+        except (OSError, ValueError):
+            continue
+        clash = declared & BACKENDS
+        if not clash:
+            continue
+        if (projects.get(root) or {}).get("hasTrustDialogAccepted"):
+            continue
+        # stderr, not stdout: this runs in front of a wrapped command, and a
+        # warning that lands in `claude mcp list --json` corrupts it silently.
+        banner = [
+            "",
+            "  " + " SI CLAUDE TE PIDE CONFIAR EN ESTE PROYECTO ".center(70, "!"),
+            f"  {root.replace(HOME, '~')}/.mcp.json declara {sorted(clash)},",
+            "  que son los backends que atenea YA ejecuta por dentro. Aceptar los",
+            "  anade AL LADO de atenea: los mismos motores dos veces.",
+            f"  El porque, y que hacer si lo aceptas: {DOC.replace(HOME, '~')}",
+            "  " + "!" * 70,
+            "",
+        ]
+        print("\n".join(banner), file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------- main
+def main():
+    live = "--live" in sys.argv
+    quiet = "--quiet" in sys.argv
+
+    if "--trust-warning" in sys.argv:
+        return trust_warning()
+
+    for fn in (check_omp, check_claude, check_codex, check_opencode, check_serena):
+        try:
+            fn()
+        except FileNotFoundError as exc:
+            print(f"mcp-agree: no puedo leer {exc.filename}", file=sys.stderr)
+            return 2
+        except (ValueError, tomllib.TOMLDecodeError) as exc:
+            print(f"mcp-agree: fichero ilegible: {exc}", file=sys.stderr)
+            return 2
+    if live:
+        check_live()
+
+    if fails:
+        print()
+        print("  NO COINCIDEN  ".center(74, "="))
+        for case, what, why in fails:
+            print(f"\n  [{case}] {what}")
+            print(f"          {why}")
+        print()
+        for client, names, src in rows:
+            print(f"  {client:<9} {', '.join(names) or '(ninguno)':<34} {src}")
+        print()
+        print("=" * 74)
+        return 1
+
+    if not quiet:
+        for client, names, src in rows:
+            print(f"  {client:<9} {', '.join(names):<34} {src}")
+        for note in notes:
+            print(f"  nota: {note}")
+        print("  los cuatro coinciden")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
