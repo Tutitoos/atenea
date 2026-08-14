@@ -759,13 +759,30 @@ a single frozen exploration, so "the section costs about five exploring steps"
 is a fact about this input. A second frozen card would test that, and has not
 been run.
 
-### State on the night
+### Removed, not reverted
 
-The section stays in for now. What is known is an unexplained large effect,
-measured against one input, on a feature nobody has shown to help — and no
-mechanism is proposed here, because the last two offered tonight were both
-plausible, both consistent with everything then measured, and both wrong.
-Removing it is a decision worth taking rested.
+The section came out of the planning prompt on 2026-08-14. The distinction
+matters for whoever reads this next: a revert says the change was a mistake,
+and this one was a correct measurement delivered to the wrong reader. What was
+removed is the delivery. `CostByType`, the store method, the `repository`
+column, the `workflow_step` pricing columns and every test defending the
+censoring, the verbatim `never measured` and the printed `n` all stay, with
+the renderer exported as `CostReport` for a reader, for `plan-check`, or for a
+consumer shown to benefit. An untested renderer rots, and the next consumer
+would inherit a broken measurement rather than none.
+
+The worked example in the prompt lost its `budget_usd = 0.25` at the same
+time, unmeasured and said so: a worked example carrying a figure is an anchor,
+and leaving one in place after this week is not a defensible default.
+
+Confirmed on one frozen replay against the measured baseline -- 7 exploring
+steps, 11 steps total, $3.45 of $3.50, and the plan compiles. One run, because
+this is a removal checked against a baseline rather than a new comparison.
+
+No mechanism is offered here. The last two proposed were both plausible, both
+consistent with everything then measured, and both wrong; the honest state is
+a large effect, measured against one input, on a feature nobody had shown to
+help.
 
 ## The general lesson
 
