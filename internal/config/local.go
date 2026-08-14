@@ -192,6 +192,24 @@ var refusedLocalLeaves = map[string]string{
 // whichever directory it happened to start in. LoadEffective answers "what
 // applies here", which is what a one-shot command in a working tree wants.
 func LoadEffective(explicit string) (Config, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Config{}, contract.Fail(contract.FailureUnavailable,
+			"cannot read the working directory to look for %s: %v", LocalDir, err)
+	}
+	return LoadEffectiveIn(explicit, cwd)
+}
+
+// LoadEffectiveIn is LoadEffective for a named directory: what applies to work
+// happening there, rather than to wherever this process was started.
+//
+// A one-shot command and a spawned agent ask the same question with different
+// ideas of "here". A command's repository is the directory the person is
+// standing in. An agent's is in its assignment: its working directory was
+// chosen by whoever spawned it, and reading the overlay from that would answer
+// about a place the work does not have to be. Both callers exist, so the
+// directory is an argument rather than an assumption.
+func LoadEffectiveIn(explicit, dir string) (Config, error) {
 	cfg, err := Load(explicit)
 	if err != nil {
 		return Config{}, err
@@ -199,12 +217,7 @@ func LoadEffective(explicit string) (Config, error) {
 	if os.Getenv(DisableLocalEnv) == "0" {
 		return cfg, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return Config{}, contract.Fail(contract.FailureUnavailable,
-			"cannot read the working directory to look for %s: %v", LocalDir, err)
-	}
-	return withLocal(cfg, cwd)
+	return withLocal(cfg, dir)
 }
 
 // withLocal applies the overlay of the repository containing dir, if there is

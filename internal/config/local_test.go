@@ -815,3 +815,38 @@ func TestARepositoryMayNotRaiseItsOwnCeiling(t *testing.T) {
 		}
 	}
 }
+
+// LoadEffective asks about the process's own directory, which is the right
+// question for a command someone typed and the wrong one for an agent spawned
+// somewhere else. This test never changes its working directory: if the
+// overlay is read from `os.Getwd` it does not appear at all.
+func TestTheEffectiveSettingsCanBeAskedAboutAnotherDirectory(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "atenea.toml")
+	if err := WriteDefault(settings, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	t.Setenv("ATENEA_CONFIG", settings)
+
+	elsewhere := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"spec-reader\"\nruns = \"filereader\"\nsummary = \"reads SPEC.md verbatim\"\n")
+
+	here, err := LoadEffective("")
+	if err != nil {
+		t.Fatalf("LoadEffective: %v", err)
+	}
+	if _, err := here.AgentTypeByName("spec-reader"); err == nil {
+		t.Fatal("this directory is not that repository, yet its type resolved here")
+	}
+
+	there, err := LoadEffectiveIn("", elsewhere)
+	if err != nil {
+		t.Fatalf("LoadEffectiveIn: %v", err)
+	}
+	got, err := there.AgentTypeByName("spec-reader")
+	if err != nil {
+		t.Fatalf("the named repository's own type did not resolve: %v", err)
+	}
+	if !got.Local {
+		t.Error("resolved, but not marked as the repository's own")
+	}
+}

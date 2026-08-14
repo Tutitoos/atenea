@@ -3,6 +3,8 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -431,5 +433,65 @@ func TestTheMenuSaysWhichTypesAreTheRepositorysOwn(t *testing.T) {
 		case strings.HasPrefix(line, "- reviewer ") && own:
 			t.Errorf("a shipped type is marked as the repository's: %s", line)
 		}
+	}
+}
+
+// The menu is built from settings this process reads for itself, so reading
+// the global file alone hides every type a repository declared. Measured on a
+// real run on 2026-08-14: a repository declared `spec-reader`, `config show`
+// listed it, `atenea agent spec-reader` spawned it, and the planner was handed
+// a menu of five types that did not include it -- because this path called
+// Load rather than LoadEffectiveIn. The repository comes from the assignment:
+// this test's own working directory is the package, not the repository, so a
+// menu built from `os.Getwd` fails it too.
+func TestThePlannerSeesTypesTheAssignedRepositoryDeclared(t *testing.T) {
+	settings := filepath.Join(t.TempDir(), "atenea.toml")
+	if err := config.WriteDefault(settings, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	t.Setenv("ATENEA_CONFIG", settings)
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".atenea"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	overlay := "[[agent]]\nname = \"spec-reader\"\nruns = \"filereader\"\nsummary = \"reads SPEC.md verbatim\"\n"
+	if err := os.WriteFile(filepath.Join(root, ".atenea", "config.toml"), []byte(overlay), 0o600); err != nil {
+		t.Fatalf("write overlay: %v", err)
+	}
+
+	in := planAssignment("ok", map[string]any{"summary": "s", "findings": []any{"f"}})
+	level, err := json.Marshal(map[string]string{"root": root})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	in.Context = map[string]json.RawMessage{"repository": level}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var seen config.Config
+	var out strings.Builder
+	if err := run(context.Background(), strings.NewReader(string(raw)), &out,
+		func(_ context.Context, _ assignment, cfg config.Config, _ deps) report {
+			seen = cfg
+			return report{Result: map[string]any{"plan": "x"}, Verdict: "ok"}
+		}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got, err := seen.AgentTypeByName("spec-reader")
+	if err != nil {
+		t.Fatalf("the planner's settings do not carry the repository's own type: %v", err)
+	}
+	if !got.Local {
+		t.Error("the type is not marked as the repository's own, so the menu cannot say so")
+	}
+	if menu := declaredTypes(seen); !strings.Contains(menu, "spec-reader") {
+		t.Errorf("the menu handed to the model does not name it:\n%s", menu)
 	}
 }

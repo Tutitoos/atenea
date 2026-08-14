@@ -157,9 +157,22 @@ func run(ctx context.Context, stdin io.Reader, stdout io.Writer, do turn) error 
 
 	// The settings are read here rather than served as context: what these
 	// agents need is the declared model role and the declared agent types,
-	// and neither is one of the four context levels. The process inherits
-	// the environment Atenea was started with, so it resolves the same file.
-	cfg, cfgErr := config.Load("")
+	// and neither is one of the four context levels.
+	//
+	// Effective settings, from the repository this assignment names. A type a
+	// repository declared in its own `.atenea/config.toml` is one this run may
+	// spawn, so a planner reading the global file alone writes graphs against
+	// a menu that is missing them -- which is what happened on 2026-08-14, on
+	// a real run, with the type accepted everywhere else. The directory comes
+	// from the assignment rather than from `os.Getwd`, because the working
+	// directory of a spawned agent is whatever its spawner chose.
+	where := repositoryRoot(in)
+	if where == "" {
+		// No repository level: nothing names a tree, so fall back to the one
+		// this process was started in.
+		where = "."
+	}
+	cfg, cfgErr := config.LoadEffectiveIn("", where)
 	if cfgErr != nil {
 		return answer(stdout, unavailable("the settings could not be read, so no model was called: "+
 			contract.MessageOf(cfgErr)))
