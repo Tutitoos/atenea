@@ -399,7 +399,7 @@ func printRun(out io.Writer, run workflow.Run) {
 			truncate(step.Step.ID, 16),
 			truncate(step.Step.TypeName, 14),
 			step.Pool,
-			run.Label(step),
+			run.State(step),
 			stepCost(step),
 			stepDetail(run, step))
 	}
@@ -485,17 +485,22 @@ func stepCost(step workflow.StepRow) string {
 }
 
 // stepDetail is the most useful sentence about one step: why it ended badly,
-// what it found, or what it is waiting for.
+// what it found, or what it is waiting for. A partial answer's stopped_at is
+// folded into whichever of those it is -- the STATE column already says the
+// answer is partial, and DETAIL is where a reader learns what was cut short.
 func stepDetail(run workflow.Run, step workflow.StepRow) string {
 	if !step.Reason.Empty() {
-		return truncate(step.Reason.Kind.String()+": "+step.Reason.Text, 60)
+		return truncate(withStopped(step.Reason.Kind.String()+": "+step.Reason.Text, step), 60)
 	}
 	switch step.Status {
 	case workflow.StatusOK:
+		var detail string
 		if len(step.Result) > 0 {
-			return truncate(resultLine(step.Result[firstKey(step.Result)]), 60)
+			detail = resultLine(step.Result[firstKey(step.Result)])
+		} else {
+			detail = took(traceLike(step))
 		}
-		return took(traceLike(step))
+		return truncate(withStopped(detail, step), 60)
 	case workflow.StatusPending:
 		// Not truncated. The subject form of this line carries the command
 		// that clears it, and a cure cut off at sixty columns is not one.
@@ -507,6 +512,20 @@ func stepDetail(run workflow.Run, step workflow.StepRow) string {
 		}
 	}
 	return ""
+}
+
+// withStopped appends what a partial answer did not reach, when the report
+// says so. A coverage figure in the STATE column with no explanation beside
+// it tells a reader something is missing without telling them what.
+func withStopped(detail string, step workflow.StepRow) string {
+	stopped := step.Report().StoppedAt
+	if stopped == "" {
+		return detail
+	}
+	if detail == "" {
+		return "stopped at " + stopped
+	}
+	return detail + " (stopped at " + stopped + ")"
 }
 
 func firstKey(m map[string]any) string {

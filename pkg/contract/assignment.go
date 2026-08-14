@@ -694,6 +694,44 @@ type Report struct {
 	// Spent is what this run cost. The zero value means unmeasured, which is
 	// the ordinary case for an agent that spends no tokens.
 	Spent Charge
+	// Completeness is how much of the objective this answer covers, from 0
+	// (exclusive) to 1. Nil means unclaimed -- the ordinary case, and every
+	// report accepted before this field existed.
+	//
+	// It lives on the report, not on whatever reads the report afterwards,
+	// because completeness is a fact about the answer: how much of the
+	// objective it actually covers. The agent that stopped three files into
+	// five knows that number; a reviewer or a caller working only from the
+	// result would have to guess it, which makes it a measurement, not a
+	// judgement, and measurements belong with what they measure.
+	//
+	// Partial is deliberately still VerdictOK rather than a fifth verdict.
+	// The verdict slot answers one question -- did anybody look at this --
+	// and every consumer branches on that alone: the reviewer gate `on =
+	// "answered"`, retry logic, receipts. A verdict that meant "answered,
+	// but not all of it" would put a second question in a slot built for
+	// one, and every place that already treats VerdictOK as "there is
+	// something here to judge" would start treating answered work as if
+	// nobody had answered.
+	//
+	// Nil rather than a bare float so "never measured" and "measured at
+	// zero" stay distinguishable -- the same reason Charge.USD is a
+	// pointer. A zero value read as absent would silently pass off an
+	// unmeasured report as one that covered nothing at all.
+	Completeness *float64
+	// StoppedAt is what this answer did not reach. Required whenever
+	// Completeness is below 1 -- see validateCompleteness -- because a
+	// completeness number with nothing named beside it is not actionable: a
+	// caller reading "0.55" cannot resume, retry, or even describe the run
+	// to a person without knowing which part of the objective is missing.
+	StoppedAt string
+}
+
+// Partial reports whether this answer covers less than the whole objective.
+// A report with no Completeness claim at all is not partial -- it never
+// measured itself, which is a different fact from measuring itself short.
+func (r Report) Partial() bool {
+	return r.Completeness != nil && *r.Completeness < 1
 }
 
 // Validate judges the report against the type that produced it.
@@ -717,6 +755,9 @@ func (r Report) Validate(spec AgentTypeSpec) error {
 	if err := r.validateReason(); err != nil {
 		return err
 	}
+	if err := r.validateCompleteness(); err != nil {
+		return err
+	}
 	if err := r.validateDiscovered(); err != nil {
 		return err
 	}
@@ -726,6 +767,40 @@ func (r Report) Validate(spec AgentTypeSpec) error {
 		return nil
 	}
 	return spec.ValidateResult(r.Result)
+}
+
+// validateCompleteness enforces the rules tying a completeness claim to the
+// rest of the report.
+//
+// The range is (0, 1]: zero is not "no progress", it is nothing to claim --
+// an agent with nothing to show reports that through Verdict and Reason,
+// the same as it always has, and a Completeness of zero would just be a
+// second, contradicting way to say the same thing. A claim below 1 has to
+// name where it stopped, for the same reason validateReason makes a reason
+// mandatory: a number with nothing beside it cannot be acted on.
+//
+// A claim only stands on VerdictOK. VerdictIncomplete already exists for
+// "nobody obtained an answer to judge"; Completeness is the opposite fact --
+// somebody did, just not all of it -- and letting it ride on any other
+// verdict would blur the one distinction VerdictIncomplete exists to draw.
+func (r Report) validateCompleteness() error {
+	if r.Completeness == nil {
+		return nil
+	}
+	if r.Verdict != VerdictOK {
+		return Fail(FailureInvalidInput,
+			"report: completeness is set on a %s report; only an ok verdict can be partial", r.Verdict)
+	}
+	c := *r.Completeness
+	if c <= 0 || c > 1 {
+		return Fail(FailureInvalidInput,
+			"report: completeness %v is out of range, want (0, 1]", c)
+	}
+	if c < 1 && strings.TrimSpace(r.StoppedAt) == "" {
+		return Fail(FailureInvalidInput,
+			"report: completeness %v below 1 requires stopped_at to say what was not reached", c)
+	}
+	return nil
 }
 
 // validateReason enforces the two rules about why.
@@ -785,6 +860,11 @@ func (r Report) validateDiscovered() error {
 // one field a caller already reads for caveats.
 func (r Report) Normalize() Report {
 	out := r.Clone()
+	// StoppedAt is prose a model wrote, and prose comes with the whitespace
+	// a model leaves around it. Trimmed here rather than at the boundary
+	// that checks it, so a caller reading the field after Normalize sees
+	// the same value the emptiness check saw.
+	out.StoppedAt = strings.TrimSpace(out.StoppedAt)
 	for i, d := range out.Discovered {
 		length := utf8.RuneCountInString(d.Note)
 		if length <= MaxDiscoveryLength {
@@ -846,6 +926,13 @@ func (r Report) Clone() Report {
 		// never be edited in place.
 		amount := *r.Spent.USD
 		out.Spent.USD = &amount
+	}
+	if r.Completeness != nil {
+		// Same reasoning as Spent.USD above: the pointer is what makes
+		// "unclaimed" and "claimed at some value" different facts, so the
+		// copy needs its own float rather than the original's address.
+		value := *r.Completeness
+		out.Completeness = &value
 	}
 	return out
 }

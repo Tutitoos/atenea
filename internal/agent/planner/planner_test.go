@@ -265,6 +265,26 @@ func TestTheGrantedShareReachesTheModel(t *testing.T) {
 	}
 }
 
+// Measured 2026-08-14: twelve of twelve real steps spent their whole ceiling
+// reading and hit --max-budget-usd before writing an answer, and a same-
+// evening probe showed the CLI has no mid-turn cost signal -- see readShare
+// and tokensPerUSD's own comments. ReadTokens is how the client is told to
+// hold back the rest, denominated in tokens because those are what the CLI
+// reports as it goes.
+func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
+	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+		"summary": "s", "findings": "f",
+	})}}
+	in := exploreAssignment()
+	grant := 0.80
+	in.BudgetUSD = usd(grant)
+	explore(context.Background(), in, config.Config{}, withTools(c))
+
+	if want := int(readShare * grant * tokensPerUSD); c.seen.ReadTokens != want {
+		t.Errorf("read tokens = %v, want %v", c.seen.ReadTokens, want)
+	}
+}
+
 func TestAnUngrantedRunPassesNoCeiling(t *testing.T) {
 	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
 		"summary": "s", "findings": "f",
@@ -308,6 +328,84 @@ func TestAShareOfNothingIsRefusedAndNoModelIsCalled(t *testing.T) {
 	}
 	if c.calls != 0 {
 		t.Error("the model was called on a grant of nothing")
+	}
+}
+
+// ---- the reserved answer ---------------------------------------------------
+
+func TestAPartialAnswerKeepsVerdictOkAndCarriesCompletenessAndANotice(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured: structured(t, map[string]string{
+			"summary": "the settings load in one place", "findings": "config.Load reads the file.",
+		}),
+		Completeness: usd(0.55),
+		StoppedAt:    "internal/config/loader.go and everything downstream of it",
+		Spent:        charged(),
+	}}
+	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
+
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %q (%s), want ok: a partial that answered is still an answer", got.Verdict, reasonOf(got))
+	}
+	if got.Completeness == nil || *got.Completeness != 0.55 {
+		t.Errorf("completeness = %v, want 0.55", got.Completeness)
+	}
+	if got.StoppedAt == "" {
+		t.Error("stopped_at was dropped")
+	}
+	if len(got.Notices) != 1 {
+		t.Errorf("notices = %v, want exactly one naming what was not reached", got.Notices)
+	}
+}
+
+// A partial that will not say where it stopped is not auditable: `ok` with an
+// unnamed gap would read as whole to everything downstream that counts it.
+func TestAPartialAnswerWithNoStoppedAtIsRefused(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured:   structured(t, map[string]string{"summary": "s", "findings": "f"}),
+		Completeness: usd(0.55),
+		Spent:        charged(),
+	}}
+	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
+
+	if got.Verdict != "failed" {
+		t.Errorf("verdict = %q, want failed", got.Verdict)
+	}
+	if got.Spent == nil {
+		t.Error("a refused partial threw away the charge the turn really cost")
+	}
+}
+
+func TestAWholeAnswerIsAPlainOKWithNoCompletenessAndNoNotice(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured:   structured(t, map[string]string{"summary": "s", "findings": "f"}),
+		Completeness: usd(1),
+	}}
+	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
+
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %q (%s), want ok", got.Verdict, reasonOf(got))
+	}
+	if got.Completeness != nil {
+		t.Errorf("completeness = %v, want nil on a whole answer", got.Completeness)
+	}
+	if len(got.Notices) != 0 {
+		t.Errorf("notices = %v, want none", got.Notices)
+	}
+}
+
+// The empty-answer refusals apply to a partial the same as to a whole one: a
+// partial still has to contain an answer, not just a completeness figure.
+func TestAnEmptyPartialExplorationIsStillRefused(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured:   structured(t, map[string]string{"summary": "", "findings": ""}),
+		Completeness: usd(0.55),
+		StoppedAt:    "everything",
+	}}
+	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
+
+	if got.Verdict != "failed" {
+		t.Errorf("verdict = %q, want failed", got.Verdict)
 	}
 }
 

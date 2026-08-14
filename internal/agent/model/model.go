@@ -14,11 +14,14 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -234,6 +237,65 @@ type Request struct {
 	// truly meant "spend nothing" has no reason to call Turn at all. See
 	// Validate for the one value this field does refuse.
 	BudgetUSD float64
+	// ReadTokens is the soft allowance, in input-equivalent tokens, that
+	// this turn may spend before it is told to stop reading and answer with
+	// what it has. Zero means off, and a turn with it off is the single shot
+	// it was before this field existed.
+	//
+	// Measured 2026-08-14: twelve of twelve explore steps hit BudgetUSD and
+	// came back with result_len 0. $3.78, and then $4.09 on the re-run,
+	// bought no answers at all, because the kill lands in exactly the wrong
+	// place -- after a turn has paid to read everything and before it has
+	// written anything. A real turn stopped at its ceiling prints no
+	// `result` field whatsoever; see envelope.TerminalReason. Raising the
+	// ceiling does not move the kill, it only moves where the same empty
+	// death happens.
+	//
+	// Tokens, and not dollars, for two measured reasons that compound. The
+	// CLI reports no cost mid-turn at all -- a figure appears only on the
+	// `result` event that ends a turn -- so a dollar allowance can only ever
+	// be checked at a turn boundary. And the steps this exists for never
+	// reach one: measured on the re-run, an explore step does all of its
+	// work inside turn 1, so the first result event never arrives and a
+	// boundary-checked allowance never fires. It did not fire: the re-run
+	// with a dollar allowance of 0.165 of 0.22 died exactly as before, 12 of
+	// 12, zero passes. Usage, unlike cost, is on the stream continuously:
+	// every assistant event carries the usage of its own request, which is
+	// what makes a mid-turn trigger possible at all. See weigh for the
+	// arithmetic and conversation.spend for where it fires.
+	//
+	// The unit is input-equivalent tokens: every kind of token weighed by its
+	// price relative to an input token, which puts 333,333 of them to the
+	// dollar on the model measured. That is the number to convert a reserved
+	// dollar share with, and see weigh for how the ratios were checked
+	// against a real receipt.
+	//
+	// The figure is in tens of thousands, and a caller guessing in thousands
+	// has written an allowance that fires on the first event of every turn.
+	// Measured 2026-08-14, one live turn surveying this repository: the very
+	// first assistant event already weighed 65,625 input-equivalent tokens --
+	// about $0.20 -- because the CLI's system prompt and tool definitions are
+	// cached on it, 32,799 cache-creation tokens against `input_tokens: 2`.
+	// The whole 14-second turn weighed 87,004, which is the $0.26 the CLI
+	// charged for it. So an allowance under ~70,000 buys no reading at all on
+	// this CLI, and one over the ceiling's worth buys the old empty death.
+	//
+	// What pays for the answer is whatever BudgetUSD has left when the nudge
+	// lands, so this figure and that one are set together even though they
+	// are in different units: an allowance so high that the CLI's own
+	// ceiling arrives first is an allowance that never fires. Nothing here
+	// can check that for the caller -- the two units only meet in a price
+	// this package is not entitled to assume -- so it is the caller's
+	// arithmetic to do, and internal/agent/planner does it.
+	//
+	// The reserve is not a rounding allowance. Measured 2026-08-14 on one
+	// live turn of this exact path: an allowance of 66,000 (about $0.20)
+	// against a ceiling of $0.60 was nudged as intended, and the answer it
+	// then wrote -- 4,006 output tokens on top of everything already read --
+	// took the turn to $0.5363. Writing cost more than reading was allowed.
+	// A reserve of a few cents would have bought the nudge and then died
+	// writing, which is the original failure with extra steps.
+	ReadTokens int
 	// Timeout caps this one turn. Zero takes the Client's own.
 	Timeout time.Duration
 	// Tools is an MCP config -- built by AteneaTools, a JSON string or a
@@ -273,12 +335,73 @@ func (r Request) Validate() error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"request: budget_usd must not be negative, got %v", r.BudgetUSD)
 	}
+	if r.ReadTokens < 0 {
+		// The two figures are in different units and no comparison between
+		// them belongs here: turning tokens into dollars needs a price, and
+		// a price is exactly what this package refuses to assume -- see
+		// pricedByCLI. Negative is the only value that is wrong on its own
+		// terms.
+		return contract.Fail(contract.FailureInvalidInput,
+			"request: read_tokens must not be negative, got %d", r.ReadTokens)
+	}
 	if r.Timeout < 0 {
 		return contract.Fail(contract.FailureInvalidInput,
 			"request: timeout must not be negative, got %s", r.Timeout)
 	}
 	return nil
 }
+
+// reservesAnswer reports whether this turn holds back an allowance for the
+// answer, which is what decides between the two paths through Turn.
+//
+// Both conditions are the request's own, so the decision is derivable from
+// it and never passed around: one predicate, read by Turn and by args, which
+// is what keeps the command line from ever disagreeing with the code driving
+// it.
+//
+// A Schema is required and not merely preferred. The reserved answer is a
+// claim the model makes about its own answer -- completeness, and what it
+// did not reach -- and a free-text turn has nowhere to put either: the two
+// properties live in the schema the caller declared. A schema-less turn is
+// therefore left as the single shot it always was.
+func (r Request) reservesAnswer() bool {
+	return r.ReadTokens > 0 && len(r.Schema) > 0
+}
+
+// sentPrompt is the prompt as it actually goes out, protocol and all.
+//
+// One function for both paths, because recordPrompt writes what this returns
+// and the turn sends what this returns: a log that can disagree with the
+// wire is the exact drift PromptLogEnv exists to rule out. A single-shot
+// turn gets the caller's own string back unchanged, byte for byte.
+func (r Request) sentPrompt() string {
+	if !r.reservesAnswer() {
+		return r.Prompt
+	}
+	return r.Prompt + "\n" + passProtocol
+}
+
+// passProtocol is what sentPrompt appends to a reserved-answer prompt: the
+// paragraph that makes an answer exist before the money runs out.
+//
+// Measured 2026-08-14: twelve of twelve agent steps hit their ceiling and
+// twelve came back with result_len 0. $3.78 bought no answers at all,
+// because each step spent its whole grant reading and was killed before it
+// wrote anything. A turn that answers on every pass cannot be killed empty;
+// the worst it can be killed with is an answer that covers less.
+//
+// It says nothing about money, deliberately. The model is never given a
+// dollar figure, because the figure that decides anything is read between
+// passes from what the CLI reports having spent -- and there is no mid-turn
+// cost signal for a model to reason about even if it were told to (see
+// crossed). What it is given instead is the one instruction that survives
+// being cut off at any point: answer everything, every time.
+const passProtocol = `Work in passes, and treat every pass as if it were your last.
+On every pass, answer the whole schema with what you have so far. Never leave a
+field for a later pass and never fill one with a placeholder. Set completeness to
+the fraction of the objective you have actually covered and stopped_at to what you
+have not reached yet; use completeness 1 only when the objective is fully answered.
+You will be told when to stop reading and answer for good.`
 
 // Answer is what one Turn produced.
 type Answer struct {
@@ -296,6 +419,33 @@ type Answer struct {
 	// tokens: a Turn that failed before an envelope ever printed leaves this
 	// zero, because nothing was measured, not because the turn was free.
 	Spent contract.Charge
+	// Completeness is the fraction of the objective the model says its own
+	// answer actually covers, or nil when it claimed nothing -- a
+	// single-shot turn, or a schema the caller declared without the
+	// property. Never zero: a turn that answered covered something, and a
+	// figure this package could not read as a fraction is dropped to
+	// unclaimed rather than repaired into one. See claimOf.
+	//
+	// When it is set it is greater than 0 and at most 1, and anything below
+	// 1 comes with StoppedAt filled in. Both are guaranteed here so a
+	// caller can hand them straight to a contract.Report, whose own
+	// validation refuses either shape.
+	Completeness *float64
+	// StoppedAt is what the model says it did not reach. Empty on an answer
+	// that claims the whole objective, and on any turn that claimed
+	// nothing.
+	StoppedAt string
+	// Passes is how many times the model answered during this turn: 1 for a
+	// single-shot turn, and on a reserved-answer turn one per pass that
+	// actually produced an answer. Zero means nobody answered, so a Turn
+	// reporting zero here always returns an error too.
+	//
+	// The converse does not hold, and reading it as if it did would be the
+	// mistake to make here: a pass that answered in a shape the schema does
+	// not accept, or a turn refused an action it needed, is counted and
+	// still refused. Passes says what the money bought, not whether the
+	// caller got an answer -- the error says that.
+	Passes int
 }
 
 // Turn runs one model turn and reads back what it answered.
@@ -306,6 +456,13 @@ type Answer struct {
 // ones -- a turn that ran for a minute and then died at its ceiling occupied
 // the machine and charged for it, and leaving that off the answer would put
 // the minute and the money on nobody's receipt.
+//
+// There are two ways to run one: a single shot, which is what the CLI does
+// natively, and a conversation held open across passes, which is what
+// Request.ReadTokens asks for. Only the request decides which -- see
+// reservesAnswer -- and everything downstream of the spawn is shared, so the
+// two paths differ in how the answer is obtained and in nothing about how it
+// is read.
 func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if err := req.Validate(); err != nil {
 		return Answer{}, err
@@ -324,6 +481,10 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		timeout = c.timeout
 	}
 
+	if req.reservesAnswer() {
+		return c.converse(ctx, dir, timeout, req)
+	}
+
 	env, err := c.invoke(ctx, dir, timeout, req)
 	answer := Answer{Spent: chargeFrom(env)}
 	if err != nil {
@@ -333,7 +494,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if err != nil {
 		return answer, err
 	}
-	answer.Text, answer.Structured = text, structured
+	answer.Text, answer.Structured, answer.Passes = text, structured, 1
 	return answer, nil
 }
 
@@ -341,11 +502,30 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 // exact CLI, plus --model and --mcp-config for what this package's callers
 // need that a capability call does not.
 func (c *Client) args(req Request) ([]string, error) {
-	argv := []string{
+	argv := []string{"--print"}
+	if req.reservesAnswer() {
+		// The three flags that hold the process open, and they are not a
+		// choice of three. Read out of the shipped binary (2.1.232), each
+		// one a hard error the CLI exits 1 on rather than a preference:
+		// "--input-format=stream-json requires output-format=stream-json",
+		// "--input-format=stream-json requires --print", and "When using
+		// --print, --output-format=stream-json requires --verbose". Drop any
+		// of them and the turn does not start at all.
+		//
+		// No positional prompt here, deliberately: the same binary's
+		// getInputPrompt reads stdin and never looks at the prompt argument
+		// once the input format is stream-json. A prompt passed here would
+		// look sent, be recorded as sent, and never arrive.
+		argv = append(argv,
+			"--input-format", "stream-json",
+			"--output-format", "stream-json",
+			"--verbose")
+	} else {
 		// --print takes no value of its own; the prompt that follows it is
 		// the CLI's positional [prompt] argument, not --print's value.
-		"--print", req.Prompt,
-		"--output-format", "json",
+		argv = append(argv, req.sentPrompt(), "--output-format", "json")
+	}
+	argv = append(argv,
 		// Ambient customization off: this machine's settings, the repository's
 		// hooks, and the skills any of them install must not be able to change
 		// what a turn does.
@@ -372,7 +552,7 @@ func (c *Client) args(req Request) ([]string, error) {
 		// fails outright on the second run. A fresh, unsaved session per
 		// turn is what keeps two callers from ever sharing a far side.
 		"--no-session-persistence",
-	}
+	)
 	// Omitted, not zero, when the caller granted no ceiling for this call --
 	// see Request.BudgetUSD's own doc for why zero means that rather than
 	// "spend nothing". The CLI's flag has no separate "unlimited" spelling;
@@ -434,21 +614,23 @@ func allowedTools(req Request) []string {
 	return append(out, req.Builtins...)
 }
 
-// invoke runs one turn and hands back the envelope, sorted into the shared
-// failure bins when it did not answer cleanly.
-func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, req Request) (envelope, error) {
+// command prepares the process both paths run: same binary, same argv, same
+// containment, same record on the way out. Only how it is then driven --
+// once, or held open across passes -- belongs to the caller.
+//
+// The timeout context is the caller's to build and cancel, because the defer
+// that releases it has to live for as long as the process is being read
+// from, which is a scope this function does not have.
+func (c *Client) command(ctx context.Context, dir string, req Request) (*exec.Cmd, error) {
 	binary, err := exec.LookPath(c.binary)
 	if err != nil {
-		return envelope{}, contract.Fail(contract.FailureUnavailable,
+		return nil, contract.Fail(contract.FailureUnavailable,
 			"claude code is not installed: %q is not on PATH", c.binary)
 	}
 	argv, err := c.args(req)
 	if err != nil {
-		return envelope{}, err
+		return nil, err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, argv...)
 	cmd.Dir = dir
 	// A model turn spawns a tree of its own -- tool subprocesses among them
@@ -456,6 +638,18 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	// here until the longest-lived one exits. See internal/procgroup.
 	procgroup.Contain(cmd)
 	recordPrompt(req, argv)
+	return cmd, nil
+}
+
+// invoke runs one turn and hands back the envelope, sorted into the shared
+// failure bins when it did not answer cleanly.
+func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, req Request) (envelope, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd, err := c.command(ctx, dir, req)
+	if err != nil {
+		return envelope{}, err
+	}
 	stdout, runErr := cmd.Output()
 
 	var stderr string
@@ -484,6 +678,571 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 		return out, failureFor(out.reason(), runErr)
 	}
 	return out, nil
+}
+
+// maxPasses bounds how many times one reserved-answer turn may answer.
+//
+// A guard against a model that never converges, not a knob: the read
+// allowance is what normally ends a turn, and this is what ends one whose
+// cost the CLI never priced or whose completeness never reaches 1. Eight
+// leaves a real exploration room to widen and still notices a stuck turn
+// inside the turn rather than inside a bill. Reaching it is not a kill: the
+// last pass a turn gets is always a finalize pass, so the cap ends with an
+// answer like every other stopping condition here.
+const maxPasses = 8
+
+// finalizeMessage is the message that replaces the kill.
+//
+// It is sent once and never twice: a second would be paying a whole pass to
+// tell the model something it has already been told. It names the two
+// properties explicitly because a model asked only to "answer now" answers
+// the objective and leaves the fields that say how far it got at whatever
+// the last pass claimed -- and a stale completeness is worse than none, it
+// reports coverage nobody has.
+const finalizeMessage = "Stop reading. Answer now, in the required schema, with exactly what " +
+	"you already have. Set completeness to the fraction covered and stopped_at to what " +
+	"you did not reach."
+
+// continueMessage is what a pass with allowance left is told.
+//
+// Short on purpose: every message here is read back on the next pass at the
+// caller's expense, and this one carries no instruction the pass protocol in
+// the prompt has not already given. Its whole job is to be a turn boundary
+// the model can answer past.
+const continueMessage = "Keep going, then answer the whole schema again with completeness " +
+	"and stopped_at updated."
+
+// eventBuffer sizes the reader over the CLI's event stream. A starting size
+// rather than a ceiling -- ReadBytes grows past it -- and large because a
+// result event carries the whole structured answer on one line.
+const eventBuffer = 1 << 20
+
+// converse runs one turn as a conversation held open across passes.
+//
+// THE CENTRAL GUARANTEE, and the only reason this path exists: once any pass
+// has answered, the CLI dying -- at the hard ceiling, on a signal, on
+// anything at all -- costs nothing but the passes that had not happened yet.
+// The best answer so far comes back with what it spent and no error. Only a
+// death with no pass behind it is still a failure, because only then is there
+// genuinely nothing to hand back.
+//
+// Measured 2026-08-14, before this existed: 12 of 12 agent steps died at
+// their ceiling with result_len 0, and the $3.78 they had already spent
+// bought nothing whatsoever. The death is not what this fixes -- a turn can
+// still run out of money. What it fixes is the death costing the answer.
+func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration, req Request) (Answer, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd, err := c.command(ctx, dir, req)
+	if err != nil {
+		return Answer{}, err
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return Answer{}, contract.Fail(contract.FailureUnavailable,
+			"cannot hold claude code's input open: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Answer{}, contract.Fail(contract.FailureUnavailable,
+			"cannot read claude code's event stream: %v", err)
+	}
+	// Collected rather than inherited, and read only after Wait -- the one
+	// point os/exec guarantees its own copier has finished. This is where a
+	// CLI that refused a flag or died without framing an event says so.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return Answer{}, failureFor("", err)
+	}
+
+	// Pass one goes in as a message, not as an argument. Measured on this
+	// CLI: a user message on the same stdin is acted on by the same process
+	// with the context intact -- both between turns and, measured on the
+	// real backend repository, in the middle of one: a message written 5.8s
+	// in, before the model's first tool call, had it finish that call and
+	// answer the schema immediately. That is what makes an answer securable
+	// before the ceiling rather than after it. Session resume across
+	// processes is not an option here; see --no-session-persistence in args.
+	handoff := say(stdin, req.sentPrompt())
+
+	var conv conversation
+	stop := handoff != nil
+	reader := bufio.NewReaderSize(stdout, eventBuffer)
+	for !stop {
+		line, readErr := reader.ReadBytes('\n')
+		if ev, ok := readEvent(line); ok {
+			// The two kinds of line that decide anything. An assistant event
+			// is the only signal that arrives while a turn is still running,
+			// and a result event is the only place an answer appears. Every
+			// other line -- the init system line, tool results, the echo of
+			// what was just said -- is read past.
+			switch ev.Type {
+			case "assistant":
+				stop = conv.spend(ev.Message.ID, ev.Message.Usage, stdin, req.ReadTokens)
+			case "result":
+				stop = conv.hear(ev.envelope, stdin, req.ReadTokens)
+			}
+		}
+		if readErr != nil {
+			// EOF ends a turn that answered and exited, and it ends a turn
+			// killed at its hard ceiling. Neither is sorted here: what
+			// decides between them is whether any pass answered, below.
+			stop = true
+		}
+	}
+
+	// Stdin first: the end of its input is what tells the CLI the
+	// conversation is over, and it leaves on its own. Measured against the
+	// live CLI: the same argv this path builds, given no message at all and
+	// then EOF, exits 0 without calling anything.
+	_ = stdin.Close()
+	// Then drain, for two reasons that both end in a hang. os/exec's Wait
+	// must not run while a read on the pipe is still in flight, and a CLI
+	// blocked writing into a stdout pipe nobody is reading would never reach
+	// the end of stdin that tells it to stop. A pass that answered early
+	// leaves exactly that: events still queued behind the one this loop
+	// stopped at.
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		_, _ = io.Copy(io.Discard, stdout)
+	}()
+	settle := func() bool {
+		select {
+		case <-drained:
+			return true
+		case <-time.After(procgroup.Grace):
+			return false
+		}
+	}
+	if !settle() {
+		// It is not leaving on its own and the answer is already in hand, so
+		// stop paying for the wait. Killing the group closes the write end,
+		// which is what lets the drain finish.
+		_ = procgroup.Kill(cmd)
+		settle()
+	}
+	waitErr := cmd.Wait()
+	said := strings.TrimSpace(stderr.String())
+
+	answer := Answer{Spent: conv.charge(), Passes: conv.answered}
+	if conv.answered == 0 {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Sorted before anything the CLI said, the same order invoke
+			// reads it in: the caller stopped waiting, and that outranks
+			// whatever the process managed to print on its way out.
+			return answer, contract.Stopped(ctxErr, "claude code", timeout).WithRaw(said)
+		}
+		return answer, conv.emptyDeath(req, said, cmp.Or(handoff, waitErr))
+	}
+	// The guarantee, in code: everything that could have gone wrong with the
+	// process -- waitErr, a killed group, a context that expired -- is
+	// deliberately not consulted past this line. A pass answered, so the turn
+	// produced something, and how the process ended is not the caller's
+	// problem. The turn timeout becomes a ceiling on how long a turn may keep
+	// reading rather than a reason to throw away what it read.
+	text, structured, err := readAnswer(conv.best, req)
+	if err != nil {
+		// The one failure that still outranks an answer: the shape is wrong,
+		// or the turn was refused an action it needed. Both are things a
+		// caller has to act on rather than read around, and readAnswer words
+		// them the same way for both paths.
+		return answer, err
+	}
+	answer.Text, answer.Structured = text, structured
+	answer.Completeness, answer.StoppedAt = conv.claimed.reported()
+	return answer, nil
+}
+
+// conversation is what the passes of one turn have produced so far, which is
+// exactly what has to survive the process for the guarantee to mean anything.
+type conversation struct {
+	// best is the last pass that carried an answer, and claimed is what that
+	// pass said about itself. Not necessarily the last pass: a turn whose
+	// final event is a ceiling death keeps the answer from before it.
+	best    envelope
+	claimed claim
+	// receipt is the last result event of any kind, answered or not.
+	//
+	// Read out of the shipped binary (2.1.232): every result event carries
+	// `usage: this.totalUsage`, an accumulator that starts at zero and is
+	// summed field by field on each message_stop, and `total_cost_usd` from
+	// the same running total. So the last event is the whole turn's receipt,
+	// and adding the events up would double-count every pass.
+	receipt envelope
+	// settled is what the assistant events reported for every message before
+	// the one in flight, and inflight is the latest reading for that one.
+	// Together they are the only account of what a turn has spent that exists
+	// while it is still running.
+	//
+	// Kept per message rather than per event, because the events repeat.
+	// Measured 2026-08-14 against the live CLI, one turn surveying this
+	// repository: 4 assistant events carried 2 message ids, and the two
+	// events of a message carried byte-identical usage -- one content block
+	// each, one request's usage restated. Summed per event that turn read
+	// 78,386 cache-creation tokens; summed per message, 39,193, which is
+	// exactly what the CLI's own result event then reported. So a per-event
+	// sum is not an estimate that runs high, it is double-counting, and it
+	// would also be the figure a caller is handed when no result event
+	// arrives at all.
+	//
+	// A message id the CLI stopped sending would collapse every event into
+	// one message and under-count instead. That direction is the deliberate
+	// one: it nudges late rather than charging a caller for tokens nobody
+	// measured, and the magnitudes measured below leave it firing anyway.
+	settled    usage
+	inflight   usage
+	inflightID string
+	// answered counts passes that produced an answer; rounds counts result
+	// events whether they answered or not. They are different numbers and
+	// each has one job: answered is what the caller is told and what decides
+	// the guarantee, rounds is what bounds the loop, because a model that
+	// answers nothing would otherwise be nudged forever.
+	answered int
+	rounds   int
+	// finalized records that the one finalize message has gone out.
+	finalized bool
+}
+
+// read is what the assistant events have accounted for so far: the messages
+// that are done, plus the latest reading of the one in flight.
+func (conv *conversation) read() usage {
+	return conv.settled.add(conv.inflight)
+}
+
+// weighed is what this turn has run up so far, in the input-equivalent tokens
+// ReadTokens is denominated in.
+//
+// The larger of the two readings, which is also the only way they can be
+// combined honestly: the assistant events are all there is mid-turn, and the
+// result event's own total is the CLI's own count and therefore the authority
+// whenever one has arrived. Taking the larger keeps the figure monotone across
+// a boundary, so an allowance already crossed cannot appear uncrossed again --
+// measured on the live turn below, the two readings straddle a boundary at
+// 81,699 and 87,004, and only the streamed one is short.
+func (conv *conversation) weighed() int {
+	return max(weigh(conv.read()), weigh(conv.receipt.Usage))
+}
+
+// charge is what the turn cost.
+//
+// The result event is the authority when one arrived: it carries the CLI's own
+// cumulative usage and the CLI's own price. When none did -- the exact shape
+// of the 12 deaths this path exists for -- the assistant events are all there
+// is, and per message they are the same field-by-field total the CLI would
+// have printed (measured: 39,193 cache-creation tokens either way). It carries
+// no dollar figure, because the CLI never printed one, and a price invented
+// here is precisely what contract.Charge.PricedBy exists to make impossible.
+//
+// The streamed output_tokens run short -- 6 against the 1,067 the same turn's
+// result event reported -- because an assistant event is printed while its
+// message is still being written. Short and honest beats invented: it is the
+// count the CLI gave, and the alternative is arithmetic nobody measured.
+func (conv *conversation) charge() contract.Charge {
+	if conv.rounds > 0 {
+		return chargeFrom(conv.receipt)
+	}
+	return chargeFrom(envelope{Usage: conv.read()})
+}
+
+// spend takes one assistant event's account of itself and fires the finalize
+// nudge the moment the turn crosses its allowance -- mid-turn, without waiting
+// for a boundary that may never come.
+//
+// This is the trigger a cost check could not be, for two measured reasons. The
+// CLI reports no cost mid-turn at all, and an explore step does all of its work
+// inside turn 1: 12 of 12 steps died with zero passes because the boundary
+// where an allowance was checked never arrived.
+//
+// Measured 2026-08-14, live, and this is the whole mechanism working: a turn
+// surveying this repository was sent the finalize message 2.75s in, mid-turn,
+// right after its first tool call and with no result event anywhere. It
+// finished that call, and answered the schema -- completeness 0.05, naming
+// what it had not reached -- for $0.26, exit 0. The pass protocol makes the
+// answer possible; this is what asks for it in time.
+func (conv *conversation) spend(id string, reported usage, stdin io.Writer, allowance int) bool {
+	if id != conv.inflightID {
+		conv.settled = conv.read()
+		conv.inflightID = id
+	}
+	conv.inflight = reported
+	if conv.finalized || conv.weighed() < allowance {
+		return false
+	}
+	if err := say(stdin, finalizeMessage); err != nil {
+		return true // the far side is gone; what is in hand is what there is
+	}
+	conv.finalized = true
+	return false
+}
+
+// hear takes one pass and decides what the turn does next, reporting whether
+// it is over.
+//
+// Every path out of here either stops or has just written exactly one message
+// to stdin, which is what keeps the passes strictly alternating: the CLI is
+// never given two messages to answer, and never left waiting on one that was
+// not sent.
+func (conv *conversation) hear(event envelope, stdin io.Writer, allowance int) bool {
+	conv.rounds++
+	conv.receipt = event
+	pass, carried := claimOf(event)
+	if carried {
+		conv.best, conv.claimed, conv.answered = event, pass, conv.answered+1
+	}
+	switch {
+	case carried && pass.complete():
+		// The model says the objective is fully covered. There is nothing
+		// left to buy.
+		return true
+	case conv.finalized:
+		// The finalize message already went out, so this pass is the answer
+		// it asked for -- whatever that turned out to be, including nothing,
+		// in which case an earlier pass is still held above.
+		return true
+	case conv.rounds+1 >= maxPasses, conv.weighed() >= allowance:
+		// The boundary half of the same trigger, kept because it needs
+		// nothing from the assistant events: a result event carries the
+		// CLI's own cumulative usage, so a turn whose assistant events said
+		// nothing about usage is still stopped here. Either the allowance is
+		// gone or the next pass is the last one this turn gets, and both mean
+		// the same thing to the model.
+		if err := say(stdin, finalizeMessage); err != nil {
+			return true // the far side is gone; what is in hand is what there is
+		}
+		conv.finalized = true
+		return false
+	default:
+		return say(stdin, continueMessage) != nil
+	}
+}
+
+// emptyDeath sorts a turn that never got a pass out of the far side: the one
+// case the guarantee cannot cover, because there is no answer to hand back
+// and the failure is the whole story.
+//
+// It sorts the same shapes the same way invoke does, deliberately. A caller
+// cannot tell which of the two paths ran, so it must not be able to tell from
+// the failure either.
+func (conv *conversation) emptyDeath(req Request, said string, runErr error) error {
+	if conv.rounds == 0 {
+		// Nothing was ever framed. A CLI that died before it could is a CLI
+		// that said why in plain text on stderr -- a rejected flag, a broken
+		// schema -- so the raw line travels for whoever debugs.
+		if runErr != nil {
+			return failureFor(said, runErr)
+		}
+		return contract.Fail(contract.FailureUnavailable,
+			"claude code ended the turn without ever answering a pass").WithRaw(said)
+	}
+	if conv.receipt.IsError {
+		return failureFor(conv.receipt.reason(), runErr)
+	}
+	// A pass was framed, said it was fine, and carried nothing this package
+	// could keep. readAnswer names which of those it was, in the same words
+	// the single-shot path uses for the same envelope.
+	if _, _, err := readAnswer(conv.receipt, req); err != nil {
+		return err
+	}
+	// readAnswer accepted it and claimOf did not, which leaves one shape:
+	// bytes that open like an object and do not parse as one. readAnswer
+	// checks the first byte, claimOf parses the whole thing.
+	return contract.Fail(contract.FailureInvalidInput,
+		"claude code's structured answer is not readable JSON").
+		WithRaw(string(conv.receipt.StructuredOutput))
+}
+
+// say writes one user message on the CLI's stdin.
+//
+// The shape is the one --input-format stream-json takes, and it is worth
+// getting exactly right rather than approximately: read out of the shipped
+// binary (2.1.232), a line whose message.role is not "user" comes back as
+// "Error: Expected message role 'user'", and a line carrying a type it does
+// not know is dropped with "Ignoring unknown message type" -- silently, which
+// would look from here exactly like a model that stopped answering. The
+// trailing newline is the frame; the CLI reads its input a line at a time.
+func say(w io.Writer, text string) error {
+	line, err := json.Marshal(map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": []any{map[string]any{"type": "text", "text": text}},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(line, '\n'))
+	return err
+}
+
+// event is one line of the stream, read for both of the things a line can
+// carry that this package acts on.
+//
+// One decode rather than two: the embedded envelope is what a `result` line
+// is, whole, and Message is where an `assistant` line puts its own account of
+// itself. The two never collide -- a result event has no `message`, an
+// assistant event has no top-level `usage` -- so one pass over the bytes
+// answers whichever kind arrived.
+//
+// The id is read because the usage beside it is not per event. Measured
+// 2026-08-14 on the live CLI: one message's content blocks arrive as separate
+// events restating identical usage, so the id is what tells a second reading
+// of one request from a second request. See conversation.settled.
+type event struct {
+	envelope
+	Message struct {
+		ID    string `json:"id"`
+		Usage usage  `json:"usage"`
+	} `json:"message"`
+}
+
+// readEvent reads one line of the event stream, reporting whether it was JSON
+// at all. Which kind of event it is, and whether that kind matters, is the
+// caller's to decide -- see the switch in converse, the one place the CLI's
+// event names are spelled.
+//
+// Read out of the shipped binary (2.1.232): with --output-format stream-json
+// the CLI installs a guard over its own stdout that lets only whole valid
+// JSON lines through and diverts everything else to stderr, so a line here is
+// either an event or nothing. An unreadable one is therefore skipped rather
+// than reported: it is not this package's news to break.
+func readEvent(line []byte) (event, bool) {
+	text := bytes.TrimSpace(line)
+	if len(text) == 0 || text[0] != '{' {
+		return event{}, false
+	}
+	var out event
+	if err := json.Unmarshal(text, &out); err != nil {
+		return event{}, false
+	}
+	return out, true
+}
+
+// claim is what one pass says about its own answer: the two properties the
+// pass protocol adds to the caller's schema, decoded out of the same
+// structured output the caller will decode for its own fields.
+type claim struct {
+	Completeness *float64 `json:"completeness"`
+	StoppedAt    string   `json:"stopped_at"`
+}
+
+// claimOf reads a pass's account of itself, reporting whether the pass
+// carried an answer at all.
+//
+// The two are one question on purpose: a pass whose structured output is
+// missing, is not an object, or does not parse has not answered, and cannot
+// become the answer this turn hands back. That reading is exact rather than
+// approximate: in the shipped binary (2.1.232) the list a result event's
+// structured_output is taken from is built per submitted message, so an
+// absent structure means this pass produced none -- never that an earlier
+// pass's answer is being repeated here.
+//
+// A pass that answered without claiming anything still counts. The claim is
+// then empty, which reads as unclaimed, and an answer nobody measured is
+// still an answer.
+func claimOf(env envelope) (claim, bool) {
+	shape := bytes.TrimSpace(env.StructuredOutput)
+	if len(shape) == 0 || shape[0] != '{' {
+		return claim{}, false
+	}
+	var out claim
+	if err := json.Unmarshal(shape, &out); err != nil {
+		return claim{}, false
+	}
+	return out, true
+}
+
+// complete reports whether the pass says the objective is fully answered,
+// which is the one thing that ends a turn with allowance still on the table.
+//
+// Read as ">= 1" rather than "== 1" so a model that over-claims is taken at
+// its word about being done. It is the cheapest claim to believe: the
+// alternative is paying for another pass to be told the same thing.
+func (c claim) complete() bool {
+	return c.Completeness != nil && *c.Completeness >= 1
+}
+
+// reported is what a claim becomes on an Answer: a fraction and the remainder
+// it implies, or neither.
+//
+// A figure is kept only when it is a fraction -- above 0, at most 1, the
+// range pkg/contract's Report accepts. Anything else is dropped to unclaimed
+// rather than repaired into range, because a number outside it is not a
+// measurement of this: above 1 already means "whole", which is what an absent
+// completeness reads as, and at or below 0 claims there is no answer next to
+// an answer there is.
+//
+// What is never dropped is a partial answer's remainder. A pass claiming less
+// than the whole objective and naming nothing it missed would build a Report
+// that Report's own validation refuses, and what that would cost is the
+// answer -- so it is named the way deniedTools names a refusal the provider
+// did not name: badly, but at all.
+func (c claim) reported() (*float64, string) {
+	stoppedAt := strings.TrimSpace(c.StoppedAt)
+	if c.Completeness == nil || *c.Completeness <= 0 || *c.Completeness > 1 {
+		return nil, stoppedAt
+	}
+	covered := *c.Completeness
+	if covered < 1 && stoppedAt == "" {
+		stoppedAt = unnamedRemainder
+	}
+	return &covered, stoppedAt
+}
+
+// unnamedRemainder stands in for a stopped_at the model left empty on a pass
+// that claimed less than the whole objective. See claim.reported.
+const unnamedRemainder = "the model did not say what it did not reach"
+
+// weigh converts one usage reading into input-equivalent tokens: one number
+// that four differently-priced kinds of token can be compared against a single
+// allowance in.
+//
+// The weights are price ratios normalised to input tokens at $3/M: input x1,
+// cache creation x2 ($6/M), cache read x0.1 ($0.30/M), output x5 ($15/M). So
+// tokensPerUSD is 333,333 by construction, which is the number a caller
+// converts a dollar share with -- see Request.ReadTokens. Kept as integer
+// arithmetic, which truncates, because the figure is an ESTIMATE and rounding
+// it precisely would dress it up as something it is not.
+//
+// The cache creation weight is x2 and not the x1.25 of a 5-minute write,
+// because this CLI writes 1-hour cache entries. Measured 2026-08-14 against
+// one live turn's own receipt: `cache_creation` reported
+// ephemeral_1h_input_tokens 39,193 and ephemeral_5m_input_tokens 0, and these
+// weights reproduce the CLI's own total_cost_usd of $0.261685 to within 0.26%,
+// and a second turn's $0.536291 to within 0.14%.
+// At x1.25 the same arithmetic lands 34% low, which is a nudge that fires a
+// third of the way past where it was asked to.
+//
+// The cache weights are also the only ones that decide anything, which is not
+// obvious from the field names: measured on the same turn, `input_tokens` was
+// 2 against 32,799 cache-creation tokens, so a check written on InputTokens
+// alone would read a turn that had just spent $0.20 as having spent nothing.
+//
+// It is still an estimate, in one way that matters: the ratios are one model's,
+// and the model a turn actually ran on is whatever internal/config named. Its
+// only job is to fire the nudge early enough to leave room for an answer, and
+// being wrong by a factor makes the nudge early or late, never wrong. What the
+// turn may actually spend is still --max-budget-usd, enforced by the CLI
+// against its own arithmetic, and what the caller is told it spent is still the
+// CLI's own total -- see chargeFrom. This number is never reported to anybody.
+func weigh(u usage) int {
+	return u.InputTokens + u.CacheWrite*2 + u.CacheRead/10 + u.OutputTokens*5
+}
+
+// add returns the two usages summed, field by field -- the same arithmetic the
+// CLI itself does to build the total it prints (read out of the shipped binary
+// 2.1.232: totalUsage starts at zero and each message's usage is added into it
+// at message_stop). Per message, and never per event: see
+// conversation.settled for the measurement that separates the two.
+func (u usage) add(other usage) usage {
+	return usage{
+		InputTokens:  u.InputTokens + other.InputTokens,
+		OutputTokens: u.OutputTokens + other.OutputTokens,
+		CacheRead:    u.CacheRead + other.CacheRead,
+		CacheWrite:   u.CacheWrite + other.CacheWrite,
+	}
 }
 
 // PromptLogEnv names a directory where every prompt this package sends is
@@ -517,15 +1276,29 @@ func recordPrompt(req Request, argv []string) {
 	}
 	name := fmt.Sprintf("%d-%s-%d.txt", time.Now().UnixNano(), req.Role, os.Getpid())
 	var b strings.Builder
-	fmt.Fprintf(&b, "role: %s\nbudget_usd: %v\ntools: %v\n", req.Role, req.BudgetUSD, req.Builtins)
-	fmt.Fprintf(&b, "argv: %q\n\n----- prompt -----\n%s\n", argv, req.Prompt)
+	fmt.Fprintf(&b, "role: %s\nbudget_usd: %v\nread_tokens: %d\ntools: %v\n",
+		req.Role, req.BudgetUSD, req.ReadTokens, req.Builtins)
+	// sentPrompt, not Prompt: a reserved-answer turn sends the pass protocol
+	// too, and a record of the caller's half alone would be a record of a
+	// string nobody was ever asked. On a single-shot turn the two are the
+	// same value.
+	fmt.Fprintf(&b, "argv: %q\n\n----- prompt -----\n%s\n", argv, req.sentPrompt())
 	_ = os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644)
 }
 
 // envelope is the JSON one headless turn prints -- the same shape claudecode
 // reads, because this package drives the identical CLI and inherits the same
-// measured traps.
+// measured traps. It is also, line for line, the `result` event a streaming
+// turn prints once per pass: one shape read two ways, which is why a pass and
+// a whole single-shot turn are sorted by the same functions below.
 type envelope struct {
+	// Type names which event this is, and matters only where there are
+	// several to tell apart -- resultEvent, reading the stream a
+	// reserved-answer turn prints. A single-shot turn carries it too
+	// (measured: a real --output-format json run prints "type":"result") and
+	// has no reason to read it, since a single-shot turn prints one object
+	// and that object is the answer.
+	Type string `json:"type"`
 	// IsError is the only field that tells the truth about failure.
 	// Measured, on this same CLI, in claudecode: a turn that failed to
 	// authenticate still reported subtype "success", so subtype can never be

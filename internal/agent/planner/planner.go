@@ -93,6 +93,15 @@ type report struct {
 	Reason     *reason        `json:"reason,omitempty"`
 	Discovered []discovery    `json:"discovered,omitempty"`
 	Spent      *charge        `json:"spent,omitempty"`
+	// Completeness and StoppedAt carry a pass's own claim about its coverage.
+	// Both stay zero on a whole answer; coverage is the only place that fills
+	// them in, and it refuses before either is set on an answer that claims
+	// less than whole without saying where it stopped.
+	Completeness *float64 `json:"completeness,omitempty"`
+	StoppedAt    string   `json:"stopped_at,omitempty"`
+	// Notices are caveats that are not failures -- mirrors contract.Report's
+	// own field. A partial answer earns one naming what it did not reach.
+	Notices []string `json:"notices,omitempty"`
 }
 
 type reason struct {
@@ -208,6 +217,68 @@ func answer(stdout io.Writer, out report) error {
 	return json.NewEncoder(stdout).Encode(out)
 }
 
+// readShare is the fraction of a step's own budget spent on reading; the
+// rest is held back for the answer, via model.Request.ReadTokens.
+//
+// Measured 2026-08-14: twelve of twelve real steps spent their whole ceiling
+// reading -- code.search, symbol.definition, the tools these two agents are
+// handed -- and every one of them hit --max-budget-usd before a single
+// result field was written. $3.78 across twelve turns, result_len 0 on all
+// twelve. The model was never told to stop reading and answer; it just kept
+// paying until the process killed it mid-turn, with the answer it would have
+// written nowhere on the record. Reserving part of the grant turns that death
+// into a request: read on this share, then answer with what you have.
+//
+// The fraction is a half rather than three quarters, and that came from a
+// measurement too. At 0.75 the same twelve steps still died, and so did a
+// single step re-run at $0.90: the finalize pass is not free, and it is the
+// most expensive pass of the turn -- it carries the whole grown context,
+// ~57,900 input-equivalent tokens on a real explore turn, and the CLI
+// overshoots its own --max-budget-usd by up to 1.6x while getting there
+// ($0.35 spent against a $0.22 ceiling, measured). A quarter held back is
+// swallowed by that overshoot before a word is written.
+const readShare = 0.5
+
+// tokensPerUSD converts the reserved dollar share into a token count, in the
+// same input-equivalent unit model.Request.ReadTokens is weighed in (input
+// x1, cache creation x2 for this CLI's 1-hour cache entries, cache read
+// x0.1, output x5 -- see model.weigh).
+//
+// It has to be tokens, not dollars: the CLI prices a turn only once it ends
+// -- no mid-turn cost signal exists -- and an explore step does its whole
+// job inside turn one, so a dollar-denominated nudge never fires before the
+// hard ceiling kills the turn. A same-evening probe confirmed a nudge
+// injected mid-turn IS acted on: sent 2.75s in, the model finished its
+// in-flight tool call and answered the full schema with completeness 0.05,
+// no result event ever seen.
+//
+// Reconciled 2026-08-14 against two real turns' own receipts, and they do not
+// agree -- which is the reason this figure is the lower of the two. A short
+// turn (input 4, cache_creation 39,193, cache_read 32,799, output 1,067)
+// weighs 87,004 and was charged $0.261685: 332,700 per dollar. A full explore
+// turn on the taxiprime backend (input 16, cache_creation 56,921, cache_read
+// 356,434, output 5,279) weighs 175,896 and was charged $1.058432: 166,200
+// per dollar, half as many. The weighting's ratios are input-relative, so a
+// turn's rate moves with which model answered it and with the 1-hour cache
+// premium; explore and plan run claude-opus-5 here, and the expensive
+// reading-heavy shape is the one this mechanism exists for.
+//
+// So the estimate is deliberately the pessimistic end of what was measured.
+// Being wrong low nudges a turn earlier than it had to be, which costs some
+// coverage; being wrong high nudges it after the CLI has already killed it,
+// which costs the whole answer. An earlier figure here (333,333) was measured
+// on the cheap turn alone, and at $0.90 a step it put the nudge past the
+// ceiling: measured, that run spent $1.06 and wrote nothing.
+const tokensPerUSD = 166000
+
+// readTokens is what model.Request.ReadTokens is given: readShare of the
+// step's own dollar budget, converted through tokensPerUSD. budget(in) is
+// zero for an ungranted run, which makes this zero too -- off, the same
+// reading ReadTokens gives every zero.
+func readTokens(in assignment) int {
+	return int(readShare * budget(in) * tokensPerUSD)
+}
+
 func explore(ctx context.Context, in assignment, cfg config.Config, d deps) report {
 	tools, err := d.tools()
 	if err != nil {
@@ -224,7 +295,10 @@ func explore(ctx context.Context, in assignment, cfg config.Config, d deps) repo
 		Schema:    exploreSchema(),
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
-		Tools:     tools,
+		// ReadTokens holds back readShare's complement for the answer -- see
+		// readShare and tokensPerUSD for why this is tokens, not dollars.
+		ReadTokens: readTokens(in),
+		Tools:      tools,
 		// Read and Glob, and nothing else. There is no "read this file"
 		// capability, so without Read the explorer can find a symbol and
 		// never see the code around it; Glob is how it learns a tree it has
@@ -251,6 +325,10 @@ func explore(ctx context.Context, in assignment, cfg config.Config, d deps) repo
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.Findings) == "" {
 		return refused("the model answered with an empty exploration", answer.Spent)
 	}
+	completeness, stoppedAt, refusal := coverage(answer)
+	if refusal != nil {
+		return *refusal
+	}
 
 	got := report{
 		Verdict: "ok",
@@ -259,6 +337,11 @@ func explore(ctx context.Context, in assignment, cfg config.Config, d deps) repo
 			FindingsField: out.Findings,
 		},
 		Spent: spent(answer.Spent),
+	}
+	if completeness != nil {
+		got.Completeness = completeness
+		got.StoppedAt = stoppedAt
+		got.Notices = append(got.Notices, partialNotice(*completeness, stoppedAt))
 	}
 	// What was learned outlives the commission. A note is a sentence, not a
 	// transcript: the ceiling truncates, and a truncated paragraph teaches
@@ -287,6 +370,9 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		Schema:    planSchema(),
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
+		// ReadTokens holds back readShare's complement for the answer -- see
+		// readShare and tokensPerUSD for why this is tokens, not dollars.
+		ReadTokens: readTokens(in),
 	})
 	if err != nil {
 		return fromModelError(err, answer.Spent)
@@ -301,11 +387,22 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 	if strings.TrimSpace(out.Plan) == "" {
 		return refused("the model answered with an empty plan", answer.Spent)
 	}
-	return report{
+	completeness, stoppedAt, refusal := coverage(answer)
+	if refusal != nil {
+		return *refusal
+	}
+
+	got := report{
 		Verdict: "ok",
 		Result:  map[string]any{PlanField: out.Plan},
 		Spent:   spent(answer.Spent),
 	}
+	if completeness != nil {
+		got.Completeness = completeness
+		got.StoppedAt = stoppedAt
+		got.Notices = append(got.Notices, partialNotice(*completeness, stoppedAt))
+	}
+	return got
 }
 
 // fromModelError sorts a failed turn, keeping the charge whatever happened.
@@ -343,6 +440,36 @@ func unavailable(text string) report {
 		Verdict: "incomplete",
 		Reason:  &reason{Kind: "unavailable", Text: text},
 	}
+}
+
+// coverage turns a pass's own completeness claim into the report's fields, or
+// a refusal when the claim cannot be trusted.
+//
+// A model that answers completeness 1 (or leaves it unset) answered the whole
+// commission: nil out, nothing to carry. Below 1 it is a partial, and a
+// partial that will not say where it stopped is not auditable -- `ok` with an
+// unnamed gap reads as whole to every counter downstream of it, which is
+// worse than the empty answer the existing refusals already catch. `ok` with
+// completeness and stopped_at named is the honest shape: the harness told it
+// to answer with what it had, and it did.
+func coverage(a model.Answer) (completeness *float64, stoppedAt string, refusal *report) {
+	if a.Completeness == nil || *a.Completeness >= 1 {
+		return nil, "", nil
+	}
+	if strings.TrimSpace(a.StoppedAt) == "" {
+		out := refused(fmt.Sprintf(
+			"the model answered completeness %.2f with no stopped_at: a partial that will not say where it stopped is not auditable",
+			*a.Completeness), a.Spent)
+		return nil, "", &out
+	}
+	return a.Completeness, a.StoppedAt, nil
+}
+
+// partialNotice is the caveat a partial answer earns, naming what it did not
+// reach so a reader of the result does not have to open completeness and
+// stopped_at separately to find out the answer is short.
+func partialNotice(completeness float64, stoppedAt string) string {
+	return fmt.Sprintf("this answer is partial: %.0f%% complete, stopped at %s", completeness*100, stoppedAt)
 }
 
 // spent converts a charge for the wire, and returns nil when there is nothing

@@ -104,11 +104,13 @@ func (s StepRow) Needs() []string {
 // whole.
 func (s StepRow) Report() contract.Report {
 	return contract.Report{
-		Result:     s.Result,
-		Verdict:    s.Verdict,
-		Reason:     s.Reason,
-		Discovered: s.Discovered,
-		Spent:      s.Spent,
+		Result:       s.Result,
+		Verdict:      s.Verdict,
+		Reason:       s.Reason,
+		Discovered:   s.Discovered,
+		Spent:        s.Spent,
+		Completeness: s.Completeness,
+		StoppedAt:    s.StoppedAt,
 	}
 }
 
@@ -139,6 +141,20 @@ func (r Run) Label(step StepRow) string {
 		return "blocked"
 	}
 	return step.Status.String()
+}
+
+// State is what to print in a listing's STATE column: the label, with the
+// coverage appended when the step's own report claims less than the whole
+// objective. Separate from Label -- which Counts and Summary group on --
+// because folding "ok (0.55)" and "ok (0.90)" into distinct groups would
+// make a run that mostly succeeded look like it barely finished.
+func (r Run) State(step StepRow) string {
+	label := r.Label(step)
+	report := step.Report()
+	if !report.Partial() {
+		return label
+	}
+	return fmt.Sprintf("%s (%.2f)", label, *report.Completeness)
 }
 
 // Counts totals the steps by label.

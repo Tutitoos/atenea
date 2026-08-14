@@ -262,6 +262,13 @@ func indent(text string) string {
 // The schemas below are the structured-output contract with the model. They
 // are strict for the same reason the agent result schema is: a field nobody
 // declared is a field nobody checked.
+//
+// completeness and stopped_at are on both, and both are required rather than
+// optional. The model is the only party that knows, pass to pass, how much of
+// the commission it actually covered -- the harness cannot measure it, only
+// price the turn after the fact -- so the schema is written so a pass that
+// forgets to state its own coverage is refused by the CLI before it ever
+// reaches this package, rather than silently read as complete.
 
 func exploreSchema() map[string]any {
 	return map[string]any{
@@ -275,8 +282,10 @@ func exploreSchema() map[string]any {
 				"type":        "string",
 				"description": "The files, packages and symbols the commission touches, named exactly.",
 			},
+			"completeness": completenessProperty(),
+			"stopped_at":   stoppedAtProperty(),
 		},
-		"required":             []any{SummaryField, FindingsField},
+		"required":             []any{SummaryField, FindingsField, "completeness", "stopped_at"},
 		"additionalProperties": false,
 	}
 }
@@ -289,8 +298,29 @@ func planSchema() map[string]any {
 				"type":        "string",
 				"description": "The graph, as TOML, in the format given. No fences, no commentary.",
 			},
+			"completeness": completenessProperty(),
+			"stopped_at":   stoppedAtProperty(),
 		},
-		"required":             []any{PlanField},
+		"required":             []any{PlanField, "completeness", "stopped_at"},
 		"additionalProperties": false,
+	}
+}
+
+// completenessProperty and stoppedAtProperty are shared between both schemas
+// so the two pass protocols cannot drift into asking the same thing two
+// different ways.
+func completenessProperty() map[string]any {
+	return map[string]any{
+		"type":        "number",
+		"minimum":     0,
+		"maximum":     1,
+		"description": "How much of the commission this answer covers, 1 meaning whole. State this every pass, honestly: it is what tells the harness whether to keep reading or finalize.",
+	}
+}
+
+func stoppedAtProperty() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"description": "What was not reached, when completeness is below 1. Empty when completeness is 1.",
 	}
 }

@@ -261,6 +261,135 @@ func TestReasonNeedsBothHalves(t *testing.T) {
 	}
 }
 
+// Rule: a completeness claim is a fact about the answer, and it has to
+// agree with the rest of the report -- in range, explained whenever it is
+// short of 1, and never riding on a verdict that already means "nobody
+// obtained an answer to judge".
+func TestCompletenessRules(t *testing.T) {
+	spec := testSpec()
+
+	cases := []struct {
+		name      string
+		r         contract.Report
+		errSubstr string // empty means the report must validate
+	}{
+		{
+			name: "a full answer with no completeness marker",
+			r: contract.Report{
+				Result:  map[string]any{"summary": "all five files read"},
+				Verdict: contract.VerdictOK,
+			},
+		},
+		{
+			name: "a full answer that claims completeness 1",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "all five files read"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(1.0),
+			},
+		},
+		{
+			name: "a partial answer with a stop point",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "three of five files read"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(0.55),
+				StoppedAt:    "the last two files, cut off by the read budget",
+			},
+		},
+		{
+			name: "a partial answer with no stop point",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "three of five files read"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(0.55),
+			},
+			errSubstr: "stopped_at",
+		},
+		{
+			name: "completeness on a failed report",
+			r: contract.Report{
+				Verdict:      contract.VerdictFailed,
+				Reason:       contract.Reason{Kind: contract.FailureTimeout, Text: "ran out of time"},
+				Completeness: ptrOf(0.55),
+				StoppedAt:    "the last two files",
+			},
+			errSubstr: "ok verdict",
+		},
+		{
+			name: "completeness on an incomplete report",
+			r: contract.Report{
+				Verdict:      contract.VerdictIncomplete,
+				Reason:       contract.Reason{Kind: contract.FailureTimeout, Text: "ran out of time"},
+				Completeness: ptrOf(0.55),
+				StoppedAt:    "the last two files",
+			},
+			errSubstr: "ok verdict",
+		},
+		{
+			name: "completeness at zero",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "x"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(0.0),
+				StoppedAt:    "everything",
+			},
+			errSubstr: "out of range",
+		},
+		{
+			name: "completeness above one",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "x"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(1.5),
+			},
+			errSubstr: "out of range",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.r.Validate(spec)
+			if tc.errSubstr == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Validate accepted a report that should have been refused")
+			}
+			if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Fatalf("error does not name the rule: %v", err)
+			}
+		})
+	}
+}
+
+// Partial is true only below completeness 1: an unclaimed report never
+// measured itself, and a report that claims the whole objective is not
+// short of it either.
+func TestPartialIsTrueOnlyBelowOne(t *testing.T) {
+	unclaimed := contract.Report{Verdict: contract.VerdictOK}
+	if unclaimed.Partial() {
+		t.Fatal("a report with no completeness claim reported partial")
+	}
+
+	whole := contract.Report{Verdict: contract.VerdictOK, Completeness: ptrOf(1.0)}
+	if whole.Partial() {
+		t.Fatal("completeness 1 reported partial")
+	}
+
+	short := contract.Report{Verdict: contract.VerdictOK, Completeness: ptrOf(0.55)}
+	if !short.Partial() {
+		t.Fatal("completeness 0.55 did not report partial")
+	}
+}
+
+// ptrOf returns the address of a copy of f, for building Completeness
+// pointers inline in table literals.
+func ptrOf(f float64) *float64 { return &f }
+
 // The result is judged against the shape the agent type declared, strictly:
 // an unknown field is refused, because the schema handed to whoever produced
 // it says additionalProperties is false.

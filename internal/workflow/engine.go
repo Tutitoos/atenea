@@ -784,6 +784,20 @@ func outcome(report contract.Report, err error) Status {
 	}
 	switch report.Verdict {
 	case contract.VerdictOK:
+		// A partial answer (Completeness < 1) is still VerdictOK -- see
+		// contract.Report.Validate, which refuses anything else for a
+		// partial -- so it lands here with a full ok, not in the
+		// VerdictIncomplete branch below. That is deliberate: Requirement's
+		// satisfiedBy and downstream gates key on StatusOK (both
+		// OnAnswered and OnOK clear on it), and a partial answer IS an
+		// answer. Measured 2026-08-14: twelve of twelve steps that hit
+		// their spending ceiling came back with an empty result and
+		// VerdictIncomplete, and six reviewers keyed on OnOK never ran
+		// against subjects that had, in fact, said something. Splitting
+		// the ceiling into a read allowance and a reserved answer pass
+		// exists so a step that ran out of read budget still reports
+		// VerdictOK with less than 1 -- and that only pays off if a
+		// partial answer clears the same gate a whole one does.
 		return StatusOK
 	case contract.VerdictFailed:
 		return StatusFailed

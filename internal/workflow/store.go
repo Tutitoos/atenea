@@ -163,6 +163,16 @@ type StepRow struct {
 	// two must never collapse into the same "$0.00" on a receipt -- the
 	// same lie as list-price cost on subscription traffic.
 	Spent contract.Charge
+	// Completeness is how much of the objective this step's answer covers,
+	// nil when the report made no claim about it. A full ok never sets
+	// this -- see [contract.Report.Partial] -- so nil is both "no report
+	// yet" and "the report was whole", and a reader wanting the second
+	// without the first already has Status for that.
+	Completeness *float64
+	// StoppedAt is what a partial answer did not reach. Empty on a full
+	// answer, and required on any answer whose Completeness is under 1 --
+	// see contract.Report.Validate.
+	StoppedAt string
 }
 
 // Spend is what a run's steps have been charged, split by whether anything
@@ -294,6 +304,15 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     -- report where the two disagree before it ever reaches here; this
     -- column only has to keep what it was handed.
     priced_by   TEXT    NOT NULL DEFAULT '',
+    -- NULL means the report made no claim about coverage -- the ordinary
+    -- case, and the only reading a full ok has ever had. Same nullability
+    -- as spent_usd, same reason: a step that never measured its own
+    -- completeness must not collapse into one that measured a perfect 1.
+    completeness REAL,
+    -- What a partial answer did not reach. Empty on a full answer;
+    -- contract.Report.Validate requires it non-empty whenever completeness
+    -- is under 1, so the two columns are read together or not at all.
+    stopped_at  TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (workflow_id, id),
     FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
 );
@@ -379,6 +398,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 func addColumns(ctx context.Context, db *sql.DB) error {
 	wanted := []struct{ table, column, ddl string }{
 		{"workflow", "repository", "ALTER TABLE workflow ADD COLUMN repository TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "completeness", "ALTER TABLE workflow_step ADD COLUMN completeness REAL"},
+		{"workflow_step", "stopped_at", "ALTER TABLE workflow_step ADD COLUMN stopped_at TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, add := range wanted {
 		rows, err := db.QueryContext(ctx, "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
@@ -467,7 +488,7 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 		     result = '', discovered = '', spent_usd = NULL,
 		     spent_input_tokens = NULL, spent_output_tokens = NULL,
 		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
-		     priced_by = ''
+		     priced_by = '', completeness = NULL, stopped_at = ''
 		 WHERE workflow_id = ? AND id = ?`,
 		StatusRunning.String(), traceID, attempt, pid, stamp(at), id, stepID)
 	if err != nil {
@@ -485,17 +506,23 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 			"workflow: %s step %s: result cannot be recorded: %v", id, stepID, err)
 	}
 	input, output, cacheRead, cacheWrite, usd, pricedBy := spentColumns(report.Spent)
+	var completeness any
+	if report.Completeness != nil {
+		completeness = *report.Completeness
+	}
 	_, err = s.db.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?,
 		     result = ?, discovered = ?, writer_pid = 0, spent_usd = ?,
 		     spent_input_tokens = ?, spent_output_tokens = ?,
-		     spent_cache_read_tokens = ?, spent_cache_write_tokens = ?, priced_by = ?
+		     spent_cache_read_tokens = ?, spent_cache_write_tokens = ?, priced_by = ?,
+		     completeness = ?, stopped_at = ?
 		 WHERE workflow_id = ? AND id = ?`,
 		status.String(), stamp(at), report.Verdict.String(),
 		report.Reason.Kind.String(), report.Reason.Text,
 		result, jsonDiscoveries(report.Discovered), usd,
-		input, output, cacheRead, cacheWrite, pricedBy, id, stepID)
+		input, output, cacheRead, cacheWrite, pricedBy,
+		completeness, report.StoppedAt, id, stepID)
 	if err != nil {
 		return unavailable(err, "workflow: closing %s step %s", id, stepID)
 	}
@@ -605,7 +632,8 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 		        on_outcome, effects, grant_usd, status, trace_id, attempt, writer_pid,
 		        started_at, ended_at, verdict, reason_kind, reason_text, result,
 		        discovered, spent_usd, spent_input_tokens, spent_output_tokens,
-		        spent_cache_read_tokens, spent_cache_write_tokens, priced_by
+		        spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
+		        completeness, stopped_at
 		 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
 	if err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
@@ -677,6 +705,8 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		inputTok, outputTok         sql.NullInt64
 		cacheReadTok, cacheWriteTok sql.NullInt64
 		pricedBy                    string
+		completeness                sql.NullFloat64
+		stoppedAt                   string
 	)
 	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &pool,
 		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs,
@@ -684,7 +714,8 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.Attempt,
 		&out.WriterPID, &started, &ended, &verdict, &reasonKind, &reasonText,
 		&result, &discovered, &usd,
-		&inputTok, &outputTok, &cacheReadTok, &cacheWriteTok, &pricedBy); err != nil {
+		&inputTok, &outputTok, &cacheReadTok, &cacheWriteTok, &pricedBy,
+		&completeness, &stoppedAt); err != nil {
 		return StepRow{}, unavailable(err, "workflow: reading a step")
 	}
 	var err error
@@ -731,6 +762,11 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		value := usd.Float64
 		out.Spent.USD = &value
 	}
+	if completeness.Valid {
+		value := completeness.Float64
+		out.Completeness = &value
+	}
+	out.StoppedAt = stoppedAt
 	return out, nil
 }
 

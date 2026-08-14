@@ -1,8 +1,11 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -633,5 +636,900 @@ func TestNoPromptLogWithoutADirectory(t *testing.T) {
 	client := testClient(t, `{"result":"ok","is_error":false,"subtype":"success"}`)
 	if _, err := client.Turn(t.Context(), baseRequest()); err != nil {
 		t.Fatalf("Turn: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The reserved answer
+// ---------------------------------------------------------------------------
+
+// Everything below drives the other path through Turn, where one turn is a
+// conversation instead of one envelope. The stub above cannot stand in for
+// that: it answers whatever it is asked once and exits, and what has to be
+// observable here is the alternation -- which pass answered, what was said
+// back to it, and what happened when the process died mid-conversation.
+
+// fakeCLI stands in for the binary on the reserved-answer path. It answers the
+// Nth message it is given with the Nth scripted pass, records both sides, and
+// once the passes run out it dies the way the script says -- which is how a
+// turn killed at its hard ceiling ends.
+//
+// Same shape as stub: a shell script in t.TempDir(), no login and no network.
+// This one just has two sides to record instead of one.
+type fakeCLI struct {
+	binary string
+	dir    string
+}
+
+// fakeScript is the fake's whole behavior. It follows the flags it was given
+// the way the real CLI does: with no --input-format there is no conversation
+// to hold open, so it prints one envelope and leaves.
+//
+// Otherwise it models a turn the way the real CLI runs one: a message starts
+// it, the assistant events are what it prints while it is still working, and
+// the result event is what ends it. So the steps of one turn are emitted as a
+// group, and the next message is not read until that group's result event has
+// gone out -- which is what makes an assistant event arrive with no result
+// event anywhere behind it, the exact shape the mid-turn trigger exists for.
+//
+// The stderr text is single-quoted into the script, so a fixture that needs an
+// apostrophe needs a different quoting than this.
+const fakeScript = `#!/bin/sh
+dir="%s"
+printf '%%s\n' "$@" > "$dir/argv"
+case " $* " in
+  *" --input-format "*) ;;
+  *) cat "$dir/step1"; exit 0 ;;
+esac
+n=0
+while IFS= read -r line; do
+  printf '%%s\n' "$line" >> "$dir/stdin"
+  while :; do
+    n=$((n + 1))
+    step="$dir/step$n"
+    if [ ! -f "$step" ]; then
+      # A fake told to hang stops answering without leaving, which is what a
+      # turn that runs into its own timeout looks like from the Go side.
+      [ -f "$dir/hang" ] && sleep 30
+      printf '%%s\n' '%s' >&2
+      exit %d
+    fi
+    body=$(cat "$step")
+    printf '%%s\n' "$body"
+    case "$body" in *'"type":"result"'*) break ;; esac
+  done
+done
+`
+
+// scriptCLI writes the fake and the event lines it will print, in order. A
+// line carrying a result event ends a turn and the fake reads the next message
+// before going on; anything else is printed straight away. said and exit are
+// how it ends once the steps run out.
+func scriptCLI(t *testing.T, steps []string, said string, exit int) fakeCLI {
+	t.Helper()
+	dir := t.TempDir()
+	for i, step := range steps {
+		name := filepath.Join(dir, fmt.Sprintf("step%d", i+1))
+		if err := os.WriteFile(name, []byte(step+"\n"), 0o600); err != nil {
+			t.Fatalf("writing step %d: %v", i+1, err)
+		}
+	}
+	binary := filepath.Join(dir, "claude")
+	script := fmt.Sprintf(fakeScript, dir, said, exit)
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the fake: %v", err)
+	}
+	return fakeCLI{binary: binary, dir: dir}
+}
+
+// hangs makes the fake stop answering without leaving, once its steps run
+// out. What the turn hits then is its own timeout, with whatever it has.
+func (f fakeCLI) hangs(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.dir, "hang"), nil, 0o600); err != nil {
+		t.Fatalf("telling the fake to hang: %v", err)
+	}
+}
+
+// client points a Client at the fake, both roles configured, the same way
+// testClient does for the single-envelope stub.
+func (f fakeCLI) client(t *testing.T) *Client {
+	t.Helper()
+	client, err := New(Options{Binary: f.binary, Explore: "explore-model", Plan: "plan-model"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return client
+}
+
+// messages is the text of everything the fake was told, in order.
+//
+// Every line is checked against the shape the CLI validates before its text is
+// returned: read out of the shipped binary, a line whose message.role is not
+// "user" comes back as "Error: Expected message role 'user'", and one carrying
+// an unknown type is dropped silently -- which from the Go side would look
+// exactly like a model that stopped answering.
+func (f fakeCLI) messages(t *testing.T) []string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(f.dir, "stdin"))
+	if err != nil || strings.TrimSpace(string(body)) == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var one struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &one); err != nil {
+			t.Fatalf("the cli was sent a line that is not JSON: %v\n%s", err, line)
+		}
+		if one.Type != "user" || one.Message.Role != "user" ||
+			len(one.Message.Content) != 1 || one.Message.Content[0].Type != "text" {
+			t.Fatalf("the cli was sent a message it would refuse or ignore: %s", line)
+		}
+		out = append(out, one.Message.Content[0].Text)
+	}
+	return out
+}
+
+// argv is the command line the fake was actually started with.
+func (f fakeCLI) argv(t *testing.T) []string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(f.dir, "argv"))
+	if err != nil {
+		t.Fatalf("the fake recorded no argv, so it was never started: %v", err)
+	}
+	return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+}
+
+// passEvent renders one scripted result event: what a stream-json turn prints
+// when a pass ends. One line, always -- the reader on the other side splits on
+// newlines, exactly as the CLI's own stdout guard promises it may.
+//
+// The cost and the tokens are cumulative across passes in a real stream, so
+// the fixtures below grow them: they are the running total, not the pass's own
+// share.
+func passEvent(cost float64, tokens int, structured string) string {
+	return fmt.Sprintf(`{"type":"result","is_error":false,"subtype":"success","result":"a pass",`+
+		`"structured_output":%s,"usage":{"input_tokens":%d,"output_tokens":10},"total_cost_usd":%v}`,
+		structured, tokens, cost)
+}
+
+// assistantEvent renders one assistant event: the only line that reports what
+// a turn has spent while it is still running.
+//
+// The id is what makes the reading count once. Measured on the live CLI, one
+// message's content blocks arrive as separate events restating identical usage,
+// so two events sharing an id are one request seen twice -- which is why every
+// fixture here names one.
+func assistantEvent(id string, input, cacheWrite, cacheRead, output int) string {
+	return fmt.Sprintf(`{"type":"assistant","message":{"id":%q,"role":"assistant",`+
+		`"content":[{"type":"text","text":"reading"}],"usage":{"input_tokens":%d,`+
+		`"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,"output_tokens":%d}}}`,
+		id, input, cacheWrite, cacheRead, output)
+}
+
+// readAllowance is the token allowance the tests below hold answers back with.
+// Its exact value matters to the fixtures, which are written to cross it at a
+// named point and not before.
+const readAllowance = 900
+
+// reservedRequest is a turn that holds an answer back: a token allowance, and
+// a schema for the model to put the answer in.
+func reservedRequest() Request {
+	req := baseRequest()
+	req.Schema = map[string]any{"type": "object"}
+	req.BudgetUSD = 0.5
+	req.ReadTokens = readAllowance
+	return req
+}
+
+// nudges counts how many of the messages sent are the one that replaces the
+// kill. Exactly one, ever: a second would pay a whole pass to repeat itself.
+func nudges(messages []string) int {
+	count := 0
+	for _, m := range messages {
+		if strings.Contains(m, "Stop reading") {
+			count++
+		}
+	}
+	return count
+}
+
+// A pass that says it covered the whole objective ends the turn on the spot:
+// there is nothing left to buy, so nothing is said back to it.
+func TestAPassClaimingTheWholeObjectiveEndsTheTurn(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"all of it","completeness":1,"stopped_at":""}`),
+	}, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Passes != 1 {
+		t.Errorf("Passes = %d, want 1", answer.Passes)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 1 {
+		t.Errorf("Completeness = %v, want 1", answer.Completeness)
+	}
+	if answer.StoppedAt != "" {
+		t.Errorf("StoppedAt = %q, want empty on a whole answer", answer.StoppedAt)
+	}
+	messages := fake.messages(t)
+	if len(messages) != 1 {
+		t.Fatalf("the cli was told %d things, want only the prompt: %q", len(messages), messages)
+	}
+	if !strings.Contains(messages[0], "Work in passes") {
+		t.Errorf("the prompt went in without the pass protocol:\n%s", messages[0])
+	}
+	if nudges(messages) != 0 {
+		t.Error("a turn that answered whole was still told to stop reading")
+	}
+}
+
+// The boundary half of the trigger, on its own: this stream carries no
+// assistant events at all, so the only reading of what the turn has spent is
+// the cumulative usage on each result event. Three cheap passes, the fourth
+// crosses the allowance, and the answer comes from the pass after the one
+// nudge -- not from a kill.
+func TestTheReadAllowanceBuysTheAnswerWithOneNudge(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":0.1,"stopped_at":"most of it"}`),
+		passEvent(0.04, 200, `{"findings":"ab","completeness":0.3,"stopped_at":"much of it"}`),
+		passEvent(0.06, 300, `{"findings":"abc","completeness":0.5,"stopped_at":"half of it"}`),
+		// 1000 input + 10 output weighs 1050, which is past the allowance.
+		passEvent(0.12, 1000, `{"findings":"abcd","completeness":0.7,"stopped_at":"some of it"}`),
+		passEvent(0.14, 1100, `{"findings":"abcde","completeness":0.8,"stopped_at":"the last file"}`),
+	}, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	messages := fake.messages(t)
+	if len(messages) != 5 {
+		t.Fatalf("the cli was told %d things, want 5 -- a prompt, three continues, one finalize: %q",
+			len(messages), messages)
+	}
+	if got := nudges(messages); got != 1 {
+		t.Fatalf("finalize messages = %d, want exactly 1: %q", got, messages)
+	}
+	if !strings.Contains(messages[4], "Stop reading") {
+		t.Errorf("the finalize did not land on the pass that crossed the allowance: %q", messages)
+	}
+	// The answer is the one after the nudge, not the best of the cheap ones.
+	var decoded struct {
+		Findings string `json:"findings"`
+	}
+	if err := json.Unmarshal(answer.Structured, &decoded); err != nil {
+		t.Fatalf("Structured did not round-trip: %v", err)
+	}
+	if decoded.Findings != "abcde" {
+		t.Errorf("findings = %q, want the pass that answered after the nudge", decoded.Findings)
+	}
+	if answer.Passes != 5 {
+		t.Errorf("Passes = %d, want 5", answer.Passes)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 0.8 {
+		t.Errorf("Completeness = %v, want 0.8", answer.Completeness)
+	}
+	if answer.StoppedAt != "the last file" {
+		t.Errorf("StoppedAt = %q, want the last pass's own remainder", answer.StoppedAt)
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.14 {
+		t.Errorf("USD = %v, want 0.14 -- the cumulative total, not one pass's share", answer.Spent.USD)
+	}
+	if answer.Spent.InputTokens != 1100 {
+		t.Errorf("input tokens = %d, want 1100: the last event's usage is the whole turn's",
+			answer.Spent.InputTokens)
+	}
+}
+
+// THE CENTRAL GUARANTEE. Measured 2026-08-14: 12 of 12 steps died at their
+// ceiling with result_len 0, and the $3.78 already spent bought nothing. A
+// death after a pass answered now costs the passes that had not happened yet
+// and nothing else -- no error, and the receipt still travels.
+func TestADeathAtTheCeilingNoLongerCostsTheAnswer(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":0.2,"stopped_at":"most of it"}`),
+		passEvent(0.05, 200, `{"findings":"ab","completeness":0.4,"stopped_at":"the rest of it"}`),
+	}, "Reached maximum budget ($0.50)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("a death after two answered passes was still reported as a failure: %v", err)
+	}
+	if answer.Passes != 2 {
+		t.Fatalf("Passes = %d, want 2", answer.Passes)
+	}
+	var decoded struct {
+		Findings string `json:"findings"`
+	}
+	if err := json.Unmarshal(answer.Structured, &decoded); err != nil {
+		t.Fatalf("Structured did not round-trip: %v", err)
+	}
+	if decoded.Findings != "ab" {
+		t.Errorf("findings = %q, want the last pass that answered", decoded.Findings)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 0.4 {
+		t.Errorf("Completeness = %v, want 0.4 -- a partial answer is still an answer", answer.Completeness)
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.05 {
+		t.Errorf("USD = %v, want 0.05: a turn that died still spent what it spent", answer.Spent.USD)
+	}
+	if !answer.Spent.Measured() {
+		t.Error("the charge reads as unmeasured, so the death took the receipt with it")
+	}
+}
+
+// The one death the guarantee cannot cover: nobody obtained an answer, so
+// there is nothing to hand back and the failure is the whole story -- sorted
+// exactly as the single-shot path sorts the same ending.
+func TestADeathWithNoPassIsStillAFailure(t *testing.T) {
+	fake := scriptCLI(t, nil, "Reached maximum budget ($0.50)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable", got)
+	}
+	if !strings.Contains(contract.MessageOf(err), "spending ceiling") {
+		t.Errorf("message = %q, want the ceiling named", contract.MessageOf(err))
+	}
+	if answer.Passes != 0 {
+		t.Errorf("Passes = %d, want 0 -- nobody answered", answer.Passes)
+	}
+	if answer.Completeness != nil {
+		t.Errorf("Completeness = %v, want nil: there is no answer to have covered anything",
+			*answer.Completeness)
+	}
+}
+
+// A read allowance of zero is the feature off, and off means the turn the CLI
+// runs natively: one shot, the prompt as an argument, no stream-json anywhere.
+func TestAReadAllowanceOfZeroIsTheSingleShotTurn(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		`{"is_error":false,"subtype":"success","result":"one shot",` +
+			`"structured_output":{"findings":"a"},"usage":{"input_tokens":10,"output_tokens":2}}`,
+	}, "", 0)
+	req := reservedRequest()
+	req.ReadTokens = 0
+
+	answer, err := fake.client(t).Turn(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	argv := fake.argv(t)
+	for _, unwanted := range []string{"--input-format", "stream-json", "--verbose"} {
+		if slices.Contains(argv, unwanted) {
+			t.Errorf("a single-shot turn was started with %s: %q", unwanted, argv)
+		}
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--output-format json") {
+		t.Errorf("the old output format did not survive: %q", argv)
+	}
+	if !slices.Contains(argv, req.Prompt) {
+		t.Errorf("the prompt did not travel as an argument: %q", argv)
+	}
+	if msgs := fake.messages(t); len(msgs) != 0 {
+		t.Errorf("a single-shot turn was sent %d messages on stdin: %q", len(msgs), msgs)
+	}
+	if answer.Passes != 1 {
+		t.Errorf("Passes = %d, want 1 -- one shot is one pass", answer.Passes)
+	}
+	if answer.Completeness != nil {
+		t.Errorf("Completeness = %v, want nil: a single-shot turn claims nothing", *answer.Completeness)
+	}
+}
+
+// A schema-less turn has nowhere to put a completeness, so it is never held
+// open however much allowance it was granted.
+func TestASchemalessTurnIsNeverHeldOpen(t *testing.T) {
+	fake := scriptCLI(t, []string{`{"is_error":false,"subtype":"success","result":"free text"}`}, "", 0)
+	req := reservedRequest()
+	req.Schema = nil
+
+	answer, err := fake.client(t).Turn(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Text != "free text" {
+		t.Errorf("Text = %q, want the envelope's own result", answer.Text)
+	}
+	if slices.Contains(fake.argv(t), "--input-format") {
+		t.Errorf("a schema-less turn was held open: %q", fake.argv(t))
+	}
+}
+
+// The answer and the receipt come from different passes when the turn ends on
+// an event that carries no answer -- which is exactly what a real ceiling
+// death looks like: is_error, a terminal_reason, no result and no structure,
+// and the full cumulative cost.
+func TestTheReceiptIsTheLastEventEvenWhenTheAnswerIsNot(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":0.2,"stopped_at":"most of it"}`),
+		passEvent(0.05, 200, `{"findings":"ab","completeness":0.4,"stopped_at":"the rest"}`),
+		`{"type":"result","subtype":"error_max_budget_usd","is_error":true,` +
+			`"terminal_reason":"budget_exhausted","errors":["Reached maximum budget ($0.50)"],` +
+			`"usage":{"input_tokens":900,"output_tokens":10},"total_cost_usd":0.55}`,
+	}, "Reached maximum budget ($0.50)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("the ceiling event was read as a failure even though two passes answered: %v", err)
+	}
+	if answer.Passes != 2 {
+		t.Errorf("Passes = %d, want 2 -- the ceiling event answered nothing", answer.Passes)
+	}
+	if answer.StoppedAt != "the rest" {
+		t.Errorf("StoppedAt = %q, want the last pass that answered", answer.StoppedAt)
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.55 {
+		t.Errorf("USD = %v, want 0.55 -- what the turn spent, including the pass that died",
+			answer.Spent.USD)
+	}
+}
+
+// A model that never converges is ended by the cap, and ended with an answer:
+// the last pass it gets is a finalize pass, like every other stopping
+// condition here. These passes are unpriced, so the allowance never fires --
+// the cap is the only thing that can end this turn.
+func TestTheCapEndsATurnThatNeverConverges(t *testing.T) {
+	var passes []string
+	for i := range maxPasses + 1 {
+		passes = append(passes, fmt.Sprintf(
+			`{"type":"result","is_error":false,"subtype":"success","result":"a pass",`+
+				`"structured_output":{"findings":"%d","completeness":0.1,"stopped_at":"nearly all"},`+
+				`"usage":{"input_tokens":%d,"output_tokens":10}}`, i, 100*(i+1)))
+	}
+	fake := scriptCLI(t, passes, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Passes != maxPasses {
+		t.Errorf("Passes = %d, want %d: the cap is what ends an unpriced turn", answer.Passes, maxPasses)
+	}
+	messages := fake.messages(t)
+	if len(messages) != maxPasses {
+		t.Errorf("the cli was told %d things, want %d", len(messages), maxPasses)
+	}
+	if got := nudges(messages); got != 1 {
+		t.Errorf("finalize messages = %d, want exactly 1", got)
+	}
+	if !strings.Contains(messages[len(messages)-1], "Stop reading") {
+		t.Errorf("the last thing said was not the finalize: %q", messages)
+	}
+}
+
+// A partial answer that names nothing it missed would build a contract.Report
+// that Report's own validation refuses, and what that would cost is the
+// answer. So it is named badly rather than not at all.
+func TestAPartialAnswerAlwaysNamesWhatItMissed(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":0.5}`),
+	}, "", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 0.5 {
+		t.Fatalf("Completeness = %v, want 0.5", answer.Completeness)
+	}
+	if strings.TrimSpace(answer.StoppedAt) == "" {
+		t.Error("a partial answer came back claiming less than the whole and naming nothing")
+	}
+}
+
+// A figure outside (0, 1] is not a measurement of this, and repairing it into
+// range would report coverage nobody has. It reads as unclaimed instead.
+func TestACompletenessThatIsNotAFractionIsUnclaimed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		structure string
+	}{
+		{"above one", `{"findings":"a","completeness":1.7,"stopped_at":""}`},
+		{"zero", `{"findings":"a","completeness":0,"stopped_at":"everything"}`},
+		{"negative", `{"findings":"a","completeness":-1,"stopped_at":"everything"}`},
+		{"absent", `{"findings":"a"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Nothing claims completeness 1 here, so the turn only ends when
+			// the fake runs out of passes.
+			fake := scriptCLI(t, []string{passEvent(0.02, 100, tc.structure)}, "", 0)
+			answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+			if err != nil {
+				t.Fatalf("Turn: %v", err)
+			}
+			if answer.Completeness != nil {
+				t.Errorf("Completeness = %v, want nil", *answer.Completeness)
+			}
+			if answer.Passes != 1 {
+				t.Errorf("Passes = %d, want 1 -- the pass answered, it just measured nothing",
+					answer.Passes)
+			}
+		})
+	}
+}
+
+// The allowance and the ceiling are in different units, and nothing here
+// compares them: turning tokens into dollars needs a price, and a price is
+// what this package refuses to assume. So an allowance that looks enormous
+// beside the ceiling is still a valid request -- whether it fires before the
+// CLI's own ceiling arrives is the caller's arithmetic, not this one's.
+func TestTheAllowanceIsNotComparedWithTheCeiling(t *testing.T) {
+	req := baseRequest()
+	req.BudgetUSD = 0.25
+	req.ReadTokens = 5_000_000
+	if err := req.Validate(); err != nil {
+		t.Fatalf("a large token allowance under a small dollar ceiling was refused: %v", err)
+	}
+
+	req.BudgetUSD = 0
+	if err := req.Validate(); err != nil {
+		t.Fatalf("an allowance under an unbounded ceiling was refused: %v", err)
+	}
+}
+
+func TestANegativeReadAllowanceIsRefused(t *testing.T) {
+	req := baseRequest()
+	req.ReadTokens = -1
+	if got := contract.KindOf(req.Validate()); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+// The turn timeout is a ceiling on reading now, not a reason to throw away
+// what was read. Measured 2026-08-14, before this path existed: exploration
+// of this repository was cut at 90s having answered nothing, and reported no
+// charge while having spent real money.
+func TestATimeoutAfterAPassKeepsTheAnswer(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":0.2,"stopped_at":"the rest"}`),
+	}, "", 0)
+	fake.hangs(t)
+	req := reservedRequest()
+	req.Timeout = 300 * time.Millisecond
+
+	started := time.Now()
+	answer, err := fake.client(t).Turn(t.Context(), req)
+	if err != nil {
+		t.Fatalf("a turn that answered once and then ran out of time was reported as a failure: %v", err)
+	}
+	if answer.Passes != 1 || answer.StoppedAt != "the rest" {
+		t.Errorf("Passes = %d, StoppedAt = %q, want 1 and the pass's own remainder",
+			answer.Passes, answer.StoppedAt)
+	}
+	// And the process was actually contained: a turn that had to wait out the
+	// fake's own sleep would take thirty seconds, not the timeout it was given.
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Errorf("the turn took %s, so the hung fake was waited out rather than stopped", elapsed)
+	}
+}
+
+// A held-open turn is told its prompt on stdin and nowhere else. Read out of
+// the shipped binary: with --input-format stream-json the CLI reads stdin and
+// never looks at the prompt argument, so a prompt passed there would look
+// sent, be recorded as sent, and never arrive.
+func TestAHeldOpenTurnIsToldItsPromptOnlyOnStdin(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":1,"stopped_at":""}`),
+	}, "", 0)
+	req := reservedRequest()
+
+	if _, err := fake.client(t).Turn(t.Context(), req); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	argv := fake.argv(t)
+	joined := strings.Join(argv, " ")
+	for _, want := range []string{
+		"--input-format stream-json", "--output-format stream-json", "--verbose",
+		// The runaway guard is unchanged: the hard ceiling is still the CLI's
+		// to enforce, and the allowance never reaches the command line.
+		"--max-budget-usd 0.5",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the command line is missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "--read-tokens") || strings.Contains(joined, "900") {
+		t.Errorf("the read allowance reached the cli, which has no such flag:\n%s", joined)
+	}
+	for _, arg := range argv {
+		if strings.Contains(arg, req.Prompt) {
+			t.Errorf("the prompt was passed as an argument, where this mode ignores it: %q", arg)
+		}
+	}
+	if got := fake.messages(t); len(got) != 1 || !strings.Contains(got[0], req.Prompt) {
+		t.Errorf("the prompt did not arrive on stdin: %q", got)
+	}
+}
+
+// THE FAILURE THIS TRIGGER EXISTS FOR, and the one a boundary check cannot
+// reach. Measured 2026-08-14 on the re-run of the real 18-step plan: an
+// explore step does all of its work inside turn 1, so no result event ever
+// arrives before the ceiling, and an allowance checked only between passes is
+// never checked at all -- 12 of 12 steps died with zero passes, exactly as
+// they had before there was an allowance. Here the stream is that stream: a
+// run of assistant events, no result event, and a kill at the end.
+func TestTheAllowanceFiresBeforeTheFirstResultEvent(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		// Three requests, 322 input-equivalent each; the third is what
+		// crosses 900. Shaped like the live stream: cache creation carries
+		// the weight and input_tokens is a rounding error beside it.
+		assistantEvent("msg_a", 2, 160, 0, 0),
+		assistantEvent("msg_b", 2, 160, 0, 0),
+		assistantEvent("msg_c", 2, 160, 0, 0),
+		// Answered only because it was told to -- which is the whole point.
+		// Deliberately cheap: 150 input-equivalent, so nothing about this
+		// event crosses the allowance and the nudge it answers can only have
+		// come from the assistant events above it.
+		passEvent(0.31, 100, `{"findings":"what I had","completeness":0.4,"stopped_at":"the rest"}`),
+	}, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	messages := fake.messages(t)
+	if len(messages) != 2 {
+		t.Fatalf("the cli was told %d things, want 2 -- the prompt and one finalize: %q",
+			len(messages), messages)
+	}
+	if got := nudges(messages); got != 1 {
+		t.Fatalf("finalize messages = %d, want exactly 1 mid-turn nudge: %q", got, messages)
+	}
+	if answer.Passes != 1 {
+		t.Errorf("Passes = %d, want 1: the nudge bought the only answer there is", answer.Passes)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 0.4 {
+		t.Errorf("Completeness = %v, want 0.4", answer.Completeness)
+	}
+	if answer.StoppedAt != "the rest" {
+		t.Errorf("StoppedAt = %q, want what the pass said it missed", answer.StoppedAt)
+	}
+}
+
+// One nudge, not one per event. A turn keeps reading after the nudge lands --
+// it has a tool call in flight and its own answer to write, measured live at
+// 11.5s of work after the message went in -- so every event after the crossing
+// arrives with the allowance still spent, and a second finalize would pay a
+// whole pass to repeat a sentence.
+func TestTheMidTurnNudgeIsSentOnce(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		assistantEvent("msg_a", 1000, 0, 0, 0),
+		assistantEvent("msg_b", 1000, 0, 0, 0),
+		assistantEvent("msg_c", 1000, 0, 0, 0),
+		passEvent(0.4, 3000, `{"findings":"enough","completeness":0.5,"stopped_at":"the rest"}`),
+	}, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if got := nudges(fake.messages(t)); got != 1 {
+		t.Fatalf("finalize messages = %d, want exactly 1: %q", got, fake.messages(t))
+	}
+	if answer.Passes != 1 {
+		t.Errorf("Passes = %d, want 1", answer.Passes)
+	}
+}
+
+// The events of ONE message are one request seen more than once, and counting
+// them twice is counting money twice. Measured 2026-08-14 on the live CLI: 4
+// assistant events carried 2 message ids, and the pair sharing an id carried
+// byte-identical usage. Summed per event that turn read 78,386 cache-creation
+// tokens; per message, 39,193 -- exactly what the CLI's own result event then
+// reported. Here the same shape crosses the allowance if, and only if, the
+// repeats are counted.
+func TestRepeatedEventsForOneMessageCountOnce(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		// 802 input-equivalent for the message, restated four times. Counted
+		// per event that is 3,208 and well past the allowance; counted per
+		// message it is not.
+		assistantEvent("msg_a", 2, 400, 0, 0),
+		assistantEvent("msg_a", 2, 400, 0, 0),
+		assistantEvent("msg_a", 2, 400, 0, 0),
+		assistantEvent("msg_a", 2, 400, 0, 0),
+	}, "Reached maximum budget ($0.50)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err == nil {
+		t.Fatal("a death with no pass answered was reported as a success")
+	}
+	if got := nudges(fake.messages(t)); got != 0 {
+		t.Errorf("finalize messages = %d, want 0: one request was counted four times", got)
+	}
+	// And the same double-count would have been the receipt handed back.
+	if answer.Spent.CacheWriteTokens != 400 {
+		t.Errorf("cache write = %d, want 400 -- the message's own usage, once",
+			answer.Spent.CacheWriteTokens)
+	}
+}
+
+// A death with no result event at all is the measured shape: no `result`
+// field, and therefore no cost and no usage from the CLI. The assistant events
+// are the only receipt that exists, so they are the one that travels -- with
+// no dollar figure, because the CLI never printed one and inventing one here
+// is what contract.Charge.PricedBy exists to prevent.
+func TestTheAssistantEventsAreTheReceiptWhenNoPassLanded(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		assistantEvent("msg_a", 300, 40, 500, 8),
+		assistantEvent("msg_b", 200, 60, 1500, 12),
+	}, "Reached maximum budget ($0.50)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err == nil {
+		t.Fatal("a death with no pass answered was reported as a success")
+	}
+	if answer.Passes != 0 {
+		t.Errorf("Passes = %d, want 0", answer.Passes)
+	}
+	// Summed field by field across both messages, the same arithmetic the CLI
+	// would have done for the total it never got to print.
+	if answer.Spent.InputTokens != 500 || answer.Spent.OutputTokens != 20 {
+		t.Errorf("input/output = %d/%d, want 500/20 -- the events summed, not the last one",
+			answer.Spent.InputTokens, answer.Spent.OutputTokens)
+	}
+	if answer.Spent.CacheReadTokens != 2000 || answer.Spent.CacheWriteTokens != 100 {
+		t.Errorf("cache read/write = %d/%d, want 2000/100",
+			answer.Spent.CacheReadTokens, answer.Spent.CacheWriteTokens)
+	}
+	if answer.Spent.USD != nil {
+		t.Errorf("USD = %v, want nil: the cli priced nothing, so neither does this",
+			*answer.Spent.USD)
+	}
+}
+
+// The two readings of what a turn has spent must not be added together. The
+// result event's usage is already the cumulative total the assistant events
+// were summed into (read out of the shipped binary 2.1.232), so adding them
+// would double-count every pass and fire the nudge on a turn that has spent
+// half what it looks like.
+func TestTheTwoUsageReadingsAreNotAddedTogether(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		// 500 input-equivalent, well under the allowance.
+		assistantEvent("msg_a", 500, 0, 0, 0),
+		// The CLI's own cumulative figure for the same 500, plus its
+		// answer's output. Added to the above it would clear 900; read as
+		// the total it is, it does not.
+		passEvent(0.05, 500, `{"findings":"a","completeness":0.2,"stopped_at":"the rest"}`),
+		passEvent(0.06, 520, `{"findings":"ab","completeness":1,"stopped_at":""}`),
+	}, "", 0)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if got := nudges(fake.messages(t)); got != 0 {
+		t.Fatalf("finalize messages = %d, want 0: 500 spent was counted as 1000+", got)
+	}
+	if answer.Passes != 2 {
+		t.Errorf("Passes = %d, want 2 -- the turn ran on to answer whole", answer.Passes)
+	}
+}
+
+// The ordering claim the end-to-end tests cannot make race-free: exactly when
+// the nudge goes out, counted in assistant events and with no result event in
+// the picture at all. Driven directly, because through a process the fake's
+// next print and this write are concurrent and the count would flake.
+//
+// This is the whole mechanism in four lines: nothing is said while the turn is
+// inside its allowance, one thing is said the moment it is not, and nothing is
+// said again however long the turn keeps working afterwards.
+func TestTheNudgeFiresOnAnAssistantEventAlone(t *testing.T) {
+	var sent bytes.Buffer
+	var conv conversation
+	// 322 input-equivalent apiece against an allowance of 900: two fit, the
+	// third does not. A fresh id each time, so each one is its own request,
+	// and shaped like the live stream -- input_tokens 2, the weight in cache
+	// creation -- so a check reading input_tokens alone would see 2 and nudge
+	// nothing.
+	reported := usage{InputTokens: 2, CacheWrite: 160}
+
+	for i, want := range []int{0, 0, 1, 1, 1} {
+		if stop := conv.spend(fmt.Sprintf("msg_%d", i), reported, &sent, readAllowance); stop {
+			t.Fatalf("event %d stopped the turn: a written message is not a reason to stop", i+1)
+		}
+		if got := strings.Count(sent.String(), "Stop reading"); got != want {
+			t.Fatalf("after %d events the cli had been nudged %d times, want %d:\n%s",
+				i+1, got, want, sent.String())
+		}
+	}
+	if conv.rounds != 0 || conv.answered != 0 {
+		t.Errorf("rounds/answered = %d/%d, want 0/0: no result event ever arrived",
+			conv.rounds, conv.answered)
+	}
+	// The nudge is a message like any other, so it must be the shape the CLI
+	// validates -- the same check messages makes of a real stream.
+	var line struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role string `json:"role"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(sent.Bytes(), &line); err != nil {
+		t.Fatalf("the nudge is not a JSON line: %v", err)
+	}
+	if line.Type != "user" || line.Message.Role != "user" {
+		t.Errorf("the nudge would be refused or ignored: %s", sent.String())
+	}
+}
+
+// A turn the CLI reports no usage for gets no mid-turn signal, and must not
+// get a false one. Zero read as "spent nothing" is right here and is the same
+// reading everywhere else in this file; what stops such a turn is maxPasses.
+func TestAnEventReportingNoUsageNudgesNothing(t *testing.T) {
+	var sent bytes.Buffer
+	var conv conversation
+	for i := range maxPasses * 2 {
+		if stop := conv.spend(fmt.Sprintf("msg_%d", i), usage{}, &sent, readAllowance); stop {
+			t.Fatal("an event reporting nothing stopped the turn")
+		}
+	}
+	if sent.Len() != 0 {
+		t.Errorf("a turn that reported no usage was told to stop reading:\n%s", sent.String())
+	}
+}
+
+// The four weights, pinned to the turn they were measured against, because
+// three of them are invisible to any test that only watches a nudge fire.
+//
+// Measured 2026-08-14, one live turn surveying this repository: the first
+// assistant event reported input_tokens 2, cache_creation 32,799, cache_read 0,
+// output 5, and the result event that ended the turn reported 4 / 39,193 /
+// 32,799 / 1,067 -- and charged $0.261685 for it. That last figure is what
+// makes this a measurement rather than a restatement of the code: the weights
+// have to turn the same usage into the same money.
+func TestWeighIsTheMeasuredPriceRatios(t *testing.T) {
+	firstEvent := usage{InputTokens: 2, CacheWrite: 32_799, CacheRead: 0, OutputTokens: 5}
+	if got := weigh(firstEvent); got != 65_625 {
+		t.Errorf("weigh(first assistant event) = %d, want 65625 -- about $0.20 before the "+
+			"turn has read anything of its own", got)
+	}
+	wholeTurn := usage{InputTokens: 4, CacheWrite: 39_193, CacheRead: 32_799, OutputTokens: 1_067}
+	if got := weigh(wholeTurn); got != 87_004 {
+		t.Errorf("weigh(the turn's own total) = %d, want 87004", got)
+	}
+	// The reconciliation. 333,333 input-equivalent tokens to the dollar is
+	// what normalising to input at $3/M means, so weighing the turn's usage
+	// has to reproduce the price the CLI put on it. Within 1%: the weights
+	// are ratios, and the CLI counts a few things these fields do not name.
+	const perUSD = 333_333.0
+	const charged = 0.261685
+	if implied := float64(weigh(wholeTurn)) / perUSD; math.Abs(implied-charged)/charged > 0.01 {
+		t.Errorf("weighed to $%.6f, the cli charged $%.6f: the ratios do not price this turn",
+			implied, charged)
+	}
+	// Each kind on its own, so a weight that drifts is named by the failure
+	// rather than hidden in a sum.
+	for _, tc := range []struct {
+		name string
+		u    usage
+		want int
+	}{
+		{"input at 1x", usage{InputTokens: 1000}, 1000},
+		// x2, not x1.25: this CLI writes 1-hour cache entries. Measured on
+		// the same turn -- cache_creation reported ephemeral_1h_input_tokens
+		// 39,193 and ephemeral_5m_input_tokens 0 -- and at x1.25 the
+		// reconciliation above lands 34% under what was charged.
+		{"cache creation at 2x", usage{CacheWrite: 1000}, 2000},
+		{"cache read at 0.1x", usage{CacheRead: 1000}, 100},
+		{"output at 5x", usage{OutputTokens: 1000}, 5000},
+		{"nothing weighs nothing", usage{}, 0},
+	} {
+		if got := weigh(tc.u); got != tc.want {
+			t.Errorf("%s: weigh = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }

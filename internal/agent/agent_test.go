@@ -111,6 +111,32 @@ func TestFinishedAgentAnswers(t *testing.T) {
 	}
 }
 
+// A partial answer's completeness, stop point and notices are wire fields
+// like any other: they have to survive stdout -> decodeReport -> Normalize
+// -> Validate intact, the same hop `path` already proves above.
+func TestFinishedAgentAnswersWithACompletenessClaim(t *testing.T) {
+	r, _ := runner(t, declared(answers(t,
+		`{"result":{"path":"a.txt"},"verdict":"ok","completeness":0.55,`+
+			`"stopped_at":"two files left when the read budget ran out",`+
+			`"notices":["read three of five files"]}`)))
+	report, _, err := r.Run(t.Context(), "reader", task(), nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !report.Partial() {
+		t.Fatal("Partial() answered false for a completeness-0.55 report")
+	}
+	if report.Completeness == nil || *report.Completeness != 0.55 {
+		t.Fatalf("completeness = %v, want 0.55", report.Completeness)
+	}
+	if report.StoppedAt != "two files left when the read budget ran out" {
+		t.Fatalf("stopped_at = %q", report.StoppedAt)
+	}
+	if len(report.Notices) != 1 || report.Notices[0] != "read three of five files" {
+		t.Fatalf("notices = %v", report.Notices)
+	}
+}
+
 // The distinction this package exists for: exiting clean is not answering.
 // An agent that says nothing has died, however politely it exited.
 func TestCleanExitWithoutAReportIsADeath(t *testing.T) {

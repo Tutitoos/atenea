@@ -91,6 +91,16 @@ type reportWire struct {
 	Verdict    string          `json:"verdict"`
 	Reason     *reasonWire     `json:"reason,omitempty"`
 	Discovered []discoveryWire `json:"discovered,omitempty"`
+	// Notices are caveats about the report, distinct from Reason: a
+	// truncated discovery or a partial answer's own account of itself, not
+	// why the run ended the way it did.
+	Notices []string `json:"notices,omitempty"`
+	// Completeness and StoppedAt travel together: absent on an agent that
+	// never measured itself, which is every agent before this pair existed.
+	// See contract.Report for why the claim is a pointer and why it needs a
+	// stop point.
+	Completeness *float64 `json:"completeness,omitempty"`
+	StoppedAt    string   `json:"stopped_at,omitempty"`
 	// Spent is absent on the agents that spend nothing, which is what
 	// unmeasured looks like on the wire. An agent writing `"spent": {}` says
 	// the same thing: a charge nobody filled in.
@@ -218,7 +228,14 @@ func decodeReport(raw []byte) (contract.Report, error) {
 		return contract.Report{}, contract.Fail(contract.FailureInvalidInput,
 			"unreadable report: %v", err)
 	}
-	out := contract.Report{Result: wire.Result, Verdict: verdict}
+	out := contract.Report{
+		Result: wire.Result, Verdict: verdict,
+		Notices: wire.Notices, StoppedAt: wire.StoppedAt,
+	}
+	if wire.Completeness != nil {
+		amount := *wire.Completeness
+		out.Completeness = &amount
+	}
 	if wire.Reason != nil {
 		kind, err := contract.ParseFailureKind(wire.Reason.Kind)
 		if err != nil {
