@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -248,6 +250,7 @@ func resultLine(value any) string {
 // second thing to install, find on PATH and keep in step -- and the settings
 // file can name this one by the path it was already started from.
 func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
+	stdin = recordAssignment(kind, stdin)
 	switch kind {
 	case "filereader":
 		return filereader.Main(stdin, stdout)
@@ -271,6 +274,46 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 			"no built-in agent %q: this binary ships filereader, reviewer, plan-check, explore and plan", kind)
 	}
 }
+
+// AssignmentLogEnv names a directory where the assignment each built-in agent
+// is handed is written verbatim, before anything parses it.
+//
+// The sibling of model.PromptLogEnv, at the other end of the spawn. That one
+// records what a turn was told; this records what the agent was given, which
+// is the input a comparison has to hold fixed. Measured 2026-08-14: five runs
+// of one unchanged commission produced five different planner prompts,
+// because the planner's own input is another model's answer. A recorded
+// assignment is what makes the next comparison a comparison -- replay it and
+// the input is identical by construction rather than by hope.
+//
+// Unset records nothing. The bytes are passed through either way: this reads
+// stdin and hands back a reader over the same bytes, so a failure to write
+// costs the caller nothing but the record.
+func recordAssignment(kind string, stdin io.Reader) io.Reader {
+	dir := strings.TrimSpace(os.Getenv("ATENEA_ASSIGNMENT_LOG"))
+	if dir == "" {
+		return stdin
+	}
+	raw, err := io.ReadAll(stdin)
+	if err != nil {
+		// The read failed, and the agent about to parse this must see the
+		// same failure rather than an empty card that looks like a
+		// malformed one.
+		return io.MultiReader(bytes.NewReader(raw), errReader{err})
+	}
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr == nil {
+		name := fmt.Sprintf("%d-%s-%d.json", time.Now().UnixNano(), kind, os.Getpid())
+		_ = os.WriteFile(filepath.Join(dir, name), raw, 0o644)
+	}
+	return bytes.NewReader(raw)
+}
+
+// errReader hands one error to whoever reads next. It exists so a stdin that
+// failed halfway is still reported as a read failure rather than silently
+// becoming a short card.
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // cmdTraces prints the record.
 //
