@@ -367,3 +367,48 @@ func TestThePlannerIsGivenNoToolsAtAll(t *testing.T) {
 		t.Errorf("builtins = %v, want none: the planner plans from the exploration", s.seen.Builtins)
 	}
 }
+
+// Both plans a real model wrote on 2026-08-14 used `needs` as a data pipe:
+// four steps read files so that seven later steps could "have" them, which is
+// not what needs does. The prompt had never said so, and worse, it forbade the
+// one edge that does carry an answer to a step outside the review pool.
+
+func TestThePromptSaysWhatAnEdgeCarries(t *testing.T) {
+	got := planPrompt(planAssignment("ok", exploration()), config.Config{})
+	for _, want := range []string{
+		"needs carries order and NOTHING ELSE",
+		"subject is the only edge an answer travels along",
+		"write the fetching into the objective of the step that needs it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the plan prompt never says %q", want)
+		}
+	}
+}
+
+// A planner cannot choose the right edge without knowing which types can
+// receive one, and the catalog is the only place that fact lives.
+func TestEveryDeclaredTypeSaysWhetherItReadsASubject(t *testing.T) {
+	cfg := config.Config{Agents: []config.AgentType{
+		{Spec: contract.AgentTypeSpec{Name: "critic"}, Pool: config.PoolReview},
+		{Spec: contract.AgentTypeSpec{Name: "planner"}, Pool: config.PoolAgent, ReadsSubject: true},
+		{Spec: contract.AgentTypeSpec{Name: "reader"}, Pool: config.PoolAgent},
+	}}
+	got := declaredTypes(cfg)
+
+	for name, want := range map[string]string{
+		"critic":  "Review pool: every step of this type needs",
+		"planner": "Reads a subject:",
+		"reader":  "Reads no subject:",
+	} {
+		var found bool
+		for _, line := range strings.Split(got, "\n") {
+			if strings.HasPrefix(line, "- "+name+" ") && strings.Contains(line, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s is not described as %q:\n%s", name, want, got)
+		}
+	}
+}

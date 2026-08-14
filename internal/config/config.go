@@ -579,6 +579,35 @@ func missingImplementations(cfg Config) []string {
 	return out
 }
 
+// shippedAgents returns the agent types the built-in settings declare and
+// this file does not name, in the order they ship.
+//
+// A file that names an agent keeps its own: the shipped declaration is a
+// default, and a person who edited `filereader` to spawn something else
+// meant it. Nothing is ever removed here.
+//
+// The BuiltIn guard is what stops the recursion -- Defaults() is parse() of
+// the shipped file -- and a defaults file that will not parse is a build
+// fault this must not turn into a failure to load a working user file, the
+// same reasoning missingImplementations spells out above.
+func shippedAgents(source string, named map[string]bool) []AgentType {
+	if source == BuiltIn {
+		return nil
+	}
+	shipped, err := Defaults()
+	if err != nil {
+		return nil
+	}
+	var out []AgentType
+	for _, agent := range shipped.Agents {
+		if named[agent.Spec.Name] {
+			continue
+		}
+		out = append(out, agent)
+	}
+	return out
+}
+
 // WriteDefault copies the built-in settings to path.
 func WriteDefault(path string, force bool) error {
 	if _, err := os.Stat(path); err == nil && !force {
@@ -1103,6 +1132,21 @@ func parse(raw []byte, source string) (Config, error) {
 		named[agent.Spec.Name] = true
 		cfg.Agents = append(cfg.Agents, agent)
 	}
+	// A settings file written by `config init` is a copy, not a reference:
+	// it replaces the shipped defaults rather than layering over them. Every
+	// agent type shipped after that copy was taken is therefore invisible,
+	// and the only symptom is `declared are none` at dispatch -- measured
+	// 2026-08-14 on a file six weeks old, which had lost all five shipped
+	// agents and read as a working configuration until something tried to
+	// run one.
+	//
+	// Agents, and not the rest of the catalog, on purpose. An implementation
+	// names a program that has to exist on this machine, and handing back
+	// one a person removed because they do not have it would be Atenea
+	// claiming something can answer when it cannot; that class is reported
+	// by Missing instead, which says so without acting. An agent type is
+	// inert until a plan names it.
+	cfg.Agents = append(cfg.Agents, shippedAgents(source, named)...)
 	// Two blocks under one id would silently make one of them dead: the
 	// payload is a map keyed by id, so the later would win and the earlier
 	// would never be probed or declared. Refusing is the only way the file

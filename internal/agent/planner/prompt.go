@@ -100,7 +100,8 @@ The format, which is compiled before it runs:
     files = ["path/one.go"]       # optional
     effects = ["read"]            # what it may cause
     budget_usd = 0.25             # its share
-    needs = ["other-step"]        # optional: run after these finish OK
+    needs = ["other-step"]        # optional: run after these finish OK.
+                                  # Order only -- see below.
 
     [[step]]
     id = "audit-a"
@@ -120,8 +121,22 @@ Rules the compiler enforces, so getting them wrong costs a round trip:
   - Shares must not exceed the grant.
   - Two steps that could run at the same time must not both touch a file when
     one of them writes it. Order them with needs, or give them different files.
-  - A review-pool type needs a subject; a type that is not review-pool must not
-    have one.
+  - A review-pool type needs a subject. Any other type may only have one if it
+    is marked above as reading a subject.
+
+What an edge carries, which is the mistake that costs the most money:
+
+  - needs carries order and NOTHING ELSE. A step waiting on another is still
+    handed only its own objective, criterion and files. It never sees what the
+    step before it found. A step whose whole purpose is to produce input for a
+    later step is money spent on an answer nobody receives.
+  - subject is the only edge an answer travels along. It names one upstream
+    step, and the step reading it is handed that step's whole report.
+  - So if a step needs to know something, one of these is true: it is a type
+    that reads a subject and you gave it one; or its own objective and files
+    tell it enough to find out itself. There is no third way. When no declared
+    type can receive what you wanted to pass, do not add a step to fetch it --
+    write the fetching into the objective of the step that needs it.
 
 Return the TOML and nothing else: no fences, no commentary around it.
 `, grant(in), grant(in))

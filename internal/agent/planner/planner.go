@@ -422,9 +422,16 @@ func declaredTypes(cfg config.Config) string {
 		line := fmt.Sprintf("- %s (%s): %s. effects: %s",
 			declared.Spec.Name, declared.Pool.String(), declared.Summary,
 			strings.Join(effects, ", "))
-		if declared.Pool == config.PoolReview {
+		switch {
+		case declared.Pool == config.PoolReview:
 			line += ". Review pool: every step of this type needs `subject = \"<step id>\"`" +
 				" naming the step it audits."
+		case declared.ReadsSubject:
+			line += ". Reads a subject: `subject = \"<step id>\"` hands this step that" +
+				" step's whole answer as its input."
+		default:
+			line += ". Reads no subject: it is handed its objective and files, never" +
+				" another step's answer."
 		}
 		lines = append(lines, line)
 	}

@@ -740,3 +740,39 @@ the client the panel is drawn in.
 deleted, because this page has been cited by date and a heading that vanishes turns
 an old citation into a dead reference. The condition was met by a source nobody had
 looked for, not by a provider changing anything.
+
+### Discoveries are the top of the document, not facts worth outliving the task
+
+**Measured 2026-08-14, not fixed.** The `history` context level serves past runs
+of the same agent type their predecessors' discoveries, and the mechanism works:
+run 5 was handed run 4's three notes, from the trace database, unprompted. What
+it was handed is junk.
+
+`firstSentences` in `internal/agent/planner/planner.go` splits a report on `. `
+and keeps the first three fragments under `contract.MaxDiscoveryLength`. On a
+markdown answer — which is what a model returns — that yields the heading and
+the first line under it:
+
+```
+repository | ## Where a row is OPENED
+repository | **`internal/trace/trace.go` - `func (s *Store) Begin(...)` (line 237).**
+repository | Single `INSERT INTO agent_trace` of id, parent_id, type_name, ...
+```
+
+The design's own words are "a short fact worth outliving its task". What is
+persisted is **the top of the document**: position, not significance. A second
+run reading that learns where the previous answer started, which it would have
+found anyway.
+
+Two things make this harder than it looks, and are why it is here rather than
+patched. Selecting the *interesting* sentences from a report is a judgement, and
+the honest implementations of it are a second model call (priced, on every run
+that answers) or a declared `discovered` field the agent fills in itself (free,
+but it moves the judgement to the agent and every agent type would have to
+declare it). Picking between those is a design decision with a cost attached,
+not a bug fix.
+
+**How you would know it was finished:** two consecutive runs of the same type,
+where the second's served history contains a claim the first *found* — a
+file:line, a count, a refuted assumption — and no markdown heading anywhere in
+the set.

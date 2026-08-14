@@ -1926,3 +1926,96 @@ pool = "review"
 		t.Error("the reviewer's declared value was invented rather than implied")
 	}
 }
+
+// A settings file is a copy of the shipped defaults, not a reference to them.
+// Measured 2026-08-14: a file six weeks old had lost all five shipped agent
+// types and read as working configuration until a workflow named one and got
+// "declared are none".
+
+func TestAFileThatPredatesAnAgentTypeStillGetsIt(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	shipped, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	if len(shipped.Agents) == 0 {
+		t.Fatal("the built-in settings declare no agents; this test proves nothing")
+	}
+
+	got := make(map[string]bool, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		got[agent.Spec.Name] = true
+	}
+	for _, agent := range shipped.Agents {
+		if !got[agent.Spec.Name] {
+			t.Errorf("agent %q is missing: a file that never mentioned it cannot have meant to drop it",
+				agent.Spec.Name)
+		}
+	}
+}
+
+// The shipped declaration is a default, and a file that names an agent means
+// what it says -- including a command of its own.
+func TestAFileThatNamesAnAgentKeepsItsOwn(t *testing.T) {
+	body := minimal + `
+[[agent]]
+name = "filereader"
+kind = "specialized"
+summary = "the operator's own reader"
+command = "/usr/local/bin/my-reader"
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+max_tokens = 1
+
+  [[agent.result]]
+  name = "content"
+  type = "string"
+  required = true
+  summary = "what the file holds"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	var seen int
+	for _, agent := range cfg.Agents {
+		if agent.Spec.Name != "filereader" {
+			continue
+		}
+		seen++
+		if agent.Command != "/usr/local/bin/my-reader" {
+			t.Errorf("command = %q, want the file's own", agent.Command)
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("filereader appears %d times, want exactly one", seen)
+	}
+	// And the ones it did not name still arrive.
+	if len(cfg.Agents) < 2 {
+		t.Errorf("agents = %d, want the shipped set beside the override", len(cfg.Agents))
+	}
+}
+
+// The built-in settings are parsed by the same function that merges them.
+// Without the guard that is unbounded recursion, and with a wrong guard the
+// shipped file would declare every agent twice.
+func TestTheBuiltInSettingsAreNotMergedIntoThemselves(t *testing.T) {
+	shipped, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	seen := make(map[string]int, len(shipped.Agents))
+	for _, agent := range shipped.Agents {
+		seen[agent.Spec.Name]++
+	}
+	for name, n := range seen {
+		if n != 1 {
+			t.Errorf("agent %q appears %d times in the built-in settings", name, n)
+		}
+	}
+}
