@@ -23,6 +23,15 @@ func withCosts(in assignment, level map[string]any) assignment {
 	return in
 }
 
+// report renders the cost section the way a consumer of CostReport would,
+// from the same served workspace level the runner builds. The planning prompt
+// no longer carries it -- see TestThePlanningPromptCarriesNoCostSection -- so
+// these tests drive the renderer directly. They are kept because an untested
+// renderer rots, and the next consumer would inherit a broken measurement.
+func costSection(in assignment, cfg config.Config) string {
+	return CostReport(in.Context["workspace"], cfg)
+}
+
 func planningTypes() config.Config {
 	return config.Config{Agents: []config.AgentType{
 		{Spec: contract.AgentTypeSpec{Name: "explore"}, Pool: config.PoolAgent},
@@ -44,7 +53,7 @@ func TestATypeWithNoRunsSaysNeverMeasured(t *testing.T) {
 			},
 		},
 	})
-	got := planPrompt(in, planningTypes())
+	got := costSection(in, planningTypes())
 
 	if !strings.Contains(got, "filereader: never measured") {
 		t.Errorf("a type with no rows must say `never measured`:\n%s", got)
@@ -57,7 +66,7 @@ func TestATypeWithNoRunsSaysNeverMeasured(t *testing.T) {
 // most plausible reason a planner facing all-unpriced types picked the ones
 // that plausibly cost nothing.
 func TestTheCostSectionEndsAtTheFigures(t *testing.T) {
-	got := planPrompt(costsOf(t, "explore", map[string]any{
+	got := costSection(costsOf(t, "explore", map[string]any{
 		"median_usd": 1.63, "min_usd": 1.26, "max_usd": 2.16, "n": 3,
 	}), planningTypes())
 
@@ -83,7 +92,7 @@ func TestTheMedianIsPrintedWithItsSampleSize(t *testing.T) {
 			},
 		},
 	})
-	got := planPrompt(in, planningTypes())
+	got := costSection(in, planningTypes())
 
 	if !strings.Contains(got, "median $1.63 over n=3 run(s), range $1.26-$2.16") {
 		t.Errorf("the median must carry its sample size and range:\n%s", got)
@@ -104,7 +113,7 @@ func TestExcludedRowsAreCountedOutLoud(t *testing.T) {
 			},
 		},
 	})
-	got := planPrompt(in, planningTypes())
+	got := costSection(in, planningTypes())
 
 	if !strings.Contains(got, "excluded: 1 stopped at its ceiling, 1 ran unpriced") {
 		t.Errorf("the censored rows are not counted where the median is read:\n%s", got)
@@ -123,7 +132,7 @@ func TestAMachineWideTableSaysSoAndNamesWhatItCovers(t *testing.T) {
 			},
 		},
 	})
-	got := planPrompt(in, planningTypes())
+	got := costSection(in, planningTypes())
 
 	if !strings.Contains(got, "machine-wide (nothing has been recorded against this repository yet)") {
 		t.Errorf("an unscoped table must say it is machine-wide:\n%s", got)
@@ -136,7 +145,7 @@ func TestAMachineWideTableSaysSoAndNamesWhatItCovers(t *testing.T) {
 // A machine with no measurements at all says nothing rather than printing a
 // table of zeros. The absence is the honest output.
 func TestNoCostTableMeansNoSection(t *testing.T) {
-	got := planPrompt(planAssignment("ok", exploration()), planningTypes())
+	got := costSection(planAssignment("ok", exploration()), planningTypes())
 	if strings.Contains(got, "What these types have actually cost") {
 		t.Errorf("a machine with no measurements printed a cost table:\n%s", got)
 	}
@@ -158,7 +167,7 @@ func costsOf(t *testing.T, name string, fields map[string]any) assignment {
 // measured 2026-08-14, a planner handed exactly that dropped the only type
 // that could search from the graph.
 func TestAMedianOfOneIsNotPublished(t *testing.T) {
-	got := planPrompt(costsOf(t, "explore", map[string]any{
+	got := costSection(costsOf(t, "explore", map[string]any{
 		"median_usd": 1.29, "min_usd": 1.29, "max_usd": 1.29, "n": 1,
 	}), planningTypes())
 
@@ -173,7 +182,7 @@ func TestAMedianOfOneIsNotPublished(t *testing.T) {
 // Withholding the figure is not withholding the fact that runs exist: the
 // count is honest, cheap, and cannot be mistaken for a price.
 func TestAWithheldMedianStillPrintsItsSampleCount(t *testing.T) {
-	got := planPrompt(costsOf(t, "explore", map[string]any{
+	got := costSection(costsOf(t, "explore", map[string]any{
 		"median_usd": 1.29, "min_usd": 1.29, "max_usd": 1.29, "n": 2, "at_ceiling": 1,
 	}), planningTypes())
 
@@ -188,7 +197,7 @@ func TestAWithheldMedianStillPrintsItsSampleCount(t *testing.T) {
 // At the threshold a median is a middle rather than a pick, and it is
 // published. The line either side of the boundary is the whole rule.
 func TestTheThirdCleanRunPublishesTheMedian(t *testing.T) {
-	got := planPrompt(costsOf(t, "explore", map[string]any{
+	got := costSection(costsOf(t, "explore", map[string]any{
 		"median_usd": 1.63, "min_usd": 1.26, "max_usd": 2.16, "n": 3,
 	}), planningTypes())
 
@@ -227,5 +236,39 @@ func TestWithoutACommissionTheOwnBudgetIsTheCeiling(t *testing.T) {
 
 	if got := planPrompt(in, planningTypes()); !strings.Contains(got, "granted $0.90") {
 		t.Errorf("a planner outside a workflow was given no ceiling:\n%s", got)
+	}
+}
+
+// The measurement is kept; the delivery is not. Fifteen frozen replays on
+// 2026-08-14: 2-3 exploring steps with this section in the prompt, 6-9
+// without it, for the same allocation.
+func TestThePlanningPromptCarriesNoCostSection(t *testing.T) {
+	in := costsOf(t, "explore", map[string]any{
+		"median_usd": 1.63, "min_usd": 1.26, "max_usd": 2.16, "n": 3,
+	})
+	got := planPrompt(in, planningTypes())
+
+	for _, gone := range []string{
+		"have actually cost",
+		"never measured",
+		"median $",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the cost section is back in the prompt: %q\n%s", gone, got)
+		}
+	}
+}
+
+// A worked example carrying a figure is an anchor. The share in the format
+// example is a placeholder for that reason, removed unmeasured on 2026-08-14
+// rather than left in place unmeasured.
+func TestTheFormatExampleCarriesNoShareFigure(t *testing.T) {
+	got := planPrompt(planAssignment("ok", exploration()), planningTypes())
+
+	if strings.Contains(got, "budget_usd = 0.25") {
+		t.Errorf("the worked example still anchors a share:\n%s", got)
+	}
+	if !strings.Contains(got, "budget_usd = <its share of the grant>") {
+		t.Errorf("the example lost its share placeholder entirely:\n%s", got)
 	}
 }
