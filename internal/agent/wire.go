@@ -38,6 +38,11 @@ type assignmentWire struct {
 	// of zero: the first means run without a ceiling of your own, and the
 	// second means do not spend.
 	BudgetUSD *float64 `json:"budget_usd,omitempty"`
+	// CommissionUSD is the grant of the run this step belongs to, present
+	// only inside a workflow. An agent writing a graph divides this figure;
+	// BudgetUSD above is its own share and dividing that was the bug this
+	// field exists to end.
+	CommissionUSD *float64 `json:"commission_usd,omitempty"`
 	// Context carries only the levels the type declared, keyed by level name.
 	// A level that was not declared is absent, not empty: absent says nobody
 	// offered it, and empty would say it was offered and had nothing in it.
@@ -140,6 +145,10 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 	if a.BudgetUSD != nil {
 		budget := *a.BudgetUSD
 		out.BudgetUSD = &budget
+	}
+	if a.CommissionUSD != nil {
+		commission := *a.CommissionUSD
+		out.CommissionUSD = &commission
 	}
 	out.Subject = encodeSubject(a.Subject)
 	out.Rejected = encodeSubject(a.Rejected)

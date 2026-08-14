@@ -223,6 +223,21 @@ type Assignment struct {
 	// before anything spawns. The day an agent hands money to a child, the
 	// narrowing belongs in Child beside the other three.
 	BudgetUSD *float64
+	// CommissionUSD is the grant of the run this step belongs to -- what the
+	// whole graph was authorized to spend, not what this step may draw.
+	//
+	// Two different figures, and conflating them was measured. An agent that
+	// writes a graph has to divide the commission's grant; before this field
+	// existed the shipped planner was handed its own BudgetUSD under the
+	// name "the grant for the whole graph", so it divided its own allowance
+	// and its plans came back the same size no matter what the commission
+	// granted -- $0.87 of $10.00 on 2026-08-14, and the same $0.90 of $3.50
+	// through eleven runs before it.
+	//
+	// Nil outside a workflow, where there is no run above this one and the
+	// question has no answer. An agent that needs it and finds nil is being
+	// told there is no commission, not that it was granted nothing.
+	CommissionUSD *float64
 	// Subject is another run's whole answer, handed to this one. Nil on
 	// ordinary work. Two kinds of agent read it: a reviewer, whose job is to
 	// judge it, and an agent whose work takes another's answer as its input

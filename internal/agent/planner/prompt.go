@@ -85,8 +85,10 @@ The commission:
 
 	fmt.Fprintf(&b, `
 
-The grant for the whole graph is $%.2f. Every step takes a share of it, and the
-shares must not add up to more than the grant -- money is split, never copied.
+This commission was granted $%.2f. That figure is the whole run's grant, not
+your own allowance for writing this plan, and it is what the graph you return
+divides: every step takes a share of it, and the shares must not add up to
+more than the grant -- money is split, never copied.
 
 The format, which is compiled before it runs:
 
@@ -157,10 +159,23 @@ sentence -- fix exactly this and change nothing else that already worked:
 	return b.String()
 }
 
-// grant is what the planner may allocate. A step handed no budget still has to
-// print a number in the format above, and printing the ceiling as zero would
-// teach the model to write plans that allocate nothing.
+// grant is what the graph this planner writes may allocate: the commission's
+// grant, which is the run's ceiling, not this turn's own share of it.
+//
+// The two were the same value for eleven runs because only the second was on
+// the card, and the prompt printed it as "the grant for the whole graph". A
+// planner dividing its own allowance produces the same plan at $3.50 and at
+// $10.00, which is what was measured on 2026-08-14 before CommissionUSD
+// existed.
+//
+// Falling back to this turn's budget when there is no commission is
+// deliberate: outside a workflow no run is above this one, and a planner
+// printing a ceiling of zero teaches the model to write plans that allocate
+// nothing.
 func grant(in assignment) float64 {
+	if in.CommissionUSD != nil && *in.CommissionUSD > 0 {
+		return *in.CommissionUSD
+	}
 	if b := budget(in); b > 0 {
 		return b
 	}

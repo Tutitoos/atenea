@@ -2,6 +2,8 @@ package workflow_test
 
 import (
 	"database/sql"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -177,5 +179,56 @@ func TestADatabaseWrittenBeforeTheRepositoryColumnStillOpens(t *testing.T) {
 	}
 	if got := table.Types["explore"]; got.N != 1 {
 		t.Errorf("n = %d, want the row this store just wrote", got.N)
+	}
+}
+
+// The engine hands each step the run's grant, not only the step's own share.
+//
+// Measured 2026-08-14: the shipped planner divides whatever it is told the
+// grant is, and it was being told its own budget. Eleven runs allocated the
+// same $0.90 whether the commission granted $3.50 or $10.00. The two figures
+// travel separately because they are separate facts.
+func TestAStepIsToldTheRunsGrantAndItsOwnShare(t *testing.T) {
+	dir := t.TempDir()
+	captured := filepath.Join(dir, "assignment.json")
+	// Written here rather than through stub: that helper drains stdin to
+	// /dev/null before its body runs, and stdin is the thing under test.
+	binary := filepath.Join(dir, "worker")
+	script := "#!/bin/sh\ncat > " + captured + "\n" +
+		`echo '{"result":{"ok":true},"verdict":"ok"}'` + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the stub: %v", err)
+	}
+	h := newHarness(t, noCeiling(), declared("worker", binary, config.PoolAgent))
+
+	one := step("a", "worker", nil)
+	one.Permission.BudgetUSD = 0.90
+	graph := graphOf(one)
+	graph.GrantUSD = 10.00
+
+	run, err := h.engine.Start(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := statuses(t, run); got["a"] != "ok" {
+		t.Fatalf("the step did not run: %v", got)
+	}
+
+	raw, readErr := os.ReadFile(captured)
+	if readErr != nil {
+		t.Fatalf("reading the assignment the step was handed: %v", readErr)
+	}
+	var payload struct {
+		BudgetUSD     *float64 `json:"budget_usd"`
+		CommissionUSD *float64 `json:"commission_usd"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("the assignment is not json: %v", err)
+	}
+	if payload.CommissionUSD == nil || *payload.CommissionUSD != 10.00 {
+		t.Errorf("commission_usd = %v, want the run's grant of 10\n%s", payload.CommissionUSD, raw)
+	}
+	if payload.BudgetUSD == nil || *payload.BudgetUSD != 0.90 {
+		t.Errorf("budget_usd = %v, want the step's own share of 0.90", payload.BudgetUSD)
 	}
 }

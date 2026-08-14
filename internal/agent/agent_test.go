@@ -547,3 +547,61 @@ func TestAnAgentTypeThatDidNotDeclareHistoryIsServedNothing(t *testing.T) {
 		t.Fatalf("assignment = %s, a withheld discovery leaked onto the wire", raw)
 	}
 }
+
+// The commission's grant has to reach the spawned process, not just the
+// Assignment in memory: an agent writing a graph divides it, and before this
+// field existed the shipped planner divided its own share instead.
+func TestTheCommissionsGrantArrivesOnStdin(t *testing.T) {
+	captured := filepath.Join(t.TempDir(), "assignment.json")
+	spec := declared(stub(t, "cat >"+captured+"\ncat <<'REPORT'\n"+
+		`{"result":{"path":"a.txt"},"verdict":"ok"}`+"\nREPORT"))
+	r, _ := runner(t, spec)
+
+	own, commission := 0.90, 10.00
+	if _, _, err := r.Dispatch(t.Context(), agent.Dispatch{
+		TypeName:      spec.Spec.Name,
+		Task:          task(),
+		BudgetUSD:     &own,
+		CommissionUSD: &commission,
+	}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("reading the assignment the agent was handed: %v", err)
+	}
+	var payload struct {
+		BudgetUSD     *float64 `json:"budget_usd"`
+		CommissionUSD *float64 `json:"commission_usd"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("the assignment is not json: %v", err)
+	}
+	if payload.CommissionUSD == nil || *payload.CommissionUSD != commission {
+		t.Errorf("commission_usd = %v, want %v\n%s", payload.CommissionUSD, commission, raw)
+	}
+	if payload.BudgetUSD == nil || *payload.BudgetUSD != own {
+		t.Errorf("budget_usd = %v, want %v", payload.BudgetUSD, own)
+	}
+}
+
+// Outside a workflow there is no run above this one, and a figure invented
+// here would be a ceiling nobody granted.
+func TestNoCommissionOutsideAWorkflow(t *testing.T) {
+	captured := filepath.Join(t.TempDir(), "assignment.json")
+	spec := declared(stub(t, "cat >"+captured+"\ncat <<'REPORT'\n"+
+		`{"result":{"path":"a.txt"},"verdict":"ok"}`+"\nREPORT"))
+	r, _ := runner(t, spec)
+
+	if _, _, err := r.Run(t.Context(), spec.Spec.Name, task(), nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("reading the assignment: %v", err)
+	}
+	if strings.Contains(string(raw), "commission_usd") {
+		t.Errorf("a dispatch outside a workflow carried a commission:\n%s", raw)
+	}
+}

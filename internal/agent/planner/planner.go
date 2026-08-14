@@ -55,8 +55,14 @@ type assignment struct {
 		MaxSeconds float64 `json:"max_seconds"`
 		MaxTokens  int     `json:"max_tokens"`
 	} `json:"limits"`
-	BudgetUSD *float64                   `json:"budget_usd"`
-	Context   map[string]json.RawMessage `json:"context"`
+	BudgetUSD *float64 `json:"budget_usd"`
+	// CommissionUSD is what the run this planner belongs to was granted --
+	// the figure a graph written here divides. BudgetUSD above is this one
+	// turn's own allowance, and dividing that instead was measured: eleven
+	// runs allocated the same $0.90 whether the commission granted $3.50 or
+	// $10.00, because $0.90 was the plan step's own share.
+	CommissionUSD *float64                   `json:"commission_usd"`
+	Context       map[string]json.RawMessage `json:"context"`
 	// Subject is the exploration this plan is built from. Rejected is this
 	// planner's own last graph, refused by the compile reviewer: two cards,
 	// because a second attempt needs the finding AND the complaint.

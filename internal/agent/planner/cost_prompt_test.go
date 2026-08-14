@@ -196,3 +196,36 @@ func TestTheThirdCleanRunPublishesTheMedian(t *testing.T) {
 		t.Errorf("three clean runs must publish:\n%s", got)
 	}
 }
+
+// The grant a planner divides is the commission's, not its own share of it.
+//
+// Measured 2026-08-14: eleven runs allocated the same $0.90 whether the
+// commission granted $3.50 or $10.00, because the prompt printed the plan
+// step's own budget under the name "the grant for the whole graph".
+func TestThePromptCarriesTheCommissionsGrant(t *testing.T) {
+	in := planAssignment("ok", exploration())
+	own, commission := 0.90, 10.00
+	in.BudgetUSD = &own
+	in.CommissionUSD = &commission
+
+	got := planPrompt(in, planningTypes())
+
+	if !strings.Contains(got, "granted $10.00") {
+		t.Errorf("the planner was not told the commission's grant:\n%s", got)
+	}
+	if strings.Contains(got, "$0.90") {
+		t.Errorf("the planner's own allowance reached the prompt as the grant:\n%s", got)
+	}
+}
+
+// Outside a workflow no run is above this one, and printing a ceiling of zero
+// teaches the model to write plans that allocate nothing.
+func TestWithoutACommissionTheOwnBudgetIsTheCeiling(t *testing.T) {
+	in := planAssignment("ok", exploration())
+	own := 0.90
+	in.BudgetUSD = &own
+
+	if got := planPrompt(in, planningTypes()); !strings.Contains(got, "granted $0.90") {
+		t.Errorf("a planner outside a workflow was given no ceiling:\n%s", got)
+	}
+}

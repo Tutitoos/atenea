@@ -559,6 +559,14 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					// has to be told its ceiling, or the only thing bounding
 					// it is the provider's patience.
 					BudgetUSD: &step.Permission.BudgetUSD,
+					// What the whole run was granted, which is a different
+					// fact from the line above and the one an agent writing
+					// a graph has to divide. Measured 2026-08-14: without
+					// it the shipped planner divided its own share under
+					// the name "the grant for the whole graph", and eleven
+					// runs allocated the same $0.90 whatever the
+					// commission said.
+					CommissionUSD: &plan.Graph.GrantUSD,
 				}
 				if step.Subject != "" {
 					subject, err := subjectFrom(answers[step.Subject])

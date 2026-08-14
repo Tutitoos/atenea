@@ -198,6 +198,10 @@ type Dispatch struct {
 	// what every caller outside a workflow passes: nobody granted money,
 	// which is not the same as granting none.
 	BudgetUSD *float64
+	// CommissionUSD is the grant of the run this dispatch belongs to, set by
+	// the workflow engine and nil everywhere else. An agent that writes a
+	// graph divides this; BudgetUSD above is its own share.
+	CommissionUSD *float64
 }
 
 // NextID mints an execution id without dispatching anything.
@@ -228,6 +232,10 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID, d.BudgetUSD)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
+	}
+	if d.CommissionUSD != nil {
+		commission := *d.CommissionUSD
+		assignment.CommissionUSD = &commission
 	}
 	if d.Subject != nil {
 		subject := d.Subject.Clone()
