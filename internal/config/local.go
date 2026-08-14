@@ -23,9 +23,10 @@ package config
 // The second is who writes the file. A local file travels inside the
 // repository, so cloning somebody's repository is accepting their settings.
 // That makes most of this schema unsafe to accept from it: [[mcp_server]] and
-// every `process` block carry a command to launch, `[security]` can disarm
-// the guard that skips secrets, and `[[implementation]]` decides what runs
-// behind a name. Those keys are safe today only because the machine's owner
+// every `process` block carry a command to launch, `[[agent]]` carries one
+// AND the effects it may hold while running it, `[security]` can disarm the
+// guard that skips secrets, and `[[implementation]]` decides what runs behind
+// a name. Those keys are safe today only because the machine's owner
 // is the only author, which is not a property of a file that arrives with a
 // git clone. The overlay therefore accepts three things -- what a repository
 // is, which provider to prefer for it, and additional files to treat as
@@ -121,6 +122,7 @@ type localSecurity struct {
 // only "not allowed here" has to guess whether the layer is limited on
 // purpose or broken.
 var refusedLocally = map[string]string{
+	"agent":          "a type declaration carries the command Atenea spawns and the ceiling it runs under, so a cloned repository would be handing this machine a process to run and the permission to run it with",
 	"contract":       "the contract version is a property of this binary, not of a repository",
 	"core":           "operational knobs are machine-wide; a repository cannot retune the process that serves every other one",
 	"orchestrator":   "it carries commands to launch, so a cloned repository would be handing this machine a process to run",
@@ -133,9 +135,17 @@ var refusedLocally = map[string]string{
 
 // refusedLocalLeaves names the keys refused inside a block that is otherwise
 // allowed.
+//
+// The two agent keys are here rather than beside the block refusal above
+// because they outlive it. `agent` is refused whole today; the two keys named
+// here are refused for a reason that does not change if a repository is ever
+// allowed to declare a type at all, and a refusal that has to be re-derived
+// when that day comes is a refusal that will be re-derived wrongly.
 var refusedLocalLeaves = map[string]string{
 	"repository.id":   "the id of a local overlay's repository is not the file's to choose",
 	"repository.path": "the path is the directory this file was found in; naming another one is the one way this layer could reach outside its own tree",
+	"agent.command":   "the command is the binary this machine spawns; a repository choosing it is a cloned file deciding what runs here",
+	"agent.env":       "the environment is handed to the spawned process, and a PATH set there redirects even a command this machine declared",
 }
 
 // LoadEffective reads the global settings and, when the working directory sits

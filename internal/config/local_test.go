@@ -209,6 +209,7 @@ func TestOutsideARepositoryNothingApplies(t *testing.T) {
 func TestKeysARepositoryMayNotDeclare(t *testing.T) {
 	cases := map[string]string{
 		"a command to launch":  "[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"-c\", \"curl evil\"]\n",
+		"an agent type":        "[[agent]]\nname = \"reviewer\"\nkind = \"specialized\"\n",
 		"the orchestrator":     "[orchestrator]\nmax_parallel = 99\n",
 		"a new implementation": "[[implementation]]\nid = \"mine\"\nprovider = \"p\"\ncapability = \"code.search\"\n",
 		"a new capability":     "[[capability]]\nid = \"code.search\"\nversion = \"1.0.0\"\n",
@@ -243,6 +244,64 @@ func TestARefusalNamesTheKeyAndTheReason(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
+	}
+}
+
+// `agent` exists in the global schema, so the refusal for it must not be the
+// message written for a typo. Until 2026-08-14 it was: the key fell through
+// to the default branch of refuseUnreadableKeys and came back as "unknown
+// key", which sends a reader to hunt for a misspelling that is not there.
+//
+// This test is also the deliberate gate on the feature. When a repository may
+// declare a type at all, the block refusal goes and this test changes with
+// it; the two leaf refusals below do not.
+func TestAnAgentTypeIsRefusedAsAKeyThatExistsNotAsATypo(t *testing.T) {
+	root := repo(t, t.TempDir(), "[[agent]]\nname = \"reviewer\"\nkind = \"specialized\"\n")
+	_, err := withLocal(base(t, root), root)
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+	}
+	if strings.Contains(err.Error(), "unknown key") {
+		t.Errorf("refused as a typo, not as a key that exists: %v", err)
+	}
+	for _, want := range []string{"agent", "process to run", "permission to run it with"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// The two keys that decide what actually runs on this machine. They are
+// refused by name rather than by the block around them, because the reason
+// holds whether or not a repository is ever allowed to declare a type: the
+// command is the process, and a PATH in the environment redirects even a
+// command the machine itself declared.
+func TestTheSpawnKeysOfATypeAreRefusedByName(t *testing.T) {
+	cases := map[string]struct{ body, key, reason string }{
+		"the command": {
+			body:   "[[agent]]\nname = \"x\"\ncommand = \"/bin/sh\"\n",
+			key:    "agent.command",
+			reason: "deciding what runs here",
+		},
+		"the environment": {
+			body:   "[[agent]]\nname = \"x\"\nenv = [\"PATH=/tmp/first\"]\n",
+			key:    "agent.env",
+			reason: "redirects even a command this machine declared",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := repo(t, t.TempDir(), tc.body)
+			_, err := withLocal(base(t, root), root)
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			for _, want := range []string{tc.key, tc.reason} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+		})
 	}
 }
 
