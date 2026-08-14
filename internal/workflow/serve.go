@@ -227,8 +227,8 @@ type floors struct{ store *floor.Store }
 // Floor answers what starting a turn costs, from what was measured. The
 // context is unused: the store is a file this process reads, with nothing to
 // cancel.
-func (f floors) Floor(_ context.Context, repository, model string) (Floor, bool, error) {
-	measured, ok, err := f.store.Get(repository, model)
+func (f floors) Floor(_ context.Context, repository, agent, model string) (Floor, bool, error) {
+	measured, ok, err := f.store.Get(repository, agent, model)
 	if err != nil || !ok {
 		return Floor{}, false, err
 	}

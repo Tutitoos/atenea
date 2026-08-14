@@ -17,6 +17,33 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A plan funded below the cost of starting a turn is refused before anything
+  is written.** `atenea floor measure --repo ID --agent explore|plan` runs one
+  real turn that is asked to do nothing at all and records what it cost;
+  `atenea workflow create` then refuses a graph whose steps are funded below
+  that number, naming the arithmetic per step and the measurement's provenance
+  once. Nothing has been measured on a fresh machine, so the check is off until
+  somebody measures, and it never raises a share — it declines to start.
+
+  It exists because of a number nobody had checked. On an eighteen-step plan,
+  measured twice, twelve steps died at their ceiling having read everything and
+  written nothing, and the arithmetic underneath says why: one turn on that
+  repository costs about **$0.28 before a single file is read** — 27,666 tokens
+  of cache write for the system prompt and the tool definitions — and seventeen
+  of the eighteen steps were funded between $0.12 and $0.28. They were not
+  budgeted badly, they were budgeted below the price of starting.
+
+  Two things the first live run of the command corrected, both of them
+  measurements. The floor is keyed on the **agent**, not just the repository and
+  the model: `explore`, carrying Atenea's tools plus `Read` and `Glob`, costs
+  $0.28/27,666 tokens where `plan`, carrying none, costs $0.06/4,991 on the same
+  repository with the same model — the tool definitions are 81% of the floor,
+  and a store keyed without the agent let the cheap row govern the expensive
+  steps. And a probe run against a **warm prompt cache is refused rather than
+  recorded**: the second probe of an evening reads back the prefix the first one
+  wrote and reports $0.01 with zero tokens of cache write, a real receipt from a
+  real turn understating the cost of starting by 28x.
+
 - **`atenea intent` reads the client config a repository carries and says how
   each thing it asks for is answered.** `.mcp.json` and `.claude/` for Claude
   Code, `opencode.json` and `.opencode/` for opencode, mapped onto registered

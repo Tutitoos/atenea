@@ -70,9 +70,10 @@ Commands:
   metrics                What the base measured, per capability and provider;
                          'clear' empties it, narrowed by --capability,
                          --implementation or --repository, or --all for the lot
-  floor                  What starting one turn already costs, measured
-                         per repository and per model; 'measure --repo ID'
-                         spends real money to find out, never invented
+  floor                  What starting one turn already costs, measured per
+                         repository, per agent and per model; 'measure
+                         --repo ID --agent explore|plan' spends real money
+                         to find out, never invented
   config init            Write the built-in settings file to disk
   config path            Print where settings are read from
   config show            Print the settings that apply here, and from where
@@ -349,7 +350,7 @@ Flags:
   --all                 with clear: confirm emptying the whole base
 `,
 	"floor": `Usage: atenea floor
-       atenea floor measure --repo ID [--model explore|plan]
+       atenea floor measure --repo ID [--agent explore|plan]
 
 What starting a single turn already costs on a repository, before any file
 is read: the tokens the CLI spends writing its system prompt and tool
@@ -357,22 +358,36 @@ schemas into cache, priced in dollars. It is never invented -- there is no
 default and no formula here, only what 'measure' found by spending one real
 turn to find out.
 
+A floor is per repository, per agent and per model, never per repository
+and model alone: --agent picks explore or plan, the two built-in agent
+types, because what actually drives the cost is the tool surface that
+agent starts a turn with, not which model answers it. Measured 2026-08-14,
+same repository and same model: explore (Atenea's own tools plus Read and
+Glob) cost $0.28, 27,666 cache-write tokens; plan (no tools at all) cost
+$0.06, 4,991 -- 81% of the $0.28 floor is the tool definitions written
+into cache before the model reads a single file. --agent was called
+--model until that same day, which is exactly why the two measurements
+used to collide: the flag never selected a model, only ever the agent.
+
 With no subcommand, floor lists every stored measurement: repository,
-model, USD, cache-write tokens, CLI version and how long ago it was taken.
-A row is marked stale when its CLI version does not match the CLI installed
-on this machine right now -- the system prompt and tool schemas ship WITH
-the CLI, so a new CLI is a new floor even against the same repository and
-model.
+agent, model, USD, cache-write tokens, CLI version and how long ago it was
+taken. A row is marked stale when its CLI version does not match the CLI
+installed on this machine right now -- the system prompt and tool schemas
+ship WITH the CLI, so a new CLI is a new floor even against the same
+repository, agent and model. A row measured before --agent existed prints
+with no agent and must be re-measured -- see 'floor measure' -- rather
+than be guessed at.
 
 'measure' spends real money: one turn, priced at roughly what it finds. It
 prints what it is about to spend, and what it last found for the same
-repository and model if anything did, before it spends anything. It never
-tops a stored figure up -- a re-measurement replaces the row outright.
+repository, agent and model if anything did, before it spends anything. It
+never tops a stored figure up -- a re-measurement replaces the row
+outright.
 
 Flags (measure):
   --repo ID     repository id or path to measure (required)
-  --model NAME  which configured model to measure: explore or plan
-                (default: plan)
+  --agent NAME  which built-in agent's tool surface to measure: explore or
+                plan (default: plan)
 `,
 	"config": `Usage: atenea config init [--force]
        atenea config path

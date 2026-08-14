@@ -26,22 +26,22 @@ type floorTable struct {
 	asked []string
 }
 
-func floorsOf(repository, model string, measured workflow.Floor) *floorTable {
+func floorsOf(repository, agent, model string, measured workflow.Floor) *floorTable {
 	table := &floorTable{rows: make(map[string]workflow.Floor, 2)}
-	return table.add(repository, model, measured)
+	return table.add(repository, agent, model, measured)
 }
 
-func (f *floorTable) add(repository, model string, measured workflow.Floor) *floorTable {
-	f.rows[repository+"\x00"+model] = measured
+func (f *floorTable) add(repository, agent, model string, measured workflow.Floor) *floorTable {
+	f.rows[repository+"\x00"+agent+"\x00"+model] = measured
 	return f
 }
 
-func (f *floorTable) Floor(_ context.Context, repository, model string) (workflow.Floor, bool, error) {
-	f.asked = append(f.asked, repository+" "+model)
+func (f *floorTable) Floor(_ context.Context, repository, agent, model string) (workflow.Floor, bool, error) {
+	f.asked = append(f.asked, repository+" "+agent+" "+model)
 	if f.err != nil {
 		return workflow.Floor{}, false, f.err
 	}
-	measured, ok := f.rows[repository+"\x00"+model]
+	measured, ok := f.rows[repository+"\x00"+agent+"\x00"+model]
 	return measured, ok, nil
 }
 
@@ -130,7 +130,7 @@ func lineFor(message, id string) string {
 // them for.
 func TestAPlanThatClearsTheFloorIsCreated(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	run, gate, err := h.engine.Create(t.Context(), commissioned(
@@ -153,7 +153,7 @@ func TestAPlanThatClearsTheFloorIsCreated(t *testing.T) {
 // plan can act without going looking for either.
 func TestAPlanFundedBelowTheFloorIsRefusedAndSaysTheArithmetic(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	_, _, err := h.engine.Create(t.Context(), commissioned(
@@ -173,7 +173,7 @@ func TestAPlanFundedBelowTheFloorIsRefusedAndSaysTheArithmetic(t *testing.T) {
 		"admin-aux",
 		"funded $0.18",
 		"starting a turn costs ~$0.35",
-		"the floor for taxiprime-backend with claude-opus-5 was measured 2026-08-14 19:40 " +
+		"the floor for taxiprime-backend as explore with claude-opus-5 was measured 2026-08-14 19:40 " +
 			"on claude code 2.1.227:",
 		"25,340 tokens of cache write",
 		"nothing was written and no budget was changed",
@@ -201,7 +201,7 @@ func TestARefusedPlanWritesNothing(t *testing.T) {
 	h := newHarnessWith(t, workflow.Options{
 		Lanes:      noCeiling(),
 		Repository: "taxiprime-backend",
-		Floors:     floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35)),
+		Floors:     floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)),
 		ModelFor:   pricedTypes,
 		IDs:        func() string { return "wf-refused" },
 	}, dir, floorTypes(t, dir)...)
@@ -240,7 +240,7 @@ func TestARefusedPlanWritesNothing(t *testing.T) {
 // copies of one measurement would bury the list they are there to support.
 func TestEveryUnderfundedStepIsNamedAndTheFloorExplainedOnce(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	under := []string{"admin-aux", "users-dev-routes", "billing-webhooks", "a",
@@ -298,7 +298,7 @@ func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
 		USD:        0.35,
 		MeasuredAt: time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
 	}
-	h := floored(t, dir, "", floorsOf("", "claude-opus-5", bare))
+	h := floored(t, dir, "", floorsOf("", "explore", "claude-opus-5", bare))
 
 	_, _, err := h.engine.Create(t.Context(),
 		commissioned(funded("admin-aux", "explore", 0.18)))
@@ -307,7 +307,7 @@ func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"the floor for this machine with claude-opus-5 was measured 2026-08-14 19:40.\n",
+		"the floor for this machine as explore with claude-opus-5 was measured 2026-08-14 19:40.\n",
 		"`atenea floor measure`.",
 	} {
 		if !strings.Contains(message, want) {
@@ -327,7 +327,7 @@ func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
 // floor for it would be the written-down constant this check exists to avoid.
 func TestAStepWhoseModelNobodyMeasuredIsNeverRefused(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	if _, _, err := h.engine.Create(t.Context(), commissioned(
@@ -344,7 +344,7 @@ func TestAStepWhoseModelNobodyMeasuredIsNeverRefused(t *testing.T) {
 // Nil either half is the check off: what every caller that has measured
 // nothing has, and what every test written before this check relies on.
 func TestWithoutAMeasurementCreateBehavesAsItAlwaysDid(t *testing.T) {
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	for _, c := range []struct {
 		name string
 		opts workflow.Options
@@ -389,8 +389,8 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 	cheaper := measuredFloor(0.09)
 	cheaper.CLIVersion = "2.1.231"
 	cheaper.CacheWriteTokens = 9120
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35)).
-		add("taxiprime-backend", "claude-sonnet-5", cheaper)
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
+		add("taxiprime-backend", "plan", "claude-sonnet-5", cheaper)
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	_, _, err := h.engine.Create(t.Context(), commissioned(
@@ -409,8 +409,8 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 		t.Errorf("the sonnet step reads %q, want the sonnet floor of $0.09:\n%s", got, message)
 	}
 	for _, want := range []string{
-		"with claude-opus-5 was measured 2026-08-14 19:40 on claude code 2.1.227",
-		"with claude-sonnet-5 was measured 2026-08-14 19:40 on claude code 2.1.231",
+		"as explore with claude-opus-5 was measured 2026-08-14 19:40 on claude code 2.1.227",
+		"as plan with claude-sonnet-5 was measured 2026-08-14 19:40 on claude code 2.1.231",
 		"25,340 tokens of cache write",
 		"9,120 tokens of cache write",
 	} {
@@ -428,7 +428,7 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 // makes a plan fundable by quietly raising one.
 func TestTheStoredSharesAreExactlyTheOnesTheGraphDeclared(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	h := floored(t, dir, "taxiprime-backend", table)
 
 	want := map[string]float64{
@@ -467,7 +467,7 @@ func TestTheStoredSharesAreExactlyTheOnesTheGraphDeclared(t *testing.T) {
 // the check exists to stop, and it would do it silently.
 func TestACacheThatCannotBeReadRefusesRatherThanLaunches(t *testing.T) {
 	dir := t.TempDir()
-	table := floorsOf("taxiprime-backend", "claude-opus-5", measuredFloor(0.35))
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
 	table.err = contract.Fail(contract.FailureInvalidInput,
 		"floor: /state/floors.json is not the json this writes")
 	h := newHarnessWith(t, workflow.Options{
@@ -492,5 +492,56 @@ func TestACacheThatCannotBeReadRefusesRatherThanLaunches(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Errorf("the store holds %d runs after a lookup that failed, want none", len(runs))
+	}
+}
+
+// The floor is keyed by (repository, agent, model), not (repository, model):
+// the tool surface an agent type carries is most of the cost, not the model
+// it spends against -- see [workflow.Floors]. Two agent types spending the
+// SAME model at different floors is exactly the shape a (repository, model)
+// key could not tell apart: measuring one would silently answer for the
+// other, and here that would either refuse a step that clears its own
+// agent's floor or wave through one that doesn't.
+func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
+		add("taxiprime-backend", "filereader", "claude-opus-5", measuredFloor(0.05))
+	// Both agent types spend the same model here on purpose: the model alone
+	// cannot distinguish them, only the agent can.
+	sameModel := func(agentType string) string {
+		switch agentType {
+		case "explore", "filereader":
+			return "claude-opus-5"
+		}
+		return ""
+	}
+	h := newHarnessWith(t, workflow.Options{
+		Lanes:      noCeiling(),
+		Repository: "taxiprime-backend",
+		Floors:     table,
+		ModelFor:   sameModel,
+	}, dir, floorTypes(t, dir)...)
+
+	_, _, err := h.engine.Create(t.Context(), commissioned(
+		funded("explores", "explore", 0.20),        // under explore's own floor of $0.35
+		funded("reads-a-file", "filereader", 0.20), // clear of filereader's own floor of $0.05
+	))
+	if err == nil {
+		t.Fatal("Create accepted a step funded below its own agent's floor")
+	}
+	message := err.Error()
+	if !strings.Contains(message,
+		"workflow create refused: 1 of 2 steps is funded below the cost of starting a turn") {
+		t.Errorf("the count is wrong:\n%s", message)
+	}
+	if lineFor(message, "explores") == "" {
+		t.Errorf("the step under its own agent's floor has no line:\n%s", message)
+	}
+	if strings.Contains(message, "reads-a-file") {
+		t.Errorf("a step that clears its own agent's floor, sharing a model with an "+
+			"underfunded step of another agent, is named:\n%s", message)
+	}
+	if !strings.Contains(message, "as explore with claude-opus-5") {
+		t.Errorf("the provenance does not name the agent whose floor was measured:\n%s", message)
 	}
 }

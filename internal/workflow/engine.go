@@ -52,14 +52,25 @@ type Floor struct {
 	CacheWriteTokens int
 }
 
-// Floors answers what starting a turn costs, for a repository and a model.
+// Floors answers what starting a turn costs, for a repository, an agent
+// type, and the model that agent type spends against.
+//
+// Keyed by agent because the tool surface is most of the cost, not the
+// model. Measured 2026-08-14, same repository (taxiprime-backend) and same
+// model (claude-opus-5), two agent types: explore -- Atenea MCP tools, Read,
+// Glob -- cost $0.28 and 27,666 tokens of cache write; plan -- no tools at
+// all -- cost $0.06 and 4,991 tokens of cache write. 81% of the floor is the
+// tool schemas, not the system prompt. A key of (repository, model) alone
+// conflates the two: measuring plan overwrote the row explore reads, and the
+// cheap $0.06 figure then governed the expensive explore steps -- the check
+// waving through exactly the steps it exists to refuse.
 //
 // An interface because the measurements live in a file this package does not
 // own, and because a caller who has measured nothing must be able to hand over
-// nothing at all. The bool is "nobody has measured this pair yet", which is
+// nothing at all. The bool is "nobody has measured this triple yet", which is
 // not an error: it is the state every machine starts in.
 type Floors interface {
-	Floor(ctx context.Context, repository, model string) (Floor, bool, error)
+	Floor(ctx context.Context, repository, agent, model string) (Floor, bool, error)
 }
 
 // Options configure the engine.
@@ -215,12 +226,14 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 type underfunded struct {
 	step  string
 	usd   float64
+	agent string
 	model string
 	floor Floor
 }
 
 // checkFloors refuses a plan that funds a step below what starting a turn
-// costs on this repository with the model that step would spend against.
+// costs on this repository, as the agent type that step runs, with the
+// model that agent type spends against.
 //
 // Measured 2026-08-14, on one real 18-step plan run twice: 17 of its 18 steps
 // were funded $0.12-$0.28, and one turn on that repository cost ~$0.35 before
@@ -242,14 +255,15 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 	if e.floors == nil || e.modelFor == nil {
 		return nil
 	}
-	// One lookup per model rather than per step: the measured fact is per
-	// (repository, model), and the store behind this re-reads its file on
-	// every call.
+	// One lookup per (agent, model) rather than per step: the measured fact
+	// is per (repository, agent, model) -- see [Floors] -- and the store
+	// behind this re-reads its file on every call.
+	type key struct{ agent, model string }
 	type lookup struct {
 		floor Floor
 		known bool
 	}
-	asked := make(map[string]lookup, 2)
+	asked := make(map[key]lookup, 2)
 	var under []underfunded
 	for i := range plan.Graph.Steps {
 		step := &plan.Graph.Steps[i]
@@ -260,9 +274,10 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 		if model == "" {
 			continue
 		}
-		got, seen := asked[model]
+		k := key{agent: step.TypeName, model: model}
+		got, seen := asked[k]
 		if !seen {
-			floor, known, err := e.floors.Floor(ctx, e.repo, model)
+			floor, known, err := e.floors.Floor(ctx, e.repo, step.TypeName, model)
 			if err != nil {
 				// A measurement that cannot be read is not a measurement
 				// that says yes. Reading a corrupt cache as "no floor known"
@@ -270,7 +285,7 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 				return err
 			}
 			got = lookup{floor: floor, known: known}
-			asked[model] = got
+			asked[k] = got
 		}
 		if !got.known {
 			continue
@@ -285,6 +300,7 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 		under = append(under, underfunded{
 			step:  step.ID,
 			usd:   step.Permission.BudgetUSD,
+			agent: step.TypeName,
 			model: model,
 			floor: got.floor,
 		})
@@ -331,17 +347,20 @@ func refusal(repository string, steps int, under []underfunded) string {
 			wide, u.step, money, u.usd, u.floor.USD)
 	}
 
-	// The provenance once per model, not once per step: seventeen copies of
-	// the same measurement would bury the list it is there to support. In the
-	// order the plan named them, so the same refusal reads the same way twice.
-	said := make([]string, 0, 2)
+	// The provenance once per (agent, model), not once per step: seventeen
+	// copies of the same measurement would bury the list it is there to
+	// support. In the order the plan named them, so the same refusal reads
+	// the same way twice.
+	type said struct{ agent, model string }
+	told := make([]said, 0, 2)
 	for _, u := range under {
-		if slices.Contains(said, u.model) {
+		row := said{agent: u.agent, model: u.model}
+		if slices.Contains(told, row) {
 			continue
 		}
-		said = append(said, u.model)
-		line := fmt.Sprintf("\nthe floor for %s with %s was measured %s",
-			where, u.model, u.floor.MeasuredAt.Local().Format("2006-01-02 15:04"))
+		told = append(told, row)
+		line := fmt.Sprintf("\nthe floor for %s as %s with %s was measured %s",
+			where, u.agent, u.model, u.floor.MeasuredAt.Local().Format("2006-01-02 15:04"))
 		if u.floor.CLIVersion != "" {
 			line += " on claude code " + u.floor.CLIVersion
 		}

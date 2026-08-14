@@ -66,14 +66,31 @@ func floorList(settingsPath string, out io.Writer) error {
 	}
 	// Cheap: --version is what toolversion always probes with, and asking it
 	// costs nothing beyond starting the CLI once. This is the "running CLI"
-	// every row's own CLIVersion is compared against below.
-	running := toolversion.New(binary, "--version").Version(context.Background())
+	// every row's own CLIVersion is compared against below -- trimmed with
+	// the same model.VersionToken a stored row was trimmed with when it was
+	// written. Measured 2026-08-14: a row written seconds earlier still
+	// listed "stale" because the stored side was trimmed ("2.1.232") and
+	// this side was compared raw ("2.1.232 (Claude Code)") -- two different
+	// strings for the same version. Trimming only one side of a comparison
+	// is the same bug as trimming neither.
+	running := model.VersionToken(toolversion.New(binary, "--version").Version(context.Background()))
 
-	fmt.Fprintf(out, "%-20s %-16s %10s %14s %-18s %s\n",
-		"REPOSITORY", "MODEL", "USD", "CACHE-WRITE", "CLI VERSION", "AGE")
+	fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s %s\n",
+		"REPOSITORY", "AGENT", "MODEL", "USD", "CACHE-WRITE", "CLI VERSION", "AGE")
 	now := time.Now()
 	stale := 0
+	legacy := 0
 	for _, m := range rows {
+		if m.Agent == "" {
+			// Put before Agent was part of the key (see Measurement's own
+			// doc): it does not describe any agent that exists today, so
+			// it is shown as needing re-measurement rather than printed
+			// as if it still applied to whichever agent asks next.
+			fmt.Fprintf(out, "%-20s %-9s needs re-measurement -- predates --agent; run "+
+				"atenea floor measure --repo %s --agent explore|plan\n", m.Repository, "(none)", m.Repository)
+			legacy++
+			continue
+		}
 		version := m.CLIVersion
 		if version == "" {
 			version = "(unknown)"
@@ -83,15 +100,19 @@ func floorList(settingsPath string, out io.Writer) error {
 			mark = " stale"
 			stale++
 		}
-		fmt.Fprintf(out, "%-20s %-16s %10s %14s %-18s measured %s%s\n",
-			m.Repository, m.Model, formatUSD(m.USD), groupedInt(m.CacheWriteTokens),
+		fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s measured %s%s\n",
+			m.Repository, m.Agent, m.Model, formatUSD(m.USD), groupedInt(m.CacheWriteTokens),
 			version, formatAge(now.Sub(m.MeasuredAt)), mark)
 	}
 	if stale > 0 {
 		fmt.Fprintf(out, "\n%d row(s) marked stale: the running CLI answers %q now, and the "+
 			"system prompt and tool schemas ship WITH the CLI, so a different CLI is a "+
-			"different floor even against the same repository and model. Re-run "+
+			"different floor even against the same repository, agent and model. Re-run "+
 			"atenea floor measure to replace a stale row.\n", stale, running)
+	}
+	if legacy > 0 {
+		fmt.Fprintf(out, "\n%d row(s) need re-measurement: they were measured before --agent was "+
+			"part of the key and are not read as any agent's floor.\n", legacy)
 	}
 	return nil
 }
@@ -102,21 +123,22 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("floor measure", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	repoFlag := flags.String("repo", "", "repository id or path to measure (required)")
-	modelFlag := flags.String("model", "plan", "which configured model to measure: explore or plan")
+	agentFlag := flags.String("agent", "plan", "which built-in agent's tool surface to measure: explore or plan")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput,
-			"floor measure takes no positional arguments, only --repo and --model: got %q", flags.Arg(0))
+			"floor measure takes no positional arguments, only --repo and --agent: got %q", flags.Arg(0))
 	}
 	if strings.TrimSpace(*repoFlag) == "" {
 		return contract.Fail(contract.FailureInvalidInput, "floor measure: --repo is required")
 	}
-	role, err := floorRole(*modelFlag)
+	role, err := floorRole(*agentFlag)
 	if err != nil {
 		return err
 	}
+	agent := string(role)
 
 	cfg, err := config.LoadEffective(settingsPath)
 	if err != nil {
@@ -152,7 +174,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	// modelName is resolved the same way Client.Floor resolves it
 	// internally (Options.Explore / Options.Plan, by Role) -- read here,
 	// ahead of spending anything, only so the warning below can name the
-	// pair and quote what it cost last time. Client.Floor's own returned
+	// triple and quote what it cost last time. Client.Floor's own returned
 	// Measurement.Model is still what gets stored; this is not a second
 	// source of truth, only an early read of the same one.
 	modelName := strings.TrimSpace(cfg.Model.Explore)
@@ -163,7 +185,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"floor measure: no model is configured for role %q", role)
 	}
-	previous, hadPrevious, err := store.Get(repo.ID, modelName)
+	previous, hadPrevious, err := store.Get(repo.ID, agent, modelName)
 	if err != nil {
 		return err
 	}
@@ -173,11 +195,11 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	// turn, priced at roughly the floor itself -- see Client.Floor's own
 	// doc for why nothing calls it implicitly.
 	if hadPrevious {
-		fmt.Fprintf(out, "about to spend real money: one turn on %s with %s -- last measured at ~%s\n",
-			repo.ID, modelName, formatUSD(previous.USD))
+		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- last measured at ~%s\n",
+			repo.ID, agent, modelName, formatUSD(previous.USD))
 	} else {
-		fmt.Fprintf(out, "about to spend real money: one turn on %s with %s -- no previous "+
-			"measurement, the amount is unknown\n", repo.ID, modelName)
+		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- no previous "+
+			"measurement, the amount is unknown\n", repo.ID, agent, modelName)
 	}
 
 	tools, builtins, err := floorTurnShape(role)
@@ -197,6 +219,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	measuredAt := time.Now().UTC()
 	if err := store.Put(floor.Measurement{
 		Repository:       repo.ID,
+		Agent:            agent,
 		Model:            measured.Model,
 		USD:              measured.USD,
 		CacheWriteTokens: measured.CacheWriteTokens,
@@ -208,15 +231,19 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(out, "starting a turn on %s with %s costs ~%s (%s tokens of cache write: "+
+	fmt.Fprintf(out, "starting a turn on %s as %s with %s costs ~%s (%s tokens of cache write: "+
 		"system prompt and tool definitions, before any file is read)\n",
-		repo.ID, measured.Model, formatUSD(measured.USD), groupedInt(measured.CacheWriteTokens))
+		repo.ID, agent, measured.Model, formatUSD(measured.USD), groupedInt(measured.CacheWriteTokens))
 	return nil
 }
 
-// floorRole reads --model as a Role name. It is deliberately not a free
+// floorRole reads --agent as a Role name. It is deliberately not a free
 // string: model.Role is a closed set of two (see model.Role's own doc), and
-// a Client can only ever be asked to price one of them.
+// a Client can only ever be asked to price one of them. Named --agent, not
+// --model -- the flag always selected which built-in agent's tool surface
+// to price, never a model name, and the old --model spelling is exactly why
+// an explore measurement and a plan measurement, against the same
+// repository and model, used to be read as the same stored row.
 func floorRole(name string) (model.Role, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "explore":
@@ -225,7 +252,7 @@ func floorRole(name string) (model.Role, error) {
 		return model.RolePlan, nil
 	default:
 		return "", contract.Fail(contract.FailureInvalidInput,
-			"floor measure: --model must be explore or plan, got %q", name)
+			"floor measure: --agent must be explore or plan, got %q", name)
 	}
 }
 

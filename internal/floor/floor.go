@@ -27,9 +27,27 @@ import (
 )
 
 // Measurement is what one real turn cost, spent once to find out what a turn
-// costs on one repository for one model.
+// costs on one repository, for one agent, with one model.
+//
+// Agent is part of the key alongside Repository and Model, not a label
+// beside it, because what a floor actually varies with is the tool surface
+// a turn starts with -- and that surface is fixed by which built-in agent
+// is running, not by which model answers it. Measured 2026-08-14, same
+// repository, same model (claude-opus-5): agent explore (Atenea's MCP
+// tools plus Read and Glob) cost $0.28, 27,666 cache-write tokens; agent
+// plan (no tools at all) cost $0.06, 4,991 cache-write tokens -- 81% of
+// the $0.28 floor is the tool definitions written into cache before the
+// model reads a single file. Keying on (Repository, Model) alone let a
+// measurement of plan silently replace the row for explore: the two
+// shared a key, so the cheap figure ended up governing the expensive
+// steps it was supposed to catch.
+//
+// A row whose Agent is empty predates this field and does not describe
+// any agent that exists today: see Store.Get and Store.List for how it is
+// treated as unmeasured rather than guessed at.
 type Measurement struct {
 	Repository       string    `json:"repository"`
+	Agent            string    `json:"agent"`
 	Model            string    `json:"model"`
 	USD              float64   `json:"usd"`
 	CacheWriteTokens int       `json:"cache_write_tokens"`
@@ -45,7 +63,8 @@ func DefaultPath() string {
 	return filepath.Join(platform.StateDir(), "floors.json")
 }
 
-// Store is a JSON file of measurements, one row per (repository, model) pair.
+// Store is a JSON file of measurements, one row per (repository, agent,
+// model) triple.
 //
 // It holds no open handle and no in-memory copy between calls: every method
 // reads the file, does its work and, for a write, renames a replacement into
@@ -68,19 +87,23 @@ func Open(path string) (*Store, error) {
 	return &Store{path: path}, nil
 }
 
-// Get returns the stored measurement for one (repository, model) pair, and
-// whether one exists. A pair nobody has measured -- including every pair on a
-// machine whose cache file does not exist yet -- is not an error: it is the
-// ordinary state of "the check is off for this pair", and a caller (the
-// workflow engine's refusal included) is expected to treat it that way rather
-// than fail the operation it is guarding.
-func (s *Store) Get(repository, model string) (Measurement, bool, error) {
+// Get returns the stored measurement for one (repository, agent, model)
+// triple, and whether one exists. A triple nobody has measured -- including
+// every triple on a machine whose cache file does not exist yet, and every
+// row Put before Agent became part of the key (see Measurement's own doc)
+// -- is not an error: it is the ordinary state of "the check is off for
+// this triple", and a caller (the workflow engine's refusal included) is
+// expected to treat it that way rather than fail the operation it is
+// guarding. A legacy row's Agent is "", never a real agent name, so it
+// cannot match a query for "explore" or "plan" and Get reads it as
+// unmeasured without any special-casing here.
+func (s *Store) Get(repository, agent, model string) (Measurement, bool, error) {
 	rows, err := s.load()
 	if err != nil {
 		return Measurement{}, false, err
 	}
 	for _, m := range rows {
-		if m.Repository == repository && m.Model == model {
+		if m.Repository == repository && m.Agent == agent && m.Model == model {
 			return m, true, nil
 		}
 	}
@@ -88,7 +111,7 @@ func (s *Store) Get(repository, model string) (Measurement, bool, error) {
 }
 
 // Put stores m, replacing whatever was measured before for the same
-// (repository, model) and leaving every other row untouched.
+// (repository, agent, model) triple and leaving every other row untouched.
 func (s *Store) Put(m Measurement) error {
 	rows, err := s.load()
 	if err != nil {
@@ -96,7 +119,7 @@ func (s *Store) Put(m Measurement) error {
 	}
 	replaced := false
 	for i := range rows {
-		if rows[i].Repository == m.Repository && rows[i].Model == m.Model {
+		if rows[i].Repository == m.Repository && rows[i].Agent == m.Agent && rows[i].Model == m.Model {
 			rows[i] = m
 			replaced = true
 			break
@@ -109,8 +132,13 @@ func (s *Store) Put(m Measurement) error {
 	return s.write(rows)
 }
 
-// List returns every stored measurement, sorted by repository then model so
-// two readings of the same file always print in the same order.
+// List returns every stored measurement, sorted by repository then agent
+// then model so two readings of the same file always print in the same
+// order. A legacy row with no Agent sorts first within its repository
+// (empty precedes every real agent name) rather than being dropped -- it is
+// still on disk and still money somebody spent, so a caller (floorList) has
+// to be able to point at it and say it needs re-measuring, not pretend it
+// was never there.
 func (s *Store) List() ([]Measurement, error) {
 	rows, err := s.load()
 	if err != nil {
@@ -124,6 +152,9 @@ func sortMeasurements(rows []Measurement) {
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Repository != rows[j].Repository {
 			return rows[i].Repository < rows[j].Repository
+		}
+		if rows[i].Agent != rows[j].Agent {
+			return rows[i].Agent < rows[j].Agent
 		}
 		return rows[i].Model < rows[j].Model
 	})

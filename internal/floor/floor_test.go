@@ -11,9 +11,10 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-func measurement(repo, model string) floor.Measurement {
+func measurement(repo, agent, model string) floor.Measurement {
 	return floor.Measurement{
 		Repository:       repo,
+		Agent:            agent,
 		Model:            model,
 		USD:              0.35,
 		CacheWriteTokens: 25340,
@@ -34,7 +35,7 @@ func TestPutAndGetRoundTripThroughARealFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	want := measurement("atenea", "claude-opus-5")
+	want := measurement("atenea", "explore", "claude-opus-5")
 	if err := writer.Put(want); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -43,7 +44,7 @@ func TestPutAndGetRoundTripThroughARealFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	got, ok, err := reader.Get("atenea", "claude-opus-5")
+	got, ok, err := reader.Get("atenea", "explore", "claude-opus-5")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -65,17 +66,17 @@ func TestPutReplacesTheSamePairAndLeavesOthersAlone(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	other := measurement("atenea", "claude-sonnet-5")
+	other := measurement("atenea", "explore", "claude-sonnet-5")
 	if err := store.Put(other); err != nil {
 		t.Fatalf("Put other: %v", err)
 	}
-	original := measurement("atenea", "claude-opus-5")
+	original := measurement("atenea", "explore", "claude-opus-5")
 	original.USD = 0.35
 	if err := store.Put(original); err != nil {
 		t.Fatalf("Put original: %v", err)
 	}
 
-	replacement := measurement("atenea", "claude-opus-5")
+	replacement := measurement("atenea", "explore", "claude-opus-5")
 	replacement.USD = 0.41
 	replacement.CLIVersion = "claude-code/1.3.0"
 	replacement.MeasuredAt = original.MeasuredAt.Add(24 * time.Hour)
@@ -83,7 +84,7 @@ func TestPutReplacesTheSamePairAndLeavesOthersAlone(t *testing.T) {
 		t.Fatalf("Put replacement: %v", err)
 	}
 
-	got, ok, err := store.Get("atenea", "claude-opus-5")
+	got, ok, err := store.Get("atenea", "explore", "claude-opus-5")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestPutReplacesTheSamePairAndLeavesOthersAlone(t *testing.T) {
 		t.Errorf("Get = %+v, want the replacement %+v", got, replacement)
 	}
 
-	untouched, ok, err := store.Get("atenea", "claude-sonnet-5")
+	untouched, ok, err := store.Get("atenea", "explore", "claude-sonnet-5")
 	if err != nil {
 		t.Fatalf("Get other: %v", err)
 	}
@@ -114,6 +115,59 @@ func TestPutReplacesTheSamePairAndLeavesOthersAlone(t *testing.T) {
 	}
 }
 
+// This is the exact defect the shared key fixes: measuring the same
+// repository and the same model for two different agents used to collide,
+// because the key was (repository, model) and Agent did not exist -- a Put
+// for plan silently replaced the row Put for explore. Measured 2026-08-14,
+// same repository (taxiprime-backend) and same model (claude-opus-5):
+// explore cost $0.28 / 27,666 cache-write tokens, plan cost $0.06 / 4,991 --
+// two genuinely different floors that a shared (repository, model) key
+// would merge into one.
+func TestPutTwoAgentsAgainstTheSameRepositoryAndModelKeepsBothRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "floors.json")
+	store, err := floor.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	explore := measurement("taxiprime-backend", "explore", "claude-opus-5")
+	explore.USD = 0.28
+	explore.CacheWriteTokens = 27666
+	if err := store.Put(explore); err != nil {
+		t.Fatalf("Put explore: %v", err)
+	}
+	plan := measurement("taxiprime-backend", "plan", "claude-opus-5")
+	plan.USD = 0.06
+	plan.CacheWriteTokens = 4991
+	if err := store.Put(plan); err != nil {
+		t.Fatalf("Put plan: %v", err)
+	}
+
+	rows, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("List returned %d rows, want 2 (one per agent): %+v", len(rows), rows)
+	}
+
+	gotExplore, ok, err := store.Get("taxiprime-backend", "explore", "claude-opus-5")
+	if err != nil {
+		t.Fatalf("Get explore: %v", err)
+	}
+	if !ok || gotExplore != explore {
+		t.Errorf("Get explore = %+v, ok=%v, want %+v, ok=true", gotExplore, ok, explore)
+	}
+
+	gotPlan, ok, err := store.Get("taxiprime-backend", "plan", "claude-opus-5")
+	if err != nil {
+		t.Fatalf("Get plan: %v", err)
+	}
+	if !ok || gotPlan != plan {
+		t.Errorf("Get plan = %+v, ok=%v, want %+v, ok=true", gotPlan, ok, plan)
+	}
+}
+
 // A pair nobody has measured -- including every pair on a machine whose
 // cache file was never written -- is the ordinary state a caller checks for
 // before deciding the refusal is off, not a fault.
@@ -123,7 +177,7 @@ func TestGetOnAnUnknownPairIsAPlainNoNotAnError(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	_, ok, err := store.Get("atenea", "claude-opus-5")
+	_, ok, err := store.Get("atenea", "explore", "claude-opus-5")
 	if err != nil {
 		t.Fatalf("Get on a file that was never written: %v", err)
 	}
@@ -131,15 +185,68 @@ func TestGetOnAnUnknownPairIsAPlainNoNotAnError(t *testing.T) {
 		t.Fatal("Get: ok = true on a file that was never written")
 	}
 
-	if err := store.Put(measurement("atenea", "claude-opus-5")); err != nil {
+	if err := store.Put(measurement("atenea", "explore", "claude-opus-5")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	_, ok, err = store.Get("other-repo", "claude-opus-5")
+	_, ok, err = store.Get("other-repo", "explore", "claude-opus-5")
 	if err != nil {
 		t.Fatalf("Get on an unmeasured repository: %v", err)
 	}
 	if ok {
 		t.Fatal("Get: ok = true for a repository nothing measured")
+	}
+}
+
+// A row measured for one agent must not answer a query for another: the
+// whole point of the key is that explore's and plan's numbers never stand
+// in for each other.
+func TestGetWithTheWrongAgentIsAPlainNo(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := store.Put(measurement("atenea", "explore", "claude-opus-5")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	_, ok, err := store.Get("atenea", "plan", "claude-opus-5")
+	if err != nil {
+		t.Fatalf("Get with the wrong agent: %v", err)
+	}
+	if ok {
+		t.Fatal("Get: ok = true for an agent nothing measured on this repository/model")
+	}
+}
+
+// A row Put before Agent was part of the key (see Measurement's own doc)
+// has Agent == "", which is not a real agent name -- it cannot match a
+// query for "explore" or "plan", so it reads as unmeasured rather than
+// being guessed at.
+func TestGetOnALegacyRowWithNoAgentReadsAsUnmeasured(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := store.Put(measurement("atenea", "", "claude-opus-5")); err != nil {
+		t.Fatalf("Put legacy row: %v", err)
+	}
+
+	for _, agent := range []string{"explore", "plan"} {
+		_, ok, err := store.Get("atenea", agent, "claude-opus-5")
+		if err != nil {
+			t.Fatalf("Get(%q): %v", agent, err)
+		}
+		if ok {
+			t.Errorf("Get(%q): ok = true against a legacy row with no Agent, want unmeasured", agent)
+		}
+	}
+
+	rows, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Agent != "" {
+		t.Errorf("List = %+v, want the legacy row still present with Agent == \"\"", rows)
 	}
 }
 
@@ -154,12 +261,12 @@ func TestListIsStableRegardlessOfPutOrder(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	for _, m := range []floor.Measurement{
-		measurement("zeta", "claude-opus-5"),
-		measurement("atenea", "claude-sonnet-5"),
-		measurement("atenea", "claude-opus-5"),
+		measurement("zeta", "plan", "claude-opus-5"),
+		measurement("atenea", "plan", "claude-sonnet-5"),
+		measurement("atenea", "explore", "claude-opus-5"),
 	} {
 		if err := store.Put(m); err != nil {
-			t.Fatalf("Put %s/%s: %v", m.Repository, m.Model, err)
+			t.Fatalf("Put %s/%s/%s: %v", m.Repository, m.Agent, m.Model, err)
 		}
 	}
 
@@ -179,9 +286,9 @@ func TestListIsStableRegardlessOfPutOrder(t *testing.T) {
 			t.Errorf("row %d differed between two List calls: %+v vs %+v", i, first[i], second[i])
 		}
 	}
-	want := []string{"atenea/claude-opus-5", "atenea/claude-sonnet-5", "zeta/claude-opus-5"}
+	want := []string{"atenea/explore/claude-opus-5", "atenea/plan/claude-sonnet-5", "zeta/plan/claude-opus-5"}
 	for i, m := range first {
-		if got := m.Repository + "/" + m.Model; got != want[i] {
+		if got := m.Repository + "/" + m.Agent + "/" + m.Model; got != want[i] {
 			t.Errorf("row %d = %q, want %q", i, got, want[i])
 		}
 	}
@@ -200,13 +307,13 @@ func TestACorruptFileIsRefusedNamingThePath(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	if _, _, err := store.Get("atenea", "claude-opus-5"); err == nil {
+	if _, _, err := store.Get("atenea", "explore", "claude-opus-5"); err == nil {
 		t.Fatal("Get on a corrupt file: want an error")
 	} else if !containsPath(err, path) {
 		t.Errorf("Get error %q does not name the corrupt file %q", err, path)
 	}
 
-	putErr := store.Put(measurement("atenea", "claude-opus-5"))
+	putErr := store.Put(measurement("atenea", "explore", "claude-opus-5"))
 	if putErr == nil {
 		t.Fatal("Put on a corrupt file: want an error, not a silent reset")
 	}
@@ -247,7 +354,7 @@ func TestWriteIsAtomicNoPartialFileInAFreshDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := store.Put(measurement("atenea", "claude-opus-5")); err != nil {
+	if err := store.Put(measurement("atenea", "explore", "claude-opus-5")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 

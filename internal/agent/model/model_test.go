@@ -1586,6 +1586,30 @@ const floorAnswer = `{"is_error":false,"subtype":"success","result":"ok",
   "usage":{"input_tokens":4,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":25340},
   "total_cost_usd":0.28,"num_turns":1}`
 
+// The warm reading, in the shape the live CLI answered on the second probe of
+// the evening: the same prefix the cold probe wrote, read back for a
+// twenty-eighth of the price.
+const floorWarmAnswer = `{"is_error":false,"subtype":"success","result":"ok",
+  "usage":{"input_tokens":4,"output_tokens":3,"cache_read_input_tokens":25340,"cache_creation_input_tokens":0},
+  "total_cost_usd":0.01,"num_turns":1}`
+
+// A warm cache is refused, because it is the most convincing wrong number
+// available: a real receipt, from a real turn, reporting 1/28th of what
+// starting a turn costs when nobody has paid for the prefix yet.
+func TestAFloorProbeAgainstAWarmCacheIsRefused(t *testing.T) {
+	client, _ := floorClient(t, floorWarmAnswer)
+	_, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore})
+	if err == nil {
+		t.Fatal("Floor: a warm-cache probe was accepted as a floor")
+	}
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("Floor: kind = %v, want unavailable", contract.KindOf(err))
+	}
+	if !strings.Contains(contract.MessageOf(err), "warm") {
+		t.Fatalf("Floor: message does not say the cache was warm: %s", contract.MessageOf(err))
+	}
+}
+
 // A clean probe reports USD, the token breakdown, the resolved model name,
 // and the version token trimmed off the stub's own banner.
 func TestAFloorProbeMeasuresUSDTokensAndVersion(t *testing.T) {
@@ -1674,5 +1698,26 @@ func TestAFloorProbeArgvCarriesTheRolesModelAndToolsNoSchema(t *testing.T) {
 	}
 	if slices.Contains(argv, "--json-schema") {
 		t.Errorf("argv carries --json-schema, want none: %v", argv)
+	}
+}
+
+// VersionToken is exported so cmd/atenea/floor.go can trim the running
+// CLI's own --version banner the same way a stored Measurement.CLIVersion
+// was trimmed -- see the function's own doc for the 2026-08-14 false-stale
+// measurement that made comparing an untrimmed banner against a trimmed
+// stored token the bug.
+func TestVersionToken(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		banner string
+		want   string
+	}{
+		{"real banner shape", "2.1.232 (Claude Code)", "2.1.232"},
+		{"already trimmed", "2.1.232", "2.1.232"},
+		{"empty", "", ""},
+	} {
+		if got := VersionToken(tc.banner); got != tc.want {
+			t.Errorf("%s: VersionToken(%q) = %q, want %q", tc.name, tc.banner, got, tc.want)
+		}
 	}
 }

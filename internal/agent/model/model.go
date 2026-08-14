@@ -634,6 +634,29 @@ func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement,
 		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
 			"floor probe: claude code priced the turn as nothing -- what was measured is not a floor")
 	}
+	// A warm prompt cache is not a cheaper floor, it is a different
+	// measurement. The system prompt and the tool definitions are cached
+	// server-side by content, so a second probe minutes after the first pays
+	// cache_read prices for the same prefix the first one wrote.
+	//
+	// Measured 2026-08-14, twice within the hour against the same repository
+	// and model: the cold probe reported 27,666 tokens of cache write for
+	// $0.28, and the warm one that followed reported 0 tokens of cache write
+	// for $0.01. Storing the second as the floor would understate the cost of
+	// starting a turn by 28x, and it would do it with a real receipt from a
+	// real turn -- the most convincing kind of wrong number there is.
+	//
+	// The floor a plan must be funded for is the cold one: the cache expires,
+	// and whichever step starts first pays the write. So a warm reading is
+	// refused rather than recorded, and the caller is told to come back after
+	// the entry has aged out.
+	if env.Usage.CacheRead > env.Usage.CacheWrite {
+		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
+			"floor probe: the prompt cache was warm (%d tokens read, %d written) -- "+
+				"this measures what a turn costs after another turn already paid for it, "+
+				"not what starting one costs. Wait for the cache entry to age out and measure again",
+			env.Usage.CacheRead, env.Usage.CacheWrite)
+	}
 
 	return FloorMeasurement{
 		USD:              *env.TotalCostUSD,
@@ -641,17 +664,25 @@ func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement,
 		InputTokens:      env.Usage.InputTokens,
 		OutputTokens:     env.Usage.OutputTokens,
 		Model:            modelName,
-		CLIVersion:       versionToken(c.version.Version(ctx)),
+		CLIVersion:       VersionToken(c.version.Version(ctx)),
 	}, nil
 }
 
-// versionToken trims a version probe's banner to its first whitespace-
+// VersionToken trims a version probe's banner to its first whitespace-
 // delimited field. Read out of the shipped CLI: `claude --version` answers
 // "2.1.232 (Claude Code)", and the token a stale-floor comparison actually
 // wants to match is "2.1.232", not the trailing name repeated on every
 // version this CLI will ever print. Empty stays empty -- see
 // FloorMeasurement.CLIVersion.
-func versionToken(banner string) string {
+//
+// Exported (was versionToken) so cmd/atenea/floor.go can trim the running
+// CLI's own banner the same way before comparing it against a stored row's
+// CLIVersion. Measured 2026-08-14: a row written seconds earlier still
+// listed "stale" because the stored side was trimmed ("2.1.232") but the
+// list command compared it against the raw banner ("2.1.232 (Claude
+// Code)") -- two different strings for the same version, never equal. One
+// function, called on both sides, is what makes that comparison meaningful.
+func VersionToken(banner string) string {
 	fields := strings.Fields(banner)
 	if len(fields) == 0 {
 		return ""

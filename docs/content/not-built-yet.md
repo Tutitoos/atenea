@@ -976,3 +976,23 @@ Until one of them is true on disk, there is no cross-repository question this
 provider could answer that grep cannot. The difference from the version of this
 entry written that morning is only that the answer is now one uncommented block
 away instead of a build away — and that is not a reason to uncomment it.
+
+## A floor that guards the door and not the room — 2026-08-14
+
+`atenea workflow create` now refuses a plan whose steps are funded below the
+measured cost of starting a turn. The check lives in `Create` and nowhere else,
+which is a deliberate limit and a real hole: a proposal approved mid-run
+(`Store.Ask` / `Engine.grow`) can still add a step funded below the floor, and
+it will die exactly the way the twelve steps of 2026-08-14 died.
+
+It was left open because refusing there is a different decision, not the same
+one moved. At create time the refusal costs nothing — no run exists, the person
+edits a file and tries again. Mid-run the same refusal kills a live expansion of
+a graph that is already spending, and the honest options (decline the expansion
+and continue, or stop the run) are a choice about somebody's money that should
+be made deliberately rather than inherited from a check written for a different
+moment.
+
+**The condition:** an expansion is observed to add a step below the floor on a
+real run. Until then this is a hole with a receipt, not a bug — the door is the
+path every plan takes, and no measured failure has yet come through the window.

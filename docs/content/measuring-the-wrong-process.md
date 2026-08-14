@@ -1001,6 +1001,58 @@ not reached. The mechanism was never the thing that was broken. The number
 underneath it was, and nothing in the pipeline had ever compared that number to
 what a turn actually costs.
 
+### What the floor actually is, once it was measured instead of estimated
+
+`$0.35` above was inferred from a trajectory. Measuring it directly — one turn
+that is asked to do nothing at all, `Reply with exactly: ok`, on the same
+repository with the same model and the same tools a step gets — gives a smaller
+number and a much more useful one:
+
+| agent | tool surface | cache write | cost of starting |
+|---|---|---|---|
+| `explore` | Atenea's capabilities + Read + Glob | 27,666 tok | **$0.28** |
+| `plan` | none | 4,991 tok | **$0.06** |
+
+Same repository, same `claude-opus-5`, same evening. The difference between the
+two rows is nothing but the tool definitions, so **81% of the cost of starting a
+turn is the tool schemas** — $0.22 of $0.28. The system prompt, the thing one
+would naturally blame, is the cheap sixth.
+
+That reframes the twelve deaths a third time. They were not underfunded because
+someone typed small numbers; they were underfunded because every step was billed
+for a catalog before it was allowed to read one line, and nothing in the pipeline
+knew that catalog had a price. It also says where the floor can be lowered, which
+an estimate never could: not by trimming the prompt, but by handing a step fewer
+tools.
+
+The first version of the stored measurement got this wrong in a way worth
+recording, because it is the same error one layer up. It keyed the floor by
+`(repository, model)` — the two things that are obviously about cost — and
+measuring `plan` silently overwrote `explore`, replacing $0.28 with $0.06. A
+check built to refuse underfunded explore steps would have waved every one of
+them through, quoting a real measurement of the wrong thing. The floor is per
+tool surface, and the tool surface belongs to the agent type.
+
+The second version got it wrong in a better way. With the agent in the key, both
+rows were re-measured minutes after the first pair, and both came back at
+**$0.01 with zero tokens of cache write** — a 28x discount that arrived as a
+real receipt, from a real turn, priced by the CLI itself. Nothing was broken.
+The prompt cache was warm: the prefix the cold probe had paid 27,666 tokens to
+write was still resident, so the second probe read it back at a tenth of a cent
+and reported that as the cost of starting.
+
+A floor measured that way is worse than no floor, because it is quotable. The
+probe now refuses a reading whose cache reads exceed its cache writes and says
+to come back when the entry has aged out. The refusal was confirmed on live
+traffic within the minute: `27666 tokens read, 0 written` — the same number the
+cold probe wrote, coming back as evidence that the measurement was of the wrong
+turn.
+
+The general shape, and the reason this belongs with the other fourteen: **a
+measurement that costs almost nothing to take is telling you that somebody else
+already paid for it.** A price falling by an order of magnitude between two
+identical runs is not good news about the second one.
+
 ## A sixteenth instrument: four fixtures that encoded the belief and then confirmed it
 
 Measured on 2026-08-14, building the Ladygraph provider into Atenea: a stdio-MCP
