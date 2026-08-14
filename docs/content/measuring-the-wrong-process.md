@@ -697,8 +697,75 @@ with more confidence than their evidence supported.
 
 What survives: adding a section of cost evidence to a prompt was followed by
 plans that could not search, and no correction has reliably changed that back.
-Whether the section caused it is open, and settling it needs a number of runs
-per configuration that nobody has yet decided.
+Whether the section caused it is settled in the next entry, which could only
+be written once the noise had a name.
+
+## A twelfth instrument: the feature that was measured, and the bug that fixed
+what it was aimed at
+
+Freezing the input made the comparison affordable. One real planner assignment
+was captured verbatim — exploration, served context and cost table inside it —
+and replayed against three builds, five runs each. One prompt hash per cell,
+checked rather than assumed; the cost table is pinned by construction, because
+a replay writes no `workflow_step` row for its successor to read.
+
+| run | A: no cost section | B: section + closing warning | C: section as shipped |
+|-----|--------------------|------------------------------|-----------------------|
+| 1 | 8 explore, 11 steps, $3.45 | 2, 4, $3.50 | 3, 6, $3.39 |
+| 2 | 6 explore, 12 steps, $3.50 | 2, 4, $3.50 | 3, 6, $3.48 |
+| 3 | 8 explore, 12 steps, $3.50 | 2, 3, $3.50 | 3, 5, $3.50 |
+| 4 | 9 explore, 12 steps, $3.45 | 2, 4, $3.50 | 3, 6, $3.45 |
+| 5 | 7 explore, 12 steps, $3.45 | 2, 4, $3.50 | 3, 6, $3.45 |
+| | **6–9**, median 8 | **2**, all five | **3**, all five |
+
+**The cost section as shipped makes plans worse.** Exploring steps fall from
+6–9 to 2–3 while allocation stays in the same band, $3.39–$3.50 in every cell.
+Less exploration for the same money, which is not the trade the section was
+built to make: it was added so a planner would fund steps adequately, and
+funding is exactly what it does not touch.
+
+The warning that was accused, then acquitted, then accused again is a minor
+term. B and C do not overlap, so it does have an effect — of **one step**, in
+the predicted direction. What it does not do is what was claimed twice
+tonight: **zero explorers never occurred in any of the fifteen frozen runs.**
+The `0`s that started this were exploration variance wearing a mechanism's
+clothes.
+
+### The half nobody was measuring
+
+Under-allocation — the problem the cost table was built to solve — was a bug
+in the contract. The planner was told "the grant for the whole graph is $X"
+where X was the plan step's own `budget_usd`, so it divided its own allowance
+and eleven runs allocated $0.87–$0.90 whatever the commission said, including
+one granted $10.00. With the run's grant travelling beside the step's share,
+the same commission allocates $3.50 of $3.50 and $9.68 of $10.00.
+
+**25% to 100%, from a field on a card.** No configuration of the cost table
+moved that number, before or after. The table was aimed at under-allocation
+and hit composition instead; the bug hunt was aimed at composition and fixed
+under-allocation. Both landed — neither on its target.
+
+### What generalises, and what does not
+
+**Generalises:** the ordering (no section explores most, section-with-warning
+least, shipped configuration between them) and the size class — the section is
+a 2–4× effect on composition and a null effect on allocation. Five runs per
+cell is enough to see an effect that large and not enough to see a small one,
+which is why the one-step warning difference is reported as separated rather
+than as a finding.
+
+**Does not generalise:** every magnitude in the table. All fifteen runs replay
+a single frozen exploration, so "the section costs about five exploring steps"
+is a fact about this input. A second frozen card would test that, and has not
+been run.
+
+### State on the night
+
+The section stays in for now. What is known is an unexplained large effect,
+measured against one input, on a feature nobody has shown to help — and no
+mechanism is proposed here, because the last two offered tonight were both
+plausible, both consistent with everything then measured, and both wrong.
+Removing it is a decision worth taking rested.
 
 ## The general lesson
 
@@ -843,6 +910,22 @@ per configuration that nobody has yet decided.
     Two properties make it mandatory rather than good practice — an input
     produced by a model is never the same input twice, and a run that writes to
     the table its successor reads has already changed the next cell.
+16. **Freeze the input before comparing prompts.** When a stage's input is
+    another model's answer, "the same task twice" is not the same input twice,
+    and every comparison downstream inherits that spread. Recording one real
+    assignment and replaying it verbatim turned a $40 question into a $7 one
+    and collapsed the noise from `0, 0, 5, 0, 4` to `3, 3, 3, 3, 3`. Capture
+    the card at the boundary the process actually reads, not a reconstruction
+    of it: a hand-built copy here was missing the served cost table, ran
+    cleanly, and would have measured a different configuration than the one
+    shipping.
+17. **A feature can work and still be aimed at the wrong problem.** The cost
+    table was built to stop under-allocation. It never moved allocation in any
+    configuration — a contract bug did, from 25% of the grant to 100% — while
+    what it did move, badly, was something nobody was watching: the plans it
+    informed explored 2–4× less for the same money. Ask what a feature changed,
+    not only whether it changed what it was for. The second question is the one
+    with an answer prepared in advance, and it is the cheaper half.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
