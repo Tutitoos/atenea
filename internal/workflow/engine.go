@@ -2,9 +2,11 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,42 @@ type Dispatcher interface {
 	// NextID mints an execution id ahead of the spawn, so the step can be
 	// recorded as running before it is.
 	NextID() string
+}
+
+// Floor is what starting a turn costs before any work happens: the cache write
+// of a system prompt and a tool catalog, priced.
+//
+// Measured, never declared. The figure belongs to one repository and one model
+// together -- the tool schemas that repository serves and that model's prices
+// are both inside it -- and it moves whenever the client's system prompt or
+// that catalog changes. So every figure carries when it was taken and what
+// took it, and there is no constant in Go anybody could read as the answer.
+type Floor struct {
+	// USD is what one turn costs before it has read anything.
+	USD float64
+	// MeasuredAt is when this figure was taken. A floor with no date is a
+	// claim, not a measurement.
+	MeasuredAt time.Time
+	// CLIVersion is the client that produced it, bare ("2.1.227"). Empty
+	// means the probe could not read one, which is reported as silence
+	// rather than as a version.
+	CLIVersion string
+	// CacheWriteTokens is what the turn pays for before it reads a file: the
+	// system prompt and the tool definitions. It is the evidence half of the
+	// figure -- a dollar amount is a number to argue with, a token count that
+	// bought nothing is not -- and zero means the measurement did not carry
+	// one, never that a turn was free.
+	CacheWriteTokens int
+}
+
+// Floors answers what starting a turn costs, for a repository and a model.
+//
+// An interface because the measurements live in a file this package does not
+// own, and because a caller who has measured nothing must be able to hand over
+// nothing at all. The bool is "nobody has measured this pair yet", which is
+// not an error: it is the state every machine starts in.
+type Floors interface {
+	Floor(ctx context.Context, repository, model string) (Floor, bool, error)
 }
 
 // Options configure the engine.
@@ -61,21 +99,33 @@ type Options struct {
 	// spent on -- exploring a six-file repository and this one are not the
 	// same act at the same price. Empty is honest and means machine-wide.
 	Repository string
+	// Floors answers what starting a turn costs on a repository with a
+	// model, from what somebody measured. Nil turns the check off, which is
+	// what a caller that has measured nothing has: no measurement, no claim.
+	Floors Floors
+	// ModelFor resolves which model an agent type spends against, so a
+	// step's share can be held against the floor for the model it would
+	// actually pay. Empty means the type runs no model turn this engine can
+	// price, and such a step is never refused. Nil turns the check off with
+	// Floors.
+	ModelFor func(agentType string) string
 }
 
 // Engine runs graphs.
 type Engine struct {
-	runner  Dispatcher
-	store   *Store
-	types   []config.AgentType
-	lanes   config.Workflow
-	now     func() time.Time
-	ids     func() string
-	pid     int
-	alive   func(pid int) bool
-	poll    time.Duration
-	surface string
-	repo    string
+	runner   Dispatcher
+	store    *Store
+	types    []config.AgentType
+	lanes    config.Workflow
+	now      func() time.Time
+	ids      func() string
+	pid      int
+	alive    func(pid int) bool
+	poll     time.Duration
+	surface  string
+	repo     string
+	floors   Floors
+	modelFor func(agentType string) string
 }
 
 // New builds an engine.
@@ -89,17 +139,19 @@ func New(opts Options) (*Engine, error) {
 			"workflow: a store is required: a run nobody wrote down cannot be resumed")
 	}
 	e := &Engine{
-		runner:  opts.Runner,
-		store:   opts.Store,
-		types:   opts.Types,
-		lanes:   opts.Lanes,
-		now:     opts.Now,
-		ids:     opts.IDs,
-		pid:     opts.PID,
-		alive:   opts.Alive,
-		poll:    opts.Poll,
-		repo:    opts.Repository,
-		surface: opts.Surface,
+		runner:   opts.Runner,
+		store:    opts.Store,
+		types:    opts.Types,
+		lanes:    opts.Lanes,
+		now:      opts.Now,
+		ids:      opts.IDs,
+		pid:      opts.PID,
+		alive:    opts.Alive,
+		poll:     opts.Poll,
+		repo:     opts.Repository,
+		surface:  opts.Surface,
+		floors:   opts.Floors,
+		modelFor: opts.ModelFor,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -128,10 +180,17 @@ func New(opts Options) (*Engine, error) {
 // the whole point of the split: a plan is a thing to read before it is a
 // thing to run, and the reading is a separate act from the commissioning.
 //
+// A plan that funds a step below what starting a turn costs is refused here,
+// before the record exists, so the person who would have approved it reads
+// the arithmetic instead of the receipt.
+//
 // The returned Gate carries the digest the launch will be checked against.
 func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	plan, err := Compile(graph, e.types)
 	if err != nil {
+		return Run{}, Gate{}, err
+	}
+	if err := e.checkFloors(ctx, plan); err != nil {
 		return Run{}, Gate{}, err
 	}
 	id := e.ids()
@@ -149,6 +208,188 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 		return Run{}, Gate{}, err
 	}
 	return run, gate, nil
+}
+
+// underfunded is one step, the share it was handed, and the measured floor it
+// is under.
+type underfunded struct {
+	step  string
+	usd   float64
+	model string
+	floor Floor
+}
+
+// checkFloors refuses a plan that funds a step below what starting a turn
+// costs on this repository with the model that step would spend against.
+//
+// Measured 2026-08-14, on one real 18-step plan run twice: 17 of its 18 steps
+// were funded $0.12-$0.28, and one turn on that repository cost ~$0.35 before
+// a single file was read -- 25,340 tokens of cache write for the system prompt
+// and the tool definitions. All twelve steps that got as far as spawning died
+// at their ceiling with result_len = 0. The two runs spent $3.78 and $3.57 and
+// answered nothing. Every one of those dollars was authorized by somebody
+// reading a plan that looked affordable, which is why the refusal is here, at
+// create, before the record exists and before anybody is asked to approve it:
+// after a no there is nothing to clean up.
+//
+// THE ENGINE NEVER TOPS A STEP UP TO THE FLOOR. Quietly raising a share to
+// make a plan runnable is Atenea spending money nobody approved, and it is
+// worse than the defect above because it is silent: the reader of the receipt
+// would have no way to tell the figure they authorized from the one the engine
+// preferred. Refusing is the honest move. The shares in a plan are its
+// author's, and they stay its author's.
+func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
+	if e.floors == nil || e.modelFor == nil {
+		return nil
+	}
+	// One lookup per model rather than per step: the measured fact is per
+	// (repository, model), and the store behind this re-reads its file on
+	// every call.
+	type lookup struct {
+		floor Floor
+		known bool
+	}
+	asked := make(map[string]lookup, 2)
+	var under []underfunded
+	for i := range plan.Graph.Steps {
+		step := &plan.Graph.Steps[i]
+		// No model, no claim: an agent type this engine cannot price is one
+		// nobody measured a turn for, and inventing a floor for it would be
+		// the written-down constant this whole thing exists to avoid.
+		model := e.modelFor(step.TypeName)
+		if model == "" {
+			continue
+		}
+		got, seen := asked[model]
+		if !seen {
+			floor, known, err := e.floors.Floor(ctx, e.repo, model)
+			if err != nil {
+				// A measurement that cannot be read is not a measurement
+				// that says yes. Reading a corrupt cache as "no floor known"
+				// would launch exactly the plan this check exists to stop.
+				return err
+			}
+			got = lookup{floor: floor, known: known}
+			asked[model] = got
+		}
+		if !got.known {
+			continue
+		}
+		// Below is below, and zero is not exempt: a step handed nothing is
+		// the extreme of this defect, not an exception to it. The epsilon is
+		// the one Compile divides shares with, so a share that equals the
+		// floor is not refused over the last bit of binary floating point.
+		if step.Permission.BudgetUSD+moneyEpsilon >= got.floor.USD {
+			continue
+		}
+		under = append(under, underfunded{
+			step:  step.ID,
+			usd:   step.Permission.BudgetUSD,
+			model: model,
+			floor: got.floor,
+		})
+	}
+	if len(under) == 0 {
+		return nil
+	}
+	return contract.Fail(contract.FailureInvalidInput, "%s",
+		refusal(e.repo, len(plan.Graph.Steps), under))
+}
+
+// refusal writes what a person needs in order to act: the arithmetic for every
+// step that is under, and where the floor came from.
+//
+// Every underfunded step is named, however many there are. A person about to
+// approve a plan is reading this to decide whether to raise seventeen shares or
+// throw the plan away, and a list that stopped at five would hide the size of
+// the decision. They are aligned for the same reason: the columns are meant to
+// be compared down the page, not read as sentences.
+func refusal(repository string, steps int, under []underfunded) string {
+	// An empty repository id is honest and means machine-wide -- see
+	// Options.Repository -- so it is said in words rather than left as a gap
+	// in a sentence, and the re-measure line drops a flag it cannot fill.
+	where := repository
+	if where == "" {
+		where = "this machine"
+	}
+	verb := "are"
+	if len(under) == 1 {
+		verb = "is"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "workflow create refused: %d of %s %s funded below the cost of starting a turn\n\n",
+		len(under), plural(steps, "step", "steps"), verb)
+
+	wide, money := 0, 0
+	for _, u := range under {
+		wide = max(wide, len(u.step))
+		money = max(money, len(strconv.FormatFloat(u.usd, 'f', 2, 64)))
+	}
+	for _, u := range under {
+		fmt.Fprintf(&b, "  %-*s   funded $%*.2f   starting a turn costs ~$%.2f\n",
+			wide, u.step, money, u.usd, u.floor.USD)
+	}
+
+	// The provenance once per model, not once per step: seventeen copies of
+	// the same measurement would bury the list it is there to support. In the
+	// order the plan named them, so the same refusal reads the same way twice.
+	said := make([]string, 0, 2)
+	for _, u := range under {
+		if slices.Contains(said, u.model) {
+			continue
+		}
+		said = append(said, u.model)
+		line := fmt.Sprintf("\nthe floor for %s with %s was measured %s",
+			where, u.model, u.floor.MeasuredAt.Local().Format("2006-01-02 15:04"))
+		if u.floor.CLIVersion != "" {
+			line += " on claude code " + u.floor.CLIVersion
+		}
+		if u.floor.CacheWriteTokens == 0 {
+			// A measurement that carried no token count ends its sentence
+			// instead of promising evidence it does not have.
+			b.WriteString(line + ".\n")
+			continue
+		}
+		b.WriteString(line + ":\n")
+		fmt.Fprintf(&b, "%s tokens of cache write -- system prompt and tool definitions -- "+
+			"before any file is read.\n", grouped(u.floor.CacheWriteTokens))
+	}
+
+	b.WriteString("\nnothing was written and no budget was changed. " +
+		"Raise the shares in the plan, or re-measure with\n`atenea floor measure")
+	if repository != "" {
+		b.WriteString(" --repo " + repository)
+	}
+	b.WriteString("`.\n")
+	return b.String()
+}
+
+// grouped writes an integer with thousands separators. The token count in a
+// refusal is evidence somebody has to weigh at a glance, and 25,340 reads as a
+// quantity where 25340 reads as a serial number.
+func grouped(n int) string {
+	digits := strconv.Itoa(n)
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	if len(digits) <= 3 {
+		return sign + digits
+	}
+	var b strings.Builder
+	b.Grow(len(sign) + len(digits) + (len(digits)-1)/3)
+	b.WriteString(sign)
+	head := len(digits) % 3
+	if head == 0 {
+		head = 3
+	}
+	b.WriteString(digits[:head])
+	for i := head; i < len(digits); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(digits[i : i+3])
+	}
+	return b.String()
 }
 
 // Launch answers a run's launch gate and drives it.

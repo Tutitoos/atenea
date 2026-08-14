@@ -1533,3 +1533,146 @@ func TestWeighIsTheMeasuredPriceRatios(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Floor
+// ---------------------------------------------------------------------------
+
+// floorScript stands in for the real binary on Floor's own path: it answers
+// --version on its own, without letting that overwrite the turn's own argv
+// recording, and otherwise answers exactly one single-shot turn the way
+// stub does. A dedicated fake rather than reusing stub or scriptCLI: stub
+// records no argv at all, and scriptCLI's fake would have the version probe
+// itself recorded as if it were the turn.
+const floorScript = `#!/bin/sh
+case "$1" in --version) echo '2.1.232 (Claude Code)'; exit 0;; esac
+printf '%%s\n' "$@" > '%s'
+cat <<'ENVELOPE'
+%s
+ENVELOPE
+`
+
+// floorClient builds a Client over floorScript and returns the path the
+// turn's own argv was recorded to.
+func floorClient(t *testing.T, stdout string) (*Client, string) {
+	t.Helper()
+	dir := t.TempDir()
+	argvPath := filepath.Join(dir, "argv")
+	binary := filepath.Join(dir, "claude")
+	script := fmt.Sprintf(floorScript, argvPath, stdout)
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the floor stub: %v", err)
+	}
+	client, err := New(Options{Binary: binary, Explore: "explore-model", Plan: "plan-model"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return client, argvPath
+}
+
+func floorArgv(t *testing.T, path string) []string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the floor probe recorded no argv, so it was never started: %v", err)
+	}
+	return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+}
+
+// floorAnswer is a clean, single-pass probe: no tool call (num_turns 1, no
+// denials) and a real cache-write figure -- shaped after the 25,340-token
+// floor this whole feature exists to measure.
+const floorAnswer = `{"is_error":false,"subtype":"success","result":"ok",
+  "usage":{"input_tokens":4,"output_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":25340},
+  "total_cost_usd":0.28,"num_turns":1}`
+
+// A clean probe reports USD, the token breakdown, the resolved model name,
+// and the version token trimmed off the stub's own banner.
+func TestAFloorProbeMeasuresUSDTokensAndVersion(t *testing.T) {
+	client, _ := floorClient(t, floorAnswer)
+	m, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore})
+	if err != nil {
+		t.Fatalf("Floor: %v", err)
+	}
+	if m.USD != 0.28 {
+		t.Errorf("USD = %v, want 0.28", m.USD)
+	}
+	if m.CacheWriteTokens != 25340 || m.InputTokens != 4 || m.OutputTokens != 3 {
+		t.Errorf("token breakdown = %+v, want the usage block's own counts", m)
+	}
+	if m.Model != "explore-model" {
+		t.Errorf("Model = %q, want %q", m.Model, "explore-model")
+	}
+	if m.CLIVersion != "2.1.232" {
+		t.Errorf("CLIVersion = %q, want the banner trimmed to its first token", m.CLIVersion)
+	}
+}
+
+// num_turns > 1 means the far side read a tool result back -- see
+// claudecode's own completenessDoubt, measured the same way. A probe that
+// did work priced that work into the same total the floor is meant to be,
+// and that total must never reach a caller who would trust it as one.
+const floorUsedATool = `{"is_error":false,"subtype":"success","result":"ok",
+  "usage":{"input_tokens":4,"output_tokens":3,"cache_creation_input_tokens":25340},
+  "total_cost_usd":0.30,"num_turns":3}`
+
+func TestAFloorProbeThatUsedAToolIsRefused(t *testing.T) {
+	client, _ := floorClient(t, floorUsedATool)
+	if _, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore}); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("Floor: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+}
+
+// A permission denial is a tool call too, even one refused before it ran --
+// the far side still reached for something this probe never asked it to.
+const floorDeniedATool = `{"is_error":false,"subtype":"success","result":"ok",
+  "usage":{"input_tokens":4,"output_tokens":3,"cache_creation_input_tokens":25340},
+  "total_cost_usd":0.30,"num_turns":1,
+  "permission_denials":[{"tool_name":"Bash"}]}`
+
+func TestAFloorProbeThatWasDeniedAToolIsRefused(t *testing.T) {
+	client, _ := floorClient(t, floorDeniedATool)
+	if _, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore}); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("Floor: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+}
+
+// total_cost_usd absent is "the cli did not price this turn" -- see
+// chargeFrom's own doc -- and FloorMeasurement.USD has no pointer to leave
+// nil instead. A probe with nothing to report honestly is refused rather
+// than made to report zero.
+const floorUnpriced = `{"is_error":false,"subtype":"success","result":"ok",
+  "usage":{"input_tokens":4,"output_tokens":3,"cache_creation_input_tokens":25340}}`
+
+func TestAFloorProbeWithNoCostIsRefused(t *testing.T) {
+	client, _ := floorClient(t, floorUnpriced)
+	if _, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore}); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("Floor: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+}
+
+// The probe has to be shaped exactly like the step it is standing in for:
+// the role's own model, the tools config a step would carry, and no
+// --json-schema -- floorPrompt asks for free text, never structure.
+func TestAFloorProbeArgvCarriesTheRolesModelAndToolsNoSchema(t *testing.T) {
+	client, argvPath := floorClient(t, floorAnswer)
+	tools := `{"mcpServers":{"atenea":{"command":"atenea","args":["mcp"]}}}`
+	_, err := client.Floor(context.Background(), FloorRequest{
+		Role:     RolePlan,
+		Tools:    tools,
+		Builtins: []string{"Read"},
+	})
+	if err != nil {
+		t.Fatalf("Floor: %v", err)
+	}
+	argv := floorArgv(t, argvPath)
+	if got, ok := flagValue(argv, "--model"); !ok || got != "plan-model" {
+		t.Errorf("--model = %q, ok=%v, want %q", got, ok, "plan-model")
+	}
+	if got, ok := flagValue(argv, "--mcp-config"); !ok || got != tools {
+		t.Errorf("--mcp-config = %q, ok=%v, want the request's own Tools", got, ok)
+	}
+	if slices.Contains(argv, "--json-schema") {
+		t.Errorf("argv carries --json-schema, want none: %v", argv)
+	}
+}

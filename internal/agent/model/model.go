@@ -32,6 +32,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/procgroup"
+	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -96,6 +97,11 @@ type Client struct {
 	timeout time.Duration
 	explore string
 	plan    string
+	// version answers what the CLI calls itself, for Floor's CLIVersion --
+	// memoised for the life of this Client, the same tradeoff
+	// internal/toolversion's own doc explains: an upgrade on disk underneath
+	// a live Atenea is picked up at the next restart, not mid-process.
+	version *toolversion.Probe
 }
 
 // New validates the options and returns a Client.
@@ -122,6 +128,7 @@ func New(opts Options) (*Client, error) {
 	if client.timeout == 0 {
 		client.timeout = DefaultTimeout
 	}
+	client.version = toolversion.New(client.binary, "--version")
 	return client, nil
 }
 
@@ -448,6 +455,22 @@ type Answer struct {
 	Passes int
 }
 
+// resolveDir turns a Request's Dir into the absolute path invoke actually
+// runs the turn in. Empty stays empty, which inherits this process's own --
+// see Request.Dir. Shared by Turn and Floor so a real turn and the floor
+// probe standing in for one resolve a working directory exactly the same
+// way.
+func resolveDir(dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", contract.Fail(contract.FailureInvalidInput, "request: dir %q: %v", dir, err)
+	}
+	return abs, nil
+}
+
 // Turn runs one model turn and reads back what it answered.
 //
 // The request is checked before anything spawns: a turn that cannot run is
@@ -467,14 +490,9 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if err := req.Validate(); err != nil {
 		return Answer{}, err
 	}
-	dir := req.Dir
-	if dir != "" {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return Answer{}, contract.Fail(contract.FailureInvalidInput,
-				"request: dir %q: %v", dir, err)
-		}
-		dir = abs
+	dir, err := resolveDir(req.Dir)
+	if err != nil {
+		return Answer{}, err
 	}
 	timeout := req.Timeout
 	if timeout == 0 {
@@ -496,6 +514,149 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	}
 	answer.Text, answer.Structured, answer.Passes = text, structured, 1
 	return answer, nil
+}
+
+// floorPrompt is what a Floor probe asks the model to do: nothing. It is a
+// named constant, not inlined, because the one property this string needs --
+// answering it costs nothing beyond starting the turn itself, no reading, no
+// writing, no reasoning a real step's own prompt would pay for on top of the
+// floor -- is exactly what a caller re-reading this file has to be able to
+// confirm without diffing a literal against itself.
+const floorPrompt = "Reply with exactly: ok"
+
+// FloorRequest is one probe: the shape of turn internal/workflow's refusal
+// wants priced, spelled out in this package's own vocabulary rather than
+// repeated by the caller.
+type FloorRequest struct {
+	// Role picks which of the Client's two configured models the probe
+	// calls -- the same Role a real step of that agent type would get.
+	Role Role
+	// Dir is the working directory a real step would run in. See Request.Dir.
+	Dir string
+	// Tools is the --mcp-config a real step would carry. See Request.Tools.
+	Tools string
+	// Builtins is the CLI's own tools a real step would be allowed to call
+	// beside Atenea's. See Request.Builtins.
+	Builtins []string
+}
+
+// FloorMeasurement is what one Floor probe found: the cost of starting a
+// turn on Model, in this repository, with these tools, before any real work
+// happened.
+//
+// It is never written down as a constant -- see internal/floor.Measurement,
+// which is what stores one of these. The floor is per repository and per
+// model, and it drifts as the CLI's own system prompt and tool schemas
+// change, so a figure divorced from what produced it is a figure nobody can
+// tell is stale.
+type FloorMeasurement struct {
+	USD              float64
+	CacheWriteTokens int
+	InputTokens      int
+	OutputTokens     int
+	// Model is the model name Role actually resolved to. A measurement is
+	// only ever valid for this exact pair with the repository, never for
+	// Role alone -- internal/config can repoint a Role at a different model
+	// without this package knowing, and the old figure would silently be
+	// read as still describing the new one.
+	Model string
+	// CLIVersion is the version token `claude --version` answered right
+	// after this probe ran -- the banner's first field, trimmed of
+	// whatever trails it (a real answer reads "2.1.232 (Claude Code)"; this
+	// keeps "2.1.232"). Empty means the probe could not get a version at
+	// all, the same "silence is an answer" reading
+	// internal/toolversion.Probe.Version already gives an unreachable or
+	// uncooperative binary -- never a placeholder like "unknown", which
+	// would print as if it were a real answer.
+	//
+	// The system prompt and tool schemas ship WITH the CLI, so a new CLI is
+	// a new floor -- this is what lets a stale figure be spotted instead of
+	// quietly trusted.
+	CLIVersion string
+}
+
+// Floor measures the cost of starting a turn -- system prompt, tool
+// definitions, one minimal exchange -- with nothing asked of the model
+// beyond floorPrompt.
+//
+// CALLING THIS SPENDS REAL MONEY: one turn, priced at roughly the floor
+// itself. That is exactly why nothing in this package, and nothing in
+// internal/workflow, calls it implicitly -- a refusal that is allowed to pay
+// for its own evidence on every check is a refusal nobody approved the cost
+// of. A caller wants a stored Floor probe measurement it took once, on
+// purpose, and reads it back through internal/floor; it does not call this
+// to get a fresh one on every plan.
+//
+// The turn this runs is shaped exactly like the turn a real step of Role
+// gets: the same model, the same --mcp-config, the same builtins, the same
+// working directory, the same single-shot flags. Reusing invoke -- the exact
+// path a real single-shot step already takes through args and command -- is
+// what keeps the two identical; a Floor built by duplicating the spawn would
+// drift the first time args changed and nobody remembered to change this
+// too.
+//
+// A measurement this returns is refused, not merely noted, when it would
+// mislead whoever reads it back. A turn that reports having used a tool
+// (num_turns > 1, or an action the far side denied) priced real work into
+// the same total the floor is meant to be, and a turn the CLI never priced
+// at all has no USD to report honestly. A floor measured on a turn that did
+// work is not a floor.
+func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
+	turn := Request{
+		Role:     req.Role,
+		Prompt:   floorPrompt,
+		Dir:      req.Dir,
+		Tools:    req.Tools,
+		Builtins: req.Builtins,
+	}
+	if err := turn.Validate(); err != nil {
+		return FloorMeasurement{}, err
+	}
+	modelName, err := c.modelFor(turn.Role)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+	dir, err := resolveDir(turn.Dir)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+
+	env, err := c.invoke(ctx, dir, c.timeout, turn)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+	if env.NumTurns > 1 || len(env.PermissionDenials) > 0 {
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"floor probe: claude code used a tool (num_turns=%d, %d denial(s)) -- "+
+				"a turn that did work is not a floor", env.NumTurns, len(env.PermissionDenials))
+	}
+	if env.TotalCostUSD == nil {
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"floor probe: claude code priced the turn as nothing -- what was measured is not a floor")
+	}
+
+	return FloorMeasurement{
+		USD:              *env.TotalCostUSD,
+		CacheWriteTokens: env.Usage.CacheWrite,
+		InputTokens:      env.Usage.InputTokens,
+		OutputTokens:     env.Usage.OutputTokens,
+		Model:            modelName,
+		CLIVersion:       versionToken(c.version.Version(ctx)),
+	}, nil
+}
+
+// versionToken trims a version probe's banner to its first whitespace-
+// delimited field. Read out of the shipped CLI: `claude --version` answers
+// "2.1.232 (Claude Code)", and the token a stale-floor comparison actually
+// wants to match is "2.1.232", not the trailing name repeated on every
+// version this CLI will ever print. Empty stays empty -- see
+// FloorMeasurement.CLIVersion.
+func versionToken(banner string) string {
+	fields := strings.Fields(banner)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 // args builds the command line: the same flags claudecode measured for this

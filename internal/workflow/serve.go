@@ -13,6 +13,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -81,6 +82,19 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		_ = traces.Close()
 		return nil, nil, err
 	}
+	// A measurement cache that will not open is not a reason to stop somebody
+	// launching work: the check goes off and the notice says so, so a person
+	// who expected a plan to be refused knows why it was not. Nothing here
+	// invents a floor to stand in for the one it could not read.
+	var measured Floors
+	if store, floorErr := floor.Open(""); floorErr != nil {
+		if notices != nil {
+			fmt.Fprintf(notices, "cannot read the measured cost of starting a turn (%v): "+
+				"plans will not be checked against it\n", floorErr)
+		}
+	} else {
+		measured = floors{store: store}
+	}
 	engine, err := New(Options{
 		Runner:     runner,
 		Store:      state,
@@ -88,6 +102,8 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		Lanes:      cfg.Workflow,
 		Surface:    surface,
 		Repository: workspace.RepositoryID,
+		Floors:     measured,
+		ModelFor:   modelFor(cfg),
 	})
 	if err != nil {
 		_ = state.Close()
@@ -197,4 +213,50 @@ func costsFor(table CostTable) agent.CostTable {
 		}
 	}
 	return out
+}
+
+// floors adapts the measured floors on disk to what the engine asks of them.
+//
+// A conversion for the same reason costsFor above is one: the store's row is a
+// record of a probe -- tokens in and out, the client that answered, when --
+// and the engine needs the figure plus enough provenance to print in a
+// refusal. One struct being both is how a field added for the record turns up
+// in a message to a person.
+type floors struct{ store *floor.Store }
+
+// Floor answers what starting a turn costs, from what was measured. The
+// context is unused: the store is a file this process reads, with nothing to
+// cancel.
+func (f floors) Floor(_ context.Context, repository, model string) (Floor, bool, error) {
+	measured, ok, err := f.store.Get(repository, model)
+	if err != nil || !ok {
+		return Floor{}, false, err
+	}
+	return Floor{
+		USD:              measured.USD,
+		MeasuredAt:       measured.MeasuredAt,
+		CLIVersion:       measured.CLIVersion,
+		CacheWriteTokens: measured.CacheWriteTokens,
+	}, true, nil
+}
+
+// modelFor resolves which model an agent type spends against, out of the two
+// the settings file fixes -- see internal/config's Model.
+//
+// The two names are the shipped agent types that spawn a model turn, and
+// everything else answers "": a type nobody configured a model for is one
+// nobody measured a turn for either, and guessing here would put a floor on a
+// step whose price was never taken. A settings file that runs `agent-exec
+// explore` under some other type name is unpriced rather than mispriced, which
+// is the direction to be wrong in.
+func modelFor(cfg config.Config) func(agentType string) string {
+	return func(agentType string) string {
+		switch agentType {
+		case "explore":
+			return cfg.Model.Explore
+		case "plan":
+			return cfg.Model.Plan
+		}
+		return ""
+	}
 }
