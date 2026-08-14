@@ -776,3 +776,203 @@ not a bug fix.
 where the second's served history contains a claim the first *found* — a
 file:line, a count, a refuted assumption — and no markdown heading anywhere in
 the set.
+
+## A second code graph, built, declared, and still unjustified — 2026-08-14
+
+Ladygraph — a code knowledge graph with its own persistent store — was cloned,
+source-built and evaluated on this machine for one hour, and then, later the same
+day, built into Atenea as a structural provider. Both halves of that sentence are
+true and neither cancels the other: **the plumbing is finished and the
+justification is not.** Four capabilities are declared, an adapter answers them
+over stdio, and every one was driven end to end against a live graph. The
+condition that would make them worth paying for — recorded below, unchanged from
+the day it was written — has still not been met.
+
+This entry stays on this page for that reason, and it is **not a to-do**. There
+is nothing left to implement. It is a build waiting for the question it was built
+to answer, which is a different and more uncomfortable thing to have on the
+shelf. The three grounds the original answer rested on are kept below, because
+two of them are still true.
+
+**The cost gate answered no.** *Measured, not felt.* Declared narrow — only the
+four answers no attached provider gives, never mirroring the symbol family or
+`code.impact` — the surface adds **736 tokens** (cl100k_base, `~/bin/fixed-cost`)
+to every request from all three fixed-prefix clients: omp 12,130 → 12,866
+(+6.07%), opencode +6.49%, codex +8.63%. claude-code defers MCP schemas, so it
+pays nothing fixed. That is a permanent per-request tax on three clients, and this
+week it would have bought four answers not once needed. The one that justifies it
+— cross-repository consumers, the single answer neither a language server nor
+codebase-memory's path-shape edges can give — matters for a question not yet
+asked. Mirroring the seven serena/codebase-memory duplicates instead would have
+cost +1,688; the narrow shape refuses that, but narrow-and-unused is still 736
+tokens of nothing, forever.
+
+**It was not a declaration, and that is precisely what got built.** The three
+existing providers are one HTTP-MCP server (serena) and two per-call CLIs (omp,
+codebase-memory). Ladygraph's `serve` is a persistent **stdio** MCP server — a
+third transport shape Atenea did not have. That shape now exists:
+`internal/mcpstdio` (one session per child, `initialize` then `tools/call` over
+its stdin and stdout), `supervisor.TransportStdio` carrying it over the same
+restart-limit, on-demand and idle-reaper machinery the HTTP process blocks
+already used, and `internal/adapter/ladygraph` on top of both. This paragraph
+predicted a build rather than a config line, and it was right. That was a reason
+to hesitate, never a reason it could not be done.
+
+**Then it was measured, which is the third ground.** The graph was built by hand —
+`ladygraph init` + `index --full` over taxiprime, no Atenea in the middle — and
+asked the real question over `serve`'s stdio. A full index of four disjoint
+repositories takes **4.07 s**, peak RSS **~794 MB**, and publishes 3,068 symbols /
+14,753 nodes / 26,194 edges into a 22 MB `graph.db`. The state directory reports
+544 MB, of which **513 MB is a fixed LadybugDB `space-reserve` preallocation** —
+not corpus-proportional, and not a number to quote as the cost of this corpus.
+
+**The four repositories are genuinely decoupled, so the answer is empty and the
+empty answer is right.** `find_cross_repo_consumers` on backend's real schema
+symbols (`reservas`, `users`, `drivers`) returns `total: 0` for every one.
+Verified against the source rather than trusted: `backend` (`taxiprime-backend`,
+Fastify) and `frontend` (`@taxiprime/frontend`, React + react-query) declare no
+dependency on each other and no workspace joins them — they meet over HTTP, not
+over shared types. `app` is Dart. `scrapper` is a standalone Go module. There is
+nothing for a cross-repository query to find, and the tool says so.
+
+**The one real cross-boundary edge is root's, and it is invisible for two
+structural reasons — neither of them a weakness in the tool.** The only importers
+of `backend/src` anywhere in the tree are the six files in `migration/scripts/`,
+which pull `users`, `drivers`, `reservas` and `socialAccounts` from
+`backend/src/db/schema` (every other hit across `*.ts,tsx,dart,go` is `.md`
+prose). That edge cannot be indexed here because:
+
+1. **Nesting.** `root` is `new-app`, which contains `backend/`, `frontend/` and
+   `app/`. `init` accepts all four; `index --full` then fails fast with
+   `nested repositories ("…/new-app" contains "…/new-app/backend")`. A parent and
+   its children cannot be peer repositories, so the four-repository shape that was
+   asked for is not expressible at all.
+2. **No project.** `migration/` has a named `package.json` but no `tsconfig`, so
+   its `ProjectPath` is empty and `internal/indexer/full.go:449` skips it by
+   design — Ladygraph refuses to guess the root `tsconfig` (ADR 0009). The warning
+   it prints, `declares no package`, is loose wording for "declares no project".
+
+The resolver itself is not the problem: `ts-worker`'s `cross-repository` suite
+passes, five tests. The capability works; this codebase never presents a case it
+can index.
+
+**Dart does not show up at all: 231 files, zero symbols, a registry entry with no
+coverage.** Ladygraph is a graph for Go and TypeScript, with a Rust loader.
+Registering `app` succeeds, indexing it reports `app declares no package, so it
+contributes nothing`, and the published graph holds not one Dart symbol. For
+taxiprime — whose client *is* the Flutter app — that single line decides the
+question on its own: the repository this provider would most be asked about is the
+one it cannot read.
+
+**The loud-failure requirement — built, and verified by inverting it.** The
+empty-graph trap is the one that bites: a first `serve` with no config writes an
+empty config and an empty graph, and answers every query with nothing —
+successfully, exit 0. The adapter inverts it. Every implementation carries
+`requires_index = true`; detection maps an absent graph, an empty graph, or a
+repository missing from the published snapshot to not-indexed; and the call path
+returns `FailureUnavailable` instead of an empty success.
+
+Proven by causing the trap rather than reasoning about it: the same binary, run
+with an isolated `HOME`, which is exactly what makes `serve` scaffold an empty
+graph. All four capabilities fail with `unavailable: ladygraph has no published
+graph to answer from (status "empty")`, and `detect` reports every repository
+`not ready` with that same sentence. A repository merely absent from a healthy
+graph reads differently and correctly — `ladygraph's published graph does not
+include repository /home/tutitoos/Desktop/atenea` — and the funnel drops the
+implementation by name rather than answering empty. Down provider, not a
+repository with no matches, as required.
+
+### The declaration, as shipped
+
+The draft that used to sit here — some 250 lines of TOML — has been deleted on
+purpose. It is real now, in `internal/config/default.toml`, and a copy of a
+config file kept in prose beside it is a fixture of one's own belief: it drifts,
+and the drift is invisible because both copies look authoritative. Read the file.
+
+Four `[[capability]]` blocks — `symbol.consumers`, `symbol.get`,
+`symbol.unresolved`, `graph.status` — and four `[[implementation]]` blocks —
+`ladygraph.cross_repo_consumers`, `ladygraph.get`,
+`ladygraph.unresolved_references`, `ladygraph.status`, every one
+`requires_index = true` — plus `[orchestrator.ladygraph]`. The orchestrator's
+compiled card in `internal/orchestrator/orchestrator.go` names all four; without
+that the catalog, the funnel and a live runner can all be ready and the ask is
+still refused with `agent orchestrator may not ask for …`.
+
+**Shipped unattached, deliberately.** `runners = ["omp"]` is unchanged and
+`[orchestrator.ladygraph.process]` ships commented out, the same way serena's own
+process block does, because `command` is an absolute path that exists on this
+machine and no other. Uncommenting it is a per-machine decision, not a compiled
+default.
+
+**What the draft got wrong, corrected against the wire.** Each of these was
+written from the design, read as evidence, and refuted by asking the server:
+`graph_status` takes no arguments at all, so the capability declares no inputs;
+`get_unresolved_references` has no `path_prefix`, and its rows carry a byte
+`offset` and never a line; `find_cross_repo_consumers` records name their class
+in `category` — `exact_symbol`, `package`, `candidate`, `unresolved`, not
+`exact` — and a `package` row carries no file at all, so `path` had to become
+optional; and `get_file_outline` returns an object whose declarations hang off
+`symbols`, alone among these tools in not returning a row list.
+
+**The contract ruling worth keeping.** `symbol.consumers` is position-first
+(`file`, `line`, `column`) and never takes a `stable_key`, even though
+`find_cross_repo_consumers` requires one. A capability whose required input only
+one provider can mint is not a capability, it is a tool passthrough: no language
+server and no path-shape matcher can produce a Ladygraph stable key, so declaring
+it would make the capability permanently unimplementable by anyone else and
+unreachable for the caller who has a file and a line, which is what callers
+actually hold. The adapter pays the resolution instead — `get_file_outline`,
+innermost containing declaration wins, `name` breaks ties, and an ambiguity it
+resolved is reported as a discovery rather than hidden. `symbol.get` is the one
+deliberate exception, because it is *about* stable-key identity. One exception is
+considered; two would be a leak.
+
+**Both open decisions, closed.** `graph.status` kept its own namespace rather
+than folding into `catalog.graph_status`. Transport is the shared persistent
+stdio server, one for the machine, as drafted — per-call spawning was rejected
+because it pays a graph open on every request.
+
+**Adapter:** `internal/adapter/ladygraph`, one `initialize` then a `tools/call`
+per request over the child's stdio, mapping `symbol.consumers →
+find_cross_repo_consumers`, `symbol.get → get_symbol`, `symbol.unresolved →
+get_unresolved_references`, `graph.status → graph_status`. The binary is the
+checkout-independent build at
+`~/.local/opt/ladygraph-eval/v0.5.1/bin/ladygraph`.
+
+**One prerequisite that fails silently, learned the hard way.** That install is
+Go-only: it ships no `ladygraph-ts-worker`, and `version --json` reports
+`"node": null, "typescript": null` to say so. Indexing any TypeScript repository
+without a worker on `PATH` dies with `decode TypeScript facts: unexpected end of
+JSON input` — not "worker missing". A worker must dispatch `facts …` to
+`ts-worker/dist/facts-cli.js` and everything else to `dist/index.js`, which is a
+`hello`-only probe; pointing the whole command at `index.js` produces exactly the
+same misleading JSON error. Any launcher written for it must not hardcode a path
+into `~/Desktop/ladygraph`, which is what makes the install checkout-independent
+in the first place.
+
+**What it costs today: nothing — and the baseline no longer describes it.**
+`~/fixed-cost-ladygraph-base.json` was measured against the draft's schemas with
+the provider attached, and predicted omp +736. The shipped schemas are leaner,
+the provider ships unattached, and this machine's own
+`~/.config/atenea/atenea.toml` is a complete catalog that does not name the four:
+measured 2026-08-14, they are absent from the live `tools/list` entirely. The tax
+is not being paid. Re-measure the day the process block is uncommented and the
+machine's config adopts them — and re-measure rather than quoting the old number,
+which is the entire reason the file exists. A `--compare` run against that
+baseline on the same day showed +342 across three clients from `workflow.create`
+and `workflow.launch`, unrelated work landing in the same tree: a baseline names
+a moment, not a cause.
+
+**The condition, unchanged and still unmet.** Nothing above changes it, and the
+build does not earn it. It stays what it was: `migration/` becomes a registerable
+TypeScript project — a named `package.json` with a `tsconfig` that covers it — so
+the one real cross-boundary edge in this codebase becomes expressible; or two of
+these repositories actually share symbols, through a published package or a
+shared types workspace, anything but HTTP, so there is a second edge to find.
+Both are file-level facts, checkable in a second: either the `tsconfig` exists or
+it does not, either two repositories share an import or they do not.
+
+Until one of them is true on disk, there is no cross-repository question this
+provider could answer that grep cannot. The difference from the version of this
+entry written that morning is only that the answer is now one uncommented block
+away instead of a build away — and that is not a reason to uncomment it.

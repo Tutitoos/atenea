@@ -38,6 +38,55 @@ func (g guardedRunner) Run(ctx context.Context, req contract.RunRequest) (contra
 	return g.Runner.Run(ctx, req)
 }
 
+// guardedProber is guardedRunner for a runner that also answers
+// contract.IndexProber.
+//
+// Two types rather than one because the interface is optional and a type
+// assertion is how the core finds it. guardedRunner embeds contract.Runner,
+// an interface, so only that method set is promoted: ProbeIndex is dropped
+// on the floor, and the runner disappears from the detect sweep with no
+// error anywhere -- which is how ladygraph, the first supervised runner that
+// also probes, silently reported no index for a graph it was holding. The
+// alternative, giving guardedRunner a ProbeIndex of its own, is worse: it
+// would make every guarded runner satisfy IndexProber, dragging in the ones
+// that opted out deliberately (serena's own comment explains why it must
+// not answer this). Deciding at construction keeps both truths.
+type guardedProber struct {
+	guardedRunner
+	prober contract.IndexProber
+}
+
+// ProbeIndex brackets the probe exactly as Run brackets a call. A probe is a
+// question for the far side like any other: on an on_demand process it is
+// usually the first thing to wake it, and without Acquire/Release the idle
+// reaper is free to stop the server mid-probe and turn "is there an index"
+// into "the provider is down".
+func (g guardedProber) ProbeIndex(ctx context.Context, root string) (bool, string, error) {
+	// Only the path is known here. That is enough for every provider this
+	// can reach today: a probing runner under the shared policy ignores the
+	// repository entirely, and the one per_repository provider does not
+	// implement IndexProber. A per_repository prober added later would need
+	// the id, and would get an unknown-instance failure from EnsureReady
+	// rather than a wrong answer.
+	id := g.instanceID(contract.Repository{Path: root})
+	if _, err := g.procs.EnsureReady(ctx, id); err != nil {
+		return false, "", guardFailure(err, ctx, id)
+	}
+	g.procs.Acquire(id)
+	defer g.procs.Release(id)
+	return g.prober.ProbeIndex(ctx, root)
+}
+
+// guard wraps runner so the supervisor brackets every call, preserving
+// contract.IndexProber when the runner answers it.
+func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func(contract.Repository) string) contract.Runner {
+	guarded := guardedRunner{Runner: runner, procs: procs, instanceID: instanceID}
+	if prober, ok := runner.(contract.IndexProber); ok {
+		return guardedProber{guardedRunner: guarded, prober: prober}
+	}
+	return guarded
+}
+
 // guardFailure sorts an EnsureReady error into the shared bins, mirroring
 // each adapter's own failureFor: whatever the supervisor says, the core only
 // ever sees one of the six, with the untranslated text kept beside it.
@@ -62,6 +111,13 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	var specs []supervisor.Spec
 	if p := cfg.Orchestrator.Serena.Process; p != nil {
 		specs = append(specs, serenaSpecs(*p, cfg.Repositories)...)
+	}
+	if p := cfg.Orchestrator.Ladygraph.Process; p != nil {
+		added, err := ladygraphSpecs(cfg.Source, *p)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, added...)
 	}
 	if len(specs) == 0 {
 		return nil, nil
@@ -123,6 +179,46 @@ func serenaSpec(id string, p config.ManagedProcess, args []string) supervisor.Sp
 		Lifecycle:    p.Lifecycle,
 		Port:         p.Port,
 		EndpointPath: "/mcp",
+		RestartLimit: p.RestartLimit,
+		RestartDelay: p.RestartDelay,
+		StableAfter:  p.StableAfter,
+		ReadyTimeout: p.ReadyTimeout,
+		IdleTimeout:  p.IdleTimeout,
+		StopGrace:    p.StopGrace,
+	}
+}
+
+// ladygraphSpecs turns the settings file's ladygraph declaration into the
+// one supervisor.Spec it launches. Unlike Serena there is only ever one:
+// the graph is one global corpus, published by atomic generation and read
+// by every repository alike (see the adapter's own package doc comment),
+// so per_repository has no meaning here and is refused loudly rather than
+// silently collapsed into the one shared server a caller might not have
+// meant.
+func ladygraphSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
+	if p.Instance == config.InstancePerRepository {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.ladygraph.process.instance is %q, but ladygraph publishes one global "+
+				"graph -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
+	}
+	return []supervisor.Spec{ladygraphSpec(config.RunnerLadygraph, p)}, nil
+}
+
+// ladygraphSpec turns the settings file's declaration into what the
+// supervisor package needs to launch and watch it. Transport is
+// TransportStdio, and Host, Port and EndpointPath are left zero: a stdio
+// server listens on nothing, and the supervisor package itself refuses a
+// spec that sets any of them rather than silently ignoring a likely config
+// mistake -- the same discipline serenaSpec applies to EndpointPath by
+// hand, just enforced one layer further in for this transport.
+func ladygraphSpec(id string, p config.ManagedProcess) supervisor.Spec {
+	return supervisor.Spec{
+		ID:           id,
+		Transport:    supervisor.TransportStdio,
+		Command:      p.Command,
+		Args:         p.Args,
+		Env:          p.Env,
+		Lifecycle:    p.Lifecycle,
 		RestartLimit: p.RestartLimit,
 		RestartDelay: p.RestartDelay,
 		StableAfter:  p.StableAfter,

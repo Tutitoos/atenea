@@ -40,7 +40,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.impact", "code.search", "repository.index", "symbol.calls", "symbol.definition", "symbol.implementations", "symbol.overview", "symbol.references"}
+	wantIDs := []string{"code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -91,6 +91,10 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codebase-memory.impact",
 		"codebase-memory.index",
 		"codebase-memory.overview",
+		"ladygraph.cross_repo_consumers",
+		"ladygraph.get",
+		"ladygraph.status",
+		"ladygraph.unresolved_references",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",

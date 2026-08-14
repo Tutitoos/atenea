@@ -290,6 +290,7 @@ type Orchestrator struct {
 	ClaudeCode     ClaudeCodeAdapter
 	Serena         SerenaAdapter
 	CodebaseMemory CodebaseMemoryAdapter
+	Ladygraph      LadygraphAdapter
 }
 
 // Model fixes which model backs each of the two model-backed built-in
@@ -467,6 +468,30 @@ type SerenaAdapter struct {
 	Process *ManagedProcess
 }
 
+// LadygraphAdapter configures the Ladygraph adapter.
+//
+// Ladygraph is the second far side that is not a CLI, but unlike Serena it
+// is never anything else: there is no proxy to point at and no externally
+// managed instance to assume is already running, so this struct has no
+// Endpoint field. The child is a persistent stdio-MCP server Atenea itself
+// spawns and supervises over its own stdin/stdout -- see Process below and
+// supervisor.TransportStdio -- and a process reached by talking to its own
+// stdin has no URL for an Endpoint to name, or to fall back to once Process
+// is unset.
+type LadygraphAdapter struct {
+	// Implementations the adapter answers for.
+	Implementations []string
+	// Timeout caps one call. It sits at Serena's and codebase-memory's own
+	// ceiling: opening a graph database cold is slow long before it is
+	// stuck.
+	Timeout time.Duration
+	// Process launches and supervises the ladygraph server itself, over a
+	// stdio transport rather than the http one Serena's Process uses.
+	// Unlike Serena, this is not optional: with no Endpoint to fall back to,
+	// a nil Process leaves the adapter with no child to talk to at all.
+	Process *ManagedProcess
+}
+
 // CodebaseMemoryAdapter configures the codebase-memory-mcp adapter.
 //
 // Unlike Serena, this far side needs no Process block: codebase-memory-mcp
@@ -560,13 +585,15 @@ func DefaultLocalAgents() LocalAgents {
 	}
 }
 
-// RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory and
-// RunnerLocal are the values orchestrator.runners accepts.
+// RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory,
+// RunnerLadygraph and RunnerLocal are the values orchestrator.runners
+// accepts.
 const (
 	RunnerOMP            = "omp"
 	RunnerClaudeCode     = "claudecode"
 	RunnerSerena         = "serena"
 	RunnerCodebaseMemory = "codebasememory"
+	RunnerLadygraph      = "ladygraph"
 	RunnerLocal          = "local"
 )
 
@@ -768,6 +795,7 @@ type fileOrchestrator struct {
 	ClaudeCode     fileClaudeCodeAdapter     `toml:"claudecode"`
 	Serena         fileSerenaAdapter         `toml:"serena"`
 	CodebaseMemory fileCodebaseMemoryAdapter `toml:"codebasememory"`
+	Ladygraph      fileLadygraphAdapter      `toml:"ladygraph"`
 }
 
 type fileLocalRunner struct {
@@ -802,6 +830,17 @@ type fileClaudeCodeAdapter struct {
 
 type fileSerenaAdapter struct {
 	Endpoint        string              `toml:"endpoint"`
+	Implementations *[]string           `toml:"implementations"`
+	Timeout         string              `toml:"timeout"`
+	Process         *fileManagedProcess `toml:"process"`
+}
+
+// fileLadygraphAdapter is the TOML shape of LadygraphAdapter. It reuses
+// fileManagedProcess for its own .process table: the shape a supervised
+// server takes in the settings file does not depend on which transport it
+// talks over, only fileManagedProcess.build's caller does (see the section
+// parameter it takes below).
+type fileLadygraphAdapter struct {
 	Implementations *[]string           `toml:"implementations"`
 	Timeout         string              `toml:"timeout"`
 	Process         *fileManagedProcess `toml:"process"`
@@ -1303,6 +1342,28 @@ var defaultSensitive = []string{
 // able to tell them apart.
 var defaultClaudeImplementations = []string{"claude.search"}
 
+// ladygraphDefaultTimeout and ladygraphDefaultImplementations mirror what
+// internal/adapter/ladygraph's own DefaultTimeout and DefaultImplementations
+// would say -- the same pattern serena.DefaultImplementations() and
+// codebasememory.DefaultImplementations() already follow above. They are
+// declared locally instead of imported because internal/adapter/ladygraph
+// does not exist in this tree yet (it lands in a separate, concurrent
+// change); importing a package that is not there would not compile, and
+// importing it the moment it lands could just as easily cycle back through
+// config the way internal/agent/model's own Options comment above warns
+// about. Once the adapter package exists, replace these three lines with an
+// import and a call, matching serena and codebasememory exactly.
+const ladygraphDefaultTimeout = 90 * time.Second
+
+func ladygraphDefaultImplementations() []string {
+	return []string{
+		"ladygraph.cross_repo_consumers",
+		"ladygraph.get",
+		"ladygraph.unresolved_references",
+		"ladygraph.status",
+	}
+}
+
 // contractRemedy names the edit that fixes a refused settings file, because
 // the two numbers alone do not say which of them is meant to move.
 //
@@ -1349,6 +1410,10 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Binary:          codebasememory.DefaultBinary,
 			Implementations: codebasememory.DefaultImplementations(),
 			Timeout:         codebasememory.DefaultTimeout,
+		},
+		Ladygraph: LadygraphAdapter{
+			Implementations: ladygraphDefaultImplementations(),
+			Timeout:         ladygraphDefaultTimeout,
 		},
 	}
 	if o.MaxParallel != nil {
@@ -1410,11 +1475,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLocal:
+			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLadygraph, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s",
-					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLocal)
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLadygraph, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -1460,6 +1525,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.CodebaseMemory = memory
+	graph, err := o.Ladygraph.build(source, out.Ladygraph)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Ladygraph = graph
 	return out, nil
 }
 
@@ -1673,7 +1743,7 @@ func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapte
 		out.Timeout = timeout
 	}
 	if s.Process != nil {
-		process, err := s.Process.build(source)
+		process, err := s.Process.build(source, "orchestrator.serena.process")
 		if err != nil {
 			return SerenaAdapter{}, err
 		}
@@ -1682,10 +1752,47 @@ func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapte
 	return out, nil
 }
 
-func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
+// build is additive over the passed-in defaults, never zeroing: an omitted
+// key keeps whatever the caller already put in out (the compiled-in
+// defaults), the same shape every other adapter's build follows. Unlike
+// fileSerenaAdapter.build there is no Endpoint branch: LadygraphAdapter has
+// no such field, so there is nothing here to leave alone.
+func (l fileLadygraphAdapter) build(source string, out LadygraphAdapter) (LadygraphAdapter, error) {
+	if l.Implementations != nil {
+		out.Implementations = *l.Implementations
+	}
+	if l.Timeout != "" {
+		timeout, err := time.ParseDuration(l.Timeout)
+		if err != nil {
+			return LadygraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.ladygraph.timeout %q: %v", source, l.Timeout, err)
+		}
+		if timeout <= 0 {
+			return LadygraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.ladygraph.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	if l.Process != nil {
+		process, err := l.Process.build(source, "orchestrator.ladygraph.process")
+		if err != nil {
+			return LadygraphAdapter{}, err
+		}
+		out.Process = &process
+	}
+	return out, nil
+}
+
+// build turns the file shape of a process table into a ManagedProcess.
+// section is the settings key path this table lives at (e.g.
+// "orchestrator.serena.process"), used to name it in every error below --
+// this one function backs every supervised-process table in the file, and a
+// serena-shaped error naming ladygraph's own mistake would send the reader
+// to the wrong block.
+func (p fileManagedProcess) build(source, section string) (ManagedProcess, error) {
 	if strings.TrimSpace(p.Command) == "" {
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.command is required once the process table is present", source)
+			"settings %s: %s.command is required once the process table is present", source, section)
 	}
 	out := ManagedProcess{
 		Command: strings.TrimSpace(p.Command),
@@ -1705,8 +1812,8 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		out.Lifecycle = supervisor.Lifecycle(p.Lifecycle)
 	default:
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.lifecycle must be %q or %q, got %q",
-			source, supervisor.Persistent, supervisor.OnDemand, p.Lifecycle)
+			"settings %s: %s.lifecycle must be %q or %q, got %q",
+			source, section, supervisor.Persistent, supervisor.OnDemand, p.Lifecycle)
 	}
 	// idle_timeout describes the idle reaper, and the reaper skips persistent
 	// servers by definition, so the two keys together are a contradiction
@@ -1716,13 +1823,13 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 	// read anywhere, which is the only reason it is refused and they are not.
 	if out.Lifecycle == supervisor.Persistent && strings.TrimSpace(p.IdleTimeout) != "" {
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.idle_timeout has no meaning for a %q server: only %q servers are stopped when idle",
-			source, supervisor.Persistent, supervisor.OnDemand)
+			"settings %s: %s.idle_timeout has no meaning for a %q server: only %q servers are stopped when idle",
+			source, section, supervisor.Persistent, supervisor.OnDemand)
 	}
 	if p.Port != nil {
 		if *p.Port < 0 || *p.Port > 65535 {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.process.port must be between 0 and 65535, got %d", source, *p.Port)
+				"settings %s: %s.port must be between 0 and 65535, got %d", source, section, *p.Port)
 		}
 		out.Port = *p.Port
 	}
@@ -1733,8 +1840,8 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		out.Instance = Instance(strings.TrimSpace(p.Instance))
 	default:
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.instance must be %q or %q, got %q",
-			source, InstanceShared, InstancePerRepository, p.Instance)
+			"settings %s: %s.instance must be %q or %q, got %q",
+			source, section, InstanceShared, InstancePerRepository, p.Instance)
 	}
 	// The three rules below are all one rule seen from three sides: a
 	// per-repository declaration has to be able to produce servers that
@@ -1748,9 +1855,9 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		// itself -- N processes doing one process's work, and no error
 		// anywhere to say so.
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.instance = %q needs %s in args: "+
+			"settings %s: %s.instance = %q needs %s in args: "+
 				"without it every repository would start the same server",
-			source, InstancePerRepository, ProjectPlaceholder)
+			source, section, InstancePerRepository, ProjectPlaceholder)
 	case out.Instance == InstanceShared && hasProject:
 		// The mirror image: a placeholder with nothing to substitute would
 		// reach the command line verbatim, and the server would be asked to
@@ -1765,14 +1872,14 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		// use. Zero is not merely the better default here, it is the only
 		// answer that works.
 		return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.serena.process.port cannot be fixed with instance = %q: "+
+			"settings %s: %s.port cannot be fixed with instance = %q: "+
 				"each repository needs its own port, so leave it unset and Atenea picks them",
-			source, InstancePerRepository)
+			source, section, InstancePerRepository)
 	}
 	if p.RestartLimit != nil {
 		if *p.RestartLimit < 0 {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.process.restart_limit must not be negative, got %d", source, *p.RestartLimit)
+				"settings %s: %s.restart_limit must not be negative, got %d", source, section, *p.RestartLimit)
 		}
 		out.RestartLimit = *p.RestartLimit
 	}
@@ -1793,11 +1900,11 @@ func (p fileManagedProcess) build(source string) (ManagedProcess, error) {
 		dur, err := time.ParseDuration(d.raw)
 		if err != nil {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.process.%s %q: %v", source, d.key, d.raw, err)
+				"settings %s: %s.%s %q: %v", source, section, d.key, d.raw, err)
 		}
 		if dur <= 0 {
 			return ManagedProcess{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.process.%s must be above 0, got %s", source, d.key, dur)
+				"settings %s: %s.%s must be above 0, got %s", source, section, d.key, dur)
 		}
 		*d.field = dur
 	}

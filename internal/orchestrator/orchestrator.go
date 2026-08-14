@@ -127,6 +127,20 @@ const (
 // be asked for even when everything below it is ready to answer.
 const repositoryIndexCapability = "repository.index"
 
+// The four Ladygraph answers. Named here for the reason stated above and for
+// no other: none of them is planned into a commission either. Three read one
+// symbol's cross-repository consumers, its identity by stable key, and the
+// references that resolved to nothing; the fourth reports the published
+// graph itself. A provider can be declared, attached, holding a ready index
+// and answering on the wire, and still be unreachable if this list does not
+// name it -- which is how it read from the outside the first time.
+const (
+	consumersCapability   = "symbol.consumers"
+	symbolGetCapability   = "symbol.get"
+	unresolvedCapability  = "symbol.unresolved"
+	graphStatusCapability = "graph.status"
+)
+
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
 const probeContextLines = 0
@@ -194,6 +208,10 @@ var card = contract.Agent{
 		callsCapability,
 		impactCapability,
 		repositoryIndexCapability,
+		consumersCapability,
+		symbolGetCapability,
+		unresolvedCapability,
+		graphStatusCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,

@@ -34,6 +34,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Tutitoos/atenea/internal/mcpstdio"
 )
 
 // Lifecycle decides who may stop a server once it is up.
@@ -46,6 +48,23 @@ const (
 	// OnDemand servers start lazily on first use and are stopped by the
 	// idle reaper once nothing has been in flight for IdleTimeout.
 	OnDemand Lifecycle = "on_demand"
+)
+
+// Transport is how a server this package started is reached once it is up.
+type Transport string
+
+const (
+	// TransportHTTP is streamable-HTTP: the server listens on Host:Port and
+	// speaks the wire format internal/adapter/serena/mcp.go and this
+	// package's own probe already speak. It is the zero value, so every
+	// Spec written before stdio existed keeps behaving exactly as it did.
+	TransportHTTP Transport = "http"
+	// TransportStdio is JSON-RPC over the child's own stdin and stdout, the
+	// way internal/mcpstdio and internal/passthrough already speak it. A
+	// stdio server listens on nothing: Host, Port and EndpointPath are
+	// meaningless for it, and withDefaults rejects a spec that sets any of
+	// them rather than silently ignoring a likely config mistake.
+	TransportStdio Transport = "stdio"
 )
 
 // The defaults every zero-valued Spec field falls back to. They live here
@@ -121,6 +140,10 @@ type Spec struct {
 	// than silently guessing which of the two very different behaviors --
 	// always warm, or stopped when idle -- was meant.
 	Lifecycle Lifecycle
+	// Transport is how id is reached once it is up. The zero value is
+	// TransportHTTP, so a Spec written before stdio existed keeps its
+	// current meaning untouched.
+	Transport Transport
 	// Host and Port are where the server listens. Port zero asks the OS for
 	// a free one, chosen once in New and then fixed for the life of the
 	// Supervisor: the endpoint an adapter is built with must never go stale
@@ -176,8 +199,23 @@ func (s Spec) withDefaults() (Spec, error) {
 		return Spec{}, fmt.Errorf("supervisor: spec %q restart limit must not be negative, got %d",
 			s.ID, s.RestartLimit)
 	}
-	if s.Host == "" {
-		s.Host = defaultHost
+	if s.Transport == "" {
+		s.Transport = TransportHTTP
+	}
+	switch s.Transport {
+	case TransportHTTP:
+		if s.Host == "" {
+			s.Host = defaultHost
+		}
+	case TransportStdio:
+		if s.Host != "" || s.Port != 0 || s.EndpointPath != "" {
+			return Spec{}, fmt.Errorf(
+				"supervisor: spec %q is stdio and also sets host, port or endpoint_path: a stdio server listens on nothing, so this is almost certainly a config mistake and not something to honor silently",
+				s.ID)
+		}
+	default:
+		return Spec{}, fmt.Errorf("supervisor: spec %q transport must be %q or %q, got %q",
+			s.ID, TransportHTTP, TransportStdio, s.Transport)
 	}
 	if s.IdleTimeout <= 0 {
 		s.IdleTimeout = DefaultIdleTimeout
@@ -277,11 +315,13 @@ func New(specs ...Spec) (*Supervisor, error) {
 		if _, dup := s.procs[built.ID]; dup {
 			return nil, fmt.Errorf("supervisor: spec %q is registered twice", built.ID)
 		}
-		port, err := choosePort(built.Host, built.Port)
-		if err != nil {
-			return nil, fmt.Errorf("supervisor: spec %q: %w", built.ID, err)
+		if built.Transport == TransportHTTP {
+			port, err := choosePort(built.Host, built.Port)
+			if err != nil {
+				return nil, fmt.Errorf("supervisor: spec %q: %w", built.ID, err)
+			}
+			built.Port = port
 		}
-		built.Port = port
 		s.procs[built.ID] = newProcess(built)
 		s.order = append(s.order, built.ID)
 	}
@@ -299,11 +339,17 @@ func (s *Supervisor) find(id string) (*process, error) {
 }
 
 // Endpoint returns the URL id will listen on, without starting it. The value
-// never changes after New: the port was chosen there.
+// never changes after New: the port was chosen there. It only means
+// anything for an http server; a stdio server has no URL to give, and
+// asking for one here fails loudly rather than handing back "" as if it
+// were a real answer -- see Session for the stdio counterpart.
 func (s *Supervisor) Endpoint(id string) (string, error) {
 	p, err := s.find(id)
 	if err != nil {
 		return "", err
+	}
+	if p.spec.Transport != TransportHTTP {
+		return "", fmt.Errorf("supervisor: %q is a %s server: it has no endpoint URL, use Session instead", id, p.spec.Transport)
 	}
 	return p.endpoint, nil
 }
@@ -317,6 +363,17 @@ func (s *Supervisor) EnsureReady(ctx context.Context, id string) (string, error)
 		return "", err
 	}
 	return p.ensureReady(ctx)
+}
+
+// Session returns the live mcpstdio session for id, the stdio counterpart
+// of Endpoint: usable once EnsureReady has returned successfully for a
+// stdio spec, and never again once that activation's child is gone.
+func (s *Supervisor) Session(id string) (*mcpstdio.Session, error) {
+	p, err := s.find(id)
+	if err != nil {
+		return nil, err
+	}
+	return p.liveSession()
 }
 
 // Acquire and Release bracket one call against id, so the idle reaper never

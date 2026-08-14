@@ -19,11 +19,13 @@ func newTestProcess(t *testing.T, spec Spec) *process {
 	if err != nil {
 		t.Fatalf("withDefaults: %v", err)
 	}
-	port, err := choosePort(built.Host, built.Port)
-	if err != nil {
-		t.Fatalf("choosePort: %v", err)
+	if built.Transport == TransportHTTP {
+		port, err := choosePort(built.Host, built.Port)
+		if err != nil {
+			t.Fatalf("choosePort: %v", err)
+		}
+		built.Port = port
 	}
-	built.Port = port
 	p := newProcess(built)
 	t.Cleanup(p.stop)
 	return p

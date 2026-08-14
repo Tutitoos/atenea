@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/internal/procgroup"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // process is one server's whole lifecycle: at most one activation running at
@@ -49,15 +51,22 @@ type process struct {
 	// out from under a goroutine that is, by construction, always gone by
 	// the time a new one could replace it.
 	stopCh chan struct{}
+	// session is the live mcpstdio session for a stdio activation's child,
+	// replaced on every restart under mu so no caller can be handed one
+	// whose process has already exited. Always nil for an http spec.
+	session *mcpstdio.Session
 }
 
 func newProcess(spec Spec) *process {
-	return &process{
+	p := &process{
 		spec:     spec,
-		endpoint: fmt.Sprintf("http://%s:%d%s", spec.Host, spec.Port, spec.EndpointPath),
 		state:    StateStopped,
 		lastUsed: time.Now(),
 	}
+	if spec.Transport == TransportHTTP {
+		p.endpoint = fmt.Sprintf("http://%s:%d%s", spec.Host, spec.Port, spec.EndpointPath)
+	}
+	return p
 }
 
 // ensureReady starts the process if it is idle and blocks until it answers
@@ -183,6 +192,28 @@ func (p *process) status() Status {
 	}
 }
 
+// liveSession returns the current activation's mcpstdio session -- the
+// stdio counterpart of the endpoint field an http spec already carries.
+// Every reason a caller cannot use it collapses to the one bin a caller
+// backing off on error needs, rather than three different ones to
+// distinguish: never a stdio spec, not ready yet, and a session whose child
+// has already died all mean the same thing to whoever asked.
+func (p *process) liveSession() (*mcpstdio.Session, error) {
+	if p.spec.Transport != TransportStdio {
+		return nil, contract.Fail(contract.FailureUnavailable, "%s is not a stdio server", p.spec.ID)
+	}
+	p.mu.Lock()
+	state, session := p.state, p.session
+	p.mu.Unlock()
+	if state != StateReady || session == nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "%s is not ready", p.spec.ID)
+	}
+	if err := session.Err(); err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "%s session died: %v", p.spec.ID, err)
+	}
+	return session, nil
+}
+
 // run drives one activation from its first spawn to the moment nothing is
 // left running: a deliberate stop, or the restart budget running out. It is
 // the only goroutine that ever moves this process between Starting,
@@ -245,10 +276,12 @@ type spawnResult struct {
 }
 
 // spawnOnce launches one child and carries it from Start through either a
-// deliberate stop or its own exit, whichever comes first. The child's own
-// stdout and stderr are captured throughout, so a failure that happens
-// before ready and one that happens hours into a long run both get to leave
-// a reason behind.
+// deliberate stop or its own exit, whichever comes first. stderr is
+// captured throughout for both transports, so a failure that happens
+// before ready and one that happens hours into a long run both get to
+// leave a reason behind. stdout joins it only for an http child; for a
+// stdio child stdout is the protocol itself, read instead by the session
+// this function stores on p for Supervisor.Session to hand out.
 func (p *process) spawnOnce(stopCh chan struct{}) spawnResult {
 	args := withPort(p.spec.Args, p.spec.Port)
 	cmd := exec.Command(p.spec.Command, args...)
@@ -264,8 +297,25 @@ func (p *process) spawnOnce(stopCh chan struct{}) spawnResult {
 	// or the deadline below instead, on this package's own timers.
 	procgroup.Isolate(cmd)
 	out := newRing(outputLimit)
-	cmd.Stdout = out
 	cmd.Stderr = out
+
+	var session *mcpstdio.Session
+	if p.spec.Transport == TransportStdio {
+		// A stdio child's stdout is the protocol, not diagnostics -- it
+		// must never join stderr in out the way an http child's does, or
+		// mcpstdio and this ring would each read half of every frame.
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return spawnResult{err: fmt.Errorf("starting: %w", err)}
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return spawnResult{err: fmt.Errorf("starting: %w", err)}
+		}
+		session = mcpstdio.New(stdin, stdout, mcpstdio.Options{})
+	} else {
+		cmd.Stdout = out
+	}
 
 	if err := cmd.Start(); err != nil {
 		return spawnResult{err: fmt.Errorf("starting: %w", err)}
@@ -273,12 +323,20 @@ func (p *process) spawnOnce(stopCh chan struct{}) spawnResult {
 	p.mu.Lock()
 	p.pid = cmd.Process.Pid
 	p.started = time.Now()
+	// The previous activation's child is provably gone by the time a new
+	// one starts -- run only calls spawnOnce again after the last call
+	// already returned -- so its session is retired here rather than left
+	// for some caller to discover the hard way mid-call.
+	if p.session != nil {
+		_ = p.session.Close()
+	}
+	p.session = session
 	p.mu.Unlock()
 
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
-	outcome, err := p.waitForReady(cmd, exited, stopCh)
+	outcome, err := p.waitForReady(cmd, exited, stopCh, session)
 	switch outcome {
 	case readyStopRequested:
 		return spawnResult{deliberate: true}
@@ -309,15 +367,19 @@ const (
 	readyStopRequested
 )
 
-// waitForReady blocks until the probe confirms readiness, the process exits
-// on its own, ready_timeout elapses, or stop fires.
+// waitForReady blocks until the server confirms readiness, the process
+// exits on its own, ready_timeout elapses, or stop fires. What "confirms
+// readiness" means depends on session: nil means an http spec, and this
+// probes the endpoint exactly as before stdio existed; non-nil means a
+// stdio spec, and this drives the MCP handshake on it instead, since a
+// stdio child owns no address for a probe to point at.
 //
 // Every outcome except readyReached leaves exited already drained: on the
 // two paths that end without the server ever answering, this function is the
 // one that either received the exit itself or killed the child and then
 // waited for it. spawnOnce only reads exited again after a readyReached,
 // where this function deliberately left it alone.
-func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan struct{}) (readyOutcome, error) {
+func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan struct{}, session *mcpstdio.Session) (readyOutcome, error) {
 	deadline := time.Now().Add(p.spec.ReadyTimeout)
 	ticker := time.NewTicker(probeEvery)
 	defer ticker.Stop()
@@ -326,14 +388,16 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 		case err := <-exited:
 			return readyNeverCame, fmt.Errorf("exited before answering ready: %w", err)
 		case <-stopCh:
-			// Never reached ready: there is no session to close politely,
-			// so this goes straight to the hard stop rather than through
-			// gracefulStop's SIGTERM-then-wait.
+			// Never reached ready: there is nothing negotiated yet worth
+			// ending politely, so this goes straight to the hard stop
+			// rather than through gracefulStop's SIGTERM-then-wait. A
+			// stdio session dies on its own once its child is killed: its
+			// stdout closes, which is what the read loop is waiting on.
 			_ = procgroup.Kill(cmd)
 			<-exited
 			return readyStopRequested, nil
 		case <-ticker.C:
-			if perr := probeReady(context.Background(), p.spec.HTTP, p.endpoint); perr == nil {
+			if p.readyNow(session) {
 				return readyReached, nil
 			}
 			if time.Now().After(deadline) {
@@ -343,6 +407,22 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 			}
 		}
 	}
+}
+
+// readyNow asks, once, whether this attempt is ready. A nil session is an
+// http spec and this is byte-for-byte the probe waitForReady always made;
+// a non-nil session is a stdio spec, and initialize succeeding is the only
+// thing "ready" can mean when there is no address to ask instead. Bounded
+// to one tick rather than the whole ready_timeout so a child that accepts
+// the handshake but never answers it does not itself starve waitForReady's
+// own ability to notice stopCh or ready_timeout in the meantime.
+func (p *process) readyNow(session *mcpstdio.Session) bool {
+	if session != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), probeEvery)
+		defer cancel()
+		return session.Initialize(ctx) == nil
+	}
+	return probeReady(context.Background(), p.spec.HTTP, p.endpoint) == nil
 }
 
 // gracefulStop asks a ready server to leave the polite way: SIGTERM to the

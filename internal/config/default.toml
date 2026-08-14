@@ -228,6 +228,44 @@ runners = ["omp"]
   # cold one is slow long before it is stuck.
   timeout = "90s"
 
+  [orchestrator.ladygraph]
+  # No `binary` and no `repository.index`: Atenea never builds this graph, only
+  # reads it. index_project / `ladygraph index` stay out of the funnel entirely
+  # (an auditor does not rebuild what it audits). The graph is built by hand with
+  # `ladygraph init` + `ladygraph index --full` before this is useful.
+  implementations = [
+    "ladygraph.cross_repo_consumers",
+    "ladygraph.get",
+    "ladygraph.unresolved_references",
+    "ladygraph.status",
+  ]
+  timeout = "90s"             # opens a graph db cold, same class as serena/codebase-memory
+
+    # [orchestrator.ladygraph.process]
+    # Uncomment to have Atenea launch and supervise the ladygraph server
+    # itself, the same way [orchestrator.serena.process] above does but over
+    # a stdio transport instead of http: Spec.Transport = stdio carries this
+    # over the same restart-limit / on_demand / idle-timeout machinery every
+    # http-transport process block already uses. Left commented for the
+    # same reason serena's own process block above is: `command` below is a
+    # path that exists on this machine and no other, and a shipped repo
+    # default must never bake in one operator's filesystem. Uncommenting is
+    # a per-machine decision, not a compiled default.
+    #
+    # Persistent stdio MCP server, one for the machine: the graph is a single
+    # global corpus and readers share it by atomic generation publishing, so a
+    # second copy buys nothing. on_demand so an unused install costs no process.
+    #
+    # command = "/home/tutitoos/.local/opt/ladygraph-eval/v0.5.1/bin/ladygraph"
+    # args = ["serve"]
+    # HOME is load-bearing and MUST be the real one: an isolated/empty HOME makes
+    # `serve` scaffold a fresh EMPTY config and publish an empty graph that
+    # answers nothing, successfully. Absolute, never ~ .
+    # env = ["HOME=/home/tutitoos"]
+    # instance = "shared"
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+
   [orchestrator.local]
   # Implementations the stand-in answers for.
   implementations = ["ripgrep"]
@@ -1044,6 +1082,280 @@ effects = ["write", "process"]
   summary = "How many graph edges the index now holds."
 
 # ---------------------------------------------------------------------------
+# Ladygraph capabilities. Four answers no attached provider gives today.
+#
+# Why Ladygraph does NOT appear under symbol.definition / references /
+# implementations / overview / calls, or code.impact: serena and
+# codebase-memory already answer those, and a second implementation would not
+# add an answer -- it would rank two providers for one the funnel already has,
+# and cost +1,688 tok in every fixed-prefix client's request, forever, for a
+# duplicate. Ladygraph is declared ONLY for what it alone resolves: consumers
+# across repositories (a real edge, not a path-shape match), the stable-key
+# identity retrieval the position-first family cannot do, the graph's own
+# unresolved-reference blind spots, and the published graph's provenance.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "symbol.consumers"
+version = "1.0.0"
+summary = "From a symbol, find who consumes it from other repositories."
+semantics = """
+Resolved cross-repository consumers of one symbol, sorted into exact_symbol, package, \
+candidate and unresolved -- an edge the graph actually resolved, not two files that \
+share a path. Position first, name as a hint, as symbol.references names one; a caller \
+holding only a name asks symbol.definition first. Neither a language server (one \
+repository) nor a path-shape match (a guess) can give this. \
+\
+A package row is not an exact_symbol row read loosely: it proves the consuming \
+repository depends on the provider PACKAGE, never that it uses this symbol, and it \
+carries no path for exactly that reason. Counting it as a use nobody observed is the \
+one mistake this shape invites. \
+\
+Answering from a position costs one extra lookup inside the provider: Ladygraph \
+addresses symbols by a stable key, not by position, so the implementation resolves \
+file/line/column to that key before it can ask the graph anything. That lookup is the \
+provider's own cost, never this capability's -- callers still pay in file and line, \
+the same currency every other position-first capability on this page takes, and never \
+in a key that only this one provider could ever mint.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+  summary = "File holding the symbol, relative to the repository root."
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+  summary = "Line where the symbol appears, starting at 1."
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+  summary = "Column where the symbol starts on that line, starting at 1."
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+  summary = "Hint: the symbol's name, for tie-breaking and for reading the request."
+
+  [[capability.input]]
+  name = "resolution"
+  type = "string"
+  required = false
+  summary = "Narrow to one class: exact_symbol, package, candidate or unresolved. Empty means all four."
+
+  [[capability.output]]
+  name = "consumers"
+  type = "record_list"
+  required = true
+  summary = "Consumers in other repositories, grouped by resolution class."
+
+    [[capability.output.field]]
+    name = "repository"
+    type = "string"
+    required = true
+    summary = "The consuming repository."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = false
+    summary = "File holding the consuming reference, relative to that repository's root. Empty for a package-level consumer, which names a dependency on the package and never a use of the symbol."
+
+    [[capability.output.field]]
+    name = "resolution"
+    type = "string"
+    required = true
+    summary = "How firmly it resolved: exact_symbol, package, candidate or unresolved."
+    enum = ["exact_symbol", "package", "candidate", "unresolved"]
+
+[[capability]]
+id = "symbol.get"
+version = "1.0.0"
+summary = "Return one symbol by its stable key."
+semantics = """
+The identity retrieval the position-first family cannot do: a stable key every \
+Ladygraph answer carries, resolved back to the one symbol it names, so a reference \
+held across an edit that moved its line still points at the same thing. The key is \
+the address; there is no file and no line to pass.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "stable_key"
+  type = "string"
+  required = true
+  summary = "The symbol's stable key, as returned by any other answer. Position-independent."
+
+  [[capability.output]]
+  name = "symbol"
+  type = "record_list"
+  required = true
+  summary = "The one symbol the key names, as a single-row list, or empty if the key is unknown."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File where the symbol is declared, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line of the declaration, starting at 1."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The symbol's own name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "The kind of symbol, in the graph's own vocabulary."
+
+[[capability]]
+id = "symbol.unresolved"
+version = "1.0.0"
+summary = "List the references that resolve to no exact symbol."
+semantics = """
+The graph's blind spots, not its edges: references it recorded but could not tie to a \
+definition. A completeness surface, repository-scoped, for judging how much of an answer \
+to trust before trusting it.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "reason"
+  type = "string"
+  required = false
+  summary = "Narrow to one failure reason, e.g. PACKAGE_PROVIDER_NOT_FOUND. Empty means every reason."
+
+  [[capability.input]]
+  name = "requested_package"
+  type = "string"
+  required = false
+  summary = "Narrow to references that asked for this package."
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Cap the number of rows returned."
+
+  [[capability.output]]
+  name = "unresolved"
+  type = "record_list"
+  required = true
+  summary = "References with no exact target, in the order the provider found them."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the unresolved reference, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "offset"
+    type = "int"
+    required = true
+    summary = "Byte offset of the reference. Ladygraph records no line here, and this declares what it has rather than a line it would have to guess."
+
+    [[capability.output.field]]
+    name = "reason"
+    type = "string"
+    required = true
+    summary = "Why it did not resolve, e.g. PACKAGE_PROVIDER_NOT_FOUND."
+
+    [[capability.output.field]]
+    name = "requested_package"
+    type = "string"
+    required = false
+    summary = "The package the reference asked for, when the reason names one."
+
+[[capability]]
+id = "graph.status"
+version = "1.0.0"
+summary = "Report the published graph: snapshot, provenance, counts and health."
+semantics = """
+The one repository-agnostic capability here, because the graph is one global thing. It \
+reports the published snapshot and where it came from, its counts, and its dependency \
+health. An empty or absent graph is reported AS a fault, never as a graph with zero of \
+everything -- see the implementation note on requires_index below.\
+"""
+effects = ["read"]
+
+  # Deliberately no inputs: the provider's own graph_status tool takes none
+  # -- not even a repository filter -- and reports the whole published graph
+  # every time. The draft here once offered an optional `repository` input;
+  # a live call against the real tool showed it accepts zero arguments
+  # (empty inputSchema, additionalProperties = false), so declaring one would
+  # promise a scope the provider cannot honor.
+
+  [[capability.output]]
+  name = "snapshot"
+  type = "record_list"
+  required = true
+  summary = "The published snapshot's provenance, counts and dependency health."
+
+    [[capability.output.field]]
+    name = "status"
+    type = "string"
+    required = true
+    summary = "\"ready\", or the word the provider gives for why the graph cannot answer."
+
+    [[capability.output.field]]
+    name = "snapshot_id"
+    type = "int"
+    required = true
+    summary = "The published snapshot's own generation number."
+
+    [[capability.output.field]]
+    name = "snapshot_built_at"
+    type = "string"
+    required = true
+    summary = "When this snapshot was built, as the provider reports it."
+
+    [[capability.output.field]]
+    name = "symbols"
+    type = "int"
+    required = true
+    summary = "How many symbols the published snapshot holds."
+
+    [[capability.output.field]]
+    name = "edges"
+    type = "int"
+    required = true
+    summary = "How many resolved edges the published snapshot holds."
+
+    [[capability.output.field]]
+    name = "files"
+    type = "int"
+    required = true
+    summary = "How many files the published snapshot covers."
+
+    [[capability.output.field]]
+    name = "repositories"
+    type = "int"
+    required = true
+    summary = "How many repositories are registered in the published snapshot."
+
+    [[capability.output.field]]
+    name = "unresolved"
+    type = "int"
+    required = true
+    summary = "How many references the snapshot recorded but could not resolve."
+
+# ---------------------------------------------------------------------------
 # Implementations: the "who and how". Four blocks each -- capability,
 # constraints, cost and health.
 #
@@ -1285,6 +1597,79 @@ capability = "repository.index"
   # The answer is three scalars, not a list -- the one implementation here
   # whose token cost barely depends on repository size at all.
   estimated_tokens = 60
+
+# The four ladygraph implementations share one provider and one supervised
+# stdio-MCP process (see [orchestrator.ladygraph] above): one child process,
+# four tools called against it over the same wire, no second index to build.
+#
+# None of the four ships a live measurement yet -- ladygraph is not attached
+# to any shipped runners list, so nothing has ever actually called it through
+# this funnel. Duration below is not a guess: it comes from the provider's
+# own measured SLOs, not this page's usual "nearest shape already shipped"
+# fallback -- docs/performance/slo.md puts find_cross_repo_consumers at
+# p95 <= 5ms, and benchmarks/mcp-client/report.md measures the backend
+# itself at 0.014ms p95, both point queries against a published in-memory
+# snapshot. The estimates below sit in the low tens of milliseconds instead
+# of matching that directly, because they cost the stdio round trip on top
+# -- one write and one read against the child's pipes -- which neither
+# number above includes. Token sizes still follow the usual sizing-by-shape
+# reasoning: a cross-repo edge list, a point lookup, an unresolved scan, and
+# a handful of scalars, in that order. The moment real calls exist,
+# measurement takes over the way it does for every other implementation
+# here.
+
+[[implementation]]
+id = "ladygraph.cross_repo_consumers"
+provider = "ladygraph"
+capability = "symbol.consumers"
+
+  [implementation.constraints]
+  languages = []              # the graph is polyglot; language is the graph's problem, not the funnel's
+  requires_index = true       # empty/absent graph -> detect reports not-indexed -> dropped, not answered empty
+  min_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "20ms"
+  estimated_tokens = 900
+
+[[implementation]]
+id = "ladygraph.get"
+provider = "ladygraph"
+capability = "symbol.get"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "10ms"
+  estimated_tokens = 300
+
+[[implementation]]
+id = "ladygraph.unresolved_references"
+provider = "ladygraph"
+capability = "symbol.unresolved"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "25ms"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "ladygraph.status"
+provider = "ladygraph"
+capability = "graph.status"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true       # graph.status on an empty/absent graph is a fault; requires_index makes it one
+
+  [implementation.cost]
+  estimated_duration = "8ms"
+  estimated_tokens = 200
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

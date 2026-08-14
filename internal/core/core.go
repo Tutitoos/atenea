@@ -18,6 +18,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
+	"github.com/Tutitoos/atenea/internal/adapter/ladygraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/backup"
@@ -27,6 +28,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
+	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
@@ -462,6 +464,8 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 		})
 	case config.RunnerSerena:
 		return buildSerenaRunner(cfg, procs)
+	case config.RunnerLadygraph:
+		return buildLadygraphRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -529,7 +533,36 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 	if managed == nil {
 		return runner, nil
 	}
-	return guardedRunner{Runner: runner, procs: procs, instanceID: instanceID}, nil
+	return guard(runner, procs, instanceID), nil
+}
+
+// buildLadygraphRunner builds the ladygraph adapter. Unlike Serena there is
+// no unmanaged mode to fall back to: a stdio server has no address, only
+// two pipes, so a settings file that names this runner without a Process
+// block has nothing this adapter could ever dial -- refused here rather
+// than reaching Run only to fail on the first call.
+func buildLadygraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	if cfg.Orchestrator.Ladygraph.Process == nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: ladygraph has no process to launch -- a stdio server has no address to dial without one",
+			cfg.Source)
+	}
+	runner, err := ladygraph.New(ladygraph.Options{
+		Implementations: cfg.Orchestrator.Ladygraph.Implementations,
+		Timeout:         cfg.Orchestrator.Ladygraph.Timeout,
+		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
+			return procs.Session(config.RunnerLadygraph)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The declaration is instance = "shared" only (see ladygraphSpecs in
+	// guard.go, which refuses per_repository before a Supervisor is ever
+	// built), so the instance id every call guards against is the one
+	// constant name, never a per-repository lookup the way Serena needs.
+	instanceID := func(contract.Repository) string { return config.RunnerLadygraph }
+	return guard(runner, procs, instanceID), nil
 }
 
 // checkReach refuses two live adapters that both claim the same

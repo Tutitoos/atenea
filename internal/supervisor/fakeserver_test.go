@@ -15,6 +15,7 @@ package supervisor
 // supervisor concern; it is scaffolding for exercising one.
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,6 +31,9 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv("ATENEA_TEST_FAKE_SERVER") == "1" {
 		os.Exit(runFakeServer())
+	}
+	if os.Getenv("ATENEA_TEST_FAKE_STDIO_SERVER") == "1" {
+		os.Exit(runFakeStdioServer())
 	}
 	os.Exit(m.Run())
 }
@@ -101,6 +105,75 @@ func runFakeServer() int {
 	return 0
 }
 
+// runFakeStdioServer is runFakeServer's stdio counterpart: the same
+// self-exec trick, speaking newline-delimited JSON-RPC on stdin and stdout
+// instead of listening on a port, so internal/mcpstdio has a real pipe pair
+// to hold a session open against rather than a fake called in process. It
+// shares exitAfterMillis with the http fake because crashing on a timer is
+// not a transport-specific behavior -- only how a test reaches this server
+// is.
+func runFakeStdioServer() int {
+	if ms := exitAfterMillis(); ms > 0 {
+		code := 1
+		if c := os.Getenv("FAKE_EXIT_CODE"); c != "" {
+			code, _ = strconv.Atoi(c)
+		}
+		time.Sleep(ms)
+		fmt.Fprintf(os.Stderr, "fake-stdio-server: simulated crash (exit %d)\n", code)
+		return code
+	}
+
+	fmt.Fprintln(os.Stderr, "fake-stdio-server: reading stdin")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal([]byte(line), &msg) != nil {
+			continue
+		}
+		if len(msg.ID) == 0 || string(msg.ID) == "null" {
+			continue // a notification: nothing to answer
+		}
+		var answer map[string]any
+		switch msg.Method {
+		case "initialize":
+			answer = map[string]any{
+				"jsonrpc": "2.0", "id": msg.ID,
+				"result": map[string]any{"protocolVersion": protocolVersion},
+			}
+		case "tools/call":
+			// The only tool any test here calls. Answering it for real,
+			// rather than just the handshake, is what proves a session
+			// handed out by Supervisor.Session is actually usable and not
+			// only alive.
+			answer = map[string]any{
+				"jsonrpc": "2.0", "id": msg.ID,
+				"result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "pong"}},
+				},
+			}
+		default:
+			answer = map[string]any{
+				"jsonrpc": "2.0", "id": msg.ID,
+				"error": map[string]any{"code": -32601, "message": "unknown method: " + msg.Method},
+			}
+		}
+		body, err := json.Marshal(answer)
+		if err != nil {
+			continue
+		}
+		_, _ = os.Stdout.Write(append(body, '\n'))
+	}
+	return 0
+}
+
 // exitAfterMillis decides how long this invocation should live before its
 // simulated crash. FAKE_EXIT_AFTER_MS is a single fixed value; a test that
 // needs different behavior across the same process's own restarts instead
@@ -164,6 +237,29 @@ func fakeSpec(id string, lifecycle Lifecycle, env map[string]string) Spec {
 		Env:          kv,
 		Lifecycle:    lifecycle,
 		EndpointPath: "/mcp",
+		ReadyTimeout: 2 * time.Second,
+		RestartDelay: 30 * time.Millisecond,
+		StopGrace:    300 * time.Millisecond,
+		IdleTimeout:  120 * time.Millisecond,
+		RestartLimit: 2,
+	}
+}
+
+// fakeStdioSpec is fakeSpec's stdio counterpart: this same test binary,
+// re-executed to become the small stdio MCP server above instead of the
+// http one. There is no --port and no EndpointPath -- a stdio child listens
+// on nothing, which is the whole fact these tests are exercising.
+func fakeStdioSpec(id string, lifecycle Lifecycle, env map[string]string) Spec {
+	kv := []string{"ATENEA_TEST_FAKE_STDIO_SERVER=1"}
+	for k, v := range env {
+		kv = append(kv, k+"="+v)
+	}
+	return Spec{
+		ID:           id,
+		Command:      os.Args[0],
+		Env:          kv,
+		Lifecycle:    lifecycle,
+		Transport:    TransportStdio,
 		ReadyTimeout: 2 * time.Second,
 		RestartDelay: 30 * time.Millisecond,
 		StopGrace:    300 * time.Millisecond,

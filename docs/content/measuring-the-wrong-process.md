@@ -1001,6 +1001,69 @@ not reached. The mechanism was never the thing that was broken. The number
 underneath it was, and nothing in the pipeline had ever compared that number to
 what a turn actually costs.
 
+## A sixteenth instrument: four fixtures that encoded the belief and then confirmed it
+
+Measured on 2026-08-14, building the Ladygraph provider into Atenea: a stdio-MCP
+transport, an adapter, four capabilities, and a unit-test suite written alongside
+all three. Every package was green. `go test ./... -race` passed. Then the thing
+was pointed at the real server for the first time and four defects fell out in a
+row, three of which had a passing test sitting directly on top of them.
+
+They are worth listing plainly, because the mechanism is identical each time and
+the surface is different each time:
+
+1. **`core.guardedRunner` swallowed an optional interface.** It embeds
+   `contract.Runner` — an interface, so only that method set is promoted.
+   `contract.IndexProber` is optional and found by type assertion, and the
+   assertion fails on the wrapper. Ladygraph is the first supervised runner that
+   also probes, so it reported no index for a graph it was holding, with no error
+   anywhere. The tests for the adapter's own `ProbeIndex` all passed: they called
+   it directly, which is the one path production never takes.
+2. **A capability the orchestrator's card does not name cannot be dispatched.**
+   Declared in the catalog, chosen by the funnel, answered by a live runner, and
+   still refused with `agent orchestrator may not ask for graph.status` — a gate
+   the CHANGELOG records hitting once before, for `symbol.calls`.
+3. **The `NOT_FOUND` reclassification was unreachable.** The transport bins every
+   tool refusal as `FailureInvalidInput`, correctly — it must not learn one
+   provider's vocabulary. The adapter's `failureFor` short-circuited on
+   `errors.As` before its own rule ran, and the tool-name prefix meant the code
+   was not the first colon-separated segment either. Its unit test constructed a
+   bare `SYMBOL_NOT_FOUND: …` error by hand and passed.
+4. **`get_file_outline` returns an object, not a list.** Its declarations hang
+   off `results.symbols`, alone among these tools. The fixture said `"results":
+   [ … ]`, the decoder was written to match the fixture, and the package stayed
+   green while every live outline call failed with `cannot unmarshal object into
+   Go struct field`.
+
+Three of the four passed their unit tests because each test asserted against the
+design, and the design was wrong in a way only the real server could say. That is
+the sharpest version of this week's pattern: **the fixture that encodes your
+belief and then confirms it.** A mock is not a cheap copy of the far side; it is
+a written record of what you currently think the far side does, and a test built
+on one measures the consistency of your beliefs, never their accuracy. It cannot
+fail for the only reason that matters, and it reports that inability as a pass.
+
+What separates this from the rest of the page is where the deception sits. The
+earlier instruments produced a *reading* about the wrong process — a pid, a file,
+a column, a client name. Here the instrument produced no reading at all. It
+produced **agreement**, which is worse, because agreement is what a test is for
+and there is no anomalous number to notice. Nineteen adapter tests, 1,769 across
+the tree, all green, describing an integration that could not complete a single
+call.
+
+The corrective is not more tests. It is one call to the real thing before the
+fixtures are written down: five minutes of a JSON-RPC driver over
+`ladygraph serve`'s stdin printed the exact envelopes, and every one of the four
+would have been impossible to write. The fixtures that shipped were rewritten
+from those payloads afterwards, which is the same work in the correct order. The
+ordering is the whole finding — the shapes were measurable at any point, and were
+measured only after the code had been built against a guess about them.
+
+There is one honest defence of the suite. Once the shapes were right, those same
+tests held the corrections in place and caught two regressions during the fix.
+A fixture is a fine way to *keep* behaviour that has been observed. It is not a
+way to *learn* it, and the failure here was using it for the second.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1197,6 +1260,20 @@ what a turn actually costs.
     make them survivable could not fire inside them. Nothing in the chain asked
     the only question that mattered, which is whether the limit is larger than
     the smallest thing it can permit.
+
+21. **A fixture is a record of your belief, not a copy of the far side.** A test
+    built on one cannot fail for the only reason that matters, and it reports
+    that inability as a pass. Building a provider on 2026-08-14 produced four
+    integration defects in a row, three of them sitting under a green test: an
+    optional interface silently dropped by a wrapper, a decoder written to match
+    a hand-typed envelope the server never sends, an error rule made unreachable
+    by a prefix the mock did not add. Nineteen adapter tests and 1,769 across the
+    tree all agreed with an integration that could not complete one call. The
+    other instruments on this page produced a wrong reading; this one produced
+    agreement, which is harder to notice because agreement is what a test is for.
+    So call the real thing once before writing the fixtures down — the envelopes
+    took five minutes to print and made all four defects unwriteable. Fixtures
+    are how you *keep* behaviour you have observed, never how you *learn* it.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
