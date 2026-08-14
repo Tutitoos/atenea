@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -313,4 +314,56 @@ func reasonOf(r report) string {
 		return ""
 	}
 	return r.Reason.Text
+}
+
+// Which built-ins the explorer is given is a design decision with a price
+// attached, not an incidental. Measured 2026-08-14, before this list existed:
+// three explorations of a real repository spent $1.87 and 1.05M tokens and
+// dispatched zero capabilities, because Grep and Bash sat beside them.
+func TestTheExplorerIsGivenReadingToolsAndNotSearchingOnes(t *testing.T) {
+	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+		"summary":  "the settings are read in internal/config",
+		"findings": "config.Load reads the file named by ATENEA_CONFIG.",
+	})}}
+
+	if got := explore(t.Context(), exploreAssignment(), config.Config{}, withTools(s)); got.Verdict != "ok" {
+		t.Fatalf("verdict = %q, want ok: %+v", got.Verdict, got)
+	}
+
+	// Read, because no capability hands back a file's body; Glob, because a
+	// tree with no index has to be learned somehow.
+	for _, want := range []string{"Read", "Glob"} {
+		if !slices.Contains(s.seen.Builtins, want) {
+			t.Errorf("builtins = %v, want %s: the explorer cannot read the code", s.seen.Builtins, want)
+		}
+	}
+	// Grep is code.search under another name, and an explorer holding both
+	// never dispatches the capability. Bash makes read-only a hope.
+	for _, unwanted := range []string{"Grep", "Bash", "Write", "Edit"} {
+		if slices.Contains(s.seen.Builtins, unwanted) {
+			t.Errorf("builtins = %v, want %s absent", s.seen.Builtins, unwanted)
+		}
+	}
+	if s.seen.Tools == "" {
+		t.Error("the explorer was handed no atenea tools at all")
+	}
+}
+
+// The planner reads the exploration it was handed. Giving it the repository
+// would let it plan from a second, unrecorded look at the code -- and the
+// exploration on the record would no longer be what the graph came from.
+func TestThePlannerIsGivenNoToolsAtAll(t *testing.T) {
+	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+		"plan": "task = \"x\"\nbudget_usd = 1.0\n",
+	})}}
+	in := exploreAssignment()
+	in.Type = "plan"
+	in.Subject = &subject{Verdict: "ok", Result: map[string]any{
+		"summary": "s", "findings": "f",
+	}}
+
+	_ = plan(t.Context(), in, config.Config{}, withTools(s))
+	if len(s.seen.Builtins) != 0 {
+		t.Errorf("builtins = %v, want none: the planner plans from the exploration", s.seen.Builtins)
+	}
 }

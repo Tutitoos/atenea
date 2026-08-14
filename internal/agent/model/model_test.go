@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,9 +113,9 @@ const measuredCeilingEnvelope = `{
 // What Claude Code is told
 // ---------------------------------------------------------------------------
 
-// The measured flags travel unchanged from claudecode: safe-mode and no
-// session persistence are what keep a turn from inheriting a project's own
-// customisations or sharing a far side with another caller.
+// The measured flags. Not --safe-mode: it traveled here from claudecode by
+// copying, and it disables MCP servers -- see TestATurnIsNotStartedInSafeMode
+// for the measurement that cost four explorations to find.
 func TestTheArgvCarriesTheMeasuredFlags(t *testing.T) {
 	client := argvClient(t)
 	req := baseRequest()
@@ -125,7 +126,7 @@ func TestTheArgvCarriesTheMeasuredFlags(t *testing.T) {
 	}
 	joined := strings.Join(args, " ")
 	for _, want := range []string{"--print", "--output-format json", "--json-schema",
-		"--safe-mode", "--no-session-persistence", "--max-budget-usd", "--model explore-model"} {
+		"--setting-sources", "--no-session-persistence", "--max-budget-usd", "--model explore-model"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the command line is missing %q:\n%s", want, joined)
 		}
@@ -436,5 +437,164 @@ func TestAteneaToolsMatchesWhetherTheSocketAnswers(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "atenea service is listening") {
 		t.Errorf("message = %q, want it to name the missing service", err.Error())
+	}
+}
+
+// What a turn may call is the whole point of handing it capabilities: an
+// exploration that can reach for the tool the capability replaces will.
+
+// argvOf builds the command line for one request, which is what the CLI is
+// actually told -- the only place the allow-list is observable.
+func argvOf(t *testing.T, req Request) []string {
+	t.Helper()
+	client, err := New(Options{Binary: "/nonexistent/claude", Explore: "m", Plan: "m"})
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+	argv, err := client.args(req)
+	if err != nil {
+		t.Fatalf("args: %v", err)
+	}
+	return argv
+}
+
+func flagValue(argv []string, flag string) (string, bool) {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1], true
+		}
+	}
+	return "", false
+}
+
+// Measured 2026-08-14: three explorations, $1.87, zero capability dispatches.
+// The turn had Atenea's tools and the CLI's built-ins at once and used only
+// the built-ins. The allow-list is what makes the offer real.
+func TestATurnIsToldExactlyWhichToolsItMayCall(t *testing.T) {
+	tools, err := AteneaTools()
+	if err != nil {
+		t.Skipf("no atenea tools to hand over here: %v", err)
+	}
+	argv := argvOf(t, Request{
+		Role: RoleExplore, Prompt: "look", Tools: tools,
+		Builtins: []string{"Read", "Glob"},
+	})
+
+	for _, flag := range []string{"--tools", "--allowedTools"} {
+		list, ok := flagValue(argv, flag)
+		if !ok {
+			t.Fatalf("%s was not passed: the turn keeps the whole built-in set", flag)
+		}
+		for _, want := range []string{"mcp__atenea", "Read", "Glob"} {
+			if !strings.Contains(list, want) {
+				t.Errorf("%s = %q, want %s in it", flag, list, want)
+			}
+		}
+		// Grep is code.search, and Bash makes read-only a hope.
+		for _, unwanted := range []string{"Grep", "Bash", "Write", "Edit"} {
+			if strings.Contains(list, unwanted) {
+				t.Errorf("%s = %q, want %s absent", flag, list, unwanted)
+			}
+		}
+	}
+}
+
+// The allow-list addresses the server by the name the config registers it
+// under. Rename one alone and the turn is handed a server it may not call --
+// which reads exactly like a model choosing not to use it.
+func TestTheAllowListNamesTheServerTheConfigRegisters(t *testing.T) {
+	tools, err := AteneaTools()
+	if err != nil {
+		t.Skipf("no atenea tools to hand over here: %v", err)
+	}
+	var cfg struct {
+		Servers map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(tools), &cfg); err != nil {
+		t.Fatalf("parsing the mcp config: %v", err)
+	}
+	if len(cfg.Servers) != 1 {
+		t.Fatalf("servers = %v, want exactly one", cfg.Servers)
+	}
+	for name := range cfg.Servers {
+		list, _ := flagValue(argvOf(t, Request{Role: RoleExplore, Prompt: "x", Tools: tools}), "--allowedTools")
+		if want := "mcp__" + name; !strings.Contains(list, want) {
+			t.Errorf("allow-list = %q, want the registered server %q", list, want)
+		}
+	}
+}
+
+// A turn with nothing to call gets no list rather than an empty one: the CLI
+// reads an empty --tools as "nothing", and a turn that can call nothing
+// should not have been started.
+func TestATurnWithNothingToCallGetsNoList(t *testing.T) {
+	argv := argvOf(t, Request{Role: RolePlan, Prompt: "plan from what you were given"})
+	if list, ok := flagValue(argv, "--tools"); ok {
+		t.Errorf("--tools = %q, want the flag absent", list)
+	}
+}
+
+// "refused 1 action(s)" cost a debugging session: the run had spent $1.26 and
+// nothing said whether the model reached for a shell, a write, or a tool
+// nobody granted.
+func TestARefusalNamesWhatWasRefused(t *testing.T) {
+	envelope := `{"is_error":false,"result":"",` +
+		`"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"go test ./..."}}],` +
+		`"usage":{"input_tokens":10,"output_tokens":1}}`
+	client := testClient(t, envelope)
+
+	_, err := client.Turn(context.Background(), Request{Role: RoleExplore, Prompt: "look"})
+	if err == nil {
+		t.Fatal("a refused turn answered cleanly")
+	}
+	if got := contract.MessageOf(err); !strings.Contains(got, "Bash") {
+		t.Errorf("message = %q, want the refused tool named", got)
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Errorf("kind = %v, want permission_denied", got)
+	}
+}
+
+// A denial the provider did not name is still a denial. Dropping it would
+// turn a refused turn into a silent one.
+func TestAnUnnamedRefusalIsStillReported(t *testing.T) {
+	envelope := `{"is_error":false,"result":"","permission_denials":[{}],` +
+		`"usage":{"input_tokens":10,"output_tokens":1}}`
+	client := testClient(t, envelope)
+
+	_, err := client.Turn(context.Background(), Request{Role: RoleExplore, Prompt: "look"})
+	if err == nil {
+		t.Fatal("a refused turn answered cleanly")
+	}
+	if got := contract.MessageOf(err); !strings.Contains(got, "unnamed") {
+		t.Errorf("message = %q, want the unnamed denial reported", got)
+	}
+}
+
+// --safe-mode disables MCP servers -- the CLI's own --help says so, and it was
+// measured on 2026-08-14 after four explorations costing $4.43 dispatched zero
+// capabilities. A turn handed --mcp-config and --safe-mode together is a turn
+// told about tools it cannot see.
+func TestATurnIsNotStartedInSafeMode(t *testing.T) {
+	tools, err := AteneaTools()
+	if err != nil {
+		t.Skipf("no atenea tools to hand over here: %v", err)
+	}
+	argv := argvOf(t, Request{Role: RoleExplore, Prompt: "look", Tools: tools})
+
+	if slices.Contains(argv, "--safe-mode") {
+		t.Error("--safe-mode is passed: the turn gets no atenea tools at all")
+	}
+	// What replaces it, and must stay: ambient settings and skills off.
+	if v, ok := flagValue(argv, "--setting-sources"); !ok || v != "" {
+		t.Errorf("--setting-sources = %q (present=%v), want it passed empty", v, ok)
+	}
+	if !slices.Contains(argv, "--disable-slash-commands") {
+		t.Error("skills are not suppressed")
+	}
+	// And the server list stays closed, which is what makes dropping
+	// --safe-mode survivable.
+	if !slices.Contains(argv, "--strict-mcp-config") {
+		t.Error("--strict-mcp-config is missing: the turn would see this machine's other servers")
 	}
 }

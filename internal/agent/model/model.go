@@ -148,6 +148,12 @@ func (c *Client) modelFor(role Role) (string, error) {
 	return name, nil
 }
 
+// ateneaServer is the key this package registers Atenea's tools under, and
+// the name the CLI's allow-list addresses them by (`mcp__<server>`). One
+// constant because the two have to agree: rename the key alone and the turn
+// is handed a server it is then forbidden to call.
+const ateneaServer = "atenea"
+
 // ateneaToolsConfig builds the MCP config AteneaTools hands to --mcp-config:
 // one stdio server, `atenea mcp`, the same bridge cmd/atenea/mcp.go relays
 // for every other MCP client.
@@ -167,7 +173,7 @@ func ateneaToolsConfig() (string, error) {
 	}
 	cfg, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
-			"atenea": map[string]any{"command": self, "args": []string{"mcp"}},
+			ateneaServer: map[string]any{"command": self, "args": []string{"mcp"}},
 		},
 	})
 	if err != nil {
@@ -234,6 +240,17 @@ type Request struct {
 	// Atenea's own tools. Empty means the turn gets none of them, only
 	// whatever the CLI's built-in set still allows under --safe-mode.
 	Tools string
+	// Builtins names the CLI's own tools this turn may call, beside Atenea's
+	// capabilities. It is a complete list, never an addition to a default:
+	// nil means Atenea's tools and nothing else.
+	//
+	// Measured 2026-08-14, before this field existed: three explorations of
+	// this repository, $1.87 and 1.05M tokens, dispatched **zero**
+	// capabilities. The turn was handed Atenea's tools and the CLI's whole
+	// built-in set at once, and a model given both reaches for the one it
+	// has read a hundred thousand examples of. Offering a capability beside
+	// the tool it was meant to replace is not offering it.
+	Builtins []string
 }
 
 // Validate checks the request can even be attempted.
@@ -328,13 +345,28 @@ func (c *Client) args(req Request) ([]string, error) {
 		// the CLI's positional [prompt] argument, not --print's value.
 		"--print", req.Prompt,
 		"--output-format", "json",
-		// The catalog, the rules and any project's own CLAUDE.md must not be
-		// able to change what a turn does -- see claudecode's own
-		// measurement of what a customized session costs before a single
-		// tool runs. --mcp-config below still reaches the turn: an explicit
-		// config handed to the CLI is not one of the ambient customisations
-		// this flag suppresses.
-		"--safe-mode",
+		// Ambient customization off: this machine's settings, the repository's
+		// hooks, and the skills any of them install must not be able to change
+		// what a turn does.
+		//
+		// NOT --safe-mode, which claudecode uses and which this package used
+		// until it was measured. That flag disables MCP servers too -- its own
+		// --help says so, in those words -- so a turn carrying --mcp-config
+		// got no Atenea tools at all and answered by reading files instead.
+		// Measured 2026-08-14 against the live CLI: with --safe-mode the turn
+		// lists no mcp__ tool; without it, all eight. Four real explorations
+		// of a repository, $4.43, dispatched zero capabilities before this
+		// line was found, and the comment that used to sit here asserted the
+		// opposite without ever having been checked.
+		//
+		// The one thing --safe-mode still covered and this does not is
+		// CLAUDE.md auto-discovery: the repository being explored can put
+		// text in the turn's context. --bare suppresses that but also skips
+		// keychain reads, and a turn with no OAuth session cannot run at all
+		// ("Not logged in", measured the same day). Known, and left honest
+		// rather than traded for a turn that never works.
+		"--setting-sources", "",
+		"--disable-slash-commands",
 		// Measured on this same CLI, in claudecode: reusing a --session-id
 		// fails outright on the second run. A fresh, unsaved session per
 		// turn is what keeps two callers from ever sharing a far side.
@@ -360,6 +392,16 @@ func (c *Client) args(req Request) ([]string, error) {
 		return nil, err
 	}
 	argv = append(argv, "--model", modelName)
+	// The complete set this turn may call, always passed. Handing a turn
+	// Atenea's capabilities and leaving the CLI's built-ins beside them is
+	// what made the first three real explorations bypass Atenea entirely --
+	// see Request.Builtins for the measurement. --tools is what the CLI
+	// loads; --allowedTools is what it may use without asking a person who,
+	// under --print, is not there to answer.
+	if allowed := allowedTools(req); len(allowed) > 0 {
+		list := strings.Join(allowed, ",")
+		argv = append(argv, "--tools", list, "--allowedTools", list)
+	}
 	if tools := strings.TrimSpace(req.Tools); tools != "" {
 		// --mcp-config is the one flag here the CLI declares variadic
 		// (<configs...>), so it has to stay last in argv: anything placed
@@ -371,6 +413,24 @@ func (c *Client) args(req Request) ([]string, error) {
 		argv = append(argv, "--mcp-config", tools, "--strict-mcp-config")
 	}
 	return argv, nil
+}
+
+// allowedTools is the complete set a turn may call: Atenea's whole server
+// when it was given one, plus whatever built-ins the caller named.
+//
+// The server is named as a unit rather than tool by tool. A capability added
+// to the catalog tomorrow is reachable the same day, and a list enumerated
+// here would silently be the older, shorter catalog.
+//
+// A turn with no MCP config and no built-ins gets no list at all -- the CLI
+// would read an empty --tools as "nothing", and a turn that can call nothing
+// is a turn that should not have been started.
+func allowedTools(req Request) []string {
+	var out []string
+	if strings.TrimSpace(req.Tools) != "" {
+		out = append(out, "mcp__"+ateneaServer)
+	}
+	return append(out, req.Builtins...)
 }
 
 // invoke runs one turn and hands back the envelope, sorted into the shared
@@ -586,7 +646,8 @@ func chargeFrom(env envelope) contract.Charge {
 func readAnswer(env envelope, req Request) (text string, structured json.RawMessage, err error) {
 	if len(env.PermissionDenials) > 0 {
 		return "", nil, contract.Fail(contract.FailurePermissionDenied,
-			"claude code was refused %d action(s) it needed", len(env.PermissionDenials)).WithRaw(env.Result)
+			"claude code was refused %d action(s) it needed: %s",
+			len(env.PermissionDenials), deniedTools(env.PermissionDenials)).WithRaw(env.Result)
 	}
 	if len(req.Schema) == 0 {
 		return env.Result, nil, nil
@@ -601,4 +662,28 @@ func readAnswer(env envelope, req Request) (text string, structured json.RawMess
 			"claude code's structured answer is not a JSON object").WithRaw(string(env.StructuredOutput))
 	}
 	return env.Result, env.StructuredOutput, nil
+}
+
+// deniedTools names what a turn was refused, for the sentence a person reads
+// when nothing else about the failure is actionable.
+//
+// A count alone -- "refused 1 action(s)" -- was the shipped message, and it
+// cost a real debugging session on 2026-08-14: the run had spent $1.26 and
+// the operator could not tell whether the model had reached for a shell, a
+// write, or a tool nobody had granted. The provider's own field name is used
+// as-is, and an entry that does not carry one is reported as unnamed rather
+// than dropped: a refusal nobody can name is still a refusal that happened.
+func deniedTools(denials []json.RawMessage) string {
+	names := make([]string, 0, len(denials))
+	for _, raw := range denials {
+		var one struct {
+			ToolName string `json:"tool_name"`
+		}
+		if err := json.Unmarshal(raw, &one); err != nil || strings.TrimSpace(one.ToolName) == "" {
+			names = append(names, "unnamed")
+			continue
+		}
+		names = append(names, one.ToolName)
+	}
+	return strings.Join(names, ", ")
 }

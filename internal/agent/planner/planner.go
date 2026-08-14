@@ -206,6 +206,17 @@ func explore(ctx context.Context, in assignment, cfg config.Config, d deps) repo
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
 		Tools:     tools,
+		// Read and Glob, and nothing else. There is no "read this file"
+		// capability, so without Read the explorer can find a symbol and
+		// never see the code around it; Glob is how it learns a tree it has
+		// no index of yet.
+		//
+		// Grep is deliberately absent: it is `code.search`, and leaving both
+		// on is precisely what let the first three explorations spend $1.87
+		// answering nothing while dispatching zero capabilities. Bash is
+		// absent because a read-only agent that can run a shell is read-only
+		// by hope.
+		Builtins: []string{"Read", "Glob"},
 	})
 	if err != nil {
 		return fromModelError(err, answer.Spent)
