@@ -642,9 +642,63 @@ exists to record.
    cheap half; the expensive half is the run that could have refuted you, and
    this one did.
 
-What survives unrefuted is narrower than it felt at the time: adding a section
-of cost evidence to a prompt changed the plan, in the wrong direction, and no
-correction attempted so far has changed it back. The cause is still open.
+What survives unrefuted is narrower than it felt at the time — and narrower
+again after the next entry, which took the ground out from under this whole
+section.
+
+## An eleventh instrument: the comparison that was never controlled
+
+Everything above compares configurations one run apiece. Run 8 had the cost
+section and produced no explorers; run 10 had it without the closing warning
+and produced five. That was reported here as a single-variable comparison and
+the warning was named as the cause.
+
+Nobody had asked whether the process was stable. On 2026-08-14, after the
+grant bug below surfaced, the same commission was run five times with nothing
+changed at all — same grant, same binary, same prompt, same everything:
+
+| run | explore steps | allocated |
+|-----|---------------|-----------|
+| 1 | 0 | $0.85 |
+| 2 | 0 | $0.88 |
+| 3 | 5 | $0.90 |
+| 4 | 0 | $0.90 |
+| 5 | 4 | $0.90 |
+
+`0, 0, 5, 0, 4` at rest. Both outcomes the configuration experiment was
+distinguishing occur unprompted, in the same cell, with nothing varied. Run
+10's five explorers and run 8's zero are two draws from that distribution.
+**The warning may still have done it. Nothing here shows that it did, and the
+run that was offered as proof cannot carry the claim.**
+
+Two facts about the setup made this worse than ordinary sampling noise, and
+both were visible before any of it ran:
+
+- **The planner's main input is another model's answer.** The `explore` step
+  is a model turn whose text feeds the planner, so "the same commission" was
+  never the same prompt. Captured this time, the five planner prompts had five
+  distinct hashes.
+- **Each run mutates the next one's input.** The cost table is read from the
+  same database the runs write to: `n=6`, `n=7`, `n=8`, `n=9`, `n=10` across
+  the five, with the median moving $1.54 → $1.47 → $1.54 → $1.47.
+
+A prompt log helped here and should have existed earlier. Four runs had been
+compared against a prompt captured from a stub binary standing in for the CLI
+— a different string than the real planner reads — and the gap surfaced only
+as a grep reporting a grant figure from the wrong run. `ATENEA_PROMPT_LOG`
+now records what was sent, at the call site, on the way out.
+
+**A controlled comparison is only controlled if the process is stable, and
+that is a measurement, not an assumption.** It is one cheap run repeated: the
+null experiment, the same cell twice, before any cell is compared to another.
+Eleven runs of interpretation preceded it here, and the honest cost of
+skipping it is not the runs — it is that three entries above were written
+with more confidence than their evidence supported.
+
+What survives: adding a section of cost evidence to a prompt was followed by
+plans that could not search, and no correction has reliably changed that back.
+Whether the section caused it is open, and settling it needs a number of runs
+per configuration that nobody has yet decided.
 
 ## The general lesson
 
@@ -778,6 +832,17 @@ correction attempted so far has changed it back. The cause is still open.
     the endpoint will. The endpoint answers only when asked, and asking is
     cheap in exactly one direction: an over-limit request is refused before it
     is billed, so probe a wall from above.
+15. **Measure the process's variance before comparing configurations.** Eleven
+    runs were interpreted one sample per cell, and three sections were written
+    naming causes, before anyone ran the same cell twice. The same commission,
+    unchanged, produced `0, 0, 5, 0, 4` explorer steps — both outcomes the
+    comparison was distinguishing, with nothing varied. A single run per cell
+    cannot separate an effect from noise, and a comparison built on two of them
+    is not controlled however carefully the variable was isolated. The null
+    experiment is the cheapest run on the page: the same cell, twice, first.
+    Two properties make it mandatory rather than good practice — an input
+    produced by a model is never the same input twice, and a run that writes to
+    the table its successor reads has already changed the next cell.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
