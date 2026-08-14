@@ -327,14 +327,20 @@ func measuredCosts(in assignment, cfg config.Config) string {
 			declared.Spec.Name, cost.MedianUSD, cost.N, cost.MinUSD, cost.MaxUSD,
 			parenthetical(exclusions(cost.AtCeiling, cost.Unmeasured)))
 	}
-
-	b.WriteString(`
-These are observations, not prices and not ceilings. A share below what the
-type has cost is a step that will stop at its ceiling having produced nothing,
-which is worse than not planning it. A median over one or two runs is barely
-evidence -- weigh it accordingly. "never measured" means exactly that: nobody
-has priced it here, not that it is free.
-`)
+	// The section ends at the last figure, deliberately. It closed with a
+	// paragraph telling the planner that observations are not ceilings, that
+	// a share below what a type costs buys a step which stops having produced
+	// nothing, and that `never measured` does not mean free. Measured
+	// 2026-08-14: the sentence about never measured was ignored outright, and
+	// the warning about under-funding is the reason this experiment exists --
+	// told that under-funding is the danger and that nothing is priced, a
+	// planner picking the types that plausibly cost nothing is reading the
+	// paragraph correctly and answering the wrong question with it.
+	//
+	// It also carried a sentence about a median over one or two runs being
+	// barely evidence, which publishableN made impossible to see. An inert
+	// falsehood in a prompt is what the edge rule was before it cost seven
+	// `needs` edges.
 	return b.String()
 }
 

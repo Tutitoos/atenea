@@ -49,8 +49,26 @@ func TestATypeWithNoRunsSaysNeverMeasured(t *testing.T) {
 	if !strings.Contains(got, "filereader: never measured") {
 		t.Errorf("a type with no rows must say `never measured`:\n%s", got)
 	}
-	if !strings.Contains(got, `"never measured" means exactly that`) {
-		t.Error("the prompt never explains that never measured is not free")
+}
+
+// The section ends at the last figure. The paragraph that used to close it
+// was measured on 2026-08-14 and removed: its sentence about `never measured`
+// not meaning free was ignored, and its warning about under-funding is the
+// most plausible reason a planner facing all-unpriced types picked the ones
+// that plausibly cost nothing.
+func TestTheCostSectionEndsAtTheFigures(t *testing.T) {
+	got := planPrompt(costsOf(t, "explore", map[string]any{
+		"median_usd": 1.63, "min_usd": 1.26, "max_usd": 2.16, "n": 3,
+	}), planningTypes())
+
+	for _, gone := range []string{
+		"These are observations, not prices and not ceilings",
+		"will stop at its ceiling having produced nothing",
+		"barely",
+	} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the closing paragraph is back: %q\n%s", gone, got)
+		}
 	}
 }
 
