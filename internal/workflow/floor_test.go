@@ -287,6 +287,41 @@ func TestEveryUnderfundedStepIsNamedAndTheFloorExplainedOnce(t *testing.T) {
 	}
 }
 
+// A measurement carrying less provenance says less, rather than making the
+// rest up: no version clause when the probe could not read one, and a sentence
+// that ends where the evidence does instead of introducing a token count it
+// does not have. An engine with no repository id says machine-wide in words,
+// and the re-measure line drops a flag it cannot fill.
+func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
+	dir := t.TempDir()
+	bare := workflow.Floor{
+		USD:        0.35,
+		MeasuredAt: time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
+	}
+	h := floored(t, dir, "", floorsOf("", "claude-opus-5", bare))
+
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("admin-aux", "explore", 0.18)))
+	if err == nil {
+		t.Fatal("Create accepted an underfunded plan")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"the floor for this machine with claude-opus-5 was measured 2026-08-14 19:40.\n",
+		"`atenea floor measure`.",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
+	}
+	for _, unwanted := range []string{"claude code", "tokens of cache write", "--repo"} {
+		if strings.Contains(message, unwanted) {
+			t.Errorf("the refusal claims %q from a measurement that carried none:\n%s",
+				unwanted, message)
+		}
+	}
+}
+
 // A step whose agent type spends no model this machine has priced is never
 // refused, however little it carries: no measurement, no claim. Inventing a
 // floor for it would be the written-down constant this check exists to avoid.
