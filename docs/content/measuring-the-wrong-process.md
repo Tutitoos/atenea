@@ -877,6 +877,92 @@ with source access and a stream capture running exactly that. The half I could
 not measure was closed faster than the half I could, because it was labelled as
 unmeasured and came with the test that would settle it.
 
+## A fourteenth instrument: two comparisons whose sides were in different units
+
+Two defects in one evening, one shape: a comparison whose two sides were never
+expressed in the same units. They are filed together because only one of them
+announced itself.
+
+**The loud one.** A tree of 15,563 files was walked before a run and after it,
+recording `(path, mtime, size)` per file. The baseline used `st_mtime_ns`; the
+re-check, written an hour later, used `st_mtime`. Every file came back changed:
+
+```
+.env | then: (1785883432157773146, 3143) | now: (1785883432.1577733, 3143)
+```
+
+Nanoseconds against float seconds — the same instant, twice, disagreeing about
+everything. It cost one minute. `15563 changed, 0 added, 0 removed` is not a
+result anybody believes, so it was re-derived in the correct units before it
+reached a sentence: **1 added, 3 changed**, all four stamped 85 minutes after
+the run under audit had finished.
+
+**The quiet one.** The same evening, the question was whether a write had
+restarted a live API. The container log was searched for
+`Server listening|Database connected|migration`. It returned **0** — over the
+precise window, and over the whole history since 08-10 — and that zero was
+reported as evidence that nothing had restarted.
+
+The log is pino with colour on. Every line carries `\x1b[...m` around the very
+tokens being matched:
+
+```
+2026-08-14T17:09:10.256510005Z     ^[[35mreqId^[[39m: "req-mp"$
+```
+
+Strip the escapes and the same window yields three restarts. **A grep that
+cannot match is indistinguishable from a thing that did not happen.** The output
+of a broken instrument and the output of a clean system are the same string:
+nothing. This is the second time in two days from the identical cause — on
+08-13 the escapes around `reqId` broke a scanner's correlation the same way —
+which makes it a property of this log rather than an accident: **any pattern
+matched against `taxiprime-backend` output is wrong until the escapes are
+stripped.**
+
+The pair inverts the usual intuition about severity. The absurd reading was
+harmless; it could not survive being written down. The plausible one — a clean
+zero, in the direction already expected — went into a report as fact and would
+have stayed there.
+
+### What the fixed instrument then measured
+
+With the escapes stripped, the first hard number on something that had been a
+hypothesis for days: **one save in that tree costs two full boots against the
+live dev database.**
+
+The container's inner process restarts and runs the migrator:
+
+```
+16:52:27Z [tsx] change in ./src/modules/reservas/reservas.routes.ts Restarting...
+16:52:28Z   message: 'relation "__migrations" already exists, skipping',
+16:52:28Z [migrate] up to date (63 migrations tracked)
+16:52:28Z INFO (307040): Database connected
+16:52:28Z INFO (307040): Server listening at http://127.0.0.1:22021
+```
+
+And a PM2 ghost — `taxiprime-api-dev`, pid 2232, the same tree as cwd, up since
+08-13 — independently boots, migrates, connects Redis, and only then dies:
+
+```
+18:52:27 6:52:27 PM [tsx] change in ./src/modules/reservas/reservas.routes.ts Rerunning...
+18:52:27 [migrate] up to date (63 migrations tracked)
+18:52:27 INFO (3581486): Database connected
+18:52:27 INFO (3581486): Redis connected
+18:53:08 Error: listen EADDRINUSE: address already in use 0.0.0.0:22021
+```
+
+Three saves at 16:52:27, 16:53:07 and 16:53:55 — **88 seconds, six migrator
+passes**, six connections to the live dev database, three of them from a process
+that can never serve a request because the container holds the port. No
+migration was applied on any pass: all six read `up to date (63 migrations
+tracked)`. The cost is the boot, not the schema.
+
+Two details make the ghost worse than a duplicate. It is invisible from the API
+side — nothing in the container's log mentions it, and the only symptom is
+`EADDRINUSE` in a PM2 file nobody reads. And it dies *after* the expensive part:
+the port check that stops it runs once the database and Redis connections are
+already open.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1050,6 +1136,18 @@ unmeasured and came with the test that would settle it.
     stands alone and a work item when it carries the test, and that the cost of
     labelling it is one sentence against the cost of a confident guess that gets
     believed.
+19. **A search that finds nothing is a reading with two explanations.** Absence
+    of evidence and a broken matcher produce byte-identical output, and the
+    broken matcher is the one that agrees with whatever you expected. Both units
+    defects of 2026-08-14 were the same failure — sides of a comparison in
+    different units — but only the absurd one, `15563 changed`, could not be
+    believed. The plausible one, a clean `0` restart lines from a log whose every
+    token is wrapped in ANSI escapes, was already written into a report as proof
+    the API had not moved; the same escapes had broken a different scanner
+    twenty-four hours earlier. So before a zero is allowed to mean anything, make
+    the instrument produce a one: match a line you know exists, on the same
+    stream, through the same pipe. A positive control costs one command, and it
+    is the only thing that separates a quiet system from a deaf one.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
