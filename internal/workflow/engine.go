@@ -55,6 +55,12 @@ type Options struct {
 	// Surface names where this engine's own answers come from, for the gate
 	// log. Defaults to "cli".
 	Surface string
+	// Repository is which repository these runs are about, resolved by
+	// WorkspaceFor the same way every agent resolves it. Recorded on the run
+	// so what a step cost can later be read back scoped to the tree it was
+	// spent on -- exploring a six-file repository and this one are not the
+	// same act at the same price. Empty is honest and means machine-wide.
+	Repository string
 }
 
 // Engine runs graphs.
@@ -69,6 +75,7 @@ type Engine struct {
 	alive   func(pid int) bool
 	poll    time.Duration
 	surface string
+	repo    string
 }
 
 // New builds an engine.
@@ -91,6 +98,7 @@ func New(opts Options) (*Engine, error) {
 		pid:     opts.PID,
 		alive:   opts.Alive,
 		poll:    opts.Poll,
+		repo:    opts.Repository,
 		surface: opts.Surface,
 	}
 	if e.now == nil {
@@ -128,7 +136,7 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	}
 	id := e.ids()
 	at := e.now()
-	if err := e.store.Create(ctx, id, plan, at, 0); err != nil {
+	if err := e.store.Create(ctx, id, plan, e.repo, at, 0); err != nil {
 		return Run{}, Gate{}, err
 	}
 	gate, err := e.store.Ask(ctx, id, KindLaunch,

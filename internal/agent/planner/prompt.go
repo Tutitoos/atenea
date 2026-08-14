@@ -81,6 +81,7 @@ The commission:
 
 	b.WriteString("\nThe agent types declared on this machine. You may name these and\nnothing else:\n\n")
 	b.WriteString(declaredTypes(cfg))
+	b.WriteString(measuredCosts(in, cfg))
 
 	fmt.Fprintf(&b, `
 
@@ -270,4 +271,85 @@ func planSchema() map[string]any {
 		"required":             []any{PlanField},
 		"additionalProperties": false,
 	}
+}
+
+// measuredCosts renders what each declared type has cost, one line per type,
+// including the types nobody has ever priced.
+//
+// Every declared type gets a line. A table listing only what was measured
+// reads as a complete price list with some rows missing, and the difference
+// between "cheap" and "unknown" is the whole reason this exists -- so a type
+// with no rows says **never measured** in those words, and the model is left
+// to decide what to do about it rather than handed a number that was invented
+// for it.
+//
+// n travels with every median. Three samples and thirty are different claims,
+// and the reader can only discount the first if it is told which it has.
+func measuredCosts(in assignment, cfg config.Config) string {
+	raw, ok := in.Context["workspace"]
+	if !ok {
+		return ""
+	}
+	var level struct {
+		Costs *struct {
+			Repository string `json:"repository"`
+			Covers     string `json:"covers"`
+			Types      map[string]struct {
+				MedianUSD  float64 `json:"median_usd"`
+				MinUSD     float64 `json:"min_usd"`
+				MaxUSD     float64 `json:"max_usd"`
+				N          int     `json:"n"`
+				AtCeiling  int     `json:"at_ceiling"`
+				Unmeasured int     `json:"unmeasured"`
+			} `json:"types"`
+		} `json:"costs"`
+	}
+	if err := json.Unmarshal(raw, &level); err != nil || level.Costs == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	scope := "machine-wide (nothing has been recorded against this repository yet)"
+	if level.Costs.Repository != "" {
+		scope = "repository " + level.Costs.Repository
+	}
+	fmt.Fprintf(&b, "\nWhat these types have actually cost, %s, %s:\n\n",
+		scope, level.Costs.Covers)
+
+	for _, declared := range cfg.Agents {
+		cost, measured := level.Costs.Types[declared.Spec.Name]
+		if !measured || cost.N == 0 {
+			fmt.Fprintf(&b, "  - %s: never measured%s\n",
+				declared.Spec.Name, excluded(cost.AtCeiling, cost.Unmeasured))
+			continue
+		}
+		fmt.Fprintf(&b, "  - %s: median $%.2f over n=%d run(s), range $%.2f-$%.2f%s\n",
+			declared.Spec.Name, cost.MedianUSD, cost.N, cost.MinUSD, cost.MaxUSD,
+			excluded(cost.AtCeiling, cost.Unmeasured))
+	}
+
+	b.WriteString(`
+These are observations, not prices and not ceilings. A share below what the
+type has cost is a step that will stop at its ceiling having produced nothing,
+which is worse than not planning it. A median over one or two runs is barely
+evidence -- weigh it accordingly. "never measured" means exactly that: nobody
+has priced it here, not that it is free.
+`)
+	return b.String()
+}
+
+// excluded names the rows the median left out, so the exclusion is visible
+// rather than silently improving the number.
+func excluded(atCeiling, unmeasured int) string {
+	var parts []string
+	if atCeiling > 0 {
+		parts = append(parts, fmt.Sprintf("%d stopped at its ceiling", atCeiling))
+	}
+	if unmeasured > 0 {
+		parts = append(parts, fmt.Sprintf("%d ran unpriced", unmeasured))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (excluded: " + strings.Join(parts, ", ") + ")"
 }

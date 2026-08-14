@@ -45,12 +45,20 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		_ = traces.Close()
 		return nil, nil, err
 	}
+	workspace := WorkspaceFor(cfg, repository)
 	runner, err := agent.New(agent.Options{
 		Types:     cfg.Agents,
 		Store:     traces,
-		Workspace: WorkspaceFor(cfg, repository),
+		Workspace: workspace,
 		History: func(ctx context.Context, name string, limit int) ([]trace.Row, error) {
 			return traces.List(ctx, trace.Filter{TypeName: name, Limit: limit})
+		},
+		Costs: func(ctx context.Context) (agent.CostTable, error) {
+			table, err := state.CostByType(ctx, workspace.RepositoryID)
+			if err != nil {
+				return agent.CostTable{}, err
+			}
+			return costsFor(table), nil
 		},
 	})
 	if err != nil {
@@ -59,11 +67,12 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		return nil, nil, err
 	}
 	engine, err := New(Options{
-		Runner:  runner,
-		Store:   state,
-		Types:   cfg.Agents,
-		Lanes:   cfg.Workflow,
-		Surface: surface,
+		Runner:     runner,
+		Store:      state,
+		Types:      cfg.Agents,
+		Lanes:      cfg.Workflow,
+		Surface:    surface,
+		Repository: workspace.RepositoryID,
 	})
 	if err != nil {
 		_ = state.Close()
@@ -93,4 +102,27 @@ func WorkspaceFor(cfg config.Config, id string) agent.Workspace {
 		}
 	}
 	return ws
+}
+
+// costsFor converts what the store measured into what an agent is served.
+//
+// A conversion and not a shared type on purpose: the store's row counts are a
+// record, the agent's copy is evidence handed to a model, and letting one
+// struct be both is how a field added for the record quietly reaches a prompt.
+func costsFor(table CostTable) agent.CostTable {
+	out := agent.CostTable{
+		Repository: table.Repository,
+		Types:      make(map[string]agent.Cost, len(table.Types)),
+	}
+	for name, observed := range table.Types {
+		out.Types[name] = agent.Cost{
+			MedianUSD:  observed.MedianUSD,
+			MinUSD:     observed.MinUSD,
+			MaxUSD:     observed.MaxUSD,
+			N:          observed.N,
+			AtCeiling:  observed.AtCeiling,
+			Unmeasured: observed.Unmeasured,
+		}
+	}
+	return out
 }

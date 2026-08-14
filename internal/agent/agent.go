@@ -86,6 +86,12 @@ type Options struct {
 	// history is served an empty list rather than refused -- a machine with
 	// no past is a fact, not an error.
 	History func(ctx context.Context, typeName string, limit int) ([]trace.Row, error)
+	// Costs supplies what agent types have cost on this machine, served at
+	// the workspace level. Nil means the level carries no cost table at all,
+	// which reads as "never measured" -- the one thing it must never do is
+	// hand back zeros, because a type nobody has priced and a type that
+	// costs nothing are different facts.
+	Costs func(ctx context.Context) (CostTable, error)
 }
 
 // Workspace is what Atenea knows about where the work happens.
@@ -109,6 +115,7 @@ type Runner struct {
 	workspace Workspace
 	self      string
 	history   func(ctx context.Context, typeName string, limit int) ([]trace.Row, error)
+	costs     func(ctx context.Context) (CostTable, error)
 }
 
 // SelfPlaceholder is what a declaration writes instead of a path to Atenea.
@@ -132,6 +139,7 @@ func New(opts Options) (*Runner, error) {
 		workspace: opts.Workspace,
 		self:      opts.Self,
 		history:   opts.History,
+		costs:     opts.Costs,
 	}
 	if r.self == "" {
 		exe, err := os.Executable()
@@ -420,9 +428,15 @@ func (r *Runner) serve(ctx context.Context, assignment contract.Assignment) (map
 				"root": r.workspace.RepositoryRoot,
 			}
 		case contract.ContextWorkspace:
-			served[level.String()] = map[string]any{
-				"repositories": r.workspace.Repositories,
+			payload := map[string]any{"repositories": r.workspace.Repositories}
+			costs, err := r.costTable(ctx)
+			if err != nil {
+				return nil, err
 			}
+			if costs != nil {
+				payload["costs"] = costs
+			}
+			served[level.String()] = payload
 		case contract.ContextGlobal:
 			served[level.String()] = map[string]any{
 				"atenea":   r.workspace.AteneaVersion,
@@ -519,4 +533,76 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// CostTable is what agent types have cost on this machine, as the workspace
+// level carries it.
+//
+// It is a copy rather than a reference to the workflow package's own type:
+// this package is below that one, and an agent being told what things cost
+// must not drag the engine that measured them into every binary that spawns
+// an agent.
+type CostTable struct {
+	// Repository the figures are scoped to. Empty means machine-wide, and a
+	// reader must be told which it is holding -- exploring a six-file tree
+	// and exploring this one are not the same act at the same price.
+	Repository string
+	// Types is keyed by agent type name. A type absent here has never been
+	// measured, which every reader must pass on in those words.
+	Types map[string]Cost
+}
+
+// Cost is one agent type's record.
+type Cost struct {
+	// MedianUSD, and the range it sits in.
+	MedianUSD      float64
+	MinUSD, MaxUSD float64
+	// N is how many clean runs are behind the median. It travels with the
+	// median everywhere, because three samples and thirty are different
+	// claims and only one of them is worth planning against.
+	N int
+	// AtCeiling and Unmeasured are the rows deliberately left out: a run that
+	// spent its whole grant is a lower bound rather than a measurement, and a
+	// run nobody could price is not a cheap run. Counted out loud so the
+	// exclusion is visible to whoever reads the median.
+	AtCeiling  int
+	Unmeasured int
+}
+
+// costTable serves the workspace level's cost figures, or nil when this
+// machine has none. Nil and empty differ: nil is "no measurement reached
+// here", and the reader prints that rather than inventing a zero.
+func (r *Runner) costTable(ctx context.Context) (map[string]any, error) {
+	if r.costs == nil {
+		return nil, nil
+	}
+	table, err := r.costs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(table.Types) == 0 {
+		return nil, nil
+	}
+	types := make(map[string]any, len(table.Types))
+	for name, cost := range table.Types {
+		types[name] = map[string]any{
+			"median_usd": cost.MedianUSD,
+			"min_usd":    cost.MinUSD,
+			"max_usd":    cost.MaxUSD,
+			"n":          cost.N,
+			"at_ceiling": cost.AtCeiling,
+			"unmeasured": cost.Unmeasured,
+		}
+	}
+	out := map[string]any{
+		"types": types,
+		// Said here rather than left to the reader: agent_trace carries no
+		// spend column, so a single `atenea agent` run is priced nowhere and
+		// this table cannot see one.
+		"covers": "workflow steps only",
+	}
+	if table.Repository != "" {
+		out["repository"] = table.Repository
+	}
+	return out, nil
 }

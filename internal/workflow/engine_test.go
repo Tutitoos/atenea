@@ -397,7 +397,7 @@ func TestARunOwnedByALiveProcessIsNotTakenOver(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	// A run left behind by a process that is still alive.
-	if err := h.state.Create(t.Context(), "wf-live", plan, time.Now(), 9999); err != nil {
+	if err := h.state.Create(t.Context(), "wf-live", plan, "", time.Now(), 9999); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := h.state.Claim(t.Context(), "wf-live", "a", "trace-1", 1, time.Now(), 9999); err != nil {
@@ -431,7 +431,7 @@ func TestARunLeftByADeadProcessResumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if err := h.state.Create(t.Context(), "wf-dead", plan, time.Now(), 5150); err != nil {
+	if err := h.state.Create(t.Context(), "wf-dead", plan, "", time.Now(), 5150); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := h.state.Claim(t.Context(), "wf-dead", "a", "trace-1", 1, time.Now(), 5150); err != nil {

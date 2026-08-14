@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -231,6 +232,12 @@ const schema = `
 CREATE TABLE IF NOT EXISTS workflow (
     id          TEXT    NOT NULL PRIMARY KEY,
     task        TEXT    NOT NULL,
+    -- Which repository the run was about, resolved the same way every agent
+    -- resolves it (WorkspaceFor). Empty on rows written before this column
+    -- existed, and that emptiness is load-bearing: a cost read back from
+    -- those rows is machine-wide and has to say so rather than claim a scope
+    -- it cannot support.
+    repository  TEXT    NOT NULL DEFAULT '',
     grant_usd   REAL    NOT NULL DEFAULT 0,
     started_at  TEXT    NOT NULL,
     ended_at    TEXT    NOT NULL DEFAULT '',
@@ -351,7 +358,54 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"workflow: schema %s: %v", path, err)
 	}
+	if err := addColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
+}
+
+// addColumns brings an existing database up to the schema above.
+//
+// `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+// so a column added after a machine started recording is invisible there
+// forever. This is deliberately not a version ledger: one additive column
+// with a default is described completely by "is it there", and a ledger for
+// that is machinery whose failure modes outnumber the change's.
+//
+// Every entry must stay additive and defaulted. A migration that rewrites or
+// drops belongs somewhere it can be reviewed as a migration, not in a list
+// that runs silently on open.
+func addColumns(ctx context.Context, db *sql.DB) error {
+	wanted := []struct{ table, column, ddl string }{
+		{"workflow", "repository", "ALTER TABLE workflow ADD COLUMN repository TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, add := range wanted {
+		rows, err := db.QueryContext(ctx, "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
+			add.table, add.column)
+		if err != nil {
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow: reading %s columns: %v", add.table, err)
+		}
+		present := rows.Next()
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow: reading %s columns: %v", add.table, err)
+		}
+		if err := rows.Close(); err != nil {
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow: reading %s columns: %v", add.table, err)
+		}
+		if present {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, add.ddl); err != nil {
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow: adding %s.%s: %v", add.table, add.column, err)
+		}
+	}
+	return nil
 }
 
 // Path is the file this store is backed by.
@@ -369,7 +423,7 @@ func (s *Store) Close() error {
 //
 // The whole graph, in one transaction, before anything spawns. A workflow
 // half on disk is one a resume would continue with steps it never knew about.
-func (s *Store) Create(ctx context.Context, id string, plan Plan, at time.Time, pid int) error {
+func (s *Store) Create(ctx context.Context, id string, plan Plan, repository string, at time.Time, pid int) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return unavailable(err, "workflow: begin %s", id)
@@ -377,9 +431,9 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, at time.Time, 
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO workflow (id, task, grant_usd, started_at, writer_pid)
-		 VALUES (?, ?, ?, ?, ?)`,
-		id, plan.Graph.Task, plan.Graph.GrantUSD, stamp(at), pid); err != nil {
+		`INSERT INTO workflow (id, task, repository, grant_usd, started_at, writer_pid)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, plan.Graph.Task, repository, plan.Graph.GrantUSD, stamp(at), pid); err != nil {
 		return unavailable(err, "workflow: opening %s", id)
 	}
 	for i, step := range plan.Graph.Steps {
@@ -821,4 +875,153 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// ---------------------------------------------------------------------------
+// What things have cost
+// ---------------------------------------------------------------------------
+
+// Observed is what one agent type has actually cost on this machine.
+//
+// It is evidence, not a price. Nothing here is a ceiling and nothing here is
+// enforced: a planner dividing a grant is better off knowing that exploring
+// this repository has cost $1.63 than dividing evenly, and that is the whole
+// claim.
+type Observed struct {
+	// TypeName is the agent type these rows ran as.
+	TypeName string
+	// MedianUSD is the middle of the clean rows. Median rather than mean
+	// because one run stopped at its ceiling drags a mean toward exactly the
+	// under-estimate this table exists to prevent.
+	MedianUSD float64
+	// MinUSD and MaxUSD are the range of the same clean rows, so a reader can
+	// see whether the median means anything.
+	MinUSD, MaxUSD float64
+	// N is how many clean rows the median is built from. Printed, always: a
+	// median of two is a rumor and the reader is entitled to discount it.
+	N int
+	// AtCeiling counts rows excluded because the run spent its whole grant.
+	// Those are censored observations -- "at least this much", not "this
+	// much" -- and averaging them in is how a measurement quietly becomes the
+	// under-estimate it was meant to replace.
+	AtCeiling int
+	// Unmeasured counts rows that ran and reported no price at all: a turn
+	// killed at its timeout, or an agent that never called a model. Counted
+	// rather than dropped, because "we have no number" and "the number is
+	// small" are different facts.
+	Unmeasured int
+}
+
+// CostTable is what CostByType read back, and the scope it could support.
+type CostTable struct {
+	// Repository is the repository the rows were scoped to. Empty means the
+	// table is machine-wide -- either because nothing has been recorded
+	// against this repository yet, or because the rows predate the column.
+	Repository string
+	// Types is keyed by agent type name. A type absent from this map has
+	// never been measured here, which is a fact the caller must pass on in
+	// those words rather than substituting a default.
+	Types map[string]Observed
+}
+
+// CostByType reads back what each agent type has cost, scoped to repository
+// when that repository has rows and machine-wide when it does not.
+//
+// Workflow steps only. A single `atenea agent` run is not priced anywhere --
+// agent_trace has no spend column -- so this table cannot see one, and every
+// caller has to say so rather than let a reader assume it covers them.
+func (s *Store) CostByType(ctx context.Context, repository string) (CostTable, error) {
+	out := CostTable{Repository: repository, Types: map[string]Observed{}}
+	rows, err := s.costRows(ctx, repository)
+	if err != nil {
+		return CostTable{}, err
+	}
+	// Falling back is not the same as finding nothing: a machine that has
+	// never run anything against this repository still knows what exploring
+	// costs, and saying so with the scope named is more useful than silence.
+	if len(rows) == 0 && repository != "" {
+		out.Repository = ""
+		if rows, err = s.costRows(ctx, ""); err != nil {
+			return CostTable{}, err
+		}
+	}
+
+	clean := map[string][]float64{}
+	for _, row := range rows {
+		seen := out.Types[row.typeName]
+		seen.TypeName = row.typeName
+		switch {
+		case row.spent == nil:
+			seen.Unmeasured++
+		case row.grant > 0 && *row.spent >= row.grant*ceilingBand:
+			seen.AtCeiling++
+		default:
+			clean[row.typeName] = append(clean[row.typeName], *row.spent)
+		}
+		out.Types[row.typeName] = seen
+	}
+	for name, spends := range clean {
+		sort.Float64s(spends)
+		seen := out.Types[name]
+		seen.N = len(spends)
+		seen.MinUSD, seen.MaxUSD = spends[0], spends[len(spends)-1]
+		seen.MedianUSD = median(spends)
+		out.Types[name] = seen
+	}
+	return out, nil
+}
+
+// ceilingBand is how close to its grant a run has to land before its spend is
+// read as censored. Not equality: a run stopped at its ceiling stops on the
+// turn that crossed it, so the recorded figure lands just under or just over.
+const ceilingBand = 0.98
+
+type costRow struct {
+	typeName string
+	grant    float64
+	spent    *float64
+}
+
+// costRows reads finished steps. Only `ok` rows: a step that failed spent what
+// it spent, but it is not evidence of what the work costs when it works.
+func (s *Store) costRows(ctx context.Context, repository string) ([]costRow, error) {
+	query := `SELECT s.type_name, s.grant_usd, s.spent_usd
+	          FROM workflow_step s JOIN workflow w ON w.id = s.workflow_id
+	          WHERE s.verdict = ?`
+	args := []any{contract.VerdictOK.String()}
+	if repository != "" {
+		query += " AND w.repository = ?"
+		args = append(args, repository)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reading costs")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []costRow
+	for rows.Next() {
+		var row costRow
+		if err := rows.Scan(&row.typeName, &row.grant, &row.spent); err != nil {
+			return nil, unavailable(err, "workflow: reading costs")
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, unavailable(err, "workflow: reading costs")
+	}
+	return out, nil
+}
+
+// median of a sorted slice. Even counts take the mean of the middle pair,
+// which is the ordinary definition and not a decision worth a knob.
+func median(sorted []float64) float64 {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
 }

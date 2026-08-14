@@ -828,6 +828,38 @@ same note found twice is served once. This is why `explore` declares
 `history`: those facts were paid for, and a commission that rediscovers them
 pays for them again.
 
+The `workspace` level names the repositories this machine knows, and carries
+**what each agent type has actually cost here**. This is why `plan` declares
+it: a planner dividing a grant with no idea what exploring costs divides it
+evenly, and every step it writes stops at a ceiling it could not have known
+was too low. Measured 2026-08-14: a plan allocated `$0.10` to a step whose type
+had never once finished under `$1.26`.
+
+The figures are read back from the workflow record — `median`, the range, and
+`n`, which travels with every median because three samples and thirty are
+different claims. Three exclusions are deliberate and are printed rather than
+hidden:
+
+- **A run that spent its whole grant is excluded and counted.** It is a lower
+  bound — "at least this much" — and averaging those in is exactly how a
+  measured table becomes the under-estimate it was built to replace.
+- **A run nobody could price is excluded and counted.** A turn killed at its
+  timeout is not a cheap turn.
+- **A type with no rows is reported as `never measured`, in those words.** Not
+  a zero, not a dash, not an omitted line: "nobody has priced this" and "this
+  is cheap" are different facts, and only one of them is safe to plan against.
+
+Two limits ship with it. The figures cover **workflow steps only** — a single
+`atenea agent` run is priced nowhere, because `agent_trace` has no spend
+column — and the table says so on every render. And the scope is the
+repository the run was recorded against, falling back to **machine-wide** when
+that repository has no rows yet, which it says in those words rather than
+presenting another tree's numbers as this one's.
+
+None of it is enforced. A share below the measured median compiles and runs:
+a machine with history refusing plans that a fresh install accepts is a worse
+failure than an under-allocated grant, and the grant is the operator's call.
+
 `[[agent.result]]` compiles to a strict JSON schema -- `additionalProperties`
 is false -- so an answer carrying a field nobody declared is refused at the
 boundary rather than believed. A refused answer is `incomplete`, not `failed`:

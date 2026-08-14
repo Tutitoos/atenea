@@ -1434,8 +1434,10 @@ args = ["agent-exec", "plan"]
 reads_subject = true
 # It plans from what `explore` handed it, not from a fresh look of its own:
 # the exploration arrives as the subject, and re-reading the repository here
-# would pay for the expensive half twice.
-context = ["repository"]
+# would pay for the expensive half twice. The workspace level is what carries
+# the measured cost of each agent type: a planner dividing a grant evenly
+# because it has no idea what exploring costs is the failure this closes.
+context = ["repository", "workspace"]
 effects = ["read"]
 max_duration = "10m"
 max_tokens = 200000
