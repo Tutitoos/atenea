@@ -598,3 +598,40 @@ func TestATurnIsNotStartedInSafeMode(t *testing.T) {
 		t.Error("--strict-mcp-config is missing: the turn would see this machine's other servers")
 	}
 }
+
+// A prompt that cannot be read cannot be measured: this records the string on
+// the way out, so a reader is never comparing against a stub's copy of it.
+func TestThePromptLogRecordsWhatWasSent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(PromptLogEnv, dir)
+
+	client := testClient(t, `{"result":"ok","is_error":false,"subtype":"success"}`)
+	req := baseRequest()
+	req.Prompt = "the exact words the planner reads"
+	if _, err := client.Turn(t.Context(), req); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+
+	entries, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want one recorded turn, got %v (%v)", entries, err)
+	}
+	body, err := os.ReadFile(entries[0])
+	if err != nil {
+		t.Fatalf("reading the record: %v", err)
+	}
+	for _, want := range []string{"the exact words the planner reads", "--print"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the record is missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// Unset is the normal case: no directory, no recording, and no failure.
+func TestNoPromptLogWithoutADirectory(t *testing.T) {
+	t.Setenv(PromptLogEnv, "")
+	client := testClient(t, `{"result":"ok","is_error":false,"subtype":"success"}`)
+	if _, err := client.Turn(t.Context(), baseRequest()); err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+}

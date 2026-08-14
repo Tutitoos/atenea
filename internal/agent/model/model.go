@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -454,6 +455,7 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	// -- and without this a canceled turn leaves them running and blocks
 	// here until the longest-lived one exits. See internal/procgroup.
 	procgroup.Contain(cmd)
+	recordPrompt(req, argv)
 	stdout, runErr := cmd.Output()
 
 	var stderr string
@@ -482,6 +484,42 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 		return out, failureFor(out.reason(), runErr)
 	}
 	return out, nil
+}
+
+// PromptLogEnv names a directory where every prompt this package sends is
+// written before the turn runs, one file per turn.
+//
+// It exists because a prompt that cannot be read cannot be measured. Four
+// planning runs on 2026-08-14 were compared against a prompt captured from a
+// stub binary standing in for the CLI, which is a different string than the
+// real planner reads, and the difference was found by a grep returning a
+// figure from the wrong run. A record written at the call site cannot drift
+// from what was sent: it is the same value, on the way out.
+//
+// Unset means no recording, which is the normal case -- prompts carry the
+// repository's own text and belong in a directory an operator named, not in
+// a default one they did not.
+const PromptLogEnv = "ATENEA_PROMPT_LOG"
+
+// recordPrompt writes the prompt and argv of one turn, when asked to.
+//
+// Failures are silent by design: this is instrumentation, and a turn that
+// would have answered must not fail because a debugging directory is
+// read-only. The cost of that choice is that an unwritable path looks like
+// no turns, so the caller reading an empty directory checks the path first.
+func recordPrompt(req Request, argv []string) {
+	dir := strings.TrimSpace(os.Getenv(PromptLogEnv))
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	name := fmt.Sprintf("%d-%s-%d.txt", time.Now().UnixNano(), req.Role, os.Getpid())
+	var b strings.Builder
+	fmt.Fprintf(&b, "role: %s\nbudget_usd: %v\ntools: %v\n", req.Role, req.BudgetUSD, req.Builtins)
+	fmt.Fprintf(&b, "argv: %q\n\n----- prompt -----\n%s\n", argv, req.Prompt)
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644)
 }
 
 // envelope is the JSON one headless turn prints -- the same shape claudecode
