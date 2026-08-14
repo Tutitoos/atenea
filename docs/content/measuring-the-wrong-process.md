@@ -784,6 +784,99 @@ consistent with everything then measured, and both wrong; the honest state is
 a large effect, measured against one input, on a feature nobody had shown to
 help.
 
+## A thirteenth instrument: a retry that reported progress by re-sending a request that could only fail
+
+This one is not from Atenea. It surfaced in the omp harness on 2026-08-14, and it
+earns a place here anyway, because the page is about the shape and not about which
+tool produced it — and it is the cleanest instance of the shape yet. The earlier
+entries are all *readings* that describe the wrong thing. This is an *action*:
+well-formed, executed, reported as progress, and unable to do anything but fail.
+
+A session wedged. Every request to Anthropic came back `400 invalid_request_error`,
+rejected at `messages.1.content.5`: *thinking or redacted_thinking blocks in the
+latest assistant message cannot be modified*. That error is deterministic and about
+the request body — the same body re-sent can only earn it again. omp classified it
+as a transient failure: it retried, and on retry fell back `claude-sonnet-5:max →
+claude-opus-5`, and both the retry and the fallback re-sent the byte-identical
+assistant turn, thinking blocks and signatures unchanged.
+
+Five outbound requests were logged inside six minutes; this much is measured, from
+the bodies omp actually put on the wire:
+
+| # | model sent | thinking signed by | rejected at |
+| --- | --- | --- | --- |
+| 1 | `claude-sonnet-5` | `claude-sonnet-5` | `content.5` |
+| 2–5 | `claude-opus-5` | `claude-sonnet-5` | `content.5` |
+
+The error never moved off `content.5`. A genuine model/signature mismatch on the
+fallback would have failed at `content.0`; it did not, which is the tell that blocks
+0–4 validated under both models and the resend carried the one corrupt block along
+untouched. The TUI showed `Fallback: … -> claude-opus-5`, then `Retry failed after
+1 attempts`, and every later keystroke reproduced the same 400. The mechanism did
+not fail. It succeeded, on every attempt, at issuing a new and well-formed request
+that had been decided against before it left — a crash would have ended the session
+honestly; this kept it alive, showing retry progress, doing the wrong thing forever.
+
+What corrupted `content.5` in the first place is **not** measured here, and is filed
+as not measured. The proxy in front of the API was cleared by reading it — it
+rewrites only the `tools` array and forwards message content unchanged, confirmed
+from its source and its live transform feed — so the invalid body is omp's own
+outbound. The probable trigger is tool-search deferral collapsing a multi-round
+discovery into a single assistant turn of six thinking blocks, on a signing-proxy
+path that three earlier omp fixes (`#1531`, `#6495`, `#6717`) did not fully close;
+but no pre-collapse stream was captured and omp ships here as a compiled binary, so
+the mechanism stays a hypothesis. It is filed as one —
+[oh-my-pi#8559](https://github.com/can1357/oh-my-pi/issues/8559), marked inference
+inside the report itself.
+
+The retry is the half that is measured, and it is filed separately:
+[oh-my-pi#8558](https://github.com/can1357/oh-my-pi/issues/8558). The two are
+independent — repairing the corruption stops this particular loop, but the retry
+would still turn the next non-retryable `400` into the same unbreakable cycle,
+because the defect is the classification, not the block. A `400
+invalid_request_error` about message content is not transient; retrying it by
+re-send, and falling back to another model with the previous model's signed thinking
+still attached, are two ways of spending attempts on a request that cannot be
+granted.
+
+The shape, for the index: **an action that returns something answer-shaped instead
+of erroring is the same failure as an instrument that reads something answer-shaped
+instead of reporting *unknown*** (see 12). A retry that re-sends a guaranteed-invalid
+body is a `fine` standing where the honest state was *this cannot succeed*, and the
+fix points the same way this page keeps arriving at from every other side: make the
+failure loud — refuse the resend, surface the terminal error — rather than let a
+well-formed motion stand in for progress.
+
+### What happened to both halves
+
+Both were fixed the same afternoon, by someone else, within twenty minutes of
+being filed — and the two outcomes are worth separating, because they are not
+the same kind of result.
+
+The measured half needed no defence. #8558 was reproduced on `main` in ten
+minutes and closed by [#8560](https://github.com/can1357/oh-my-pi/pull/8560):
+the deterministic immutable-thinking `400` now surfaces as terminal, with no
+same-model retry, no model fallback, and no retry-progress event. That is what
+a measured report buys — nobody had to agree with an interpretation, only read
+a table of five requests and their rejections.
+
+The unmeasured half was **confirmed, and the confirmation was not mine**. The
+report ordered three candidate mechanisms by fit and refused to pick one. The
+first — server and tool-search blocks dropped during the collapse, extending
+the `#6495` family — is the one that reproduced: a focused stream emitting
+`thinking → server_tool_use → tool_search_tool_result → thinking → tool_use`
+persisted as `thinking → thinking → tool_use`, both tool-search blocks dropped
+before the custom-endpoint projector runs. Fixed in
+[#8561](https://github.com/can1357/oh-my-pi/pull/8561).
+
+Being right about the hypothesis is the least interesting part of that, and it
+would have been just as correct to be wrong. What did the work was the report
+naming the experiment it could not run — *replay the latest assistant message
+and assert every original block survives byte-for-byte, in order* — and someone
+with source access and a stream capture running exactly that. The half I could
+not measure was closed faster than the half I could, because it was labelled as
+unmeasured and came with the test that would settle it.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -943,6 +1036,20 @@ help.
     informed explored 2–4× less for the same money. Ask what a feature changed,
     not only whether it changed what it was for. The second question is the one
     with an answer prepared in advance, and it is the cheaper half.
+18. **Name the experiment you could not run.** An unmeasured half is not a hole
+    in a report; it is the part of it somebody else can act on, but only if it
+    arrives as a question with a procedure attached. On 2026-08-14 a defect was
+    split into what was on the wire — five requests, five rejections, all at
+    `content.5` — and what was not: which mutation produced that block, which
+    needed a stream capture and a source read this machine could not do. The
+    unmeasured half named three candidates ordered by fit, refused to pick, and
+    stated the assertion that would separate them. It was reproduced and fixed
+    by someone with the access, faster than the measured half. The lesson is not
+    that the leading hypothesis happened to be right — being wrong there costs
+    nothing when it is labelled. It is that *I do not know* is a dead end when it
+    stands alone and a work item when it carries the test, and that the cost of
+    labelling it is one sentence against the cost of a confident guess that gets
+    believed.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
