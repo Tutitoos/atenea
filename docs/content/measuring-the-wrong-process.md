@@ -543,6 +543,109 @@ something adjacent to the question. Here the adjacency is *whose* limit — the
 client's model table and the server's enforcement are two different claims, and
 only one of them 400s.
 
+## A tenth instrument: correct evidence that made the answer worse
+
+Every instrument above measured the wrong thing. This one measured the right
+thing, reported it accurately, and the output got worse anyway — which makes
+it the most useful entry on the page.
+
+A planner divides a grant between the steps it writes. It had no idea what
+anything cost, so it divided evenly: on 2026-08-14 it gave `$0.10` to a step
+whose type had never finished under `$1.26`. The fix was to read back what
+each agent type had actually cost from the workflow record and put it in the
+prompt — median, range, sample count, with censored rows excluded and counted.
+The mechanism was built, unit-tested at every layer, and verified end to end
+by capturing the argv of a stubbed model CLI: the table arrived, verbatim.
+
+What the planner was handed, scoped correctly, every figure true:
+
+```
+  - filereader: never measured
+  - reviewer:   never measured
+  - plan-check: never measured (excluded: 1 ran unpriced)
+  - explore:    median $1.29 over n=1 run(s), range $1.29-$1.29
+  - plan:       median $0.28 over n=1 run(s), range $0.28-$0.28
+```
+
+The plan it produced dropped `explore` entirely — six `filereader` steps and
+two reviewers, a graph that **cannot search the repository it is auditing**.
+The previous plan, written without the table, used five explorers. Same
+binary, same commission, same grant; the cost table was the only variable.
+
+The prompt carried a sentence written to prevent exactly this: *"never
+measured" means exactly that: nobody has priced it here, not that it is free.*
+It did not survive contact with the number beside it.
+
+### The hypothesis, and the measurement that refused it
+
+The reading at the time: the number was not the problem, the **asymmetry**
+was. One type carried a figure and every other type carried a phrase, and a
+model minimising cost reads that as a ranking with one known-expensive entry.
+A median over one sample is not a median anyway — it is an anecdote with a
+statistic's name on it — so withholding it below three clean runs was correct
+on its own terms and cost nothing to do.
+
+It was done, and it was tested. The threshold works: reconstructed against a
+copy of the database as it stood, the next planner was handed
+
+```
+  - filereader: never measured (excluded: 1 ran unpriced)
+  - reviewer:   never measured
+  - plan-check: never measured (excluded: 2 ran unpriced)
+  - explore:    never measured (2 clean runs so far, too few for a median)
+  - plan:       never measured (2 clean runs so far, too few for a median)
+```
+
+— no figure anywhere, perfect symmetry between the priced and the unpriced.
+
+**`explore` did not come back.** Three `filereader` steps and four reviewers,
+`$0.88` of `$3.50`, still no step that can search. The asymmetry hypothesis is
+**refuted**: whatever removed the searching type from the graph, it was not
+the published median, because the median was gone and the type stayed gone.
+
+What is left of the difference between the plans that used explorers and the
+plans that do not is the cost section as a whole — its header, five lines that
+say nothing is priced, and a closing paragraph warning that a share below what
+a type costs buys a step that stops at its ceiling having produced nothing.
+That warning is the current suspect: told that under-funding is the danger and
+that no type's cost is known, choosing the types that plausibly cost nothing is
+a defensible reading. It is a hypothesis with two runs either side of it, and
+it is recorded here as a hypothesis.
+
+Two entries on this page for one change, then: a measurement that improved the
+evidence and did not improve the answer, and a correction to it that was right
+and did not work either. Both are kept, because a page that only records the
+diagnoses that landed teaches the wrong lesson about how often they do.
+
+### The general shape
+
+**Evidence a model can act on is not the same as evidence a model reads
+correctly.** Every prior entry on this page asks whether the number is true.
+This one asks a second question that no amount of accuracy answers: *what
+distinction does publishing it draw, and is that distinction real?* A figure
+published beside an absence is not one fact, it is two — the figure, and the
+contrast — and the second one is invented by the layout rather than measured.
+
+Three rules follow. The first two are earned; the third is the one this entry
+exists to record.
+
+1. **Publish a statistic only where the data supports the word.** `median`
+   over `n=1` is a category error, and the reader is entitled to take the word
+   at face value. This one is right whether or not it fixes anything.
+2. **An absence beside a number is a comparison.** Where some rows are unknown,
+   the unknowns and the knowns must be rendered so that the difference between
+   them cannot be read as an ordering.
+3. **A plausible mechanism is not a diagnosis until the fix moves the
+   number.** The asymmetry story explained every fact available when it was
+   written, named a real defect, and produced a change that was correct in
+   isolation — and the output did not move. Explaining the observation is the
+   cheap half; the expensive half is the run that could have refuted you, and
+   this one did.
+
+What survives unrefuted is narrower than it felt at the time: adding a section
+of cost evidence to a prompt changed the plan, in the wrong direction, and no
+correction attempted so far has changed it back. The cause is still open.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim

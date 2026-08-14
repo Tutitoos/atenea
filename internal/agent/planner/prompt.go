@@ -318,14 +318,14 @@ func measuredCosts(in assignment, cfg config.Config) string {
 
 	for _, declared := range cfg.Agents {
 		cost, measured := level.Costs.Types[declared.Spec.Name]
-		if !measured || cost.N == 0 {
-			fmt.Fprintf(&b, "  - %s: never measured%s\n",
-				declared.Spec.Name, excluded(cost.AtCeiling, cost.Unmeasured))
+		if !measured || cost.N < publishableN {
+			fmt.Fprintf(&b, "  - %s: never measured%s\n", declared.Spec.Name,
+				parenthetical(sampleCount(cost.N), exclusions(cost.AtCeiling, cost.Unmeasured)))
 			continue
 		}
 		fmt.Fprintf(&b, "  - %s: median $%.2f over n=%d run(s), range $%.2f-$%.2f%s\n",
 			declared.Spec.Name, cost.MedianUSD, cost.N, cost.MinUSD, cost.MaxUSD,
-			excluded(cost.AtCeiling, cost.Unmeasured))
+			parenthetical(exclusions(cost.AtCeiling, cost.Unmeasured)))
 	}
 
 	b.WriteString(`
@@ -338,9 +338,39 @@ has priced it here, not that it is free.
 	return b.String()
 }
 
-// excluded names the rows the median left out, so the exclusion is visible
+// publishableN is the fewest clean runs a median may be built from before it
+// is printed as one.
+//
+// Below it the type reads `never measured`, in the same words as a type with
+// no runs at all, because that is what it is: one sample is an anecdote, and
+// naming it a median publishes a false distinction between a type somebody
+// happened to run once and a type nobody has run. Measured 2026-08-14: told
+// `explore: median $1.29 over n=1` while every other type read never
+// measured, a planner dropped explore from the graph entirely and wrote a
+// plan that could not search the repository it was auditing. It acted on the
+// asymmetry, not the number -- so the fix is to stop manufacturing the
+// asymmetry, not to argue with it in prose.
+//
+// Three is the smallest n where a median is a middle rather than a pick.
+const publishableN = 3
+
+// sampleCount says how many clean runs are behind a withheld median. The
+// count is a fact and costs nothing to know; the median it cannot support is
+// the thing being withheld.
+func sampleCount(n int) string {
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return "1 clean run so far, too few for a median"
+	default:
+		return fmt.Sprintf("%d clean runs so far, too few for a median", n)
+	}
+}
+
+// exclusions names the rows a median left out, so the exclusion is visible
 // rather than silently improving the number.
-func excluded(atCeiling, unmeasured int) string {
+func exclusions(atCeiling, unmeasured int) string {
 	var parts []string
 	if atCeiling > 0 {
 		parts = append(parts, fmt.Sprintf("%d stopped at its ceiling", atCeiling))
@@ -351,5 +381,19 @@ func excluded(atCeiling, unmeasured int) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return " (excluded: " + strings.Join(parts, ", ") + ")"
+	return "excluded: " + strings.Join(parts, ", ")
+}
+
+// parenthetical joins the notes that follow a line, dropping the empty ones.
+func parenthetical(notes ...string) string {
+	var kept []string
+	for _, note := range notes {
+		if note != "" {
+			kept = append(kept, note)
+		}
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(kept, "; ") + ")"
 }

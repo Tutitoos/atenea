@@ -123,3 +123,58 @@ func TestNoCostTableMeansNoSection(t *testing.T) {
 		t.Errorf("a machine with no measurements printed a cost table:\n%s", got)
 	}
 }
+
+// costsOf builds a served workspace level with one type's figures.
+func costsOf(t *testing.T, name string, fields map[string]any) assignment {
+	t.Helper()
+	return withCosts(planAssignment("ok", exploration()), map[string]any{
+		"costs": map[string]any{
+			"covers": "workflow steps only",
+			"types":  map[string]any{name: fields},
+		},
+	})
+}
+
+// One sample is an anecdote. Published as a median beside types that read
+// `never measured`, it manufactures a distinction the data cannot support --
+// measured 2026-08-14, a planner handed exactly that dropped the only type
+// that could search from the graph.
+func TestAMedianOfOneIsNotPublished(t *testing.T) {
+	got := planPrompt(costsOf(t, "explore", map[string]any{
+		"median_usd": 1.29, "min_usd": 1.29, "max_usd": 1.29, "n": 1,
+	}), planningTypes())
+
+	if strings.Contains(got, "median $1.29") {
+		t.Errorf("a median built from one run was published:\n%s", got)
+	}
+	if !strings.Contains(got, "explore: never measured") {
+		t.Errorf("a withheld median must read the same as no data at all:\n%s", got)
+	}
+}
+
+// Withholding the figure is not withholding the fact that runs exist: the
+// count is honest, cheap, and cannot be mistaken for a price.
+func TestAWithheldMedianStillPrintsItsSampleCount(t *testing.T) {
+	got := planPrompt(costsOf(t, "explore", map[string]any{
+		"median_usd": 1.29, "min_usd": 1.29, "max_usd": 1.29, "n": 2, "at_ceiling": 1,
+	}), planningTypes())
+
+	if !strings.Contains(got, "2 clean runs so far, too few for a median") {
+		t.Errorf("the sample count behind a withheld median is missing:\n%s", got)
+	}
+	if !strings.Contains(got, "1 stopped at its ceiling") {
+		t.Errorf("the exclusions are lost when the median is withheld:\n%s", got)
+	}
+}
+
+// At the threshold a median is a middle rather than a pick, and it is
+// published. The line either side of the boundary is the whole rule.
+func TestTheThirdCleanRunPublishesTheMedian(t *testing.T) {
+	got := planPrompt(costsOf(t, "explore", map[string]any{
+		"median_usd": 1.63, "min_usd": 1.26, "max_usd": 2.16, "n": 3,
+	}), planningTypes())
+
+	if !strings.Contains(got, "explore: median $1.63 over n=3 run(s)") {
+		t.Errorf("three clean runs must publish:\n%s", got)
+	}
+}
