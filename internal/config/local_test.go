@@ -661,3 +661,157 @@ func find(t *testing.T, cfg Config, id string) contract.Repository {
 	t.Fatalf("repository %q is gone from %+v", id, cfg.Repositories)
 	return contract.Repository{}
 }
+
+// stale writes the shipped default with [local_agents] deleted: a settings
+// file exactly as it would be on a machine set up before the ceiling existed,
+// rather than a fixture missing a key it never had.
+func stale(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "atenea.toml")
+	if err := WriteDefault(path, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	lines := strings.Split(string(body), "\n")
+	kept := make([]string, 0, len(lines))
+	inside := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "[") {
+			inside = strings.HasPrefix(line, "[local_agents]")
+		}
+		if !inside {
+			kept = append(kept, line)
+		}
+	}
+	out := strings.Join(kept, "\n")
+	if strings.Contains(out, "local_agents") {
+		t.Fatalf("the block survived the strip, so this file is not stale")
+	}
+	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return path
+}
+
+// The one that matters most. Every settings file in existence on the day this
+// shipped predates it, so the default cannot live in the file -- it has to
+// survive the file saying nothing. An absent ceiling reading as no ceiling is
+// the same failure as an unmeasured cost reading as free.
+func TestASettingsFileThatPredatesTheCeilingStillGetsIt(t *testing.T) {
+	cfg, err := Load(stale(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Equal(cfg.LocalAgents.Effects, DefaultLocalAgents().Effects) ||
+		!slices.Equal(cfg.LocalAgents.Context, DefaultLocalAgents().Context) {
+		t.Fatalf("a file with no block loaded the ceiling %+v, want the default %+v",
+			cfg.LocalAgents, DefaultLocalAgents())
+	}
+
+	// And it is a ceiling in force, not a value sitting in a struct: `plan`
+	// really is served the workspace, so this is the cap cutting a level the
+	// borrowed type genuinely holds.
+	root := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \"plan\"\nsummary = \"s\"\ncontext = [\"workspace\"]\n")
+	if _, err := withLocal(cfg, root); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+	}
+
+	quiet := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \"plan\"\nsummary = \"s\"\n")
+	merged, err := withLocal(cfg, quiet)
+	if err != nil {
+		t.Fatalf("withLocal: %v", err)
+	}
+	got, err := merged.AgentTypeByName("mine")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(got.Context) != 1 || got.Context[0] != contract.ContextRepository {
+		t.Errorf("context = %v, want repository alone", got.Context)
+	}
+}
+
+// A Config assembled in code has a nil ceiling, which is neither "the default"
+// nor "an empty list" until something decides. Nil is the default, field by
+// field; empty stays empty, because a machine that wrote `effects = []` meant
+// it.
+func TestAnUnsetCeilingIsTheDefaultAndAnEmptyOneIsOff(t *testing.T) {
+	body := "[[agent]]\nname = \"mine\"\nruns = \"reviewer\"\nsummary = \"s\"\n"
+
+	root := repo(t, t.TempDir(), body)
+	unset := base(t, root)
+	unset.LocalAgents = LocalAgents{}
+	merged, err := withLocal(unset, root)
+	if err != nil {
+		t.Fatalf("an unset ceiling refused everything: %v", err)
+	}
+	if got, err := merged.AgentTypeByName("mine"); err != nil ||
+		len(got.Effects) != 1 || got.Effects[0] != contract.EffectRead {
+		t.Errorf("effects = %v (%v), want read alone", got.Effects, err)
+	}
+
+	off := repo(t, t.TempDir(), body)
+	cfg := base(t, off)
+	cfg.LocalAgents = LocalAgents{Effects: []contract.Effect{}, Context: []contract.ContextLevel{}}
+	if _, err := withLocal(cfg, off); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("an empty ceiling accepted a type: %v", err)
+	}
+}
+
+// The machine may hold a repository's type below what a generous shipped type
+// would allow it. Declared numbers over that are refused; omitted ones inherit
+// the tighter of the two, because saying nothing must not be a way to hold
+// more than saying something.
+func TestTheMachineMayCapLimitsBelowTheTypeBeingRun(t *testing.T) {
+	capped := func(t *testing.T, root string) Config {
+		cfg := base(t, root)
+		cfg.LocalAgents = LocalAgents{Limits: contract.Limits{MaxTokens: 500}}
+		return cfg
+	}
+
+	quiet := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \"reviewer\"\nsummary = \"s\"\n")
+	merged, err := withLocal(capped(t, quiet), quiet)
+	if err != nil {
+		t.Fatalf("withLocal: %v", err)
+	}
+	got, err := merged.AgentTypeByName("mine")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Limits.MaxTokens != 500 {
+		t.Errorf("max_tokens = %d, want the machine's 500 rather than the shipped %d",
+			got.Limits.MaxTokens, shipped(t, "reviewer").Limits.MaxTokens)
+	}
+
+	asking := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \"reviewer\"\nsummary = \"s\"\nmax_tokens = 100000\n")
+	_, err = withLocal(capped(t, asking), asking)
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "this machine allows") {
+		t.Errorf("the refusal does not name the machine's ceiling: %v", err)
+	}
+}
+
+// The ceiling is the machine's. A repository setting it would be granting
+// itself the permissions it is being held to, which is the whole point of
+// having one.
+func TestARepositoryMayNotRaiseItsOwnCeiling(t *testing.T) {
+	root := repo(t, t.TempDir(),
+		"[local_agents]\neffects = [\"read\", \"write\"]\ncontext = [\"workspace\"]\n")
+	_, err := withLocal(base(t, root), root)
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", contract.KindOf(err), err)
+	}
+	for _, want := range []string{"local_agents", "held to"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}

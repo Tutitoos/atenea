@@ -59,10 +59,13 @@ type Config struct {
 	// agents, explore and plan, by role.
 	Model Model
 	// Workflow is how a graph of agent steps is scheduled.
-	Workflow        Workflow
-	Metrics         Metrics
-	Backup          Backup
-	Security        Security
+	Workflow Workflow
+	Metrics  Metrics
+	Backup   Backup
+	Security Security
+	// LocalAgents caps the agent types a repository declares for itself.
+	// Never the zero value: an absent block is DefaultLocalAgents.
+	LocalAgents     LocalAgents
 	Selector        selector.Config
 	Capabilities    []contract.Capability
 	Implementations []contract.Implementation
@@ -489,6 +492,74 @@ type Security struct {
 	Sensitive []string
 }
 
+// LocalAgents is the ceiling on an agent type a repository declares in its
+// own `.atenea/config.toml`.
+//
+// It exists because "may only narrow" needs something to be narrower than. A
+// repository redefining a shipped type is measured against that type, but a
+// repository adding a NEW one has no counterpart, and a rule with no referent
+// is not a rule. This is the referent.
+//
+// The defaults are the whole design. A settings file that predates this
+// feature says nothing about it, which is every settings file in existence
+// when it shipped -- and an absent ceiling that reads as no ceiling is the
+// same failure as an unmeasured cost that reads as free. So the zero value of
+// this struct is never what applies: [DefaultLocalAgents] is, and the file
+// may only be read on top of it. The same shape is already documented one
+// field up in Config.Missing, where a settings file predating a release never
+// gained what that release shipped and nothing said so.
+type LocalAgents struct {
+	// Effects is the most a locally declared type may cause. Read alone by
+	// default: it is what every type this project ships holds, so it is the
+	// floor of usefulness rather than a token gesture.
+	//
+	// An explicitly empty list turns the feature off -- a type that may
+	// cause nothing is refused by AgentType.Validate -- which is the switch
+	// for a machine that wants none of this.
+	Effects []contract.Effect
+	// Context is the most a locally declared type may be served. The
+	// repository alone by default, because it is the only level that cannot
+	// leak: `workspace` is the catalog of every repository on this machine
+	// and `history` is what other runs of the same type were told.
+	Context []contract.ContextLevel
+	// Limits caps one run of a locally declared type. Zero on either field
+	// means the machine states no number of its own and the ceiling is the
+	// one already in force: the limits of the shipped type being run, which
+	// a local type may lower and never raise. That is a real bound, so an
+	// omitted key here is not an open door -- it is a deferral to a door
+	// that is already shut.
+	Limits contract.Limits
+}
+
+// orDefault fills in what nobody stated, field by field.
+//
+// Two ways to arrive here with nothing set, and they need the same answer.
+// The settings file may have no [local_agents] block, which build already
+// handles; or a Config may be assembled in code -- a test, an embedder --
+// where the zero value is nil rather than the default. Left alone, nil reads
+// as an empty list, which is the machine allowing local types NOTHING: fail
+// closed, and safe, but a feature that quietly stops working is not the same
+// as one that was turned off on purpose. An explicitly empty list still means
+// off, because empty and absent stay different all the way down.
+func (l LocalAgents) orDefault() LocalAgents {
+	fallback := DefaultLocalAgents()
+	if l.Effects == nil {
+		l.Effects = fallback.Effects
+	}
+	if l.Context == nil {
+		l.Context = fallback.Context
+	}
+	return l
+}
+
+// DefaultLocalAgents is what applies when the settings file says nothing.
+func DefaultLocalAgents() LocalAgents {
+	return LocalAgents{
+		Effects: []contract.Effect{contract.EffectRead},
+		Context: []contract.ContextLevel{contract.ContextRepository},
+	}
+}
+
 // RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory and
 // RunnerLocal are the values orchestrator.runners accepts.
 const (
@@ -638,6 +709,7 @@ type file struct {
 	Metrics         fileMetrics      `toml:"metrics"`
 	Backup          fileBackup       `toml:"backup"`
 	Security        fileSecurity     `toml:"security"`
+	LocalAgents     fileLocalAgents  `toml:"local_agents"`
 	Selector        fileSelector     `toml:"selector"`
 	Capabilities    []fileCapability `toml:"capability"`
 	Implementations []fileImpl       `toml:"implementation"`
@@ -708,6 +780,18 @@ type fileOMPAdapter struct {
 	Implementations *[]string `toml:"implementations"`
 	MatchLimit      *int      `toml:"match_limit"`
 	Timeout         string    `toml:"timeout"`
+}
+
+// fileLocalAgents is [local_agents] as written. Pointers throughout, so that
+// an omitted key inherits the default and an explicitly empty list is the
+// machine saying no -- the same distinction fileSecurity draws, for a closer
+// reason: `effects = []` here refuses every locally declared type, and
+// leaving `effects` out must not be read as the same statement.
+type fileLocalAgents struct {
+	Effects     *[]string `toml:"effects"`
+	Context     *[]string `toml:"context"`
+	MaxDuration *string   `toml:"max_duration"`
+	MaxTokens   *int      `toml:"max_tokens"`
 }
 
 type fileClaudeCodeAdapter struct {
@@ -1079,6 +1163,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Workflow, err = decoded.Workflow.build(source); err != nil {
+		return Config{}, err
+	}
+	if cfg.LocalAgents, err = decoded.LocalAgents.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
@@ -1722,6 +1809,56 @@ func (s fileSecurity) build() Security {
 		return Security{Sensitive: defaultSensitive}
 	}
 	return Security{Sensitive: *s.Sensitive}
+}
+
+// build reads [local_agents] ON TOP OF the defaults, never instead of them.
+// A file with no block, which is every file written before this shipped,
+// comes back capped rather than uncapped.
+func (l fileLocalAgents) build(source string) (LocalAgents, error) {
+	out := DefaultLocalAgents()
+	fail := func(format string, args ...any) (LocalAgents, error) {
+		return LocalAgents{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: local_agents: %s", source, fmt.Sprintf(format, args...))
+	}
+	if l.Effects != nil {
+		effects := make([]contract.Effect, 0, len(*l.Effects))
+		for _, name := range *l.Effects {
+			effect, err := contract.ParseEffect(name)
+			if err != nil {
+				return fail("%v", err)
+			}
+			effects = append(effects, effect)
+		}
+		out.Effects = effects
+	}
+	if l.Context != nil {
+		levels := make([]contract.ContextLevel, 0, len(*l.Context))
+		for _, name := range *l.Context {
+			level, err := contract.ParseContextLevel(name)
+			if err != nil {
+				return fail("%v", err)
+			}
+			levels = append(levels, level)
+		}
+		out.Context = levels
+	}
+	if l.MaxDuration != nil {
+		parsed, err := time.ParseDuration(strings.TrimSpace(*l.MaxDuration))
+		if err != nil {
+			return fail("max_duration %q: %v", *l.MaxDuration, err)
+		}
+		if parsed <= 0 {
+			return fail("max_duration must be positive, got %v", parsed)
+		}
+		out.Limits.MaxDuration = parsed
+	}
+	if l.MaxTokens != nil {
+		if *l.MaxTokens <= 0 {
+			return fail("max_tokens must be positive, got %d", *l.MaxTokens)
+		}
+		out.Limits.MaxTokens = *l.MaxTokens
+	}
+	return out, nil
 }
 
 func (c fileCore) build(source string) (Core, error) {

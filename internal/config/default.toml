@@ -353,6 +353,34 @@ sensitive = [
   "*service-account*.json",
 ]
 
+[local_agents]
+# The ceiling on an agent type a REPOSITORY declares, in its own
+# `.atenea/config.toml`. Such a type has no command of its own: it names one
+# this file declares with `runs = "..."` and borrows its spawn. These are the
+# permissions it may hold while doing so.
+#
+# Deleting this block does NOT lift the ceiling, it restores these values --
+# which is also what a settings file written before the feature existed gets.
+# An absent ceiling that read as no ceiling would be the same mistake as an
+# unmeasured cost that reads as free.
+#
+# effects: read alone. It is what every agent type below holds, so it is the
+#   floor of usefulness and not a token gesture. An explicitly empty list
+#   turns repository-declared types off entirely: a type that may cause
+#   nothing is refused.
+# context: the repository alone. It is the only level that cannot leak --
+#   `workspace` is the catalog of every repository on this machine, and
+#   `history` is what other runs of the same type were told.
+effects = ["read"]
+context = ["repository"]
+
+# max_duration and max_tokens are unset on purpose. A local type is already
+# bounded by the limits of the type it runs, which it may lower and never
+# raise; state a number here only to hold a cloned repository below what a
+# generous shipped type would otherwise allow it.
+# max_duration = "5m"
+# max_tokens = 20000
+
 # ---------------------------------------------------------------------------
 # Capabilities: the stable "what". Agnostic of any tool, by definition.
 # ---------------------------------------------------------------------------

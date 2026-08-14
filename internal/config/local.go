@@ -162,6 +162,7 @@ var refusedLocally = map[string]string{
 	"backup":         "the backup target is machine-wide state",
 	"capability":     "the catalog is what Atenea answers for; a repository redefining it would change what a name means",
 	"implementation": "a repository cannot declare what runs behind a capability, only prefer among the implementations already declared",
+	"local_agents":   "it is the ceiling on what a repository's own types may do, so a repository setting it would be granting itself the permissions it is being held to",
 	"mcp_server":     "it carries a command to launch, so a cloned repository would be handing this machine a process to run",
 }
 
@@ -549,24 +550,11 @@ func localSensitive(security Security, declared *[]string) Security {
 	return security
 }
 
-// localEffectCeiling and localContextCeiling are the machine-side cap on a
-// type a repository declared: it may cause nothing but a read, and it may see
-// nothing but the repository it came from.
-//
-// The cap is a constant here and a setting in neither file, which is
-// deliberate for one release: a repository cannot raise it, and neither can a
-// global file that predates the feature and therefore says nothing about it.
-// An absent ceiling that reads as no ceiling is the same failure shape as an
-// unmeasured cost that reads as free.
-//
-// Read is the floor of usefulness rather than a token gesture -- every shipped
-// type holds exactly this and nothing more. Repository is the level that
-// cannot leak: `workspace` is the catalog of every repository on the machine,
-// and `history` is what other runs of this type were told.
-var (
-	localEffectCeiling  = []contract.Effect{contract.EffectRead}
-	localContextCeiling = []contract.ContextLevel{contract.ContextRepository}
-)
+// The machine-side cap on a type a repository declared now lives in
+// [LocalAgents], read from `[local_agents]` and defaulted by
+// [DefaultLocalAgents] when the settings file says nothing -- which is what
+// every settings file written before the feature says. It was a pair of
+// constants here for exactly one commit.
 
 // localSummaryMax caps a repository's own summary.
 //
@@ -613,7 +601,7 @@ func localAgents(cfg Config, declared []localAgent, source string, local *Local)
 	}
 
 	for _, want := range declared {
-		built, err := buildLocalAgent(want, shipped, taken, source)
+		built, err := buildLocalAgent(want, shipped, taken, cfg.LocalAgents.orDefault(), source)
 		if err != nil {
 			return Config{}, err
 		}
@@ -627,7 +615,7 @@ func localAgents(cfg Config, declared []localAgent, source string, local *Local)
 
 // buildLocalAgent turns one declared block into a type, or says why not.
 func buildLocalAgent(want localAgent, shipped map[string]AgentType,
-	taken map[string]string, source string) (AgentType, error) {
+	taken map[string]string, ceiling LocalAgents, source string) (AgentType, error) {
 	name := strings.TrimSpace(want.Name)
 	fail := func(format string, args ...any) (AgentType, error) {
 		return AgentType{}, contract.Fail(contract.FailureInvalidInput,
@@ -704,7 +692,7 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 	}
 
 	if want.Effects == nil {
-		out.Effects = intersectEffects(base.Effects, localEffectCeiling)
+		out.Effects = intersectEffects(base.Effects, ceiling.Effects)
 	} else {
 		effects := make([]contract.Effect, 0, len(*want.Effects))
 		for _, declared := range *want.Effects {
@@ -715,9 +703,9 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 			if !slices.Contains(base.Effects, effect) {
 				return fail("effect %s, which %s does not hold", effect, runs)
 			}
-			if !slices.Contains(localEffectCeiling, effect) {
-				return fail("effect %s: a type declared by a repository may cause %s and nothing else",
-					effect, joinEffects(localEffectCeiling))
+			if !slices.Contains(ceiling.Effects, effect) {
+				return fail("effect %s: a type declared by a repository may cause %s",
+					effect, orNothing(joinEffects(ceiling.Effects)))
 			}
 			effects = append(effects, effect)
 		}
@@ -725,7 +713,7 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 	}
 
 	if want.Context == nil {
-		out.Context = intersectLevels(base.Context, localContextCeiling)
+		out.Context = intersectLevels(base.Context, ceiling.Context)
 	} else {
 		levels := make([]contract.ContextLevel, 0, len(*want.Context))
 		for _, declared := range *want.Context {
@@ -736,16 +724,29 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 			if !slices.Contains(base.Context, level) {
 				return fail("context %s, which %s is not served", level, runs)
 			}
-			if !slices.Contains(localContextCeiling, level) {
-				return fail("context %s: a type declared by a repository is served %s and nothing else",
-					level, joinLevels(localContextCeiling))
+			if !slices.Contains(ceiling.Context, level) {
+				return fail("context %s: a type declared by a repository is served %s",
+					level, orNothing(joinLevels(ceiling.Context)))
 			}
 			levels = append(levels, level)
 		}
 		out.Context = levels
 	}
 
-	limits := base.Limits
+	// Two ceilings on the same numbers. What is inherited is the tighter of
+	// the two, for the same reason an omitted effects list inherits the
+	// intersection: saying nothing must not be a way to hold more than
+	// saying something. What is declared is checked against both, and each
+	// refusal names the ceiling it broke rather than the one that happened
+	// to be lower.
+	inherited := base.Limits
+	if ceiling.Limits.MaxDuration > 0 && ceiling.Limits.MaxDuration < inherited.MaxDuration {
+		inherited.MaxDuration = ceiling.Limits.MaxDuration
+	}
+	if ceiling.Limits.MaxTokens > 0 && ceiling.Limits.MaxTokens < inherited.MaxTokens {
+		inherited.MaxTokens = ceiling.Limits.MaxTokens
+	}
+	limits := inherited
 	if want.MaxDuration != nil {
 		parsed, err := time.ParseDuration(strings.TrimSpace(*want.MaxDuration))
 		if err != nil {
@@ -760,6 +761,11 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 		return fail("limits %v and %d tokens, over the %v and %d that %s allows",
 			limits.MaxDuration, limits.MaxTokens,
 			base.Limits.MaxDuration, base.Limits.MaxTokens, runs)
+	}
+	if !limits.Fits(inherited) {
+		return fail("limits %v and %d tokens, over the %v and %d this machine allows a type a repository declared",
+			limits.MaxDuration, limits.MaxTokens,
+			inherited.MaxDuration, inherited.MaxTokens)
 	}
 	out.Limits = limits
 
@@ -808,6 +814,17 @@ func intersectLevels(declared, ceiling []contract.ContextLevel) []contract.Conte
 		}
 	}
 	return out
+}
+
+// orNothing keeps the refusal readable when the ceiling is empty. An empty
+// list in [local_agents] turns locally declared types off entirely, and a
+// message reading "may cause " with nothing after it is how a setting working
+// exactly as asked would look like a bug.
+func orNothing(list string) string {
+	if list == "" {
+		return "nothing at all: this machine's local_agents block is empty"
+	}
+	return list + " and nothing else"
 }
 
 func joinEffects(effects []contract.Effect) string {
