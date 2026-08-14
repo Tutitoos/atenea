@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/trace"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // Serve builds an engine over the same trace database the agents write to,
@@ -45,7 +48,19 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		_ = traces.Close()
 		return nil, nil, err
 	}
-	workspace := WorkspaceFor(cfg, repository)
+	here, err := os.Getwd()
+	if err != nil {
+		_ = state.Close()
+		_ = traces.Close()
+		return nil, nil, contract.Fail(contract.FailureUnavailable,
+			"cannot read the working directory to resolve which repository this run is about: %v", err)
+	}
+	workspace, err := WorkspaceFor(cfg, repository, here)
+	if err != nil {
+		_ = state.Close()
+		_ = traces.Close()
+		return nil, nil, err
+	}
 	runner, err := agent.New(agent.Options{
 		Types:     cfg.Agents,
 		Store:     traces,
@@ -86,22 +101,79 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 }
 
 // WorkspaceFor resolves which repository an agent serves at the repository
-// context level.
-func WorkspaceFor(cfg config.Config, id string) agent.Workspace {
+// context level: the one named, or the one `dir` is inside.
+//
+// The directory is an argument because the answer is about where the work is,
+// and a long-lived process serving many runs must not answer from wherever it
+// was started.
+//
+// Two silent substitutions were removed here on 2026-08-14, both measured on
+// one real run. This machine's settings declare a repository whose id is
+// `current`, which was also the name this function invented for "the tree you
+// are standing in" -- so a run launched in /tmp/e2e/repo was served
+// /home/tutitoos/Desktop/atenea, and every agent in it was told it was
+// somewhere it was not. A sentinel that a settings file may legally declare is
+// not a sentinel. There is no invented name now: an unregistered tree serves
+// its own root under an empty id, which reads as "not one of the declared
+// repositories" and cannot be captured by declaring anything.
+//
+// The other was `id == ""` taking the first repository in the file. Order in a
+// settings file is not a statement about where anyone is working, and a
+// caller that named nothing is asking about here.
+func WorkspaceFor(cfg config.Config, id, dir string) (agent.Workspace, error) {
 	ws := agent.Workspace{AteneaVersion: buildinfo.Version}
 	for _, repo := range cfg.Repositories {
 		ws.Repositories = append(ws.Repositories, repo.ID)
-		if repo.ID == id || (id == "" && ws.RepositoryID == "") {
+	}
+	sort.Strings(ws.Repositories)
+
+	if id != "" {
+		for _, repo := range cfg.Repositories {
+			if repo.ID == id {
+				ws.RepositoryID, ws.RepositoryRoot = repo.ID, repo.Path
+				return ws, nil
+			}
+		}
+		// Falling back to the working directory here is how a typo becomes a
+		// run against a tree nobody named.
+		return agent.Workspace{}, contract.Fail(contract.FailureNotFound,
+			"no repository %q is declared: this machine declares %s",
+			id, strings.Join(ws.Repositories, ", "))
+	}
+
+	// Deepest wins: a repository nested inside another is the more specific
+	// answer about where this directory is.
+	for _, repo := range cfg.Repositories {
+		if !within(dir, repo.Path) {
+			continue
+		}
+		if len(repo.Path) > len(ws.RepositoryRoot) {
 			ws.RepositoryID, ws.RepositoryRoot = repo.ID, repo.Path
 		}
 	}
-	sort.Strings(ws.Repositories)
-	if ws.RepositoryRoot == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			ws.RepositoryID, ws.RepositoryRoot = "current", cwd
-		}
+	if ws.RepositoryRoot != "" {
+		return ws, nil
 	}
-	return ws
+	// Not a declared repository. The work still happens in a tree, and the
+	// agents still need a root, but no id is invented for it.
+	if root, ok := config.RepoRoot(dir); ok {
+		ws.RepositoryRoot = root
+		return ws, nil
+	}
+	ws.RepositoryRoot = dir
+	return ws, nil
+}
+
+// within reports whether dir is root or sits inside it.
+func within(dir, root string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return false
+	}
+	return rel == "." || !strings.HasPrefix(rel, "..")
 }
 
 // costsFor converts what the store measured into what an agent is served.
