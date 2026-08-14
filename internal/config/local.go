@@ -41,6 +41,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -76,6 +77,10 @@ type Local struct {
 	// show`: everything else in the effective settings came from the global
 	// file or the compiled fallbacks.
 	Keys []string
+	// Types are the agent types this overlay added, sorted. Named rather
+	// than counted: a reader asking which types this machine has wants to
+	// know which of them arrived with a clone.
+	Types []string
 }
 
 // localSettings is the whole of what a repository may declare. Every field is
@@ -93,6 +98,34 @@ type localSettings struct {
 	Repositories []localRepository `toml:"repository"`
 	Selector     localSelector     `toml:"selector"`
 	Security     localSecurity     `toml:"security"`
+	Agents       []localAgent      `toml:"agent"`
+}
+
+// localAgent is what a repository may declare about an agent type.
+//
+// Deliberately not fileAgent. The three keys that decide what actually runs
+// -- command, args and env -- have no field here, so the decoder reports them
+// undecoded and refuseUnreadableKeys names each one and why. What a local
+// type runs is chosen by `runs`, which may only name a type this machine has
+// already declared: the same latitude [[implementation]] gets, for the same
+// reason.
+//
+// Every optional field is a pointer so that omitted and empty stay different.
+// `effects = []` is a repository declaring a type that may cause nothing,
+// which Validate refuses; leaving `effects` out is a repository saying
+// nothing about them, which inherits the ceiling.
+type localAgent struct {
+	Name         string      `toml:"name"`
+	Runs         string      `toml:"runs"`
+	Summary      string      `toml:"summary"`
+	Kind         *string     `toml:"kind"`
+	Pool         *string     `toml:"pool"`
+	ReadsSubject *bool       `toml:"reads_subject"`
+	Context      *[]string   `toml:"context"`
+	Effects      *[]string   `toml:"effects"`
+	MaxDuration  *string     `toml:"max_duration"`
+	MaxTokens    *int        `toml:"max_tokens"`
+	Result       []fileField `toml:"result"`
 }
 
 type localRepository struct {
@@ -122,7 +155,6 @@ type localSecurity struct {
 // only "not allowed here" has to guess whether the layer is limited on
 // purpose or broken.
 var refusedLocally = map[string]string{
-	"agent":          "a type declaration carries the command Atenea spawns and the ceiling it runs under, so a cloned repository would be handing this machine a process to run and the permission to run it with",
 	"contract":       "the contract version is a property of this binary, not of a repository",
 	"core":           "operational knobs are machine-wide; a repository cannot retune the process that serves every other one",
 	"orchestrator":   "it carries commands to launch, so a cloned repository would be handing this machine a process to run",
@@ -136,15 +168,16 @@ var refusedLocally = map[string]string{
 // refusedLocalLeaves names the keys refused inside a block that is otherwise
 // allowed.
 //
-// The two agent keys are here rather than beside the block refusal above
-// because they outlive it. `agent` is refused whole today; the two keys named
-// here are refused for a reason that does not change if a repository is ever
-// allowed to declare a type at all, and a refusal that has to be re-derived
-// when that day comes is a refusal that will be re-derived wrongly.
+// The three agent keys are the spawn: the binary, its argv and its
+// environment. They are refused by name rather than by refusing the block
+// around them, because the reason holds whether or not a repository may
+// declare a type at all -- and since 2026-08-14 it may. A local type runs
+// what `runs` names, and these three come from the type it named.
 var refusedLocalLeaves = map[string]string{
 	"repository.id":   "the id of a local overlay's repository is not the file's to choose",
 	"repository.path": "the path is the directory this file was found in; naming another one is the one way this layer could reach outside its own tree",
 	"agent.command":   "the command is the binary this machine spawns; a repository choosing it is a cloned file deciding what runs here",
+	"agent.args":      "the arguments are the other half of the command; a repository choosing them would pick what the binary does",
 	"agent.env":       "the environment is handed to the spawned process, and a PATH set there redirects even a command this machine declared",
 }
 
@@ -257,6 +290,9 @@ func applyLocal(cfg Config, raw []byte, root, source string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg, err = localRules(cfg, declared.Selector.Rules, source, local); err != nil {
+		return Config{}, err
+	}
+	if cfg, err = localAgents(cfg, declared.Agents, source, local); err != nil {
 		return Config{}, err
 	}
 	cfg.Security = localSensitive(cfg.Security, declared.Security.Sensitive)
@@ -511,4 +547,281 @@ func localSensitive(security Security, declared *[]string) Security {
 	}
 	security.Sensitive = out
 	return security
+}
+
+// localEffectCeiling and localContextCeiling are the machine-side cap on a
+// type a repository declared: it may cause nothing but a read, and it may see
+// nothing but the repository it came from.
+//
+// The cap is a constant here and a setting in neither file, which is
+// deliberate for one release: a repository cannot raise it, and neither can a
+// global file that predates the feature and therefore says nothing about it.
+// An absent ceiling that reads as no ceiling is the same failure shape as an
+// unmeasured cost that reads as free.
+//
+// Read is the floor of usefulness rather than a token gesture -- every shipped
+// type holds exactly this and nothing more. Repository is the level that
+// cannot leak: `workspace` is the catalog of every repository on the machine,
+// and `history` is what other runs of this type were told.
+var (
+	localEffectCeiling  = []contract.Effect{contract.EffectRead}
+	localContextCeiling = []contract.ContextLevel{contract.ContextRepository}
+)
+
+// localSummaryMax caps a repository's own summary.
+//
+// The planner is handed one line per type -- `- name (pool): summary. effects:
+// ...` -- so the summary is the one piece of repository-authored prose that
+// reaches a model's prompt. A newline in it would close that line and open
+// another, and the next line could claim a type that does not exist with
+// effects nobody granted. Control characters are refused for that reason and
+// the length for a duller one: a menu is a menu.
+const localSummaryMax = 200
+
+// localAgents merges the overlay's agent types. Three properties hold this
+// layer where it is.
+//
+// It runs what this machine already declared. `runs` names a type from the
+// global settings, and the command, its arguments and its environment come
+// from that type; the overlay has no field for any of the three. A repository
+// picks among what is here, which is the latitude [[implementation]] already
+// has and for the same reason.
+//
+// It cannot widen. Effects and context are checked against two ceilings and
+// refused if they exceed either -- the type being run, and the machine-side
+// cap above -- and when omitted they are the intersection of the two rather
+// than the borrowed type's own. Limits may only come down.
+//
+// It cannot shadow. A name this machine already declares is a refusal naming
+// both files. AgentTypeByName returns the first match, so a silent winner
+// would be decided by the order the two files were read in, and a repository
+// quietly redefining `reviewer` as something weaker is exactly what would
+// hide there.
+func localAgents(cfg Config, declared []localAgent, source string, local *Local) (Config, error) {
+	if len(declared) == 0 {
+		return cfg, nil
+	}
+	// Snapshotted before anything is appended: `runs` may name a type this
+	// machine declared, never one the same file declared a few lines above.
+	// A local type built on another local type is a chain whose ceiling
+	// depends on which end you read it from.
+	shipped := make(map[string]AgentType, len(cfg.Agents))
+	taken := make(map[string]string, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		shipped[agent.Spec.Name] = agent
+		taken[agent.Spec.Name] = cfg.Source
+	}
+
+	for _, want := range declared {
+		built, err := buildLocalAgent(want, shipped, taken, source)
+		if err != nil {
+			return Config{}, err
+		}
+		taken[built.Spec.Name] = source
+		cfg.Agents = append(cfg.Agents, built)
+		local.Types = append(local.Types, built.Spec.Name)
+	}
+	sort.Strings(local.Types)
+	return cfg, nil
+}
+
+// buildLocalAgent turns one declared block into a type, or says why not.
+func buildLocalAgent(want localAgent, shipped map[string]AgentType,
+	taken map[string]string, source string) (AgentType, error) {
+	name := strings.TrimSpace(want.Name)
+	fail := func(format string, args ...any) (AgentType, error) {
+		return AgentType{}, contract.Fail(contract.FailureInvalidInput,
+			"local settings %s: agent %s: %s", source, name, fmt.Sprintf(format, args...))
+	}
+	if name == "" {
+		return AgentType{}, contract.Fail(contract.FailureInvalidInput,
+			"local settings %s: an [[agent]] block declares no name", source)
+	}
+	if where, ok := taken[name]; ok {
+		return fail("already declared in %s: a repository may add a type, never redefine one", where)
+	}
+	runs := strings.TrimSpace(want.Runs)
+	if runs == "" {
+		return fail("runs is required: a local type has no command of its own, " +
+			"so it has to name the declared type whose command it borrows")
+	}
+	base, ok := shipped[runs]
+	if !ok {
+		return fail("runs %q, which this machine does not declare: declared are %s",
+			runs, strings.Join(sortedNames(shipped), ", "))
+	}
+
+	out := base
+	out.Local = true
+	out.Spec = base.Spec.Clone()
+	out.Spec.Name = name
+	out.Args = slices.Clone(base.Args)
+	out.Env = slices.Clone(base.Env)
+
+	summary := strings.TrimSpace(want.Summary)
+	switch {
+	case summary == "":
+		return fail("summary is required: it is the line the planner reads to " +
+			"decide whether to pick this type at all")
+	case len(summary) > localSummaryMax:
+		return fail("summary is %d characters, over the %d a local one may take",
+			len(summary), localSummaryMax)
+	case strings.ContainsFunc(summary, isControl):
+		return fail("summary carries a control character: it is rendered as one " +
+			"line of the planner's menu, and a second line here would be a " +
+			"repository writing an entry of its own")
+	}
+	out.Summary = summary
+
+	// Kind, pool and subject belong to what runs, not to what named it. A
+	// repository may restate them -- a declaration that says what it is is
+	// worth more than one that leaves it implied -- and a mismatch is
+	// refused rather than ignored. Turning reads_subject on is the one of
+	// the three that would hand this type another step's whole answer.
+	if want.Kind != nil {
+		kind, err := contract.ParseAgentType(*want.Kind)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if kind != base.Spec.Kind {
+			return fail("kind %s, but %s is %s: a local type may restate what it runs, not relabel it",
+				kind, runs, base.Spec.Kind)
+		}
+	}
+	if want.Pool != nil {
+		pool, err := ParsePool(*want.Pool)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if pool != base.Pool {
+			return fail("pool %s, but %s is scheduled in the %s pool: the lane belongs to the type being run",
+				pool, runs, base.Pool)
+		}
+	}
+	if want.ReadsSubject != nil && *want.ReadsSubject != base.ReadsSubject {
+		return fail("reads_subject = %t, but %s is %t: being handed another step's whole answer is a property of what runs",
+			*want.ReadsSubject, runs, base.ReadsSubject)
+	}
+
+	if want.Effects == nil {
+		out.Effects = intersectEffects(base.Effects, localEffectCeiling)
+	} else {
+		effects := make([]contract.Effect, 0, len(*want.Effects))
+		for _, declared := range *want.Effects {
+			effect, err := contract.ParseEffect(declared)
+			if err != nil {
+				return fail("%v", err)
+			}
+			if !slices.Contains(base.Effects, effect) {
+				return fail("effect %s, which %s does not hold", effect, runs)
+			}
+			if !slices.Contains(localEffectCeiling, effect) {
+				return fail("effect %s: a type declared by a repository may cause %s and nothing else",
+					effect, joinEffects(localEffectCeiling))
+			}
+			effects = append(effects, effect)
+		}
+		out.Effects = effects
+	}
+
+	if want.Context == nil {
+		out.Context = intersectLevels(base.Context, localContextCeiling)
+	} else {
+		levels := make([]contract.ContextLevel, 0, len(*want.Context))
+		for _, declared := range *want.Context {
+			level, err := contract.ParseContextLevel(declared)
+			if err != nil {
+				return fail("%v", err)
+			}
+			if !slices.Contains(base.Context, level) {
+				return fail("context %s, which %s is not served", level, runs)
+			}
+			if !slices.Contains(localContextCeiling, level) {
+				return fail("context %s: a type declared by a repository is served %s and nothing else",
+					level, joinLevels(localContextCeiling))
+			}
+			levels = append(levels, level)
+		}
+		out.Context = levels
+	}
+
+	limits := base.Limits
+	if want.MaxDuration != nil {
+		parsed, err := time.ParseDuration(strings.TrimSpace(*want.MaxDuration))
+		if err != nil {
+			return fail("max_duration %q: %v", *want.MaxDuration, err)
+		}
+		limits.MaxDuration = parsed
+	}
+	if want.MaxTokens != nil {
+		limits.MaxTokens = *want.MaxTokens
+	}
+	if !limits.Fits(base.Limits) {
+		return fail("limits %v and %d tokens, over the %v and %d that %s allows",
+			limits.MaxDuration, limits.MaxTokens,
+			base.Limits.MaxDuration, base.Limits.MaxTokens, runs)
+	}
+	out.Limits = limits
+
+	if len(want.Result) > 0 {
+		fields, err := buildFields(want.Result)
+		if err != nil {
+			return fail("%v", err)
+		}
+		out.Spec.Result = fields
+	}
+
+	if err := out.Validate(source); err != nil {
+		return AgentType{}, err
+	}
+	return out, nil
+}
+
+// isControl reports whether r would break the one line a summary is rendered
+// as. Tab is included: it is not a line break, but nothing in a menu needs it.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+func sortedNames(agents map[string]AgentType) []string {
+	names := make([]string, 0, len(agents))
+	for name := range agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func intersectEffects(declared, ceiling []contract.Effect) []contract.Effect {
+	out := make([]contract.Effect, 0, len(declared))
+	for _, effect := range declared {
+		if slices.Contains(ceiling, effect) {
+			out = append(out, effect)
+		}
+	}
+	return out
+}
+
+func intersectLevels(declared, ceiling []contract.ContextLevel) []contract.ContextLevel {
+	out := make([]contract.ContextLevel, 0, len(declared))
+	for _, level := range declared {
+		if slices.Contains(ceiling, level) {
+			out = append(out, level)
+		}
+	}
+	return out
+}
+
+func joinEffects(effects []contract.Effect) string {
+	names := make([]string, 0, len(effects))
+	for _, effect := range effects {
+		names = append(names, effect.String())
+	}
+	return strings.Join(names, ", ")
+}
+
+func joinLevels(levels []contract.ContextLevel) string {
+	names := make([]string, 0, len(levels))
+	for _, level := range levels {
+		names = append(names, level.String())
+	}
+	return strings.Join(names, ", ")
 }

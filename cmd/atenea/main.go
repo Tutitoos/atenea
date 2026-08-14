@@ -2704,6 +2704,13 @@ func cmdConfigShow(settingsPath string, out io.Writer) error {
 		fmt.Fprintf(out, "         root %s, %s repository %s\n",
 			cfg.Local.Root, verb, cfg.Local.Repository)
 		fmt.Fprintf(out, "         declares %s\n", strings.Join(cfg.Local.Keys, ", "))
+		if len(cfg.Local.Types) > 0 {
+			// Named, not counted. A type this machine will spawn that
+			// arrived with a clone is the line in this output most worth
+			// reading, and "2 agent types" is not that line.
+			fmt.Fprintf(out, "         adds agent types %s (each runs a type this machine declared)\n",
+				strings.Join(cfg.Local.Types, ", "))
+		}
 	}
 
 	// Only the repository the overlay is about. The other declared ones are

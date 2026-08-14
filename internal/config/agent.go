@@ -65,6 +65,16 @@ type AgentType struct {
 	// Read it through [AgentType.ReadsASubject], which is where the review
 	// implication lives.
 	ReadsSubject bool
+	// Local is true when this type came from a repository's own overlay
+	// rather than from this machine's settings.
+	//
+	// Written by the merge and never by a file: fileAgent has no field for
+	// it and localAgent has none either, so a repository cannot dress its
+	// own type as shipped. It exists because the planner is told which types
+	// are the repository's own, and a flag Atenea sets beside a name Atenea
+	// validated is the only part of that sentence a cloned file does not
+	// write.
+	Local bool
 }
 
 // ReadsASubject reports whether this type is handed another step's answer.

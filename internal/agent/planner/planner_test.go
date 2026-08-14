@@ -412,3 +412,24 @@ func TestEveryDeclaredTypeSaysWhetherItReadsASubject(t *testing.T) {
 		}
 	}
 }
+
+// A type the repository declared is a fact about the project, not only a
+// capability, and the planner cannot read it as one without being told which
+// is which. The marker is Atenea's own word for it: the merge sets the flag,
+// and nothing a repository writes can set or clear it.
+func TestTheMenuSaysWhichTypesAreTheRepositorysOwn(t *testing.T) {
+	cfg := config.Config{Agents: []config.AgentType{
+		{Spec: contract.AgentTypeSpec{Name: "reviewer"}, Pool: config.PoolReview},
+		{Spec: contract.AgentTypeSpec{Name: "migrations-reviewer"}, Pool: config.PoolReview,
+			Summary: "audits a migration", Local: true},
+	}}
+	for _, line := range strings.Split(declaredTypes(cfg), "\n") {
+		own := strings.Contains(line, "this repository's own")
+		switch {
+		case strings.HasPrefix(line, "- migrations-reviewer ") && !own:
+			t.Errorf("a local type is not marked as one: %s", line)
+		case strings.HasPrefix(line, "- reviewer ") && own:
+			t.Errorf("a shipped type is marked as the repository's: %s", line)
+		}
+	}
+}

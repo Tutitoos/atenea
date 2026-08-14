@@ -412,7 +412,16 @@ func firstSentences(text string, n int) []string {
 }
 
 // declaredTypes is the menu the planner writes against: every agent type this
-// machine has, with what it does and what it may cause.
+// machine has, with what it does, what it may cause, and whether it is the
+// repository's own.
+//
+// The origin is marked because a type a repository declared is a fact about
+// the project as much as a capability -- a `migrations-reviewer` says this
+// codebase has migrations worth auditing separately. The marker is written
+// here, from a flag the merge set, never from a field a file could fill: the
+// only repository-authored text on the line is the summary, and that one is
+// held to a single control-character-free line so it cannot forge a second
+// entry.
 //
 // It is assembled here rather than served as context because a planner that
 // has to guess at the names writes graphs that refuse to compile, and the
@@ -425,8 +434,12 @@ func declaredTypes(cfg config.Config) string {
 		for _, effect := range declared.Effects {
 			effects = append(effects, effect.String())
 		}
-		line := fmt.Sprintf("- %s (%s): %s. effects: %s",
-			declared.Spec.Name, declared.Pool.String(), declared.Summary,
+		origin := ""
+		if declared.Local {
+			origin = ", this repository's own"
+		}
+		line := fmt.Sprintf("- %s (%s%s): %s. effects: %s",
+			declared.Spec.Name, declared.Pool.String(), origin, declared.Summary,
 			strings.Join(effects, ", "))
 		switch {
 		case declared.Pool == config.PoolReview:
