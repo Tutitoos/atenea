@@ -963,6 +963,44 @@ side — nothing in the container's log mentions it, and the only symptom is
 the port check that stops it runs once the database and Redis connections are
 already open.
 
+## A fifteenth instrument: a ceiling that enforced nothing and killed everything
+
+`--max-budget-usd` is the only thing standing between a step and an unbounded
+bill, and it is read as a limit everywhere in this project. Measured on
+eighteen real steps, twice, it did neither job.
+
+It did not bound the spend. Every one of the twelve steps that ran overshot its
+own declared share, by 1.15x to 1.79x, and the run overshot its $3.50 grant:
+
+| step | declared | spent | ratio |
+|---|---|---|---|
+| admin-aux | $0.18 | $0.32 | 1.79x |
+| ws-routes | $0.18 | $0.29 | 1.61x |
+| mechanisms | $0.20 | $0.31 | 1.55x |
+| auth-routes | $0.22 | $0.26 | 1.16x |
+
+And it killed the step at the strictly worst point in the run: after the money
+had bought the reading and before a word of the answer was written. `result_len
+= 0` on all twelve, $3.78 for zero answers. A limit that stops a process once
+it has paid for everything and produced nothing is the downside of a limit with
+none of the upside.
+
+The second reading is the one worth keeping. Fixing the kill — hold back part
+of the share, tell the step to answer instead of killing it — changed nothing
+on the same plan, and the reason was arithmetic that had never been checked
+against the instrument's own floor. One turn on this repository costs about
+**$0.35 before a single file is read**: 25,340 tokens of cache write for the
+system prompt and tool schemas. Seventeen of the eighteen steps were funded
+below that floor. They were not budgeted badly; they were budgeted below the
+price of starting, and no split of $0.20 leaves room to write when $0.20 does
+not buy the first request.
+
+The same fix on the same card, at a share that clears the floor, turned a $1.11
+death that wrote nothing into a $0.69 answer at 90% coverage naming what it had
+not reached. The mechanism was never the thing that was broken. The number
+underneath it was, and nothing in the pipeline had ever compared that number to
+what a turn actually costs.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1148,6 +1186,17 @@ already open.
     the instrument produce a one: match a line you know exists, on the same
     stream, through the same pipe. A positive control costs one command, and it
     is the only thing that separates a quiet system from a deaf one.
+
+20. **Check a limit against the floor of the thing it limits.** A ceiling is
+    arithmetic about a process, and arithmetic that has never been compared to
+    what the process costs is a guess with a number's authority. Seventeen of
+    eighteen steps were funded below the price of one turn — $0.35 of system
+    prompt and tool schemas before a file is opened — and every layer above
+    treated those figures as budgets: the planner wrote them, the engine
+    dispatched on them, the receipt reported against them, and the fix built to
+    make them survivable could not fire inside them. Nothing in the chain asked
+    the only question that mattered, which is whether the limit is larger than
+    the smallest thing it can permit.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
