@@ -1649,6 +1649,79 @@ way the first two false reports on this page did: by answering fast,
 looking exactly like what was asked for, and describing a different piece
 of the system than the one the caller was about to touch.
 
+## A twenty-seventh instrument: a value that governs every call and cannot be read back
+
+The 45s ceiling from the entry above was applied at 20:36 tonight, and the question that
+followed was the honest one: does the *running* process hold it, not just the file. The answer
+turned out to need an instrument that does not exist.
+
+The first attempt was cheap, clean, and proved nothing. `raw.agent-device.boot` against
+`Pixel_9` -- already fully booted, `sys.boot_completed=1` confirmed moments before -- returned
+in **173ms**, cross-confirmed against the daemon's own session log (`durationMs:173`, an
+independent source reporting the identical number). A pass this fast is consistent with a 15s
+ceiling, a 45s ceiling, or no ceiling at all. Success without duration near the boundary is not
+evidence of which number governed it; the call never came close to testing what it was sent to
+probe.
+
+### A cold boot would not have settled it either
+
+The next thought was to force a real cold boot: stop a live emulator, restart it, watch whether
+it still succeeds now that the old 15s would have failed it. Two entries up, Pixel_9 and
+Pixel_10 already generated exactly this data point by accident -- 19.133s and 18.309s, both past
+the old ceiling -- and that is real signal, worth stating precisely for what it is and is not. A
+cold boot succeeding proves the ceiling moved *above 15s*. It does not prove it is 45s. A boot
+that passes at 19s shows only that the ceiling is above 19 -- a 20s ceiling, a 45s ceiling, and
+an unbounded one all produce the identical pass. Boot duration is not a dial a caller can turn
+to land a probe inside a specific window; it is an environmental fact, set by whatever the
+machine is doing at the time, not by the person asking the question. Paying the risk of
+stopping a live emulator, under tonight's own documented memory pressure, buys at best a lower
+bound -- not the number that was actually asked for.
+
+### Nowhere the number is written down
+
+With the direct test ruled out, the next move was to look for the value somewhere cheaper:
+somewhere Atenea already reports on itself. It is not in `atenea status`. The `servers` table
+there lists all eight configured stdio backends -- `serena`, `context7`, `semgrep`,
+`codebase-memory`, `agent-device`, `maestro`, `headroom`, `chrome-devtools` -- uniformly, one row
+each, with columns for health, transport, `expose`, `checked`, and the full command line. No
+column carries a timeout, for any of the eight; the absence is a property of the table's format,
+not of any one backend's entry in it. It is not in `atenea catalog` either -- that command walks
+the capability and implementation graph, and a backend exposed raw is neither, by definition:
+`agent-device`'s tools never enter the funnel `catalog` is built to describe. And the startup log
+prints exactly one line about configuration -- `settings /home/tutitoos/.config/atenea/atenea.toml`
+-- the path read, never a value read from it.
+
+The number is not lost. For `agent-device`, traced in full for the entry two above, it is parsed
+once at process start into the `Spec.Timeout` field the passthrough layer applies to every call
+on that backend (`internal/passthrough/stdio.go`) -- it sits in memory the entire time the
+process runs, next to the process that is supposed to be the source of truth for it. There is
+simply no path from that field back out to a caller standing outside the process, wondering
+whether a hung call is still within budget or has already blown past it. **A configuration value
+that governs every call on a backend, and cannot be read back from the running process governed
+by it, is not provable except by finding an operation slow enough to fail on the old number and
+succeed on the new one -- and nobody can schedule when that happens.**
+
+Tonight it stops here: 45s is established by reading the source, the same way the file was
+edited, not by observing the process obey it. That is a real gap between two different kinds of
+confidence, and it stays open until some future call, run for an unrelated reason, happens to
+land inside the 15s-45s band on its own.
+
+### What the smallest fix looks like, not built tonight
+
+The `servers` table in `atenea status` is the candidate, and it fits for reasons beyond
+convenience. It already has the right cardinality: one row per backend, all eight already
+enumerated. It already mixes a static configuration fact into what reads as a health screen --
+the full command line printed in that row today is exactly as static and exactly as non-health
+as a timeout would be, so a `timeout=45s` column would not be a new category of information
+there, only one more field of a kind that row already carries. And it is free: the value is
+already resident in the parsed spec the moment the process is up, unlike `checked` or the health
+light, both of which cost an actual call to a backend to produce. `status` costs a fraction of a
+second precisely because it does not probe anything -- `checked=-`, "nobody has asked yet" -- and
+that is exactly the moment an operator staring at a hung call needs the number, not a moment
+later. A machine-readable path -- `atenea intent --json`, which already exists to say how a
+repository's calls will be answered -- is a reasonable second home for the same fact, but that is
+a second surface, not part of the smallest version of this fix.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
