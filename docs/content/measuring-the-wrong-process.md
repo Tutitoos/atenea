@@ -1053,6 +1053,39 @@ measurement that costs almost nothing to take is telling you that somebody else
 already paid for it.** A price falling by an order of magnitude between two
 identical runs is not good news about the second one.
 
+### The instrument kept warm the thing it was measuring
+
+Waiting the cache out took three attempts, and the reason is the sharpest part
+of this entry. The prefix was written at 23:11 and probed again at 23:28, 23:35
+and 00:25 — seventy-four minutes after the write, on a one-hour entry — and the
+reading was still warm, at `23,278 tokens read` both of the last two times, the
+same figure to the token. Every probe was refreshing the entry it was trying to
+find expired. **A measurement taken on a schedule tight enough to be convenient
+is a measurement of its own last attempt.** The cold reading arrived only after
+sixty-six minutes with no probe at all: `$0.27, 26,603 tokens`, within 4% of the
+first cold reading of the evening, which is what makes both of them credible.
+
+One more thing fell out of the failed attempts, and it moves the design. A
+repository that had never been probed — this one — came back warm on its very
+first probe, `23,278 read, 3,323 written`: it shared 23,278 tokens with a prefix
+written for a different repository. **The dominant term in the floor is not the
+repository at all, it is the tool surface**, which is machine-wide; the
+repository contributes about 3,300 tokens of delta. The store is keyed on all
+three because a floor should be quotable as the thing it names, but the number
+it holds is mostly a fact about the agent type.
+
+What that leaves unresolved, honestly: within a run, the first step to start
+pays the write and every step after it reads. The floor as measured is the
+pessimistic, cold, first-mover price, and refusing on it is refusing on the
+worst case. That is the right default for a plan nobody has run yet — any step
+may be the first — but it is not the average, and the day a plan is refused that
+would in fact have run warm, this paragraph is where the argument starts.
+
+End to end, on tonight's real eighteen-step plan, against the cold floor:
+`workflow create` refused it, exit 2, naming ten of the eighteen steps and the
+arithmetic on each, and the newest row in the run store is still the one from
+before the floor existed. Nothing was written.
+
 ## A sixteenth instrument: four fixtures that encoded the belief and then confirmed it
 
 Measured on 2026-08-14, building the Ladygraph provider into Atenea: a stdio-MCP
