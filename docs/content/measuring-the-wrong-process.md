@@ -1180,6 +1180,53 @@ asked to care — is unknown. Its source is rollup output, single-letter
 bindings, no line attributable to a decision either way. The finding stands on
 a syscall confirmed live, not on a reading of code that could not be read.
 
+## An eighteenth instrument: live confirms the channel, not the content
+
+Measured 2026-08-15, directly, not by re-reading `atenea-config-guard`'s own comment about
+`atenea mcp --check` and assuming the sibling command shares its blindness. `mcp-agree --live`
+does not call `--check` at all: it spawns bare `atenea mcp` — the exact command a real client's
+own config declares (`~/.omp/agent/mcp.json`: `command: .../atenea, args: ["mcp"]`) — and speaks
+the real protocol at it, `initialize` then `tools/list`, over a live stdio pipe. That is a
+stronger claim than the comment had made, so it got tested on its own rather than inherited.
+
+Baseline: `atenea 42, headroom 3, serena 23`, ficheros VERDE. Then `atenea.toml`'s mtime was
+bumped with `touch` — content untouched, byte-identical, only the timestamp moved past
+`atenea.service`'s `ActiveEnterTimestamp` — exactly the condition `atenea-config-guard` exists
+to catch. The same handshake, run again immediately after: `atenea 42, headroom 3, serena 23`,
+identical to the digit, still VERDE. Run once more a minute later: the same again.
+`atenea-config-guard`, unmodified, run against the identical induced state in between: caught it
+at once, named both timestamps, gave the restart instruction. One touch, two checks, one blind.
+
+That confirms what the comment implied but had not itself shown: bare `atenea mcp` bridges to
+the same long-running core the systemd unit supervises rather than reparsing on its own account,
+so a handshake against it can only ever answer with whatever the core currently holds in memory
+— which is exactly the thing that goes stale. The exact original mtime was restored afterward;
+nothing about the finding needed a mark left behind to stay true.
+
+One adjacent thing in that same output did change, and belongs kept separate rather than folded
+in: the account-surface line grew a `CADUCA` suffix after the touch, because plain mode's own
+fingerprint moved and stopped matching the one `--wire` had cached from an earlier run. That is
+a real check, correctly firing — but on a different subject, this run's file-derived fingerprint
+against a previous run's cached one, not on whether atenea's core has re-read the file since it
+changed. `mcp-agree` now carries two "is this current" checks, watching two different things,
+and neither covers the other's blind side.
+
+So, plainly, what `--live` can and cannot back. **Can:** that the bridge process starts, speaks
+real MCP correctly, and returns a tool list agreeing with what the core currently holds — which
+rules out crashed, hung, or answering the wrong protocol, and is a genuine claim. **Cannot:**
+that what the core holds is what is on disk right now. A stale core answers a real handshake
+honestly, promptly, and wrongly, and `--live` has no way to notice, by construction — not a bug
+in this check, a boundary in what it was ever built to see. Live proves reachable; it does not
+prove current, and this page already has a name for a check that reports the fine direction by
+default on a question it cannot see — see 12 — and for one that cannot see past the files it
+reads — see 11. This is that second argument's mirror: the channel that skips files entirely
+turns out to have a blind side of its own, just a different one.
+
+The mode built specifically to distrust static configuration and go verify the real process
+instead still has a boundary, and the boundary sits exactly where the fault that cost this
+project twice this week lives. That is the instruments page's whole argument, arriving again
+from the one place it had not yet been asked to look.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1408,6 +1455,16 @@ a syscall confirmed live, not on a reading of code that could not be read.
     currently holds it, read the process group and session it actually runs
     under, or better, an explicit lifecycle contract — not a column that was
     last true at fork time and has not been asked again since.
+
+23. **A live connection proves the channel, not the content.** A handshake that gets a real
+    answer from a real process confirms the process is up and speaking correctly — nothing about
+    whether that answer reflects what changed upstream of it since. `mcp-agree --live` spawns
+    the same bridge command a client would and reads back a real `tools/list`, measured
+    2026-08-15 against a config staled on purpose: the count did not move, because the bridge
+    relays a long-running core's memory rather than reparsing anything, and the core's memory is
+    exactly what a live socket cannot audit from outside itself. Liveness answers *is this
+    reachable*. Freshness answers *is this current*. A check built to answer the first can stay
+    green forever on a subject that has already failed the second.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
