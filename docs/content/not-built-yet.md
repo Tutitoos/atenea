@@ -979,11 +979,15 @@ away instead of a build away — and that is not a reason to uncomment it.
 
 ## A floor that guards the door and not the room — 2026-08-14
 
-`atenea workflow create` now refuses a plan whose steps are funded below the
-measured cost of starting a turn. The check lives in `Create` and nowhere else,
-which is a deliberate limit and a real hole: a proposal approved mid-run
-(`Store.Ask` / `Engine.grow`) can still add a step funded below the floor, and
-it will die exactly the way the twelve steps of 2026-08-14 died.
+`atenea workflow create` now refuses a plan whose steps are funded below either
+of two measured requirements: the floor, what starting a turn costs before any
+file is read, and the rescuable threshold added 2026-08-15 -- the point past
+which a step's own read allowance outweighs the weight of its first assistant
+event. Both checks live in `Create` and nowhere else, which is a deliberate
+limit and a real hole: a proposal approved mid-run (`Store.Ask` / `Engine.grow`)
+can still add a step funded below either requirement, and it will die exactly
+the way the twelve steps of 2026-08-14 died to the first, or the thirteen the
+following night died to the second.
 
 It was left open because refusing there is a different decision, not the same
 one moved. At create time the refusal costs nothing — no run exists, the person

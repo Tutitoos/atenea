@@ -17,6 +17,63 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`atenea floor measure` now makes a real tool call, and prices what comes
+  back warm.** A probe that answered without touching a tool measured the one
+  event nothing is refused against: the prefix alone, before any tool schema
+  had been re-sent or any result had arrived. On this machine the block that
+  arrives with the first tool result is `41,927` tokens against a `5,647`-token
+  prefix — 8.4x the quantity the floor was built on — and it is written once per
+  machine per cache lifetime, then read at a twentieth of the price by every
+  step after. `floor measure` now runs one tool call, stores
+  `first_call_tokens`, and `atenea floor` prints `WARM USD` (what a step pays)
+  beside `COLD USD` (what establishing the cache costs once). The floor rule
+  charges the warm figure wherever a row carries one; a row measured before
+  this field existed still charges the cold prefix, and says so. The rate a
+  probe derives is the receipt over every token it paid for, and not over the
+  prefix alone: divided by the prefix, the same `$0.4935` bill reported a
+  `$0.21` warm step and a `$4.16` cold start. Priced against everything it
+  covers, the derived cold start reproduces the bill to the cent and the
+  per-token rate lands within 2% of the same model's independently measured
+  rate.
+- **Every `agent-exec` run was buying a session title nobody reads; it no
+  longer does.** The CLI names each session with a second model call — one
+  `claude-opus-5` request at `effort: high`, `max_tokens: 64000`, carrying
+  atenea's entire commission as its user message — to title a session
+  `--no-session-persistence` throws away. Passing `--name atenea-<role>` gives
+  it an answer and it stops asking. Measured against a loopback recorder that
+  answers the Messages API locally, so the finding cost nothing: the call fires
+  in 4 of 8 unnamed runs (racy — one run of it proves nothing) and 0 of 8 named,
+  then 0 of 6 against atenea's real argv.
+
+  `--exclude-dynamic-system-prompt-sections` was measured in the same harness
+  and deliberately **not** adopted: it moves 3,368 bytes out of the shared,
+  cached system block into `messages[0]` beside the per-step-unique commission.
+  It is a cross-user prompt-cache optimisation, and atenea is one user on one
+  machine, so here it only shrinks the cached prefix.
+
+- **A plan can clear the floor and still die: `workflow create` now refuses
+  below a second, larger number too.** Half of a step's own share is reserved
+  as its read allowance, and if that half does not outweigh the turn's own
+  first assistant event — cold-equivalent, the same reading a floor is priced
+  from — the reserved-answer nudge fires on the arrival of the prompt, before
+  the model has read anything of its own, and the step dies with nothing
+  written anyway. `workflow create` now computes this threshold from the same
+  stored floor row, per repository, agent and model, and refuses a plan on
+  whichever of the two requirements is larger, in one pass, naming both in the
+  refusal.
+
+  It exists because the floor alone had already been proven insufficient.
+  Thirteen model-backed steps, funded above the floor the night before, died
+  empty anyway: $5.24 spent against a $3.52 grant. The arithmetic that would
+  have caught it — half a share buys 83,000 input-equivalent tokens of reading
+  per dollar, and a real turn's own first assistant event already weighed
+  65,625 of them — was measured the same day the floor check shipped, and sat
+  in a doc comment unread by any admission rule until now.
+
+  `atenea floor` prints the new number beside the ones it already reported:
+  the smallest share, for a repository/agent/model row, that buys any reading
+  at all before its own first event outweighs it.
+
 - **A step that reads files somebody already named no longer pays for tools it
   never calls.** `reader` ships declared beside `explore`: the same agent, the
   same model role, the same answer, handed `Read` and `Glob` and no
@@ -323,6 +380,31 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   reading older than the longest window to land there.
 
 ### Fixed
+
+- **The rescuable threshold charged every step for a cache write that happens
+  once, and refused ten of eighteen adequately funded steps as a result.** The
+  rule shipped hours earlier weighed a turn's first assistant event
+  cold-equivalent — the whole prefix as cache write, x2 — on the reasoning that
+  any step might be the first to pay for it. Measured the same night against a
+  loopback recorder and two live probes, that is wrong by 20x: the prefix is
+  written once and read at x0.1 by everything after it, with `cache_read`
+  pinned at exactly 40,227 on turn 2 and 4,772 on turn 1 across five runs of
+  different objectives, different files and different nonces. `workflow create`
+  now refuses against `allowance.WarmFirstEventWeight` — the same stored row,
+  the same arithmetic, cache read instead of cache write — which moves the
+  threshold on the real explore row from $0.65 to $0.04 with no re-measurement.
+  The cold figure travels beside it: `atenea floor`'s `RESCUABLE` column is the
+  warm per-step number, its `USD` column the one-time cold one, and the refusal
+  names both so a person sizing a grant can see what the hour's first run adds
+  and that no other run pays it.
+
+  The floor itself, $0.27, was deliberately left cold and is now the only rule
+  refusing anything. The probes showed the cost that kills a step is a
+  ~40,000-token block arriving at the *first tool call*, and no stored
+  measurement contains it — the row on disk carries the turn-1 prefix. A warm
+  floor derived from that row would be a confident number about the wrong
+  quantity, which is the failure mode this project keeps a page about. It needs
+  `atenea floor measure` to make a tool call and record what comes back warm.
 
 - **The `Models` header was shipped one column too wide and wrapped in silence.**
   A `sidebar_content` text gets 37 columns, not the 42 the column is wide, and the

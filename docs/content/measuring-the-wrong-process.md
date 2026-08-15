@@ -1494,6 +1494,20 @@ types never turn at all. That is a property of where the CLI reports usage, not
 a bug to fix in this package — nothing on the stream would tell an accumulator
 that a toolless answer is getting expensive.
 
+### Closed 2026-08-15
+
+`workflow create` now refuses on this number directly. The threshold is not a
+second constant beside the floor -- it is derived, per `(repository, agent,
+model)`, from the same stored row this page already distrusts hand arithmetic
+on: `allowance.MinShareUSD` off the row's own `FirstEventTokens`, recomputed
+on every `create` rather than typed once and left to go stale. The floor
+stayed rather than being subsumed, and for a reason that is a property of a
+price, not of the rules: the threshold dominates the floor only while a
+model's measured rate stays under `$2.41e-5` per token, and today's opus rate
+(`$1.0149e-5`) is comfortably under that line, not structurally under it. A
+rule deleted because a currently-larger rule shadows it is the same mistake
+this whole page is named for.
+
 ## A twenty-fourth instrument: a probe that works on one backend is not a probe
 
 Measured 2026-08-15, enumerating what two raw MCP backends offer, with one
@@ -1774,6 +1788,88 @@ check that goes red on every paragraph is one nobody reads by the end of the wee
 that enter the build make it stale, and which files those are is discovered by reading the
 `//go:embed` directives rather than by a list that would drift. Its first run against this
 machine found the binary stale *again*, from a `model.go` change committed an hour earlier.
+
+
+## A twenty-ninth instrument: the same quantity corrected three times in one night
+
+Measured 2026-08-15. A rule shipped that morning refused ten of eighteen steps at `$0.65`
+each. By the end of the night the same rule asked `$0.04`, from the same stored row, with
+no re-measurement of the row and no change to the arithmetic. Nothing was wrong with the
+instrument. What moved three times was **which quantity a step's price is a function of**,
+and each correction was found by measuring rather than by reasoning about the last one.
+
+**First: file size.** The plan under refusal sized every step's share by the bytes it was
+told to read, and a proposal to merge twelve readers into four rested on the same
+arithmetic. Two probes, same code path, files differing 17.7x (452 vs 8,002 tokens): the
+turn-2 cache write moved 41,973 -> 53,036. The file is 7.3x of the delta and 17.7x of
+itself. Sizing by bytes predicted the wrong thing, and the merge proposal died with it.
+
+**Second: round trips.** If not size, then per-call. Eight warm turns cost **less than two
+cold ones**: `$0.4373` for eight against `$0.4935` for two, `$0.089` mean per warm round
+trip against `$0.49` for the cold first tool call. Cost is not proportional to calls
+either.
+
+**Third: cache warmth, and it is one-time.** The block is `~40,000` tokens arriving at the
+first tool result, written once and read at a twentieth of the price by everything after
+it -- `cache_read` pinned at **exactly 40,227 on turn 2 and 4,772 on turn 1** across five
+runs spanning different objectives, different files, different nonces, with and without
+`--max-budget-usd`. Two arms with matched cold starts and distinct nonces were
+superimposable per turn (1.02x, output variance), which also killed the `--max-budget-usd`
+cache-busting hypothesis I had been carrying for an hour.
+
+The rule that shipped in the morning charged **every** step for that one-time write. The
+correction is one line of arithmetic -- `Weigh(input, output, prefix, 0)` instead of
+`Weigh(input, output, 0, prefix)`, cache read instead of cache write -- and it moves the
+admission threshold on the real explore row from `$0.65` to `$0.04`, twenty times, with the
+cold figure still reported beside it as what establishing the prefix costs whichever run of
+the hour is first.
+
+### The two things this did not fix
+
+The floor beside it, `$0.27`, is still the cold prefix priced and still charged per step,
+and it is now the only rule refusing anything. It was **not** re-derived here, on purpose:
+the stored row carries the turn-1 prefix (26,603 tokens), and the probes showed the cost
+that actually kills a step is the `~40,000`-token block at the *first tool call*, which no
+stored measurement contains. Deriving a warm floor from the row that is on disk would be
+this page's own title one more time. It needs `atenea floor measure` to make a tool call and
+record what comes back warm -- a measurement, not an edit.
+
+And a free one, taken the same night because it cost nothing: every `agent-exec` run was
+paying for a **session title nobody reads**. One opus request at `effort: high`,
+`max_tokens: 64000`, carrying atenea's whole 2,453-byte commission, to name a session
+discarded by `--no-session-persistence`. Against a loopback recorder it fired in **4 of 8**
+control runs -- racy, which is why one run of it proves nothing -- and in **0 of 8** with
+`--name`, then 0 of 6 against atenea's real argv. `--exclude-dynamic-system-prompt-sections`
+was measured in the same harness and **rejected**: it moves 3,368 bytes out of the shared
+cached system block and into `messages[0]`, next to the per-step-unique commission. Its
+benefit is cross-user prompt-cache reuse; atenea is one user on one machine, so here it is a
+strictly smaller cached prefix. Free is not the same as good, and the recorder can tell the
+difference for `$0.00`.
+
+
+## A thirtieth instrument: the probe that ends the entry above it
+
+Measured 2026-08-15, hours later. The entry above closes by naming the measurement it could
+not make: `atenea floor measure` had to make a tool call and record what comes back warm.
+It does now, and the numbers it records are the ones the paid probes found: a `5,647`-token
+prefix, a `41,927`-token block arriving with the first tool result, `$0.4935` for the pair.
+`atenea floor` prints both prices — `WARM USD` `$0.02`, what a step pays; `COLD USD` `$0.06`,
+the prefix priced once — and the admission rule charges the warm one wherever a row carries
+it, the cold one where no probe has made a tool call yet, and says which in the refusal.
+
+**The fourth wrong quantity was in the instrument, and no test saw it.** The probe stores a
+per-token rate by dividing its receipt by what the receipt paid for. With no tool call that
+was the prefix, and dividing by the prefix was correct for as long as the prefix was
+everything. The first run of the new probe printed a step starting at `$0.21` warm and
+`$4.16` on the establishing run, from a turn that had cost `$0.4935` — an 8.4x error, exactly
+the ratio between the two messages, pointing the same direction as the bug the entry above
+is about. Four suites were green when it printed that: the rate had no assertion that
+compared it to anything outside itself. The check that caught it is the cheapest one
+available and it is not a test — read the number the command prints and ask whether the bill
+it came from says the same thing. The derived cold start now reproduces the receipt to the
+cent (`$0.4935`), and the derived rate lands within 2% of the same model's rate measured
+independently a day earlier. Both of those comparisons are now assertions; neither existed
+when the arithmetic was written.
 
 
 ## The general lesson
@@ -2065,6 +2161,40 @@ machine found the binary stale *again*, from a `model.go` change committed an ho
     checks was wrong; the gap was that no check took the executable as its subject. Ask
     what each instrument's subject actually is, and the one nobody named is the one that
     will produce confident numbers about a program that is not running.
+
+29. **A right measurement that stays a comment is not a control.** The other
+    entries on this page are wrong measurements or wrong instruments; this one
+    was neither. 65,625 input-equivalent tokens -- a real turn's own first
+    assistant event, cold-equivalent -- was measured 2026-08-14 and written,
+    correctly, into the `ReadTokens` doc comment the same day the floor check
+    shipped. Thirteen model-backed steps, funded with allowances of
+    9,960-33,200 input-equivalent tokens, died empty the following night --
+    $5.24 spent against a $3.52 grant -- and the floor check refused none of
+    them, because it was checking a different number than the one that killed
+    them. The question after measuring something correctly is not "is this
+    written down" but "which admission rule now refuses what this number says
+    is impossible" -- and until `workflow create` asked that question of this
+    one, the answer was none.
+
+30. **A one-time cost charged per step is a wrong price, not a safe margin.** The
+    conservative reading -- "any step may be the first to pay for the prefix, so
+    charge them all as if they were" -- was written into a doc comment as
+    prudence and shipped as an admission rule. It was off by 20x, and the
+    direction it was wrong in was not safe: it refused ten of eighteen adequately
+    funded steps and would have had a $3.50 plan re-priced at $15.17. Before
+    pricing anything per step, measure whether the quantity recurs. `cache_read`
+    pinned to the same integer across five runs of different work is what
+    "one-time" looks like on the wire; the pessimistic assumption looks like
+    nothing at all, because nobody measured it.
+
+31. **Arithmetic checked only against itself passes forever.** A derived rate had
+    tests for its shape, its rounding and its absence, and every one of them
+    computed the expected value the same way the code did. It was 8.4x wrong for
+    a day and green the whole time; what caught it was running the command once
+    and comparing the number it printed to the bill it was derived from. Every
+    derived figure needs at least one assertion whose right-hand side comes from
+    outside the derivation -- a receipt, or the same quantity measured another
+    way. Without one, the test is a transcription of the bug.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
