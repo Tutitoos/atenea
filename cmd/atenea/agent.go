@@ -258,20 +258,27 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		return reviewer.Main(stdin, stdout)
 	case "plan-check":
 		return plancheck.Main(stdin, stdout)
-	case "explore", "plan":
-		// These two call a model, so they are the only built-ins that can
+	case "explore", "reader", "plan":
+		// These three call a model, so they are the only built-ins that can
 		// be waiting on somebody else when a person gives up. A signal has
 		// to reach the turn, or the parent's kill leaves a request billing
 		// against a run nobody is reading.
 		ctx, stop := interruptible()
 		defer stop()
-		if kind == "explore" {
+		switch kind {
+		case "explore":
 			return planner.Explore(ctx, stdin, stdout)
+		case "reader":
+			// The same half `explore` runs, with none of Atenea's
+			// capabilities behind it -- see planner.Surface for what that
+			// is worth per turn.
+			return planner.Read(ctx, stdin, stdout)
+		default:
+			return planner.Plan(ctx, stdin, stdout)
 		}
-		return planner.Plan(ctx, stdin, stdout)
 	default:
 		return contract.Fail(contract.FailureNotFound,
-			"no built-in agent %q: this binary ships filereader, reviewer, plan-check, explore and plan", kind)
+			"no built-in agent %q: this binary ships filereader, reviewer, plan-check, explore, reader and plan", kind)
 	}
 }
 

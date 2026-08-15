@@ -46,15 +46,63 @@ import (
 // any agent that exists today: see Store.Get and Store.List for how it is
 // treated as unmeasured rather than guessed at.
 type Measurement struct {
-	Repository       string    `json:"repository"`
-	Agent            string    `json:"agent"`
-	Model            string    `json:"model"`
-	USD              float64   `json:"usd"`
-	CacheWriteTokens int       `json:"cache_write_tokens"`
-	InputTokens      int       `json:"input_tokens"`
-	OutputTokens     int       `json:"output_tokens"`
-	CLIVersion       string    `json:"cli_version"`
-	MeasuredAt       time.Time `json:"measured_at"`
+	Repository string `json:"repository"`
+	Agent      string `json:"agent"`
+	Model      string `json:"model"`
+
+	// USD is the cold-equivalent cost of starting a turn on this
+	// (repository, agent, model) triple -- PrefixTokens * USDPerToken --
+	// not whatever a single receipt happened to say Anthropic billed for
+	// the turn that produced this row. The two disagree in exactly the
+	// case that matters: measured 2026-08-14/15 on taxiprime-backend,
+	// claude-opus-5, agent explore, cold -- the CLI wrote 26,603 tokens to
+	// cache and the receipt said $0.27, giving $1.0149e-5 per token
+	// ($0.27 / 26,603). Warm an hour later, the same tool surface read
+	// 23,278 tokens from cache and wrote only 3,325 -- the same 26,603
+	// total, split differently -- and that turn's own receipt said $0.01,
+	// because Anthropic bills a cache read far below a cache write.
+	// Pricing the same 26,603-token total at the stored rate reproduces
+	// $0.27, the number a caller deciding "can this turn afford to start
+	// cold" actually needs; recording the $0.01 receipt instead would say
+	// the floor had dropped when nothing but cache state had changed.
+	USD float64 `json:"usd"`
+
+	// PrefixTokens is the cache-write and cache-read tokens this
+	// measurement's turn spent together: the total size of what the CLI
+	// puts in front of the model before it does anything, regardless of
+	// cache state. It is the invariant the USD doc above demonstrates --
+	// 26,603 cold (all write) or 23,278 + 3,325 warm (mostly read) -- and
+	// it is what USDPerToken converts into USD.
+	PrefixTokens int `json:"prefix_tokens"`
+
+	// USDPerToken is the rate PrefixTokens is priced at. For a cold row
+	// (Cold == true) it is derived from this row's own receipt: USD /
+	// PrefixTokens at measurement time, $1.0149e-5 in the example above.
+	// For a warm row it is copied from PriceForModel -- the most recent
+	// cold rate on record for the same model -- because a warm receipt's
+	// own price-per-token is not the cold price and using it would
+	// silently mix the two.
+	USDPerToken float64 `json:"usd_per_token"`
+
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+
+	// Cold reports whether the turn that produced this row was a
+	// cache-write measurement (CacheReadTokens == 0 upstream) rather than
+	// a cache-read one. Only a cold row's USDPerToken was derived from its
+	// own receipt rather than borrowed from PriceForModel, which is why
+	// PriceForModel considers cold rows only -- chaining a warm row's rate
+	// into a later warm row would drift away from any real measurement.
+	// A row with USD == 0 and PrefixTokens == 0 is a legitimate cold
+	// reading, not an unmeasured one: reviewer and filereader call no
+	// model at all, so a zero floor is what measuring them correctly
+	// produces, and Get must hand it back rather than treat zero as
+	// absence.
+	Cold bool `json:"cold"`
+
+	CLIVersion string    `json:"cli_version"`
+	MeasuredAt time.Time `json:"measured_at"`
 }
 
 // DefaultPath is where the cache lives when nothing overrides it: beside
@@ -108,6 +156,45 @@ func (s *Store) Get(repository, agent, model string) (Measurement, bool, error) 
 		}
 	}
 	return Measurement{}, false, nil
+}
+
+// PriceForModel returns the USD-per-token rate from the most recently
+// measured cold row for model, across every repository and every agent,
+// and whether one exists.
+//
+// The key is the model alone, not (repository, model) or (repository,
+// agent, model): Get and Put key on the full triple because the *floor* --
+// the tool surface, the token count a turn starts with -- varies with the
+// repository's providers and the agent's capability set, but the *rate*
+// that turns a token count into dollars is Anthropic's price for that
+// model, the same number whichever repository or agent is asking. A warm
+// reading on a repository nobody has ever measured cold still needs a
+// rate to convert its tokens with, and the only sound source is a cold
+// measurement of the same model taken anywhere -- there is nothing
+// repository- or agent-specific to look up.
+//
+// Only cold rows are considered (see Measurement.Cold): a warm row's own
+// USDPerToken was itself borrowed from an earlier PriceForModel call, and
+// chaining through it would drift the rate away from any receipt that
+// actually priced a token. Errors reading the store are reported as "no
+// price on record" rather than surfaced, matching the two-value contract
+// callers rely on to decide cleanly whether a rate exists.
+func (s *Store) PriceForModel(model string) (usdPerToken float64, measuredAt time.Time, ok bool) {
+	rows, err := s.load()
+	if err != nil {
+		return 0, time.Time{}, false
+	}
+	for _, m := range rows {
+		if !m.Cold || m.Model != model {
+			continue
+		}
+		if !ok || m.MeasuredAt.After(measuredAt) {
+			usdPerToken = m.USDPerToken
+			measuredAt = m.MeasuredAt
+			ok = true
+		}
+	}
+	return usdPerToken, measuredAt, ok
 }
 
 // Put stores m, replacing whatever was measured before for the same

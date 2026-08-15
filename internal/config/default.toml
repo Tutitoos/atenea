@@ -1835,6 +1835,40 @@ max_tokens = 200000
   required = true
   summary = "What was found, in prose, naming files"
 
+# The same agent as `explore` above, minus Atenea's capability catalog, and
+# that catalog is most of what a step of this shape costs to exist. Measured
+# 2026-08-15 on a real repository against claude-opus-5, cold: starting an
+# `explore` turn costs $0.27 and 26,603 tokens of prefix before the model has
+# read one line, and the identical probe with no tools at all costs $0.06 and
+# 4,991 -- 81% of the floor is the definitions of tools most steps never call.
+# On one 18-step plan that was $2.64 of a $5.29 requirement, for twelve steps
+# that read files the ask had already named. Those twelve are this type.
+[[agent]]
+name = "reader"
+kind = "specialized"
+summary = "Reads files the ask already names and globs the tree; cannot search the code or query the graph, and costs about a fifth of `explore` to start"
+command = "$atenea"
+args = ["agent-exec", "reader"]
+# The same two levels `explore` takes, and for the same reasons: the
+# repository level is what resolves a relative path, and the history is what
+# keeps a second run from paying to rediscover the first one's answer.
+context = ["repository", "history"]
+effects = ["read"]
+max_duration = "10m"      # a real model turn, not a file read
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "summary"
+  type = "string"
+  required = true
+  summary = "One paragraph: what this project is and how it is arranged"
+
+  [[agent.result]]
+  name = "findings"
+  type = "string"
+  required = true
+  summary = "What was found, in prose, naming files"
+
 [[agent]]
 name = "plan"
 kind = "specialized"

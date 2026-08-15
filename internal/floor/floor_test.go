@@ -17,9 +17,12 @@ func measurement(repo, agent, model string) floor.Measurement {
 		Agent:            agent,
 		Model:            model,
 		USD:              0.35,
+		PrefixTokens:     25340,
+		USDPerToken:      0.35 / 25340,
 		CacheWriteTokens: 25340,
 		InputTokens:      120,
 		OutputTokens:     40,
+		Cold:             true,
 		CLIVersion:       "claude-code/1.2.3",
 		MeasuredAt:       time.Date(2026, 8, 14, 19, 40, 0, 0, time.UTC),
 	}
@@ -368,5 +371,152 @@ func TestWriteIsAtomicNoPartialFileInAFreshDirectory(t *testing.T) {
 			names[i] = e.Name()
 		}
 		t.Errorf("directory holds %v, want exactly [floors.json]", names)
+	}
+}
+
+// The rate is a property of the model, not of any one (repository, agent)
+// pair: three cold rows for the same model spread across two repositories
+// and two agents, measured at different times, must all feed the same
+// PriceForModel(model) answer, and the answer must be the most recently
+// measured one -- a rate from last week has no reason to win over a rate
+// measured an hour ago on a completely different repository.
+func TestPriceForModelReturnsTheMostRecentColdRowAcrossRepositoriesAndAgents(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	oldest := measurement("atenea", "explore", "claude-opus-5")
+	oldest.USDPerToken = 1.0e-5
+	oldest.MeasuredAt = time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	if err := store.Put(oldest); err != nil {
+		t.Fatalf("Put oldest: %v", err)
+	}
+
+	middle := measurement("taxiprime-backend", "plan", "claude-opus-5")
+	middle.USDPerToken = 1.1e-5
+	middle.MeasuredAt = time.Date(2026, 8, 14, 8, 0, 0, 0, time.UTC)
+	if err := store.Put(middle); err != nil {
+		t.Fatalf("Put middle: %v", err)
+	}
+
+	newest := measurement("taxiprime-backend", "explore", "claude-opus-5")
+	newest.USDPerToken = 1.0149e-5
+	newest.MeasuredAt = time.Date(2026, 8, 15, 3, 0, 0, 0, time.UTC)
+	if err := store.Put(newest); err != nil {
+		t.Fatalf("Put newest: %v", err)
+	}
+
+	usdPerToken, measuredAt, ok := store.PriceForModel("claude-opus-5")
+	if !ok {
+		t.Fatal("PriceForModel: ok = false, want true with three cold rows on record")
+	}
+	if usdPerToken != newest.USDPerToken {
+		t.Errorf("PriceForModel usdPerToken = %v, want %v (the most recent cold row)", usdPerToken, newest.USDPerToken)
+	}
+	if !measuredAt.Equal(newest.MeasuredAt) {
+		t.Errorf("PriceForModel measuredAt = %v, want %v", measuredAt, newest.MeasuredAt)
+	}
+}
+
+// A warm row's USDPerToken was itself borrowed from an earlier PriceForModel
+// call, not derived from its own receipt: chaining through it would drift
+// the rate away from any real measurement, so PriceForModel must skip warm
+// rows even when one is more recent than every cold row on record.
+func TestPriceForModelIgnoresWarmRows(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	cold := measurement("atenea", "explore", "claude-opus-5")
+	cold.Cold = true
+	cold.USDPerToken = 1.0149e-5
+	cold.MeasuredAt = time.Date(2026, 8, 14, 19, 40, 0, 0, time.UTC)
+	if err := store.Put(cold); err != nil {
+		t.Fatalf("Put cold: %v", err)
+	}
+
+	warm := measurement("atenea", "explore", "claude-opus-5")
+	warm.Agent = "plan"
+	warm.Cold = false
+	warm.USDPerToken = 4.28e-7 // what a warm receipt would imply if taken at face value; must not win
+	warm.MeasuredAt = time.Date(2026, 8, 15, 20, 40, 0, 0, time.UTC)
+	if err := store.Put(warm); err != nil {
+		t.Fatalf("Put warm: %v", err)
+	}
+
+	usdPerToken, _, ok := store.PriceForModel("claude-opus-5")
+	if !ok {
+		t.Fatal("PriceForModel: ok = false, want true with a cold row on record")
+	}
+	if usdPerToken != cold.USDPerToken {
+		t.Errorf("PriceForModel usdPerToken = %v, want %v (the cold row, not the later warm one)", usdPerToken, cold.USDPerToken)
+	}
+}
+
+// A model nobody has ever measured cold -- including on a store that holds
+// cold rows for other models entirely -- is a clean false, not a zero rate
+// mistaken for a real one.
+func TestPriceForModelOnAnUnknownModelIsAPlainNo(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	usdPerToken, _, ok := store.PriceForModel("claude-opus-5")
+	if ok {
+		t.Fatalf("PriceForModel on an empty store: ok = true, usdPerToken = %v", usdPerToken)
+	}
+
+	if err := store.Put(measurement("atenea", "explore", "claude-sonnet-5")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	usdPerToken, _, ok = store.PriceForModel("claude-opus-5")
+	if ok {
+		t.Fatalf("PriceForModel(claude-opus-5) with only claude-sonnet-5 on record: ok = true, usdPerToken = %v", usdPerToken)
+	}
+}
+
+// reviewer and filereader call no model at all, so measuring them
+// correctly produces USD == 0 and PrefixTokens == 0 -- a legitimate cold
+// reading, not a sign that nothing was measured. Get has to hand that row
+// back with ok == true; treating a zero floor as absent would make the
+// caller re-measure an agent that will only ever cost zero, forever.
+func TestZeroFloorRowRoundTripsAsMeasuredNotAsAbsent(t *testing.T) {
+	store, err := floor.Open(filepath.Join(t.TempDir(), "floors.json"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	want := measurement("atenea", "reviewer", "claude-opus-5")
+	want.USD = 0
+	want.PrefixTokens = 0
+	want.USDPerToken = 0
+	want.CacheWriteTokens = 0
+	want.InputTokens = 0
+	want.OutputTokens = 0
+	want.Cold = true
+	if err := store.Put(want); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, ok, err := store.Get("atenea", "reviewer", "claude-opus-5")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !ok {
+		t.Fatal("Get: ok = false on a zero-floor row, want true -- zero is a measured value, not absence")
+	}
+	if got != want {
+		t.Errorf("Get = %+v, want %+v", got, want)
+	}
+
+	rows, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0] != want {
+		t.Errorf("List = %+v, want the zero-floor row present and unchanged", rows)
 	}
 }

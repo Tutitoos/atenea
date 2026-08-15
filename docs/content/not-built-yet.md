@@ -996,3 +996,44 @@ moment.
 **The condition:** an expansion is observed to add a step below the floor on a
 real run. Until then this is a hole with a receipt, not a bug — the door is the
 path every plan takes, and no measured failure has yet come through the window.
+
+## The planner writes two things it cannot check — 2026-08-15
+
+Both found on the same eighteen-step plan, and neither is a money problem: a
+larger grant and a measured floor leave both exactly where they are.
+
+**It assigns work to an agent that cannot do it.** Six of the eighteen steps
+were `reviewer`, and each one reads like this:
+
+> Open `src/modules/admin/admin.routes.ts` yourself and check the subject's
+> route inventory. Verify: that the stated route count matches the number of
+> route declarations actually in the file; that no route present in the file is
+> missing from the answer; that each route's cited line really declares that
+> route.
+
+The built-in `reviewer` cannot do any of it. It is mechanical by design — see
+its own doc: "a review that cannot be checked is an opinion" — and what it
+checks is `path`, `bytes`, `lines` and `content` out of the subject's result,
+which is the **filereader's** result schema. Handed an explore answer, which
+carries `summary` and `findings`, it returns "the result names no path, so
+there is nothing to re-read". Six steps were written for an agent that does not
+exist, by a planner reading a menu that told it the type reviews answers and
+did not tell it which answers it can read. The gate never fired, so this cost
+nothing on the night and would have cost a third of the graph on any night it
+did.
+
+**It funds types that call no model.** `reviewer` and `filereader` spend
+nothing — no turn, no tokens, `max_tokens = 1` in the declaration — and the six
+reviewer steps were allocated $0.78 of a $3.50 grant, **22.7%**, at $0.12 to
+$0.18 each. The planner is dividing a grant by step count weighted by its own
+sense of size, with no notion that some types are free. Whatever derived shares
+ends up computing, the first term is zero for a type that calls no model, and
+that is knowable from the declaration without measuring anything.
+
+**The condition, for both:** the agent menu the planner is handed carries what
+a type can be given and what it costs — the result schema it consumes, and
+whether it spends. Today the menu carries a one-line summary and the planner
+guesses the rest. Neither defect is fixable downstream: `workflow create` can
+refuse a plan that is underfunded because a floor is a number it can compare,
+and it cannot refuse a plan that is misassigned, because nothing has written
+down what a fit would be.

@@ -8,6 +8,10 @@
 // that already passed -- and "explored well, planned badly" is two verdicts on
 // the record instead of one.
 //
+// The exploring half ships under two agent types, `explore` and `reader`,
+// which are one implementation handed two different tool surfaces -- see
+// Surface, where the price of the difference is written down.
+//
 // The plan comes back as TOML text in a single result field, not as a JSON
 // graph Atenea re-encodes. Three reasons, and the third is the one that
 // matters: there is one plan format rather than two, every mistake a model can
@@ -123,9 +127,17 @@ type charge struct {
 	PricedBy         string   `json:"priced_by,omitempty"`
 }
 
-// Explore runs the first half: look at the project, say what is there.
+// Explore runs the first half: look at the project through Atenea's own
+// capabilities, say what is there.
 func Explore(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	return run(ctx, stdin, stdout, explore)
+}
+
+// Read runs that same half over files somebody already named, with none of
+// Atenea's capabilities behind it. See Surface for what that is worth and
+// what it costs.
+func Read(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	return run(ctx, stdin, stdout, reader)
 }
 
 // Plan runs the second half: read the exploration, return a graph.
@@ -279,19 +291,130 @@ func readTokens(in assignment) int {
 	return int(readShare * budget(in) * tokensPerUSD)
 }
 
-func explore(ctx context.Context, in assignment, cfg config.Config, d deps) report {
-	tools, err := d.tools()
-	if err != nil {
-		// The explorer's whole job is to use Atenea's own capabilities. With
-		// no service to reach them through it did not do badly -- it could
-		// not run, which is `incomplete` with an `unavailable` reason and
-		// never a refusal of the project it never looked at.
-		return unavailable(contract.MessageOf(err))
+// Surface is the shape of the turn one built-in agent type gets: which of
+// the two configured models answers it, whether it is handed Atenea's own
+// capabilities as an --mcp-config, and which of the CLI's own tools it may
+// call beside them.
+//
+// It is a type rather than three literals spread over this package because
+// the tool surface is a property of the AGENT TYPE, not of the step: two
+// steps of one type get the same tools whatever their objective says, and
+// the floor probe that prices a type has to measure the turn a real step of
+// it actually gets. A table restated in the command that prints the floor is
+// a table that will one day price a surface nothing runs.
+//
+// What the difference is worth, measured 2026-08-15 on taxiprime-backend
+// against claude-opus-5, cold: an explore turn costs $0.27 and 26,603 tokens
+// of prefix before the model has read one line of the repository, and 81% of
+// that is the definitions of Atenea's capabilities -- the same probe with no
+// tools came back at $0.06 and 4,991 tokens. The figure does not move with
+// the prompt cache: warm, the same surface read 23,278 and wrote 3,325,
+// which is the identical 26,603 tokens split differently. On one real
+// 18-step plan the catalog was $2.64 of a $5.29 requirement, and twelve of
+// those steps read files the commission had already named and never
+// dispatched a single capability. Those twelve are what `reader` is for.
+type Surface struct {
+	// Role is which of the two configured models answers this type's turns.
+	Role model.Role
+	// Capabilities says whether the turn is handed Atenea's own tools. It
+	// is a bool rather than the --mcp-config itself because building that
+	// config dials the service, and a caller asking what a type's surface
+	// is has not asked to open a socket.
+	Capabilities bool
+	// Builtins are the CLI's own tools this type's turns may call. See
+	// readingTools for why the list is what it is.
+	Builtins []string
+}
+
+// SurfaceOf answers what turn a built-in agent runs, keyed by the name
+// `agent-exec` is given -- which is args[1] of the declared type, and so is
+// also the right key for a repository's own type that borrows a shipped
+// command with `runs`.
+//
+// False is the answer for `filereader`, `reviewer` and `plan-check`: those
+// three are deterministic Go on this side of the spawn, they call no model,
+// and a type with no turn has neither a surface to shape nor a floor to
+// price.
+func SurfaceOf(agentType string) (Surface, bool) {
+	switch agentType {
+	case "explore":
+		return exploreSurface(), true
+	case "reader":
+		return readerSurface(), true
+	case "plan":
+		return planSurface(), true
+	}
+	return Surface{}, false
+}
+
+// exploreSurface is what an `explore` turn gets: Atenea's own capabilities
+// beside the reading built-ins.
+func exploreSurface() Surface {
+	return Surface{Role: model.RoleExplore, Capabilities: true, Builtins: readingTools()}
+}
+
+// readerSurface is what a `reader` turn gets: the same built-ins and nothing
+// else. No --mcp-config means no capability catalog to pay for before the
+// model has read a line.
+func readerSurface() Surface {
+	return Surface{Role: model.RoleExplore, Builtins: readingTools()}
+}
+
+// planSurface is what a `plan` turn gets: nothing at all. The planner plans
+// from the exploration it was handed, and a second, unrecorded look at the
+// code would mean the exploration on the record is no longer what the graph
+// came from.
+func planSurface() Surface { return Surface{Role: model.RolePlan} }
+
+// readingTools is the CLI's own tools an exploring turn may call.
+//
+// Read, because there is no "read this file" capability, so without it the
+// explorer can find a symbol and never see the code around it; Glob, because
+// it is how a tree with no index gets learned.
+//
+// Grep is deliberately absent: it is `code.search`, and leaving both on is
+// precisely what let the first three explorations spend $1.87 answering
+// nothing while dispatching zero capabilities. Bash is absent because a
+// read-only agent that can run a shell is read-only by hope. The list is
+// built fresh on every call so that nothing downstream can edit the surface
+// of every future turn by appending to a shared slice.
+func readingTools() []string { return []string{"Read", "Glob"} }
+
+// explore is the `explore` agent type: the exploring half with Atenea's own
+// capabilities behind it.
+func explore(ctx context.Context, in assignment, _ config.Config, d deps) report {
+	return exploring(ctx, in, d, exploreSurface())
+}
+
+// reader is the `reader` agent type: the same function, the same role, the
+// same schema and the same answer, on the cheaper surface. It calls exploring
+// rather than copying it because a copy is how the two would come to differ
+// in something other than their tools.
+func reader(ctx context.Context, in assignment, _ config.Config, d deps) report {
+	return exploring(ctx, in, d, readerSurface())
+}
+
+func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
+	var tools string
+	if s.Capabilities {
+		got, err := d.tools()
+		if err != nil {
+			// This surface's whole job is to use Atenea's own capabilities.
+			// With no service to reach them through it did not do badly --
+			// it could not run, which is `incomplete` with an `unavailable`
+			// reason and never a refusal of the project it never looked at.
+			//
+			// A `reader` never reaches this branch, and that is a property
+			// worth having on purpose: a step that reads files somebody
+			// already named does not need the service up to read them.
+			return unavailable(contract.MessageOf(err))
+		}
+		tools = got
 	}
 
 	answer, err := d.client.Turn(ctx, model.Request{
-		Role:      model.RoleExplore,
-		Prompt:    explorePrompt(in),
+		Role:      s.Role,
+		Prompt:    explorePrompt(in, s),
 		Schema:    exploreSchema(),
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
@@ -299,17 +422,7 @@ func explore(ctx context.Context, in assignment, cfg config.Config, d deps) repo
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),
 		Tools:      tools,
-		// Read and Glob, and nothing else. There is no "read this file"
-		// capability, so without Read the explorer can find a symbol and
-		// never see the code around it; Glob is how it learns a tree it has
-		// no index of yet.
-		//
-		// Grep is deliberately absent: it is `code.search`, and leaving both
-		// on is precisely what let the first three explorations spend $1.87
-		// answering nothing while dispatching zero capabilities. Bash is
-		// absent because a read-only agent that can run a shell is read-only
-		// by hope.
-		Builtins: []string{"Read", "Glob"},
+		Builtins:   s.Builtins,
 	})
 	if err != nil {
 		return fromModelError(err, answer.Spent)
@@ -364,8 +477,12 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 			v, reasonText(in.Subject)))
 	}
 
+	// The planner's own surface, read from the same table the floor probe
+	// prices: nothing at all, which is why no --mcp-config is built here and
+	// the service is never dialed. See planSurface.
+	s := planSurface()
 	answer, err := d.client.Turn(ctx, model.Request{
-		Role:      model.RolePlan,
+		Role:      s.Role,
 		Prompt:    planPrompt(in, cfg),
 		Schema:    planSchema(),
 		Dir:       repositoryRoot(in),
@@ -373,6 +490,7 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		// ReadTokens holds back readShare's complement for the answer -- see
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),
+		Builtins:   s.Builtins,
 	})
 	if err != nil {
 		return fromModelError(err, answer.Spent)

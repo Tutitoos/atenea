@@ -13,7 +13,12 @@ import (
 // prompt buried between two functions gets changed without anybody reading
 // what it used to say.
 
-func explorePrompt(in assignment) string {
+// explorePrompt is the exploring half's commission, on the surface it was
+// given. The tool paragraph is the one part that moves: a turn told to reach
+// for code.search when it holds no such tool spends the commission looking
+// for it, and one told to read files it does have never learns that the
+// capabilities were the point.
+func explorePrompt(in assignment, s Surface) string {
 	var b strings.Builder
 	b.WriteString(`You are the exploring half of Atenea's orchestrator.
 
@@ -22,12 +27,26 @@ understand the project well enough that the plan is about this codebase rather
 than about codebases in general. You do not plan, and you do not change
 anything.
 
-Use the atenea tools you have been given. They are the point: code.search finds
+`)
+	if s.Capabilities {
+		b.WriteString(`Use the atenea tools you have been given. They are the point: code.search finds
 literal text, symbol.definition and symbol.references answer questions about a
 named symbol, symbol.overview lists what a file declares, and
 catalog.repositories says what is registered on this machine. Grep-by-eye over
 whole files is what these exist to replace.
-
+`)
+	} else {
+		b.WriteString(`You have Read and Glob, and no other tools at all. That is deliberate: this
+step was chosen for work whose files are already named, and carrying Atenea's
+capability catalog would cost about five times as much to start as it does to
+read them. Read what the commission names, glob to resolve a name or find the
+file beside it, and answer from what you actually read. You cannot search the
+text of the code and you cannot ask about a symbol -- when an answer would
+need that, say so in findings instead of guessing, and whoever reads this can
+dispatch an explorer for that one question.
+`)
+	}
+	b.WriteString(`
 The commission:
 `)
 	b.WriteString("  " + in.Task.Objective + "\n")

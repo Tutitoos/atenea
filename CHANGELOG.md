@@ -17,6 +17,28 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **A step that reads files somebody already named no longer pays for tools it
+  never calls.** `reader` ships declared beside `explore`: the same agent, the
+  same model role, the same answer, handed `Read` and `Glob` and no
+  `--mcp-config` at all. `atenea agent-exec reader` runs it, and a plan picks
+  it off the same menu `explore` is on.
+
+  The saving is the whole reason it exists, and it was measured rather than
+  assumed. Cold, on one repository against one model: starting an `explore`
+  turn costs **$0.27 and 26,603 tokens of prefix before the model has read a
+  line**, and the identical probe carrying no tools costs **$0.06 and 4,991** —
+  81% of what such a step pays to exist is the definitions of Atenea's
+  capabilities. On one eighteen-step plan that was **$2.64 of a $5.29
+  requirement**, for twelve steps that read files the ask had already named and
+  dispatched not one capability.
+
+  It is one implementation given two tool surfaces, never a copy: `explore` and
+  `reader` are the same function called with a different `planner.Surface`, and
+  that surface is what `atenea floor measure` reads to build its probe, so the
+  turn that gets priced is the turn a real step gets. A `reader` also never
+  dials the core — it has no capability catalog to fetch — so it runs on a
+  machine whose service is down.
+
 - **A plan funded below the cost of starting a turn is refused before anything
   is written.** `atenea floor measure --repo ID --agent explore|plan` runs one
   real turn that is asked to do nothing at all and records what it cost;

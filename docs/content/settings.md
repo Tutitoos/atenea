@@ -805,12 +805,22 @@ a hard-coded path there survives exactly until the next reinstall. Any other
 harness -- differs only in what it does between reading stdin and writing
 stdout.
 
-Five agents ship declared. `filereader` reads one file, `reviewer` audits an
+Six agents ship declared. `filereader` reads one file, `reviewer` audits an
 answer against the files it named, and `plan-check` compiles a plan and says
 whether the engine accepts it -- none of the three spends a token, and their
 `max_tokens = 1` is the honest ceiling of an agent that never calls a model.
-`explore` and `plan` do call one, through `[model]` above: they are the two
-halves of planning, and they are off until you name a model for each role.
+`explore`, `reader` and `plan` do call one, through `[model]` above, and they
+are off until you name a model for each role.
+
+`explore` and `reader` are one agent declared twice, and the only difference
+is the tools their turn is handed: `explore` gets Atenea's own capabilities,
+`reader` gets Read and Glob alone. That is not a detail. Measured 2026-08-15,
+cold, on one repository against one model: starting an `explore` turn costs
+$0.27 and 26,603 tokens of prefix before the model has read a line, and the
+identical probe with no tools at all costs $0.06 and 4,991 -- 81% of the floor
+is the definitions of tools most steps never call. Give a step that already
+knows which files it is about to `reader`, and pay `explore` only when
+something has to be searched for.
 
 `context` is a permission, not a delivery. Only the levels named here are ever
 sent, and a level nobody asked for is absent from the payload rather than

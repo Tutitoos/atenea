@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/agent/model"
+	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/registry"
@@ -76,7 +77,7 @@ func floorList(settingsPath string, out io.Writer) error {
 	running := model.VersionToken(toolversion.New(binary, "--version").Version(context.Background()))
 
 	fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s %s\n",
-		"REPOSITORY", "AGENT", "MODEL", "USD", "CACHE-WRITE", "CLI VERSION", "AGE")
+		"REPOSITORY", "AGENT", "MODEL", "USD", "PREFIX TOKENS", "CLI VERSION", "AGE")
 	now := time.Now()
 	stale := 0
 	legacy := 0
@@ -87,7 +88,7 @@ func floorList(settingsPath string, out io.Writer) error {
 			// it is shown as needing re-measurement rather than printed
 			// as if it still applied to whichever agent asks next.
 			fmt.Fprintf(out, "%-20s %-9s needs re-measurement -- predates --agent; run "+
-				"atenea floor measure --repo %s --agent explore|plan\n", m.Repository, "(none)", m.Repository)
+				"atenea floor measure --repo %s --agent NAME\n", m.Repository, "(none)", m.Repository)
 			legacy++
 			continue
 		}
@@ -100,8 +101,26 @@ func floorList(settingsPath string, out io.Writer) error {
 			mark = " stale"
 			stale++
 		}
+		modelName := m.Model
+		if modelName == "" {
+			// filereader, reviewer and plan-check call no model at all (see
+			// floorMeasureNoModel): their row prices a check that never ran
+			// one, and a blank column would read as data lost rather than
+			// as the fact it is.
+			modelName = "(no model)"
+		}
+		// A row can carry a real USD and no PrefixTokens: it was Put
+		// before the field existed, when a floor was stored as the cache
+		// write of whichever probe measured it. Printing the zero would
+		// put "0" in a token column beside a real dollar figure, which is
+		// the same misreading the zero-floor rows were guarded against --
+		// there, zero is the measurement; here, it is its absence.
+		tokens := groupedInt(m.PrefixTokens)
+		if m.PrefixTokens == 0 && m.USD > 0 {
+			tokens = "(not recorded)"
+		}
 		fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s measured %s%s\n",
-			m.Repository, m.Agent, m.Model, formatUSD(m.USD), groupedInt(m.CacheWriteTokens),
+			m.Repository, m.Agent, modelName, formatUSD(m.USD), tokens,
 			version, formatAge(now.Sub(m.MeasuredAt)), mark)
 	}
 	if stale > 0 {
@@ -118,12 +137,13 @@ func floorList(settingsPath string, out io.Writer) error {
 }
 
 // floorMeasure spends one real turn to price starting another one, and
-// stores what it found.
+// stores what it found -- unless the agent type calls no model at all, in
+// which case nothing is spent; see floorMeasureNoModel.
 func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("floor measure", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	repoFlag := flags.String("repo", "", "repository id or path to measure (required)")
-	agentFlag := flags.String("agent", "plan", "which built-in agent's tool surface to measure: explore or plan")
+	agentFlag := flags.String("agent", "plan", "which declared agent type's tool surface to measure")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -134,16 +154,22 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	if strings.TrimSpace(*repoFlag) == "" {
 		return contract.Fail(contract.FailureInvalidInput, "floor measure: --repo is required")
 	}
-	role, err := floorRole(*agentFlag)
-	if err != nil {
-		return err
-	}
-	agent := string(role)
 
 	cfg, err := config.LoadEffective(settingsPath)
 	if err != nil {
 		return err
 	}
+	// AgentTypeByName is the same lookup a workflow step gets when it names
+	// its agent, refused the same way and for the same reason: a name
+	// nobody declared is one keystroke from a typo, and "declared are ..."
+	// is the settings file's own answer rather than a second list this
+	// file would have to keep in sync with it.
+	agentType, err := cfg.AgentTypeByName(strings.TrimSpace(*agentFlag))
+	if err != nil {
+		return err
+	}
+	agent := agentType.Spec.Name
+
 	// The same lookup "atenea select", "atenea detect" and "atenea ask" use:
 	// an exact registered id, or -- because registry.Repository falls back
 	// to it -- an absolute path under one of them. Building only the
@@ -162,28 +188,29 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 
-	client, err := model.New(model.Options(cfg.Model))
-	if err != nil {
-		return err
-	}
-
 	store, err := floor.Open("")
 	if err != nil {
 		return err
 	}
+
+	surface, callsModel := planner.SurfaceOf(agentKind(agentType))
+	if !callsModel {
+		return floorMeasureNoModel(store, repo.ID, agent, out)
+	}
+
 	// modelName is resolved the same way Client.Floor resolves it
 	// internally (Options.Explore / Options.Plan, by Role) -- read here,
 	// ahead of spending anything, only so the warning below can name the
 	// triple and quote what it cost last time. Client.Floor's own returned
-	// Measurement.Model is still what gets stored; this is not a second
-	// source of truth, only an early read of the same one.
+	// FloorMeasurement.Model is still what gets stored; this is not a
+	// second source of truth, only an early read of the same one.
 	modelName := strings.TrimSpace(cfg.Model.Explore)
-	if role == model.RolePlan {
+	if surface.Role == model.RolePlan {
 		modelName = strings.TrimSpace(cfg.Model.Plan)
 	}
 	if modelName == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"floor measure: no model is configured for role %q", role)
+			"floor measure: no model is configured for role %q", surface.Role)
 	}
 	previous, hadPrevious, err := store.Get(repo.ID, agent, modelName)
 	if err != nil {
@@ -202,16 +229,32 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 			"measurement, the amount is unknown\n", repo.ID, agent, modelName)
 	}
 
-	tools, builtins, err := floorTurnShape(role)
+	client, err := model.New(model.Options(cfg.Model))
 	if err != nil {
 		return err
 	}
+	// Capabilities is a bool, not the config string, precisely so that a
+	// surface can be inspected above without dialing the service; the
+	// --mcp-config itself is only built for the one surface that actually
+	// carries it, right before spending the turn it prices.
+	var tools string
+	if surface.Capabilities {
+		tools, err = model.AteneaTools()
+		if err != nil {
+			return err
+		}
+	}
 	measured, err := client.Floor(context.Background(), model.FloorRequest{
-		Role:     role,
+		Role:     surface.Role,
 		Dir:      repo.Path,
 		Tools:    tools,
-		Builtins: builtins,
+		Builtins: surface.Builtins,
 	})
+	if err != nil {
+		return err
+	}
+
+	usd, usdPerToken, cold, pricedAt, err := coldEquivalentUSD(store, measured)
 	if err != nil {
 		return err
 	}
@@ -221,7 +264,10 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		Repository:       repo.ID,
 		Agent:            agent,
 		Model:            measured.Model,
-		USD:              measured.USD,
+		USD:              usd,
+		USDPerToken:      usdPerToken,
+		PrefixTokens:     measured.PrefixTokens,
+		Cold:             cold,
 		CacheWriteTokens: measured.CacheWriteTokens,
 		InputTokens:      measured.InputTokens,
 		OutputTokens:     measured.OutputTokens,
@@ -231,52 +277,95 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintf(out, "starting a turn on %s as %s with %s costs ~%s (%s tokens of cache write: "+
-		"system prompt and tool definitions, before any file is read)\n",
-		repo.ID, agent, measured.Model, formatUSD(measured.USD), groupedInt(measured.CacheWriteTokens))
+	note := ""
+	if !cold {
+		// The turn that ran just now only ever saw the cache-read price --
+		// see coldEquivalentUSD -- so the figure printed above is not what
+		// this probe was billed, and saying so is the difference between a
+		// reader trusting a number and one who can tell you why it can be
+		// trusted.
+		note = fmt.Sprintf(" -- this reading came back warm, priced from the %s cold measurement taken on %s",
+			measured.Model, pricedAt.Format("2006-01-02"))
+	}
+	fmt.Fprintf(out, "starting a turn on %s as %s with %s costs ~%s (%s prefix tokens: system prompt "+
+		"and tool definitions, before any file is read)%s\n",
+		repo.ID, agent, measured.Model, formatUSD(usd), groupedInt(measured.PrefixTokens), note)
 	return nil
 }
 
-// floorRole reads --agent as a Role name. It is deliberately not a free
-// string: model.Role is a closed set of two (see model.Role's own doc), and
-// a Client can only ever be asked to price one of them. Named --agent, not
-// --model -- the flag always selected which built-in agent's tool surface
-// to price, never a model name, and the old --model spelling is exactly why
-// an explore measurement and a plan measurement, against the same
-// repository and model, used to be read as the same stored row.
-func floorRole(name string) (model.Role, error) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "explore":
-		return model.RoleExplore, nil
-	case "plan", "":
-		return model.RolePlan, nil
-	default:
-		return "", contract.Fail(contract.FailureInvalidInput,
-			"floor measure: --agent must be explore or plan, got %q", name)
+// agentKind reads the built-in name a declared agent type dispatches to:
+// args[1] of "agent-exec <kind>", the same key planner.SurfaceOf reads by
+// (see its own doc). A repository's own type that borrows a shipped command
+// with `runs` carries the same Args, so this resolves it to the shipped
+// type's surface without this file needing to know local overlays exist; a
+// type whose command is not $atenea, or that declares no args, answers ""
+// and SurfaceOf reads that as "calls no model" rather than as a match.
+func agentKind(a config.AgentType) string {
+	if len(a.Args) < 2 || a.Args[0] != "agent-exec" {
+		return ""
 	}
+	return a.Args[1]
 }
 
-// floorTurnShape returns the --mcp-config and builtin tools a real step of
-// role would carry, because Client.Floor prices exactly the shape it is
-// handed -- see Client.Floor's own doc: "the same --mcp-config a real step
-// would carry". Explore reads the repository through Atenea's own tools and
-// the CLI's Read and Glob (see internal/agent/planner's explore, which this
-// mirrors); plan reasons over an exploration already in its prompt and
-// calls no tool at all, so it carries neither.
-func floorTurnShape(role model.Role) (tools string, builtins []string, err error) {
-	switch role {
-	case model.RoleExplore:
-		tools, err = model.AteneaTools()
-		if err != nil {
-			return "", nil, err
-		}
-		return tools, []string{"Read", "Glob"}, nil
-	case model.RolePlan:
-		return "", nil, nil
-	default:
-		return "", nil, contract.Fail(contract.FailureInvalidInput,
-			"floor measure: role %q is not explore or plan", role)
+// floorMeasureNoModel stores a zero floor for an agent type SurfaceOf says
+// calls no model at all -- filereader, reviewer and plan-check are
+// deterministic Go on the far side of the spawn (see cmd/atenea/agent.go's
+// dispatch and planner.SurfaceOf's own doc), so there is no turn to price,
+// and calling Client.Floor for one of them would price a turn that agent
+// type never runs.
+//
+// The row is written anyway, at zero, rather than left absent: floorList's
+// only way to tell "checked, costs nothing" from "never measured" is a row
+// on disk, and the legacy-agent handling above already treats an absent
+// row as needing attention rather than as a quiet zero.
+func floorMeasureNoModel(store *floor.Store, repository, agent string, out io.Writer) error {
+	if err := store.Put(floor.Measurement{
+		Repository: repository,
+		Agent:      agent,
+		Cold:       true,
+		MeasuredAt: time.Now().UTC(),
+	}); err != nil {
+		return err
 	}
+	fmt.Fprintf(out, "%s as %s calls no model, so starting it costs nothing\n", repository, agent)
+	return nil
+}
+
+// coldEquivalentUSD turns one Floor probe into the cold-equivalent price a
+// stored floor is defined as (see internal/floor.Measurement's own doc):
+// prefix tokens times a price per token, because PrefixTokens is the one
+// quantity that does not move with cache state -- see
+// model.FloorMeasurement.PrefixTokens for the same 26,603-both-times
+// reading this is built on.
+//
+// A cold probe prices itself: the receipt IS the price of the tokens it
+// just wrote, so USDPerToken is read straight back out of what was paid. A
+// warm probe has no receipt to divide -- the CLI billed only the
+// cache-read price of tokens somebody else already wrote -- so it borrows
+// USDPerToken from the most recent turn on the same model that WAS measured
+// cold, wherever that happened: price is a property of the model, not of
+// one repository's surface (see Store.PriceForModel). No cold row for that
+// model anywhere is refused rather than guessed at: waiting roughly an hour
+// with no probe ages the warm entry out, and the next reading is cold
+// again.
+func coldEquivalentUSD(store *floor.Store, measured model.FloorMeasurement) (usd, usdPerToken float64, cold bool, pricedAt time.Time, err error) {
+	if measured.Cold {
+		if measured.PrefixTokens == 0 {
+			return 0, 0, false, time.Time{}, contract.Fail(contract.FailureInvalidInput,
+				"floor probe: claude code wrote and read zero prefix tokens -- there is nothing to price")
+		}
+		return measured.USD, measured.USD / float64(measured.PrefixTokens), true, time.Time{}, nil
+	}
+	price, measuredAt, ok := store.PriceForModel(measured.Model)
+	if !ok {
+		return 0, 0, false, time.Time{}, contract.Fail(contract.FailureUnavailable,
+			"floor measure: this reading came back warm (%s of its %s prefix tokens were already "+
+				"cached) and %s has never been measured cold, so there is no price to convert its "+
+				"tokens with -- wait for the cache entry to age out (roughly an hour with no probe of "+
+				"this repository, agent and model; every probe refreshes it) and measure again",
+			groupedInt(measured.CacheReadTokens), groupedInt(measured.PrefixTokens), measured.Model)
+	}
+	return float64(measured.PrefixTokens) * price, price, false, measuredAt, nil
 }
 
 // formatUSD renders a dollar figure the way every other money line in this

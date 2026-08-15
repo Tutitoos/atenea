@@ -1376,6 +1376,32 @@ comment: `env -u VAR` and count what changes. The earlier `env -i` run was the s
 pointed at the subject the comment nominated, which is how a good instrument produces a true
 answer to the wrong question.
 
+## A twenty-first instrument: three identical answers from a verdict that had already gone stale
+
+Measured 2026-08-15, testing `code.impact` against `taxiprime` once codebase-memory was reachable
+again. Three calls, each varying `baseline` or `scope`, returned the same sentence: `unavailable:
+every implementation of code.impact is down for repository taxiprime`. Three independent-looking
+readings agreeing with each other is exactly the shape this page opened with, and it was exactly
+as misleading here: they were not three readings of the provider. They were one reading of the
+process asking about it, taken three times.
+
+`symbol.calls`, same repository, same minute, no restart in between, answered cleanly — a real
+call graph off codebase-memory. The provider was not down. Only `code.impact`'s belief about it
+was, and nothing asking `code.impact` again could ever discover that, because each ask reads the
+same cached verdict rather than the provider. `systemctl --user restart atenea`, and nothing else,
+cleared it: the next call succeeded on the first try, against the same repository.
+
+Same shape as 23, one layer over. There, a stale core answered a real handshake honestly and
+wrongly about which tools existed; here, a stale core answers a real capability call honestly and
+wrongly about whether a provider is reachable. Both are the same fact wearing different clothes: a
+long-running process's belief about the world is not the world, and a check that can only ever ask
+that process again inherits its staleness rather than testing it. A third instance of the identical
+mechanism turned up the same day, unforced: `indexed_by`, once corrected in memory by `atenea
+detect`, is not written back to the settings file, so the correction itself does not survive the
+next restart — the same restart that would otherwise be needed to clear a stale `down`. Three
+separate caches, three separate call sites, one missing operation between all of them: nothing on
+this path re-asks a provider it has already formed an opinion about.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1637,6 +1663,16 @@ answer to the wrong question.
     consumption: ask who reads the line, with `env -u` against what actually runs, not `env -i`
     against the tool the comment nominates. Deleting them would not have errored — the
     catalogue would just have been quieter by 54.
+
+26. **A cached verdict about a provider is not the provider, and re-asking through the same core
+    never tests the difference.** `code.impact` answered `down` three times running for a
+    provider that was, the whole time, answering `symbol.calls` cleanly, because atenea's
+    long-running core latches a reachability verdict per capability once observed and has no path
+    back from `down` to `up` except a full restart. `indexed_by` has the identical gap from the
+    other side: a correction made in memory by `atenea detect` is never written back to the
+    settings file, so it does not survive the restart that would otherwise be needed to clear a
+    stale `down`. Three consistent answers from a channel that cannot revise itself are not
+    corroboration; they are the same stale opinion, read again.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

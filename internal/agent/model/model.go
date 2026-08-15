@@ -552,8 +552,33 @@ type FloorRequest struct {
 type FloorMeasurement struct {
 	USD              float64
 	CacheWriteTokens int
-	InputTokens      int
-	OutputTokens     int
+	// CacheReadTokens is how many tokens of the cached prefix this turn read
+	// back at cache-read price instead of writing fresh. On its own it says
+	// nothing about what starting a turn costs -- see PrefixTokens, which is
+	// the field a floor is actually built on.
+	CacheReadTokens int
+	// PrefixTokens is CacheWriteTokens + CacheReadTokens: the size of the
+	// system-prompt-and-tool-definitions prefix this turn paid for, written
+	// or read. Measured 2026-08-15, the same tool surface probed cold and
+	// warm an hour apart: the cold probe wrote 26,603 tokens of cache and
+	// read 0; the warm probe read 23,278 and wrote 3,325. Two different
+	// splits, identical totals to the token -- 26,603 both times. The split
+	// moves with cache state; PrefixTokens does not, which is why a floor is
+	// built on this field and never on CacheWriteTokens alone.
+	PrefixTokens int
+	InputTokens  int
+	OutputTokens int
+	// Cold is true when none of this prefix was already cached --
+	// CacheReadTokens == 0. It is never true just because the tool surface
+	// is new: the refusal this field replaced was written an hour before
+	// this doc and was measurably too strict, because a NEW tool surface can
+	// never be cold either -- the machine-wide system-prompt prefix Claude
+	// Code ships with is already resident server-side before the first
+	// probe of it ever runs. Measured 2026-08-15: a repository never probed
+	// before still came back 23,278 tokens read and only 3,325 written on
+	// its first-ever probe. Only the per-repository, per-surface remainder
+	// can still be genuinely cold, and only CacheReadTokens == 0 says so.
+	Cold bool
 	// Model is the model name Role actually resolved to. A measurement is
 	// only ever valid for this exact pair with the repository, never for
 	// Role alone -- internal/config can repoint a Role at a different model
@@ -634,35 +659,15 @@ func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement,
 		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
 			"floor probe: claude code priced the turn as nothing -- what was measured is not a floor")
 	}
-	// A warm prompt cache is not a cheaper floor, it is a different
-	// measurement. The system prompt and the tool definitions are cached
-	// server-side by content, so a second probe minutes after the first pays
-	// cache_read prices for the same prefix the first one wrote.
-	//
-	// Measured 2026-08-14, twice within the hour against the same repository
-	// and model: the cold probe reported 27,666 tokens of cache write for
-	// $0.28, and the warm one that followed reported 0 tokens of cache write
-	// for $0.01. Storing the second as the floor would understate the cost of
-	// starting a turn by 28x, and it would do it with a real receipt from a
-	// real turn -- the most convincing kind of wrong number there is.
-	//
-	// The floor a plan must be funded for is the cold one: the cache expires,
-	// and whichever step starts first pays the write. So a warm reading is
-	// refused rather than recorded, and the caller is told to come back after
-	// the entry has aged out.
-	if env.Usage.CacheRead > env.Usage.CacheWrite {
-		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
-			"floor probe: the prompt cache was warm (%d tokens read, %d written) -- "+
-				"this measures what a turn costs after another turn already paid for it, "+
-				"not what starting one costs. Wait for the cache entry to age out and measure again",
-			env.Usage.CacheRead, env.Usage.CacheWrite)
-	}
-
+	prefixTokens := env.Usage.CacheWrite + env.Usage.CacheRead
 	return FloorMeasurement{
 		USD:              *env.TotalCostUSD,
 		CacheWriteTokens: env.Usage.CacheWrite,
+		CacheReadTokens:  env.Usage.CacheRead,
+		PrefixTokens:     prefixTokens,
 		InputTokens:      env.Usage.InputTokens,
 		OutputTokens:     env.Usage.OutputTokens,
+		Cold:             env.Usage.CacheRead == 0,
 		Model:            modelName,
 		CLIVersion:       VersionToken(c.version.Version(ctx)),
 	}, nil

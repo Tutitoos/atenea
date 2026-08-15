@@ -1593,20 +1593,51 @@ const floorWarmAnswer = `{"is_error":false,"subtype":"success","result":"ok",
   "usage":{"input_tokens":4,"output_tokens":3,"cache_read_input_tokens":25340,"cache_creation_input_tokens":0},
   "total_cost_usd":0.01,"num_turns":1}`
 
-// A warm cache is refused, because it is the most convincing wrong number
-// available: a real receipt, from a real turn, reporting 1/28th of what
-// starting a turn costs when nobody has paid for the prefix yet.
-func TestAFloorProbeAgainstAWarmCacheIsRefused(t *testing.T) {
+// A warm reading is no longer refused: the prefix was already paid for by an
+// earlier turn, and CacheReadTokens plus PrefixTokens say exactly how much
+// of it -- see FloorMeasurement.Cold. USD stays whatever the receipt priced
+// this particular turn at; converting that into a cold-equivalent floor is
+// internal/floor's job, not this package's.
+func TestAFloorProbeAgainstAWarmCacheReportsTheReadPrefix(t *testing.T) {
 	client, _ := floorClient(t, floorWarmAnswer)
-	_, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore})
-	if err == nil {
-		t.Fatal("Floor: a warm-cache probe was accepted as a floor")
+	m, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore})
+	if err != nil {
+		t.Fatalf("Floor: %v", err)
 	}
-	if contract.KindOf(err) != contract.FailureUnavailable {
-		t.Fatalf("Floor: kind = %v, want unavailable", contract.KindOf(err))
+	if m.Cold {
+		t.Error("Cold = true, want false for a warm-cache reading")
 	}
-	if !strings.Contains(contract.MessageOf(err), "warm") {
-		t.Fatalf("Floor: message does not say the cache was warm: %s", contract.MessageOf(err))
+	if m.CacheReadTokens != 25340 {
+		t.Errorf("CacheReadTokens = %d, want 25340", m.CacheReadTokens)
+	}
+	if m.CacheWriteTokens != 0 {
+		t.Errorf("CacheWriteTokens = %d, want 0", m.CacheWriteTokens)
+	}
+	if m.PrefixTokens != 25340 {
+		t.Errorf("PrefixTokens = %d, want 25340", m.PrefixTokens)
+	}
+	if m.USD != 0.01 {
+		t.Errorf("USD = %v, want the receipt's own 0.01", m.USD)
+	}
+}
+
+// A cold reading has nothing read back, so PrefixTokens is exactly the
+// cache-write figure -- the invariant internal/floor's PriceForModel relies
+// on to turn a cold row into a price per token.
+func TestAFloorProbeAgainstAColdCacheReportsPrefixEqualsWrite(t *testing.T) {
+	client, _ := floorClient(t, floorAnswer)
+	m, err := client.Floor(context.Background(), FloorRequest{Role: RoleExplore})
+	if err != nil {
+		t.Fatalf("Floor: %v", err)
+	}
+	if !m.Cold {
+		t.Error("Cold = false, want true for a cold-cache reading")
+	}
+	if m.CacheReadTokens != 0 {
+		t.Errorf("CacheReadTokens = %d, want 0", m.CacheReadTokens)
+	}
+	if m.PrefixTokens != m.CacheWriteTokens {
+		t.Errorf("PrefixTokens = %d, CacheWriteTokens = %d, want them equal on a cold reading", m.PrefixTokens, m.CacheWriteTokens)
 	}
 }
 

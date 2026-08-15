@@ -468,6 +468,140 @@ func TestThePlannerIsGivenNoToolsAtAll(t *testing.T) {
 	}
 }
 
+// ---- the reader surface ----------------------------------------------------
+
+// `reader` is `explore` with the capability catalog taken off, and that
+// catalog is most of what starting such a turn costs. Measured 2026-08-15 on
+// a real repository against claude-opus-5, cold: $0.27 and 26,603 tokens of
+// prefix with it, $0.06 and 4,991 without, which is 81% of the floor spent on
+// the definitions of tools most steps never call. The whole saving is the
+// --mcp-config that is not there, so its absence is the assertion.
+func TestAReaderIsGivenNoCapabilitiesAndTheSameReadingTools(t *testing.T) {
+	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+		"summary":  "the settings are read in internal/config",
+		"findings": "config.Load reads the file named by ATENEA_CONFIG.",
+	})}}
+
+	if got := reader(t.Context(), exploreAssignment(), config.Config{}, withTools(s)); got.Verdict != "ok" {
+		t.Fatalf("verdict = %q, want ok: %+v", got.Verdict, got)
+	}
+
+	if s.seen.Tools != "" {
+		t.Errorf("tools = %q, want none: a reader is the surface with no --mcp-config", s.seen.Tools)
+	}
+	// The built-ins are the ones explore gets, unchanged: a reader that
+	// cannot open a file is not a cheaper agent, it is no agent.
+	for _, want := range []string{"Read", "Glob"} {
+		if !slices.Contains(s.seen.Builtins, want) {
+			t.Errorf("builtins = %v, want %s", s.seen.Builtins, want)
+		}
+	}
+	for _, unwanted := range []string{"Grep", "Bash", "Write", "Edit"} {
+		if slices.Contains(s.seen.Builtins, unwanted) {
+			t.Errorf("builtins = %v, want %s absent", s.seen.Builtins, unwanted)
+		}
+	}
+	if s.seen.Role != model.RoleExplore {
+		t.Errorf("role = %q, want %q: it is the exploring half, on a cheaper surface",
+			s.seen.Role, model.RoleExplore)
+	}
+}
+
+// The service is not a dependency of a step that reads files somebody already
+// named. A reader that dialed it anyway would refuse to run whenever the core
+// is down -- for a socket whose only purpose is the catalog this type
+// deliberately does not carry.
+func TestAReaderNeverAsksForTheCapabilitiesItDoesNotCarry(t *testing.T) {
+	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+		"summary": "one place", "findings": "config.Load reads it.",
+	})}}
+	d := deps{client: s, tools: func() (string, error) {
+		t.Error("the reader dialed the service for tools it is not given")
+		return "", contract.Fail(contract.FailureUnavailable, "no atenea service is listening")
+	}}
+
+	if got := reader(t.Context(), exploreAssignment(), config.Config{}, d); got.Verdict != "ok" {
+		t.Fatalf("verdict = %q, want ok with no service at all: %+v", got.Verdict, got)
+	}
+}
+
+// The floor probe rebuilds a turn out of SurfaceOf and prices it, and its
+// whole claim is that what it priced is the turn a real step gets. That holds
+// only while the table and the turns agree, so here they are compared: every
+// model-backed type, run for real against a stub, against what the table says
+// it is.
+func TestEveryTurnAsksForTheSurfaceItsTypeDeclares(t *testing.T) {
+	for name, run := range map[string]turn{"explore": explore, "reader": reader, "plan": plan} {
+		t.Run(name, func(t *testing.T) {
+			s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+				"summary": "s", "findings": "f", "plan": "task = \"x\"\n",
+			})}}
+			in := planAssignment("ok", exploration())
+			in.Type = name
+			if got := run(t.Context(), in, config.Config{}, withTools(s)); got.Verdict != "ok" {
+				t.Fatalf("verdict = %q, want ok: %+v", got.Verdict, got)
+			}
+
+			want, ok := SurfaceOf(name)
+			if !ok {
+				t.Fatalf("SurfaceOf says %q calls no model, and a turn of it just did", name)
+			}
+			if s.seen.Role != want.Role {
+				t.Errorf("role = %q, want %q", s.seen.Role, want.Role)
+			}
+			if carries := s.seen.Tools != ""; carries != want.Capabilities {
+				t.Errorf("carries an --mcp-config = %v, want %v", carries, want.Capabilities)
+			}
+			if !slices.Equal(s.seen.Builtins, want.Builtins) {
+				t.Errorf("builtins = %v, want %v", s.seen.Builtins, want.Builtins)
+			}
+		})
+	}
+}
+
+// The three deterministic built-ins answer in Go and call no model, so there
+// is no turn of theirs to shape and no floor of theirs to price. A surface
+// invented for them would have the floor command spend a real turn measuring
+// an agent that never spends one.
+//
+// The key is the name `agent-exec` is given, not the declared type's own: a
+// repository's `spec-reader` that borrows this command with `runs` is keyed
+// by what it runs, and a type whose command is not this binary has no answer
+// here at all.
+func TestOnlyTheTypesThatCallAModelHaveASurface(t *testing.T) {
+	for _, name := range []string{"filereader", "reviewer", "plan-check", "spec-reader", ""} {
+		if got, ok := SurfaceOf(name); ok {
+			t.Errorf("SurfaceOf(%q) = %+v, want none", name, got)
+		}
+	}
+}
+
+// A turn is told what it can do, and these two can do different things.
+// Naming code.search to an agent holding no such tool spends the commission
+// hunting for it, and the reverse -- an explorer never told the capabilities
+// are the point -- is what cost $1.87 across three explorations that
+// dispatched none of them.
+func TestEachSurfaceIsToldWhichToolsItActuallyHas(t *testing.T) {
+	withCatalog := explorePrompt(exploreAssignment(), exploreSurface())
+	for _, want := range []string{"code.search", "symbol.definition", "catalog.repositories"} {
+		if !strings.Contains(withCatalog, want) {
+			t.Errorf("the explorer is never told about %s", want)
+		}
+	}
+
+	filesOnly := explorePrompt(exploreAssignment(), readerSurface())
+	for _, unwanted := range []string{"code.search", "symbol.", "catalog.repositories"} {
+		if strings.Contains(filesOnly, unwanted) {
+			t.Errorf("a reader is pointed at %s, which it does not have:\n%s", unwanted, filesOnly)
+		}
+	}
+	for _, want := range []string{"Read and Glob", "no other tools"} {
+		if !strings.Contains(filesOnly, want) {
+			t.Errorf("a reader is never told what it does have: %q is missing", want)
+		}
+	}
+}
+
 // Both plans a real model wrote on 2026-08-14 used `needs` as a data pipe:
 // four steps read files so that seven later steps could "have" them, which is
 // not what needs does. The prompt had never said so, and worse, it forbade the

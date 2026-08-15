@@ -267,10 +267,10 @@ There is **one** agent contract and two kinds under it. The **orchestrator**
 decides and splits; a **specialized** agent executes one objective it was
 handed and answers in the shape its type declares. The specialist was drawn up
 early, left unbuilt for a while, and is now the kind every shipped agent uses:
-`filereader`, `reviewer`, `plan-check`, `explore` and `plan`. They are one
-contract and one wire -- two JSON objects on stdin and stdout -- which is why
-a script and a model-backed agent differ only in what they do between reading
-and writing.
+`filereader`, `reviewer`, `plan-check`, `explore`, `reader` and `plan`. They
+are one contract and one wire -- two JSON objects on stdin and stdout -- which
+is why a script and a model-backed agent differ only in what they do between
+reading and writing.
 
 No orchestrator process exists yet, and the two kinds are a field rather than
 a fork so that adding one does not split the contract. What planning needed

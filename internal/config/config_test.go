@@ -1961,6 +1961,73 @@ func TestAFileThatPredatesAnAgentTypeStillGetsIt(t *testing.T) {
 	}
 }
 
+// `reader` is `explore` with Atenea's capability catalog taken off, and it is
+// worth declaring only while it stays exactly that: the saving is entirely in
+// what `agent-exec reader` hands the turn. Measured 2026-08-15 on one
+// repository against one model, cold: starting an `explore` turn costs $0.27
+// and 26,603 tokens of prefix, and the identical probe with no tools at all
+// costs $0.06 and 4,991.
+//
+// So this asserts the pair rather than the block. Everything a step of either
+// type may see, cause, spend and answer has to match, or they are no longer
+// one agent on two surfaces -- and a planner choosing between them on price
+// would be choosing between two different agents.
+func TestTheShippedReaderIsExploreOnACheaperSurface(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	reader, err := cfg.AgentTypeByName("reader")
+	if err != nil {
+		t.Fatalf("the shipped settings declare no reader: %v", err)
+	}
+	explore, err := cfg.AgentTypeByName("explore")
+	if err != nil {
+		t.Fatalf("AgentTypeByName(explore): %v", err)
+	}
+
+	// What it spawns: this binary, under the name cmd/atenea dispatches the
+	// cheap surface on. The whole difference between the two types is here.
+	if reader.Command != explore.Command {
+		t.Errorf("command = %q, want %q", reader.Command, explore.Command)
+	}
+	if want := []string{"agent-exec", "reader"}; !slices.Equal(reader.Args, want) {
+		t.Errorf("args = %v, want %v", reader.Args, want)
+	}
+
+	// And everything it is: the same agent, so the same levels, the same
+	// ceiling on what it may cause, the same ceiling on one run, the same
+	// lane, and the same answer.
+	if reader.Spec.Kind != explore.Spec.Kind {
+		t.Errorf("kind = %v, want explore's %v", reader.Spec.Kind, explore.Spec.Kind)
+	}
+	if !slices.Equal(reader.Context, explore.Context) {
+		t.Errorf("context = %v, want explore's %v", reader.Context, explore.Context)
+	}
+	if !slices.Equal(reader.Effects, explore.Effects) {
+		t.Errorf("effects = %v, want explore's %v", reader.Effects, explore.Effects)
+	}
+	if reader.Limits != explore.Limits {
+		t.Errorf("limits = %+v, want explore's %+v", reader.Limits, explore.Limits)
+	}
+	if reader.Pool != explore.Pool || reader.ReadsASubject() != explore.ReadsASubject() {
+		t.Errorf("scheduled as %v/reads-subject %v, want explore's %v/%v",
+			reader.Pool, reader.ReadsASubject(), explore.Pool, explore.ReadsASubject())
+	}
+	if !reflect.DeepEqual(reader.Spec.Result, explore.Spec.Result) {
+		t.Errorf("result shape = %+v, want explore's %+v", reader.Spec.Result, explore.Spec.Result)
+	}
+
+	// The summary is the one line the planner picks a type off, so it has to
+	// carry the tradeoff and not just the name.
+	for _, want := range []string{"cannot search", "fifth"} {
+		if !strings.Contains(reader.Summary, want) {
+			t.Errorf("summary %q never says %q, so the menu does not state the tradeoff",
+				reader.Summary, want)
+		}
+	}
+}
+
 // The shipped declaration is a default, and a file that names an agent means
 // what it says -- including a command of its own.
 func TestAFileThatNamesAnAgentKeepsItsOwn(t *testing.T) {

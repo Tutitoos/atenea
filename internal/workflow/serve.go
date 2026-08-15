@@ -243,16 +243,23 @@ func (f floors) Floor(_ context.Context, repository, agent, model string) (Floor
 // modelFor resolves which model an agent type spends against, out of the two
 // the settings file fixes -- see internal/config's Model.
 //
-// The two names are the shipped agent types that spawn a model turn, and
-// everything else answers "": a type nobody configured a model for is one
-// nobody measured a turn for either, and guessing here would put a floor on a
-// step whose price was never taken. A settings file that runs `agent-exec
-// explore` under some other type name is unpriced rather than mispriced, which
-// is the direction to be wrong in.
+// `reader` answers with the explore model because it IS the explore
+// implementation, spawned with no MCP config: same role, same client, same
+// two configured names, and a floor measured for one is the floor of the
+// other's model. A settings file that runs `agent-exec explore` under some
+// other type name of its own is unpriced rather than mispriced, which is the
+// direction to be wrong in.
+//
+// Everything else answers "", and the two readings of that are different.
+// For `filereader`, `reviewer` and `plan-check` it is final and correct:
+// those three answer in deterministic Go, call no model at all, and have no
+// model-shaped floor to look up. For anything else it means nobody
+// configured a model for that type, so nobody measured a turn for it either,
+// and guessing here would put a floor on a step whose price was never taken.
 func modelFor(cfg config.Config) func(agentType string) string {
 	return func(agentType string) string {
 		switch agentType {
-		case "explore":
+		case "explore", "reader":
 			return cfg.Model.Explore
 		case "plan":
 			return cfg.Model.Plan
