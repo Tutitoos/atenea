@@ -1061,16 +1061,24 @@ next call, because restart is the only invalidation this mechanism has.
 is the identical shape from the write side instead of the read side: a claim about whether a
 provider serves a repository, set once — by hand, in a settings file, or in memory by `atenea
 detect` — and never rechecked against the thing it claims. `detect` does not call `SetHealth`;
-it prints and exits. Measured the same day: after restoring `indexed_by = [..., "codebase-memory"]`
-across six repositories, a fresh `detect` per repository found the claim true for one of six.
-Five sat wrong, silently, with nothing in the load path positioned to notice, until something
-went looking by hand.
+it prints and exits.
 
 These are not two bugs. They are one missing operation — *re-probe a provider this process has
 already formed an opinion about* — absent from two call sites that both currently treat
 "observed once" as "true forever," in opposite directions: `Health` latches down and never
 un-latches; `indexed_by` latches up (whatever the file says) and never re-confirms. One design
 has to cover both, or the second one just gets rebuilt as a copy of the first with the same gap.
+
+**A separate fault, not fixed by any of this.** Measured the same day: restoring `indexed_by =
+[..., "codebase-memory"]` across six repositories was done by hand, from a backup, reconstructing
+what the value had been before an earlier retirement — and a fresh `detect` per repository, run
+afterward, found the claim true for exactly one of six. That is not the design gap above. Nothing
+about the missing reconciliation mechanism made those five values wrong; running `detect` before
+writing them, which cost nothing and needed no new code, would have caught it the same day it
+happened. The design gap explains why a wrong value, once written, sits unnoticed instead of
+self-correcting. It does not explain why the value was wrong in the first place — that was a step
+skipped, not a feature missing, and building the reconciliation mechanism below would not by
+itself stop the next person from writing six confident, unchecked declarations by hand again.
 
 **The shape.** `contract.Health` gains one field: `ObservedAt time.Time`. Nothing else about it
 changes — `Usable()` stays a state check, not a time check, so this stays additive. `indexed_by`
