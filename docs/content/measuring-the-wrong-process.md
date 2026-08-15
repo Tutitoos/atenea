@@ -1414,11 +1414,17 @@ This entry does not name a cause, because nothing that survives names one. What 
 checked, was: the daemon did not run at all on 08-10 — zero journal entries that day — then ran
 without interruption from 08-13 11:50 through 08-15 04:08, the exact minute of this session's own
 retirement of the provider, with no delete event anywhere in that window. The installed binary
-went from v0.8.1 (the README's own version) to v0.10.0 (recorded in `daemon.log`, dated 07-06) to
-v0.9.0 — the version running today, binary mtime 07-08. That is a downgrade somewhere in the
-sequence, not an upgrade. `delete_project` is a real, documented CLI verb on this binary, and
-there is no audit record anywhere on this machine of whether it was ever called. systemd's own
-journal keeps nothing from before 08-11; several machine reboots in that window rotated it away.
+went from v0.8.1 (the README's own version) to v0.9.0 — the version running today, binary mtime
+07-08 — on the same calendar day v0.9.0 was officially released. `daemon.log` recorded a
+`0.10.0` handshake on 07-06, two days *before* v0.9.0 itself was released and over a month before
+DeusData published any real v0.10.0; that entry was a local build carrying a version string
+ahead of any tag this project ever cut, not an official artifact this install downgraded from.
+Checked two sessions later, in full: the 07-08 install is an ordinary same-day release-day
+update, ruling the version history out as a plausible mechanism for what follows — it is noted
+here only because, before that check, it briefly looked like one. `delete_project` is a real,
+documented CLI verb on this binary, and there is no audit record anywhere on this machine of
+whether it was ever called. systemd's own journal keeps nothing from before 08-11; several
+machine reboots in that window rotated it away.
 
 Three projects and 179,600 edges are gone between a README that names no date and a today that
 has one. The honest description of this store, right now, is that it cannot answer the one
@@ -1487,6 +1493,57 @@ The mechanism is therefore **structurally limited to agents that call tools**:
 types never turn at all. That is a property of where the CLI reports usage, not
 a bug to fix in this package — nothing on the stream would tell an accumulator
 that a toolless answer is getting expensive.
+
+## A twenty-fourth instrument: a probe that works on one backend is not a probe
+
+Measured 2026-08-15, enumerating what two raw MCP backends offer, with one
+function used against both. Against `agent-device` it worked exactly as
+intended: **55 tools, 215,174 bytes, 0.06 seconds**, every name listed. Against
+`maestro`, the same function returned nothing and reported no answer after 2.4
+seconds.
+
+Read as a measurement, that is a dead server. It is not. Running the same
+command with stderr no longer discarded shows the opposite:
+
+```
+mcp_viewer_ready http://127.0.0.1:10000
+kotlin-logging: initializing... active logger factory: Slf4jLoggerFactory
+MCP Server: Started. Waiting for messages. Working directory: /tmp
+```
+
+It started, it said so, and it exited **rc 0** when stdin closed without ever
+writing a JSON-RPC frame to stdout. Newline-delimited JSON on stdin, which is
+what the sibling backend answers, is not what this one reads. The silence was
+the framing, not the server — and nothing in the silence says which.
+
+Two things make it worse than an ordinary null result. The failure is
+**asymmetric within one call site**: the same helper is correct and incorrect
+depending on which binary it is pointed at, so the code cannot be trusted or
+distrusted as a unit, and a suite that probes only the cooperative backend stays
+green. And the probe **is not read-only**, though it was written as though it
+were: `mcp_viewer_ready` is a web application on `127.0.0.1:10000`, started as a
+side effect of asking a question. It went away with the process here. A probe
+that leaves a listener behind is an instrument that changes the machine it is
+measuring.
+
+What settled it was not a better handshake. It was three channels that were
+already working, each answering a different question, none of them this one:
+
+| question | channel | reading |
+|---|---|---|
+| what is *allowed* | `atenea.toml`, read from source | six tools each, plus the four excluded Cloud tools by name |
+| what is *offered right now* | `fixed-cost --repo`, a live handshake through atenea | atenea serving 42 tools, `raw.agent-device.click` the priciest schema on this machine |
+| whether it ever *answered* | the receipt store, `~/.local/state/atenea/runs/` | `raw.maestro.list_devices` and `inspect_screen`, three calls, all `ok`, 2026-08-15 00:57–00:58 |
+
+The receipts are the decisive one, and they are decisive precisely because they
+are not a probe: they are what the server did when something real asked. A
+backend that cannot be interrogated directly can still be observed working, and
+the record of it working outranks any fresh attempt to reproduce it. The
+published figure for maestro's ten offered tools therefore keeps its original
+date — 2026-08-14, when a handshake did succeed through a client that speaks its
+framing — rather than being silently re-dated to a day it could not be
+reproduced on. An unreproducible measurement is not thereby wrong; writing
+today's date on it would be.
 
 ## The general lesson
 
