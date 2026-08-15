@@ -521,11 +521,11 @@ func TestZeroFloorRowRoundTripsAsMeasuredNotAsAbsent(t *testing.T) {
 	}
 }
 
-// FirstEventWeight moves when the measurement moves: it is a live
+// StartWeight moves when the measurement moves: it is a live
 // derivation off Prefix, InputTokens and OutputTokens, never a stored
 // number of its own. Two rows, prefixes in a clean 2x ratio and input and
 // output held at zero to isolate it, must weigh in the same ratio.
-func TestFirstEventWeightMovesWithTheMeasurementItIsDerivedFrom(t *testing.T) {
+func TestStartWeightMovesWithTheMeasurementItIsDerivedFrom(t *testing.T) {
 	small := measurement("taxiprime-backend", "reader", "claude-opus-5")
 	small.PrefixTokens = 10_000
 	small.InputTokens = 0
@@ -534,22 +534,60 @@ func TestFirstEventWeightMovesWithTheMeasurementItIsDerivedFrom(t *testing.T) {
 	large := small
 	large.PrefixTokens = 20_000
 
-	if got, want := small.FirstEventWeight(), 20_000; got != want {
-		t.Errorf("FirstEventWeight (prefix 10,000) = %d, want %d", got, want)
+	if got, want := small.StartWeight(), 20_000; got != want {
+		t.Errorf("StartWeight (prefix 10,000) = %d, want %d", got, want)
 	}
-	if got, want := large.FirstEventWeight(), 40_000; got != want {
-		t.Errorf("FirstEventWeight (prefix 20,000) = %d, want %d", got, want)
+	if got, want := large.StartWeight(), 40_000; got != want {
+		t.Errorf("StartWeight (prefix 20,000) = %d, want %d", got, want)
+	}
+}
+
+// The re-derivation: both weights read StartTokens, so the block that arrives
+// with a turn's first tool call is in them. Measured 2026-08-15 on
+// taxiprime-backend/explore -- prefix 5,647, first call 41,927 -- the block is
+// 7.4x the prefix, so a weight that ignored it understated what a step pays
+// before it can read a second thing by the same factor.
+func TestBothWeightsIncludeTheFirstCallBlock(t *testing.T) {
+	probed := floor.Measurement{PrefixTokens: 5_647, FirstCallTokens: 41_927}
+	prefixOnly := floor.Measurement{PrefixTokens: 5_647}
+
+	if got, want := probed.StartTokens(), 47_574; got != want {
+		t.Fatalf("StartTokens = %d, want %d", got, want)
+	}
+	if got, want := probed.StartWeight(), 2*47_574; got != want {
+		t.Errorf("StartWeight = %d, want %d -- the whole start as cache write", got, want)
+	}
+	if got, want := probed.WarmStartWeight(), 47_574/10; got != want {
+		t.Errorf("WarmStartWeight = %d, want %d -- the whole start as cache read", got, want)
+	}
+	// The factor the rule was wrong by, stated rather than implied.
+	ratio := float64(probed.WarmStartWeight()) / float64(prefixOnly.WarmStartWeight())
+	if ratio < 8.3 || ratio > 8.5 {
+		t.Errorf("probed/prefix-only warm weight = %.2fx, want ~8.4x", ratio)
+	}
+}
+
+// An unprobed row answers its prefix alone, which is what it was measured to
+// be. Honest for an agent type with no tools, an understatement for one whose
+// first call nobody has priced -- and never a zero, which would read as free.
+func TestARowWithNoFirstCallWeighsItsPrefixAlone(t *testing.T) {
+	row := floor.Measurement{PrefixTokens: 12_000, InputTokens: 2, OutputTokens: 4}
+	if got, want := row.StartTokens(), 12_000; got != want {
+		t.Errorf("StartTokens = %d, want %d", got, want)
+	}
+	if got, want := row.WarmStartWeight(), 2+4*5+1_200; got != want {
+		t.Errorf("WarmStartWeight = %d, want %d", got, want)
 	}
 }
 
 // A row Put before PrefixTokens existed carries the same number in
 // CacheWriteTokens alone (see Measurement's own doc and Prefix), and
-// FirstEventWeight has to read its weight off that fallback rather than
+// StartWeight has to read its weight off that fallback rather than
 // answering zero -- zero means unknown, and this row is not. The figures
 // are the real ones on this machine: taxiprime-backend/explore,
 // input_tokens 2, output_tokens 4, cache_write_tokens 26,603, prefix_tokens
 // 0.
-func TestFirstEventWeightReadsALegacyRowsWeightOffCacheWriteRatherThanZero(t *testing.T) {
+func TestStartWeightReadsALegacyRowsWeightOffCacheWriteRatherThanZero(t *testing.T) {
 	legacy := floor.Measurement{
 		Repository:       "taxiprime-backend",
 		Agent:            "explore",
@@ -562,8 +600,8 @@ func TestFirstEventWeightReadsALegacyRowsWeightOffCacheWriteRatherThanZero(t *te
 	if got, want := legacy.Prefix(), 26_603; got != want {
 		t.Errorf("Prefix = %d, want %d off the CacheWriteTokens fallback", got, want)
 	}
-	if got, want := legacy.FirstEventWeight(), 53_228; got != want {
-		t.Errorf("FirstEventWeight = %d, want %d -- a legacy row answering zero would read "+
+	if got, want := legacy.StartWeight(), 53_228; got != want {
+		t.Errorf("StartWeight = %d, want %d -- a legacy row answering zero would read "+
 			"as unmeasured rather than as the real weight it carries", got, want)
 	}
 }
@@ -586,11 +624,11 @@ func TestTheColdAndWarmFirstEventsAreTheSamePrefixAtTwoPrices(t *testing.T) {
 	}
 	// allowance.Weigh(2, 4, 0, 26603) and allowance.Weigh(2, 4, 26603, 0):
 	// 22 tokens of input and output either way, then 53,206 against 2,660.
-	if got, want := row.FirstEventWeight(), 53_228; got != want {
-		t.Errorf("FirstEventWeight = %d, want %d", got, want)
+	if got, want := row.StartWeight(), 53_228; got != want {
+		t.Errorf("StartWeight = %d, want %d", got, want)
 	}
-	if got, want := row.WarmFirstEventWeight(), 2_682; got != want {
-		t.Errorf("WarmFirstEventWeight = %d, want %d -- the same prefix read from cache, "+
+	if got, want := row.WarmStartWeight(), 2_682; got != want {
+		t.Errorf("WarmStartWeight = %d, want %d -- the same prefix read from cache, "+
 			"not written to it", got, want)
 	}
 }
@@ -599,7 +637,7 @@ func TestTheColdAndWarmFirstEventsAreTheSamePrefixAtTwoPrices(t *testing.T) {
 // Put before PrefixTokens existed still prices, off CacheWriteTokens. If it
 // answered zero the engine would read the row as carrying no token count and
 // refuse every step against it -- see checkFunding's unmeasured branch.
-func TestWarmFirstEventWeightReadsTheLegacyFallbackToo(t *testing.T) {
+func TestWarmStartWeightReadsTheLegacyFallbackToo(t *testing.T) {
 	legacy := floor.Measurement{
 		Repository:       "taxiprime-backend",
 		Agent:            "explore",
@@ -609,8 +647,8 @@ func TestWarmFirstEventWeightReadsTheLegacyFallbackToo(t *testing.T) {
 		InputTokens:      2,
 		OutputTokens:     4,
 	}
-	if got, want := legacy.WarmFirstEventWeight(), 2_682; got != want {
-		t.Errorf("WarmFirstEventWeight = %d, want %d off the CacheWriteTokens fallback",
+	if got, want := legacy.WarmStartWeight(), 2_682; got != want {
+		t.Errorf("WarmStartWeight = %d, want %d off the CacheWriteTokens fallback",
 			got, want)
 	}
 }

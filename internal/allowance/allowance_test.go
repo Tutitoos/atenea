@@ -35,13 +35,13 @@ func TestWeighReproducesTheFirstEventThatStartedThisRule(t *testing.T) {
 // charged twenty steps for one write.
 func TestTheWarmFirstEventIsATwentiethOfTheColdOne(t *testing.T) {
 	const prefix = 26_603
-	cold := allowance.FirstEventWeight(prefix, 2, 4)
-	warm := allowance.WarmFirstEventWeight(prefix, 2, 4)
+	cold := allowance.StartWeight(prefix, 2, 4)
+	warm := allowance.WarmStartWeight(prefix, 2, 4)
 	if cold != 53_228 {
-		t.Errorf("FirstEventWeight(26603, 2, 4) = %d, want 53,228", cold)
+		t.Errorf("StartWeight(26603, 2, 4) = %d, want 53,228", cold)
 	}
 	if warm != 2_682 {
-		t.Errorf("WarmFirstEventWeight(26603, 2, 4) = %d, want 2,682", warm)
+		t.Errorf("WarmStartWeight(26603, 2, 4) = %d, want 2,682", warm)
 	}
 	// The 22 tokens of input and output ride on both, so the ratio is on
 	// the prefix alone: x2 against x0.1.
@@ -55,8 +55,8 @@ func TestTheWarmFirstEventIsATwentiethOfTheColdOne(t *testing.T) {
 // prefix it is derived from is priced as the cache read it actually is.
 func TestTheWarmThresholdIsTheOneAStepPays(t *testing.T) {
 	const prefix = 26_603
-	cold := allowance.MinShareUSD(allowance.FirstEventWeight(prefix, 2, 4))
-	warm := allowance.MinShareUSD(allowance.WarmFirstEventWeight(prefix, 2, 4))
+	cold := allowance.MinShareUSD(allowance.StartWeight(prefix, 2, 4))
+	warm := allowance.MinShareUSD(allowance.WarmStartWeight(prefix, 2, 4))
 	if got := math.Ceil(cold*100) / 100; got != 0.65 {
 		t.Errorf("cold threshold = %.2f, want 0.65", got)
 	}

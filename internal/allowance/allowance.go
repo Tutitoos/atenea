@@ -105,7 +105,7 @@ func Weigh(input, output, cacheRead, cacheWrite int) int {
 // tokens read out of the provider's cache instead of written into it, x0.1
 // against x2 by Weigh's own ratios, so a twentieth.
 //
-// It is the money form of the split FirstEventWeight and WarmFirstEventWeight
+// It is the money form of the split StartWeight and WarmStartWeight
 // are the token forms of, and it exists as one exported number because three
 // packages would otherwise each divide by their own 20. Measured 2026-08-15
 // against two live probes and five loopback runs: the same prefix and the
@@ -126,67 +126,78 @@ func Tokens(shareUSD float64) int {
 	return int(readShare * shareUSD * tokensPerUSD)
 }
 
-// FirstEventWeight is the input-equivalent weight of establishing a turn's
-// prefix from cold: the whole prefix weighed as cache write.
+// StartWeight is the input-equivalent weight of everything a turn pays for
+// before it can read anything of its own, from cold: the prefix that arrives
+// with the prompt PLUS the block that arrives with its first tool call, all of
+// it weighed as cache write.
 //
-// Measured 2026-08-14, one live turn surveying this repository: the very
-// first assistant event already weighed 65,625 input-equivalent tokens --
-// about $0.20 -- because the CLI's system prompt and tool definitions are
-// cached on it, 32,799 cache-creation tokens against input_tokens: 2. That
-// reading is FirstEventWeight(32_799, 2, 5) here.
+// The first tool call is in here because that is where the money is, and
+// leaving it out was the last place a rule on this page still priced turn 1.
+// Measured 2026-08-15 on taxiprime-backend/claude-opus-5, one run, message by
+// message: the prompt carried 5,647 cache-creation tokens and the block
+// arriving with the first tool result carried 41,927 -- 7.4x the prefix, on
+// the same turn, before the model had read a second thing. A threshold built
+// on the prefix alone asks whether a step can afford to be handed its prompt;
+// the question worth asking is whether it can afford to still be reading after
+// its first tool call returns, which is where thirty-six reader steps died
+// saying they had located nothing.
+//
+// The earlier reading this replaced, kept because it is the same arithmetic on
+// a smaller input: 2026-08-14, one live turn surveying this repository, the
+// first assistant event alone weighed 65,625 input-equivalent tokens -- about
+// $0.20 -- from 32,799 cache-creation tokens against input_tokens: 2.
 //
 // "because any step may be the first one to pay for it" used to stand here
 // as the reason every step was checked against this number. It was wrong,
 // and it was wrong in the expensive direction: measured 2026-08-15, the cold
 // write happens once per machine per cache lifetime and every step after it
 // reads the same bytes for a twentieth of the price. One step of a plan pays
-// this; the rest pay WarmFirstEventWeight. See it for the receipts.
-func FirstEventWeight(prefixTokens, input, output int) int {
-	return Weigh(input, output, 0, prefixTokens)
+// this; the rest pay WarmStartWeight. See it for the receipts.
+func StartWeight(startTokens, input, output int) int {
+	return Weigh(input, output, 0, startTokens)
 }
 
-// WarmFirstEventWeight is the same first assistant event on a machine whose
-// prefix is already in the provider's cache: the identical PrefixTokens
-// weighed as cache READ (x0.1) instead of cache write (x2). Twenty times
-// smaller than the cold reading, on the same stored number -- which is sound
-// because PrefixTokens is cache-state invariant by construction, see
-// floor.Measurement.PrefixTokens.
+// WarmStartWeight is the same start on a machine whose cache already holds
+// both blocks: the identical token count weighed as cache READ (x0.1) instead
+// of cache write (x2). Twenty times smaller than the cold reading, on the same
+// stored numbers -- which is sound because both counts are cache-state
+// invariant by construction, see floor.Measurement.PrefixTokens and
+// FirstCallTokens.
 //
 // Measured 2026-08-15, agent reader on taxiprime-backend/claude-opus-5, two
 // matched cold-start runs differing only in whether --max-budget-usd was
 // passed: the first tool call read 40,227 cached tokens and wrote 1,674 in
 // one arm, 1,707 in the other, and the whole step -- read a file, answer the
 // schema -- was billed $0.0913 and $0.0884. The cold reading of that same
-// prefix was paid ONCE, by the first run of the day, at 41,927 cache-write
+// block was paid ONCE, by the first run of the day, at 41,927 cache-write
 // tokens and $0.4935; every run since has read it. Five consecutive runs
 // against different commissions, different files and different nonces all
 // reported cache_read 40,227 exactly, which is what makes the cold write a
 // one-time machine-wide cost rather than a per-step one.
 //
-// So this is the reading an admission rule wants per step, and
-// FirstEventWeight is the one a caller wants when asking what establishing
-// the prefix costs once. Charging every step the cold figure prices twenty
-// steps for a write that happens on one of them.
-func WarmFirstEventWeight(prefixTokens, input, output int) int {
-	return Weigh(input, output, prefixTokens, 0)
+// So this is the reading an admission rule wants per step, and StartWeight is
+// the one a caller wants when asking what establishing the cache costs once.
+// Charging every step the cold figure prices twenty steps for a write that
+// happens on one of them.
+func WarmStartWeight(startTokens, input, output int) int {
+	return Weigh(input, output, startTokens, 0)
 }
 
 // MinShareUSD is the smallest share, in dollars, that clears the allowance
-// rule against a turn whose own first assistant event weighs
-// firstEventWeight: the smallest share for which Tokens(share) >
-// firstEventWeight, strict -- a share that buys exactly the first event and
-// no more still nudges the model to answer before it has read anything of
-// its own.
+// rule against a turn whose own start weighs startWeight: the smallest share
+// for which Tokens(share) > startWeight, strict -- a share that buys exactly
+// the prompt and the first tool call and no more still nudges the model to
+// answer before it has read anything of its own.
 //
-// firstEventWeight+1 because Tokens truncates to an int and the rule is
-// strict: the smallest token count that clears "> firstEventWeight" is
-// firstEventWeight+1. The 1e-9 cushion is the same last-bit-of-float concern
+// startWeight+1 because Tokens truncates to an int and the rule is
+// strict: the smallest token count that clears "> startWeight" is
+// startWeight+1. The 1e-9 cushion is the same last-bit-of-float concern
 // internal/workflow's moneyEpsilon exists for: without it, a share computed
-// to land exactly on firstEventWeight+1 tokens can truncate one token short
+// to land exactly on startWeight+1 tokens can truncate one token short
 // after the float round trip, refusing the exact number this function just
 // handed back. The result is a raw share, not yet rounded to cents -- every
 // caller ceilings it to cents before printing it, never floors it, so a
 // person who types the printed number is admitted.
-func MinShareUSD(firstEventWeight int) float64 {
-	return float64(firstEventWeight+1) / (readShare * tokensPerUSD) * (1 + 1e-9)
+func MinShareUSD(startWeight int) float64 {
+	return float64(startWeight+1) / (readShare * tokensPerUSD) * (1 + 1e-9)
 }

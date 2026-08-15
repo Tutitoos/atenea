@@ -381,6 +381,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **The admission threshold was still priced on turn 1, the cheap half of the
+  turn.** It asked whether a step's read allowance outweighed the prefix that
+  arrives with its prompt — `5,647` tokens on the measured row — while the event
+  that actually stops a step reading is the block arriving with its first tool
+  call, `41,927` tokens, 7.4x larger on the same turn. Both weights now derive
+  from the whole start, prefix plus first call: on the probed row the threshold
+  moves `$0.01` to `$0.06`, and a `$0.05` step that would have been admitted to
+  spend its entire allowance being handed its own prompt and one tool result is
+  refused. `allowance.FirstEventWeight`/`WarmFirstEventWeight` are
+  `StartWeight`/`WarmStartWeight`, named for what they weigh. The refusal names
+  the two blocks separately with the second one's size, since that is the number
+  doing the work, and still reports the cold figure as what one run of the hour
+  pays once.
 - **An answer that stated no coverage was recorded as a whole one.** Both
   schemas mark `completeness` required and the provider does not enforce it:
   four fields were demanded and two arrived, on a step that came back `ok`

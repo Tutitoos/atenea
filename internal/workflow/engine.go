@@ -66,21 +66,22 @@ type Floor struct {
 	// bought nothing is not -- and zero means the measurement did not carry
 	// one, never that a turn was free.
 	CacheWriteTokens int
-	// FirstEventTokens is the input-equivalent weight of establishing this
-	// turn's prefix from cold -- see allowance.FirstEventWeight. Measured
-	// 2026-08-15, it is paid ONCE per machine per cache lifetime, not once
-	// per step, so it is no longer what a step is refused against. It is
-	// reported so a person can see what the first run of the hour carries.
-	// Zero means this measurement carries no token count at all, so neither
-	// weight can be answered -- never that the first event is free.
-	FirstEventTokens int
-	// WarmFirstEventTokens is the same first event once the prefix is
-	// cached: the per-step reading, twenty times smaller, and the number
-	// the allowance rule actually refuses a step against. Half of a share
-	// must buy more input-equivalent tokens of reading than this, or the
-	// reserved-answer nudge fires on the arrival of the prompt and the step
-	// dies empty. Zero has the same meaning as above.
-	WarmFirstEventTokens int
+	// StartWeight is the input-equivalent weight of establishing this turn's
+	// whole start from cold -- its prefix and the block its first tool call
+	// brings -- see allowance.StartWeight. Measured 2026-08-15, it is paid
+	// ONCE per machine per cache lifetime, not once per step, so it is no
+	// longer what a step is refused against. It is reported so a person can
+	// see what the first run of the hour carries. Zero means this measurement
+	// carries no token count at all, so neither weight can be answered --
+	// never that starting is free.
+	StartWeight int
+	// WarmStartWeight is the same start once both blocks are cached: the
+	// per-step reading, twenty times smaller, and the number the allowance
+	// rule actually refuses a step against. Half of a share must buy more
+	// input-equivalent tokens of reading than this, or the reserved-answer
+	// nudge fires by the time the step's first tool call returns and it
+	// answers having read one thing. Zero has the same meaning as above.
+	WarmStartWeight int
 }
 
 // Floors answers what starting a turn costs, for a repository, an agent
@@ -270,7 +271,7 @@ type underfunded struct {
 	// or "unmeasured" when the row carries no token count to check either
 	// rule against.
 	bound string
-	// weight is the row's FirstEventTokens: the input-equivalent weight of
+	// weight is the row's StartWeight: the input-equivalent weight of
 	// the turn's own first assistant event, cold-equivalent. Zero only when
 	// bound is "unmeasured".
 	weight int
@@ -363,7 +364,7 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			continue
 		}
 		usd := step.Permission.BudgetUSD
-		if got.floor.WarmFirstEventTokens == 0 {
+		if got.floor.WarmStartWeight == 0 {
 			// The row cannot answer the threshold question at all. Refuse
 			// rather than fall back to the floor alone, whatever usd is --
 			// see checkFunding's own doc.
@@ -388,7 +389,7 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 		// Against the WARM weight, not the cold one. A step is one of many
 		// on a machine that has already established this prefix, and
 		// measured 2026-08-15 the cold write happens once and is read by
-		// everything after it -- see allowance.WarmFirstEventWeight. The
+		// everything after it -- see allowance.WarmStartWeight. The
 		// cold figure still travels on the row, and refusal prints it, so
 		// the person sizing a grant can see what the hour's first run adds.
 		tokens := allowance.Tokens(usd)
@@ -402,12 +403,12 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			floorUSD, floorKind = got.floor.WarmUSD, "warm-floor"
 		}
 		okFloor := usd+moneyEpsilon >= floorUSD
-		okAllowance := tokens > got.floor.WarmFirstEventTokens
+		okAllowance := tokens > got.floor.WarmStartWeight
 		if okFloor && okAllowance {
 			continue
 		}
 		needUSD, bound := floorUSD, floorKind
-		if rescuable := allowance.MinShareUSD(got.floor.WarmFirstEventTokens); rescuable > needUSD {
+		if rescuable := allowance.MinShareUSD(got.floor.WarmStartWeight); rescuable > needUSD {
 			needUSD, bound = rescuable, "allowance"
 		}
 		under = append(under, underfunded{
@@ -418,7 +419,7 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			floor:   got.floor,
 			needUSD: needUSD,
 			bound:   bound,
-			weight:  got.floor.WarmFirstEventTokens,
+			weight:  got.floor.WarmStartWeight,
 			tokens:  tokens,
 		})
 	}
@@ -490,25 +491,38 @@ func refusal(repository string, steps int, under []underfunded) string {
 		if u.floor.CLIVersion != "" {
 			line += " on claude code " + u.floor.CLIVersion
 		}
-		if u.floor.CacheWriteTokens == 0 {
+		switch {
+		case u.floor.CacheWriteTokens == 0:
 			// A measurement that carried no token count ends its sentence
 			// instead of promising evidence it does not have.
 			b.WriteString(line + ".\n")
-		} else {
+		case u.floor.StartTokens > u.floor.CacheWriteTokens:
+			// A probed row: name the two blocks separately, because the
+			// second one is 7x the first and a reader sizing a share has to
+			// see which number is doing the work.
+			b.WriteString(line + ":\n")
+			fmt.Fprintf(&b, "%s tokens for the system prompt and tool definitions, and %s more "+
+				"arriving with the step's first tool call -- %s before it has read a second "+
+				"thing.\n",
+				grouped(u.floor.CacheWriteTokens),
+				grouped(u.floor.StartTokens-u.floor.CacheWriteTokens),
+				grouped(u.floor.StartTokens))
+		default:
 			b.WriteString(line + ":\n")
 			fmt.Fprintf(&b, "%s tokens of cache write -- system prompt and tool definitions -- "+
-				"before any file is read.\n", grouped(u.floor.CacheWriteTokens))
+				"before any file is read. No probe has priced this row's first tool call.\n",
+				grouped(u.floor.CacheWriteTokens))
 		}
-		if u.floor.WarmFirstEventTokens != 0 {
+		if u.floor.WarmStartWeight != 0 {
 			fmt.Fprintf(&b, "half of a share is the read allowance, %s input-equivalent tokens "+
 				"to the dollar, so a share must exceed $%.2f before it buys any reading at "+
 				"all.\n", grouped(allowance.Tokens(1)),
-				centsUp(allowance.MinShareUSD(u.floor.WarmFirstEventTokens)))
-			fmt.Fprintf(&b, "that is the warm figure, which is what a step pays: this prefix is "+
-				"written to cache once and read by everything after it. Establishing it cold "+
-				"weighs %s input-equivalent tokens, paid by whichever run of the hour is "+
+				centsUp(allowance.MinShareUSD(u.floor.WarmStartWeight)))
+			fmt.Fprintf(&b, "that is the warm figure, which is what a step pays: those bytes are "+
+				"written to cache once and read by everything after them. Establishing them "+
+				"cold weighs %s input-equivalent tokens, paid by whichever run of the hour is "+
 				"first, and by no other.\n",
-				grouped(u.floor.FirstEventTokens))
+				grouped(u.floor.StartWeight))
 		}
 	}
 
@@ -529,7 +543,8 @@ func clause(u underfunded) string {
 	case "unmeasured":
 		return "the measurement carries no token count, so what a share buys cannot be checked"
 	case "allowance":
-		return fmt.Sprintf("half a share buys %s tokens of reading; its own first event weighs %s",
+		return fmt.Sprintf("half a share buys %s tokens of reading; its prompt and first "+
+			"tool call weigh %s, read from cache",
 			grouped(u.tokens), grouped(u.weight))
 	case "warm-floor":
 		return fmt.Sprintf("starting a step costs ~$%.2f warm -- %s tokens of prefix and "+

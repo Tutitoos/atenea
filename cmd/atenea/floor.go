@@ -134,14 +134,14 @@ func floorList(settingsPath string, out io.Writer) error {
 		// The two columns are the split, and reading either as the other
 		// is the mistake measured out on 2026-08-15.
 		//
-		// WarmFirstEventWeight falls back to CacheWriteTokens the same way
+		// WarmStartWeight falls back to CacheWriteTokens the same way
 		// Prefix does, so a legacy row missing PrefixTokens still prices
 		// here. A dash, not the longer "(not recorded)" above, because a
 		// mechanical row -- no model, so no first assistant event ever
 		// fires -- is not a historical gap in what got recorded; the
 		// column does not apply to it at all.
 		rescuable := "-"
-		if w := m.WarmFirstEventWeight(); w > 0 {
+		if w := m.WarmStartWeight(); w > 0 {
 			rescuable = formatUSD(math.Ceil(allowance.MinShareUSD(w)*100) / 100)
 		}
 		// WARM USD is what a step pays and COLD USD what establishing the

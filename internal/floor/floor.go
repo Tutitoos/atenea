@@ -131,31 +131,34 @@ func (m Measurement) Prefix() int {
 	return m.CacheWriteTokens
 }
 
-// FirstEventWeight is the input-equivalent weight of this measurement's
-// turn's own first assistant event, cold-equivalent -- see
-// allowance.FirstEventWeight for the arithmetic and the receipt it is
-// checked against.
+// StartWeight is the input-equivalent weight of everything this measurement's
+// turn pays for before it reads anything of its own -- its prefix and the
+// block its first tool call brings -- priced cold, as a cache write. See
+// allowance.StartWeight for the arithmetic and the receipts.
+//
+// It reads StartTokens rather than Prefix, which is the whole point: a row
+// that has been probed answers 7.4x what its prefix alone would say, and the
+// prefix alone was never the quantity that stopped a step from reading.
 //
 // Zero means this row carries no token count at all, so the weight is
 // unknown -- not the same as a weight of zero, which would mean a turn that
 // costs nothing to start. A caller must refuse rather than pass a zero
 // weight on as an answer.
-func (m Measurement) FirstEventWeight() int {
-	return allowance.FirstEventWeight(m.Prefix(), m.InputTokens, m.OutputTokens)
+func (m Measurement) StartWeight() int {
+	return allowance.StartWeight(m.StartTokens(), m.InputTokens, m.OutputTokens)
 }
 
-// WarmFirstEventWeight is the same first assistant event once this machine's
-// prefix is in the provider's cache -- the per-step reading, twenty times
-// smaller than FirstEventWeight's one-time cold one. Both come off the same
-// stored PrefixTokens, which is cache-state invariant by construction: see
-// the field's own doc, and allowance.WarmFirstEventWeight for the two
-// matched runs that measured the split.
+// WarmStartWeight is the same start once this machine's cache holds both
+// blocks -- the per-step reading, twenty times smaller than StartWeight's
+// one-time cold one. Both come off the same stored counts, which are
+// cache-state invariant by construction: see PrefixTokens and FirstCallTokens,
+// and allowance.WarmStartWeight for the matched runs that measured the split.
 //
 // Zero means the same thing it means above: no token count on this row, so
 // the weight is unknown rather than free, and a caller must refuse rather
 // than pass it on.
-func (m Measurement) WarmFirstEventWeight() int {
-	return allowance.WarmFirstEventWeight(m.Prefix(), m.InputTokens, m.OutputTokens)
+func (m Measurement) WarmStartWeight() int {
+	return allowance.WarmStartWeight(m.StartTokens(), m.InputTokens, m.OutputTokens)
 }
 
 // StartTokens is everything a step pays for before it does any work of its

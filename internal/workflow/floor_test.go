@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -68,8 +69,8 @@ func measuredFloor(usd float64) workflow.Floor {
 		// allowance.Weigh(2, 4, 0, 12000) and allowance.Weigh(2, 4, 12000, 0):
 		// the same prefix read cold and warm, with the input/output pair
 		// every real measurement on this machine carries.
-		FirstEventTokens:     24022,
-		WarmFirstEventTokens: 1222,
+		StartWeight:     24022,
+		WarmStartWeight: 1222,
 	}
 }
 
@@ -84,12 +85,38 @@ func measuredFloor(usd float64) workflow.Floor {
 // convenience.
 func rescuableBinds() workflow.Floor {
 	return workflow.Floor{
-		USD:                  0.10,
-		MeasuredAt:           time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
-		CLIVersion:           "2.1.227",
-		CacheWriteTokens:     100000,
-		FirstEventTokens:     200024,
-		WarmFirstEventTokens: 10024,
+		USD:              0.10,
+		MeasuredAt:       time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
+		CLIVersion:       "2.1.227",
+		CacheWriteTokens: 100000,
+		StartWeight:      200024,
+		WarmStartWeight:  10024,
+	}
+}
+
+// probedRow is the real 2026-08-15 measurement of taxiprime-backend/explore
+// once a probe had made one tool call: a 5,647-token prefix, a 41,927-token
+// block arriving with the first tool call, 47,574 together, priced $0.4935
+// cold. Every weight below is that total, not the prefix -- which is the
+// whole difference between this row and the fixtures above.
+func probedRow() workflow.Floor {
+	const prefix, start = 5647, 47574
+	measured := floor.Measurement{
+		USD:             float64(prefix) * (0.4935 / float64(start)),
+		PrefixTokens:    prefix,
+		FirstCallTokens: start - prefix,
+		InputTokens:     2,
+		OutputTokens:    11,
+	}
+	return workflow.Floor{
+		USD:              measured.USD,
+		WarmUSD:          measured.WarmUSD(),
+		StartTokens:      measured.StartTokens(),
+		MeasuredAt:       time.Date(2026, 8, 15, 22, 45, 0, 0, time.Local),
+		CLIVersion:       "2.1.232",
+		CacheWriteTokens: prefix,
+		StartWeight:      measured.StartWeight(),
+		WarmStartWeight:  measured.WarmStartWeight(),
 	}
 }
 
@@ -427,8 +454,8 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 	// 3,000, not measuredFloor's 12,000: still a row the floor binds on
 	// (the warm threshold, $0.01, sits far under this $0.09 floor).
 	cheaper.CacheWriteTokens = 3000
-	cheaper.FirstEventTokens = 6000
-	cheaper.WarmFirstEventTokens = 300
+	cheaper.StartWeight = 6000
+	cheaper.WarmStartWeight = 300
 	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
 		add("taxiprime-backend", "plan", "claude-sonnet-5", cheaper)
 	h := floored(t, dir, "taxiprime-backend", table)
@@ -552,8 +579,8 @@ func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T
 	// test instead of the agent-keying this test is actually about.
 	filereaderRow := measuredFloor(0.05)
 	filereaderRow.CacheWriteTokens = 4728
-	filereaderRow.FirstEventTokens = 9478
-	filereaderRow.WarmFirstEventTokens = 494
+	filereaderRow.StartWeight = 9478
+	filereaderRow.WarmStartWeight = 494
 	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
 		add("taxiprime-backend", "filereader", "claude-opus-5", filereaderRow)
 	// Both agent types spend the same model here on purpose: the model alone
@@ -597,9 +624,8 @@ func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T
 }
 
 // A step can clear the floor by a wide margin and still be refused: the
-// floor is what a turn costs, not what a share must exceed to buy any
-// reading before the reserved-answer nudge fires on the arrival of the
-// prompt alone.
+// floor is what a turn costs, not what a share must exceed to still be
+// reading once its first tool call has returned.
 func TestAStepThatClearsTheFloorAndBuysNoReadingIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", rescuableBinds())
@@ -615,10 +641,10 @@ func TestAStepThatClearsTheFloorAndBuysNoReadingIsRefused(t *testing.T) {
 		"funded $0.11",
 		"needs $0.13",
 		"half a share buys 9,130 tokens of reading",
-		"its own first event weighs 10,024",
+		"its prompt and first tool call weigh 10,024",
 		// The cold figure is reported beside the warm one, never as the
 		// requirement: what the hour's first run adds, once.
-		"Establishing it cold weighs 200,024",
+		"Establishing them cold weighs 200,024",
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the refusal never says %q:\n%s", want, message)
@@ -828,5 +854,76 @@ func TestARowWithNoFirstCallMeasurementFallsBackToTheColdFloorAndNamesIt(t *test
 		if !strings.Contains(message, want) {
 			t.Errorf("the refusal never says %q:\n%s", want, message)
 		}
+	}
+}
+
+// The re-derivation, on the real row that motivated it. A step is refused
+// against what it pays before it can read a second thing -- prompt plus first
+// tool call -- and not against the prompt alone.
+//
+// The numbers are the 2026-08-15 measurement's own: warm start weight 4,814
+// input-equivalent tokens, so a share must exceed $0.06. Weighed on the
+// 5,647-token prefix alone the same row would ask $0.01, and a $0.05 step
+// would be admitted to spend its whole allowance being handed its own prompt
+// and one tool result. That 7.7x is the defect, stated as a test.
+func TestTheThresholdIsWeighedOnTheFirstToolCallAndNotThePromptAlone(t *testing.T) {
+	dir := t.TempDir()
+	row := probedRow()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", row)
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	// Above the warm floor ($0.03) and above what the prefix alone would ask
+	// ($0.01), so only the re-derived threshold can refuse this.
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("reads-one-thing", "explore", 0.05)))
+	if err == nil {
+		t.Fatal("Create accepted a step that cannot outlive its own first tool call")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"funded $0.05",
+		"needs $0.06",
+		"its prompt and first tool call weigh 4,814",
+		// Both blocks named, with the second one's size visible: it is 7.4x
+		// the first, and that is the whole reason this rule moved.
+		"5,647 tokens for the system prompt and tool definitions",
+		"41,927 more arriving with the step's first tool call",
+		"47,574 before it has read a second thing",
+		"Establishing them cold weighs 95,205",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
+	}
+
+	// And the same row admits the share it printed: the threshold is
+	// actionable, not just larger.
+	if _, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("reads-more", "explore", 0.06))); err != nil {
+		t.Fatalf("Create refused the share its own refusal printed: %v", err)
+	}
+}
+
+// The floor and the threshold are derived from the same stored row, so the
+// arithmetic has to reproduce the receipt that row came from: $0.4935 for the
+// whole start, cold, on 2026-08-15.
+func TestTheProbedRowsPricesReproduceItsReceipt(t *testing.T) {
+	row := probedRow()
+	if got, want := row.StartTokens, 47_574; got != want {
+		t.Errorf("StartTokens = %d, want %d", got, want)
+	}
+	// USD is the prefix alone, priced at the receipt's own rate; the whole
+	// start at that rate is the receipt.
+	cold := row.USD * float64(row.StartTokens) / float64(row.CacheWriteTokens)
+	if cold < 0.4934 || cold > 0.4936 {
+		t.Errorf("the whole start priced cold = %v, want the receipt's $0.4935", cold)
+	}
+	// What a step actually pays is that, read from cache: a twentieth.
+	if row.WarmUSD < 0.0246 || row.WarmUSD > 0.0248 {
+		t.Errorf("WarmUSD = %v, want ~$0.0247 -- the same start read warm", row.WarmUSD)
+	}
+	if row.StartWeight/row.WarmStartWeight < 19 {
+		t.Errorf("cold/warm weight ratio = %d, want ~20 (cache write x2 against read x0.1)",
+			row.StartWeight/row.WarmStartWeight)
 	}
 }

@@ -2196,6 +2196,22 @@ when the arithmetic was written.
     outside the derivation -- a receipt, or the same quantity measured another
     way. Without one, the test is a transcription of the bug.
 
+32. **A sentinel shared by "absent" and a real value erases the difference for
+    good.** Third instance on this machine, three subsystems, one shape.
+    `Charge.USD` is a pointer because an unmeasured cost read as `$0.00` would
+    pass an unpriced run off as a free one. A stored floor of zero is a real
+    measurement -- `reviewer` calls no model -- so `Get` had to hand it back
+    rather than treat zero as absence. And `coverage()` returned `nil` for both
+    "the model claimed 1" and "the model claimed nothing", which is why 62
+    stored `ok` steps could not answer which had happened: the column was
+    populated 1% of the time and every reader of it was guessing. The first two
+    were caught while designing the field. The third shipped, because the
+    collapse was in a function that *dropped* information rather than in the
+    type that stored it -- a pointer cannot protect a field its writer nils out
+    on purpose. Ask of every optional field: which two facts share this
+    sentinel, and would I be able to tell them apart from the record a week
+    later?
+
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
 the person making it.

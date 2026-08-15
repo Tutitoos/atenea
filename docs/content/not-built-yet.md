@@ -1225,6 +1225,38 @@ shimmed CLI, both arms, `$0.00`: the arm that states `completeness` records `1` 
 
 What did **not** change, deliberately: `Requirement.satisfiedBy` still reads `Status` alone, so
 `on = "answered"` and `on = "ok"` are unchanged — the refusal moves an unauditable answer out of
-`StatusOK` before any edge sees it, which is why neither word had to be redefined. A partial
-that names where it stopped still clears both, and there is no word for "only if whole". That
-is a graph-language decision, not a defect, and it is not made here.
+`StatusOK` before any edge sees it, which is why neither word had to be redefined.
+
+### The open question: is "whole" a gate or a judgement?
+
+A partial that names where it stopped clears both `answered` and `ok`, and there is no word for
+*only if whole*. The obvious move is a third one — `on = "whole"` — and it sounds right until
+somebody asks what a reviewer should then do with a partial.
+
+**Auditing a partial is legitimate work.** "Here are 60 of 107 routes, and here is where I
+stopped" is checkable: every claim in it has a file and a line, and the reviewer's finding is
+about those sixty. A gate that skips it means the only thing ever audited is work that needed
+auditing least — the answers that already claim to be whole — which inverts the reason
+`OnAnswered` is the default in the first place (see `Requirement`'s own doc: a reviewer that
+only sees successes audits the half that needs it least).
+
+So the question is not "which word is missing" but **where the sufficiency judgement belongs**.
+Two readings, and they are not the same mechanism:
+
+- **On the edge.** `on = "whole"` is a gate: cheap, declarative, visible in the graph file, and
+  it decides on a number the upstream step asserted about itself. It cannot know whether 0.6 is
+  enough for *this* criterion, because the criterion is prose and the gate reads a float.
+- **In the reviewer.** "This answer covers 60 of 107 routes and the criterion asks for a
+  complete inventory, so it is insufficient" is a verdict a reviewer can reach and cite. It
+  costs a model turn, it is auditable, and it is the same shape as every other judgement in
+  this system: an agent reads the evidence and says what it means.
+
+The second is probably right, and it implies the missing piece is not a keyword but a
+**reviewer that is told its subject's completeness and stopped_at** — which it is not today: the
+subject card carries the result, not the claim about the result. That is a smaller change than a
+new edge semantics and it needs no graph-language decision at all.
+
+**Not decided.** Recorded as a question because the cheap answer (add the word) forecloses the
+better one, and because nothing has yet been measured about how often a partial is actually
+sufficient for the criterion that asked for it. `n = 2` partials on this machine, both explore
+steps, both with completeness ≥ 0.8.
