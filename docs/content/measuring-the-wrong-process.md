@@ -1605,17 +1605,49 @@ surface does clear it. That surface is the CLI, reached by shell, which is
 exactly what the six-tool MCP allow-list exists to route around. The hint is
 not prescribing a remedy that does not exist; it is printing the one
 write-up for a CLI operator into a channel that, by design, may have no CLI
-underneath it. A second check, probing for an MCP-side alternative, found
-`session list` itself cannot be trusted as the live picture either: it
-reported `{"sessions": []}` at the same moment `open` twice refused with
-DEVICE_IN_USE, naming two other sessions (`default` on `emulator-5554`,
-`conductor` on `emulator-5558`) still holding their devices -- a second
-disagreement between what one channel reports and what the daemon actually
-enforces, the same afternoon as the first.
+underneath it.
 
 Both defects are the same shape read twice: a number and a sentence, each
 correct for the operation it was built against, handed to a different
 operation without anyone checking the fit still held.
+
+## A twenty-sixth instrument: an empty list read as an empty field
+
+Found while looking for an MCP-side escape hatch for the session-binding
+defect above, and pulled out into its own entry rather than left as
+corroboration inside it: it is not a second case of the same shape, it is a
+different and worse one. The pair above was a number and a sentence, each
+correct for the operation it was calibrated on and wrong for the one it was
+handed to. This one is two surfaces answering the identical question from
+two different places, and neither says so.
+
+`agent-device session list` reported `{"sessions": []}`. In the same
+minute, `raw.agent-device.open` was tried against two live serials and
+refused both times with `DEVICE_IN_USE`: `emulator-5554` held by session
+`default`, `emulator-5558` held by session `conductor`. Asked again
+immediately after both refusals, `session list` still answered
+`{"sessions": []}`. Two sessions the enforcement path names by name and by
+device are invisible to the read path that is supposed to be the caller's
+window onto exactly that state.
+
+This is worse than a stale entry that persists, because it inverts the
+usual order of a check. The instinctive safe move -- list first, act only
+if the target looks free -- is precisely the move that fails here: it does
+not raise a false alarm, it gives a clean answer that is wrong, and a
+caller who trusts it walks straight into the conflict it existed to
+prevent. A follow-up read today of `agent-device device status` -- a third
+channel, advisory claim files on disk, read "without starting or
+contacting a daemon" per its own help text -- told a third and different
+story again: three claims, `cli8`, `client` and `qa-driver`, all marked
+`owner-process-dead`, naming neither `default` nor `conductor`. Three
+surfaces, three answers, none of them the state the daemon actually
+enforced when a real call was made.
+
+`session list` was not deliberately distrusted until this session -- there
+was no reason yet to doubt the thing named "list" -- and it failed the same
+way the first two false reports on this page did: by answering fast,
+looking exactly like what was asked for, and describing a different piece
+of the system than the one the caller was about to touch.
 
 ## The general lesson
 
