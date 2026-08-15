@@ -1545,6 +1545,78 @@ framing — rather than being silently re-dated to a day it could not be
 reproduced on. An unreproducible measurement is not thereby wrong; writing
 today's date on it would be.
 
+## A twenty-fifth instrument: a timeout sized for the handshake, a hint sized for the wrong caller
+
+Two defects in `agent-device`, surfaced restarting three Android emulators on
+2026-08-15, one shape: something was calibrated against one operation and
+handed unchanged to a different one that nobody had re-checked it against.
+
+**The timeout.** `atenea.toml`'s `agent-device` backend carries one
+`timeout = "15s"`, sized off a 50ms `initialize` handshake. `boot` is not a
+handshake. Measured live twice today: Pixel_9 booted in **19.133s**, Pixel_10
+in **18.309s**, both past the ceiling, so both attempts through Atenea
+reported a timeout while the AVD kept booting underneath it -- a false
+negative on every cold boot, not an occasional one. Reading
+`internal/passthrough/stdio.go` settles what the field actually bounds:
+`Spec` carries exactly one `Timeout`, and `send()` applies it identically to
+the handshake and to every `tools/call` after, `boot` included. `config.go`'s
+`[[mcp_server.tool]]` table parses only `name` and `effects` -- there is no
+per-tool timeout to give `boot` instead. Raising the one number is the only
+lever, and it has a price on the other five: `devices`, `snapshot` and `find`
+answer in well under a second when the backend is healthy, so a longer
+ceiling changes nothing there -- until one of them is actually stuck, at
+which point a caller now waits for the same longer number before Atenea says
+so.
+
+**The hint.** Session `default` already held a stale claim before any of
+this: "Pixel 10" at `emulator-5554`, recorded before serials were reassigned
+across a restart -- live, `emulator-5554` is Pixel 8
+(`~/.agent-device/sessions/default/requests/383caef68f8e7262.ndjson`, today
+17:36:57). Session `cliente`'s own attempt, moments later, is the one with a
+full trail. Resolving "Pixel 8" by name landed on `emulator-5556`, already
+dead, and `adb: device 'emulator-5556' not found` came back as a
+COMMAND_FAILED
+(`~/.agent-device/sessions/cliente/requests/44c99ba333ba314c.ndjson`,
+17:37:21). The failed attempt still recorded the claim: the retry,
+`--serial=emulator-5554` this time -- the device's real, live serial -- was
+refused with INVALID_ARGS, `Session "cliente" is already bound to android
+device "Pixel 8" (emulator-5556)`
+(`.../ceb3d026751db4d8.ndjson`, 17:37:48). A call that never reached the
+device left the session wearing its serial anyway, and nothing invalidates
+that when the emulator behind it restarts. The refusal's own hint reads `Run
+agent-device session list to inspect active sessions... first run
+agent-device close --session cliente` -- both CLI verbs. Neither is in the
+six-tool allow-list Atenea exposes (`devices`, `boot`, `open`, `snapshot`,
+`click`, `find`), and no parameter on any of the six schemas substitutes:
+`open` carries the only `force` flag among them, and its own description
+scopes it to overwriting a `--save-script` target, not to replacing a device
+claim. Read at face value, a caller restricted to the six MCP tools has no
+path to the hint's own remedy.
+
+### The remedy exists -- it just does not reach the caller reading the hint
+
+The first draft of this claim was that the remedy in the hint does not exist
+at all. It does: run live, `agent-device close --session cliente` returned
+`Closed: cliente`, `agent-device session list` went from the stale claim to
+`{"sessions": []}`, and a fresh `raw.agent-device.snapshot` against the same
+session name and the live serial succeeded cleanly afterward -- a real
+accessibility tree, no error. The binding does not never expire, and a
+surface does clear it. That surface is the CLI, reached by shell, which is
+exactly what the six-tool MCP allow-list exists to route around. The hint is
+not prescribing a remedy that does not exist; it is printing the one
+write-up for a CLI operator into a channel that, by design, may have no CLI
+underneath it. A second check, probing for an MCP-side alternative, found
+`session list` itself cannot be trusted as the live picture either: it
+reported `{"sessions": []}` at the same moment `open` twice refused with
+DEVICE_IN_USE, naming two other sessions (`default` on `emulator-5554`,
+`conductor` on `emulator-5558`) still holding their devices -- a second
+disagreement between what one channel reports and what the daemon actually
+enforces, the same afternoon as the first.
+
+Both defects are the same shape read twice: a number and a sentence, each
+correct for the operation it was built against, handed to a different
+operation without anyone checking the fit still held.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
