@@ -1322,6 +1322,60 @@ it.** Cheaply available here and not taken: the workflow and `package.json` both
 version, and one `grep` across the pair would have shown two declarations where the whole point
 was to have one.
 
+## A twentieth instrument: a comment that records who wrote a line, read as who needs it
+
+Measured on 2026-08-15, deciding whether two API keys could be deleted from `~/.bashrc`.
+
+The file said this, and had said it for months:
+
+```
+# Added by codebase-memory-mcp install
+export MINIMAX_API_KEY="sk-cp-..."
+export GEMINI_API_KEY="AQ.Ab..."
+```
+
+Three people read that comment and drew the same conclusion — that the keys belong to
+codebase-memory-mcp, so the question of deleting them is a question about that one tool. The
+investigation that followed was careful and it was aimed one step to the left of the target. It
+proved, with a scrubbed environment (`env -i`, both variables confirmed unset inside the call),
+that the tool returns a complete graph without either key. Correct, reproducible, and not the
+thing that decides anything. It then ranked the options for removing them, and every option in
+the ranking inherited the same unexamined premise: that a line's installer is its consumer.
+
+The measurement that settled it took two commands. `omp --help` names both variables in its own
+credential contract — `GEMINI_API_KEY - Google Gemini models`, `MINIMAX_API_KEY - MiniMax
+models`. `omp token minimax` returns the `.bashrc` value verbatim. With the variables unset, the
+model catalogue drops from 86 entries to 32 and the credential lookup answers `No active
+credential found`. **The installer named in the comment does not need the keys. The harness that
+every terminal on this machine runs does, for 54 models.**
+
+The comment was never false. That is the whole shape. A false provenance note — the kind
+corrected elsewhere on this page, where a test comment claimed files were untracked when `git
+log` showed the diff had existed since July — is a lie you can catch by checking it. This one
+survives every check, because `codebase-memory-mcp install` really did write those lines. It is a
+true statement about 2026-06 read as a statement about today, and the reader supplies the tense.
+
+What makes it systematic rather than unlucky is an asymmetry in who annotates. **Installers
+annotate their own writes; consumers never annotate someone else's file.** `omp` did not append
+"and I read these too", because appending to a dotfile you do not own is rude and nobody does it.
+So the only annotation a shared file carries is about its origin, the dependency that arrived
+afterwards leaves no trace at all, and the surviving comment reads as authoritative precisely
+because it is the only writing on the page. The longer a line lives, the more consumers it can
+accumulate and the more stale its one comment becomes — the note ages in the wrong direction.
+
+The near miss is worth stating in its own terms, because the failure mode would have been the
+silent one this page keeps returning to. Deleting the lines does not error. `omp` starts, the
+catalogue is simply smaller, and a model that used to resolve answers "No active credential
+found" — a sentence that reads like a configuration you never had rather than one you removed
+twenty minutes ago.
+
+The check, and it is cheap: **before deleting a line because a comment says who put it there,
+ask who reads it — provenance is not consumption.** The decisive form is a scrubbed-environment
+A/B against the things that actually run from that shell, not against the thing named in the
+comment: `env -u VAR` and count what changes. The earlier `env -i` run was the same technique
+pointed at the subject the comment nominated, which is how a good instrument produces a true
+answer to the wrong question.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1572,6 +1626,17 @@ was to have one.
     that this was committed while writing the commit message naming the day's pattern as *two
     places that should agree with nothing checking that they agree* — knowing a shape by name
     is not immunity from it, which is the reason to keep a check rather than a resolution.
+
+25. **A comment records who wrote a line, never who reads it.** `# Added by
+    codebase-memory-mcp install` above two API keys in `~/.bashrc` was true, months old, and
+    read by three people as a statement about who needs them. Measured 2026-08-15: the named
+    installer runs fine with both unset, while `omp` — unmentioned, because consumers do not
+    annotate other people's dotfiles — resolves 54 of its 86 models through exactly those two
+    variables. Installers annotate their own writes and consumers never do, so a shared file
+    records only its origin and its one comment ages in the wrong direction. Provenance is not
+    consumption: ask who reads the line, with `env -u` against what actually runs, not `env -i`
+    against the tool the comment nominates. Deleting them would not have errored — the
+    catalogue would just have been quieter by 54.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
