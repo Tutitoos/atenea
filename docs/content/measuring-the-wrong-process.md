@@ -1227,6 +1227,68 @@ instead still has a boundary, and the boundary sits exactly where the fault that
 project twice this week lives. That is the instruments page's whole argument, arriving again
 from the one place it had not yet been asked to look.
 
+## A nineteenth instrument: two correct halves that only fail as a pair
+
+Measured on 2026-08-15, porting a CI workflow into the repository whose code it checks.
+
+Every other entry on this page is one thing lying: a figure measured against the wrong process,
+a fixture encoding a belief, a check reporting the fine direction on a question it cannot see.
+This one is different in kind, and the difference is worth its own entry. **Both halves were
+correct. Both were verified. The defect existed only in their combination**, and no test of
+either half could have found it, because neither half contained it.
+
+The two changes. First, a workflow file, ported from the repository it had been stranded in by a
+split. It was verified the expensive way rather than the confident way: a fresh clone of the
+published remote, then the job's four steps run in order with the pinned toolchain —
+`install --frozen-lockfile`, `typecheck`, `lint`, `test`, all exit 0, 123 tests. That closed a
+real open question, since `typecheck` fails on the development machine for permissions reasons,
+and the clean clone proved the failure was not in the code.
+
+Second, a one-field addition to `package.json`: `packageManager: "pnpm@11.5.1"`, pinning a
+version that until then existed only inside the workflow. Also verified — valid JSON,
+`install --frozen-lockfile` exit 0, lockfile untouched.
+
+The first run died in five seconds, before installing anything:
+
+```
+Error: Multiple versions of pnpm specified:
+  - version 11 in the GitHub Action config with the key "version"
+  - version pnpm@11.5.1 in the package.json with the key "packageManager"
+```
+
+`pnpm/action-setup` refuses to choose when the version is declared twice. The refusal is correct
+behaviour — guessing is precisely how the drift the second change was written to close would have
+come back, invisible. The tool was right. The two changes were each right. The pair was wrong.
+
+What makes this its own shape is that the standard defence does not reach it. Verifying a change
+in isolation is the discipline this page keeps recommending, and here it was followed twice,
+honestly, with real commands and real exit codes — and it could not have worked. An interaction
+defect lives in no component, so component-level evidence is not weak evidence about it; it is
+**silent** about it. Two green checks composed to red, and the greens were not wrong.
+
+There is a second boundary underneath, and it is the more useful half. The clean-clone run
+exercised the four *scripts*. It did not exercise the three *actions* above them —
+`actions/checkout`, `pnpm/action-setup`, `actions/setup-node` — which exist only on a runner and
+were treated as inert plumbing. The fault was in that untested layer. This is 11 wearing new
+clothes: a check cannot see past the files it reads, and a local rehearsal cannot see past the
+layer it can execute. Naming the layer you did not run is part of stating what your evidence
+covers, and "I verified both halves" was a true sentence that implied a false one.
+
+The detail that earns it a place here rather than a footnote: this was committed **while writing
+the commit message that names the pattern**. The message for the `packageManager` change says, in
+as many words, that the shape of the day's defects is *two places that should agree with nothing
+checking that they agree*. It then created exactly that, in the same push — a third place holding
+the same version, with nothing comparing them. Knowing a failure shape by name, well enough to
+write it down, does not confer immunity from it. That is not a lapse in attention; it is what
+makes the shape worth writing down at all. The page exists because recognition after the fact is
+the normal case, and the honest form of the lesson is a check, not a resolution to be careful.
+
+The check, stated plainly: **when two changes each remove ambiguity about the same value, verify
+them together before pushing, because agreement is a property of the pair and neither one has
+it.** Cheaply available here and not taken: the workflow and `package.json` both named the pnpm
+version, and one `grep` across the pair would have shown two declarations where the whole point
+was to have one.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1465,6 +1527,18 @@ from the one place it had not yet been asked to look.
     exactly what a live socket cannot audit from outside itself. Liveness answers *is this
     reachable*. Freshness answers *is this current*. A check built to answer the first can stay
     green forever on a subject that has already failed the second.
+
+24. **Verify the pair, not the halves.** Two changes that each remove ambiguity about the same
+    value can both be correct, both be verified, and still fail together — because agreement is
+    a property of the pair and neither half holds it. Measured 2026-08-15: a ported workflow
+    proven green in a clean clone, and a `packageManager` pin proven green against a frozen
+    lockfile, composed into `Multiple versions of pnpm specified` and died in five seconds.
+    Isolation testing, the discipline this page keeps urging, is not weak evidence here; it is
+    silent, since an interaction defect lives in no component. One `grep` across both files
+    would have shown two declarations where the entire purpose was to have one. Worth noting
+    that this was committed while writing the commit message naming the day's pattern as *two
+    places that should agree with nothing checking that they agree* — knowing a shape by name
+    is not immunity from it, which is the reason to keep a check rather than a resolution.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
