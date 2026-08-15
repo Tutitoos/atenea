@@ -1119,3 +1119,94 @@ own result for a repository survives a restart of the process that ran it.
 
 Not built. This is one design, not implemented, because building it inside the same session that
 found both halves of the gap is exactly the haste this page exists to refuse.
+
+## Silence and full coverage are the same answer — 2026-08-15
+
+The ceiling failures on this page fail loudly: `status incomplete`, a reason recorded, a cost
+that does not match an answer. This one is the opposite, and it is worse for exactly that
+reason. Of nineteen steps in `wf1786790289244-1`, eighteen came back `incomplete` and one came
+back `ok`. The `ok` is the false one.
+
+`auth-mod`, a `reader`, share $0.22, spent $0.19, recorded `status ok`, `verdict ok`,
+`completeness` NULL. Its own answer says:
+
+> **summary:** I cannot describe this project, because I was unable to locate it before being
+> asked to stop.
+>
+> **findings:** Nothing was read, so I have no sourced findings. Every item the commission asks
+> for is undetermined, and I am naming them individually so the gaps are not mistaken for
+> absences [...]
+
+The prose is honest. It is the record that lies, and it does so because two different things
+arrive at the same place.
+
+**The answer is missing half its required fields, and nothing noticed.** `exploreSchema`
+(`internal/agent/planner/prompt.go:307`) declares `required: [summary, findings, completeness,
+stopped_at]`. The recorded result JSON has exactly two keys: `findings` and `summary`. Both
+fields that describe how much of the objective was covered are absent from an answer whose own
+summary says it covered none of it. `required` in that map is sent to the provider and never
+checked locally — the answer unmarshals into a struct (`model.go:1348`) where an absent field is
+the zero value, so a two-field reply and a four-field reply are the same parse.
+
+**Absent is then read as fine.** `claim.reported()` (`model.go:1403`) maps a nil completeness to
+nil — deliberately: the field's own doc (`model.go:455-464`) says nil means "a single-shot turn,
+or a schema the caller declared without the property", and dropping an unreadable figure rather
+than repairing it into one is the right call. But that doc enumerates two ways to be unclaimed
+and this is a third it does not consider: the schema *did* declare the property, *did* mark it
+required, and the model ignored it. `coverage()` (`internal/agent/planner/planner.go:574`) then
+collapses the distinction for good — `Completeness == nil || *Completeness >= 1` takes the same
+branch, returning no partial marker and no refusal. **"I did not say" and "I covered everything"
+are one code path.**
+
+**Silence is treated better than honesty.** A model that answers 0.4 with no `stopped_at` is
+refused outright as unauditable (`planner.go:577`). A model that answers 0.4 *with* a
+`stopped_at` is recorded as a partial and reads as such downstream. A model that answers nothing
+at all clears both, and lands `StatusOK`. The gradient runs the wrong way: the more the model
+says about its own shortfall, the more ways it can be caught, and saying nothing is the strictly
+safest option available to it. Note it was asked directly — `finalizeMessage` says *"Set
+completeness to the fraction covered and stopped_at to what you did not reach"* — and returned
+neither.
+
+**It clears the strictest gate there is.** `outcome` (`internal/workflow/engine.go:1046`) maps
+`VerdictOK` to `StatusOK`. `Requirement.satisfiedBy` (`graph.go:107`) draws the only line the
+graph has: `OnAnswered` clears on ok, failed or incomplete alike, while `OnOK` clears on
+`StatusOK` and nothing else. So this answer does not merely pass the lenient gate a partial
+would also have passed — it is the one result in nineteen that satisfies `OnOK`, the requirement
+that exists precisely to make a downstream step wait for work that *succeeded*.
+
+The one thing that caught it did so by accident, for an unrelated reason: `audit-auth-mod`
+returned *"the result names no path, so there is nothing to re-read"* and went `incomplete` —
+that is the reviewer-cannot-read-an-explore-answer defect logged above, not a detection of
+anything. Fix that defect and the reviewer would have re-read the file, found no inventory to
+check against, and reported the failure one layer further in — still not as a false claim.
+
+**The field meant to make this auditable is empty almost everywhere.** `completeness` is non-NULL
+in **2 of 210** `workflow_step` rows in `traces.db`, across every workflow ever run on this
+machine. A column populated 1% of the time is not a record of coverage; it is a record of the two
+occasions an answer happened to carry it. On the other 208 the system has been reading silence,
+and reading it as fine.
+
+**The condition.** This is a shape the instruments page has recorded twice already — an empty
+list read as an empty field, and a store that cannot tell failure from empty — arriving now in
+the agent protocol: a sentinel meaning *no information* shares a branch with one meaning *good
+news*. Two fixes are separable and neither needs a model call:
+
+- **Enforce `required` where the answer is parsed, since the provider does not.** Four fields
+  were demanded and two arrived. `json.Unmarshal` into a struct cannot see that; a check against
+  the same schema map already in hand can, and a reply missing a required field is a refusal in
+  the same class as "the model's answer is not in the shape it was given" (`planner.go:503`),
+  which already exists for a malformed plan.
+- **Split unclaimed from complete in `coverage()`.** They are one branch today. An answer that
+  never stated its coverage is not auditable as a whole answer and should not clear `OnOK` on the
+  strength of a field nobody filled in.
+
+**Done when:** an answer omitting `completeness` cannot be recorded as `StatusOK`, and the count
+of steps carrying the field stops being 1%.
+
+Not built. `reported()`, `coverage()` and `outcome` sit on the path every step's result takes,
+and the last of them decides what every `on = "answered"` and `on = "ok"` edge in every graph
+waits for; changing what "answered" means is not a change to make in the session that noticed
+it. Recorded here with the correction that produced it: this
+entry was first drafted claiming the model asserted `completeness: 1` and was rewarded for it.
+That was inference from a NULL column, and the raw result JSON falsifies it — the model asserted
+nothing. The bug is not a lie told by a model; it is a silence the system reads as a yes.
