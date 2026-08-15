@@ -1722,6 +1722,60 @@ later. A machine-readable path -- `atenea intent --json`, which already exists t
 repository's calls will be answered -- is a reasonable second home for the same fact, but that is
 a second surface, not part of the smallest version of this fix.
 
+## A twenty-eighth instrument: green tests, an active service, and the wrong bytes
+
+Every other entry on this page is about an instrument that measured something, and measured
+the wrong thing. This one is about the absence of an instrument entirely, and it is the most
+expensive absence recorded here: three separate measurements on 2026-08-15, all internally
+consistent, all reported in good faith, all describing code that was not running.
+
+`~/.local/bin/atenea` had an mtime of **2026-08-14 17:44**. The commit that introduced the
+reserved-answer mechanism, `d142f87`, landed at **21:16** the same evening — three and a half
+hours later. The binary answering every workflow step therefore could not contain the
+mechanism, and did not: a single `grep` for the literal `finalize` message returns nothing from
+those bytes. `$atenea` resolves through `os.Executable()`, so the orchestrator hands every
+spawned step a copy of itself, and the staleness propagated perfectly and invisibly to all
+nineteen.
+
+What makes this worth its own entry is how thoroughly the surrounding signals agreed that
+everything was fine. The service was `active`. The suite was green — 1,819 tests, 41 packages.
+`config-guard` confirmed the config was current, and it was: that instrument does its job
+exactly, and its job is the settings file, not the executable. `selftest` passed. `sync status`
+reported no drift. Every one of those was true, and none of them was about the bytes.
+
+### The three readings it produced
+
+A plan step at 04:20 died at its ceiling having spent $1.53 of a $0.90 share, and the death was
+read as a hole in the new mechanism for toolless agents. A nineteen-step workflow at 10:26 came
+back 13 deaths from 13 model steps and zero partials, and was read as the mechanism failing
+under load. Both were re-run against a binary that actually contained the code, and both changed:
+13/13 deaths became 12/13 with one answer, total spend fell from $5.238 to $4.158, and
+`cache_read` moved from 0 to 45,000–83,000 per step — the signature of passes happening at all.
+The conclusions drawn from the first two readings were not merely unsupported. They were about
+a different program.
+
+### Why this one was cheap to fix and stayed unfixed
+
+The answer was already in the binary the whole time. Go stamps `vcs.revision`, `vcs.time` and
+`vcs.modified` into build info for anything compiled inside a work tree, and `go version -m`
+prints them. No new bookkeeping, no cache, no state that can itself rot — which matters on a page
+where half the entries are instruments that went stale. The check is a comparison between two
+strings that both already exist.
+
+It stayed unwritten because the question never sounds like a question. Nobody wonders whether
+the binary is the source; the deploy is a step you remember doing. That is precisely the shape
+of every entry here — a fact so obviously true that no one spends the one command it costs to
+confirm it.
+
+Now `stale-deploy`, deployed beside the binary it checks, with the comparison defended by a
+hermetic test in `agent-config`'s `selftest`. One deliberate restraint in it: being behind HEAD
+is reported but is not the verdict. This repository writes prose in the same tree as code, and a
+check that goes red on every paragraph is one nobody reads by the end of the week — so only files
+that enter the build make it stale, and which files those are is discovered by reading the
+`//go:embed` directives rather than by a list that would drift. Its first run against this
+machine found the binary stale *again*, from a `model.go` change committed an hour earlier.
+
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -2003,6 +2057,14 @@ a second surface, not part of the smallest version of this fix.
     own claims about itself. A system's history cannot be checked at all once nothing recorded it
     happening. Log the action, not only the resulting state, or the two failure modes stay
     permanently indistinguishable from the one place anyone would go looking.
+
+28. **A green check is about whatever it checks, and the deployed bytes are usually
+    nobody's.** An active service, 1,819 passing tests, a config confirmed current and a
+    clean sync all held while `~/.local/bin/atenea` was three and a half hours older than
+    the commit whose behaviour three measurements were attributing to it. None of those
+    checks was wrong; the gap was that no check took the executable as its subject. Ask
+    what each instrument's subject actually is, and the one nobody named is the one that
+    will produce confident numbers about a program that is not running.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
