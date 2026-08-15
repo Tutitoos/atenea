@@ -389,13 +389,26 @@ deterministic Go on the far side of the spawn and call no model at all, so
 agent type never runs.
 
 With no subcommand, floor lists every stored measurement: repository,
-agent, model, USD, prefix tokens, CLI version and how long ago it was
-taken. A row is marked stale when its CLI version does not match the CLI
-installed on this machine right now -- the system prompt and tool schemas
-ship WITH the CLI, so a new CLI is a new floor even against the same
-repository, agent and model. A row measured before --agent existed prints
-with no agent and must be re-measured -- see 'floor measure' -- rather
-than be guessed at.
+agent, model, the warm and cold prices, prefix tokens, the block that
+arrives with the first tool call, the rescuable share, CLI version and how
+long ago it was taken. Warm is what a step pays and cold is what
+establishing the cache costs on whichever run of the hour is first: the
+prefix and the first-call block are written once per machine per cache
+lifetime and read at a twentieth of the price by every step after, so a
+plan is refused against the warm figure wherever a row carries one. A dash
+means no probe has made a tool call on that row yet, and the cold price is
+charged instead. The rescuable share is not a second measurement either --
+it is derived from the same row: the smallest share past which half of it,
+the read allowance, outweighs the turn's own first assistant event. A step
+funded below it clears the floor and still dies with nothing written,
+because the model is nudged to answer before it has read anything of its
+own -- 'workflow create' refuses a plan on this number the same way it
+refuses one on the floor. A row is marked stale when its CLI version does
+not match the CLI installed on this machine right now -- the system prompt
+and tool schemas ship WITH the CLI, so a new CLI is a new floor even
+against the same repository, agent and model. A row measured before
+--agent existed prints with no agent and must be re-measured -- see
+'floor measure' -- rather than be guessed at.
 
 'measure' spends real money on every agent type except the three named
 above: one turn, priced at roughly what it finds. It prints what it is

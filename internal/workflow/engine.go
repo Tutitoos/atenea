@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/agent"
+	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -35,8 +37,22 @@ type Dispatcher interface {
 // that catalog changes. So every figure carries when it was taken and what
 // took it, and there is no constant in Go anybody could read as the answer.
 type Floor struct {
-	// USD is what one turn costs before it has read anything.
+	// USD is the cold-equivalent price of the prefix alone: what
+	// establishing this turn's cache costs, once, on whichever run of the
+	// hour is first. It is reported and no longer refused against -- see
+	// WarmUSD, and checkFunding for which of the two binds.
 	USD float64
+	// WarmUSD is what starting a step costs once this machine's cache holds
+	// the prefix AND the block its first tool call brings with it: the
+	// ordinary case for every step but one, and the figure the floor rule
+	// refuses a share against. Zero means no probe has priced it, and the
+	// rule falls back to USD, saying so in the refusal -- an overcharge a
+	// person can see beats a rule that silently stops applying.
+	WarmUSD float64
+	// StartTokens is the evidence under WarmUSD: prefix plus first-call
+	// block, in tokens, cache-state invariant. Zero when nothing measured
+	// the first call.
+	StartTokens int
 	// MeasuredAt is when this figure was taken. A floor with no date is a
 	// claim, not a measurement.
 	MeasuredAt time.Time
@@ -50,6 +66,21 @@ type Floor struct {
 	// bought nothing is not -- and zero means the measurement did not carry
 	// one, never that a turn was free.
 	CacheWriteTokens int
+	// FirstEventTokens is the input-equivalent weight of establishing this
+	// turn's prefix from cold -- see allowance.FirstEventWeight. Measured
+	// 2026-08-15, it is paid ONCE per machine per cache lifetime, not once
+	// per step, so it is no longer what a step is refused against. It is
+	// reported so a person can see what the first run of the hour carries.
+	// Zero means this measurement carries no token count at all, so neither
+	// weight can be answered -- never that the first event is free.
+	FirstEventTokens int
+	// WarmFirstEventTokens is the same first event once the prefix is
+	// cached: the per-step reading, twenty times smaller, and the number
+	// the allowance rule actually refuses a step against. Half of a share
+	// must buy more input-equivalent tokens of reading than this, or the
+	// reserved-answer nudge fires on the arrival of the prompt and the step
+	// dies empty. Zero has the same meaning as above.
+	WarmFirstEventTokens int
 }
 
 // Floors answers what starting a turn costs, for a repository, an agent
@@ -201,7 +232,7 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	if err != nil {
 		return Run{}, Gate{}, err
 	}
-	if err := e.checkFloors(ctx, plan); err != nil {
+	if err := e.checkFunding(ctx, plan); err != nil {
 		return Run{}, Gate{}, err
 	}
 	id := e.ids()
@@ -221,37 +252,78 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	return run, gate, nil
 }
 
-// underfunded is one step, the share it was handed, and the measured floor it
-// is under.
+// underfunded is one step, the share it was handed, and why that share does
+// not clear this repository's requirements for the agent type and model it
+// runs against.
 type underfunded struct {
 	step  string
 	usd   float64
 	agent string
 	model string
 	floor Floor
+	// needUSD is the larger of what the floor requires and what the
+	// allowance rule requires -- the number a person raises the share to.
+	// Zero when the measurement carries no token count at all, so the
+	// second requirement cannot be computed and bound is "unmeasured".
+	needUSD float64
+	// bound names which requirement needUSD came from: "floor", "allowance",
+	// or "unmeasured" when the row carries no token count to check either
+	// rule against.
+	bound string
+	// weight is the row's FirstEventTokens: the input-equivalent weight of
+	// the turn's own first assistant event, cold-equivalent. Zero only when
+	// bound is "unmeasured".
+	weight int
+	// tokens is what the funded share actually buys, in the same
+	// input-equivalent unit as weight -- allowance.Tokens(usd).
+	tokens int
 }
 
-// checkFloors refuses a plan that funds a step below what starting a turn
-// costs on this repository, as the agent type that step runs, with the
-// model that agent type spends against.
+// checkFunding refuses a plan that funds a step below either of two measured
+// requirements, for the agent type that step runs and the model that agent
+// type spends against on this repository: the floor, what starting a turn
+// costs before any file is read; and the rescuable threshold, the point past
+// which half the step's own share -- the read allowance, see
+// internal/allowance -- outweighs the turn's own first assistant event,
+// cold-equivalent. A step funded above the floor but below the threshold
+// still spawns, still spends its whole ceiling reading, and still dies with
+// nothing written -- only later, and after its money is gone.
 //
-// Measured 2026-08-14, on one real 18-step plan run twice: 17 of its 18 steps
-// were funded $0.12-$0.28, and one turn on that repository cost ~$0.35 before
-// a single file was read -- 25,340 tokens of cache write for the system prompt
-// and the tool definitions. All twelve steps that got as far as spawning died
-// at their ceiling with result_len = 0. The two runs spent $3.78 and $3.57 and
-// answered nothing. Every one of those dollars was authorized by somebody
-// reading a plan that looked affordable, which is why the refusal is here, at
-// create, before the record exists and before anybody is asked to approve it:
-// after a no there is nothing to clean up.
+// The floor half of this: measured 2026-08-14, on one real 18-step plan run
+// twice, 17 of its 18 steps were funded $0.12-$0.28 against a turn that cost
+// ~$0.35 before a single file was read -- 25,340 tokens of cache write for
+// the system prompt and the tool definitions. All twelve steps that got as
+// far as spawning died at their ceiling with result_len = 0; $3.78 and $3.57
+// spent across the two runs, nothing answered.
 //
-// THE ENGINE NEVER TOPS A STEP UP TO THE FLOOR. Quietly raising a share to
-// make a plan runnable is Atenea spending money nobody approved, and it is
-// worse than the defect above because it is silent: the reader of the receipt
-// would have no way to tell the figure they authorized from the one the engine
-// preferred. Refusing is the honest move. The shares in a plan are its
-// author's, and they stay its author's.
-func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
+// The threshold half: the arithmetic -- half of a share, 83,000
+// input-equivalent tokens to the dollar -- was measured the same day and
+// written into a doc comment, and this rule did not exist yet to read it. A
+// real turn's own first assistant event already weighed 65,625 of them
+// (~$0.20), which is why a step must clear ~$0.84 on that repository and
+// model before its allowance buys any reading at all where the floor alone
+// asks only ~$0.27. Run the next night, thirteen model-backed steps --
+// funded above the floor -- died empty anyway: $5.24 spent against a $3.52
+// grant. A measurement that stays a comment is documentation, not a control.
+//
+// Both rules are evaluated in one pass, and every underfunded step is
+// reported once, against whichever requirement is larger for its own
+// measured row -- see underfunded and refusal -- so a person raises a share
+// once rather than clearing one gate and hitting the other on the next
+// attempt.
+//
+// A row with no token count at all cannot answer the threshold question, and
+// is refused outright rather than checked against the floor alone: falling
+// back to the weaker rule whenever the stronger one cannot be evaluated is
+// the exact defect this whole rule exists to end.
+//
+// THE ENGINE NEVER TOPS A STEP UP TO EITHER REQUIREMENT. Quietly raising a
+// share to make a plan runnable is Atenea spending money nobody approved,
+// and it is worse than the defect above because it is silent: the reader of
+// the receipt would have no way to tell the figure they authorized from the
+// one the engine preferred. Refusing is the honest move. The shares in a
+// plan are its author's, and they stay its author's.
+func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 	if e.floors == nil || e.modelFor == nil {
 		return nil
 	}
@@ -290,19 +362,64 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 		if !got.known {
 			continue
 		}
+		usd := step.Permission.BudgetUSD
+		if got.floor.WarmFirstEventTokens == 0 {
+			// The row cannot answer the threshold question at all. Refuse
+			// rather than fall back to the floor alone, whatever usd is --
+			// see checkFunding's own doc.
+			under = append(under, underfunded{
+				step:  step.ID,
+				usd:   usd,
+				agent: step.TypeName,
+				model: model,
+				floor: got.floor,
+				bound: "unmeasured",
+			})
+			continue
+		}
 		// Below is below, and zero is not exempt: a step handed nothing is
 		// the extreme of this defect, not an exception to it. The epsilon is
 		// the one Compile divides shares with, so a share that equals the
 		// floor is not refused over the last bit of binary floating point.
-		if step.Permission.BudgetUSD+moneyEpsilon >= got.floor.USD {
+		// Tokens is compared strictly: a share that buys exactly the first
+		// event and no more still nudges the model to answer before it has
+		// read anything of its own.
+		//
+		// Against the WARM weight, not the cold one. A step is one of many
+		// on a machine that has already established this prefix, and
+		// measured 2026-08-15 the cold write happens once and is read by
+		// everything after it -- see allowance.WarmFirstEventWeight. The
+		// cold figure still travels on the row, and refusal prints it, so
+		// the person sizing a grant can see what the hour's first run adds.
+		tokens := allowance.Tokens(usd)
+		// The floor charged per step is the warm one when a probe has priced
+		// this row's first tool call, and the cold prefix price only while
+		// nothing has. Measured 2026-08-15: the cold figure is ~8x the warm
+		// one on a real row, so which of the two a rule reads is not a
+		// rounding question.
+		floorUSD, floorKind := got.floor.USD, "floor"
+		if got.floor.WarmUSD > 0 {
+			floorUSD, floorKind = got.floor.WarmUSD, "warm-floor"
+		}
+		okFloor := usd+moneyEpsilon >= floorUSD
+		okAllowance := tokens > got.floor.WarmFirstEventTokens
+		if okFloor && okAllowance {
 			continue
 		}
+		needUSD, bound := floorUSD, floorKind
+		if rescuable := allowance.MinShareUSD(got.floor.WarmFirstEventTokens); rescuable > needUSD {
+			needUSD, bound = rescuable, "allowance"
+		}
 		under = append(under, underfunded{
-			step:  step.ID,
-			usd:   step.Permission.BudgetUSD,
-			agent: step.TypeName,
-			model: model,
-			floor: got.floor,
+			step:    step.ID,
+			usd:     usd,
+			agent:   step.TypeName,
+			model:   model,
+			floor:   got.floor,
+			needUSD: needUSD,
+			bound:   bound,
+			weight:  got.floor.WarmFirstEventTokens,
+			tokens:  tokens,
 		})
 	}
 	if len(under) == 0 {
@@ -312,8 +429,9 @@ func (e *Engine) checkFloors(ctx context.Context, plan Plan) error {
 		refusal(e.repo, len(plan.Graph.Steps), under))
 }
 
-// refusal writes what a person needs in order to act: the arithmetic for every
-// step that is under, and where the floor came from.
+// refusal writes what a person needs in order to act: the arithmetic for
+// every step that is under, against whichever of the two rules requires
+// more, and where the underlying measurement came from.
 //
 // Every underfunded step is named, however many there are. A person about to
 // approve a plan is reading this to decide whether to raise seventeen shares or
@@ -334,17 +452,25 @@ func refusal(repository string, steps int, under []underfunded) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "workflow create refused: %d of %s %s funded below the cost of starting a turn\n\n",
+	fmt.Fprintf(&b, "workflow create refused: %d of %s %s funded below what a step needs to answer\n\n",
 		len(under), plural(steps, "step", "steps"), verb)
 
-	wide, money := 0, 0
-	for _, u := range under {
+	// needs is precomputed per step so the column can be aligned like the
+	// others -- funded $ and needs $ are meant to be compared down the page.
+	wide, money, need := 0, 0, 0
+	needs := make([]string, len(under))
+	for i, u := range under {
 		wide = max(wide, len(u.step))
 		money = max(money, len(strconv.FormatFloat(u.usd, 'f', 2, 64)))
+		needs[i] = "?"
+		if u.bound != "unmeasured" {
+			needs[i] = fmt.Sprintf("$%.2f", centsUp(u.needUSD))
+		}
+		need = max(need, len(needs[i]))
 	}
-	for _, u := range under {
-		fmt.Fprintf(&b, "  %-*s   funded $%*.2f   starting a turn costs ~$%.2f\n",
-			wide, u.step, money, u.usd, u.floor.USD)
+	for i, u := range under {
+		fmt.Fprintf(&b, "  %-*s   funded $%*.2f   needs %-*s   %s\n",
+			wide, u.step, money, u.usd, need, needs[i], clause(u))
 	}
 
 	// The provenance once per (agent, model), not once per step: seventeen
@@ -368,11 +494,22 @@ func refusal(repository string, steps int, under []underfunded) string {
 			// A measurement that carried no token count ends its sentence
 			// instead of promising evidence it does not have.
 			b.WriteString(line + ".\n")
-			continue
+		} else {
+			b.WriteString(line + ":\n")
+			fmt.Fprintf(&b, "%s tokens of cache write -- system prompt and tool definitions -- "+
+				"before any file is read.\n", grouped(u.floor.CacheWriteTokens))
 		}
-		b.WriteString(line + ":\n")
-		fmt.Fprintf(&b, "%s tokens of cache write -- system prompt and tool definitions -- "+
-			"before any file is read.\n", grouped(u.floor.CacheWriteTokens))
+		if u.floor.WarmFirstEventTokens != 0 {
+			fmt.Fprintf(&b, "half of a share is the read allowance, %s input-equivalent tokens "+
+				"to the dollar, so a share must exceed $%.2f before it buys any reading at "+
+				"all.\n", grouped(allowance.Tokens(1)),
+				centsUp(allowance.MinShareUSD(u.floor.WarmFirstEventTokens)))
+			fmt.Fprintf(&b, "that is the warm figure, which is what a step pays: this prefix is "+
+				"written to cache once and read by everything after it. Establishing it cold "+
+				"weighs %s input-equivalent tokens, paid by whichever run of the hour is "+
+				"first, and by no other.\n",
+				grouped(u.floor.FirstEventTokens))
+		}
 	}
 
 	b.WriteString("\nnothing was written and no budget was changed. " +
@@ -382,6 +519,33 @@ func refusal(repository string, steps int, under []underfunded) string {
 	}
 	b.WriteString("`.\n")
 	return b.String()
+}
+
+// clause names, in prose, the requirement that bound for one step -- what a
+// person reads after the columns to know which rule to satisfy and by how
+// much.
+func clause(u underfunded) string {
+	switch u.bound {
+	case "unmeasured":
+		return "the measurement carries no token count, so what a share buys cannot be checked"
+	case "allowance":
+		return fmt.Sprintf("half a share buys %s tokens of reading; its own first event weighs %s",
+			grouped(u.tokens), grouped(u.weight))
+	case "warm-floor":
+		return fmt.Sprintf("starting a step costs ~$%.2f warm -- %s tokens of prefix and "+
+			"first tool call, read from cache",
+			u.floor.WarmUSD, grouped(u.floor.StartTokens))
+	default: // "floor"
+		return fmt.Sprintf("starting a turn costs ~$%.2f, and no probe has priced this "+
+			"row's first tool call", u.floor.USD)
+	}
+}
+
+// centsUp rounds usd up to the nearest cent. The number in a refusal is one a
+// person may type back as a share; rounding down would print a figure that
+// still refuses the person who typed it.
+func centsUp(usd float64) float64 {
+	return math.Ceil(usd*100) / 100
 }
 
 // grouped writes an integer with thousands separators. The token count in a

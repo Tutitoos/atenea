@@ -520,3 +520,142 @@ func TestZeroFloorRowRoundTripsAsMeasuredNotAsAbsent(t *testing.T) {
 		t.Errorf("List = %+v, want the zero-floor row present and unchanged", rows)
 	}
 }
+
+// FirstEventWeight moves when the measurement moves: it is a live
+// derivation off Prefix, InputTokens and OutputTokens, never a stored
+// number of its own. Two rows, prefixes in a clean 2x ratio and input and
+// output held at zero to isolate it, must weigh in the same ratio.
+func TestFirstEventWeightMovesWithTheMeasurementItIsDerivedFrom(t *testing.T) {
+	small := measurement("taxiprime-backend", "reader", "claude-opus-5")
+	small.PrefixTokens = 10_000
+	small.InputTokens = 0
+	small.OutputTokens = 0
+
+	large := small
+	large.PrefixTokens = 20_000
+
+	if got, want := small.FirstEventWeight(), 20_000; got != want {
+		t.Errorf("FirstEventWeight (prefix 10,000) = %d, want %d", got, want)
+	}
+	if got, want := large.FirstEventWeight(), 40_000; got != want {
+		t.Errorf("FirstEventWeight (prefix 20,000) = %d, want %d", got, want)
+	}
+}
+
+// A row Put before PrefixTokens existed carries the same number in
+// CacheWriteTokens alone (see Measurement's own doc and Prefix), and
+// FirstEventWeight has to read its weight off that fallback rather than
+// answering zero -- zero means unknown, and this row is not. The figures
+// are the real ones on this machine: taxiprime-backend/explore,
+// input_tokens 2, output_tokens 4, cache_write_tokens 26,603, prefix_tokens
+// 0.
+func TestFirstEventWeightReadsALegacyRowsWeightOffCacheWriteRatherThanZero(t *testing.T) {
+	legacy := floor.Measurement{
+		Repository:       "taxiprime-backend",
+		Agent:            "explore",
+		Model:            "claude-opus-5",
+		PrefixTokens:     0,
+		CacheWriteTokens: 26_603,
+		InputTokens:      2,
+		OutputTokens:     4,
+	}
+	if got, want := legacy.Prefix(), 26_603; got != want {
+		t.Errorf("Prefix = %d, want %d off the CacheWriteTokens fallback", got, want)
+	}
+	if got, want := legacy.FirstEventWeight(), 53_228; got != want {
+		t.Errorf("FirstEventWeight = %d, want %d -- a legacy row answering zero would read "+
+			"as unmeasured rather than as the real weight it carries", got, want)
+	}
+}
+
+// The two readings come off ONE stored row -- PrefixTokens is cache-state
+// invariant by construction -- and they are twenty times apart because a
+// cache write is priced x2 and a cache read x0.1. This is the split the
+// admission rule turns on: refuse a step against the warm one, report the
+// cold one as what establishing the prefix costs whichever run of the hour
+// is first. A row where they came back equal would mean the fallback in one
+// of them stopped reading the same prefix as the other.
+func TestTheColdAndWarmFirstEventsAreTheSamePrefixAtTwoPrices(t *testing.T) {
+	row := floor.Measurement{
+		Repository:   "taxiprime-backend",
+		Agent:        "explore",
+		Model:        "claude-opus-5",
+		PrefixTokens: 26_603,
+		InputTokens:  2,
+		OutputTokens: 4,
+	}
+	// allowance.Weigh(2, 4, 0, 26603) and allowance.Weigh(2, 4, 26603, 0):
+	// 22 tokens of input and output either way, then 53,206 against 2,660.
+	if got, want := row.FirstEventWeight(), 53_228; got != want {
+		t.Errorf("FirstEventWeight = %d, want %d", got, want)
+	}
+	if got, want := row.WarmFirstEventWeight(), 2_682; got != want {
+		t.Errorf("WarmFirstEventWeight = %d, want %d -- the same prefix read from cache, "+
+			"not written to it", got, want)
+	}
+}
+
+// The warm reading takes the same legacy fallback the cold one does: a row
+// Put before PrefixTokens existed still prices, off CacheWriteTokens. If it
+// answered zero the engine would read the row as carrying no token count and
+// refuse every step against it -- see checkFunding's unmeasured branch.
+func TestWarmFirstEventWeightReadsTheLegacyFallbackToo(t *testing.T) {
+	legacy := floor.Measurement{
+		Repository:       "taxiprime-backend",
+		Agent:            "explore",
+		Model:            "claude-opus-5",
+		PrefixTokens:     0,
+		CacheWriteTokens: 26_603,
+		InputTokens:      2,
+		OutputTokens:     4,
+	}
+	if got, want := legacy.WarmFirstEventWeight(), 2_682; got != want {
+		t.Errorf("WarmFirstEventWeight = %d, want %d off the CacheWriteTokens fallback",
+			got, want)
+	}
+}
+
+// The real row and the real arithmetic: the explore measurement on this
+// machine, plus the first-call block the 2026-08-15 probes found, priced both
+// ways. The cold figure is cross-checked against a live receipt -- the probe
+// that made one tool call was billed $0.4935 where this says $0.47 -- and the
+// warm one is that over twenty, which is what a step actually pays.
+func TestWarmUSDPricesThePrefixAndTheFirstCallAtCacheReadPrice(t *testing.T) {
+	row := floor.Measurement{
+		Repository:      "taxiprime-backend",
+		Agent:           "explore",
+		Model:           "claude-opus-5",
+		USD:             0.2667,
+		PrefixTokens:    26_603,
+		FirstCallTokens: 41_930,
+	}
+	if got, want := row.StartTokens(), 68_533; got != want {
+		t.Errorf("StartTokens = %d, want %d", got, want)
+	}
+	// 0.2667 x 68,533/26,603 x 0.05.
+	if got := row.WarmUSD(); got < 0.034 || got > 0.035 {
+		t.Errorf("WarmUSD = %v, want ~$0.0344 -- the whole start read from cache", got)
+	}
+	// The cold-equivalent price of the same start, which is what the row's own
+	// USD column understated by 2.6x while it named the prefix alone.
+	if cold := row.USD * float64(row.StartTokens()) / float64(row.Prefix()); cold < 0.68 || cold > 0.69 {
+		t.Errorf("cold start = %v, want ~$0.687", cold)
+	}
+}
+
+// A row nobody has probed for a first tool call answers its prefix and says
+// so by pricing the prefix alone -- an understatement a caller can see, never
+// a zero it would read as free. Cross-checked against the mechanical rows,
+// where a zero dollar figure is the measurement.
+func TestWarmUSDIsUnknownRatherThanFreeWhenThereIsNothingToDeriveFrom(t *testing.T) {
+	noFirstCall := floor.Measurement{USD: 0.05, PrefixTokens: 4_728}
+	// 0.05 x 4,728/4,728 x 0.05: the prefix, warm, and nothing claimed about
+	// a first call nobody measured.
+	if got := noFirstCall.WarmUSD(); got < 0.0024 || got > 0.0026 {
+		t.Errorf("WarmUSD = %v, want ~$0.0025 off the prefix alone", got)
+	}
+	mechanical := floor.Measurement{USD: 0, PrefixTokens: 0}
+	if got := mechanical.WarmUSD(); got != 0 {
+		t.Errorf("WarmUSD = %v, want 0 for a row with no dollar figure to scale", got)
+	}
+}

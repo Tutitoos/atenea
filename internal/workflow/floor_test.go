@@ -13,10 +13,15 @@ import (
 
 // What starting a turn costs is measured, never written down, so these tests
 // hand the engine a table of measurements rather than a constant -- the shape
-// `atenea floor measure` leaves behind. The figures are the ones from the run
-// that bought this check: $0.35 a turn on taxiprime-backend with
-// claude-opus-5, 25,340 tokens of cache write, taken 2026-08-14 19:40 on
-// claude code 2.1.227.
+// `atenea floor measure` leaves behind. $0.35 a turn on taxiprime-backend with
+// claude-opus-5, taken 2026-08-14 19:40 on claude code 2.1.227, is the real
+// figure that bought this check, and every fixture below keeps it.
+//
+// Two shapes of row recur: measuredFloor, on which the floor is the larger
+// requirement, and rescuableBinds, the real first-assistant-event reading
+// (50,704 input-equivalent tokens) on which the newer, rescuable-threshold
+// rule is instead. See internal/allowance for the arithmetic both derive
+// from.
 
 // floorTable answers from a fixed table and remembers what it was asked, so a
 // test can prove the check was OFF rather than merely quiet.
@@ -45,7 +50,12 @@ func (f *floorTable) Floor(_ context.Context, repository, agent, model string) (
 	return measured, ok, nil
 }
 
-// measuredFloor is one row of that table.
+// measuredFloor is one row of that table: the row on which the floor is the
+// larger, binding requirement. That is the ordinary case since the rescuable
+// threshold was re-derived from the WARM first event on 2026-08-15 -- the
+// per-step reading, a tenth of the cold prefix rather than twice it, so the
+// threshold only overtakes the floor on a model priced under ~$2.4 per
+// million tokens. See rescuableBinds for a row shaped like that.
 func measuredFloor(usd float64) workflow.Floor {
 	return workflow.Floor{
 		USD: usd,
@@ -54,7 +64,32 @@ func measuredFloor(usd float64) workflow.Floor {
 		// in another timezone and the test pass only in this one.
 		MeasuredAt:       time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
 		CLIVersion:       "2.1.227",
-		CacheWriteTokens: 25340,
+		CacheWriteTokens: 12000,
+		// allowance.Weigh(2, 4, 0, 12000) and allowance.Weigh(2, 4, 12000, 0):
+		// the same prefix read cold and warm, with the input/output pair
+		// every real measurement on this machine carries.
+		FirstEventTokens:     24022,
+		WarmFirstEventTokens: 1222,
+	}
+}
+
+// rescuableBinds is a row on which the rescuable threshold, not the floor,
+// is the larger requirement. Since the re-derivation that shape needs a
+// cheap model: the threshold weighs prefix/10 against 83,000 tokens to the
+// dollar -- $1.2e-6 a prefix token -- so it binds only where the model's own
+// rate is under that. This row is a big tool catalog (100,000 prefix tokens,
+// cache-write weight 200,024) on a model priced at $1 per million: a $0.10
+// floor against a $0.13 threshold. The real opus rows now clear their own
+// threshold at a fifth of their floor, which is the finding, not a fixture
+// convenience.
+func rescuableBinds() workflow.Floor {
+	return workflow.Floor{
+		USD:                  0.10,
+		MeasuredAt:           time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
+		CLIVersion:           "2.1.227",
+		CacheWriteTokens:     100000,
+		FirstEventTokens:     200024,
+		WarmFirstEventTokens: 10024,
 	}
 }
 
@@ -169,13 +204,13 @@ func TestAPlanFundedBelowTheFloorIsRefusedAndSaysTheArithmetic(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"workflow create refused: 1 of 3 steps is funded below the cost of starting a turn",
+		"workflow create refused: 1 of 3 steps is funded below what a step needs to answer",
 		"admin-aux",
 		"funded $0.18",
 		"starting a turn costs ~$0.35",
 		"the floor for taxiprime-backend as explore with claude-opus-5 was measured 2026-08-14 19:40 " +
 			"on claude code 2.1.227:",
-		"25,340 tokens of cache write",
+		"12,000 tokens of cache write",
 		"nothing was written and no budget was changed",
 		"atenea floor measure --repo taxiprime-backend",
 	} {
@@ -255,7 +290,7 @@ func TestEveryUnderfundedStepIsNamedAndTheFloorExplainedOnce(t *testing.T) {
 		t.Fatal("Create accepted a plan with five underfunded steps")
 	}
 	message := err.Error()
-	if !strings.Contains(message, "5 of 6 steps are funded below the cost of starting a turn") {
+	if !strings.Contains(message, "5 of 6 steps are funded below what a step needs to answer") {
 		t.Errorf("the count is not in the first line:\n%s", message)
 	}
 	for _, id := range under {
@@ -267,19 +302,20 @@ func TestEveryUnderfundedStepIsNamedAndTheFloorExplainedOnce(t *testing.T) {
 		t.Errorf("the provenance appears %d times, want once:\n%s", n, message)
 	}
 
-	// Aligned: the two columns are meant to be compared down the page.
-	funds, floors := -1, -1
+	// Aligned: the two columns are meant to be compared down the page,
+	// whatever the binding rule -- "needs $" is present on every line.
+	funds, needsAt := -1, -1
 	for _, line := range strings.Split(message, "\n") {
 		at := strings.Index(line, "funded $")
 		if at < 0 {
 			continue
 		}
-		costs := strings.Index(line, "starting a turn costs")
+		need := strings.Index(line, "needs $")
 		if funds == -1 {
-			funds, floors = at, costs
+			funds, needsAt = at, need
 			continue
 		}
-		if at != funds || costs != floors {
+		if at != funds || need != needsAt {
 			t.Errorf("the columns move between lines, so the figures cannot be read down "+
 				"the page:\n%s", message)
 			break
@@ -288,16 +324,16 @@ func TestEveryUnderfundedStepIsNamedAndTheFloorExplainedOnce(t *testing.T) {
 }
 
 // A measurement carrying less provenance says less, rather than making the
-// rest up: no version clause when the probe could not read one, and a sentence
-// that ends where the evidence does instead of introducing a token count it
-// does not have. An engine with no repository id says machine-wide in words,
-// and the re-measure line drops a flag it cannot fill.
+// rest up: no version clause when the probe could not read one. An engine
+// with no repository id says machine-wide in words, and the re-measure line
+// drops a flag it cannot fill. A measurement missing its token count
+// entirely is TestAMeasurementWithNoTokenCountRefusesRatherThanCheckingLess,
+// below -- this row keeps its token count, and its own point is narrower:
+// the CLI version and the repository are what it is missing.
 func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
 	dir := t.TempDir()
-	bare := workflow.Floor{
-		USD:        0.35,
-		MeasuredAt: time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
-	}
+	bare := measuredFloor(0.35)
+	bare.CLIVersion = ""
 	h := floored(t, dir, "", floorsOf("", "explore", "claude-opus-5", bare))
 
 	_, _, err := h.engine.Create(t.Context(),
@@ -307,14 +343,14 @@ func TestAThinnerMeasurementSaysLessRatherThanMore(t *testing.T) {
 	}
 	message := err.Error()
 	for _, want := range []string{
-		"the floor for this machine as explore with claude-opus-5 was measured 2026-08-14 19:40.\n",
+		"the floor for this machine as explore with claude-opus-5 was measured 2026-08-14 19:40:\n",
 		"`atenea floor measure`.",
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the refusal never says %q:\n%s", want, message)
 		}
 	}
-	for _, unwanted := range []string{"claude code", "tokens of cache write", "--repo"} {
+	for _, unwanted := range []string{"claude code", "--repo"} {
 		if strings.Contains(message, unwanted) {
 			t.Errorf("the refusal claims %q from a measurement that carried none:\n%s",
 				unwanted, message)
@@ -388,7 +424,11 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 	dir := t.TempDir()
 	cheaper := measuredFloor(0.09)
 	cheaper.CLIVersion = "2.1.231"
-	cheaper.CacheWriteTokens = 9120
+	// 3,000, not measuredFloor's 12,000: still a row the floor binds on
+	// (the warm threshold, $0.01, sits far under this $0.09 floor).
+	cheaper.CacheWriteTokens = 3000
+	cheaper.FirstEventTokens = 6000
+	cheaper.WarmFirstEventTokens = 300
 	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
 		add("taxiprime-backend", "plan", "claude-sonnet-5", cheaper)
 	h := floored(t, dir, "taxiprime-backend", table)
@@ -411,8 +451,8 @@ func TestEachStepIsHeldAgainstTheFloorForItsOwnModel(t *testing.T) {
 	for _, want := range []string{
 		"as explore with claude-opus-5 was measured 2026-08-14 19:40 on claude code 2.1.227",
 		"as plan with claude-sonnet-5 was measured 2026-08-14 19:40 on claude code 2.1.231",
-		"25,340 tokens of cache write",
-		"9,120 tokens of cache write",
+		"12,000 tokens of cache write",
+		"3,000 tokens of cache write",
 	} {
 		if n := strings.Count(message, want); n != 1 {
 			t.Errorf("%q appears %d times, want once:\n%s", want, n, message)
@@ -504,8 +544,18 @@ func TestACacheThatCannotBeReadRefusesRatherThanLaunches(t *testing.T) {
 // agent's floor or wave through one that doesn't.
 func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T) {
 	dir := t.TempDir()
+	// filereader's own row carries a real reader-shaped weight (the actual
+	// taxiprime-backend/reader measurement: prefix 4,728, first-event weight
+	// 9,478) rather than measuredFloor's fixed 24,022 -- a $0.05 floor and a
+	// $0.35 floor do not share one turn's shape, and reusing the same weight
+	// for both would make this row's own rescuable threshold the thing under
+	// test instead of the agent-keying this test is actually about.
+	filereaderRow := measuredFloor(0.05)
+	filereaderRow.CacheWriteTokens = 4728
+	filereaderRow.FirstEventTokens = 9478
+	filereaderRow.WarmFirstEventTokens = 494
 	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
-		add("taxiprime-backend", "filereader", "claude-opus-5", measuredFloor(0.05))
+		add("taxiprime-backend", "filereader", "claude-opus-5", filereaderRow)
 	// Both agent types spend the same model here on purpose: the model alone
 	// cannot distinguish them, only the agent can.
 	sameModel := func(agentType string) string {
@@ -531,7 +581,7 @@ func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T
 	}
 	message := err.Error()
 	if !strings.Contains(message,
-		"workflow create refused: 1 of 2 steps is funded below the cost of starting a turn") {
+		"workflow create refused: 1 of 2 steps is funded below what a step needs to answer") {
 		t.Errorf("the count is wrong:\n%s", message)
 	}
 	if lineFor(message, "explores") == "" {
@@ -543,5 +593,240 @@ func TestAStepIsHeldAgainstItsOwnAgentsFloorEvenWhenTheModelMatches(t *testing.T
 	}
 	if !strings.Contains(message, "as explore with claude-opus-5") {
 		t.Errorf("the provenance does not name the agent whose floor was measured:\n%s", message)
+	}
+}
+
+// A step can clear the floor by a wide margin and still be refused: the
+// floor is what a turn costs, not what a share must exceed to buy any
+// reading before the reserved-answer nudge fires on the arrival of the
+// prompt alone.
+func TestAStepThatClearsTheFloorAndBuysNoReadingIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", rescuableBinds())
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("clears-the-floor", "explore", 0.11)))
+	if err == nil {
+		t.Fatal("Create accepted a step below its own row's rescuable threshold")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"funded $0.11",
+		"needs $0.13",
+		"half a share buys 9,130 tokens of reading",
+		"its own first event weighs 10,024",
+		// The cold figure is reported beside the warm one, never as the
+		// requirement: what the hour's first run adds, once.
+		"Establishing it cold weighs 200,024",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
+	}
+	if strings.Contains(message, "starting a turn costs") {
+		t.Errorf("a step that clears the floor is refused as if it hadn't:\n%s", message)
+	}
+}
+
+// The number a refusal prints as sufficient has to actually be sufficient:
+// this is the property that makes it actionable, and it fails the moment
+// MinShareUSD ever rounds a token short.
+func TestAShareAtTheRescuableThresholdIsCreated(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", rescuableBinds())
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	run, gate, err := h.engine.Create(t.Context(),
+		commissioned(funded("at-the-threshold", "explore", 0.13)))
+	if err != nil {
+		t.Fatalf("Create refused the exact share its own refusal would have printed as "+
+			"sufficient: %v", err)
+	}
+	if gate.Kind != workflow.KindLaunch || !gate.Waiting() {
+		t.Fatalf("gate is %s %s, want a waiting launch", gate.Kind, gate.Decision)
+	}
+	if got := statuses(t, run)["at-the-threshold"]; got != "pending" {
+		t.Errorf("step at-the-threshold is %q, want pending", got)
+	}
+}
+
+// A row with no token count at all cannot answer the threshold question, and
+// is refused rather than checked against the floor alone -- falling back to
+// the weaker rule whenever the stronger one cannot be evaluated is the exact
+// defect this whole rule exists to end.
+func TestAMeasurementWithNoTokenCountRefusesRatherThanCheckingLess(t *testing.T) {
+	dir := t.TempDir()
+	row := workflow.Floor{
+		USD:        0.35,
+		MeasuredAt: time.Date(2026, 8, 14, 19, 40, 0, 0, time.Local),
+		CLIVersion: "2.1.227",
+		// Every token count left zero on purpose: a real USD figure with no
+		// evidence behind it at all.
+	}
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", row)
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("way-over-the-floor", "explore", 5.00)))
+	if err == nil {
+		t.Fatal("Create accepted a step against a measurement with no token count at all")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"funded $5.00",
+		"needs ?",
+		"the measurement carries no token count, so what a share buys cannot be checked",
+		"atenea floor measure --repo taxiprime-backend",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
+	}
+	for _, unwanted := range []string{"tokens of reading", "first event weighs", "tokens of cache write"} {
+		if strings.Contains(message, unwanted) {
+			t.Errorf("the refusal claims a token figure %q from a measurement that carried "+
+				"none:\n%s", unwanted, message)
+		}
+	}
+}
+
+// Both rules are evaluated in one pass, and each step is reported against
+// whichever of its own row's two requirements is larger -- never the same
+// one for every step regardless of what its row actually carries.
+func TestTheBindingRuleIsTheLargerOfTheTwo(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35)).
+		add("taxiprime-backend", "plan", "claude-sonnet-5", rescuableBinds())
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	_, _, err := h.engine.Create(t.Context(), commissioned(
+		funded("floor-bound", "explore", 0.20),
+		funded("allowance-bound", "plan", 0.11),
+	))
+	if err == nil {
+		t.Fatal("Create accepted two steps each under a different one of its own row's rules")
+	}
+	message := err.Error()
+	if got := lineFor(message, "floor-bound"); !strings.Contains(got, "needs $0.35") ||
+		!strings.Contains(got, "starting a turn costs ~$0.35") {
+		t.Errorf("the floor-bound step reads %q, want the floor's own number and clause:\n%s",
+			got, message)
+	}
+	if got := lineFor(message, "allowance-bound"); !strings.Contains(got, "needs $0.13") ||
+		!strings.Contains(got, "half a share buys 9,130 tokens of reading") {
+		t.Errorf("the allowance-bound step reads %q, want the threshold's own number and "+
+			"clause:\n%s", got, message)
+	}
+}
+
+// Mirrors TestTheStoredSharesAreExactlyTheOnesTheGraphDeclared for the
+// second rule: clearing the rescuable threshold is not the engine's cue to
+// round a share up to it.
+func TestTheEngineNeverRaisesAShareToTheRescuableThreshold(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", rescuableBinds())
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	want := map[string]float64{
+		"at-the-threshold": 0.13,
+		"well-clear":       0.90,
+	}
+	graph := commissioned(
+		funded("at-the-threshold", "explore", want["at-the-threshold"]),
+		funded("well-clear", "explore", want["well-clear"]),
+	)
+	graph.GrantUSD = 2.00
+
+	run, _, err := h.engine.Create(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, row := range run.Steps {
+		if got := row.Step.Permission.BudgetUSD; got != want[row.Step.ID] {
+			t.Errorf("the record holds $%v for step %s, want the declared $%v exactly: "+
+				"the engine may never top a share up to the rescuable threshold",
+				got, row.Step.ID, want[row.Step.ID])
+		}
+	}
+	for _, declared := range graph.Steps {
+		if got := declared.Permission.BudgetUSD; got != want[declared.ID] {
+			t.Errorf("Create changed the caller's own graph: step %s now carries $%v, "+
+				"declared $%v", declared.ID, got, want[declared.ID])
+		}
+	}
+}
+
+// The floor a step is charged is the warm one once a probe has priced its
+// first tool call. Measured 2026-08-15: the cold prefix price and the warm
+// whole-start price are ~8x apart on a real row, so a share of $0.20 is
+// refused by one and cleared by the other -- and the one that describes what a
+// step pays is the warm one.
+func TestAStepIsChargedTheWarmFloorWhenTheRowCarriesOne(t *testing.T) {
+	dir := t.TempDir()
+	warm := measuredFloor(0.35)
+	warm.WarmUSD = 0.04
+	warm.StartTokens = 68_533
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", warm)
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	if _, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("clears-warm", "explore", 0.20))); err != nil {
+		t.Fatalf("Create refused a step funded five times its own warm floor: %v", err)
+	}
+}
+
+// Below the warm floor is still below, and the refusal says which floor it is
+// and what the tokens under it are -- a person raising a share needs to know
+// the number is the warm one, or they will size it against the cold column
+// beside it.
+func TestAStepBelowTheWarmFloorIsRefusedAndSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	warm := measuredFloor(0.35)
+	warm.WarmUSD = 0.04
+	warm.StartTokens = 68_533
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", warm)
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("under-warm", "explore", 0.01)))
+	if err == nil {
+		t.Fatal("Create accepted a step under its own row's warm floor")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"funded $0.01",
+		"needs $0.04",
+		"starting a step costs ~$0.04 warm",
+		"68,533 tokens of prefix and first tool call",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
+	}
+}
+
+// A row nobody has probed for a first tool call falls back to the cold prefix
+// price rather than stopping applying, and the refusal names the gap. An
+// overcharge a person can read is safe; a rule that silently exempts every
+// unprobed row is how the 2026-08-14 deaths happened.
+func TestARowWithNoFirstCallMeasurementFallsBackToTheColdFloorAndNamesIt(t *testing.T) {
+	dir := t.TempDir()
+	table := floorsOf("taxiprime-backend", "explore", "claude-opus-5", measuredFloor(0.35))
+	h := floored(t, dir, "taxiprime-backend", table)
+
+	_, _, err := h.engine.Create(t.Context(),
+		commissioned(funded("unprobed", "explore", 0.20)))
+	if err == nil {
+		t.Fatal("Create accepted a step under the only floor its row carries")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"needs $0.35",
+		"no probe has priced this row's first tool call",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal never says %q:\n%s", want, message)
+		}
 	}
 }

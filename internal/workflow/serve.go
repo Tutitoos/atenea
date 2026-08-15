@@ -233,10 +233,14 @@ func (f floors) Floor(_ context.Context, repository, agent, model string) (Floor
 		return Floor{}, false, err
 	}
 	return Floor{
-		USD:              measured.USD,
-		MeasuredAt:       measured.MeasuredAt,
-		CLIVersion:       measured.CLIVersion,
-		CacheWriteTokens: measured.CacheWriteTokens,
+		USD:                  measured.USD,
+		WarmUSD:              measured.WarmUSD(),
+		StartTokens:          measured.StartTokens(),
+		MeasuredAt:           measured.MeasuredAt,
+		CLIVersion:           measured.CLIVersion,
+		CacheWriteTokens:     measured.CacheWriteTokens,
+		FirstEventTokens:     measured.FirstEventWeight(),
+		WarmFirstEventTokens: measured.WarmFirstEventWeight(),
 	}, true, nil
 }
 

@@ -170,6 +170,21 @@ pool = "review"
   name = "checked"
   type = "int"
   required = true
+
+[[agent]]
+name = "reader"
+kind = "specialized"
+summary = "Reads files somebody already named and reports what they say"
+command = "$atenea"
+args = ["agent-exec", "reader"]
+context = ["repository"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "summary"
+  type = "string"
 `
 	rendered := strings.NewReplacer("REPO_PATH", repoPath, "BINARY", binary).Replace(body)
 	rendered += "\n[metrics]\npath = \"" + filepath.Join(dir, "base.duckdb") + "\"\n"
@@ -366,5 +381,73 @@ func TestFloorMeasureUndeclaredAgentListsDeclaredOnes(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error = %q, want it to mention %q", msg, want)
 		}
+	}
+}
+
+// firstCallReading is the event stream of a probe that made one tool call,
+// with the two real figures measured 2026-08-15: a 5,647-token prefix and the
+// 41,927-token block that arrives with the first tool result, billed $0.4935
+// together.
+//
+// One JSON object per line, unlike the single-shot fixtures above: the CLI's
+// stream-json output is read line by line, and a pretty-printed event is not
+// an event.
+const firstCallReading = `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":2,"output_tokens":11,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647}}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":2,"output_tokens":11,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647}}}
+{"type":"user","subtype":"tool_result"}
+{"type":"assistant","message":{"id":"m2","usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":41927}}}
+{"type":"result","is_error":false,"subtype":"success","result":"ok","num_turns":3,"usage":{"input_tokens":5,"output_tokens":15,"cache_read_input_tokens":0,"cache_creation_input_tokens":47574},"total_cost_usd":0.4935}`
+
+// The measurement that unblocked the floor, end to end through the command a
+// person runs. Two properties, and the second is the one that was wrong when
+// this path was first wired: the rate has to be derived from every token the
+// receipt covers, not from the prefix alone. Divided by the prefix, the same
+// receipt reported a $0.21 warm step and a $4.16 cold start -- 8.4x out, the
+// ratio between the two messages.
+func TestFloorMeasurePricesTheFirstToolCallAndDerivesTheRateFromBoth(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	settingsPath := measureSettings(t, floorFakeCLI(t, firstCallReading))
+	out, err := cli(t, "--config", settingsPath, "floor", "measure", "--repo", "api", "--agent", "reader")
+	if err != nil {
+		t.Fatalf("floor measure: %v", err)
+	}
+	for _, want := range []string{
+		"5,647 prefix tokens",
+		"its first tool call brings 41,927 more tokens",
+		// The whole start, cold, is what the receipt itself said: this is the
+		// arithmetic checking against the bill rather than against itself.
+		"$0.49 on whichever run of the hour establishes the cache",
+		"~$0.02 warm",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("out = %q, want it to mention %q", out, want)
+		}
+	}
+
+	store, err := floor.Open("")
+	if err != nil {
+		t.Fatalf("floor.Open: %v", err)
+	}
+	got, ok, err := store.Get("api", "reader", "explore-model")
+	if err != nil || !ok {
+		t.Fatalf("Get: ok=%v err=%v", ok, err)
+	}
+	if got.PrefixTokens != 5647 || got.FirstCallTokens != 41927 {
+		t.Errorf("stored prefix/first-call = %d/%d, want 5647/41927",
+			got.PrefixTokens, got.FirstCallTokens)
+	}
+	if want := 0.4935 / 47574.0; got.USDPerToken < want-1e-9 || got.USDPerToken > want+1e-9 {
+		t.Errorf("USDPerToken = %v, want %v -- the receipt over everything it paid for",
+			got.USDPerToken, want)
+	}
+	// The stored USD stays the cold price of the PREFIX, which is what every
+	// row before this probe existed carried and what floorList's own column
+	// means.
+	if want := 5647 * (0.4935 / 47574.0); got.USD < want-1e-9 || got.USD > want+1e-9 {
+		t.Errorf("USD = %v, want %v", got.USD, want)
+	}
+	if w := got.WarmUSD(); w < 0.024 || w > 0.025 {
+		t.Errorf("WarmUSD = %v, want ~$0.0247 -- the whole start read from cache", w)
 	}
 }

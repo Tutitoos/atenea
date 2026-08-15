@@ -22,6 +22,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -88,6 +89,18 @@ type Measurement struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`
 
+	// FirstCallTokens is the block that arrives with a turn's FIRST TOOL
+	// CALL, written or read -- cache-state invariant for the same reason
+	// PrefixTokens is, and measured off the same single run, message by
+	// message. See model.Client.FirstCall.
+	//
+	// Zero means no probe has priced this row's first tool call: either the
+	// row predates the measurement, or the agent type carries no tools and
+	// has no first call to price. The two are told apart by whether the
+	// surface has tools at all, never by this field, and a caller that needs
+	// the distinction asks the settings file rather than guessing here.
+	FirstCallTokens int `json:"first_call_tokens"`
+
 	// Cold reports whether the turn that produced this row was a
 	// cache-write measurement (CacheReadTokens == 0 upstream) rather than
 	// a cache-read one. Only a cold row's USDPerToken was derived from its
@@ -103,6 +116,81 @@ type Measurement struct {
 
 	CLIVersion string    `json:"cli_version"`
 	MeasuredAt time.Time `json:"measured_at"`
+}
+
+// Prefix is PrefixTokens, falling back to CacheWriteTokens when it is zero.
+// A row Put before PrefixTokens existed carries the same number in
+// CacheWriteTokens alone -- see the printing path in cmd/atenea/floor.go's
+// floorList, which already treats that case specially -- and the row on
+// this machine for taxiprime-backend/explore is exactly one of them
+// (prefix_tokens: 0, cache_write_tokens: 26603).
+func (m Measurement) Prefix() int {
+	if m.PrefixTokens != 0 {
+		return m.PrefixTokens
+	}
+	return m.CacheWriteTokens
+}
+
+// FirstEventWeight is the input-equivalent weight of this measurement's
+// turn's own first assistant event, cold-equivalent -- see
+// allowance.FirstEventWeight for the arithmetic and the receipt it is
+// checked against.
+//
+// Zero means this row carries no token count at all, so the weight is
+// unknown -- not the same as a weight of zero, which would mean a turn that
+// costs nothing to start. A caller must refuse rather than pass a zero
+// weight on as an answer.
+func (m Measurement) FirstEventWeight() int {
+	return allowance.FirstEventWeight(m.Prefix(), m.InputTokens, m.OutputTokens)
+}
+
+// WarmFirstEventWeight is the same first assistant event once this machine's
+// prefix is in the provider's cache -- the per-step reading, twenty times
+// smaller than FirstEventWeight's one-time cold one. Both come off the same
+// stored PrefixTokens, which is cache-state invariant by construction: see
+// the field's own doc, and allowance.WarmFirstEventWeight for the two
+// matched runs that measured the split.
+//
+// Zero means the same thing it means above: no token count on this row, so
+// the weight is unknown rather than free, and a caller must refuse rather
+// than pass it on.
+func (m Measurement) WarmFirstEventWeight() int {
+	return allowance.WarmFirstEventWeight(m.Prefix(), m.InputTokens, m.OutputTokens)
+}
+
+// StartTokens is everything a step pays for before it does any work of its
+// own: the prefix that arrives with the prompt plus the block that arrives
+// with its first tool call. Both counts are cache-state invariant, so this
+// total is too, and it is the quantity every price below is derived from.
+//
+// A row with no first-call measurement answers its prefix alone, which is
+// what it was measured to be -- honest for an agent type with no tools, and
+// an understatement for one whose first call nobody has priced yet. USD's own
+// doc says which rows those are.
+func (m Measurement) StartTokens() int {
+	return m.Prefix() + m.FirstCallTokens
+}
+
+// WarmUSD is what starting a step costs on a machine whose cache already
+// holds this prefix and this first-call block: the ordinary case, and the
+// figure an admission rule should refuse a per-step share against.
+//
+// Derived from USD rather than from USDPerToken, deliberately: USD is the
+// cold-equivalent price of the PREFIX, every row that carries a real dollar
+// figure has one (some carry no rate at all -- taxiprime-backend/explore is
+// priced from another row's), and scaling it by StartTokens/Prefix reaches
+// the same answer with one fewer field that can be missing. Cross-checked
+// 2026-08-15 against a live probe that made one tool call: the arithmetic
+// says $0.47 cold, the receipt said $0.4935.
+//
+// Zero when there is nothing to derive from -- no dollar figure, or no
+// prefix -- and a caller must read that as unknown, never as free.
+func (m Measurement) WarmUSD() float64 {
+	prefix := m.Prefix()
+	if m.USD <= 0 || prefix == 0 {
+		return 0
+	}
+	return allowance.WarmDiscount(m.USD * float64(m.StartTokens()) / float64(prefix))
 }
 
 // DefaultPath is where the cache lives when nothing overrides it: beside

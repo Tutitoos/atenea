@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/agent/model"
 	"github.com/Tutitoos/atenea/internal/agent/planner"
+	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/registry"
@@ -76,8 +78,9 @@ func floorList(settingsPath string, out io.Writer) error {
 	// is the same bug as trimming neither.
 	running := model.VersionToken(toolversion.New(binary, "--version").Version(context.Background()))
 
-	fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s %s\n",
-		"REPOSITORY", "AGENT", "MODEL", "USD", "PREFIX TOKENS", "CLI VERSION", "AGE")
+	fmt.Fprintf(out, "%-20s %-9s %-16s %9s %9s %13s %13s %10s %-11s %s\n",
+		"REPOSITORY", "AGENT", "MODEL", "WARM USD", "COLD USD", "PREFIX TOK",
+		"1ST CALL TOK", "RESCUABLE", "CLI VERSION", "AGE")
 	now := time.Now()
 	stale := 0
 	legacy := 0
@@ -119,9 +122,46 @@ func floorList(settingsPath string, out io.Writer) error {
 		if m.PrefixTokens == 0 && m.USD > 0 {
 			tokens = "(not recorded)"
 		}
-		fmt.Fprintf(out, "%-20s %-9s %-16s %10s %14s %-18s measured %s%s\n",
-			m.Repository, m.Agent, modelName, formatUSD(m.USD), tokens,
-			version, formatAge(now.Sub(m.MeasuredAt)), mark)
+		// The smallest share that buys any reading at all -- see
+		// allowance.MinShareUSD -- ceilinged to cents the same way a
+		// refusal's own "needs" column is, so a person who types this
+		// number is admitted.
+		//
+		// From the WARM weight, because that is what a step pays and what
+		// `workflow create` refuses against: the USD column beside it is
+		// already the cold one-time figure, prefix priced as cache write,
+		// paid by whichever run establishes the prefix and by no other.
+		// The two columns are the split, and reading either as the other
+		// is the mistake measured out on 2026-08-15.
+		//
+		// WarmFirstEventWeight falls back to CacheWriteTokens the same way
+		// Prefix does, so a legacy row missing PrefixTokens still prices
+		// here. A dash, not the longer "(not recorded)" above, because a
+		// mechanical row -- no model, so no first assistant event ever
+		// fires -- is not a historical gap in what got recorded; the
+		// column does not apply to it at all.
+		rescuable := "-"
+		if w := m.WarmFirstEventWeight(); w > 0 {
+			rescuable = formatUSD(math.Ceil(allowance.MinShareUSD(w)*100) / 100)
+		}
+		// WARM USD is what a step pays and COLD USD what establishing the
+		// cache costs once -- see floor.Measurement.WarmUSD. Both are costs,
+		// so both round the way every other money line in this CLI does; only
+		// RESCUABLE above ceilings, because it is a figure a person types back
+		// as a share and rounding it down would print a number that refuses
+		// them. A dash rather than "$0.00" where no probe has priced the first
+		// tool call: the warm figure is unknown for that row, and `workflow
+		// create` says so by falling back to the cold one in its refusal.
+		warm, firstCall := "-", "-"
+		if w := m.WarmUSD(); w > 0 {
+			warm = formatUSD(w)
+		}
+		if m.FirstCallTokens > 0 {
+			firstCall = groupedInt(m.FirstCallTokens)
+		}
+		fmt.Fprintf(out, "%-20s %-9s %-16s %9s %9s %13s %13s %10s %-11s measured %s%s\n",
+			m.Repository, m.Agent, modelName, warm, formatUSD(m.USD), tokens, firstCall,
+			rescuable, version, formatAge(now.Sub(m.MeasuredAt)), mark)
 	}
 	if stale > 0 {
 		fmt.Fprintf(out, "\n%d row(s) marked stale: the running CLI answers %q now, and the "+
@@ -244,7 +284,18 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 			return err
 		}
 	}
-	measured, err := client.Floor(context.Background(), model.FloorRequest{
+	// A surface with tools gets the probe that makes one tool call, because
+	// that is what a real step does and where most of the money is: measured
+	// 2026-08-15, the prefix is ~5,650 tokens and the block arriving with the
+	// first tool call ~41,930. A surface with none cannot be asked to call
+	// anything, and its prefix IS everything it pays -- so it gets the older
+	// probe, and the row it writes carries no first-call figure because there
+	// is none to carry.
+	probe := client.FirstCall
+	if len(surface.Builtins) == 0 && !surface.Capabilities {
+		probe = client.Floor
+	}
+	measured, err := probe(context.Background(), model.FloorRequest{
 		Role:     surface.Role,
 		Dir:      repo.Path,
 		Tools:    tools,
@@ -260,20 +311,22 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	}
 
 	measuredAt := time.Now().UTC()
-	if err := store.Put(floor.Measurement{
+	stored := floor.Measurement{
 		Repository:       repo.ID,
 		Agent:            agent,
 		Model:            measured.Model,
 		USD:              usd,
 		USDPerToken:      usdPerToken,
 		PrefixTokens:     measured.PrefixTokens,
+		FirstCallTokens:  measured.FirstCallTokens,
 		Cold:             cold,
 		CacheWriteTokens: measured.CacheWriteTokens,
 		InputTokens:      measured.InputTokens,
 		OutputTokens:     measured.OutputTokens,
 		CLIVersion:       measured.CLIVersion,
 		MeasuredAt:       measuredAt,
-	}); err != nil {
+	}
+	if err := store.Put(stored); err != nil {
 		return err
 	}
 
@@ -287,9 +340,17 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		note = fmt.Sprintf(" -- this reading came back warm, priced from the %s cold measurement taken on %s",
 			measured.Model, pricedAt.Format("2006-01-02"))
 	}
-	fmt.Fprintf(out, "starting a turn on %s as %s with %s costs ~%s (%s prefix tokens: system prompt "+
-		"and tool definitions, before any file is read)%s\n",
+	fmt.Fprintf(out, "starting a turn on %s as %s with %s costs ~%s cold (%s prefix tokens: system "+
+		"prompt and tool definitions, before any file is read)%s\n",
 		repo.ID, agent, measured.Model, formatUSD(usd), groupedInt(measured.PrefixTokens), note)
+	if measured.FirstCallTokens > 0 {
+		// The number the admission rule actually charges, and the one the
+		// prefix figure above was standing in for until this probe existed.
+		fmt.Fprintf(out, "its first tool call brings %s more tokens, so a step starts at ~%s warm "+
+			"and ~%s on whichever run of the hour establishes the cache\n",
+			groupedInt(measured.FirstCallTokens), formatUSD(stored.WarmUSD()),
+			formatUSD(usd*float64(stored.StartTokens())/float64(stored.Prefix())))
+	}
 	return nil
 }
 
@@ -338,9 +399,19 @@ func floorMeasureNoModel(store *floor.Store, repository, agent string, out io.Wr
 // model.FloorMeasurement.PrefixTokens for the same 26,603-both-times
 // reading this is built on.
 //
-// A cold probe prices itself: the receipt IS the price of the tokens it
-// just wrote, so USDPerToken is read straight back out of what was paid. A
-// warm probe has no receipt to divide -- the CLI billed only the
+// A cold probe prices itself: the receipt IS the price of the tokens it just
+// wrote, so USDPerToken is read straight back out of what was paid. The
+// denominator is every token the receipt covers -- prefix AND the block that
+// arrived with the first tool call, when the probe made one -- because
+// dividing a two-message receipt by one message's tokens inflates the rate by
+// exactly the ratio between them. Measured 2026-08-15, that ratio is 8.4x, and
+// the wrong denominator turned a $0.02 warm step into $0.21 and a $0.49 cold
+// start into $4.16 before this line said so. The rate this now derives,
+// $1.04e-5 per token, agrees to 2% with the one an earlier prefix-only probe
+// measured independently ($1.01e-5), which is what says the arithmetic is
+// right rather than merely self-consistent.
+//
+// A warm probe has no receipt to divide -- the CLI billed only the
 // cache-read price of tokens somebody else already wrote -- so it borrows
 // USDPerToken from the most recent turn on the same model that WAS measured
 // cold, wherever that happened: price is a property of the model, not of
@@ -349,12 +420,16 @@ func floorMeasureNoModel(store *floor.Store, repository, agent string, out io.Wr
 // with no probe ages the warm entry out, and the next reading is cold
 // again.
 func coldEquivalentUSD(store *floor.Store, measured model.FloorMeasurement) (usd, usdPerToken float64, cold bool, pricedAt time.Time, err error) {
+	// What the receipt paid for, which is the prefix alone only when the
+	// probe made no tool call.
+	paidFor := measured.PrefixTokens + measured.FirstCallTokens
 	if measured.Cold {
-		if measured.PrefixTokens == 0 {
+		if paidFor == 0 {
 			return 0, 0, false, time.Time{}, contract.Fail(contract.FailureInvalidInput,
 				"floor probe: claude code wrote and read zero prefix tokens -- there is nothing to price")
 		}
-		return measured.USD, measured.USD / float64(measured.PrefixTokens), true, time.Time{}, nil
+		rate := measured.USD / float64(paidFor)
+		return float64(measured.PrefixTokens) * rate, rate, true, time.Time{}, nil
 	}
 	price, measuredAt, ok := store.PriceForModel(measured.Model)
 	if !ok {
