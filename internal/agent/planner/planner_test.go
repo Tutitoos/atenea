@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/agent/model"
+	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -267,8 +268,8 @@ func TestTheGrantedShareReachesTheModel(t *testing.T) {
 
 // Measured 2026-08-14: twelve of twelve real steps spent their whole ceiling
 // reading and hit --max-budget-usd before writing an answer, and a same-
-// evening probe showed the CLI has no mid-turn cost signal -- see readShare
-// and tokensPerUSD's own comments. ReadTokens is how the client is told to
+// evening probe showed the CLI has no mid-turn cost signal -- see
+// internal/allowance's own comments. ReadTokens is how the client is told to
 // hold back the rest, denominated in tokens because those are what the CLI
 // reports as it goes.
 func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
@@ -280,7 +281,7 @@ func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
 	in.BudgetUSD = usd(grant)
 	explore(context.Background(), in, config.Config{}, withTools(c))
 
-	if want := int(readShare * grant * tokensPerUSD); c.seen.ReadTokens != want {
+	if want := allowance.Tokens(grant); c.seen.ReadTokens != want {
 		t.Errorf("read tokens = %v, want %v", c.seen.ReadTokens, want)
 	}
 }
