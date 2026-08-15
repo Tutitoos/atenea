@@ -249,6 +249,30 @@ type Request struct {
 	// what it has. Zero means off, and a turn with it off is the single shot
 	// it was before this field existed.
 	//
+	// It protects a turn that CALLS TOOLS, and only that turn. Measured
+	// 2026-08-15 on the production argv: a turn with no tools emits two
+	// assistant events in 133 seconds -- one at 31.6s, one arriving with
+	// the result -- and both carry the usage of the prompt alone
+	// (output_tokens: 2), never the answer accumulating behind them. A
+	// tool-using turn gets a fresh event per round trip, which is the only
+	// reason an accumulator can climb at all. So a toolless turn offers one
+	// usable observation, a quarter of the way in, carrying a number that
+	// does not move: if the allowance is not already crossed there it never
+	// will be. `plan` is that turn, and it died at a $0.90 share whose
+	// allowance cleared the threshold every surviving step cleared.
+	//
+	// And the allowance has a floor of its own, below which this field is
+	// worse than useless. Measured 2026-08-15 on a nineteen-step plan: all
+	// thirteen model-backed steps died empty, every one of them funded with
+	// an allowance between 9,960 and 33,200 -- under the ~70,000 named
+	// below as the weight of a turn's own first event. Under that line the
+	// nudge does not fail to fire, it fires on the arrival of the prompt,
+	// telling a model that has not opened a file to answer with what it
+	// has. Above it, four for four answered. A caller setting this field
+	// below ~70,000 has bought the empty death and paid for the message
+	// too; internal/agent/planner's readShare is where that arithmetic
+	// belongs.
+	//
 	// Measured 2026-08-14: twelve of twelve explore steps hit BudgetUSD and
 	// came back with result_len 0. $3.78, and then $4.09 on the re-run,
 	// bought no answers at all, because the kill lands in exactly the wrong

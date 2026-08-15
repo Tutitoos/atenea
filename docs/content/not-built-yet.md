@@ -1037,3 +1037,77 @@ guesses the rest. Neither defect is fixable downstream: `workflow create` can
 refuse a plan that is underfunded because a floor is a number it can compare,
 and it cannot refuse a plan that is misassigned, because nothing has written
 down what a fit would be.
+
+## Health and indexed_by are the same unanswered question, asked twice — 2026-08-15
+
+`filterHealth` (`internal/selector/selector.go:323`) drops any implementation whose
+`impl.Health.Usable()` is false before the funnel tries it. `contract.Health.Usable()`
+(`pkg/contract/implementation.go:316`) is `State != HealthDown` — nothing else. `Health` is
+written in exactly one production call site, `internal/orchestrator/orchestrator.go:1140-1144`:
+when a real call fails with `FailureUnavailable`, the orchestrator writes `HealthDown` for that
+`(repository, implementation)` pair, carrying the failure's own text as `Reason`. Nothing else
+in the shipped path ever writes `HealthAlive` back — the only call that clears a `HealthDown`
+lives in a test (`core_test.go:472`). `Health` itself carries no timestamp: once down, an entry
+has no way to become old, only to be overwritten by another `SetHealth` call that never comes.
+The only thing that clears it is a full process restart, which throws the whole map away and
+starts every implementation back at the zero-value `HealthUnknown` — usable, per the same
+`Usable()`. Measured 2026-08-15: three `code.impact` calls against `taxiprime`, varying
+`baseline` and `scope`, all returned `every implementation of code.impact is down for
+repository taxiprime`, while `symbol.calls` against the same repository in the same minute
+answered cleanly off the same provider. `systemctl --user restart atenea` cleared it on the
+next call, because restart is the only invalidation this mechanism has.
+
+`indexed_by` (`atenea.toml`, read across `config.go`, `registry.go`, `selector.go`, `core.go`)
+is the identical shape from the write side instead of the read side: a claim about whether a
+provider serves a repository, set once — by hand, in a settings file, or in memory by `atenea
+detect` — and never rechecked against the thing it claims. `detect` does not call `SetHealth`;
+it prints and exits. Measured the same day: after restoring `indexed_by = [..., "codebase-memory"]`
+across six repositories, a fresh `detect` per repository found the claim true for one of six.
+Five sat wrong, silently, with nothing in the load path positioned to notice, until something
+went looking by hand.
+
+These are not two bugs. They are one missing operation — *re-probe a provider this process has
+already formed an opinion about* — absent from two call sites that both currently treat
+"observed once" as "true forever," in opposite directions: `Health` latches down and never
+un-latches; `indexed_by` latches up (whatever the file says) and never re-confirms. One design
+has to cover both, or the second one just gets rebuilt as a copy of the first with the same gap.
+
+**The shape.** `contract.Health` gains one field: `ObservedAt time.Time`. Nothing else about it
+changes — `Usable()` stays a state check, not a time check, so this stays additive. `indexed_by`
+stops being a separate value read straight out of config at load time. It becomes the initial
+`Health` write for that `(repository, provider)` pair — `HealthAlive` if declared, `HealthUnknown`
+if not declared — recorded with `ObservedAt` at config load. From that point on, `indexed_by` and
+capability health are the same map, read the same way, and a repository's config no longer makes
+a claim the runtime can't see next to the runtime's own answer.
+
+**Invalidation.** Three triggers, not one, because the failure modes are different shapes:
+- *Time.* `filterHealth` compares `ObservedAt` against a staleness ceiling before trusting a
+  cached verdict. Past it, treat the entry as `HealthUnknown` — usable, not down, not
+  presumed-alive either — and let the funnel's own attempt be the re-probe: success writes
+  `HealthAlive` with a fresh `ObservedAt` through the existing orchestrator path, failure writes
+  `HealthDown` through the same path that already exists today. No new probing loop, no
+  background goroutine — the ceiling just stops a two-week-old verdict from being read as this
+  morning's. The right ceiling is not measured yet; this page is explicitly not the place to
+  assert one unmeasured.
+- *Explicit.* `atenea detect --repo X` calls `SetHealth` instead of only printing. The
+  correction a person runs by hand starts surviving the next restart, which closes the exact gap
+  measured this session: a `detect`-confirmed fact currently dies at the next `systemctl --user
+  restart atenea`, the same restart that's the only cure for a stale `HealthDown`.
+- *Restart.* Unchanged, and worth keeping: a fresh process should still start every provider at
+  `HealthUnknown` rather than trusting whatever the last process believed, because the last
+  process's belief is exactly what this whole entry is about not trusting past its shelf life.
+
+**What status shows.** `atenea detect --repo X` prints, today, one thing per provider: whether
+it looks reachable right now. Extend it to print what it currently hides — the state this
+process already has on file *before* the fresh probe, and how old it was — declared, observed
+state, observed age, last failure text if any. Today's five wrong-but-silent `indexed_by`
+entries would have shown as `codebase-memory: declared alive, health unknown (never probed)` —
+visibly a claim without a confirmation, not a fact.
+
+**Done when:** a `Health` entry recorded before this ships is never read as current after it —
+concretely, an implementation latched `HealthDown` in a running process gets a real retry on the
+first call after the staleness ceiling passes, with no restart in between, and `atenea detect`'s
+own result for a repository survives a restart of the process that ran it.
+
+Not built. This is one design, not implemented, because building it inside the same session that
+found both halves of the gap is exactly the haste this page exists to refuse.

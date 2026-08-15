@@ -1402,6 +1402,92 @@ next restart — the same restart that would otherwise be needed to clear a stal
 separate caches, three separate call sites, one missing operation between all of them: nothing on
 this path re-asks a provider it has already formed an opinion about.
 
+## A twenty-second instrument: a store that cannot tell failure from empty
+
+Measured 2026-08-15, reading codebase-memory's own installed README (v0.8.1, undated) for the
+first time this session. It describes the cache holding three projects — `4mans-beta`,
+`taxiprime-app`, `Kena` — 72,464 nodes, 179,600 edges, 148MB on disk. None of the three exist
+today. `list_projects`, called live, returns two projects on the entire machine: the current
+repository's root and a throwaway test checkout in `/tmp`.
+
+This entry does not name a cause, because nothing that survives names one. What could be
+checked, was: the daemon did not run at all on 08-10 — zero journal entries that day — then ran
+without interruption from 08-13 11:50 through 08-15 04:08, the exact minute of this session's own
+retirement of the provider, with no delete event anywhere in that window. The installed binary
+went from v0.8.1 (the README's own version) to v0.10.0 (recorded in `daemon.log`, dated 07-06) to
+v0.9.0 — the version running today, binary mtime 07-08. That is a downgrade somewhere in the
+sequence, not an upgrade. `delete_project` is a real, documented CLI verb on this binary, and
+there is no audit record anywhere on this machine of whether it was ever called. systemd's own
+journal keeps nothing from before 08-11; several machine reboots in that window rotated it away.
+
+Three projects and 179,600 edges are gone between a README that names no date and a today that
+has one. The honest description of this store, right now, is that it cannot answer the one
+question that matters most after a loss: whether it failed, or whether something asked it to
+forget. Both leave the same disk footprint behind — a database holding less than a document says
+it once did — and nothing this session could read tells them apart. That is not a gap in this
+investigation. It is a gap in what the store itself can say about its own history, and no amount
+of asking it again closes it.
+
+## A twenty-third instrument: a rescue that needs more money than the thing it rescues
+
+The reserved answer, built 2026-08-14, replaces a kill with a message: when a
+turn has spent its read allowance, tell it to answer with what it has instead
+of letting the ceiling take it empty. It was proven on a controlled A/B — same
+card, same $0.90 share, one binary killing at the ceiling and the other
+answering at completeness 0.90 for less money.
+
+Run on a real nineteen-step plan the next night, it protected nothing. All
+thirteen model-backed steps died at their ceiling with zero passes, $5.24 spent
+against a $3.52 grant, output between 99 and 650 tokens each and no answer.
+
+The receipts separate perfectly, across every step measured since the mechanism
+shipped, on one number nobody had thought of as a threshold:
+
+| read allowance | steps | outcome |
+|---|---|---|
+| above 70,000 input-equivalent tokens | 4 | every one answered (0.80, 0.85, 0.90, and one plain ok) |
+| below 70,000 | 13 | every one died empty |
+
+The number is not new. It is written in this codebase, in the doc comment on
+the field that carries the allowance: *"the very first assistant event already
+weighed 65,625 input-equivalent tokens — about $0.20 — because the CLI's system
+prompt and tool definitions are cached on it… an allowance under ~70,000 buys
+no reading at all on this CLI."* Measured, recorded, and then not converted
+into the one thing that would have used it: an admission rule.
+
+Below that line the mechanism does not fail quietly, it fires **too early**.
+The allowance is crossed by the first event of the turn — the arrival of the
+prompt itself — so the nudge lands before the model has opened a file, telling
+it to answer with what it has, which is nothing. It reads on, and the hard
+ceiling takes it exactly as before. The rescue was not absent; it was spent on
+an empty hand.
+
+So the binding constraint on a step is not the floor. **A step must be funded
+past $0.84 on this repository and model** — the share at which half of it, the
+read allowance, exceeds the weight of its own first event — where the floor
+says $0.27. The floor is necessary and it is nowhere near sufficient, and a
+plan can satisfy it on every step and still die on every step, which is what
+happened.
+
+### And it cannot protect an agent that calls no tool
+
+Measured directly, on the production argv: a turn with no tools emits **two**
+assistant events in 133 seconds — one at 31.6s and one that arrives with the
+result — and both carry the usage of the prompt alone, `output_tokens: 2`,
+never the answer accumulating behind them. A tool-using turn gets a fresh event
+per round trip, which is what lets an accumulator climb and cross anything.
+
+That leaves one usable observation for a toolless agent, at a quarter of the
+way in, carrying a number that does not move. If the threshold is not already
+crossed there, it never will be. `plan` at a $0.90 share is the one step in the
+table above that clears 70,000 and died anyway, and this is why.
+
+The mechanism is therefore **structurally limited to agents that call tools**:
+`explore` and `reader` can be nudged, `plan` cannot, and the three mechanical
+types never turn at all. That is a property of where the CLI reports usage, not
+a bug to fix in this package — nothing on the stream would tell an accumulator
+that a toolless answer is getting expensive.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1673,6 +1759,16 @@ this path re-asks a provider it has already formed an opinion about.
     settings file, so it does not survive the restart that would otherwise be needed to clear a
     stale `down`. Three consistent answers from a channel that cannot revise itself are not
     corroboration; they are the same stale opinion, read again.
+
+27. **A store that lost data and a store that was told to forget it look identical from
+    outside.** Three projects, 72,464 nodes, 179,600 edges, gone between a README's own account
+    of itself and a live query today — real, confirmed by asking the current store directly, not
+    a reading error. What can't be recovered is which kind of gone: `delete_project` is a real,
+    callable verb with no audit trail on this machine, and the daemon's own journal was rotated
+    away before the window that would have mattered. A system's data can be checked against its
+    own claims about itself. A system's history cannot be checked at all once nothing recorded it
+    happening. Log the action, not only the resulting state, or the two failure modes stay
+    permanently indistinguishable from the one place anyone would go looking.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
