@@ -1732,6 +1732,144 @@ func TestAFloorProbeArgvCarriesTheRolesModelAndToolsNoSchema(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// FirstCall
+// ---------------------------------------------------------------------------
+
+// firstCallStream is the event stream of a turn that made one tool call,
+// shaped after the real one measured 2026-08-15: a ~5,650-token prefix on the
+// first assistant message and a ~41,930-token block on the second, the one
+// that arrives with the first tool result.
+//
+// The first message is restated twice on purpose. Measured 2026-08-14, one
+// message's content blocks arrive as separate events carrying identical usage,
+// and a reader that appended every event would count this prefix twice --
+// which is the whole reason Client.observe keys on the message id.
+const firstCallStream = `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647}}}
+{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647}}}
+{"type":"user","subtype":"tool_result"}
+{"type":"assistant","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":0,"cache_creation_input_tokens":41927}}}
+{"type":"result","is_error":false,"subtype":"success","result":"ok","num_turns":3,"usage":{"input_tokens":5,"output_tokens":14,"cache_read_input_tokens":0,"cache_creation_input_tokens":47574},"total_cost_usd":0.4935}`
+
+// The same turn on a machine whose cache already holds both blocks: identical
+// totals per message, split differently. This is the invariance the stored
+// counts rely on -- 5,651 and 41,934 against the cold 5,647 and 41,927.
+const firstCallWarmStream = `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":9,"cache_read_input_tokens":4772,"cache_creation_input_tokens":879}}}
+{"type":"user","subtype":"tool_result"}
+{"type":"assistant","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":40227,"cache_creation_input_tokens":1707}}}
+{"type":"result","is_error":false,"subtype":"success","result":"ok","num_turns":3,"usage":{"input_tokens":5,"output_tokens":14,"cache_read_input_tokens":44999,"cache_creation_input_tokens":2586},"total_cost_usd":0.0437}`
+
+// A turn that answered without touching a tool: num_turns 1, one assistant
+// message, and nothing to price as a first call.
+const firstCallNoToolStream = `{"type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":2,"output_tokens":6,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647}}}
+{"type":"result","is_error":false,"subtype":"success","result":"ok","num_turns":1,"usage":{"input_tokens":2,"output_tokens":6,"cache_read_input_tokens":0,"cache_creation_input_tokens":5647},"total_cost_usd":0.06}`
+
+// toolSurface is the request shape every probe below shares: a surface that
+// can actually call something, which is what FirstCall requires.
+func toolSurface(role Role) FloorRequest {
+	return FloorRequest{Role: role, Builtins: []string{"Read", "Glob"}}
+}
+
+// The measurement this probe exists for: two quantities off ONE run, message
+// by message. A floor built on the first alone described 12% of what a step
+// pays to get started, and that is the defect that shipped on 2026-08-15.
+func TestAFirstCallProbeSplitsThePrefixFromTheBlockThatFollowsIt(t *testing.T) {
+	client, _ := floorClient(t, firstCallStream)
+	m, err := client.FirstCall(context.Background(), toolSurface(RoleExplore))
+	if err != nil {
+		t.Fatalf("FirstCall: %v", err)
+	}
+	if m.PrefixTokens != 5647 {
+		t.Errorf("PrefixTokens = %d, want 5647 -- the first message alone, not the total",
+			m.PrefixTokens)
+	}
+	if m.FirstCallTokens != 41927 {
+		t.Errorf("FirstCallTokens = %d, want 41927 -- the message that arrives with the "+
+			"first tool result", m.FirstCallTokens)
+	}
+	if !m.Cold {
+		t.Error("Cold = false, want true: this prefix was written, not read")
+	}
+	if m.USD != 0.4935 {
+		t.Errorf("USD = %v, want the receipt's own 0.4935", m.USD)
+	}
+}
+
+// Warm or cold, the per-message totals are the same to within a few tokens,
+// and it is the totals that get stored. A probe that recorded the write half
+// would answer a different number every hour for the same machine.
+func TestAFirstCallProbeReadsTheSameTotalsWarm(t *testing.T) {
+	client, _ := floorClient(t, firstCallWarmStream)
+	m, err := client.FirstCall(context.Background(), toolSurface(RoleExplore))
+	if err != nil {
+		t.Fatalf("FirstCall: %v", err)
+	}
+	if m.PrefixTokens != 5651 {
+		t.Errorf("PrefixTokens = %d, want 5651 (4772 read + 879 written)", m.PrefixTokens)
+	}
+	if m.FirstCallTokens != 41934 {
+		t.Errorf("FirstCallTokens = %d, want 41934 (40227 read + 1707 written)",
+			m.FirstCallTokens)
+	}
+	if m.Cold {
+		t.Error("Cold = true, want false: the prefix came back read")
+	}
+}
+
+// The refusal that keeps this from degrading into the probe it replaced: no
+// tool call, no first-call figure, and answering with the prefix alone is
+// exactly the measurement that was already proven wrong.
+func TestAFirstCallProbeThatNeverCalledAToolIsRefused(t *testing.T) {
+	client, _ := floorClient(t, firstCallNoToolStream)
+	_, err := client.FirstCall(context.Background(), toolSurface(RoleExplore))
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("FirstCall: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "without calling a tool") {
+		t.Errorf("the refusal does not say what was missing: %v", err)
+	}
+}
+
+// `plan` is this shape: no builtins, no --mcp-config, no first tool call it
+// could ever make. Refused rather than measured as a prefix probe, so a row
+// never carries a first-call figure nobody took.
+func TestAFirstCallProbeOnASurfaceWithNoToolsIsRefused(t *testing.T) {
+	client, _ := floorClient(t, firstCallStream)
+	_, err := client.FirstCall(context.Background(), FloorRequest{Role: RolePlan})
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("FirstCall: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "no tools at all") {
+		t.Errorf("the refusal does not name the surface: %v", err)
+	}
+}
+
+// The probe streams so it can read usage per message, and it must still pass
+// the prompt on the command line: --input-format stream-json would take the
+// prompt off argv and the turn would start with nothing asked of it.
+func TestAFirstCallProbeStreamsWithoutTakingThePromptOffArgv(t *testing.T) {
+	client, argvPath := floorClient(t, firstCallStream)
+	if _, err := client.FirstCall(context.Background(), toolSurface(RoleExplore)); err != nil {
+		t.Fatalf("FirstCall: %v", err)
+	}
+	argv := floorArgv(t, argvPath)
+	if got, ok := flagValue(argv, "--output-format"); !ok || got != "stream-json" {
+		t.Errorf("--output-format = %q, ok=%v, want stream-json", got, ok)
+	}
+	if !slices.Contains(argv, "--verbose") {
+		t.Errorf("argv carries no --verbose, which this CLI rejects the stream without: %v", argv)
+	}
+	if slices.Contains(argv, "--input-format") {
+		t.Errorf("argv carries --input-format, which would take the prompt off the command "+
+			"line: %v", argv)
+	}
+	if !slices.Contains(argv, firstCallPrompt) {
+		t.Errorf("the prompt is not on argv, so the turn was asked nothing: %v", argv)
+	}
+}
+
 // VersionToken is exported so cmd/atenea/floor.go can trim the running
 // CLI's own --version banner the same way a stored Measurement.CLIVersion
 // was trimmed -- see the function's own doc for the 2026-08-14 false-stale

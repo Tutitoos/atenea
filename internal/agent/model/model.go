@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/toolversion"
@@ -270,8 +271,9 @@ type Request struct {
 	// telling a model that has not opened a file to answer with what it
 	// has. Above it, four for four answered. A caller setting this field
 	// below ~70,000 has bought the empty death and paid for the message
-	// too; internal/agent/planner's readShare is where that arithmetic
-	// belongs.
+	// too; internal/allowance is where that arithmetic lives now, and
+	// `atenea workflow create` refuses a step funded below what it derives
+	// rather than merely leaving the number available.
 	//
 	// Measured 2026-08-14: twelve of twelve explore steps hit BudgetUSD and
 	// came back with result_len 0. $3.78, and then $4.09 on the re-run,
@@ -345,6 +347,20 @@ type Request struct {
 	// has read a hundred thousand examples of. Offering a capability beside
 	// the tool it was meant to replace is not offering it.
 	Builtins []string
+	// Stream asks for the event stream on stdout while still passing the
+	// prompt as the CLI's positional argument -- what a measurement needs
+	// and a real step does not: usage PER MESSAGE rather than one total for
+	// the whole turn. A single-shot turn's `--output-format json` reports
+	// only the sum, and the sum cannot tell the prefix apart from the block
+	// that arrives with the first tool result. Measured 2026-08-15, those
+	// two are 5,650 and 41,930 tokens on this machine, and charging a step
+	// for the second as if it recurred is the defect this field exists to
+	// let a probe measure instead of assume.
+	//
+	// It is ignored on a turn that reserves an answer: that path already
+	// streams, and its stdin protocol takes the prompt instead. Nothing in
+	// internal/agent sets this outside Client.FirstCall.
+	Stream bool
 }
 
 // Validate checks the request can even be attempted.
@@ -590,8 +606,16 @@ type FloorMeasurement struct {
 	// moves with cache state; PrefixTokens does not, which is why a floor is
 	// built on this field and never on CacheWriteTokens alone.
 	PrefixTokens int
-	InputTokens  int
-	OutputTokens int
+	// FirstCallTokens is the same total for the SECOND assistant message: the
+	// block that arrives with the first tool result, written or read. Zero
+	// from a Floor probe, which never makes a tool call and therefore never
+	// sees it; a real figure only from FirstCall. Measured 2026-08-15 on this
+	// machine it is ~41,930 tokens against a ~5,650-token prefix, so a cost
+	// model built on the prefix alone is describing an eighth of what a step
+	// pays to get started.
+	FirstCallTokens int
+	InputTokens     int
+	OutputTokens    int
 	// Cold is true when none of this prefix was already cached --
 	// CacheReadTokens == 0. It is never true just because the tool surface
 	// is new: the refusal this field replaced was written an hour before
@@ -697,6 +721,188 @@ func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement,
 	}, nil
 }
 
+// firstCallPrompt is what the warm probe asks for: exactly one tool call,
+// against a pattern chosen to match nothing, and then two characters of
+// answer.
+//
+// The tool call is the measurement's whole subject and its result is
+// deliberately empty. What arrives at the first tool result is not the
+// result: measured 2026-08-15, a 452-token result and an 8,002-token result
+// were followed by blocks of 41,973 and 53,036 tokens -- the file is 7.3x of
+// that difference and 17.7x of itself, so the block is overwhelmingly the
+// CLI's own re-sent scaffolding and not the payload. A probe that read a real
+// file would price that file into a figure meant to describe every step.
+//
+// Glob rather than Read: it is on every tool-carrying surface this package
+// spawns (see planner.Surface), and a pattern that matches nothing cannot
+// depend on what the repository happens to contain.
+const firstCallPrompt = "Call the Glob tool exactly once, with the pattern " +
+	"'atenea-floor-probe-matches-nothing-*'. Then reply with exactly: ok. " +
+	"Call no other tool, and read no file."
+
+// FirstCall measures both halves of what a step pays before it does any work
+// of its own: the prefix that arrives with the prompt, and the block that
+// arrives with the first tool result.
+//
+// CALLING THIS SPENDS REAL MONEY, on the same terms as Floor -- one turn,
+// priced at roughly what it measures -- and for the same reason nothing calls
+// it implicitly.
+//
+// It exists because Floor prices the wrong turn. Measured 2026-08-15 on two
+// live probes and five loopback-recorded runs: the prefix is ~5,650 tokens and
+// the block at the first tool call is ~41,930, so a floor built on the prefix
+// alone describes 12% of what a step actually pays to get started. Both are
+// written to cache once and read back at a twentieth of the price by every
+// turn after -- cache_read pinned to the exact token across runs of different
+// objectives, different files and different nonces -- which is why the two
+// counts are what gets stored and the dollars are derived from them, per
+// warmth, by internal/floor.
+//
+// One turn, not two: the two counts come off the SAME run, message by
+// message. Subtracting a no-tool probe from a tool-using one would be two
+// cache states and two receipts pretending to be one measurement, which is
+// the mistake internal/floor's own PrefixTokens doc records.
+func (c *Client) FirstCall(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
+	turn := Request{
+		Role:     req.Role,
+		Prompt:   firstCallPrompt,
+		Dir:      req.Dir,
+		Tools:    req.Tools,
+		Builtins: req.Builtins,
+		Stream:   true,
+	}
+	if err := turn.Validate(); err != nil {
+		return FloorMeasurement{}, err
+	}
+	if len(req.Builtins) == 0 && strings.TrimSpace(req.Tools) == "" {
+		// A surface with nothing to call cannot be asked to call something.
+		// Refused rather than quietly measured as a prefix probe: `plan` is
+		// exactly this shape, and a row that recorded its no-tool turn under
+		// a first-call figure would claim a measurement nobody took.
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"first-call probe: this surface carries no tools at all, so it has no first "+
+				"tool call to price -- measure it with a floor probe instead")
+	}
+	modelName, err := c.modelFor(turn.Role)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+	dir, err := resolveDir(turn.Dir)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+
+	messages, receipt, err := c.observe(ctx, dir, c.timeout, turn)
+	if err != nil {
+		return FloorMeasurement{}, err
+	}
+	if len(receipt.PermissionDenials) > 0 {
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"first-call probe: claude code was denied %d action(s) -- a tool call that did "+
+				"not happen prices nothing", len(receipt.PermissionDenials))
+	}
+	if receipt.NumTurns < 2 || len(messages) < 2 {
+		// The probe asked for a tool call and did not get one, so the second
+		// message this measurement is built on does not exist. Answering
+		// with the prefix alone is what shipped the wrong floor in the first
+		// place.
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"first-call probe: claude code answered without calling a tool (num_turns=%d, "+
+				"%d assistant message(s)) -- there is no first tool call to price",
+			receipt.NumTurns, len(messages))
+	}
+	if receipt.TotalCostUSD == nil {
+		return FloorMeasurement{}, contract.Fail(contract.FailureInvalidInput,
+			"first-call probe: claude code priced the turn as nothing -- what was measured "+
+				"is not a cost")
+	}
+	prefix, firstCall := messages[0], messages[1]
+	return FloorMeasurement{
+		USD:              *receipt.TotalCostUSD,
+		CacheWriteTokens: prefix.CacheWrite,
+		CacheReadTokens:  prefix.CacheRead,
+		PrefixTokens:     prefix.CacheWrite + prefix.CacheRead,
+		FirstCallTokens:  firstCall.CacheWrite + firstCall.CacheRead,
+		InputTokens:      prefix.InputTokens,
+		OutputTokens:     prefix.OutputTokens,
+		// Cold is the PREFIX's own state, the same reading Floor gives it:
+		// the first message is where a machine that had never held this
+		// prefix says so. The second message is warm or cold with it.
+		Cold:       prefix.CacheRead == 0,
+		Model:      modelName,
+		CLIVersion: VersionToken(c.version.Version(ctx)),
+	}, nil
+}
+
+// observe runs one streamed turn and reports what each assistant MESSAGE
+// reported about itself, in arrival order, plus the result envelope.
+//
+// Per message and never per event: measured 2026-08-14, one message's content
+// blocks arrive as separate events restating identical usage, so a reader that
+// appended every event would count one message several times. The id is what
+// separates them -- the same reading conversation.spend is built on, which is
+// why the rule lives in one place and this function follows it.
+func (c *Client) observe(ctx context.Context, dir string, timeout time.Duration, req Request) ([]usage, envelope, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd, err := c.command(ctx, dir, req)
+	if err != nil {
+		return nil, envelope{}, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, envelope{}, contract.Fail(contract.FailureUnavailable,
+			"cannot read claude code's event stream: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, envelope{}, failureFor("", err)
+	}
+
+	var messages []usage
+	var ids []string
+	var receipt envelope
+	reader := bufio.NewReaderSize(stdout, eventBuffer)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if ev, ok := readEvent(line); ok {
+			switch ev.Type {
+			case "assistant":
+				// Last reading wins for a message already seen: a message's
+				// later events restate its usage, and the final restatement
+				// is the one the CLI itself totals.
+				if n := len(ids); n > 0 && ids[n-1] == ev.Message.ID {
+					messages[n-1] = ev.Message.Usage
+				} else {
+					ids = append(ids, ev.Message.ID)
+					messages = append(messages, ev.Message.Usage)
+				}
+			case "result":
+				receipt = ev.envelope
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	waitErr := cmd.Wait()
+	said := strings.TrimSpace(stderr.String())
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, envelope{}, contract.Stopped(ctxErr, "claude code", timeout).WithRaw(said)
+	}
+	if receipt.IsError {
+		return nil, receipt, failureFor(receipt.reason(), waitErr)
+	}
+	if receipt.Type == "" {
+		// No result event at all: the turn died before pricing itself, and
+		// whatever the messages reported is an account of a turn nobody was
+		// billed for in a way this can read.
+		return nil, envelope{}, failureFor(said, waitErr)
+	}
+	return messages, receipt, nil
+}
+
 // VersionToken trims a version probe's banner to its first whitespace-
 // delimited field. Read out of the shipped CLI: `claude --version` answers
 // "2.1.232 (Claude Code)", and the token a stale-floor comparison actually
@@ -741,6 +947,16 @@ func (c *Client) args(req Request) ([]string, error) {
 			"--input-format", "stream-json",
 			"--output-format", "stream-json",
 			"--verbose")
+	} else if req.Stream {
+		// The positional prompt of a single shot with the event stream of a
+		// conversation. Read out of the shipped binary (2.1.232): with
+		// --print, --output-format stream-json is a hard error without
+		// --verbose, and --input-format is what would take the prompt off
+		// the command line -- so it is deliberately absent here. See
+		// Request.Stream.
+		argv = append(argv, req.sentPrompt(),
+			"--output-format", "stream-json",
+			"--verbose")
 	} else {
 		// --print takes no value of its own; the prompt that follows it is
 		// the CLI's positional [prompt] argument, not --print's value.
@@ -773,6 +989,22 @@ func (c *Client) args(req Request) ([]string, error) {
 		// fails outright on the second run. A fresh, unsaved session per
 		// turn is what keeps two callers from ever sharing a far side.
 		"--no-session-persistence",
+		// A session this process throws away still gets named, and naming it
+		// is a second model call: measured 2026-08-15 against a loopback
+		// recorder, the CLI fires a claude-opus-5 request carrying this
+		// turn's whole commission -- `effort: "high"`, `max_tokens: 64000`
+		// -- whose only output is a 3-7 word title for a session
+		// --no-session-persistence has already discarded. Supplying a name
+		// is what stops it: 4 of 8 control runs made the call, 0 of 8 did
+		// with this flag. Intermittent because the CLI fires it without
+		// waiting, so a turn that finishes first never pays -- which is a
+		// reason to remove it rather than to price it, since the runs that
+		// do pay are the slow ones that were already the expensive ones.
+		//
+		// The value is not shown to anybody: no picker, no terminal title,
+		// no saved session. It exists so the CLI has an answer and skips
+		// asking a model for one.
+		"--name", "atenea-"+string(req.Role),
 	)
 	// Omitted, not zero, when the caller granted no ceiling for this call --
 	// see Request.BudgetUSD's own doc for why zero means that rather than
@@ -1416,40 +1648,12 @@ func (c claim) reported() (*float64, string) {
 // that claimed less than the whole objective. See claim.reported.
 const unnamedRemainder = "the model did not say what it did not reach"
 
-// weigh converts one usage reading into input-equivalent tokens: one number
-// that four differently-priced kinds of token can be compared against a single
-// allowance in.
-//
-// The weights are price ratios normalised to input tokens at $3/M: input x1,
-// cache creation x2 ($6/M), cache read x0.1 ($0.30/M), output x5 ($15/M). So
-// tokensPerUSD is 333,333 by construction, which is the number a caller
-// converts a dollar share with -- see Request.ReadTokens. Kept as integer
-// arithmetic, which truncates, because the figure is an ESTIMATE and rounding
-// it precisely would dress it up as something it is not.
-//
-// The cache creation weight is x2 and not the x1.25 of a 5-minute write,
-// because this CLI writes 1-hour cache entries. Measured 2026-08-14 against
-// one live turn's own receipt: `cache_creation` reported
-// ephemeral_1h_input_tokens 39,193 and ephemeral_5m_input_tokens 0, and these
-// weights reproduce the CLI's own total_cost_usd of $0.261685 to within 0.26%,
-// and a second turn's $0.536291 to within 0.14%.
-// At x1.25 the same arithmetic lands 34% low, which is a nudge that fires a
-// third of the way past where it was asked to.
-//
-// The cache weights are also the only ones that decide anything, which is not
-// obvious from the field names: measured on the same turn, `input_tokens` was
-// 2 against 32,799 cache-creation tokens, so a check written on InputTokens
-// alone would read a turn that had just spent $0.20 as having spent nothing.
-//
-// It is still an estimate, in one way that matters: the ratios are one model's,
-// and the model a turn actually ran on is whatever internal/config named. Its
-// only job is to fire the nudge early enough to leave room for an answer, and
-// being wrong by a factor makes the nudge early or late, never wrong. What the
-// turn may actually spend is still --max-budget-usd, enforced by the CLI
-// against its own arithmetic, and what the caller is told it spent is still the
-// CLI's own total -- see chargeFrom. This number is never reported to anybody.
+// weigh is the adapter to allowance.Weigh for this package's own usage
+// shape -- see allowance.Weigh for the full doc comment this moved
+// from, the measured ratios, and the receipts they were checked
+// against.
 func weigh(u usage) int {
-	return u.InputTokens + u.CacheWrite*2 + u.CacheRead/10 + u.OutputTokens*5
+	return allowance.Weigh(u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite)
 }
 
 // add returns the two usages summed, field by field -- the same arithmetic the
