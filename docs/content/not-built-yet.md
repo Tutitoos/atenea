@@ -1214,3 +1214,17 @@ it. Recorded here with the correction that produced it: this
 entry was first drafted claiming the model asserted `completeness: 1` and was rewarded for it.
 That was inference from a NULL column, and the raw result JSON falsifies it — the model asserted
 nothing. The bug is not a lie told by a model; it is a silence the system reads as a yes.
+
+**Closed 2026-08-15**, on the first of the two fixes, which turned out to be enough for the
+Done-when. `coverage()` refuses an answer that states no coverage instead of reading it as
+whole, and keeps the claim on the record when it is stated — including when it is 1, which is
+what stops a NULL from meaning two things. `reported()` clamps an over-claim to 1 rather than
+dropping it to an absence the new rule would refuse. Verified against the real binary with a
+shimmed CLI, both arms, `$0.00`: the arm that states `completeness` records `1` and verdict
+`ok`; the arm that omits it is `failed`, `invalid_input`, with the charge kept.
+
+What did **not** change, deliberately: `Requirement.satisfiedBy` still reads `Status` alone, so
+`on = "answered"` and `on = "ok"` are unchanged — the refusal moves an unauditable answer out of
+`StatusOK` before any edge sees it, which is why neither word had to be redefined. A partial
+that names where it stopped still clears both, and there is no word for "only if whole". That
+is a graph-language decision, not a defect, and it is not made here.

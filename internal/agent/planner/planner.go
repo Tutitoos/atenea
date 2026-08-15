@@ -99,14 +99,31 @@ type report struct {
 	Discovered []discovery    `json:"discovered,omitempty"`
 	Spent      *charge        `json:"spent,omitempty"`
 	// Completeness and StoppedAt carry a pass's own claim about its coverage.
-	// Both stay zero on a whole answer; coverage is the only place that fills
-	// them in, and it refuses before either is set on an answer that claims
-	// less than whole without saying where it stopped.
+	// coverage is the only place that fills them in, and it refuses before
+	// either is set on an answer that states no coverage at all, or claims
+	// less than whole without saying where it stopped. A whole answer carries
+	// the 1 it claimed rather than an absence: see coverage.
 	Completeness *float64 `json:"completeness,omitempty"`
 	StoppedAt    string   `json:"stopped_at,omitempty"`
 	// Notices are caveats that are not failures -- mirrors contract.Report's
 	// own field. A partial answer earns one naming what it did not reach.
 	Notices []string `json:"notices,omitempty"`
+}
+
+// claim writes a pass's accepted coverage onto the report, and the caveat a
+// short answer earns. The notice is for a reader of the result, who would
+// otherwise have to open two other fields to find out the answer stops early;
+// a whole answer has nothing to caveat.
+func (r *report) claim(completeness *float64, stoppedAt string) {
+	if completeness == nil {
+		return
+	}
+	r.Completeness = completeness
+	if *completeness >= 1 {
+		return
+	}
+	r.StoppedAt = stoppedAt
+	r.Notices = append(r.Notices, partialNotice(*completeness, stoppedAt))
 }
 
 type reason struct {
@@ -401,11 +418,7 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		},
 		Spent: spent(answer.Spent),
 	}
-	if completeness != nil {
-		got.Completeness = completeness
-		got.StoppedAt = stoppedAt
-		got.Notices = append(got.Notices, partialNotice(*completeness, stoppedAt))
-	}
+	got.claim(completeness, stoppedAt)
 	// What was learned outlives the commission. A note is a sentence, not a
 	// transcript: the ceiling truncates, and a truncated paragraph teaches
 	// the next run nothing.
@@ -465,11 +478,7 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		Result:  map[string]any{PlanField: out.Plan},
 		Spent:   spent(answer.Spent),
 	}
-	if completeness != nil {
-		got.Completeness = completeness
-		got.StoppedAt = stoppedAt
-		got.Notices = append(got.Notices, partialNotice(*completeness, stoppedAt))
-	}
+	got.claim(completeness, stoppedAt)
 	return got
 }
 
@@ -513,16 +522,39 @@ func unavailable(text string) report {
 // coverage turns a pass's own completeness claim into the report's fields, or
 // a refusal when the claim cannot be trusted.
 //
-// A model that answers completeness 1 (or leaves it unset) answered the whole
-// commission: nil out, nothing to carry. Below 1 it is a partial, and a
-// partial that will not say where it stopped is not auditable -- `ok` with an
-// unnamed gap reads as whole to every counter downstream of it, which is
-// worse than the empty answer the existing refusals already catch. `ok` with
-// completeness and stopped_at named is the honest shape: the harness told it
-// to answer with what it had, and it did.
+// An absent claim is refused, not defaulted. Both schemas mark `completeness`
+// required and the prompt asks for it every pass, so a turn that answers
+// without one broke a protocol it was told about twice -- and the two readings
+// available cost the same to compute and disagree about everything: read as 1,
+// a turn that stopped a fifth of the way in is recorded as a whole answer no
+// counter downstream can tell from a real one. Measured 2026-08-15: one reader
+// step of nineteen came back `ok` with `completeness` NULL, and its own summary
+// began "I cannot describe this project". Defaulting is the engine asserting
+// coverage nobody measured; a refusal costs the same turn its verdict and
+// names why.
+//
+// A stated claim is kept even when it is 1. Nil-ing it made "claimed whole"
+// and "never claimed" the same row on disk, which is why the question this
+// rule answers could not be answered from 62 stored `ok` steps: the record has
+// to distinguish a claim from its absence, or the next instance is undiagnosable
+// too. `completeness` NULL now means one thing only -- an agent type that calls
+// no model, and so makes no claim about coverage.
+//
+// Below 1 it is a partial, and a partial that will not say where it stopped is
+// not auditable -- `ok` with an unnamed gap reads as whole to every counter
+// downstream of it, which is worse than the empty answer the existing refusals
+// already catch. `ok` with completeness and stopped_at named is the honest
+// shape: the harness told it to answer with what it had, and it did.
 func coverage(a model.Answer) (completeness *float64, stoppedAt string, refusal *report) {
-	if a.Completeness == nil || *a.Completeness >= 1 {
-		return nil, "", nil
+	if a.Completeness == nil {
+		out := refused(
+			"the model answered without stating completeness, which both schemas require: "+
+				"an answer that does not say how much of the commission it covers cannot be "+
+				"told from a whole one", a.Spent)
+		return nil, "", &out
+	}
+	if *a.Completeness >= 1 {
+		return a.Completeness, "", nil
 	}
 	if strings.TrimSpace(a.StoppedAt) == "" {
 		out := refused(fmt.Sprintf(

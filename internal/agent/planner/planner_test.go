@@ -41,6 +41,15 @@ func structured(t *testing.T, v any) json.RawMessage {
 	return raw
 }
 
+// whole is a model answer in the shape both schemas require: the structured
+// payload, plus the coverage claim every pass has to state. Tests about
+// anything other than coverage go through here, so the rule that refuses an
+// answer stating none does not have to be re-typed into a dozen fixtures.
+func whole(t *testing.T, v any) model.Answer {
+	t.Helper()
+	return model.Answer{Structured: structured(t, v), Completeness: usd(1)}
+}
+
 func withTools(c caller) deps {
 	return deps{client: c, tools: func() (string, error) { return "/tmp/mcp.json", nil }}
 }
@@ -86,13 +95,12 @@ func exploration() map[string]any {
 // ---- the exploration half -------------------------------------------------
 
 func TestAnExplorationComesBackAsSummaryAndFindings(t *testing.T) {
-	c := &stub{answer: model.Answer{
-		Structured: structured(t, map[string]string{
-			"summary":  "the settings load in one place",
-			"findings": "config.Load reads the file. ReadFile parses the graph.",
-		}),
-		Spent: charged(),
-	}}
+	answer := whole(t, map[string]string{
+		"summary":  "the settings load in one place",
+		"findings": "config.Load reads the file. ReadFile parses the graph.",
+	})
+	answer.Spent = charged()
+	c := &stub{answer: answer}
 	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
 
 	if got.Verdict != "ok" {
@@ -107,10 +115,10 @@ func TestAnExplorationComesBackAsSummaryAndFindings(t *testing.T) {
 }
 
 func TestAnExplorationsFindingsBecomeDiscoveries(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"summary":  "one place",
 		"findings": "First fact here. Second fact here. Third fact here. Fourth fact here.",
-	})}}
+	})}
 	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
 
 	if len(got.Discovered) == 0 {
@@ -148,9 +156,9 @@ func TestAnExplorerWithNoServiceIsUnavailableNotFailed(t *testing.T) {
 }
 
 func TestAnEmptyExplorationIsRefused(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"summary": "", "findings": "",
-	})}}
+	})}
 	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
 
 	if got.Verdict != "failed" {
@@ -191,9 +199,9 @@ func TestATurnThatDiedStillReportsWhatItSpent(t *testing.T) {
 // ---- the planning half ----------------------------------------------------
 
 func TestAPlanIsReturnedAsTOMLText(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"plan": "[[step]]\nid = \"read-a\"\n",
-	})}}
+	})}
 	got := plan(context.Background(), planAssignment("ok", exploration()), config.Config{}, withTools(c))
 
 	if got.Verdict != "ok" {
@@ -234,7 +242,7 @@ func TestPlanningOnARejectedExplorationIsRefusedBeforeTheModel(t *testing.T) {
 }
 
 func TestAnEmptyPlanIsRefused(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{"plan": "   "})}}
+	c := &stub{answer: whole(t, map[string]string{"plan": "   "})}
 	got := plan(context.Background(), planAssignment("ok", exploration()), config.Config{}, withTools(c))
 
 	if got.Verdict != "failed" {
@@ -243,7 +251,7 @@ func TestAnEmptyPlanIsRefused(t *testing.T) {
 }
 
 func TestThePlannerIsToldWhatTheExplorationFound(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{"plan": "[[step]]"})}}
+	c := &stub{answer: whole(t, map[string]string{"plan": "[[step]]"})}
 	plan(context.Background(), planAssignment("ok", exploration()), config.Config{}, withTools(c))
 
 	if !strings.Contains(c.seen.Prompt, "config.Load reads atenea.toml") {
@@ -254,9 +262,9 @@ func TestThePlannerIsToldWhatTheExplorationFound(t *testing.T) {
 // ---- the grant ------------------------------------------------------------
 
 func TestTheGrantedShareReachesTheModel(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"summary": "s", "findings": "f",
-	})}}
+	})}
 	in := exploreAssignment()
 	in.BudgetUSD = usd(0.75)
 	explore(context.Background(), in, config.Config{}, withTools(c))
@@ -273,9 +281,9 @@ func TestTheGrantedShareReachesTheModel(t *testing.T) {
 // hold back the rest, denominated in tokens because those are what the CLI
 // reports as it goes.
 func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"summary": "s", "findings": "f",
-	})}}
+	})}
 	in := exploreAssignment()
 	grant := 0.80
 	in.BudgetUSD = usd(grant)
@@ -287,9 +295,9 @@ func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
 }
 
 func TestAnUngrantedRunPassesNoCeiling(t *testing.T) {
-	c := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	c := &stub{answer: whole(t, map[string]string{
 		"summary": "s", "findings": "f",
-	})}}
+	})}
 	in := exploreAssignment() // BudgetUSD nil: nobody granted money
 	explore(context.Background(), in, config.Config{}, withTools(c))
 
@@ -377,21 +385,68 @@ func TestAPartialAnswerWithNoStoppedAtIsRefused(t *testing.T) {
 	}
 }
 
-func TestAWholeAnswerIsAPlainOKWithNoCompletenessAndNoNotice(t *testing.T) {
-	c := &stub{answer: model.Answer{
-		Structured:   structured(t, map[string]string{"summary": "s", "findings": "f"}),
-		Completeness: usd(1),
-	}}
+// A whole answer records the 1 it claimed, and earns no caveat. The figure is
+// kept rather than nil'd because absence has to mean one thing: no model was
+// asked. Measured 2026-08-15: 62 stored `ok` steps could not answer whether a
+// NULL was a claim of whole or a claim never made, because this is where the
+// two became the same row.
+func TestAWholeAnswerRecordsTheClaimAndEarnsNoNotice(t *testing.T) {
+	c := &stub{answer: whole(t, map[string]string{"summary": "s", "findings": "f"})}
 	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
 
 	if got.Verdict != "ok" {
 		t.Fatalf("verdict = %q (%s), want ok", got.Verdict, reasonOf(got))
 	}
-	if got.Completeness != nil {
-		t.Errorf("completeness = %v, want nil on a whole answer", got.Completeness)
+	if got.Completeness == nil || *got.Completeness != 1 {
+		t.Errorf("completeness = %v, want the 1 the model claimed", got.Completeness)
+	}
+	if got.StoppedAt != "" {
+		t.Errorf("stopped_at = %q, want empty on a whole answer", got.StoppedAt)
 	}
 	if len(got.Notices) != 0 {
 		t.Errorf("notices = %v, want none", got.Notices)
+	}
+}
+
+// An answer that states no coverage at all is refused rather than read as
+// whole. Both schemas mark the field required, so this is a protocol failure
+// on a turn already paid for -- and the alternative reading is the engine
+// asserting completeness nobody measured.
+func TestAnAnswerThatStatesNoCompletenessIsRefused(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured: structured(t, map[string]string{"summary": "s", "findings": "f"}),
+		Spent:      charged(),
+	}}
+	got := explore(context.Background(), exploreAssignment(), config.Config{}, withTools(c))
+
+	if got.Verdict != "failed" {
+		t.Fatalf("verdict = %q, want failed on an answer that claims no coverage", got.Verdict)
+	}
+	if got.Completeness != nil {
+		t.Errorf("completeness = %v, want nil on a refusal", got.Completeness)
+	}
+	for _, want := range []string{"without stating completeness", "cannot be told from a whole one"} {
+		if !strings.Contains(reasonOf(got), want) {
+			t.Errorf("reason = %q, want it to mention %q", reasonOf(got), want)
+		}
+	}
+	if got.Spent == nil {
+		t.Error("a refused answer threw away the charge the turn really cost")
+	}
+}
+
+// The same rule on the planning half: one refusal, one place, both protocols.
+func TestAPlanThatStatesNoCompletenessIsRefused(t *testing.T) {
+	c := &stub{answer: model.Answer{
+		Structured: structured(t, map[string]string{"plan": "task = \"x\"\n"}),
+	}}
+	got := plan(context.Background(), planAssignment("ok", exploration()), config.Config{}, withTools(c))
+
+	if got.Verdict != "failed" {
+		t.Fatalf("verdict = %q, want failed", got.Verdict)
+	}
+	if !strings.Contains(reasonOf(got), "without stating completeness") {
+		t.Errorf("reason = %q", reasonOf(got))
 	}
 }
 
@@ -422,10 +477,10 @@ func reasonOf(r report) string {
 // three explorations of a real repository spent $1.87 and 1.05M tokens and
 // dispatched zero capabilities, because Grep and Bash sat beside them.
 func TestTheExplorerIsGivenReadingToolsAndNotSearchingOnes(t *testing.T) {
-	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	s := &stub{answer: whole(t, map[string]string{
 		"summary":  "the settings are read in internal/config",
 		"findings": "config.Load reads the file named by ATENEA_CONFIG.",
-	})}}
+	})}
 
 	if got := explore(t.Context(), exploreAssignment(), config.Config{}, withTools(s)); got.Verdict != "ok" {
 		t.Fatalf("verdict = %q, want ok: %+v", got.Verdict, got)
@@ -454,9 +509,9 @@ func TestTheExplorerIsGivenReadingToolsAndNotSearchingOnes(t *testing.T) {
 // would let it plan from a second, unrecorded look at the code -- and the
 // exploration on the record would no longer be what the graph came from.
 func TestThePlannerIsGivenNoToolsAtAll(t *testing.T) {
-	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	s := &stub{answer: whole(t, map[string]string{
 		"plan": "task = \"x\"\nbudget_usd = 1.0\n",
-	})}}
+	})}
 	in := exploreAssignment()
 	in.Type = "plan"
 	in.Subject = &subject{Verdict: "ok", Result: map[string]any{
@@ -478,10 +533,10 @@ func TestThePlannerIsGivenNoToolsAtAll(t *testing.T) {
 // the definitions of tools most steps never call. The whole saving is the
 // --mcp-config that is not there, so its absence is the assertion.
 func TestAReaderIsGivenNoCapabilitiesAndTheSameReadingTools(t *testing.T) {
-	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	s := &stub{answer: whole(t, map[string]string{
 		"summary":  "the settings are read in internal/config",
 		"findings": "config.Load reads the file named by ATENEA_CONFIG.",
-	})}}
+	})}
 
 	if got := reader(t.Context(), exploreAssignment(), config.Config{}, withTools(s)); got.Verdict != "ok" {
 		t.Fatalf("verdict = %q, want ok: %+v", got.Verdict, got)
@@ -513,9 +568,9 @@ func TestAReaderIsGivenNoCapabilitiesAndTheSameReadingTools(t *testing.T) {
 // is down -- for a socket whose only purpose is the catalog this type
 // deliberately does not carry.
 func TestAReaderNeverAsksForTheCapabilitiesItDoesNotCarry(t *testing.T) {
-	s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+	s := &stub{answer: whole(t, map[string]string{
 		"summary": "one place", "findings": "config.Load reads it.",
-	})}}
+	})}
 	d := deps{client: s, tools: func() (string, error) {
 		t.Error("the reader dialed the service for tools it is not given")
 		return "", contract.Fail(contract.FailureUnavailable, "no atenea service is listening")
@@ -534,9 +589,9 @@ func TestAReaderNeverAsksForTheCapabilitiesItDoesNotCarry(t *testing.T) {
 func TestEveryTurnAsksForTheSurfaceItsTypeDeclares(t *testing.T) {
 	for name, run := range map[string]turn{"explore": explore, "reader": reader, "plan": plan} {
 		t.Run(name, func(t *testing.T) {
-			s := &stub{answer: model.Answer{Structured: structured(t, map[string]string{
+			s := &stub{answer: whole(t, map[string]string{
 				"summary": "s", "findings": "f", "plan": "task = \"x\"\n",
-			})}}
+			})}
 			in := planAssignment("ok", exploration())
 			in.Type = name
 			if got := run(t.Context(), in, config.Config{}, withTools(s)); got.Verdict != "ok" {

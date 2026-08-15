@@ -381,6 +381,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **An answer that stated no coverage was recorded as a whole one.** Both
+  schemas mark `completeness` required and the provider does not enforce it:
+  four fields were demanded and two arrived, on a step that came back `ok`
+  while its own summary began "I cannot describe this project". `coverage`
+  read absent and "claimed 1" through the same branch, so the silence was
+  stored as success and cleared every `on = "ok"` edge downstream. It is now a
+  refusal — `invalid_input`, with the turn's charge kept — and a stated claim
+  is written to the record even when it is 1, so `completeness` NULL means one
+  thing only: an agent type that calls no model. An over-claim above 1 is
+  clamped to whole rather than dropped, since dropping it would refuse a turn
+  for saying nothing when it said too much. `2 of 210` stored steps carried the
+  field; every model-backed step now does or is refused.
+
 - **The rescuable threshold charged every step for a cache write that happens
   once, and refused ten of eighteen adequately funded steps as a result.** The
   rule shipped hours earlier weighed a turn's first assistant event

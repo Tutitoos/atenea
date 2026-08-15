@@ -1620,12 +1620,15 @@ func (c claim) complete() bool {
 // reported is what a claim becomes on an Answer: a fraction and the remainder
 // it implies, or neither.
 //
-// A figure is kept only when it is a fraction -- above 0, at most 1, the
-// range pkg/contract's Report accepts. Anything else is dropped to unclaimed
-// rather than repaired into range, because a number outside it is not a
-// measurement of this: above 1 already means "whole", which is what an absent
-// completeness reads as, and at or below 0 claims there is no answer next to
-// an answer there is.
+// An over-claim is clamped to 1 rather than dropped. Above 1 already means
+// "whole" -- complete() ends a turn on `>= 1` for the same reason -- and
+// dropping it would hand the caller an absence, which is the one reading that
+// is not a measurement of anything: the planner refuses an answer that states
+// no coverage, so a model saying "1.2" would be refused for saying nothing.
+//
+// At or below 0 stays nil, and is refused upstream: a claim of no coverage
+// beside an answer there is contradicts itself, and pkg/contract's Report
+// accepts (0, 1] for the same reason.
 //
 // What is never dropped is a partial answer's remainder. A pass claiming less
 // than the whole objective and naming nothing it missed would build a Report
@@ -1634,10 +1637,10 @@ func (c claim) complete() bool {
 // did not name: badly, but at all.
 func (c claim) reported() (*float64, string) {
 	stoppedAt := strings.TrimSpace(c.StoppedAt)
-	if c.Completeness == nil || *c.Completeness <= 0 || *c.Completeness > 1 {
+	if c.Completeness == nil || *c.Completeness <= 0 {
 		return nil, stoppedAt
 	}
-	covered := *c.Completeness
+	covered := min(*c.Completeness, 1)
 	if covered < 1 && stoppedAt == "" {
 		stoppedAt = unnamedRemainder
 	}

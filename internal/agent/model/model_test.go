@@ -1131,14 +1131,14 @@ func TestAPartialAnswerAlwaysNamesWhatItMissed(t *testing.T) {
 	}
 }
 
-// A figure outside (0, 1] is not a measurement of this, and repairing it into
-// range would report coverage nobody has. It reads as unclaimed instead.
-func TestACompletenessThatIsNotAFractionIsUnclaimed(t *testing.T) {
+// At or below zero is not a measurement of an answer that exists, and
+// repairing it into range would report coverage nobody has. It reads as
+// unclaimed, which the planner refuses rather than reads as whole.
+func TestACompletenessAtOrBelowZeroIsUnclaimed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		structure string
 	}{
-		{"above one", `{"findings":"a","completeness":1.7,"stopped_at":""}`},
 		{"zero", `{"findings":"a","completeness":0,"stopped_at":"everything"}`},
 		{"negative", `{"findings":"a","completeness":-1,"stopped_at":"everything"}`},
 		{"absent", `{"findings":"a"}`},
@@ -1159,6 +1159,26 @@ func TestACompletenessThatIsNotAFractionIsUnclaimed(t *testing.T) {
 					answer.Passes)
 			}
 		})
+	}
+}
+
+// An over-claim is the one out-of-range figure that says something: above 1
+// means whole, which is exactly what complete() ends a turn on. It is clamped
+// rather than dropped, because dropping it would hand the planner an absence
+// and get the turn refused for saying nothing when it said too much.
+func TestAnOverClaimIsClampedToWhole(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		passEvent(0.02, 100, `{"findings":"a","completeness":1.7,"stopped_at":""}`),
+	}, "", 0)
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 1 {
+		t.Fatalf("Completeness = %v, want 1", answer.Completeness)
+	}
+	if answer.StoppedAt != "" {
+		t.Errorf("StoppedAt = %q, want empty: a whole answer reached everything", answer.StoppedAt)
 	}
 }
 
