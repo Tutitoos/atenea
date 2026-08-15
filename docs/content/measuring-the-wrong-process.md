@@ -1116,6 +1116,70 @@ tests held the corrections in place and caught two regressions during the fix.
 A fixture is a fine way to *keep* behaviour that has been observed. It is not a
 way to *learn* it, and the failure here was using it for the second.
 
+## A seventeenth instrument: a parent that no longer governed what it still named
+
+The page describing this failure was, for one turn, itself a casualty of it.
+Told to add an entry here, the first search run was a filename glob for
+`*instrument*` under the repository root. It matched nothing, because it was
+answering the wrong question — not "does a file about this exist" but "does a
+file *named* this exist" — and this directory names files for what happened,
+not what they are about: `not-built-yet.md`, `what-a-capability-is-worth.md`,
+and this one, titled *When the instrument is the bug* and never once spelling
+the word in its own filename, though it spells it a dozen times in the prose.
+A glob built to match a name cannot find a file whose name was never built
+that way, however many times the word it is chasing appears inside. `ls
+docs/content/` — one call, twelve files — would have settled it immediately;
+it was not tried until asked why the first attempt had failed. This is lesson
+10 wearing a different sentence: there, a number's *shape* was measured
+before its *source* was confirmed, a refresh rate read off a cache mistaken
+for the origin. Here, a *shape* — a naming pattern — was searched for before
+its *source*, one real filename in the directory, was ever looked at. The
+page stating that lesson was findable in one call, and went unfound, by the
+same move the lesson describes.
+
+Measured 2026-08-15, checking whether Atenea's `agent-device` allow-list gates the
+process doing the work, or only the process standing in front of it.
+
+The first check almost repeated the page's oldest mistake. Two earlier phases in
+the same session had each restarted `atenea.service` once, and a restart mints a
+new incarnation of every process the service owns, its per-client MCP bridges
+included. Asked to confirm the bridge was still alive, the obvious move was
+`ps -p` against a pid recorded after the session's first restart — already
+superseded by its second. It returned nothing: a result indistinguishable, read
+cold, from "not running." It meant the opposite. `pgrep -af 'agent-device mcp'`
+found the current one, 783943, alongside a second bridge, 2018103, spawned the
+day before by an unrelated session and never gated by anything.
+
+The second reading was subtler, because nothing about it would ever time out or
+come back empty. The device work is done by neither bridge: both discover a
+single long-lived daemon, pid 225716, through a lock file at
+`~/.agent-device/daemon.json`, and reuse it rather than starting their own. `ps`
+reports the daemon's parent as 2018103 — the stray bridge. Read as "the bridge
+governs the daemon," that is false, and has been false since the daemon started:
+it calls `setsid()` at launch, measured the same week, taking its own process
+group and session for the specific purpose of surviving whatever spawned it.
+`ps` was not lying — 2018103 really was 225716's parent at fork time, and stays
+the value in that column for exactly as long as 2018103 remains alive to hold
+it. **A `ppid` records who forked a process, not who governs it now, and the
+two facts look identical for as long as the fork-time parent happens not to
+have died** — the same gap lesson 1 closed from the other side, where the
+column was the tell instead of the trap.
+
+What actually bounds the daemon is the allow-list at the one gate it is reached
+through, and nowhere else. Atenea's `tools = ["devices", "boot", "open",
+"snapshot", "click", "find"]` narrows what Atenea's own clients can ask this
+daemon to do. It says nothing about the daemon's own surface — the full CLI
+carries `press`, `type`, `fill`, `settle`, and more — nothing about a bridge
+spawned outside Atenea entirely, and nothing about anyone on the host who can
+read the bearer token sitting next to the pid in `daemon.json`. Same shape as
+14, one layer over: a boundary measured at one hop describes that hop.
+
+Not measured, and filed as such: whether the daemon does anything beyond
+`setsid()` to survive its parent — polls for it, ignores it entirely, was never
+asked to care — is unknown. Its source is rollup output, single-letter
+bindings, no line attributable to a decision either way. The finding stands on
+a syscall confirmed live, not on a reading of code that could not be read.
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -1326,6 +1390,24 @@ way to *learn* it, and the failure here was using it for the second.
     So call the real thing once before writing the fixtures down — the envelopes
     took five minutes to print and made all four defects unwriteable. Fixtures
     are how you *keep* behaviour you have observed, never how you *learn* it.
+
+22. **A `ppid` records who forked a process, not who governs it.** The two
+    facts coincide only until the fork-time parent dies or the child calls
+    `setsid()`, and neither event rewrites the column — it goes on reporting
+    an accurate, irrelevant answer for as long as the original parent happens
+    to still be alive. A daemon measured 2026-08-15 still showed a disposable,
+    stray bridge as its parent more than a day after calling `setsid()` at
+    launch, because nothing had yet killed that bridge to make the column
+    catch up. It was killed later, for a reason that had nothing to do with
+    this finding — clearing the stray session it belonged to — and the column
+    updated within the same second, unprompted: `ppid` read 2018103
+    immediately before the signal and 1638 immediately after, with nothing
+    else about the daemon's own state disturbed. The lesson did not need a
+    second measurement to hold. It got one anyway, live, in the middle of
+    doing something else. Read a `ppid` for what forked a process. For what
+    currently holds it, read the process group and session it actually runs
+    under, or better, an explicit lifecycle contract — not a column that was
+    last true at fork time and has not been asked again since.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
