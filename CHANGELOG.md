@@ -462,6 +462,17 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A run's balance counted only the live attempt, so it read high after a redo.**
+  `workflow_step` holds exactly one attempt: re-dispatching a step overwrites the
+  row and files the old one in `workflow_attempt`, where `Run.Spend` could not see
+  it. Measured 2026-08-16 on the first real redo — the report said `$6.70 spent,
+  $2.30 left` of a `$9.00` grant while `$7.3231` had gone. `Load` now carries the
+  archive on `Run.Superseded` and `Spend` totals it as `SupersededUSD`, held apart
+  from the step figures because an attempt is not a step and `CostByType` must not
+  double-count the step it belongs to. The line reads `$7.32 spent, $0.62 of it on
+  1 attempt a redo replaced, $1.68 left`. A balance that reads high is the one
+  direction of this that matters: it is what a person checks before authorizing
+  another step. Introduced the same day by the archive that makes a redo auditable.
 - **`atenea floor measure` no longer quotes a price 1.9x to 9.8x below what the
   turn it is about to spend costs.** The notice named the STORED floor, which is
   by construction the prefix's slice of a receipt that also paid for the block

@@ -2215,6 +2215,62 @@ defaults.
 | **total** | **$0.31** | **$1.09** |
 
 
+## A thirty-seventh instrument: re-running a known failure, which is the only way to price one
+
+Measured 2026-08-16. Nineteen steps, four dead at their ceiling, and the admission rule
+built the day before reads `CostByType` — a median over rows that **succeeded**. So it was
+derived entirely from the population that never needed it. The only instrument that can
+price a failure is the failure, run again at a share big enough to finish.
+
+One step was bought, not four: `admin-config`, at `$0.90` against the `$0.45` it died on.
+It was the informative one because its bill was the one nothing explained — `$0.6182`
+recorded against `1,416` cache-write and `4,772` cache-read, which the recovered price list
+puts at `$0.0204`. **30x**, carried for a day as an unidentified discriminator.
+
+**It finished, at `$0.6756`.** Three things fell out of one turn.
+
+**The share it needed was 1.51x the one it had.** Not 1.05x, and not 3x. It died having
+spent `$0.6182` of `$0.45` — already 1.37x over, because the ceiling overshoots — and
+finishing cost `$0.6756`. A reader of the dead row would have concluded the step was nearly
+done; a reader of the fifteen successful rows (`$0.20`-`$0.41`) would have concluded `$0.45`
+was generous. Both readings were available yesterday and both are wrong. The number is
+**$0.68**, and nothing but running it could have said so.
+
+**The 30x was the killed-turn accounting defect, seen from the other side.** Priced lane by
+lane against the list:
+
+| attempt | share | recorded | tokens | list price | ratio |
+|---|---|---|---|---|---|
+| 1, cut | $0.45 | $0.6182 | 2 in, 152 out, 4,772 read, 1,416 written | $0.0204 | **30.37x** |
+| 2, ok | $0.90 | $0.6756 | 4 in, 5,318 out, 0 read, **54,264 written** | $0.6756 | **1.00x** |
+
+The live attempt prices to **1.00x — exact, to four decimals**. The dead one kept 1,416
+written tokens where the same step, doing the same reading, wrote 54,264. Its dollars were
+always real; its token record was missing 97% of what it read. That is precisely the
+`conversation.charge` defect fixed earlier the same day, and this is its **first
+verification on a live turn** rather than on a replayed stream or a mutation. There was
+never a second price, a hidden overhead, or an anomalous row: there was a receipt whose
+usage the client dropped on the way to the record.
+
+**And the redo exposed a balance that read high.** The run reported `$6.70 spent, $2.30
+left` of `$9.00` — while `$7.3231` had gone. `workflow_step` holds exactly one attempt, so
+overwriting the row moved the dead `$0.62` into `workflow_attempt`, where `Run.Spend` could
+not see it. **Fixed**: `Load` carries the archive, `Spend` totals it apart from the step
+figures (an attempt is not a step, and `CostByType` must not double-count), and the line now
+reads `$7.32 spent, $0.62 of it on 1 attempt a redo replaced, $1.68 left`.
+
+A balance that reads **high** is the one direction of this error that matters: it is what a
+person checks before authorizing the next step. It was introduced the same day, by the
+archive that makes redo auditable at all — the fix and the defect arrived in the same
+commit, four hours apart.
+
+**What is still unpriced.** Three ceiling deaths remain (`census`, `drivers-mod`,
+`sentry-mod`, `$0.49`-`$0.54` on `$0.45`), all three genuine large readers: 124k-180k
+cache-read against `admin-config`'s 4,772. Whether 1.51x generalises from the one step whose
+bill was anomalous to the three whose bills were ordinary is exactly the question one
+measurement cannot answer, and saying so is cheaper than implying it did.
+
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -2629,6 +2685,17 @@ defaults.
     default spends and a notice that reads like a gate and is not one. Every
     other entry on this page measures a system; this one measured the estimate,
     which no earlier entry had thought to treat as a measurement at all.
+41. **A rule derived from what succeeded has never seen what it exists to refuse.**
+    The admission rule's median comes from `CostByType`, which excludes killed
+    rows because their spend is a lower bound -- so every threshold on this page
+    was fitted to the population that never needed one. One re-dispatch settled
+    what a day of reasoning could not: the step needed **1.51x** the share it
+    died on, where its own dead row implied "nearly done" and the fifteen
+    successful rows implied "already generous". The same turn retired a 30x
+    anomaly (it was the killed-turn usage defect, and the live attempt priced to
+    1.00x) and exposed a balance reading $0.62 high. Re-running a known failure
+    costs one share and is the only instrument that observes the failure mode; a
+    median over survivors is a description of survival.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

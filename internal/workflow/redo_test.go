@@ -389,3 +389,74 @@ func TestARunWithATruncatedRowSaysItsTokenCountIsAFloor(t *testing.T) {
 		t.Errorf("a whole run hedges its token count:\n%s", got)
 	}
 }
+
+// The figures are the first real redo, 2026-08-16: admin-config died at $0.6182
+// on a $0.45 share, was re-dispatched at $0.90 and finished at $0.6756. The live
+// rows then summed to $6.7049 of a $9.00 grant while $7.3231 had been spent.
+//
+// A balance that reads HIGH is the one shape of this error that matters: it is
+// what a person checks before authorizing another step.
+func TestABalanceCountsTheAttemptsARedoReplaced(t *testing.T) {
+	dead, live, others := 0.6182, 0.6756, 6.0293
+	run := workflow.Run{GrantUSD: 9.00, Steps: []workflow.StepRow{
+		{Spent: contract.Charge{
+			InputTokens: 4, OutputTokens: 5_318, CacheWriteTokens: 54_264,
+			USD: &live, PricedBy: "a test",
+		}},
+		{Spent: contract.Charge{
+			InputTokens: 100, OutputTokens: 100, USD: &others, PricedBy: "a test",
+		}},
+	}, Superseded: []workflow.AttemptRow{
+		{StepID: "admin-config", Attempt: 1, GrantUSD: 0.45,
+			Spent: contract.Charge{
+				InputTokens: 2, OutputTokens: 152, CacheReadTokens: 4_772,
+				CacheWriteTokens: 1_416, USD: &dead, PricedBy: "a test",
+			}},
+	}}
+	spend := run.Spend()
+	if spend.SupersededAttempts != 1 {
+		t.Fatalf("SupersededAttempts = %d, want 1", spend.SupersededAttempts)
+	}
+	if got := spend.SupersededUSD; got < 0.617 || got > 0.619 {
+		t.Errorf("SupersededUSD = %v, want $0.6182", got)
+	}
+	// The step totals must NOT absorb it: two steps ran, whatever the archive
+	// holds, and every per-step figure downstream reads these.
+	if spend.MeasuredSteps != 2 {
+		t.Errorf("MeasuredSteps = %d, want 2 -- an attempt is not a step", spend.MeasuredSteps)
+	}
+	if got, want := spend.Tokens, 4+5_318+54_264+200; got != want {
+		t.Errorf("Tokens = %d, want %d -- the archive contributes no tokens", got, want)
+	}
+	if got := *spend.USD; got < 6.704 || got > 6.706 {
+		t.Errorf("Spend.USD = %v, want $6.7049 -- the live rows alone", got)
+	}
+	line := run.Budget()
+	for _, want := range []string{
+		"$7.32 spent", // not $6.70
+		"$0.62 of it on 1 attempt a redo replaced",
+		"$1.68 left", // not $2.30
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the budget line does not say %q:\n%s", want, line)
+		}
+	}
+	if strings.Contains(line, "$2.30 left") {
+		t.Errorf("the balance still omits the archive:\n%s", line)
+	}
+}
+
+// A run nobody redid must read exactly as it did before the archive existed.
+func TestABalanceOnARunNobodyRedidSaysNothingAboutAttempts(t *testing.T) {
+	usd := 0.50
+	run := workflow.Run{GrantUSD: 1.00, Steps: []workflow.StepRow{
+		{Spent: contract.Charge{InputTokens: 10, USD: &usd, PricedBy: "a test"}},
+	}}
+	line := run.Budget()
+	if !strings.Contains(line, "$0.50 spent") || !strings.Contains(line, "$0.50 left") {
+		t.Errorf("the budget line changed for a run with no archive:\n%s", line)
+	}
+	if strings.Contains(line, "redo replaced") {
+		t.Errorf("the line mentions a redo that never happened:\n%s", line)
+	}
+}

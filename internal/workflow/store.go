@@ -137,6 +137,16 @@ type Run struct {
 	// this right now.
 	WriterPID int
 	Steps     []StepRow
+	// Superseded is every dispatch a later attempt replaced, oldest first.
+	//
+	// It is on the Run rather than left to a caller who asks for it because
+	// the money it carries is the run's money: a redo overwrites the live
+	// row, so without this the sum over Steps is smaller than what the grant
+	// actually paid for. Measured 2026-08-16 on the first real redo: the
+	// report said "$6.70 spent, $2.30 left" of a $9.00 grant while $7.32 had
+	// gone -- the archived attempt's $0.62 was invisible to the only line
+	// that reports a balance.
+	Superseded []AttemptRow
 }
 
 // StepRow is one node of the graph as the record holds it: the declaration,
@@ -253,9 +263,17 @@ type Spend struct {
 	// because Tokens is a lower bound while any of them exist, and a total
 	// that cannot say so is the same lie in a different column.
 	TruncatedSteps int
-	Tokens         int
-	USD            *float64
-	PricedBy       []string
+	// SupersededAttempts and SupersededUSD are the dispatches a redo replaced
+	// and what they cost. Held apart from the step totals on purpose: a
+	// superseded attempt is not a step, and folding it into MeasuredSteps
+	// would double-count the step it belongs to in every per-step figure that
+	// reads this -- CostByType and the admission rule among them. It is money
+	// the grant paid all the same, so a balance that omits it is wrong.
+	SupersededAttempts int
+	SupersededUSD      float64
+	Tokens             int
+	USD                *float64
+	PricedBy           []string
 }
 
 // AttemptRow is a dispatch of a step that a later one replaced.
@@ -319,6 +337,18 @@ func (r Run) Spend() Spend {
 		}
 		usd += *step.Spent.USD
 		labels[step.Spent.PricedBy] = true
+	}
+	// The archive contributes dollars and never tokens: an attempt that was
+	// cut kept a token record its own receipt already contradicts (measured
+	// 2026-08-16: $0.62 against $0.02 of tokens, 30x), so adding those counts
+	// to a total would import the error the live rows were fixed of.
+	for _, attempt := range r.Superseded {
+		if attempt.Spent.USD == nil {
+			continue
+		}
+		out.SupersededAttempts++
+		out.SupersededUSD += *attempt.Spent.USD
+		labels[attempt.Spent.PricedBy] = true
 	}
 	if out.MeasuredSteps > 0 && fullyPriced {
 		out.USD = &usd
@@ -925,6 +955,21 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	if err := rows.Err(); err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
 	}
+	// Closed before the next query rather than at return: the archive read
+	// below would otherwise hold a second connection open for the length of
+	// this one, and WAL only makes that work, not free.
+	if err := rows.Close(); err != nil {
+		return Run{}, unavailable(err, "workflow: reading %s steps", id)
+	}
+	// The archive is read here rather than left to a caller who remembers to
+	// ask, because Run.Spend is the only place a balance comes from and it
+	// cannot see money it was not handed. Empty for every run nobody redid,
+	// which is almost all of them -- one indexed lookup on workflow_id.
+	superseded, err := s.Attempts(ctx, id, "")
+	if err != nil {
+		return Run{}, err
+	}
+	out.Superseded = superseded
 	return out, nil
 }
 

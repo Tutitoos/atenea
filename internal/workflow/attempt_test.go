@@ -150,6 +150,28 @@ func TestTheReplacedAttemptIsRecoverable(t *testing.T) {
 	}
 }
 
+// Load has to hand the archive over, because Run.Spend is where a balance comes
+// from and it cannot total money it was never given. Asserted through Budget
+// rather than by reading the field: the wrong balance is what a person acts on.
+func TestALoadedRunCarriesTheAttemptsItsBalanceNeeds(t *testing.T) {
+	store := attemptStore(t)
+	twoAttempts(t, store, "wf-1")
+
+	run, err := store.Load(t.Context(), "wf-1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(run.Superseded) != 1 {
+		t.Fatalf("Superseded = %d attempts, want 1 -- Load did not read the archive", len(run.Superseded))
+	}
+	if got := run.Spend().SupersededUSD; got != 0.62 {
+		t.Errorf("SupersededUSD = %v, want 0.62", got)
+	}
+	if line := run.Budget(); !strings.Contains(line, "a redo replaced") {
+		t.Errorf("the balance does not name the replaced attempt:\n%s", line)
+	}
+}
+
 // The store is not the actor. The engine is what re-claims, so the archive has
 // to be filed on the path the engine actually walks -- Resume with --redo,
 // through the same Claim the dispatch loop calls -- and not only on a sequence

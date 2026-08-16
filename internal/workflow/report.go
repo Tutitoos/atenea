@@ -223,10 +223,23 @@ func (r Run) Budget() string {
 	}
 	detail := tokens + " spent"
 	if spend.USD != nil {
+		// The balance counts the archive. A redo overwrites the live row, so
+		// the sum over steps is what the CURRENT attempts cost, and a grant
+		// pays for every attempt it funded. Measured 2026-08-16 on the first
+		// real redo: $6.70 over the live rows, $0.62 in the archive, against
+		// a $9.00 grant -- the line said "$2.30 left" where $1.68 was left,
+		// and a balance that reads high is the one shape of this error that
+		// authorizes more spending.
+		charged := *spend.USD + spend.SupersededUSD
 		detail = fmt.Sprintf("%s and $%.2f spent (priced by %s)",
-			tokens, *spend.USD, strings.Join(spend.PricedBy, ", "))
+			tokens, charged, strings.Join(spend.PricedBy, ", "))
+		if spend.SupersededAttempts > 0 {
+			detail += fmt.Sprintf(", $%.2f of it on %s a redo replaced",
+				spend.SupersededUSD,
+				plural(spend.SupersededAttempts, "attempt", "attempts"))
+		}
 		if spend.UnmeasuredSteps == 0 {
-			detail += fmt.Sprintf(", $%.2f left", r.GrantUSD-*spend.USD)
+			detail += fmt.Sprintf(", $%.2f left", r.GrantUSD-charged)
 		}
 	}
 	if spend.TruncatedSteps > 0 {
