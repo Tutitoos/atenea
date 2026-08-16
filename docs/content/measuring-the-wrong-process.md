@@ -421,13 +421,9 @@ worth less than a documented one. The retained `proxy.log` set, which does recor
 raw user-agents, only reaches back to 2026-07-30 10:20 — the 344 rows from 07-26
 and 07-29 have no evidence behind them at all.
 
-Two clients are still unnamed on the wire, each for its own reason, and neither
-is an oversight:
+One of two clients unnamed on the wire when this entry was first written crossed over on
+2026-08-16. The other stays out for the reason already given:
 
-- **codex** speaks the OpenAI protocol. `POST /v1/responses` on the proxy answers
-  `401`, not `404`, so the route exists and is ChatGPT-session aware — but that
-  path is annotated *always routes direct*, and codex has never been pointed at
-  it here. Untried, not unsupported.
 - **OpenCode** is out of the traffic path deliberately. Routing it is not a
   transport change: its `anthropic` provider is a loopback marker for an
   in-process bridge, so the only real target is the `headroom` provider already
@@ -435,9 +431,29 @@ is an oversight:
   4.6-era model names. That swaps the claude_max subscription session for
   metered billing. A provider decision wearing a transport decision's clothes.
 
-Until either sends `x-client`, `claude-code` remains the fallback for anything
-wearing that SDK profile, and the column should be read as "the Claude CLI wire",
-not "the Claude Code product".
+**codex**, routed as of 2026-08-16, earns a row beside the two clients already tracked above
+rather than another bullet — what is known and what is not, stated once instead of scattered:
+
+| client | routed since | auth confirmed | compression on real work | counting caveat |
+|---|---|---|---|---|
+| Claude Code | already routed when this page opens | `x-client: claude-code` header, read on the wire (above) | active — see the eighth instrument; decays as context grows | one row per Messages call |
+| omp | 2026-08-13 | `x-client: omp` header, read on the wire (above) | active, but tool-search deferral makes it a net cost on real tool work — see the eighth instrument | one row per Messages call |
+| codex | 2026-08-16 | `route=chatgpt_subscription`, `auth_mode=oauth`, read from the WS handshake log — not from `config.toml`, which only states intent | **unmeasured.** The one live turn run so far was a two-message no-tool probe; `router_no_compression` fired because there was nothing to compress, not because the path is inert — see the forty-third instrument | **two** PERF-log rows per WS session (`openai_responses_ws`, one per checkpoint), not one row per call like the two rows above — sum them and the session is double-counted |
+
+Codex's `client` label is not established the way the other two rows' `x-client` header is.
+`classify_client` (`auth_policy.py:92`) matches `CLIENT_UA_MAP`'s `codex-cli/` prefix, and the
+real user-agent on tonight's session was `codex_exec/0.147.0 (Debian 13.0.0; x86_64)
+Hyper/4.0.0-canary.5` — no match. What actually stamped `x-client: codex` is
+`should_stamp_codex_client` (`auth_mode.py:149`), server middleware that labels *any unidentified
+caller* reaching `/v1/responses`, added because Codex Desktop's own user-agent also misses the
+map and would otherwise be refused on a compression timeout. Confirmed from the source, not
+inferred: tonight's `"client": "codex"` tag is the path-based default catching an unrecognized
+user-agent, not attribution derived from codex's own identity. Same shape as the ledger column
+above that named a transport instead of a client — present on the OpenAI side too, and crossing
+codex over did not fix it, because nothing here needed fixing to run the turn: it needs fixing
+the day a second unrecognized Responses-speaking client shares this proxy and both get filed
+under the same name.
+
 
 ## An eighth instrument: a benchmark whose workload omitted the feature under test
 
@@ -2527,7 +2543,45 @@ matched, 148 were confirmed to exist and nothing more, 58 could not be resolved 
 more were written in a range form (`path:N-M`) this checker does not parse. Fewer than one
 citation in twenty on this page has had its content verified.
 
+## A forty-third instrument: two readings of one comment, and the log that was the only one that had read the caller
 
+Measured 2026-08-16, admitting codex to the headroom-routed path. The question, asked twice in
+the same conversation: does `openai.py:4940`'s comment — `# /v1/responses is OpenAI-specific
+(Codex) — always routes direct.` — mean codex's traffic through headroom is only observed, or
+actually optimized?
+
+The first reading took the comment at its word: "always routes direct" read as *nothing happens
+to it here*, filed as an open question rather than a claim — correctly hedged, but sourced from
+the comment alone, one hop short of the function it sits above.
+
+The second reading, later the same evening, read that function: `_compress_openai_responses_payload`
+(`openai.py:2209`), which the handler beginning at line 4940 calls, and whose own docstring states
+it runs "at every call site (HTTP /v1/responses, WS first frame, WS subsequent frames)". That
+corrected the first reading — the comment is about *backend selection* (no LiteLLM/AnyLLM
+indirection on this path), not about skipping compression — and it was still wrong, in a way
+reading the function could not surface: the handler starting at line 4940 is
+`handle_openai_responses`, the plain-HTTP path. Codex's actual traffic, confirmed only once a real
+turn was run and its own proxy log read, opens a WebSocket to
+`wss://chatgpt.com/backend-api/codex/responses` and is served by a different function entirely,
+`handle_openai_responses_ws` (`openai.py:5681`), whose docstring names why: "Newer Codex versions
+use WebSocket instead of HTTP POST." Two functions answer the same nominal endpoint, and the
+caller's own protocol chooses between them — nothing in either function's source says which one a
+given client reaches.
+
+Only `~/.headroom/logs/proxy.log`, read after the live turn, settled it: `forwarder=openai_responses_ws`,
+`path=/v1/responses`, `route=chatgpt_subscription`, `cause=response_completed`, and a PERF line
+naming `router_no_compression` for that specific turn — a real, turn-specific outcome (a two-message
+probe with nothing worth compressing), not evidence about the path's capability, which the shared
+docstring had already settled correctly.
+
+Same shape as the seventh instrument, one layer deeper. That one found a ledger column naming a
+transport instead of a client, and the fix was to stop trusting the label and read the header that
+actually decided it. Here, both readers went past the label — past the comment, into the function
+beneath it — and still landed on the wrong function, because the dispatch between two handlers
+serving one endpoint lives in neither handler's own source, only in which protocol the caller
+opens. Nothing short of a record of what the process actually did — the log, or an instrumented
+dispatch point — can answer "which code path did this caller use" when more than one exists behind
+the same name.
 
 ## The general lesson
 
