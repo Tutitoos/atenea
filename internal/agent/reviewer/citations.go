@@ -46,6 +46,7 @@ package reviewer
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -163,19 +164,77 @@ func roughlyMatches(quote, actual string) bool {
 	return strings.Contains(a, q) || strings.Contains(q, a)
 }
 
+// repoIndex maps a file's base name to every path under root ending with
+// it, skipping the trees no citation ever means: version control and
+// dependency/build output. It exists so a citation using shorthand -- a
+// name a fuller citation elsewhere in the same answer already qualified
+// with its directory -- can be resolved by an objective fact about the
+// repository (there is exactly one file with this name) rather than a
+// guess about which earlier sentence it refers to. Built once per
+// judgeCitations call and reused across every citation in that report.
+func repoIndex(root string) map[string][]string {
+	skip := map[string]bool{
+		".git": true, "node_modules": true, "dist": true, "build": true,
+		".next": true, "target": true, "vendor": true, ".turbo": true,
+	}
+	index := map[string][]string{}
+	if root == "" {
+		return index
+	}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // an unreadable entry is skipped, not reported
+		}
+		if d.IsDir() {
+			if skip[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		base := d.Name()
+		index[base] = append(index[base], path)
+		return nil
+	})
+	return index
+}
+
+// resolveByBasename looks up citedPath's base name in index and returns
+// its one match, deterministically -- never when the repository holds more
+// than one file with that name, because picking among several would be a
+// guess about which the citation meant, not a reading of the filesystem.
+func resolveByBasename(citedPath string, index map[string][]string) (string, bool) {
+	matches := index[filepath.Base(citedPath)]
+	if len(matches) != 1 {
+		return "", false
+	}
+	return matches[0], true
+}
+
 // checkCitation resolves one citation against the repository on disk.
+//
+// It tries the cited path first, joined to the repository root exactly as
+// written. Only when that file does not exist does it fall back to
+// resolveByBasename -- see that function's doc for why the fallback never
+// guesses.
 //
 // It never returns citeMismatched for a file it could not open -- the same
 // rule check() already keeps for a subject's own `path`: an unopenable file
 // is this reviewer's shortfall, not proof the citation is wrong, because a
 // permission this process does not have looks identical to a path that was
 // never real.
-func checkCitation(in assignment, c citation) (citeOutcome, string) {
+func checkCitation(in assignment, c citation, index map[string][]string) (citeOutcome, string) {
 	name := c.Path
 	if root := repositoryRoot(in); root != "" && !filepath.IsAbs(name) {
 		name = filepath.Join(root, name)
 	}
 	body, err := os.ReadFile(name)
+	if err != nil {
+		if alt, ok := resolveByBasename(c.Path, index); ok {
+			if altBody, altErr := os.ReadFile(alt); altErr == nil {
+				name, body, err = alt, altBody, nil
+			}
+		}
+	}
 	if err != nil {
 		return citeUnresolved, fmt.Sprintf("%s:%d: cannot re-read %s: %v", c.Path, c.Line, name, err)
 	}
@@ -229,10 +288,11 @@ func judgeCitations(in assignment, s *subject) report {
 			"reviewer reads (`path:line` or `Line N of path`); nothing here can verify prose alone")
 	}
 
+	index := repoIndex(repositoryRoot(in))
 	var existOnly, contentChecked int
 	var mismatches, unresolved []string
 	for _, c := range all {
-		switch outcome, detail := checkCitation(in, c); outcome {
+		switch outcome, detail := checkCitation(in, c, index); outcome {
 		case citeMatched:
 			if c.Quote != "" {
 				contentChecked++

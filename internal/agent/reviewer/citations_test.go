@@ -1,6 +1,8 @@
 package reviewer_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -151,5 +153,90 @@ func TestOneMismatchFailsEvenWithOthersHolding(t *testing.T) {
 	}
 	if !strings.Contains(got.Reason.Text, "a.txt:2") {
 		t.Fatalf("reason %q does not name the bad citation", got.Reason.Text)
+	}
+}
+
+// cardOverTree builds an assignment like card, but over a small directory
+// tree instead of one file at the root -- for citations that name a file
+// by base name only, resolved by repoIndex rather than a literal join.
+func cardOverTree(t *testing.T, files map[string]string, result map[string]any) map[string]any {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, body := range files {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatalf("making %s: %v", filepath.Dir(rel), err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", rel, err)
+		}
+	}
+	return map[string]any{
+		"task": map[string]any{"objective": "audit", "files": nil, "criterion": "citations hold"},
+		"context": map[string]any{
+			"repository": map[string]any{"id": "current", "root": dir},
+		},
+		"subject": map[string]any{
+			"run_id":  "abc-1",
+			"type":    "reader",
+			"attempt": 1,
+			"task":    map[string]any{"objective": "read", "files": nil, "criterion": "n/a"},
+			"result":  result,
+			"verdict": "ok",
+		},
+	}
+}
+
+// A citation naming a file by base name only -- the shorthand a real
+// answer uses once it has already qualified the full path earlier in the
+// same prose -- resolves when exactly one file in the repository carries
+// that name, an objective fact about the tree rather than a guess about
+// which sentence the shorthand refers to.
+func TestAUniqueBaseNameResolvesWithoutTheDirectory(t *testing.T) {
+	got := run(t, cardOverTree(t, map[string]string{
+		"src/modules/drivers/drivers.routes.ts": "one\ntwo\n",
+	}, map[string]any{
+		"findings": "See drivers.routes.ts:2, which reads `two`.",
+	}))
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %s (%v), want ok", got.Verdict, got.Reason)
+	}
+	if got.Result["content_checked"] != float64(1) {
+		t.Fatalf("content_checked = %v, want 1", got.Result["content_checked"])
+	}
+}
+
+// A base name that more than one file in the repository shares stays
+// unresolved: picking one would be a guess about which the citation meant,
+// not a reading of the filesystem.
+func TestAnAmbiguousBaseNameStaysUnresolved(t *testing.T) {
+	got := run(t, cardOverTree(t, map[string]string{
+		"src/modules/admin/admin.routes.ts":  "one\n",
+		"src/modules/sentry/admin.routes.ts": "one\n",
+	}, map[string]any{
+		"findings": "Declared at admin.routes.ts:1.",
+	}))
+	if got.Verdict != "incomplete" {
+		t.Fatalf("verdict = %s (%v), want incomplete", got.Verdict, got.Reason)
+	}
+	if !strings.Contains(got.Reason.Text, "admin.routes.ts:1") {
+		t.Fatalf("reason %q does not name the ambiguous citation", got.Reason.Text)
+	}
+}
+
+// A citation whose exact path resolves is used as written, never diverted
+// to a same-name file elsewhere in the tree.
+func TestAnExactPathIsPreferredOverBaseNameFallback(t *testing.T) {
+	got := run(t, cardOverTree(t, map[string]string{
+		"a.txt":           "one\ntwo\n",
+		"other/dir/a.txt": "three\nfour\n",
+	}, map[string]any{
+		"findings": "See a.txt:2, which reads `two`.",
+	}))
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %s (%v), want ok", got.Verdict, got.Reason)
+	}
+	if got.Result["content_checked"] != float64(1) {
+		t.Fatalf("content_checked = %v, want 1 (the root a.txt, not the ambiguous fallback)", got.Result["content_checked"])
 	}
 }
