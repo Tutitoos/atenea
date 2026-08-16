@@ -373,7 +373,7 @@ Flags:
   --all                 with clear: confirm emptying the whole base
 `,
 	"floor": `Usage: atenea floor
-       atenea floor measure --repo ID [--agent TYPE]
+       atenea floor measure --repo ID --agent TYPE
 
 What starting a single turn already costs on a repository, before any file
 is read: the tokens the CLI spends writing its system prompt and tool
@@ -434,15 +434,19 @@ against the same repository, agent and model. A row measured before
 'floor measure' -- rather than be guessed at.
 
 'measure' spends real money on every agent type except the three named
-above: one turn, priced at roughly what it finds. It prints what it is
-about to spend, and what it last found for the same repository, agent and
-model if anything did, before it spends anything. It never tops a stored
-figure up -- a re-measurement replaces the row outright.
+above: one turn, priced at roughly what it finds. It prints what the last
+probe of the same repository, agent and model was billed if anything did,
+before it spends anything. It never tops a stored figure up -- a
+re-measurement replaces the row outright.
+
+Neither flag has a default, because the only thing a default could do here
+is spend a turn on something nobody named. 'atenea floor' with no
+subcommand lists every type already measured, and costs nothing.
 
 Flags (measure):
   --repo ID     repository id or path to measure (required)
   --agent TYPE  which declared agent type's tool surface to measure
-                (default: plan)
+                (required -- it spends a turn, so there is no default)
 `,
 	"config": `Usage: atenea config init [--force]
        atenea config path

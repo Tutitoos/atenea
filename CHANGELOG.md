@@ -462,6 +462,16 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`atenea floor measure --agent` is required: a default that spends is not a
+  default.** It carried `plan`, which made the shortest form of the only command
+  here that spends unattended also the one that chose what to spend on. Measured
+  2026-08-16 by tripping it: `atenea floor measure --repo taxiprime-backend`,
+  typed to read this command's own warning text and expecting exactly this
+  refusal, priced a cold `plan` turn for `$0.3487`. It now refuses with the
+  settings file's own list of declared types, exit 2, before the probe — the same
+  courtesy an undeclared name already got. `atenea floor` lists every measured
+  type and costs nothing, so nothing is harder to discover. The notice itself
+  still cannot refuse; that half remains a decision, in `not-built-yet`.
 - **A run's balance counted only the live attempt, so it read high after a redo.**
   `workflow_step` holds exactly one attempt: re-dispatching a step overwrites the
   row and files the old one in `workflow_attempt`, where `Run.Spend` could not see

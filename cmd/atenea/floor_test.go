@@ -384,6 +384,47 @@ func TestFloorMeasureUndeclaredAgentListsDeclaredOnes(t *testing.T) {
 	}
 }
 
+// --agent carried a default of "plan" until 2026-08-16, which made the
+// SHORTEST form of the only command here that spends unattended also the one
+// that picks what to spend on. `atenea floor measure --repo taxiprime-backend`,
+// typed to read this command's warning text and expecting this refusal, priced
+// a cold plan turn for $0.3487.
+//
+// The fake CLI here ANSWERS. That is the point: the refusal has to come before
+// the probe, so the assertion is that the store is still empty afterwards.
+// Restore the default and this test fails on the row that appears, not on the
+// message -- which is the failure the missing guard actually had.
+func TestFloorMeasureWithNoAgentRefusesRatherThanPickingOne(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	settingsPath := measureSettings(t, floorFakeCLI(t, floorColdReading))
+	_, err := cli(t, "--config", settingsPath, "floor", "measure", "--repo", "api")
+	if err == nil {
+		t.Fatal("expected a refusal: --agent names what the turn is spent on")
+	}
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err = %v)", got, err)
+	}
+	msg := err.Error()
+	// The flag, the reason it has no default, and the settings file's own list
+	// -- the same courtesy AgentTypeByName gives a mistyped name.
+	for _, want := range []string{"--agent is required", "spends a turn", "plan", "reviewer"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error = %q, want it to mention %q", msg, want)
+		}
+	}
+	store, err := floor.Open("")
+	if err != nil {
+		t.Fatalf("floor.Open: %v", err)
+	}
+	for _, agent := range []string{"plan", "reader", "explore", "reviewer"} {
+		if _, ok, err := store.Get("api", agent, "plan-model"); err != nil {
+			t.Fatalf("Get: %v", err)
+		} else if ok {
+			t.Errorf("a row was written for %q: the refusal did not come before the probe", agent)
+		}
+	}
+}
+
 // firstCallReading is the event stream of a probe that made one tool call,
 // with the two real figures measured 2026-08-15: a 5,647-token prefix and the
 // 41,927-token block that arrives with the first tool result, billed $0.4935

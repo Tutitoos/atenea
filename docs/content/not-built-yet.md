@@ -1563,24 +1563,72 @@ and then spends it, on the same breath. There is no prompt, no `--yes`, and no w
 the figure without paying it. The line is phrased as a question and is a receipt stub.
 
 Measured by tripping it: `atenea floor measure --repo taxiprime-backend`, typed to read the
-notice's new wording, spent **$0.3487** on a cold `plan` turn. `--agent` is optional and
-defaults to `plan`, so the shortest form of the command is also the one that spends without
-naming what it spends on. The notice printed correctly and changed nothing, because a
-notice that cannot refuse is only ever read afterwards.
+notice's new wording, spent **$0.3487** on a cold `plan` turn. `--agent` was optional and
+defaulted to `plan`, so the shortest form of the command was also the one that spent without
+naming what it spent on. The notice printed correctly and changed nothing, because a notice
+that cannot refuse is only ever read afterwards.
 
-Two shapes would close it, and they are different decisions:
+Two shapes would close it, and only one was ever a decision:
 
-- **A confirmation.** `--yes` to proceed, otherwise print the figure and exit 0 having
-  spent nothing. That makes the notice honest and makes every scripted caller pass a flag.
-- **A required `--agent`.** Removes the accident above without touching the money path, and
-  costs a keystroke on every invocation. `atenea floor` already lists every type, so there
-  is no discovery argument for a default.
+- **A required `--agent`. Built 2026-08-16.** Not a spending policy tightened but a default
+  that spends removed: `--agent` had no business carrying `plan`, because the only thing a
+  default can do on this command is pick what to spend money on. It now refuses with the
+  settings file's own list, exit 2, before the probe - and the test that defends it points
+  at a fake CLI that ANSWERS, so restoring the default fails on the row that appears rather
+  than on the message. `atenea floor` lists every measured type and costs nothing, so there
+  was no discovery argument for the default either.
+- **A confirmation. Still not built.** `--yes` to proceed, otherwise print the figure and
+  exit 0 having spent nothing. This one is a real choice: it makes every scripted caller
+  pass a flag, and the notice is currently the only line between reading a figure and paying
+  it. The accident that prompted all of this is closed without it, which is exactly why it
+  should be decided on its own merits rather than in the session that overspent.
 
-The cheaper half needs no decision and is already built: the figure the notice quotes is
+The cheapest half needed no decision and is also built: the figure the notice quotes is
 now `Measurement.ColdStartUSD`, the receipt, where it used to be the stored floor - the
 prefix's slice, 1.9x to 9.8x too small (see instrument 36 in `measuring-the-wrong-process`).
 
-**Done when:** no `floor measure` invocation can spend money that a person did not name a
-figure and an agent type for. Not built: both options change the behaviour of the one
-command on this machine that spends unattended, and the session that overspent by $0.78 is
-not the one to widen its defaults.
+**Done when:** `about to spend real money` can refuse. The other half of the original
+condition - that no invocation spends on a type nobody named - is done.
+
+## Two more columns quoting a slice where a receipt exists - 2026-08-16
+
+The spend notice quoted the stored floor rather than the receipt, and $0.42 of an
+authorization was sized from that line. This is the audit of every other money surface in
+the CLI for the same defect. Two have it, both live, both measured against the real record.
+Reported only, at the operator's instruction; neither is fixed.
+
+**1. `atenea floor`'s `COLD USD` column is the prefix's slice, and sits beside a `WARM USD`
+column that is not.** The two columns of the same table have different scopes:
+
+| row | `WARM USD` covers | `COLD USD` shows | a cold turn is billed | out by |
+|---|---|---|---|---|
+| `explore` | prefix + first call | $0.14 | $0.27 | **2.00x** |
+| `reader` | prefix + first call | $0.05 | $0.45 | **9.84x** |
+| `plan` | prefix + first call | $0.35 | $0.35 | 1.00x |
+
+`WarmUSD` scales by `StartTokens/Prefix` and `COLD USD` prints `Measurement.USD` raw, so the
+warm figure prices the whole start and the cold one prices part of it. `plan` agrees only
+because no first-call probe has ever run against it - so the error appears exactly on the
+rows measured by the *better* probe, and a reader comparing two rows cannot tell which they
+are looking at. `ColdStartUSD` already exists and is what this column should print.
+
+**2. `atenea workflow show`'s per-step `COST` is the live attempt only.** Same shape as the
+run-level balance fixed today, one level down: `stepCost` reads `step.Spent.USD`, and a redo
+overwrites that row. `admin-config` prints `$0.68` where the step has cost **$1.29** across
+its two attempts - 1.91x. The run header above it now reads `$7.32 spent`, so the column no
+longer sums to the total printed two lines away, which is the honest form of the same
+inconsistency and the reason this one is visible at all.
+
+**Everything else audited clean, and for a reason worth keeping.** The engine's refusal
+clauses name their own scope in prose - `starting a turn costs ~$X, and no probe has priced
+this row's first tool call` for a prefix-only row, `~$X warm -- N tokens of prefix and first
+tool call` for a whole-start one - so a reader is told which quantity they have. `CostByType`
+medians read the successful attempt on purpose (the question is what a step costs to
+*finish*). `gatestore`'s allocation lines and `store.Reshare`'s raise check compare shares
+against a grant, never a receipt against a slice. `claudecode`'s per-turn note prices one
+turn against its own ceiling. `atenea traces` prints no money at all, and already names a
+redo as `try 2` with the dispatch it replaced.
+
+**Done when:** `COLD USD` prints `ColdStartUSD`, and a step's cost column either totals its
+attempts or says which one it is showing. Not built: both are one-line changes to columns
+people are reading today, and the operator asked for the audit rather than the edit.

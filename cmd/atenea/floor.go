@@ -183,7 +183,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("floor measure", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	repoFlag := flags.String("repo", "", "repository id or path to measure (required)")
-	agentFlag := flags.String("agent", "plan", "which declared agent type's tool surface to measure")
+	agentFlag := flags.String("agent", "", "which declared agent type's tool surface to measure (required)")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -199,6 +199,33 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// --agent has no default, because the only thing a default could do here
+	// is spend money on a type nobody named. It carried "plan" until
+	// 2026-08-16, when `atenea floor measure --repo taxiprime-backend` --
+	// typed to read this command's own warning text, expecting exactly the
+	// refusal below -- silently priced a cold `plan` turn for $0.3487.
+	//
+	// This is not a spending policy being tightened; it is the removal of a
+	// default that spends. Every other guard in this command refuses before
+	// the money (--repo, an undeclared name, a path off the catalog), and a
+	// missing agent type was the one hole in that set. The list is the
+	// settings file's own answer, for the same reason AgentTypeByName gives
+	// it: a caller one keystroke from the name should not be sent to a file
+	// to find it.
+	if strings.TrimSpace(*agentFlag) == "" {
+		declared := make([]string, 0, len(cfg.Agents))
+		for _, agent := range cfg.Agents {
+			declared = append(declared, agent.Spec.Name)
+		}
+		if len(declared) == 0 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"floor measure: --agent is required, and this settings file declares no agent type")
+		}
+		return contract.Fail(contract.FailureInvalidInput,
+			"floor measure: --agent is required -- it spends a turn, so there is no default: declared are %s",
+			strings.Join(declared, ", "))
+	}
+
 	// AgentTypeByName is the same lookup a workflow step gets when it names
 	// its agent, refused the same way and for the same reason: a name
 	// nobody declared is one keystroke from a typo, and "declared are ..."
