@@ -115,11 +115,19 @@ const (
 
 // Run is one workflow as the record holds it.
 type Run struct {
-	ID       string
-	Task     string
-	GrantUSD float64
-	Started  time.Time
-	Ended    time.Time
+	ID   string
+	Task string
+	// Repository is the repository this run was created against, as the
+	// `--repository` flag named it. It is on the record because funding is
+	// keyed on it -- checkFunding prices every step's floor against this
+	// id -- and a run that priced one repository must not be executed
+	// against another. Empty on rows written before the column existed,
+	// and on a run created without the flag; both mean "nothing was
+	// recorded", never "the empty repository".
+	Repository string
+	GrantUSD   float64
+	Started    time.Time
+	Ended      time.Time
 	// Closed is set when the workflow reached its end, whatever the steps
 	// did. An open run is one somebody may still resume.
 	Closed bool
@@ -606,7 +614,7 @@ func (s *Store) End(ctx context.Context, id string, stop Stop, at time.Time) err
 // Load reads one run back whole.
 func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, task, grant_usd, started_at, ended_at, closed, stop, writer_pid
+		`SELECT id, task, repository, grant_usd, started_at, ended_at, closed, stop, writer_pid
 		 FROM workflow WHERE id = ?`, id)
 	var (
 		out            Run
@@ -614,7 +622,7 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 		closed         int
 		stop           string
 	)
-	switch err := row.Scan(&out.ID, &out.Task, &out.GrantUSD, &started, &ended,
+	switch err := row.Scan(&out.ID, &out.Task, &out.Repository, &out.GrantUSD, &started, &ended,
 		&closed, &stop, &out.WriterPID); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Run{}, contract.Fail(contract.FailureNotFound,

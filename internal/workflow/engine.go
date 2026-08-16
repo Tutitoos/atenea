@@ -142,6 +142,14 @@ type Options struct {
 	// spent on -- exploring a six-file repository and this one are not the
 	// same act at the same price. Empty is honest and means machine-wide.
 	Repository string
+	// RepositoryRoot is the directory those runs would actually happen in,
+	// which is a different fact from the id above and the one that decides
+	// where a step reads. Both are needed in a refusal because an id can be
+	// uninformative while still being real: the shipped settings declare a
+	// repository `current` at `path = "."` (config/default.toml), so "would
+	// serve current" is a true statement that names no tree. Empty means the
+	// caller did not say; nothing is inferred from it.
+	RepositoryRoot string
 	// Floors answers what starting a turn costs on a repository with a
 	// model, from what somebody measured. Nil turns the check off, which is
 	// what a caller that has measured nothing has: no measurement, no claim.
@@ -167,6 +175,7 @@ type Engine struct {
 	poll     time.Duration
 	surface  string
 	repo     string
+	repoRoot string
 	floors   Floors
 	modelFor func(agentType string) string
 }
@@ -192,6 +201,7 @@ func New(opts Options) (*Engine, error) {
 		alive:    opts.Alive,
 		poll:     opts.Poll,
 		repo:     opts.Repository,
+		repoRoot: opts.RepositoryRoot,
 		surface:  opts.Surface,
 		floors:   opts.Floors,
 		modelFor: opts.ModelFor,
@@ -596,6 +606,19 @@ func grouped(n int) string {
 // is the person committing the grant, and a launch recorded by somebody who
 // then did not run it would leave an approval with nothing behind it.
 func (e *Engine) Launch(ctx context.Context, id string) (Run, error) {
+	// Before the gate, not after it. sameRepository is also checked in
+	// takeOver, which is what covers `run` and `resume` -- but reaching it
+	// through Launch would answer the gate first, and a run whose grant was
+	// committed and whose execution then refused reads as "launched already"
+	// on the retry. The mistake this refuses is one somebody fixes by typing
+	// the command again with a flag, so the gate has to survive it.
+	recorded, err := e.store.Load(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := e.sameRepository(recorded); err != nil {
+		return recorded, err
+	}
 	gate, ok, err := e.store.OpenGate(ctx, id)
 	if err != nil {
 		return Run{}, err
@@ -658,7 +681,9 @@ func (e *Engine) Start(ctx context.Context, graph Graph) (Run, error) {
 	return e.Launch(ctx, gate.RunID)
 }
 
-// takeOver refuses a run that is finished or that another live Atenea holds.
+// takeOver refuses a run that is finished, that another live Atenea holds, or
+// that would be executed against a repository other than the one it was
+// created for.
 func (e *Engine) takeOver(ctx context.Context, id string) (Run, error) {
 	run, err := e.store.Load(ctx, id)
 	if err != nil {
@@ -677,7 +702,63 @@ func (e *Engine) takeOver(ctx context.Context, id string) (Run, error) {
 		return run, contract.Fail(contract.FailureUnavailable,
 			"workflow %s is running under pid %d", id, run.WriterPID)
 	}
+	if err := e.sameRepository(run); err != nil {
+		return run, err
+	}
 	return run, nil
+}
+
+// sameRepository refuses to execute a run against a repository other than the
+// one it was created for.
+//
+// Measured 2026-08-16: a 23-step plan created with `--repository
+// taxiprime-backend` was launched WITHOUT the flag, from a shell sitting in
+// Atenea's own checkout. `create` priced every floor against taxiprime-backend
+// and wrote that id on the run. `launch`, given no flag, resolved the
+// repository the ordinary way -- and resolved it to something real: the
+// settings declare `current` at Atenea's own path, so WorkspaceFor matched it
+// by directory and served that. Twenty-three readers went looking for a Fastify
+// surface in a Go orchestrator. Eight answered that the files did not exist,
+// fifteen died searching, $5.88 of a $5.22 grant went, and not one route was
+// inventoried.
+//
+// The shape worth keeping: NEITHER side was invalid. Two declared repositories,
+// one priced and one served, and no code path compared them -- the run's
+// repository was written by Create and read only by checkFunding. This is not a
+// missing fallback, it is a missing comparison, which is why the fix is a
+// refusal and not a default.
+//
+// The refusal names BOTH sides, because either one alone sends the reader to
+// the wrong place: told only what the run recorded, they re-run the same
+// command; told only what would be served, they doubt the plan.
+//
+// A run that recorded nothing is not refused. Those rows predate the column
+// (see the schema's own note on repository) and cannot say what they were
+// created for; refusing them would break resuming work nobody can re-create.
+//
+// The comparison is on ids -- what `create` recorded, what the floor is keyed
+// on, what the operator types. The MESSAGE also carries the root, because a
+// real id can name no tree: "would serve current" is true and useless, and the
+// directory is the fact the whole failure turned on.
+func (e *Engine) sameRepository(run Run) error {
+	if run.Repository == "" || run.Repository == e.repo {
+		return nil
+	}
+	serving := strconv.Quote(e.repo)
+	if e.repo == "" {
+		// Said as a sentence rather than printed as "": no repository served
+		// is not a repository named badly, and what the steps then get is
+		// wherever the launching process happens to be standing.
+		serving = "no repository at all"
+	}
+	if e.repoRoot != "" {
+		serving += " in " + e.repoRoot
+	}
+	return contract.Fail(contract.FailureInvalidInput,
+		"workflow %s was created for repository %s and this launch would serve %s;"+
+			" its funding was priced against %s, so re-run it with --repository %s",
+		run.ID, strconv.Quote(run.Repository), serving,
+		strconv.Quote(run.Repository), run.Repository)
 }
 
 // Resume continues a run that was cut or whose Atenea died.

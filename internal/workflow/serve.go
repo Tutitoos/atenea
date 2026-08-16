@@ -96,14 +96,15 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 		measured = floors{store: store}
 	}
 	engine, err := New(Options{
-		Runner:     runner,
-		Store:      state,
-		Types:      cfg.Agents,
-		Lanes:      cfg.Workflow,
-		Surface:    surface,
-		Repository: workspace.RepositoryID,
-		Floors:     measured,
-		ModelFor:   modelFor(cfg),
+		Runner:         runner,
+		Store:          state,
+		Types:          cfg.Agents,
+		Lanes:          cfg.Workflow,
+		Surface:        surface,
+		Repository:     workspace.RepositoryID,
+		RepositoryRoot: workspace.RepositoryRoot,
+		Floors:         measured,
+		ModelFor:       modelFor(cfg),
 	})
 	if err != nil {
 		_ = state.Close()
