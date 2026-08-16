@@ -1397,3 +1397,53 @@ which closes the lie and not the gap.
 
 **Not decided:** which. It is the same decision as the expensive half above, and it should be
 taken once, for both.
+
+## A share funded above the observed maximum still died, four times - 2026-08-16
+
+The prediction on the record, made before the run: nineteen steps funded `$0.45` each all
+finish, because `$0.45` sits above `$0.44`, the top of the observed range across fourteen
+completed reader rows, and because share size was the discriminator on the previous run.
+
+**Falsified. Four of nineteen died at their ceiling** - `admin-config` `$0.62`,
+`sentry-mod` `$0.52`, `drivers-mod` `$0.49`, `census` `$0.54`. The fifteen that finished
+spent `$0.20`-`$0.41`, every one *under* its share. There is no overlap between the two
+groups: the population is bimodal, and no single flat number separates them, because the
+figure a dying step reports is the point it was *cut at*, not what it needed.
+
+Two of the four read *small* ranges - `admin-config` is 12.4 KB, `sentry-mod` 8.1 KB - so
+neither bytes nor route count predicts membership. What the four share is unclear from
+the receipts, and that is the gap: **this system can price what a step costs when it
+succeeds and cannot price what it needs when it fails.** Every completed row is an
+observation of a sufficient share; every incomplete row is a lower bound wearing the same
+column name, and `CostByType` already excludes them for exactly this reason. The admission
+rule shipped yesterday is therefore built entirely on the population that never needed it.
+
+**What it would take:** a step that hits its ceiling would have to be re-run once at a
+raised share and the second figure recorded beside the first, making one row that says
+"cut at `$0.62`, finished at `$X`". Nothing in the engine does this; `resume` redispatches
+but records the retry as its own row with no link to what it replaced.
+
+**Not built.** And not cheap: it means spending real money on a step already known to have
+failed, on purpose, to buy the only measurement that would size the next one.
+
+## A killed turn keeps its price and loses its tokens - 2026-08-16
+
+`admin-config` recorded `$0.62` spent against 1,416 cache-write, 4,772 cache-read and 152
+output tokens - arithmetic that prices at roughly `$0.05` by any rate, and around `$0.02`
+by whatever rate the fifteen successful rows imply. The fifteen that finished all price
+the other way, charged consistently ~40% of their token arithmetic, a stable ratio that
+says the rate assumption is wrong but the *recording* is whole. `admin-config` inverts it
+by 12x, and it is one of the four that were killed.
+
+So the usage of the turn that was in flight when the ceiling fired is never recorded,
+while its cost is - `total_cost_usd` arrives with the abort, the `message_stop` that
+would have carried the usage does not. This is the same seam as the reserved-answer nudge
+being blind on the turns that overspend, and it has the same consequence: **the steps
+this project most needs to measure are the ones whose token record is missing.**
+
+**Done when:** a step killed at its ceiling records the usage it actually consumed, or
+records explicitly that it does not know - a null, not a small number that reads as a
+measurement. Today a reader of that row would conclude the step did almost nothing, and
+it is the only row on the run where the dollars and the tokens disagree about that.
+
+**Not built.** The fix is in the adapter's envelope handling, not in the engine.

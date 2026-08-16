@@ -2010,6 +2010,50 @@ until `completeness` is trustworthy enough to filter on; that is the open item r
 `not-built-yet.md`, and this is the second rule now waiting on it.
 
 
+## A thirty-fourth instrument: the commission, which carried three wrong givens
+
+Measured 2026-08-16, on the 19-step run that inventoried the remaining route surface.
+Fifteen of nineteen steps delivered; **155 of 155 route declarations in those fifteen
+ranges were cited, zero missing**, verified afterwards by parsing the files independently
+and comparing line-number sets rather than prose. That is the good half, and it is not
+what this entry is about.
+
+The commission I wrote them carried three false statements of fact:
+
+1. **A prefix that belonged to a different plugin.** Every step was told "mounted at prefix
+   `/admin`, from `src/server.ts:243`". True for `adminRoutes`. `devopsRoutes` is registered
+   at `:250` with **no prefix at all**; its `/admin/devops/...` segment is literal in each
+   route string. Applying the given would have produced eighteen doubled paths.
+2. **A hook scope that does not hold.** Steps were told the hook at `admin.routes.ts:317`
+   "covers every route in the file". The file holds **two plugins**: `userTypesRoutes`
+   (`:287`, hook at `:291`) and `adminRoutes` (`:315`, hook at `:317`). The comment at
+   `:288`-`290` says so in Spanish and records that this exact gap was once a live hole —
+   `/admin/user-types` was reachable by anyone until `:291` was added.
+3. **An expected count in every prompt.** Each step was told "It contains N route
+   declarations."
+
+Two steps caught the first two and said so under a heading of their own, `devops-admin`
+quoting `server.ts:250` and `admin-head` quoting the Spanish comment, both refusing the
+given rather than inheriting it. That is the behaviour the funding is for.
+
+The third defect is mine alone and no step could catch it. **I told them the answer and
+then counted their agreement as confirmation.** Fifteen ranges reported counts matching
+what I supplied; several wrote "matches the expected N, no discrepancy". That agreement is
+worth nothing as evidence — it cannot distinguish a recount from an echo. The count is
+247, and what supports it is two structurally different parsers of my own (a regex sweep
+and a balanced-generic scanner that finds the first string literal across newlines), not
+the fifteen readers who were handed the number first.
+
+The census step, whose whole purpose was to count independently and which was the one step
+given no expected number, **died at its ceiling**. So the one uncontaminated count is the
+one that was not bought.
+
+**Done when:** a commission states givens with their provenance and marks them as
+refutable — which these steps did unprompted — and never states the quantity the step
+exists to measure. Anchoring is not a prompt style question; a number in the prompt is a
+measurement the step is no longer making.
+
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -2386,6 +2430,20 @@ until `completeness` is trustworthy enough to filter on; that is the open item r
     receipts were already in the database the planner could read. Before deriving
     a figure, ask what has already been *paid* for this exact shape. If the
     answer is "nothing", the derivation is a hypothesis and must be labelled one.
+36. **Telling a step the answer destroys its evidence, and the agreement that
+    comes back looks exactly like corroboration.** Fifteen readers were handed
+    the route count for their own range and fifteen reported it back, several
+    writing "matches the expected N". Nothing in those fifteen reports can
+    distinguish a recount from an echo. The one step given no number was the one
+    that died. A prompt that contains the quantity under measurement has ended
+    the measurement; state givens the step needs to *work*, never the figure it
+    exists to *find*.
+37. **A unit that lives only in the docstring is not recorded.** The sampler
+    stated "All memory values are BYTES" in its module comment and wrote column
+    names without units; the reader six hours later -- me -- read them as KiB and
+    published 1,054 GiB. The third defect in the same instrument, and the fix is
+    the one `manifest.py` already had: the unit belongs in the header the output
+    carries, `pss_new_bytes`, not in prose beside the code that writes it.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
