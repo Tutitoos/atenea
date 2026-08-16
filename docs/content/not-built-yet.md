@@ -1260,3 +1260,41 @@ new edge semantics and it needs no graph-language decision at all.
 better one, and because nothing has yet been measured about how often a partial is actually
 sufficient for the criterion that asked for it. `n = 2` partials on this machine, both explore
 steps, both with completeness ≥ 0.8.
+
+## The bill is not a function of the tokens we count — 2026-08-16
+
+Two floor probes, eleven seconds apart, same repository, same model, same CLI (`2.1.232`), both
+cold, doing **identical** work — one tool call against a pattern chosen to match nothing, then
+two characters of answer. `input_tokens 2`, `output_tokens 17` on both. The only difference is
+the agent surface, which changes the tool definitions in the prefix:
+
+| surface | prefix | first call | start | receipt | per start token |
+|---|---|---|---|---|---|
+| `explore` (MCP catalog + Read/Glob) | 25,704 | 25,778 | 51,482 | `$0.2724` | `5.29e-6` |
+| `reader` (Read/Glob) | 4,532 | 40,061 | 44,593 | `$0.4477` | `1.00e-5` |
+
+**`reader` paid 64% more for 13% fewer tokens.** Both receipts are the provider's, not a
+derivation. So the effective rate per token the client counts differs by `1.9x` between two
+surfaces of one model in the same minute, and at least one of the two derived rates is not a
+price of anything.
+
+This is the same term seen from a different angle on 2026-08-15, when `cache_read` came back
+pinned at exactly `40,227` on turn 2 across five runs against different objectives, different
+files and different nonces — a quantity that does not vary with the work cannot be a function of
+the work. Counting more carefully did not close it: tonight's `first_call_tokens` is measured off
+the receipt's own per-message counts, and it still does not predict the bill.
+
+**What this does *not* touch.** The admission threshold is priced in tokens against a fixed
+`tokensPerUSD` constant — `allowance.MinShareUSD(WarmStartWeight)` never reads `usd_per_token`.
+Predicted from the token counts alone, `explore` needs `$0.07` and `reader` `$0.06`; the table
+prints exactly those. A wrong per-token rate cannot move what a step is refused for. It moves
+the `WARM USD` and `COLD USD` columns, which are reported, and any grant derived from them.
+
+**Done when:** one of two things is true. Either the gap is named — some part of the request is
+billed that this project does not count, and `Weigh` gets a term for it with a receipt behind
+it — or the derived rate stops being reported as a price. Until then, a per-step budget should
+be built from a receipt for the shape of step being budgeted, never from `WARM USD × steps`.
+
+**Not built,** and not cheap to close: it needs the provider's own accounting of a request whose
+every client-side count is known, which is a different instrument from anything here. What is
+built is the refusal that no longer depends on it.
