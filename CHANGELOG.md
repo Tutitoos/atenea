@@ -17,6 +17,38 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`atenea workflow redo` dispatches a step that was cut at its own spending
+  ceiling, at a share somebody raised.** Until now the only way to retry one was
+  to write a new plan: `resume --redo` is for work nobody judged, and a ceiling
+  death *was* judged — it reported, and the report said incomplete. Measured
+  2026-08-16: of 150 steps cut at a ceiling, 2 had ever been re-dispatched. It is
+  an operator's act and never automatic, because the same share buys the same
+  result — every share must be a raise, and a redo that does not raise one is
+  refused naming both figures. It reopens a finished run to do it, records the
+  authorization as a gate of its own kind, and files the dead attempt with the
+  share it actually ran under *before* writing the new one. That ordering is what
+  leaves the pair the admission rule has never had: cut at `$0.45`, finished at
+  `$0.90`. `CostByType` excludes ceiling deaths because their spend is a lower
+  bound, so today the rule is built entirely on the population that never needed
+  it. A raise past the grant is refused until the grant is raised in the same
+  command, and the raised share meets the same funding check a new plan would.
+- **A step cut at its ceiling is now decidable from its row, with no prose
+  read.** `internal/agent/model` files a ceiling stop as `unavailable` on purpose
+  — the ceiling was that one call's own — so the reason kind a real outage writes
+  and the one a ceiling death writes are the same word. What separates them is
+  the pair of numbers, against the same `0.98` band `CostByType` already excludes
+  rows by: sharing the constant is the point, since a step that is re-dispatchable
+  is exactly a step the rule refuses to price against. Over the whole record it
+  selects 29 of 29.
+- **A run whose token count is missing says so instead of reading as cheap.** 29
+  rows on this machine carry a real charge and no tokens — `$9.61` — all of them
+  ceiling deaths from before `conversation.charge` stopped preferring a result
+  event that a killed turn never prints. Their dollars are real and their tokens
+  sum as zero, so a total was telling a reader those steps did almost nothing. The
+  budget line now reads `at least N tokens spent; 1 step charged with no token
+  record`. Derived from the row, because a turn that used no tokens cannot cost
+  money: nothing is stored, nothing is migrated, and no historical row is
+  rewritten.
 - **`workflow create` now refuses a share below what that agent type has cost to
   FINISH, not just to start.** The floor and the rescuable threshold both price a
   probe: one turn that starts, makes at most one tool call, and stops — `$0.06`

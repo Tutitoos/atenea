@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -27,7 +28,7 @@ import (
 func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"workflow needs a subcommand: create, launch, run, propose, approve, reject, resume, list or show")
+			"workflow needs a subcommand: create, launch, run, propose, approve, reject, resume, redo, list or show")
 	}
 	sub, rest := strings.TrimSpace(args[0]), args[1:]
 	switch sub {
@@ -45,13 +46,15 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowAnswer(rest, out, workflow.DecisionRejected)
 	case "resume":
 		return workflowResume(settingsPath, rest, out)
+	case "redo":
+		return workflowRedo(settingsPath, rest, out)
 	case "list":
 		return workflowList(rest, out)
 	case "show":
 		return workflowShow(rest, out)
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, resume, list or show", sub)
+			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, resume, redo, list or show", sub)
 	}
 }
 
@@ -558,4 +561,88 @@ func (s *stringList) Set(value string) error {
 	}
 	*s = append(*s, value)
 	return nil
+}
+
+// raiseList collects `--step ID=USD`, the pair a redo is.
+//
+// One flag carrying both halves, rather than a --step and a matching --share:
+// two repeatable lists that have to be zipped by position is a shape where a
+// mistyped pair reads as a valid one, and the mistake it makes is spending the
+// wrong step's money.
+type raiseList []workflow.Raise
+
+func (r *raiseList) String() string {
+	parts := make([]string, 0, len(*r))
+	for _, raise := range *r {
+		parts = append(parts, fmt.Sprintf("%s=%.2f", raise.StepID, raise.USD))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (r *raiseList) Set(value string) error {
+	id, share, ok := strings.Cut(strings.TrimSpace(value), "=")
+	id, share = strings.TrimSpace(id), strings.TrimSpace(share)
+	if !ok || id == "" || share == "" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"--step takes ID=USD, e.g. --step admin-config=0.80")
+	}
+	usd, err := strconv.ParseFloat(strings.TrimPrefix(share, "$"), 64)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput,
+			"--step %s: %q is not a dollar figure", id, share)
+	}
+	if usd <= 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"--step %s: a share is money, and $%.2f is not", id, usd)
+	}
+	*r = append(*r, workflow.Raise{StepID: id, USD: usd})
+	return nil
+}
+
+// workflowRedo dispatches steps cut at their own ceiling, at raised shares.
+//
+// Separate from resume on purpose: resume runs work nobody judged, as it was.
+// This spends more money on work that was judged and ran out -- see
+// [workflow.Engine.Redo] for why that is an operator's act and never
+// automatic.
+func workflowRedo(settingsPath string, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow redo", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	repository := flags.String("repository", "", "repository id to serve at the repository level")
+	grant := flags.Float64("grant", 0, "the run's new total grant; default leaves it alone")
+	var raises raiseList
+	flags.Var(&raises, "step", "ID=USD: a step cut at its ceiling, and its raised share; repeatable")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		// Flags before the id, because Go's parser stops at the first word
+		// that is not a flag -- so the id-first form this example used to
+		// print could not parse, and every flag after it was read as another
+		// id. Found by typing it.
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow redo takes one workflow id, with its flags before it, e.g. "+
+				"atenea workflow redo --step admin-config=0.80 --grant 8.90 wf1786-1")
+	}
+	if len(raises) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow redo needs at least one --step ID=USD: a step is only redone "+
+				"at a share somebody raised")
+	}
+
+	ctx, stop := interruptible()
+	defer stop()
+
+	engine, closers, err := openWorkflow(ctx, settingsPath, *tracePath, *repository, out)
+	if err != nil {
+		return err
+	}
+	defer closers()
+
+	run, runErr := engine.Redo(ctx, flags.Arg(0), raises, *grant)
+	if run.ID != "" {
+		printRun(out, run)
+	}
+	return runErr
 }

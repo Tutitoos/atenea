@@ -183,6 +183,52 @@ type StepRow struct {
 	StoppedAt string
 }
 
+// CutAtItsCeiling reports whether this step stopped because it ran out of the
+// share it was given, rather than because anything went wrong.
+//
+// Derived, never a stored flag, and it has to be: the provider does not name
+// this. `internal/agent/model` files a ceiling stop as FailureUnavailable on
+// purpose -- the ceiling was this one call's own, not a refusal by anybody --
+// so the reason kind a real outage writes and the reason kind a ceiling death
+// writes are the same word. What separates them is the pair of numbers: the
+// share, and what the row spent of it.
+//
+// The band is [ceilingBand], the same 0.98 CostByType already excludes rows
+// by, and for the same reason: a turn stopped at its ceiling stops on the turn
+// that crossed it, so the figure lands just under or just over, never on it.
+// Sharing the constant is the point -- a step this reports true for is exactly
+// a step the admission rule refuses to price against, and two thresholds that
+// drifted apart would let a row be re-dispatchable and countable at once.
+//
+// Measured 2026-08-16: over the whole record, 29 rows carry a real charge with
+// no tokens recorded, and this predicate selects 29 of 29 -- every one
+// `incomplete` with `unavailable` beside it. No prose is read to get there.
+func (r StepRow) CutAtItsCeiling() bool {
+	if r.Status != StatusIncomplete || r.Spent.USD == nil {
+		return false
+	}
+	share := r.Step.Permission.BudgetUSD
+	return share > 0 && *r.Spent.USD >= share*ceilingBand
+}
+
+// Truncated reports whether this row was charged real money and kept no token
+// count -- so its tokens are missing, not zero.
+//
+// A turn that used no tokens cannot cost anything, which is what makes the
+// pair decidable from the row alone with nothing stored and nothing to
+// migrate. Every such row on this machine predates the fix in
+// `conversation.charge`, which now takes the larger of the two accumulators
+// the CLI keeps rather than preferring the result event a killed turn never
+// prints: 29 rows, $9.61, all of them ceiling deaths.
+//
+// It exists because the alternative reading is worse than useless. Tokens sum
+// as zero and the dollars are real, so a reader totalling a run is told those
+// steps did almost nothing -- when what actually happened is that they spent
+// their whole share and the receipt lost the evidence.
+func (r StepRow) Truncated() bool {
+	return r.Spent.USD != nil && *r.Spent.USD > 0 && r.Spent.Tokens() == 0
+}
+
 // Spend is what a run's steps have been charged, split by whether anything
 // could say.
 //
@@ -201,9 +247,15 @@ type StepRow struct {
 type Spend struct {
 	MeasuredSteps   int
 	UnmeasuredSteps int
-	Tokens          int
-	USD             *float64
-	PricedBy        []string
+	// TruncatedSteps is how many of MeasuredSteps were charged with no token
+	// count behind them -- see [StepRow.Truncated]. They are counted as
+	// measured because their dollars are real; they are counted again here
+	// because Tokens is a lower bound while any of them exist, and a total
+	// that cannot say so is the same lie in a different column.
+	TruncatedSteps int
+	Tokens         int
+	USD            *float64
+	PricedBy       []string
 }
 
 // AttemptRow is a dispatch of a step that a later one replaced.
@@ -257,6 +309,9 @@ func (r Run) Spend() Spend {
 			continue
 		}
 		out.MeasuredSteps++
+		if step.Truncated() {
+			out.TruncatedSteps++
+		}
 		out.Tokens += step.Spent.Tokens()
 		if step.Spent.USD == nil {
 			fullyPriced = false
@@ -750,6 +805,56 @@ func (s *Store) Own(ctx context.Context, id string, pid int) error {
 		 WHERE id = ?`, pid, id)
 	if err != nil {
 		return unavailable(err, "workflow: claiming %s", id)
+	}
+	return nil
+}
+
+// Reshare changes what one step is allowed to spend on its NEXT dispatch.
+//
+// It writes the step's declaration, not its outcome, so the row a resume
+// compiles from carries the new figure and [Engine.replan] needs to know
+// nothing about redoing. What it must never do is edit an attempt already on
+// the record: the share a dead attempt ran under is the measurement, and a
+// caller that rewrote it would destroy the only half of "cut at $0.62,
+// finished at $0.80" that has actually been observed. That ordering is the
+// caller's to keep -- Reset files the archive copy, so Reset comes first --
+// and it is asserted by a test rather than trusted here, because nothing in
+// one UPDATE can see it.
+func (s *Store) Reshare(ctx context.Context, id, stepID string, usd float64) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE workflow_step SET grant_usd = ? WHERE workflow_id = ? AND id = ?`,
+		usd, id, stepID)
+	if err != nil {
+		return unavailable(err, "workflow: resharing %s step %s", id, stepID)
+	}
+	// A silent no-op here would leave a step running on its old share while
+	// the gate log says otherwise, which is the one outcome worth a refusal.
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return contract.Fail(contract.FailureNotFound,
+			"workflow %s has no step %s", id, stepID)
+	}
+	return nil
+}
+
+// Regrant raises what the whole run may spend.
+//
+// Only ever up. A grant is what somebody authorized, and lowering it under
+// steps that already ran would make the record claim they were never allowed
+// to -- so the refusal is here, where the number is written, and not only in
+// the command that asks for it.
+func (s *Store) Regrant(ctx context.Context, id string, usd float64) error {
+	run, err := s.Load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if usd < run.GrantUSD-moneyEpsilon {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow %s is granted $%.2f: a grant is raised, never lowered, and $%.2f is less",
+			id, run.GrantUSD, usd)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE workflow SET grant_usd = ? WHERE id = ?`, usd, id); err != nil {
+		return unavailable(err, "workflow: regranting %s", id)
 	}
 	return nil
 }

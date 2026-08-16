@@ -212,6 +212,15 @@ func (r Run) Budget() string {
 	}
 
 	tokens := plural(spend.Tokens, "token", "tokens")
+	if spend.TruncatedSteps > 0 {
+		// A floor, and it has to say so. These rows were charged real money
+		// and kept no token count, so they contribute zero to a sum whose
+		// dollars they do contribute to -- see [StepRow.Truncated]. Printed
+		// bare, the total tells a reader those steps did almost nothing, when
+		// what happened is that they spent their whole share and the receipt
+		// lost the evidence.
+		tokens = "at least " + tokens
+	}
 	detail := tokens + " spent"
 	if spend.USD != nil {
 		detail = fmt.Sprintf("%s and $%.2f spent (priced by %s)",
@@ -219,6 +228,10 @@ func (r Run) Budget() string {
 		if spend.UnmeasuredSteps == 0 {
 			detail += fmt.Sprintf(", $%.2f left", r.GrantUSD-*spend.USD)
 		}
+	}
+	if spend.TruncatedSteps > 0 {
+		detail += fmt.Sprintf("; %s charged with no token record",
+			plural(spend.TruncatedSteps, "step", "steps"))
 	}
 	if spend.UnmeasuredSteps == 0 {
 		return fmt.Sprintf("%s; %s", granted, detail)

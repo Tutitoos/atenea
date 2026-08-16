@@ -32,16 +32,28 @@ const MaxExpansions = 3
 // Reading a gate log should not require counting ordinals to tell them apart.
 type Kind uint8
 
-// The two things a gate can ask.
+// The three things a gate can ask.
 const (
 	// KindLaunch is the first gate on every run: the plan as created, before
 	// anything spawns.
 	KindLaunch Kind = iota
 	// KindApprove is an expansion of a run already going.
 	KindApprove
+	// KindRedo is a step being dispatched again at a share somebody raised.
+	//
+	// It is its own kind because it is the only one that authorizes money
+	// against work whose cost is already known. A launch and an expansion
+	// both bless an estimate; a redo blesses a second attempt at a step that
+	// has already been measured failing, and the figure it raises is the
+	// answer to what that step actually needed. A reader totalling what a run
+	// was allowed to spend has to be able to tell the third from the first
+	// two without diffing shares by hand.
+	KindRedo
 )
 
-var kindNames = map[Kind]string{KindLaunch: "launch", KindApprove: "approve"}
+var kindNames = map[Kind]string{
+	KindLaunch: "launch", KindApprove: "approve", KindRedo: "redo",
+}
 
 func (k Kind) String() string {
 	if name, ok := kindNames[k]; ok {

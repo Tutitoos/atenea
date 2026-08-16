@@ -944,6 +944,165 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 	return e.execute(ctx, id, plan)
 }
 
+// Raise is one step named for re-dispatch, and the share it is to run under.
+type Raise struct {
+	StepID string
+	USD    float64
+}
+
+// Redo dispatches steps that were cut at their own spending ceiling, at shares
+// somebody raised, and reopens a finished run to do it.
+//
+// This is deliberately not part of Resume, and it is deliberately not
+// automatic.
+//
+// Not Resume, because Resume is for work nobody judged -- a step cut by Ctrl-C
+// or by a dead Atenea, which may simply be run again as it was. A step cut at
+// its ceiling WAS judged: it reported, the report said incomplete, and the
+// record is complete. What it lacks is not a verdict but money, and reopening
+// a finished run to spend more of it is a different act with a different
+// receipt.
+//
+// Not automatic, because a step that died at its ceiling dies again at the
+// same share. Retrying it unchanged would burn real money to reproduce a
+// result already on the record -- which is why every share here must be a
+// RAISE, refused otherwise, naming both figures. Measured 2026-08-16: of 150
+// steps cut at a ceiling, 2 were ever re-dispatched, and the only path was to
+// write a new plan.
+//
+// What it leaves behind is the pair the admission rule has never had. Reset
+// files the dead attempt into workflow_attempt with the share it ran under
+// before anything is rewritten, then Reshare writes the new one -- so the
+// record holds "cut at $0.62" and "finished at $0.80" as two rows of one step,
+// and the second is a measurement of what the first needed. Nothing else on
+// this machine produces that pair: CostByType excludes ceiling deaths because
+// their spend is a lower bound, so the admission rule is built entirely on the
+// population that never needed it.
+//
+// grant is the run's new total, or zero to leave it alone. A raise that no
+// longer fits under the grant is refused by [Store.Ask] naming what is left,
+// rather than quietly extending it: the grant is the figure somebody
+// authorized, and a redo that moved it by itself would make the check that
+// exists to catch unapproved spend unable to fail.
+func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant float64) (Run, error) {
+	if len(raises) == 0 {
+		return Run{}, contract.Fail(contract.FailureInvalidInput,
+			"workflow redo needs at least one step to dispatch again")
+	}
+	run, err := e.store.Load(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	// Everything a live Atenea would race on is refused first. Closed is NOT
+	// checked -- reopening is the whole point -- but a run somebody else is
+	// executing right now is the same hazard here as anywhere.
+	if run.WriterPID != 0 && run.WriterPID != e.pid && e.alive(run.WriterPID) {
+		return run, contract.Fail(contract.FailureUnavailable,
+			"workflow %s is running under pid %d", id, run.WriterPID)
+	}
+	if err := e.sameRepository(run); err != nil {
+		return run, err
+	}
+
+	// Validated in full before a single write. A refusal on the third of three
+	// steps must not leave the first two resharded and the run reopened.
+	seen := make(map[string]bool, len(raises))
+	steps := make([]Step, 0, len(raises))
+	for _, raise := range raises {
+		if seen[raise.StepID] {
+			return run, contract.Fail(contract.FailureInvalidInput,
+				"workflow %s: step %s named twice", id, raise.StepID)
+		}
+		seen[raise.StepID] = true
+		row, ok := stepRow(run, raise.StepID)
+		if !ok {
+			return run, contract.Fail(contract.FailureNotFound,
+				"workflow %s has no step %s", id, raise.StepID)
+		}
+		if !row.CutAtItsCeiling() {
+			return run, contract.Fail(contract.FailureInvalidInput,
+				"workflow %s step %s is %s and was not cut at its ceiling: "+
+					"redo is for a step that ran out of its own share%s",
+				id, raise.StepID, row.Status, elsewhere(row))
+		}
+		was := row.Step.Permission.BudgetUSD
+		if raise.USD <= was+moneyEpsilon {
+			return run, contract.Fail(contract.FailureInvalidInput,
+				"workflow %s step %s was cut at its ceiling of $%.2f: "+
+					"$%.2f is not a raise, and the same share buys the same result",
+				id, raise.StepID, was, raise.USD)
+		}
+		step := row.Step.Clone()
+		step.Permission.BudgetUSD = raise.USD
+		steps = append(steps, step)
+	}
+
+	if grant > 0 {
+		if err := e.store.Regrant(ctx, id, grant); err != nil {
+			return run, err
+		}
+		if run, err = e.store.Load(ctx, id); err != nil {
+			return Run{}, err
+		}
+	}
+
+	// The gate first, while the run is still closed. Ask checks the raises
+	// against what the grant has left, so a redo that does not fit refuses
+	// here with nothing written and the run still finished.
+	at := e.now()
+	gate, err := e.store.Ask(ctx, id, KindRedo, Proposal{Steps: steps}, at)
+	if err != nil {
+		return run, err
+	}
+	// Asked and answered in one act, the same way Start commits a launch: the
+	// person who typed the shares is the person authorizing them, and a
+	// question they would answer themselves is not a question.
+	if _, err := e.store.Answer(ctx, id, gate.Ordinal, DecisionApproved,
+		Hand(e.surface), "", at); err != nil {
+		return run, err
+	}
+
+	// Reset before Reshare, always. Reset files the dead attempt with the
+	// share it actually ran under; doing it after would archive the new figure
+	// and lose the half of the pair that was measured.
+	for _, raise := range raises {
+		if err := e.store.Reset(ctx, id, raise.StepID, at); err != nil {
+			return run, err
+		}
+		if err := e.store.Reshare(ctx, id, raise.StepID, raise.USD); err != nil {
+			return run, err
+		}
+	}
+	if run, err = e.store.Load(ctx, id); err != nil {
+		return Run{}, err
+	}
+	plan, err := e.replan(run)
+	if err != nil {
+		return run, err
+	}
+	// The raised share meets the same admission rule a new plan would. A share
+	// funded past its old ceiling and still under what starting a turn costs is
+	// doomed for the second reason, and finding that out by spending it is what
+	// this check exists to prevent.
+	if err := e.checkFunding(ctx, plan); err != nil {
+		return run, err
+	}
+	if err := e.store.Own(ctx, id, e.pid); err != nil {
+		return run, err
+	}
+	return e.execute(ctx, id, plan)
+}
+
+// elsewhere names the path that does serve a step redo just refused, when
+// there is one. A refusal that only says no leaves the operator guessing
+// between resume, a new plan, and a typo.
+func elsewhere(row StepRow) string {
+	if row.Status == StatusInterrupted {
+		return ": nobody judged this one, so `atenea workflow resume --redo` runs it as it was"
+	}
+	return ""
+}
+
 // touchesTheWorld reports whether repeating this step could land an effect
 // twice. Process is not one of them: every agent spawns a process to answer at
 // all, and a second spawn of a read-only agent changes nothing outside itself.

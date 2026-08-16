@@ -122,7 +122,15 @@ func (s *Store) Ask(ctx context.Context, runID string, kind Kind, p Proposal, at
 	if err != nil {
 		return Gate{}, err
 	}
-	if run.Closed {
+	// A finished run takes no more questions, with exactly one exception:
+	// a redo is the act of reopening one. Refusing it here would leave the
+	// operator with no way to dispatch a step that died -- which is the state
+	// this project was in until 2026-08-16, when 150 steps had been cut at a
+	// ceiling and 2 had ever been re-dispatched. The gate is written while the
+	// run is still closed and the run is reopened after it is answered, so
+	// there is no window in which a finished run is open with nothing blessing
+	// the money.
+	if run.Closed && kind != KindRedo {
 		return Gate{}, contract.Fail(contract.FailureInvalidInput,
 			"workflow %s already finished at %s", runID, run.Ended.Local().Format(time.RFC3339))
 	}

@@ -265,7 +265,7 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|resume|list|show
+	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|resume|redo|list|show
 
 Run a graph of agent steps. The graph comes from a TOML file and is executed
 exactly as written: nothing here plans, splits or grows it.
@@ -319,6 +319,8 @@ flag, so anything after one is read as an id.
   reject --reason W ID  turn it down; a refused launch stops the run, a refused
                         expansion leaves the approved graph to finish
   resume ID             continue a run that was cut, or whose atenea died
+  redo --step S=USD ID  dispatch a step that was cut at its own ceiling, at a
+                        raised share; reopens a finished run to do it
   list                  the runs on record
   show ID               one run, step by step, and its gate log
 
@@ -326,6 +328,8 @@ Flags:
   --traces PATH         state database (workflows live beside the traces)
   --repository ID       repository to serve at the repository context level
   --redo STEP           with resume: dispatch a step nobody judged; repeatable
+  --step ID=USD         with redo: a step and its raised share; repeatable
+  --grant USD           with redo: the run's new total; default leaves it alone
   --replaces STEP       with propose: a step it removes; repeatable
   --reason WHY          with reject: required
   --limit N             with list: how many runs
@@ -333,6 +337,14 @@ Flags:
 Ctrl-C cuts the running agents and spawns nothing queued. What was cut is
 recorded as interrupted -- nobody judged it -- and resume redoes the read-only
 ones by itself. A step that may have written something waits for --redo.
+
+A step cut at its SPENDING ceiling is a different case: it was judged -- it
+reported, and the report said incomplete -- so resume leaves it alone and redo
+is what dispatches it. Every share redo takes must be higher than the one that
+was cut, because the same share buys the same result, and it is never automatic
+for the same reason. What the record keeps afterwards is the pair: the attempt
+cut at $0.62, and the one that finished at $0.80. Measured 2026-08-16: 150 steps
+had been cut at a ceiling and 2 had ever been re-dispatched.
 `,
 	"traces": `Usage: atenea traces [flags]
 
