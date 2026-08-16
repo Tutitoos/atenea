@@ -206,6 +206,43 @@ type Spend struct {
 	PricedBy        []string
 }
 
+// AttemptRow is a dispatch of a step that a later one replaced.
+//
+// It is deliberately not a StepRow: what a superseded attempt can answer is
+// narrower. The objective, the files and the criterion belong to the step and
+// are the same on every attempt, so keeping copies would invite a reader to
+// diff two things that cannot differ. What does differ, and is the reason
+// this type exists, is the pair (GrantUSD, Spent): the share it ran under and
+// what it cost before it stopped.
+type AttemptRow struct {
+	StepID  string
+	Attempt int
+	TraceID string
+	Status  Status
+	Verdict contract.Verdict
+	Reason  contract.Reason
+	// GrantUSD is the share THIS attempt ran under, which is the figure a
+	// later attempt may have been given more of.
+	GrantUSD float64
+	Spent    contract.Charge
+	// Completeness is nil when the attempt made no claim -- and it is nil on
+	// every attempt cut at its ceiling, because a turn that never answered
+	// never reported coverage.
+	Completeness *float64
+	StoppedAt    string
+	Result       map[string]any
+	Started      time.Time
+	Ended        time.Time
+	// Replaced is when Claim superseded this attempt, not when it ended.
+	Replaced time.Time
+}
+
+// Cut reports whether this attempt stopped without answering, which is what
+// makes its Spent a lower bound rather than a measurement. A reader pricing
+// work must not average these in; a reader asking what a share failed to buy
+// must read nothing else.
+func (a AttemptRow) Cut() bool { return a.Status != StatusOK }
+
 // Spend totals what this run's steps were charged. See [Spend] for why a run
 // with both measured and unmeasured steps comes back as a split rather than
 // one number.
@@ -326,6 +363,57 @@ CREATE TABLE IF NOT EXISTS workflow_step (
 );
 CREATE INDEX IF NOT EXISTS workflow_step_status ON workflow_step(status);
 CREATE INDEX IF NOT EXISTS workflow_open ON workflow(closed);
+
+-- What a step was, on an attempt that has been superseded.
+--
+-- workflow_step holds exactly one attempt: Claim clears the outcome columns
+-- on every re-claim, which is right for the live row and is why a redo does
+-- not inherit a charge it did not incur. The cost of that is what this table
+-- exists for. Measured 2026-08-16 on wf1786845363956-1: four steps were cut
+-- at their ceiling having spent $0.49-$0.62 against a $0.45 share, and what
+-- any of them would have cost to FINISH is unanswerable, because a redo would
+-- have overwritten the only row that said they were cut at all.
+--
+-- Append-only, and written by Claim inside the same transaction as the clear,
+-- so the archive and the erasure cannot come apart. A first dispatch archives
+-- nothing: attempt 0 means the row has never held an outcome.
+--
+-- grant_usd is kept per attempt because it is the number that can differ
+-- between them -- a step cut at $0.62 and re-run at $0.90 is one measurement
+-- of what the work costs, and the pair is unreadable if only the last share
+-- survives.
+CREATE TABLE IF NOT EXISTS workflow_attempt (
+    workflow_id TEXT    NOT NULL,
+    step_id     TEXT    NOT NULL,
+    attempt     INTEGER NOT NULL,
+    trace_id    TEXT    NOT NULL DEFAULT '',
+    status      TEXT    NOT NULL,
+    verdict     TEXT    NOT NULL DEFAULT '',
+    reason_kind TEXT    NOT NULL DEFAULT '',
+    reason_text TEXT    NOT NULL DEFAULT '',
+    grant_usd   REAL    NOT NULL DEFAULT 0,
+    -- Same nullability as workflow_step, for the same reason: an attempt
+    -- nobody could meter must not read as one that cost nothing.
+    spent_usd   REAL,
+    spent_input_tokens       INTEGER,
+    spent_output_tokens      INTEGER,
+    spent_cache_read_tokens  INTEGER,
+    spent_cache_write_tokens INTEGER,
+    priced_by   TEXT    NOT NULL DEFAULT '',
+    completeness REAL,
+    stopped_at  TEXT    NOT NULL DEFAULT '',
+    -- The answer this attempt gave. A review that refuses one hands the
+    -- sentence back to the retry, and that card is process-local today: a
+    -- run resumed in another process cannot rebuild it. Kept here so it can.
+    result      TEXT    NOT NULL DEFAULT '',
+    started_at  TEXT    NOT NULL DEFAULT '',
+    ended_at    TEXT    NOT NULL DEFAULT '',
+    -- When Claim superseded it, which is a different fact from ended_at: a
+    -- step interrupted on Monday and redone on Friday has both.
+    replaced_at TEXT    NOT NULL,
+    PRIMARY KEY (workflow_id, step_id, attempt),
+    FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS workflow_gate (
     workflow_id TEXT    NOT NULL,
@@ -485,11 +573,65 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, repository str
 	return nil
 }
 
-// Claim marks a step running, with the pid that owns it. One statement, so a
-// reader never sees a step running under nobody.
+// fileAttempt copies a step's current row into the archive, verbatim. It
+// takes (replaced_at, workflow_id, step_id).
+//
+// Two callers, and they are the two writes that make an attempt unreadable:
+// Reset, which drops the status a resume is about to replace, and Claim,
+// which clears the outcome columns. Reset runs first when a resume redoes an
+// interrupted step, so it is the one that files the TRUE terminal status --
+// measured 2026-08-16: with the copy in Claim alone, every redone attempt was
+// filed as `pending`, because Reset had already written that over
+// `interrupted`. INSERT OR IGNORE is what lets both call it: the first copy
+// of an attempt number wins, and the second is a no-op rather than a
+// correction.
+//
+// attempt > 0 is the whole guard: a step dispatched for the first time has
+// never held an outcome, and filing its empty row would put a pending step in
+// a table of finished ones.
+//
+// It selects from the row itself, so what is filed is exactly what was there;
+// it cannot drift from the columns Finish wrote, because it never passes
+// through Go.
+const fileAttempt = `
+INSERT OR IGNORE INTO workflow_attempt (
+    workflow_id, step_id, attempt, trace_id, status, verdict,
+    reason_kind, reason_text, grant_usd, spent_usd,
+    spent_input_tokens, spent_output_tokens,
+    spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
+    completeness, stopped_at, result, started_at, ended_at, replaced_at)
+SELECT workflow_id, id, attempt, trace_id, status, verdict,
+       reason_kind, reason_text, grant_usd, spent_usd,
+       spent_input_tokens, spent_output_tokens,
+       spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
+       completeness, stopped_at, result, started_at, ended_at, ?
+FROM workflow_step
+WHERE workflow_id = ? AND id = ? AND attempt > 0`
+
+// Claim marks a step running, with the pid that owns it, and files the
+// attempt it is replacing.
+//
+// One transaction, for two reasons rather than one. A reader must never see a
+// step running under nobody -- that was the original -- and the archive must
+// never come apart from the erasure it records. A copy taken outside this
+// boundary would leave two ways to lose an attempt: the copy failing after the
+// clear, and a crash between them.
+//
+// The INSERT selects from the row itself, so what is filed is exactly what was
+// there. It cannot drift from the columns Finish wrote, because it never
+// passes through Go.
 func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 	attempt int, at time.Time, pid int) error {
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, fileAttempt, stamp(at), id, stepID); err != nil {
+		return unavailable(err, "workflow: filing %s step %s attempt", id, stepID)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, trace_id = ?, attempt = ?, writer_pid = ?, started_at = ?,
 		     ended_at = '', verdict = '', reason_kind = '', reason_text = '',
@@ -498,8 +640,10 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
 		     priced_by = '', completeness = NULL, stopped_at = ''
 		 WHERE workflow_id = ? AND id = ?`,
-		StatusRunning.String(), traceID, attempt, pid, stamp(at), id, stepID)
-	if err != nil {
+		StatusRunning.String(), traceID, attempt, pid, stamp(at), id, stepID); err != nil {
+		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
+	}
+	if err := tx.Commit(); err != nil {
 		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
 	}
 	return nil
@@ -567,14 +711,32 @@ func (s *Store) Interrupt(ctx context.Context, id, stepID, why string, at time.T
 	return nil
 }
 
-// Reset puts a step back to pending so a resume can dispatch it again.
-func (s *Store) Reset(ctx context.Context, id, stepID string) error {
-	_, err := s.db.ExecContext(ctx,
+// Reset puts a step back to pending so a resume can dispatch it again, and
+// files the attempt it is about to make unreadable.
+//
+// The filing belongs here and not only in Claim because this is the write
+// that destroys the interesting half. Claim clears the outcome columns, which
+// is visible; Reset overwrites `interrupted` with `pending`, which is not --
+// and `pending` is the one status that says nothing about how the attempt
+// ended. One transaction, so the copy and the overwrite cannot come apart.
+func (s *Store) Reset(ctx context.Context, id, stepID string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, fileAttempt, stamp(at), id, stepID); err != nil {
+		return unavailable(err, "workflow: filing %s step %s attempt", id, stepID)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, ended_at = '', reason_kind = '', reason_text = '', writer_pid = 0
 		 WHERE workflow_id = ? AND id = ?`,
-		StatusPending.String(), id, stepID)
-	if err != nil {
+		StatusPending.String(), id, stepID); err != nil {
+		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
+	}
+	if err := tx.Commit(); err != nil {
 		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
 	}
 	return nil
@@ -658,6 +820,103 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	if err := rows.Err(); err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
 	}
+	return out, nil
+}
+
+// Attempts reads the superseded dispatches of one step, oldest first. An
+// empty stepID reads every step of the run.
+//
+// The live attempt is NOT here -- it is the workflow_step row, and a caller
+// wanting the whole history reads both. Keeping the current one out of this
+// table is what makes "was this ever redone" answerable by asking whether the
+// slice is empty, rather than by comparing a count against an attempt number
+// that a crash could have advanced without a dispatch.
+func (s *Store) Attempts(ctx context.Context, id, stepID string) ([]AttemptRow, error) {
+	query := `SELECT step_id, attempt, trace_id, status, verdict, reason_kind,
+	                 reason_text, grant_usd, spent_usd, spent_input_tokens,
+	                 spent_output_tokens, spent_cache_read_tokens,
+	                 spent_cache_write_tokens, priced_by, completeness,
+	                 stopped_at, result, started_at, ended_at, replaced_at
+	          FROM workflow_attempt WHERE workflow_id = ?`
+	args := []any{id}
+	if stepID != "" {
+		query += " AND step_id = ?"
+		args = append(args, stepID)
+	}
+	query += " ORDER BY step_id, attempt"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reading %s attempts", id)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AttemptRow
+	for rows.Next() {
+		row, err := scanAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, unavailable(err, "workflow: reading %s attempts", id)
+	}
+	return out, nil
+}
+
+func scanAttempt(rows *sql.Rows) (AttemptRow, error) {
+	var (
+		out                         AttemptRow
+		status, verdict             string
+		reasonKind, reasonText      string
+		usd                         sql.NullFloat64
+		inputTok, outputTok         sql.NullInt64
+		cacheReadTok, cacheWriteTok sql.NullInt64
+		pricedBy                    string
+		completeness                sql.NullFloat64
+		result                      string
+		started, ended, replaced    string
+	)
+	if err := rows.Scan(&out.StepID, &out.Attempt, &out.TraceID, &status, &verdict,
+		&reasonKind, &reasonText, &out.GrantUSD, &usd, &inputTok, &outputTok,
+		&cacheReadTok, &cacheWriteTok, &pricedBy, &completeness,
+		&out.StoppedAt, &result, &started, &ended, &replaced); err != nil {
+		return AttemptRow{}, unavailable(err, "workflow: reading an attempt")
+	}
+	var err error
+	if out.Status, err = ParseStatus(status); err != nil {
+		return AttemptRow{}, err
+	}
+	if verdict != "" {
+		if out.Verdict, err = contract.ParseVerdict(verdict); err != nil {
+			return AttemptRow{}, err
+		}
+	}
+	if reasonKind != "" {
+		if out.Reason.Kind, err = contract.ParseFailureKind(reasonKind); err != nil {
+			return AttemptRow{}, err
+		}
+		out.Reason.Text = reasonText
+	}
+	// Same convention as the step row: a null is a figure nobody measured,
+	// and a zero would read as a turn that was weighed and cost nothing.
+	if usd.Valid {
+		v := usd.Float64
+		out.Spent.USD = &v
+	}
+	out.Spent.InputTokens = int(inputTok.Int64)
+	out.Spent.OutputTokens = int(outputTok.Int64)
+	out.Spent.CacheReadTokens = int(cacheReadTok.Int64)
+	out.Spent.CacheWriteTokens = int(cacheWriteTok.Int64)
+	out.Spent.PricedBy = pricedBy
+	if completeness.Valid {
+		v := completeness.Float64
+		out.Completeness = &v
+	}
+	out.Result = readMap(result)
+	out.Started = parseStamp(started)
+	out.Ended = parseStamp(ended)
+	out.Replaced = parseStamp(replaced)
 	return out, nil
 }
 

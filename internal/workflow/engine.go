@@ -934,7 +934,7 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 		if !forced[step.Step.ID] && touchesTheWorld(step.Step.Permission.Effects) {
 			continue
 		}
-		if err := e.store.Reset(ctx, id, step.Step.ID); err != nil {
+		if err := e.store.Reset(ctx, id, step.Step.ID, e.now()); err != nil {
 			return run, err
 		}
 	}
