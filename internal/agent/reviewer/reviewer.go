@@ -2,15 +2,32 @@
 // answered about and says whether the answer holds up.
 //
 // It is the second worked example, and it is deliberately not a model. A
-// review that cannot be checked is an opinion, so this one only makes claims
-// it can prove on the spot: it opens the files the subject named and compares
-// them against the numbers in the subject's result. Everything above it --
-// the subject on the wire, the review's own trace row, the relaunch carrying
-// the rejection back -- is exercised by a process that really re-reads a file
-// and really disagrees when the answer is wrong.
+// review that cannot be checked is an opinion, so this one only makes
+// claims it can prove on the spot. Two shapes of subject get two different
+// checks:
 //
-// A model-backed reviewer differs from this one only in what happens between
-// reading the subject and writing the verdict.
+//   - A subject whose result names a `path` (filereader's contract) is
+//     re-read whole: the claimed bytes, lines and content are compared
+//     against the file on disk. See check() below.
+//   - A subject whose result is prose (`explore`'s and `reader`'s
+//     contract: `summary`/`findings`) has no bytes or lines to compare, so
+//     the check is narrower: every `path:line` or `Line N of path`
+//     citation the prose contains is resolved against disk and, where a
+//     quoted excerpt sits beside one, checked against what that line
+//     actually holds. See citations.go for exactly what counts as a
+//     citation and what "roughly matches" means -- both are deliberately
+//     narrow, and every report this mode produces says so in its own
+//     text, on an `ok` verdict as much as a refusal, because a
+//     prose-shaped answer passing this check has had far less of it
+//     looked at than a filereader answer passing the first one.
+//
+// Everything above either check -- the subject on the wire, the review's
+// own trace row, the relaunch carrying the rejection back -- is exercised
+// by a process that really re-reads a file and really disagrees when the
+// answer is wrong.
+//
+// A model-backed reviewer differs from either of these only in what
+// happens between reading the subject and writing the verdict.
 package reviewer
 
 import (
@@ -98,6 +115,9 @@ func judge(in assignment) report {
 		return incomplete("the run was canceled: " + reasonText(s))
 	}
 
+	if path, ok := s.Result["path"].(string); !ok || strings.TrimSpace(path) == "" {
+		return judgeCitations(in, s)
+	}
 	checks, err := check(in, s)
 	if err != nil {
 		return incomplete(err.Error())
