@@ -2309,11 +2309,83 @@ person checks before authorizing the next step. It was introduced the same day, 
 archive that makes redo auditable at all — the fix and the defect arrived in the same
 commit, four hours apart.
 
-**What is still unpriced.** Three ceiling deaths remain (`census`, `drivers-mod`,
-`sentry-mod`, `$0.49`-`$0.54` on `$0.45`), all three genuine large readers: 124k-180k
-cache-read against `admin-config`'s 4,772. Whether 1.51x generalises from the one step whose
-bill was anomalous to the three whose bills were ordinary is exactly the question one
-measurement cannot answer, and saying so is cheaper than implying it did.
+**What was still unpriced, and the claim that kept it that way.** Three ceiling deaths
+remained (`census`, `drivers-mod`, `sentry-mod`, `$0.49`-`$0.54` on `$0.45`). They were
+declined twice as unlike `admin-config` on the grounds that they were genuine large readers -
+124k-180k cache-read against `admin-config`'s 4,772 - so 1.51x could not be expected to
+generalise from the one step whose bill was anomalous.
+
+**That comparison was invalid, and the table that refutes it was already on the page.**
+`admin-config`'s dead attempt recorded 30.37x its tokens' list price; the other three
+recorded 2.06x, 1.44x and 1.35x; the one row that finished recorded 1.00x. Every killed row
+under-records, at a rate that varies. Comparing 4,772 against 124k-180k is comparing a record
+missing ~97% of its reads against three missing 26-51% of theirs, and no claim about how much
+a step read survives it. The next instrument bought the answer instead.
+
+## A thirty-eighth instrument: buying the failures, because a rule built on survivors cannot see them
+
+Measured 2026-08-16. The three deaths above, re-dispatched at `$0.90` against their original
+`$0.45`, on the argument that **expected cost is nearly share-independent** - a turn stops
+when it answers - so the share sets only the odds of paying for a *second* death, which
+produces no measurement at all. A generous share is cheaper in expectation than a tight one.
+
+Spent `$1.82` against an estimate of `$1.70` and a worst case of `$3.70`. Every figure below
+is a receipt.
+
+| step | share | dead spend | finish | finish/share | finish/dead | coverage |
+|---|---|---|---|---|---|---|
+| `sentry-mod` | $0.45 | $0.5151 | $0.4718 | 1.05x | **0.92x** | 1.00 |
+| `drivers-mod` | $0.45 | $0.4932 | $0.5327 | 1.18x | 1.08x | 1.00 |
+| `admin-config` | $0.45 | $0.6182 | $0.6756 | 1.50x | 1.09x | 1.00 |
+| `census` | $0.45 | $0.5369 | $0.8169 | **≥1.82x** | ≥1.52x | **0.55** |
+
+**1.51x did generalise, and dead spend predicted it.** Before dispatch, `admin-config`'s
+finish/dead ratio of 1.09x was applied to the other three as a prediction: `census` $0.59,
+`drivers-mod` $0.54, `sentry-mod` $0.56. Actual: `$0.53` (off by 1.4%), `$0.47`
+(overpredicted by 19%, in the safe direction), and `census` - the miss. `sentry-mod` finished
+for **less than it had already burned dying**. Of the three that completed, finish/dead spans
+0.92x-1.09x: **what a killed turn already spent is the best predictor of what it needs**,
+and it is a figure the record already holds for every death.
+
+**`census` is a sizing failure, and it is the one row where the answer reserve did exactly
+what it was built for.** Two things first written here about it were wrong, both by reaching
+past what was measured. It did not stop comfortably short of its ceiling: it answered at
+`$0.8169` of `$0.90` - **91%**, with `$0.08` left. And it did not answer *at* the nudge: its
+read allowance was `74,700` weighed tokens (`readShare 0.5` x share x `166,000`) and it
+consumed **163,371**, or **2.19x**. The allowance is a prompt, not a bound; it read well past
+it and then wrote the answer before the ceiling could kill it. That is the mechanism working:
+the same share, before the reserve existed, produced a death with the answer nowhere.
+
+So `census` needed more than `$0.90` and got a legible 0.55 instead of a `$0.90` hole. What it
+would need to finish in one turn is **not measured**: linearly, 11 files at 163,371 weighed
+implies ~267,000 for 18, which is a share of **`$3.22`** - 7.2x its original. That is an
+extrapolation from one point, and the honest position is that two remedies remain open and
+this run does not distinguish them: a share around `$3` or a split into two steps. Saying "no
+share rescues it" would be the same overreach as the cache-read comparison above, one entry
+later. What *is* settled is that an admission rule funding steps past a threshold cannot tell
+this apart from the three that finished - the run summary prints all four as `ok`.
+
+**The free half was the better half: the charge fix verified on the mode it was written for.**
+All four rows were killed *before* `conversation.charge` was fixed, and re-run after:
+
+| step | recorded/list, killed (pre-fix) | recorded/list, finished (post-fix) |
+|---|---|---|
+| `admin-config` | 30.37x | **1.0000x** |
+| `census` | 2.06x | **1.0000x** |
+| `drivers-mod` | 1.44x | **1.0000x** |
+| `sentry-mod` | 1.35x | **1.0000x** |
+
+Four for four, exact to four decimals, against the list price recovered in instrument 35.
+A mutation proves a fix bites; this proves it bites *the rows that were broken*, which no
+mutation can. It also confirms the two column fixes committed hours earlier on data that did
+not exist when they were written: `census` prints `$1.35` = `$0.8169` live + `$0.5369`
+archived, and the 19 rows sum to the header.
+
+**What the admission rule may now stand on.** Three failure samples, not one: finish/share of
+1.05x, 1.18x, 1.50x, median **1.18x**. That population is still small and still selected -
+all readers, all one repository, all one model - and the rule's own median still comes from
+`CostByType`, which reads survivors only. What changed is that failure is no longer *unpriced*,
+and the cheaper predictor is now known to exist.
 
 
 ## The general lesson
@@ -2741,6 +2813,34 @@ measurement cannot answer, and saying so is cheaper than implying it did.
     1.00x) and exposed a balance reading $0.62 high. Re-running a known failure
     costs one share and is the only instrument that observes the failure mode; a
     median over survivors is a description of survival.
+42. **What a killed turn already spent is the cheapest predictor of what it needs;
+    what it *read* is not a number you have.** Three deaths bought at a raised
+    share finished for 0.92x, 1.08x and 1.09x of their own dead spend -- one of
+    them for **less** than it had burned dying -- and a prediction made from a
+    single prior sample landed within 1.4% and 19%. The reason the same steps were
+    declined twice is that the comparison reached for cache-read instead: 4,772
+    against 124k-180k, which is one record missing 97% of its reads against three
+    missing 26-51%. Every killed row under-records at its own rate, so a token
+    count taken from a killed row cannot compare two of them. The dollars can:
+    they are the receipt.
+43. **A share too small and an objective too large are the same receipt, and the
+    record calls both `ok`.** Of four rows funded past their ceiling, three
+    finished and `census` answered at 0.55 -- at 91% of its ceiling, having read
+    2.19x its allowance, seven files unread. The answer reserve is what turned a
+    hole into a legible partial: nudged, it read past the prompt anyway and then
+    wrote before the ceiling could kill it. Whether `$3` or a split fixes it is
+    **not measured**; one point extrapolates to a `$3.22` share and that is an
+    extrapolation, not a finding. An admission rule funding steps past a
+    threshold cannot tell this apart from the three that finished.
+44. **The retraction and the repeat came one entry apart.** The cache-read
+    comparison was retracted on this page for reaching past what the record could
+    support -- and the very next entry, written in the same hour, said "no share
+    rescues it" about a step whose only sizing evidence was a single point. Both
+    claims were about the same four rows. Knowing the failure mode by name, having
+    just written it down, and having the corrected table on screen did not prevent
+    it; the end-of-phase question -- *what would look identical if this were
+    wrong?* -- did, and only because it was asked mechanically rather than when
+    something felt uncertain.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

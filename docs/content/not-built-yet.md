@@ -1258,8 +1258,27 @@ new edge semantics and it needs no graph-language decision at all.
 
 **Not decided.** Recorded as a question because the cheap answer (add the word) forecloses the
 better one, and because nothing has yet been measured about how often a partial is actually
-sufficient for the criterion that asked for it. `n = 2` partials on this machine, both explore
-steps, both with completeness ≥ 0.8.
+sufficient for the criterion that asked for it.
+
+What *is* measured, as of 2026-08-16, is the distribution, and it is not the one this entry
+was written against. `n = 8` partials on this machine of 34 rows carrying a completeness at
+all -- **six of them readers**, not explore steps, and four at or below 0.55:
+
+| coverage | step | type |
+|---|---|---|
+| 0.10 | `booking-b` | reader |
+| 0.15 | `admin-usuarios` | reader |
+| 0.30 | `users-mod` | reader |
+| 0.55 | `census` | reader |
+| 0.80 | `explore` | explore |
+| 0.85 | `explore` | explore |
+| 0.90 | `devops-internal` | reader |
+| 0.95 | `users-mod` | reader |
+
+The two explore rows at 0.80 and 0.85 are the original `n = 2`; every reader partial arrived
+after this was written. A rule that treats a partial as nearly-whole was plausible at `n = 2`
+with both above 0.8 and is not plausible here: the median is `0.55`, and `0.10` is a step that
+reached none of its objective and still recorded `ok`.
 
 ## The bill is not a function of the tokens we count — 2026-08-16
 
