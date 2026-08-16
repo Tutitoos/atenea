@@ -1280,6 +1280,14 @@ after this was written. A rule that treats a partial as nearly-whole was plausib
 with both above 0.8 and is not plausible here: the median is `0.55`, and `0.10` is a step that
 reached none of its objective and still recorded `ok`.
 
+`booking-b` at `0.10` is not a count correction, it is the completeness question above with a
+worse example than the one that opened it. `auth-mod` recorded no `completeness` at all, so the
+bug was legible as a missing field -- absence read as fine. `booking-b` recorded `0.10`, an
+actual claim of near-total failure, and `verdict ok` still followed it: the defect is not that
+the field goes missing, it is that no value written into it, however small, changes what `ok`
+means. A reviewer told the number would catch this one on sight; nothing today is told the
+number at all.
+
 ## The bill is not a function of the tokens we count — 2026-08-16
 
 Two floor probes, eleven seconds apart, same repository, same model, same CLI (`2.1.232`), both
@@ -1426,6 +1434,39 @@ requiring it.** Three facts settled it, all measured that day and none of them c
 So `MaxTokens` is now advisory, zero means the caller declared none, and `Fits` reads a parent's
 zero as constraining nothing -- otherwise an absence would refuse every child that did declare.
 `Validate` still refuses a negative, which is not a declaration of anything.
+
+**Re-measured 2026-08-16, against the live config and the live record. This widens the finding,
+it does not narrow it.**
+
+**Three types declare `200000` now, not two.** `explore`, `reader`, and `plan`
+(`internal/config/default.toml:1824,1858,1890`) — `plan` was not counted when this entry was
+first written. The `max_tokens = 1` types are unchanged and still honest: `reviewer` (61 rows)
+and `plan-check` (18 rows) have never recorded a token in either lane; `filereader` has never run
+once on this machine, so its `1` is untested, not confirmed.
+
+**Read literally — "input and output together," the field's own declared definition — the
+ceiling has never once been exceeded.** The highest `input + output` on any completed row: `plan`
+`20,145`, `explore` `20,476`, `reader` `7,256` — a tenth of `200000` at the very top of the range.
+Enforcing the number as written would have refused nothing real; it would have been a ceiling
+that never bound anything, which is a different failure from the one this entry names.
+
+**Read as the bill actually reads — cache included — the ceiling is not marginal, it is routine.**
+Of `explore`'s 22 completed runs, 20 (91%) clear `200000`, the worst at `1,599,487` — eight times
+the declared number, on `wf1786667473939-1`. `reader` clears it on 11 of 33 (33%), topping out at
+`268,328` on `census`, `wf1786845363956-1` — 207,330 of that cache-read alone. `plan` has never
+cleared it; its worst is `116,465`.
+
+**The row this entry cited — `auth-mod`, `224,148` cache-read tokens alone — is real, current,
+and not the extreme case.** It is not even `reader`'s own worst: `census`, same run, went higher.
+The single example understated both how often this happens and by how much.
+
+**Same conclusion, different reason.** Under its own definition the number never fired; under the
+definition that matches money, it fires on the majority of one type's successful work. Neither
+reading makes `200000` a bound worth enforcing as declared — the first because it is too loose to
+ever bind, the second because it is too tight to survive contact with real reads. Enforcing
+nothing stays correct; inventing a replacement number from this pass would repeat the mistake
+the entry above already names — a value chosen to pass a check rather than measured against the
+work.
 
 **What is still not built** is the bound itself, and the decision above does not pretend
 otherwise: it removes a false claim, not the gap. Wiring a real per-turn token cap needs values
