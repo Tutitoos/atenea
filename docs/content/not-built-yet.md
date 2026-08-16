@@ -1637,15 +1637,25 @@ Two shapes would close it, and only one was ever a decision:
   at a fake CLI that ANSWERS, so restoring the default fails on the row that appears rather
   than on the message. `atenea floor` lists every measured type and costs nothing, so there
   was no discovery argument for the default either.
-- **A confirmation. Still not built.** `--yes` to proceed, otherwise print the figure and
-  exit 0 having spent nothing. This one is a real choice: it makes every scripted caller
-  pass a flag, and the notice is currently the only line between reading a figure and paying
-  it. The accident that prompted all of this is closed without it, which is exactly why it
-  should be decided on its own merits rather than in the session that overspent.
+- **A confirmation. Decided 2026-08-16: not built, on purpose.** `--yes` to proceed,
+  otherwise print the figure and exit 0 having spent nothing. Declined, not deferred: the
+  defect that opened this entry is fixed on both counts that mattered here — the notice
+  quotes the real receipt now, and the default that actually spent is closed. A `--yes` on
+  top of both is a belt over a working brace, and it is not free: at least seven existing
+  `floor_test.go` cases call this command expecting it to spend with no `--yes` and would
+  need the flag added to keep passing, and any unattended caller of this command elsewhere
+  that could not be ruled out on this machine would break silently until updated. Chosen
+  with that cost weighed, not because the choice was costless.
 
 The cheapest half needed no decision and is also built: the figure the notice quotes is
 now `Measurement.ColdStartUSD`, the receipt, where it used to be the stored floor - the
 prefix's slice, 1.9x to 9.8x too small (see instrument 36 in `measuring-the-wrong-process`).
 
-**Done when:** `about to spend real money` can refuse. The other half of the original
-condition - that no invocation spends on a type nobody named - is done.
+**Not closed clean — the residue is structural, and it outlives this decision.** `--repo`
+and `--agent` gate spend only as a side effect of being required values; neither exists
+because a rule here says spending needs a gate. Nothing in `floorMeasure` says that. The
+next flag or default shaped like the old `--agent` default — one that can spend money by
+quietly picking a value nobody asked for — is stopped only by whoever writes it remembering
+to check, which is exactly how this one went unstopped until it was tripped. That is the
+open condition this entry leaves behind: not unrefused money, but an unenforced rule about
+when refusing is required.

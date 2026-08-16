@@ -2387,6 +2387,71 @@ all readers, all one repository, all one model - and the rule's own median still
 `CostByType`, which reads survivors only. What changed is that failure is no longer *unpriced*,
 and the cheaper predictor is now known to exist.
 
+## A thirty-ninth instrument: a ledger with volume and no verdict
+
+Measured 2026-08-16. The question on the table was whether enough traffic had accumulated
+through headroom to decide, per role, which model to route to — a router, unbuilt, parked on
+the stated reason "wait for traffic data." That framing was wrong about what was missing:
+volume was never the binding constraint.
+
+**The boundary from instrument 7 makes the clock exact.** `client` in `savings_events.jsonl`
+is authoritative from `2026-08-13T16:34:46Z`; before that it was a transport bucket. At time
+of writing that is 2.97 days of trustworthy attribution, 9,800 rows: `omp` 9,623 across four
+models (`claude-sonnet-5` 4,812, `claude-opus-5` 4,603, `claude-opus-4-8` 183,
+`claude-haiku-4-5` 25), `claude-code` 177, all on `claude-opus-5` — no model has ever run
+through both clients in the trustworthy window, and two of `omp`'s four have no `claude-code`
+row to compare against at all.
+
+**None of that volume answers the question, because the schema cannot hold the answer.**
+Every row in the file carries exactly `{v, ts, before, after, saved, cost_usd, model, client,
+source, pid}`. There is no field for whether the turn succeeded, was corrected, or was rerun.
+`saved` and `cost_usd` describe how much a request was compressed and what the compressed
+version would cost at list price — properties of the transport, not the turn. A year of this
+exact table, at any volume, on any number of clients, still answers only "which compressed
+more," never "which model was better," because the second question was never wired to a
+column.
+
+**Confirmed separately: `claude-code`'s 47-hour silence is disuse, not breakage.** The
+wrapper is intact — `claude()` in `~/.bashrc:267` still sets `x-client: claude-code` ahead of
+the inherited `omp` value, and is sourced correctly in a fresh interactive shell. One test
+turn, `claude -p "Reply with exactly: ok"`, landed a correctly tagged row within a second:
+`2026-08-16T16:05:51Z`, `client: claude-code`, `model: claude-opus-5`. The gap in the record
+is a gap in usage, not in the path.
+
+**Done when:** a row can say whether the turn it describes succeeded — from the harness's own
+outcome, joined in, or a field this ledger is given directly. Until then the router stays
+unbuilt regardless of how long the traffic keeps arriving, because more of this schema
+answers a question nobody is asking.
+
+## A fortieth instrument: an exact price list, priced against nothing
+
+Measured 2026-08-16. Instrument 35 recovered the list price behind every `$` figure on this
+page — $5/Mtok input, $25 output, $0.50 cache read, $10 cache write — and reconciled it
+exactly against real receipts, which read as proof the numbers were real money. It proved the
+arithmetic; it never asked whether this account is billed by it.
+
+**It is not.** `~/.headroom/subscription_state.json`, polled 2026-08-16T16:06:03Z:
+`extra_usage.is_enabled: false`, `monthly_limit_usd: null`. This is a Claude Max
+subscription, metered by two utilization windows — `five_hour` at 73%, `seven_day` at 72% of
+an unpublished cap — not by the dollar. Every `cost_usd` in `savings_events.jsonl` (22,000+
+rows and counting), and every `USD`/`total_cost_usd` figure this project's own receipts,
+`CostByType` rows, and floor measurements print, is the same list-price arithmetic applied to
+a session that has never once been billed in that unit.
+
+**Both things are true at once, and neither cancels the other.** The arithmetic is exact —
+instrument 35 proved that to four decimals — and it is not a bill. It remains valid for what
+every comparison on this page has actually used it for: this turn cost more than that one,
+this step's share covered its need at 1.09x. It stops being valid the moment a figure is read
+as an amount anyone paid, on this account, in dollars, because no such payment happens; the
+number is a stand-in unit for the two quantities that do get spent — utilization against the
+five-hour window and against the seven-day one — and nothing on this page has ever printed
+either.
+
+Not a defect in `CostByType`, in the recovered price list, or in the entry above: all three
+are correct arithmetic. It is a fact about the account underneath all of them that nothing had
+checked before tonight.
+
+
 
 ## The general lesson
 
@@ -2841,6 +2906,17 @@ and the cheaper predictor is now known to exist.
     it; the end-of-phase question -- *what would look identical if this were
     wrong?* -- did, and only because it was asked mechanically rather than when
     something felt uncertain.
+45. **A price list that reconciles exactly is proof of consistent arithmetic, not proof of a
+    bill.** Every `$` figure this project has printed traces to a list price recovered and
+    verified to four decimals — and the account those figures describe is a flat-rate
+    subscription that has never been charged by the token. The two scarce resources on this
+    machine are two utilization windows, and no receipt on this page has ever named either
+    one.
+46. **A ledger's volume cannot answer a question its schema has no column for.** Traffic
+    through a proxy at any scale measures what changed size and what it would have cost at
+    list price. Whether the turn behind each row succeeded is a different axis entirely, and
+    accumulating rows on the wrong axis converges on nothing — the question stays open at any
+    n, because it was never being asked.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
