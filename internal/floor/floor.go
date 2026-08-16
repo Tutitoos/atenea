@@ -174,6 +174,32 @@ func (m Measurement) StartTokens() int {
 	return m.Prefix() + m.FirstCallTokens
 }
 
+// ColdStartUSD is what ONE TURN that establishes the cache is billed: the
+// prefix and the block arriving with the first tool call, both at cold price.
+//
+// For any row a FirstCall probe wrote this is not an estimate but the receipt
+// that probe paid, recovered exactly. USD is defined as Prefix x USDPerToken
+// and USDPerToken as receipt / StartTokens (see cmd/atenea.coldEquivalentUSD),
+// so scaling USD back up by StartTokens/Prefix cancels the prefix and returns
+// the receipt itself. Measured 2026-08-16 by paying for two: $0.2724 and
+// $0.4477 against $0.2704 and $0.4464 priced lane by lane off the recovered
+// list -- 1% on both.
+//
+// It exists because the stored USD is the PREFIX's slice of that receipt and
+// reads, to anybody who has not read its doc, like the price of the turn. Two
+// probes quoted off it were authorized at $0.31 and cost $1.09. Any line that
+// tells a person what a probe is about to cost must use this figure.
+//
+// Zero when there is nothing to derive from -- no dollar figure, or no prefix
+// -- and a caller must read that as unknown, never as free.
+func (m Measurement) ColdStartUSD() float64 {
+	prefix := m.Prefix()
+	if m.USD <= 0 || prefix == 0 {
+		return 0
+	}
+	return m.USD * float64(m.StartTokens()) / float64(prefix)
+}
+
 // WarmUSD is what starting a step costs on a machine whose cache already
 // holds this prefix and this first-call block: the ordinary case, and the
 // figure an admission rule should refuse a per-step share against.
@@ -189,11 +215,7 @@ func (m Measurement) StartTokens() int {
 // Zero when there is nothing to derive from -- no dollar figure, or no
 // prefix -- and a caller must read that as unknown, never as free.
 func (m Measurement) WarmUSD() float64 {
-	prefix := m.Prefix()
-	if m.USD <= 0 || prefix == 0 {
-		return 0
-	}
-	return allowance.WarmDiscount(m.USD * float64(m.StartTokens()) / float64(prefix))
+	return allowance.WarmDiscount(m.ColdStartUSD())
 }
 
 // DefaultPath is where the cache lives when nothing overrides it: beside

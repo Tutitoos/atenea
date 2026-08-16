@@ -1555,3 +1555,32 @@ refuses a partial that will not say where it stopped - "not auditable" - but acc
 answer that claims nothing at all. The principle is already in the code; it is applied to
 `0.5 with no stopped_at` and not to `no claim`. Of the rows above, every `plan` row and
 most `explore` rows carry `completeness = NULL` and are recorded as whole answers.
+
+## A spend notice that reads like a gate - 2026-08-16
+
+`atenea floor measure` prints `about to spend real money: one turn on ... -- about $0.27`
+and then spends it, on the same breath. There is no prompt, no `--yes`, and no way to see
+the figure without paying it. The line is phrased as a question and is a receipt stub.
+
+Measured by tripping it: `atenea floor measure --repo taxiprime-backend`, typed to read the
+notice's new wording, spent **$0.3487** on a cold `plan` turn. `--agent` is optional and
+defaults to `plan`, so the shortest form of the command is also the one that spends without
+naming what it spends on. The notice printed correctly and changed nothing, because a
+notice that cannot refuse is only ever read afterwards.
+
+Two shapes would close it, and they are different decisions:
+
+- **A confirmation.** `--yes` to proceed, otherwise print the figure and exit 0 having
+  spent nothing. That makes the notice honest and makes every scripted caller pass a flag.
+- **A required `--agent`.** Removes the accident above without touching the money path, and
+  costs a keystroke on every invocation. `atenea floor` already lists every type, so there
+  is no discovery argument for a default.
+
+The cheaper half needs no decision and is already built: the figure the notice quotes is
+now `Measurement.ColdStartUSD`, the receipt, where it used to be the stored floor - the
+prefix's slice, 1.9x to 9.8x too small (see instrument 36 in `measuring-the-wrong-process`).
+
+**Done when:** no `floor measure` invocation can spend money that a person did not name a
+figure and an agent type for. Not built: both options change the behaviour of the one
+command on this machine that spends unattended, and the session that overspent by $0.78 is
+not the one to widen its defaults.

@@ -261,9 +261,23 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	// anything is spent: CALLING Client.Floor below spends real money, one
 	// turn, priced at roughly the floor itself -- see Client.Floor's own
 	// doc for why nothing calls it implicitly.
+	//
+	// It quotes the RECEIPT the probe will be billed, never the stored USD.
+	// Those are different numbers by construction: a stored floor is the
+	// prefix's slice of a receipt that also covered the block arriving with
+	// the first tool call (see coldEquivalentUSD), so it is smaller than the
+	// turn by exactly prefix/(prefix+first call). Measured 2026-08-16 by
+	// paying it: this line said "~$0.14" and "~$0.05" for the two types on
+	// taxiprime-backend, and the two turns cost ~$0.27 and ~$0.45 -- 1.9x and
+	// 9.8x what it warned. An operator budgeting two probes off this line, as
+	// one did, authorizes $0.19 and spends $0.72. The scaled figure is the one
+	// the line below already prints AFTER the money is gone; a warning that
+	// under-states the bill is worse than no warning, because it is acted on.
 	if hadPrevious {
-		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- last measured at ~%s\n",
-			repo.ID, agent, modelName, formatUSD(previous.USD))
+		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- "+
+			"about %s, which is what the last probe of it was billed (it stores %s, "+
+			"the prefix's share of that receipt)\n",
+			repo.ID, agent, modelName, formatUSD(previous.ColdStartUSD()), formatUSD(previous.USD))
 	} else {
 		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- no previous "+
 			"measurement, the amount is unknown\n", repo.ID, agent, modelName)
@@ -349,7 +363,7 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 		fmt.Fprintf(out, "its first tool call brings %s more tokens, so a step starts at ~%s warm "+
 			"and ~%s on whichever run of the hour establishes the cache\n",
 			groupedInt(measured.FirstCallTokens), formatUSD(stored.WarmUSD()),
-			formatUSD(usd*float64(stored.StartTokens())/float64(stored.Prefix())))
+			formatUSD(stored.ColdStartUSD()))
 	}
 	return nil
 }

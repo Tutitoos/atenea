@@ -2104,37 +2104,99 @@ Round numbers to three digits out of 28 receipts nobody reconciled. **A step's c
 linear function of its tokens and nothing else** — no fixed per-turn term survives the
 fit, which is itself the answer to "is there a hidden overhead".
 
-**So the 1.9x is one row, not two prices.** Against that list, the two floor rows measured
-eleven seconds apart on the same model and CLI version:
+**So the 1.9x was one rate blending two lanes — settled 2026-08-16 by paying for it.**
+The entry below this one records the second cold measurement of both types. It refutes the
+paragraph this one used to hold, which called `explore`'s row internally inconsistent. It
+is not: it is consistent, reproducible, and correctly priced. What disagreed was the table
+here, which priced every row's tokens as cache write.
 
-| row | prefix | recorded | list price | ratio |
-|---|---|---|---|---|
-| `reader` | 4,532 | $0.0455 | $0.0458 | **1.01x** |
-| `explore` | 25,704 | $0.1360 | $0.2575 | **1.89x** |
+Priced lane by lane instead, against the receipt each probe was actually billed:
 
-The `reader` row is consistent to 0.4%. The `explore` row's dollars are **half** what its
-own token count implies, its `cache_read_tokens` is absent, and it asserts `cold: true`.
-Its `usd_per_token`, `5.291e-06`, matches no price on the list — it is a real cost divided
-by a token count that disagrees with it. The 1.9x was never two prices for identical work;
-it is one internally inconsistent row, and dividing its two fields manufactured a rate.
+| row | prefix (write) | first call | output | list price | receipt | ratio |
+|---|---|---|---|---|---|---|
+| `reader` | 4,532 | 40,061 **written** | 17 | $0.4464 | $0.4477 | **1.00x** |
+| `explore` | 25,704 | 25,778 **read** | 17 | $0.2704 | $0.2724 | **1.01x** |
+
+Both rows land inside 1%, and each one is wrong by 85-89% under the other row's lane
+assignment. So the lane is not a free parameter fitted to make the sums work; it is
+determined, differently, per row.
+
+**Why the two differ is visible in the token counts alone.** `explore`'s first-call block,
+25,778, is its own prefix again to within 0.3% — its first tool call re-sends the cached
+prefix, read at $0.50/Mtok. `reader`'s, 40,061, is 8.8x its 4,532 prefix — new file
+content, written at $10/Mtok. Twenty times the price for the same field.
+
+`usd_per_token` blends whatever mix a row happened to get: 5.29e-06 for `explore`
+(half written, half read: 5.24e-06 predicted, 0.9% off) and 1.00e-05 for `reader`
+(effectively all written). **That blend is the whole 1.89x**, and it is not a defect in
+either row — it is one number standing for two prices, which is exactly the shape the
+`Charge` work spent a day removing from the step path.
+
+**What it means for the threshold that reads these rows.** The rescuable threshold derives
+from `StartTokens` — prefix plus first call — at one blended rate. Both inputs are now
+known to be per-row artefacts: the token count is set by whatever file the model chose to
+read, and the rate by that choice's cache lane. Two agent types on one repository and one
+model differ 1.9x in the derived rate for reasons that have nothing to do with either
+type's cost to finish. The threshold is still the best figure available and still refuses
+the deaths it was built for; it is not a constant of the repository.
 
 **And the 5k-versus-40k was two fields of the same row.** `reader` carries
 `prefix_tokens: 4,532` and `first_call_tokens: 40,061`. That is the whole gap, both halves
 recorded by the same probe. The recorder confirms which one is the client's payload:
 13,465 bytes for that surface is ~4,500-4,900 tokens, agreeing with `prefix_tokens`.
-`FirstCallTokens` is documented as the block arriving with the first tool call — so it is
-dominated by **whatever the model chose to read**, and on this row it is 8.8x the prefix.
-A quantity set by the model's choice of file is a poor thing for a threshold to be derived
-from, and the rescuable threshold derives from these rows.
 
-**Not settled, and what it would cost.** Why `explore`'s dollars are half its tokens
-cannot be separated from one row: a warm read the row failed to record, and a token count
-attributed to the wrong lane, predict the same single receipt. Settling it needs a second
-cold measurement of both types — `atenea floor measure --repo taxiprime-backend --agent
-explore` and `--agent reader`, about **$0.31 together** — which would also put the first
-points on the floor path against a price list so far only tested on the step path. Not
-spent: the instruction was to report the cost and stop, and the two terms are now written
-down instead of being furniture.
+
+## A thirty-sixth instrument: paying for the measurement, and what the price tag said
+
+Measured 2026-08-16. The entry above needed a second cold measurement of two floor rows,
+quoted at **$0.31 together** off the figures the CLI itself prints. It was authorized at
+that number. It cost **$1.09**, and the overrun is the instrument.
+
+**The probe is deterministic, which was not the expected result.** Both rows came back
+byte-identical to the ones taken 13.7 hours earlier — every field but `measured_at`:
+`prefix_tokens`, `first_call_tokens`, `input_tokens: 2`, `output_tokens: 17`, `usd`,
+`usd_per_token` to all seventeen digits. Across a CLI restart, a full workflow run, and
+two calendar days of cache expiry. A re-measurement of an unchanged surface is a null
+experiment: it costs a turn and cannot move a number. That is worth knowing before the
+next person budgets one, and it is the reason the lane arithmetic above can be trusted —
+the receipts it reconciles are reproducible, not one lucky draw.
+
+**The spend notice under-states the bill by prefix/(prefix + first call).** `floor measure`
+printed `last measured at ~$0.14` and `~$0.05`; the two turns were billed **$0.27** and
+**$0.45**. The notice was quoting the STORED floor, which is by construction the prefix's
+slice of a receipt that also paid for the block arriving with the first tool call. The
+correctly scaled figure was already being printed by the same command — one line later,
+after the money was gone. Ratios: 1.9x for `explore`, **9.8x** for `reader`.
+
+This is the same shape as the killed-turn receipt and the reserved-answer nudge: a number
+that is right about one part of a turn, presented where a reader needs the whole turn. It
+is the cheapest possible fix — the scaled expression already existed eleven lines below —
+and it went unfixed because nobody had ever compared the warning to a bill. **Fixed**: the
+notice now names the receipt and says the stored figure is the prefix's share of it.
+
+**And $0.35 of the overrun was one omitted flag.** `atenea floor measure --repo ID` with no
+`--agent` defaults to `plan` and immediately spends a cold turn — 34,859 prefix tokens,
+$0.3487, a row for a type nobody had priced on this machine. It was typed to see the
+corrected warning text, expecting a refusal for a missing required flag. There is no
+prompt: `about to spend real money` is printed and the turn proceeds on the same breath.
+A notice that reads like a gate and cannot refuse is worse than a silent charge, because it
+is trusted. The row it wrote is kept — it is a real measurement, and deleting a receipt to
+tidy a mistake is the failure this page is about.
+
+**Done when:** the money line either blocks or is not phrased as though it could, and
+`--agent` is required where its default spends. Not built: both are behaviour changes to a
+command that spends money, and the session that overspent is not the one to widen its
+defaults.
+
+**The arithmetic of the overrun, for the next person quoting a probe:**
+
+| turn | quoted | billed |
+|---|---|---|
+| `explore` cold | $0.14 | $0.27 |
+| `explore` warm (cache-state test) | - | $0.03 |
+| `reader` cold | $0.05 | $0.45 |
+| `plan` cold (unintended) | - | $0.35 |
+| **total** | **$0.31** | **$1.09** |
 
 
 ## The general lesson
@@ -2529,17 +2591,28 @@ down instead of being furniture.
     carries, `pss_new_bytes`, not in prose beside the code that writes it.
 38. **A ratio between two fields is not a measurement of either.** `usd_per_token`
     divides a receipt by a token count, and both halves came from the same probe.
-    Where they disagreed the quotient was a rate no price list contains, carried
-    for a day as "two prices for identical work". The two terms this page could
-    not explain were, in the end, one inconsistent row and two fields of another.
-    Before believing a derived number, price the row against something external
-    to it -- here 72 receipts, which gave the list back to three digits.
+    Where the quotient matched no price on the list, the row was called
+    inconsistent; it was not. It was one rate standing for two lanes priced 20x
+    apart, and which lane each row got was determined -- not free -- once the
+    receipt was paid for. The blend, not any row, was the whole 1.89x. Before
+    believing a derived number, price the row against something external to it,
+    lane by lane: 72 receipts gave the list back to three digits, and the list
+    then explained both rows to 1%.
 39. **The cheapest instrument answers what the client sends; only receipts answer
     what it is billed.** A loopback recorder cost nothing and refuted two
     hypotheses in one run, including one that had a plausible mechanism and a
     flag name to support it. It also found a whole API request per turn that no
     cost model on this page had counted. What it cannot see is price, and that is
     the half where both surviving questions live.
+40. **An instrument's own price tag is a claim, and the only thing that checks it
+    is a bill.** `floor measure` quoted $0.14 and $0.05 for two turns that cost
+    $0.27 and $0.45 -- it was naming the stored floor, the prefix's slice of a
+    receipt that also paid for the first tool call. The correctly scaled figure
+    was already printed by the same command, one line later, after the money was
+    gone. Two probes quoted at $0.31 came to $1.09, $0.35 of it from a flag whose
+    default spends and a notice that reads like a gate and is not one. Every
+    other entry on this page measures a system; this one measured the estimate,
+    which no earlier entry had thought to treat as a measurement at all.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

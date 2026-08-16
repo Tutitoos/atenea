@@ -462,6 +462,18 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`atenea floor measure` no longer quotes a price 1.9x to 9.8x below what the
+  turn it is about to spend costs.** The notice named the STORED floor, which is
+  by construction the prefix's slice of a receipt that also paid for the block
+  arriving with the first tool call — so it said `~$0.14` and `~$0.05` for two
+  turns billed `$0.27` and `$0.45`. Found by paying it: two probes budgeted off
+  that line were authorized at `$0.31` and cost `$1.09`. The correctly scaled
+  figure was already printed by the same command one line later, after the money
+  was gone; it is now `floor.Measurement.ColdStartUSD`, used by both lines and by
+  `WarmUSD`, which derived it by hand. For any row a first-call probe wrote it is
+  not an estimate: it recovers that probe's receipt exactly, `$0.2724` and
+  `$0.4477` against `$0.2704` and `$0.4464` priced lane by lane off the recovered
+  price list. The notice still cannot refuse — see `not-built-yet`.
 - **A turn killed at its ceiling no longer records a price against no usage.**
   `conversation.charge` preferred the result event whenever one arrived, and on a
   budget-exhausted turn that event carries a real `total_cost_usd` and `usage`

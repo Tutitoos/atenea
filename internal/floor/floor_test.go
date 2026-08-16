@@ -676,8 +676,52 @@ func TestWarmUSDPricesThePrefixAndTheFirstCallAtCacheReadPrice(t *testing.T) {
 	}
 	// The cold-equivalent price of the same start, which is what the row's own
 	// USD column understated by 2.6x while it named the prefix alone.
-	if cold := row.USD * float64(row.StartTokens()) / float64(row.Prefix()); cold < 0.68 || cold > 0.69 {
+	if cold := row.ColdStartUSD(); cold < 0.68 || cold > 0.69 {
 		t.Errorf("cold start = %v, want ~$0.687", cold)
+	}
+}
+
+// ColdStartUSD recovers the receipt the probe that wrote the row actually
+// paid, and the two rows here are the two that were paid for on 2026-08-16 --
+// the same numbers the CLI stored, with the bills they came from.
+//
+// This is the figure `floor measure` warns with. It used to warn with USD, the
+// prefix's share, and the gap it hid is asserted below: quoting the stored
+// number under-states a `reader` probe by 9.8x. Two probes budgeted off it were
+// authorized at $0.31 and cost $1.09.
+func TestColdStartUSDIsTheReceiptTheProbePaidNotThePrefixsShare(t *testing.T) {
+	// Both measured twice, 13.7 hours apart, byte-identical every field but
+	// measured_at -- so these are reproducible constants, not one draw.
+	explore := floor.Measurement{
+		Agent:           "explore",
+		USD:             0.13600522528262304,
+		PrefixTokens:    25_704,
+		FirstCallTokens: 25_778,
+	}
+	reader := floor.Measurement{
+		Agent:           "reader",
+		USD:             0.045499885632274126,
+		PrefixTokens:    4_532,
+		FirstCallTokens: 40_061,
+	}
+	// The receipts, from the bills: $0.2724 and $0.4477.
+	if got := explore.ColdStartUSD(); got < 0.272 || got > 0.273 {
+		t.Errorf("explore ColdStartUSD = %v, want ~$0.2724 -- the receipt it was billed", got)
+	}
+	if got := reader.ColdStartUSD(); got < 0.447 || got > 0.448 {
+		t.Errorf("reader ColdStartUSD = %v, want ~$0.4477 -- the receipt it was billed", got)
+	}
+	// The understatement, which is what a warning quoting USD would print.
+	// Never below 1: the stored figure prices a subset of the same turn.
+	for _, row := range []floor.Measurement{explore, reader} {
+		if row.ColdStartUSD() <= row.USD {
+			t.Errorf("%s: stored USD %v is not below the receipt %v -- "+
+				"the prefix cannot cost as much as the prefix plus the first call",
+				row.Agent, row.USD, row.ColdStartUSD())
+		}
+	}
+	if ratio := reader.ColdStartUSD() / reader.USD; ratio < 9.7 || ratio > 9.9 {
+		t.Errorf("reader understatement = %.2fx, want ~9.8x", ratio)
 	}
 }
 
