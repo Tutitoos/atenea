@@ -21,17 +21,27 @@
 // was not told directly. Prose that only uses that shorthand produces zero
 // citations here, and the report says so plainly rather than guessing.
 //
-// "Roughly matches", precisely: a citation with a quoted excerpt beside it
-// -- a backtick-quoted span on the SAME prose line as the citation, and
-// distinct from the citation's own (possibly backtick-wrapped) path --
-// passes when the excerpt, whitespace collapsed and trimmed, is a
-// substring of the cited line, or the cited line is a substring of it, also
-// whitespace collapsed and trimmed. No fuzzy matching, no case-folding, no
-// search of nearby lines: a quote that is content-correct but cited one
-// line off is a mismatch, not a match found by looking around for it. A
-// citation with no adjacent quote is checked for existence only -- the file
-// opens, the line number is in range -- and is never promoted to "content
-// verified" in what a report says it checked.
+// A quoted excerpt is paired with a citation only when the pairing cannot
+// be a guess: exactly one citation and exactly one backtick-quoted span
+// (not the citation's own, possibly backtick-wrapped, path) share the
+// line. A line naming two citations, or carrying a citation beside two
+// unrelated quotes -- both common in dense technical prose -- has no
+// textual signal saying which quote goes with which claim, so none of the
+// citations on that line get a quote at all; they fall back to
+// existence-only. Guessing "the nearest one" on a crowded line is exactly
+// the inference this file exists to refuse: measured against real
+// answers, it silently misattributes a quote from one clause to a
+// citation in another and reports a working answer as wrong.
+//
+// "Roughly matches", for a citation that does get a paired quote: the
+// excerpt, whitespace collapsed and trimmed, is a substring of the cited
+// line, or the cited line is a substring of it, also whitespace collapsed
+// and trimmed. No fuzzy matching, no case-folding, no search of nearby
+// lines: a quote that is content-correct but cited one line off is a
+// mismatch, not a match found by looking around for it. A citation with no
+// paired quote is checked for existence only -- the file opens, the line
+// number is in range -- and is never promoted to "content verified" in
+// what a report says it checked.
 package reviewer
 
 import (
@@ -70,6 +80,14 @@ var (
 	quoted = regexp.MustCompile("`([^`]+)`")
 )
 
+// citeMatch is one Form A / Form B match found on a line, before it is
+// resolved against disk.
+type citeMatch struct {
+	start, end int
+	path       string
+	line       int
+}
+
 // citations pulls every Form A / Form B citation out of s, one entry per
 // match, in the order they appear. Anything not shaped exactly like one of
 // the two grammars is not a citation as far as this function is concerned
@@ -79,44 +97,52 @@ var (
 func citations(s string) []citation {
 	var out []citation
 	for _, line := range strings.Split(s, "\n") {
+		var found []citeMatch
 		for _, m := range formA.FindAllStringSubmatchIndex(line, -1) {
 			n, err := strconv.Atoi(line[m[4]:m[5]])
 			if err != nil {
 				continue
 			}
-			out = append(out, citation{
-				Path:  line[m[2]:m[3]],
-				Line:  n,
-				Quote: adjacentQuote(line, m[0], m[1]),
-			})
+			found = append(found, citeMatch{m[0], m[1], line[m[2]:m[3]], n})
 		}
 		for _, m := range formB.FindAllStringSubmatchIndex(line, -1) {
 			n, err := strconv.Atoi(line[m[2]:m[3]])
 			if err != nil {
 				continue
 			}
-			out = append(out, citation{
-				Path:  line[m[4]:m[5]],
-				Line:  n,
-				Quote: adjacentQuote(line, m[0], m[1]),
-			})
+			found = append(found, citeMatch{m[0], m[1], line[m[4]:m[5]], n})
+		}
+		if len(found) == 0 {
+			continue
+		}
+		q := soleQuote(line, found)
+		for _, f := range found {
+			out = append(out, citation{Path: f.path, Line: f.line, Quote: q})
 		}
 	}
 	return out
 }
 
-// adjacentQuote returns the first backtick-quoted span on line that does
-// not overlap the citation's own match span [start, end) -- a code excerpt
-// cited beside a location, not the location's own (possibly
-// backtick-wrapped) path.
-func adjacentQuote(line string, start, end int) string {
-	for _, m := range quoted.FindAllStringSubmatchIndex(line, -1) {
-		if m[0] >= start && m[1] <= end {
-			continue // this quote is the citation's own path, not an excerpt beside it
-		}
-		return line[m[2]:m[3]]
+// soleQuote returns the one quoted excerpt on line to pair with every
+// citation found there, or "" when pairing would be a guess -- see the
+// package doc above. It returns a quote only when found has exactly one
+// citation and the line has exactly one backtick-quoted span that is not
+// that citation's own (possibly backtick-wrapped) path.
+func soleQuote(line string, found []citeMatch) string {
+	if len(found) != 1 {
+		return ""
 	}
-	return ""
+	var free []string
+	for _, m := range quoted.FindAllStringSubmatchIndex(line, -1) {
+		if m[0] >= found[0].start && m[1] <= found[0].end {
+			continue // the citation's own backtick-wrapped path, not an excerpt beside it
+		}
+		free = append(free, line[m[2]:m[3]])
+	}
+	if len(free) != 1 {
+		return ""
+	}
+	return free[0]
 }
 
 // normalizeSpace collapses runs of whitespace to a single space and trims
