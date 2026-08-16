@@ -1871,6 +1871,46 @@ cent (`$0.4935`), and the derived rate lands within 2% of the same model's rate 
 independently a day earlier. Both of those comparisons are now assertions; neither existed
 when the arithmetic was written.
 
+## A thirty-first instrument: two real steps, and the constant they check
+
+Measured 2026-08-16, buying a receipt for a shape nobody had priced: not a probe that starts a
+turn and stops, but a real reader step of a real plan, reading real route files and writing the
+inventory it was commissioned for.
+
+| step | bytes read | output | receipt | weighed usage | coverage |
+|---|---|---|---|---|---|
+| `admin-reservas` (lines 380-1065 of one file) | 34,077 | 6,690 tok | `$0.3751` | 75,017 | `1` |
+| `booking-mod` (two whole files) | 66,069 | 5,130 tok | `$0.9880` | 197,605 | `0.95` |
+
+**The constant now has a check from outside itself.** `allowance.tokensPerUSD` is `166,000`
+input-equivalent tokens to the dollar, measured 2026-08-14 and until now compared only against
+its own arithmetic — the thing lesson 31 was written about. Divide each receipt into its own
+weighed usage and both answer the same number: **199,992** and **200,005** weighed tokens per
+dollar, on two turns of different sizes doing different work. Five significant figures of
+agreement between two independent runs is a real rate, and the shipped constant understates it
+by 20%.
+
+That direction is the safe one. `tokensPerUSD` appears in two places — the read allowance a turn
+is handed, and `MinShareUSD` — and understating what a dollar buys makes the allowance smaller
+and the admission threshold higher than the truth. Nothing is under-refused. It is not corrected
+here, on purpose: one model on one machine is not enough rows to move a constant that governs
+every repository, and the number that would replace it should come from more than two turns of
+one agent type.
+
+**What the pair actually revealed is not about the constant.** `booking-mod` was given a `$1.50`
+ceiling — four times its measured cost — and was still nudged into answering early, because the
+allowance is spent on *reading* and reading was 171,955 of its 197,605 weighed tokens. Reading
+at 200,000 weighed tokens to the dollar against an allowance handed out at 83,000 to the dollar
+means a read-heavy step must be funded **two to four times its own cost** before it can finish
+reading, and a step funded at exactly what it costs will answer at about `0.95` with its gaps
+named. Both figures are correct and they answer different questions: what the work costs, and
+what the work must be granted to be allowed to complete it. A budget built from the first and
+launched expecting the second buys partial answers and calls it a shortfall in the model.
+
+The `0.95` was honest, which is the other half of the receipt: the nudged step named three
+things it had not reached, two of which were exclusions its own commission had imposed. That
+field existed and was empty on 208 of 210 rows twelve hours earlier.
+
 
 ## The general lesson
 
