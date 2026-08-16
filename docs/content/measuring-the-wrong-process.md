@@ -2053,6 +2053,89 @@ refutable — which these steps did unprompted — and never states the quantity
 exists to measure. Anchoring is not a prompt style question; a number in the prompt is a
 measurement the step is no longer making.
 
+## A thirty-fifth instrument: a loopback recorder, and the price list it recovered
+
+Measured 2026-08-16, at **zero cost**, to settle two terms sitting unexplained in the cost
+model: "the client sends ~5,000 tokens where the provider bills ~40,000-48,000", and "two
+receipts for identical work differ 1.9x in price per token". Both had been carried as
+facts for a day. Neither survived being measured, and one of them was never about the
+provider at all.
+
+**The instrument.** A local HTTP server answering as the Anthropic API — pointed at with
+`ANTHROPIC_BASE_URL`, which both clients honour — that writes every request body to disk
+and replies with a valid SSE stream. Nothing leaves the machine and no key is spent, so
+every reading is free. Two details are the whole difference between working and hanging:
+the reply must be chosen from the request's own shape rather than from a counter, because
+**the CLI opens every turn with a title-generation call carrying no tools** and answering
+that one with a `tool_use` makes it hang up; and the credential must be redacted before
+the headers touch disk, because the next reading deliberately runs with the real auth
+source.
+
+**What the client actually sends,** for the `Read,Glob` surface a `reader` step gets:
+
+| request | bytes | tools | system | what it is |
+|---|---|---|---|---|
+| 1 | 2,262 | 0 | 1,524 B | title generation — "a concise, sentence-case title (3-7 words)" |
+| 2 | 13,465 | 2 defs / 2,397 B | 10,320 B | the turn |
+| 3 | 14,094 | 2 defs / 2,397 B | 10,320 B | the turn again, after the tool result |
+
+**Two refutations, free.** The tool result adds **629 bytes** — there is no
+~36,300-token block arriving with it. And authentication state changes nothing: with the
+real login as the auth source instead of a fake key, the same turn sends 13,319 bytes
+against 13,465. The `--exclude-dynamic-system-prompt-sections` flag exists, so dynamic
+sections do; they are not what this gap was.
+
+**One finding nobody asked for.** Every turn pays for that title-generation request: a
+separate API call, its own system prompt, no tools, and no part of the work. It is not in
+any cost model on this page.
+
+**The price list, recovered from receipts.** Least squares over the 72 real `verdict = ok`
+step rows that carry a cache-write count, fitting USD against the four token lanes plus a
+constant. On the 28 rows from 2026-08-16 the fit is exact — **0.0% error, zero constant**:
+
+| lane | recovered | per Mtok |
+|---|---|---|
+| input | 5.00e-06 | $5 |
+| output | 2.50e-05 | $25 |
+| cache read | 5.00e-07 | $0.50 |
+| cache write | 1.00e-05 | $10 |
+
+Round numbers to three digits out of 28 receipts nobody reconciled. **A step's cost is a
+linear function of its tokens and nothing else** — no fixed per-turn term survives the
+fit, which is itself the answer to "is there a hidden overhead".
+
+**So the 1.9x is one row, not two prices.** Against that list, the two floor rows measured
+eleven seconds apart on the same model and CLI version:
+
+| row | prefix | recorded | list price | ratio |
+|---|---|---|---|---|
+| `reader` | 4,532 | $0.0455 | $0.0458 | **1.01x** |
+| `explore` | 25,704 | $0.1360 | $0.2575 | **1.89x** |
+
+The `reader` row is consistent to 0.4%. The `explore` row's dollars are **half** what its
+own token count implies, its `cache_read_tokens` is absent, and it asserts `cold: true`.
+Its `usd_per_token`, `5.291e-06`, matches no price on the list — it is a real cost divided
+by a token count that disagrees with it. The 1.9x was never two prices for identical work;
+it is one internally inconsistent row, and dividing its two fields manufactured a rate.
+
+**And the 5k-versus-40k was two fields of the same row.** `reader` carries
+`prefix_tokens: 4,532` and `first_call_tokens: 40,061`. That is the whole gap, both halves
+recorded by the same probe. The recorder confirms which one is the client's payload:
+13,465 bytes for that surface is ~4,500-4,900 tokens, agreeing with `prefix_tokens`.
+`FirstCallTokens` is documented as the block arriving with the first tool call — so it is
+dominated by **whatever the model chose to read**, and on this row it is 8.8x the prefix.
+A quantity set by the model's choice of file is a poor thing for a threshold to be derived
+from, and the rescuable threshold derives from these rows.
+
+**Not settled, and what it would cost.** Why `explore`'s dollars are half its tokens
+cannot be separated from one row: a warm read the row failed to record, and a token count
+attributed to the wrong lane, predict the same single receipt. Settling it needs a second
+cold measurement of both types — `atenea floor measure --repo taxiprime-backend --agent
+explore` and `--agent reader`, about **$0.31 together** — which would also put the first
+points on the floor path against a price list so far only tested on the step path. Not
+spent: the instruction was to report the cost and stop, and the two terms are now written
+down instead of being furniture.
+
 
 ## The general lesson
 
@@ -2444,6 +2527,19 @@ measurement the step is no longer making.
     published 1,054 GiB. The third defect in the same instrument, and the fix is
     the one `manifest.py` already had: the unit belongs in the header the output
     carries, `pss_new_bytes`, not in prose beside the code that writes it.
+38. **A ratio between two fields is not a measurement of either.** `usd_per_token`
+    divides a receipt by a token count, and both halves came from the same probe.
+    Where they disagreed the quotient was a rate no price list contains, carried
+    for a day as "two prices for identical work". The two terms this page could
+    not explain were, in the end, one inconsistent row and two fields of another.
+    Before believing a derived number, price the row against something external
+    to it -- here 72 receipts, which gave the list back to three digits.
+39. **The cheapest instrument answers what the client sends; only receipts answer
+    what it is billed.** A loopback recorder cost nothing and refuted two
+    hypotheses in one run, including one that had a plausible mechanism and a
+    flag name to support it. It also found a whole API request per turn that no
+    cost model on this page had counted. What it cannot see is price, and that is
+    the half where both surviving questions live.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
