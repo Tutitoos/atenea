@@ -2451,6 +2451,40 @@ Not a defect in `CostByType`, in the recovered price list, or in the entry above
 are correct arithmetic. It is a fact about the account underneath all of them that nothing had
 checked before tonight.
 
+## A forty-first instrument: a refusal that never announced it could not work
+
+Measured 2026-08-16, live. `reviewer` — the second worked example, the one built to relaunch a
+step's answer once on a refusal — was claimed proven end to end in an earlier session, and
+asserted again this session as reason to expect a regression rather than a first result.
+Neither was true. `grep -rn "ladrillo"` across every file in this repository, code and docs
+both, returns nothing. The only surviving evidence is nine unit tests against synthetic
+subjects in `reviewer_test.go`, still green, none of them a live dispatch. The correction came
+from `grep`, not from the person who made the claim — the same shape as everything else on this
+page: a claim from memory standing in for a measurement.
+
+**What the 36 real dispatches actually say.** 35 are `judge()` correctly agreeing with a
+subject that had already died at its own spending ceiling — a pass-through with no model call,
+reviewer working exactly as designed, not a reviewer failure. The 36th is `check()` refusing a
+subject with no `path` field: "the result names no path, so there is nothing to re-read." Fed
+live through the built binary against a real, finished, coverage-1 answer — one of last night's
+three redos — the identical refusal came back, for a reason the whole database confirms: 130
+recorded results, every type, every status, ever, and exactly zero carry a `path` key.
+`reviewer.check()` audits the contract `filereader` declares — `path`, `bytes`, `lines`,
+`content` (`atenea.toml:1521-1543`) — while `explore` and `reader` declare `summary`/`findings`
+instead (`atenea.toml:1615-1625`) and have answered that way 55 times between them. `filereader`
+has been dispatched zero times. `check()` has never once reached its own comparison logic
+against a real answer, because no real answer has ever had the shape it checks.
+
+**What makes this an instrument and not a defect note.** Every one of the 36 refusals was
+locally correct and locally well-formed — "the result names no path" is a true, complete
+sentence about exactly the assignment it was handed. It read that way 36 times over three days
+without once reading as "this cannot work," because a refusal that names its own reason looks,
+from outside, like every other honest refusal on this page. A component that fails loudly — a
+timeout, a ceiling, a missing field it cannot proceed without — announces the failure it exists
+to catch. A component that fails by returning a reasoned refusal is invisible in exactly the way
+a crash is not: the record shows it working, correctly, every time, right up until someone
+counts what shape its inputs actually take.
+
 
 
 ## The general lesson
@@ -2917,6 +2951,16 @@ checked before tonight.
     list price. Whether the turn behind each row succeeded is a different axis entirely, and
     accumulating rows on the wrong axis converges on nothing — the question stays open at any
     n, because it was never being asked.
+47. **A component that fails by returning a reasoned refusal is invisible in exactly the way a
+    crash is not.** Thirty-six real dispatches, thirty-six locally correct, well-formed
+    refusals, over three days, and none of them read as "this component cannot do its job"
+    until the shapes were counted across the whole table at once. `reviewer` audits
+    `path`/`bytes`/`lines`/`content`; `explore` and `reader` have answered `summary`/`findings`
+    in every one of 55 real results, and `filereader` — whose contract `reviewer` actually
+    checks — has never been dispatched. A refusal that names a true reason passes for a working
+    safeguard exactly as long as nobody asks whether the reason recurs. Where a check can fail
+    by refusing, count its refusals by cause, not just by rate: a 100% refusal rate for one
+    well-named reason is a system down, however calm each individual line reads.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
