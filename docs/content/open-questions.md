@@ -53,3 +53,23 @@ timestamp, a session id, a rules or skills listing — is not stable across
 invocations. Cost is a full cache write per run instead of a read, roughly 12×
 on the input side of a cold turn. Not headroom's: the churn is in the body omp
 hands over.
+
+## What a citation should point at: the text, or the route
+
+`auth-mod` cited `auth.routes.ts:49` for the claim `/auth/email/login` — the full mounted path,
+prefix included — when that line declares only the local sub-path
+(`fastify.post('/email/login', ...)`); the `/auth` prefix is applied at a different, uncited
+line entirely. Not a one-off: a nearly identical citation in the same run (`admin-mock-sim`,
+`/admin/test/mock-places` against `admin.routes.ts:4404`) makes the same move and is
+indistinguishable in intent, only escaping the checker because of an unrelated second citation on
+its line (see `measuring-the-wrong-process.md`, instrument 42). Writing the effective route while
+citing the line that only has the sub-path is how people naturally describe an API surface — the
+prefix is real, it is just declared somewhere else.
+
+The open question is what to tell an agent to cite: the line where the text it quotes literally
+appears, or the line where the route is actually mounted, which may be a different file and may
+not exist as a single line at all when a prefix is composed from more than one plugin
+registration? Whichever is chosen has to be sayable as one instruction a citing agent can follow
+while writing, not a rule this checker infers after the fact — the checker can verify a citation
+once written; which location counts as *the* citation for a composed route is a decision about
+what to ask for, not about how to check what was given.

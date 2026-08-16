@@ -2485,6 +2485,48 @@ to catch. A component that fails by returning a reasoned refusal is invisible in
 a crash is not: the record shows it working, correctly, every time, right up until someone
 counts what shape its inputs actually take.
 
+## A forty-second instrument: an `ok` that means different things on different lines
+
+Measured 2026-08-16, live, against the same 19-step, 247-route inventory instrument 34 priced.
+The citation checker built two entries above pairs a quoted excerpt with a citation only when the
+line carries exactly one of each — the documented, deliberate refusal to guess on a crowded line.
+What that refusal does not do, because nothing asked it to, is guarantee that whether a line
+happens to be crowded tracks whether its citation is right.
+
+`auth-mod` wrote `/auth/email/login` — decl. `auth.routes.ts:49` — the full mounted route,
+prefix included, against a citation to a line that declares only the local sub-path:
+`fastify.post('/email/login', ...)`. The checker refused it, correctly: the quoted text is not
+what that line holds. `admin-mock-sim` wrote the identical shape in the same run — the full
+mounted path quoted beside a citation to a line with only the local path — and passed, because
+that sentence also named `src/server.ts:243` a few words earlier, and a second citation on the
+line is enough for the pairing rule to decline to check anything at all. Same claim, if it is
+wrong in both places; one gets caught and one does not, and the difference is not the citation's
+correctness, it is how many other citations happen to share its sentence.
+
+**Not a case for tightening or loosening the rule.** Both verdicts are individually right on
+their own terms — the crowded-line refusal exists precisely so the checker never guesses which
+quote belongs to which citation, and `auth-mod`'s single-citation line has no such ambiguity to
+refuse through. The finding is that they are not the same kind of right: an `ok` from this
+checker can mean "the excerpt was checked and it matched" or "no excerpt could be safely paired
+with anything," and nothing in the verdict says which a reader has. Telling them apart today
+means re-deriving, per step, how many citations shared each cited line — work the report does
+not do for you.
+
+**The same live run is also why two earlier bugs this session survived a green suite.**
+`adjacentQuote` paired the first quote on a line with every citation on it rather than refusing a
+crowded one; the bare-path bug read a filename mentioned in passing beside an unrelated citation
+as that citation's excerpt. Both shipped behind nine and twenty-one passing tests respectively,
+because every fixture in both suites had exactly one citation and one quote per line — the one
+shape real prose does not reliably produce. A fixture simpler than the data it stands in for is
+not a check on the code; it is a description of what the author already believed about the
+input, replayed back as a pass. See lesson 21.
+
+**What "audited" means today, stated once rather than left as a computation.** Of 216 citations
+found across this inventory's 19 finished steps, 10 were checked against a quoted excerpt and
+matched, 148 were confirmed to exist and nothing more, 58 could not be resolved at all, and 21
+more were written in a range form (`path:N-M`) this checker does not parse. Fewer than one
+citation in twenty on this page has had its content verified.
+
 
 
 ## The general lesson
@@ -2961,6 +3003,13 @@ counts what shape its inputs actually take.
     safeguard exactly as long as nobody asks whether the reason recurs. Where a check can fail
     by refusing, count its refusals by cause, not just by rate: a 100% refusal rate for one
     well-named reason is a system down, however calm each individual line reads.
+48. **A check's catch rate can depend on incidental formatting rather than on what it is
+    checking.** A citation-pairing rule refuses to guess on a crowded line, correctly — and that
+    same conservatism means an identical defect passes or fails depending only on how many other
+    citations happen to share its sentence, not on whether the citation itself is right. Where a
+    check can decline to look rather than only pass or fail, its `ok` rate and its correctness
+    rate are different numbers, and only counting declines separately from passes tells them
+    apart.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
