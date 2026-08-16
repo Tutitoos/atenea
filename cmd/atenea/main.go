@@ -297,6 +297,17 @@ proposal may only replace steps that have NOT STARTED, which is what makes a
 stale approval impossible to construct rather than a race to catch. The answer
 is a row, so a gate outlives the atenea that opened it.
 
+A step's budget_usd is a FORECAST, not a ceiling. Every share is checked against
+the grant before anything spawns, and a plan whose steps are funded below what
+starting a turn costs is refused -- but nothing stops a turn once it is running.
+The provider's own --max-budget-usd is checked between messages, so it decides
+whether to start another one and never what the one in flight costs. Measured on
+a 23-step run 2026-08-16: a $0.09 share spent $0.41, and a $5.22 grant was
+charged $5.88. Budget for the work, then expect a step to exceed its share by up
+to the cost of one turn, and the run to exceed its grant by the sum of those.
+
+Nothing here honors limits.max_tokens either; it is carried and unread.
+
 Flags come before the ids -- Go's parser stops at the first word that is not a
 flag, so anything after one is read as an id.
 

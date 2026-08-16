@@ -74,22 +74,46 @@ func (t Task) Clone() Task {
 	return t
 }
 
-// Limits is the ceiling on one agent's run: wall clock and tokens.
+// Limits is what one agent's run was told to hold itself to: wall clock and
+// tokens.
 //
 // Both are required and both must be positive. A missing limit is not "no
 // limit" here -- it is a limit nobody decided, and the two are told apart by
 // refusing the second. What money may be spent is not in this struct: that is
-// Permission.BudgetUSD, because a spending ceiling is an authorization the
-// user granted, while these two are resource guards the caller sets.
+// Permission.BudgetUSD, because money is an authorization a person gave while
+// these two are guards the caller sets.
+//
+// Neither field is a ceiling something enforces on a model turn. MaxDuration
+// reaches one, as model.Request.Timeout. MaxTokens reaches nothing -- see its
+// own doc. Required and validated is not the same as honored, and this struct
+// promised the second for both fields until 2026-08-16.
 type Limits struct {
 	// MaxDuration is the wall clock the agent may take.
 	MaxDuration time.Duration
-	// MaxTokens is the token ceiling for the whole run, input and output
-	// together.
+	// MaxTokens is the token count the caller decided this run should be
+	// held to, input and output together.
+	//
+	// NOTHING ENFORCES IT, and it is not a ceiling. Measured 2026-08-16: it
+	// is validated positive here, encoded onto the wire as
+	// `limits.max_tokens`, decoded by internal/agent/planner into a struct
+	// field -- and read by nobody. model.Request has no token cap to carry
+	// it to, and no flag hands it to a provider. A turn may spend any number
+	// of tokens this field names, and did.
+	//
+	// It is worse than absent while it looks required: Validate refuses a
+	// zero precisely so that "nobody decided" cannot pass for "no limit",
+	// which tells a reader the number is load-bearing. It is not. Kept
+	// rather than deleted because the field is the right shape for the bound
+	// this system does not have -- a per-turn token cap is the only thing
+	// that could bound a searching turn, since money is checked between
+	// messages and never within one. Wiring it is the expensive half of
+	// docs/content/not-built-yet.md, undecided.
 	MaxTokens int
 }
 
-// Validate checks the ceilings.
+// Validate checks that both numbers were decided, which is all this can check:
+// whether either is then enforced is not a property of the struct. See
+// MaxTokens for the one that is not.
 func (l Limits) Validate() error {
 	if l.MaxDuration <= 0 {
 		return Fail(FailureInvalidInput,
@@ -209,19 +233,39 @@ type Assignment struct {
 	// Effects are the consequences this agent is allowed to cause. A child
 	// never holds one its parent did not, which is enforced in Child.
 	Effects []Effect
-	// BudgetUSD is the share of a grant this run may draw against. Nil is
-	// not zero, and the difference is load-bearing: nil is "nobody granted
-	// money here", which is every dispatch outside a workflow, and zero is
-	// "you were considered and given none", which an agent that spends must
-	// refuse rather than read as freedom. It is here rather than in Limits
-	// for the reason written there: time and tokens are guards a caller
-	// sets, and money is an authorization a person gave.
+	// BudgetUSD is the share of a grant this run is FORECAST to draw against.
+	// Nil is not zero, and the difference is load-bearing: nil is "nobody
+	// granted money here", which is every dispatch outside a workflow, and
+	// zero is "you were considered and given none", which an agent that
+	// spends must refuse rather than read as freedom.
+	//
+	// IT IS NOT A CEILING, and calling it one here was wrong until
+	// 2026-08-16. Nothing in this system can stop a turn mid-flight. The one
+	// control that reaches a provider is the CLI's --max-budget-usd, checked
+	// BETWEEN messages, so what it bounds is the decision to start another
+	// one; a turn already running spends what it spends. Measured on a
+	// 23-step run: a $0.09 share spent $0.41 (4.6x), a $0.10 share spent
+	// $0.41, and a $5.22 grant was charged $5.88 -- 12.6% over, with the
+	// person who authorized $5.22 never asked about the rest. The only real
+	// bound is one message's worth of output, roughly $3.86 at the rates
+	// internal/allowance measures, which is a figure nobody chose and 43x
+	// the smallest share that run used.
+	//
+	// So this is a forecast that a person approved, and the approval is real
+	// -- Compile checks the shares against the grant before anything spawns,
+	// and a plan whose steps are underfunded is refused. What the approval
+	// cannot do is hold. A caller that needs a true ceiling does not have one
+	// today; see docs/content/not-built-yet.md.
+	//
+	// It is here rather than in Limits because money is an authorization a
+	// person gave, where time is a guard a caller sets. That distinction
+	// survives this correction: both are ceilings only as far as something
+	// enforces them, and neither is enforced by this struct.
 	//
 	// Nothing subdivides it in the agent tree today, because every dispatch
 	// that carries money is a workflow step and the engine dispatches those
-	// at the root. Compile is what checks the shares against the grant,
-	// before anything spawns. The day an agent hands money to a child, the
-	// narrowing belongs in Child beside the other three.
+	// at the root. The day an agent hands money to a child, the narrowing
+	// belongs in Child beside the other three.
 	BudgetUSD *float64
 	// CommissionUSD is the grant of the run this step belongs to -- what the
 	// whole graph was authorized to spend, not what this step may draw.

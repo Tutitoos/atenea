@@ -1319,12 +1319,9 @@ to start another message, never the cost of the one already in flight. Total spe
 `Request` carries `Role`, `Prompt`, `Schema`, `Dir`, `BudgetUSD`, `ReadTokens`, `Timeout` and
 `Tools`. There is no token cap among them.
 
-**`Limits.MaxTokens` is not the missing cap, and its own doc claims it is.** `pkg/contract` says
-it is "the token ceiling for the whole run, input and output together", and `Validate` refuses a
-run without a positive one -- deliberately, so a missing limit cannot be mistaken for no limit. It
-travels on the wire as `limits.max_tokens`, `planner.go` decodes it into a struct field, and
-**nothing reads that field**. No flag carries it to the CLI. It is a required ceiling that binds
-nobody: the strictest form of the promise this page exists to catch.
+A per-turn token cap is the only shape of bound that could work here, since money is checked
+between messages and never within one. `Limits.MaxTokens` is exactly that shape and enforces
+nothing; it is a separate failure and has its own entry below.
 
 **Why the read allowance cannot cover the gap.** `ReadTokens` is atenea's own nudge, and it works
 on weighed usage accumulated from assistant events. On the fifteen steps that died at the ceiling
@@ -1343,18 +1340,60 @@ about **`$3.86`**, before any input. Against the smallest share of `$0.09` that 
 bound. The honest statement is not "unbounded"; it is "bounded at a figure nobody chose, two
 orders of magnitude above the shares in use".
 
-**What this makes `budget_usd`.** An estimate, priced from receipts, with per-step error observed
-at up to 4.6x and aggregate error of 12.6% on this run. It is a good estimate and it is not an
-authorization ceiling -- which is what `Permission.BudgetUSD`'s own doc calls it: "a spending
-ceiling is an authorization the user granted". A user who granted `$5.22` was charged `$5.88`.
+**What this makes `budget_usd`.** A forecast, priced from receipts, with per-step error observed
+at up to 4.6x and aggregate error of 12.6% on this run. It is a good forecast and it is not an
+authorization ceiling, which is what `Permission.BudgetUSD`'s own doc called it until this entry:
+"a spending ceiling is an authorization the user granted". A user who granted `$5.22` was charged
+`$5.88` and was never asked about the rest.
 
-**Done when:** either the prose stops promising a ceiling, or something enforces one. The two are
-not equivalent and the cheap one is first: say in `Permission.BudgetUSD`, in `Limits.MaxTokens`
-and in `atenea workflow`'s help that these are estimates checked between turns, that a step may
-exceed its share by the cost of one turn, and that `max_tokens` is carried but unenforced. The
-expensive one needs a provider that aborts mid-turn, or a per-turn token cap actually passed and
-honoured -- at which point `MaxTokens` becomes the real lever and the dollar figure becomes what
-it already is: a forecast.
+**The cheap half is done - 2026-08-16.** Three docs now say what the number is rather than what it
+was hoped to be: `Permission.BudgetUSD` ("IT IS NOT A CEILING", with the measured error and the
+one-message bound), `Limits` and its `Validate` (required and validated is not honoured), and
+`atenea workflow`'s help, which a person reads before granting: budget for the work, then expect a
+step to exceed its share by up to one turn and the run to exceed its grant by the sum. Nothing
+about behaviour changed. What changed is that the promise now matches the mechanism.
 
-**Not decided:** which. Recorded because the run that found it was budgeted on the assumption that
-a share was a bound, and every number in that plan inherited the assumption.
+**Done when** something enforces a bound: a provider that aborts mid-turn, or a per-turn token cap
+actually passed and honoured. At that point the token cap becomes the real lever and the dollar
+figure stays the forecast it always was.
+
+**Not decided:** which, and deliberately left open. Recorded because the run that found this was
+budgeted on the assumption that a share was a bound, and every number in that plan inherited the
+assumption.
+
+## A required ceiling that binds nobody: `Limits.MaxTokens` - 2026-08-16
+
+Filed apart from the entry above on purpose. That one is a bound checked at the wrong moment --
+real, enforced by the provider, just enforced between messages instead of within one. This one is
+a bound that **does not exist while looking like it does**, which is a different failure and the
+more misleading of the two.
+
+`pkg/contract` declared it "the token ceiling for the whole run, input and output together".
+`Limits.Validate` refuses a run whose `MaxTokens` is not positive -- and that refusal is
+deliberate, written so that "nobody decided" cannot pass for "no limit". Every signal the type
+gives a reader says the number is load-bearing.
+
+It is not read. It is encoded onto the wire as `limits.max_tokens` (`internal/agent/wire.go`),
+decoded by `internal/agent/planner` into a struct field, and **nothing consults that field**.
+`model.Request` has no token cap to carry it into: the fields are `Role`, `Prompt`, `Schema`,
+`Dir`, `BudgetUSD`, `ReadTokens`, `Timeout`, `Tools`. No argv flag hands a token limit to the CLI.
+A turn may spend any multiple of this number, and on 2026-08-16 turns did.
+
+**Why this is the worse shape.** A missing field asks a question. A required, validated field
+answers one -- wrongly. The validation is the tell: refusing a zero teaches every reader that the
+value matters, so nobody goes looking for the enforcement, and a caller sizing a run reads a
+guarantee that was never anywhere. The measured cost of that misreading is in the entry above: a
+plan whose shares were set believing a turn was capped.
+
+**Not deleted, on purpose.** The field is the right shape for the bound this system lacks. Money
+cannot bound a searching turn -- it is checked between messages, and a glob over a tree with no
+matches pays for a tool result and the model's next thought inside one message. Tokens can, and
+`MaxTokens` is already declared, validated, and on the wire in every assignment. What is missing
+is the two ends: a `Request` field and a provider flag that honours it.
+
+**Done when:** either `MaxTokens` reaches a provider that enforces it, or the field stops
+claiming to be a ceiling and `Validate` stops requiring it. The doc now says it enforces nothing,
+which closes the lie and not the gap.
+
+**Not decided:** which. It is the same decision as the expensive half above, and it should be
+taken once, for both.
