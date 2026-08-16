@@ -1465,4 +1465,93 @@ records explicitly that it does not know - a null, not a small number that reads
 measurement. Today a reader of that row would conclude the step did almost nothing, and
 it is the only row on the run where the dollars and the tokens disagree about that.
 
-**Not built.** The fix is in the adapter's envelope handling, not in the engine.
+**Built 2026-08-16, and two claims above are wrong.** Both corrections come from
+reproducing the shape instead of reasoning about it: a real ceiling death on the live CLI,
+4.4 seconds, `$0.41`.
+
+**The zeros are total, not partial.** A budget-exhausted result event carries
+`total_cost_usd: 0.41228` and `usage` that is zero in EVERY lane - not a small number, no
+number. Read out of the shipped binary (2.1.232) the two come from different accumulators:
+`total_cost_usd: OA()` is `costLedger.totalCostUSD()`, charged as the work happens, while
+`usage: this.totalUsage` is summed only at `message_stop`, which a killed message never
+reaches. One construction site for the class that owns it, so it is cumulative across
+passes - the per-pass reading was checked and refuted. So `admin-config`'s small figures
+are not this defect at all; they are a turn that settled some messages and was killed
+during the expensive ones. 29 rows in the local record have the pure shape - every one a
+ceiling death, `$9.61` charged with nothing said about what it bought.
+
+**The fix was not in the adapter.** It is `conversation.charge` in
+`internal/agent/model`, which preferred the result event whenever one arrived and so
+threw away tokens it had already read and deduped correctly - the same stream's assistant
+events carried 40,956 cache-creation tokens for that money. It now takes the larger of the
+two readings, whole and never blended lane by lane, which is what `weighed()` already did
+for the allowance and for the same reason: every figure is one the CLI printed. The price
+still comes only from the receipt.
+
+The `claudecode` adapter has the same envelope and **cannot** be fixed this way: it asks
+for `--output-format json`, one envelope, no event stream, so there is no second reading
+to recover from. That path still records a price against zero tokens, which is the
+codebase's existing way of saying "not recorded" - `cmd/atenea/floor.go` prints exactly
+that for a row with a price and no token count. Its comment claimed the usage was there;
+it now carries the measurement and names the limit.
+
+## `verdict = ok` cannot be made to mean "did the work" - 2026-08-16
+
+Asked because two rules wait on the answer: the admission rule takes its median from
+`verdict = ok` rows (`Store.costRows`), and the completeness entry above needs to know
+whether a recorded `ok` is worth anything. The answer is that it is not, that no signal in
+the record fixes it, and that the one thing which does work is not a reviewer.
+
+**What `ok` actually means.** For a model-backed step, `internal/agent/planner` sets
+`Verdict: "ok"` when four things hold: the CLI answered, the structured output parsed,
+`summary` and `findings` are both non-empty, and `coverage()` did not refuse. Nothing
+compares the answer to the world. `auth-mod` on `wf1786790289244-1` answered *"I cannot
+describe this project, because I was unable to locate it before being asked to stop"* -
+non-empty summary, non-empty findings, `verdict ok`, `$0.19`, and it sits in the
+population the admission rule takes its median from.
+
+**Four candidate discriminators, all refuted by measurement.** The population is the 29
+clean `reader` rows with `verdict = ok`:
+
+- **A non-empty answer.** The refusal above is fluent non-empty prose. It is the shape a
+  good answer has.
+- **`completeness`.** Eight of the 29 come from `wf1786840197972-1`, the run served the
+  wrong tree, and **five of those eight claim `1.00`** - full coverage of an objective the
+  tree could not contain. A `NULL` passes too: `coverage()` returns `nil, "", nil` for an
+  absent claim, so the row is recorded as whole.
+- **Tokens.** The strongest-looking candidate and the most clearly wrong. The row that read
+  nothing has **83,336 cache-read tokens**, mid-distribution, above eleven rows that did
+  real work; the eight wrong-tree rows have the **highest reads on record**, 209k-255k.
+  Reading is not evidence of reading the subject.
+- **Cost.** The wrong-tree rows cost `$0.22`-`$0.31` against the good run's
+  `$0.20`-`$0.41`. Indistinguishable.
+
+**What the contamination is actually worth.** One cent. The `reader` median is `$0.30`
+over all 29 clean rows and `$0.31` with the wrong-tree run removed. Worth writing down
+because the obvious inference - eight bad rows in twenty-nine must move the number - is
+false, and a median is why. The rule is not in danger from this; the *record* is.
+
+**The one thing that works, and it is not a reviewer.** Citations that resolve. Measured
+on the same two runs: the wrong-tree run's cited paths resolve 13/19 against the tree that
+was actually served and 6/19 against the tree the commission named; the correctly-served
+run's resolve 0/20 against the served tree and 18/20 against the intended one. That
+separates them cleanly, mechanically, with no judgement - the step supplies the
+coordinates and the engine checks them against the world. It is the same check that
+verified 155 of 155 declarations by hand on the 19-step run.
+
+**Done when:** a reader step's schema requires citations and the engine resolves them
+before recording `ok`. Note what that costs honestly: as a hard gate it needs a *rate*
+(neither run resolves 100%, because paths get abbreviated and renamed), and a rate is a
+threshold, which is the heuristic this entry exists to refuse. So the citation check is
+decisive as **evidence** and not yet sound as a **gate**, and closing that distance is the
+work, not the writing.
+
+**Not built,** and deliberately not attempted here. It changes what every reader step must
+answer and what `answered` means to every downstream gate - `complete()` in the turn loop,
+`coverage` in the report, `outcome` for every `on = "answered"` consumer.
+
+**Meanwhile, one asymmetry is worth naming as a defect rather than a gap.** `coverage()`
+refuses a partial that will not say where it stopped - "not auditable" - but accepts an
+answer that claims nothing at all. The principle is already in the code; it is applied to
+`0.5 with no stopped_at` and not to `no claim`. Of the rows above, every `plan` row and
+most `explore` rows carry `completeness = NULL` and are recorded as whole answers.
