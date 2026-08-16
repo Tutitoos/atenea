@@ -1298,3 +1298,63 @@ be built from a receipt for the shape of step being budgeted, never from `WARM U
 **Not built,** and not cheap to close: it needs the provider's own accounting of a request whose
 every client-side count is known, which is a different instrument from anything here. What is
 built is the refusal that no longer depends on it.
+
+## The grant is not a bound, and `budget_usd` says otherwise - 2026-08-16
+
+Measured on the 23-step run in the thirty-second instrument. The overshoots were not small and
+were not noise:
+
+| step | share | spent | |
+|---|---|---|---|
+| `auth-mod` | `$0.09` | `$0.41` | **4.6x** |
+| `spine` | `$0.10` | `$0.41` | **4.1x** |
+| `sweep` | `$0.11` | `$0.28` | 2.5x |
+| the fifteen that died at the ceiling | `$2.26` | **`$3.68`** | 163% |
+| the whole run | `$5.22` granted | **`$5.88`** | 112.6%, `$-0.66` left |
+
+**What bounds a turn today.** Exactly one thing reaches the provider: `--max-budget-usd`, from
+`model.Request.BudgetUSD`. The CLI checks it *between messages*, so what it bounds is the decision
+to start another message, never the cost of the one already in flight. Total spend is therefore
+`ceiling + cost of one in-flight message`, and nothing atenea passes constrains the second term.
+`Request` carries `Role`, `Prompt`, `Schema`, `Dir`, `BudgetUSD`, `ReadTokens`, `Timeout` and
+`Tools`. There is no token cap among them.
+
+**`Limits.MaxTokens` is not the missing cap, and its own doc claims it is.** `pkg/contract` says
+it is "the token ceiling for the whole run, input and output together", and `Validate` refuses a
+run without a positive one -- deliberately, so a missing limit cannot be mistaken for no limit. It
+travels on the wire as `limits.max_tokens`, `planner.go` decodes it into a struct field, and
+**nothing reads that field**. No flag carries it to the CLI. It is a required ceiling that binds
+nobody: the strictest form of the promise this page exists to catch.
+
+**Why the read allowance cannot cover the gap.** `ReadTokens` is atenea's own nudge, and it works
+on weighed usage accumulated from assistant events. On the fifteen steps that died at the ceiling
+the record holds a dollar figure and **zero tokens** -- `spine`, `auth-mod` and `public-mod` each
+show `$0.41` with input, output, cache-read and cache-write all `0`. A turn stopped at its budget
+reports `total_cost_usd` and no usage, which `claudecode`'s envelope doc had already measured. So
+the one mechanism that could interrupt a runaway turn is blind on precisely the turns that run
+away. It bounds *reading*, and this money went to *searching*: globs over a tree with no matches,
+which pay for a tool result and the model's next thought and read no file at all.
+
+**The bound that does exist, and why it is not a budget.** Since the check is between messages,
+one turn's worst case is one message's worst case. Priced with this project's own constants --
+`allowance.tokensPerUSD` at 83,000 input-equivalent tokens to the dollar, output weighted 5x --
+the 64,000-output-token request the CLI is observed to make is 320,000 input-equivalent tokens,
+about **`$3.86`**, before any input. Against the smallest share of `$0.09` that is a **43x**
+bound. The honest statement is not "unbounded"; it is "bounded at a figure nobody chose, two
+orders of magnitude above the shares in use".
+
+**What this makes `budget_usd`.** An estimate, priced from receipts, with per-step error observed
+at up to 4.6x and aggregate error of 12.6% on this run. It is a good estimate and it is not an
+authorization ceiling -- which is what `Permission.BudgetUSD`'s own doc calls it: "a spending
+ceiling is an authorization the user granted". A user who granted `$5.22` was charged `$5.88`.
+
+**Done when:** either the prose stops promising a ceiling, or something enforces one. The two are
+not equivalent and the cheap one is first: say in `Permission.BudgetUSD`, in `Limits.MaxTokens`
+and in `atenea workflow`'s help that these are estimates checked between turns, that a step may
+exceed its share by the cost of one turn, and that `max_tokens` is carried but unenforced. The
+expensive one needs a provider that aborts mid-turn, or a per-turn token cap actually passed and
+honoured -- at which point `MaxTokens` becomes the real lever and the dollar figure becomes what
+it already is: a forecast.
+
+**Not decided:** which. Recorded because the run that found it was budgeted on the assumption that
+a share was a bound, and every number in that plan inherited the assumption.

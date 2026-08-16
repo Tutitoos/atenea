@@ -381,6 +381,22 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **A run is no longer executed against a repository other than the one it was
+  created for.** A 23-step plan created with `--repository taxiprime-backend`
+  and launched without the flag ran every step in Atenea's own checkout: the
+  settings declare `current` at that path, so a real repository was served and it
+  was the wrong one. Twenty-three readers looked for a Fastify surface in a Go
+  orchestrator — eight reported the files absent, fifteen died searching, `$5.88`
+  of a `$5.22` grant went, and no route was inventoried. The repository was
+  written by `Create` and read only by `checkFunding`: a missing comparison, not
+  a missing default, so this refuses rather than adopting what the record says —
+  adopting would fix that case by hiding the class. `Launch` checks before
+  answering the gate, so a refused launch leaves the run launchable instead of
+  reading "launched already" on the retry; `takeOver` carries the same check for
+  `run` and `resume`. The refusal names what the run recorded, what would be
+  served, and the directory that id stands for, because a real id can name no
+  tree: "would serve current" is true and useless.
+
 - **The admission threshold was still priced on turn 1, the cheap half of the
   turn.** It asked whether a step's read allowance outweighed the prefix that
   arrives with its prompt — `5,647` tokens on the measured row — while the event

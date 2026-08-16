@@ -1912,6 +1912,57 @@ things it had not reached, two of which were exclusions its own commission had i
 field existed and was empty on 208 of 210 rows twelve hours earlier.
 
 
+## A thirty-second instrument: a clean manifest about a tree the run never entered
+
+Measured 2026-08-16. Two instruments were verified before the subject this time, and both were
+wrong on the first reading — which is the point of the ritual and not a reason to feel good
+about it, because a third instrument was verified, correct, and pointed at nothing.
+
+The run: a 23-step route inventory, `create`d with `--repository taxiprime-backend`, launched
+with no flag from a shell standing in Atenea's own checkout. Every reader was served the
+repository the settings declare as `current` — which on this machine is
+`/home/tutitoos/Desktop/atenea`. Twenty-three readers went looking for a Fastify surface in a Go
+orchestrator. Eight said the files were absent, fifteen died searching, `$5.88` of a `$5.22`
+grant went, and **zero routes were inventoried**.
+
+**The sharpest detail is the manifest.** A before/after tree manifest was captured around the
+run and compared: `0 added, 0 removed, 0 changed` across 15,601 files, with field names and the
+`mtime_ns` unit written into the document. Every part of that is true and none of it was
+evidence, because it was taken over `taxiprime-app/new-app/backend` — the tree named in the
+plan, and the one tree the run never touched. Read-only was established for the real case only
+afterwards, in Atenea's own checkout (`git status`, 0 changed paths), and only because the
+failure forced the question. Had the run written something, this instrument would have reported
+a clean tree with total confidence.
+
+That is the same error as the first entry on this page wearing better clothes: not the wrong
+process, the wrong *subject*, chosen from the plan's own declaration rather than from where the
+work would actually happen. The manifest took its root from the same place the plan did, so the
+one fact the two disagreed about was the one fact it could not see.
+
+**The two instrument bugs found before the run, for the record.** The sampler counted this
+machine's own omp session — 18 `claude` and 17 MCP processes, 4.26 GiB PSS — as if they were the
+run's, until a startup pid-set baseline was added and `new_*` columns reported only what appeared
+after. And it classified *itself* as the engine, because its own cmdline carries the engine
+binary path as an argument: `engine_n = 1`, 11.6 MB, with nothing running. Both were found by
+reading the instrument's output on an empty machine and asking why a number was not zero.
+
+**What the sampler did establish**, since it was corrected: peak 11 new processes, `1.05 GiB` new
+PSS, and `step_n` peaking at exactly **4** — the configured lane ceiling. The
+"twelve concurrent readers at 79 MiB PSS" figure this page has carried since 2026-08-14 is not
+reproducible, because this engine cannot run twelve.
+
+**The good news in a `$5.88` loss, and it is not small.** The eight steps that answered
+diagnosed the harness from inside it. They named the wrong tree by absolute path, cited what was
+actually there (`go.mod`, `module github.com/Tutitoos/atenea`), listed each thing the commission
+asked for as undeliverable rather than absent, and **fabricated nothing** — not one method, not
+one path, not one line number. `admin-reservas`, which had read 34,077 bytes cleanly an hour
+earlier for the receipt in the entry above, came back saying the working directory is Atenea. It
+was right both times; only the directory changed. Five of the eight recorded `completeness: 1`,
+which is the correct reading and worth stating plainly: coverage `1` of a refusal is not coverage
+of the objective, and a funding rule that guarantees a step can finish reading guarantees
+nothing about whether there was anything to read.
+
+
 ## The general lesson
 
 1. **Verify the instrument before the subject.** A measurement tool is a claim
@@ -2251,6 +2302,18 @@ field existed and was empty on 208 of 210 rows twelve hours earlier.
     on purpose. Ask of every optional field: which two facts share this
     sentinel, and would I be able to tell them apart from the record a week
     later?
+
+33. **A verified instrument pointed at the wrong subject reports confidently and
+    means nothing.** Lesson 1 says verify the instrument. It is not enough. A
+    tree manifest with its field names, its units and its 15,601 files answered
+    `0 added, 0 removed, 0 changed` -- correctly, about a directory the run
+    never entered, because it took its root from the plan's declaration and the
+    run took its root from somewhere else. The instrument was right, the subject
+    was wrong, and the two facts that disagreed were the very pair it could not
+    compare. So ask the second question too: not only "is this tool telling the
+    truth", but "is the thing it is watching the thing that acts". When those
+    are separately configured, they are separately wrong, and a clean report is
+    then indistinguishable from a report about nothing.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at
