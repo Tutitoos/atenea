@@ -437,8 +437,24 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	if out.IsError {
 		// The envelope travels with the error on purpose. A turn that ran for
 		// a minute and then died at its ceiling occupied the machine for that
-		// minute and charged for it, and its usage is right here: returning an
-		// empty one puts that time and that money on nobody's bill.
+		// minute and charged for it, and its PRICE is right here: returning an
+		// empty one puts that money on nobody's bill.
+		//
+		// Its TOKENS are not here, and on this path they are not anywhere.
+		// Measured 2026-08-16 on the live CLI (2.1.232): a turn killed at
+		// --max-budget-usd prints `total_cost_usd: 0.41228` beside usage that
+		// is zero in every lane, because the price is a cost ledger charged as
+		// the work happens while usage is summed only at `message_stop`, which
+		// a killed message never reaches. This adapter asks for
+		// `--output-format json` -- one envelope, no event stream -- so unlike
+		// internal/agent/model's held-open turn there is no second reading to
+		// recover them from. See that package's conversation.charge.
+		//
+		// So a ceiling death here records a real dollar figure against zero
+		// tokens. That pairing is the codebase's existing way of saying "not
+		// recorded" -- see cmd/atenea/floor.go, which prints exactly that for
+		// a row carrying a price and no token count -- and it is a limit of
+		// this envelope, not a measurement of a turn that read nothing.
 		return out, peak, failureFor(out.reason(), runErr)
 	}
 	return out, peak, nil

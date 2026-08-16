@@ -1057,9 +1057,14 @@ func TestTheReceiptIsTheLastEventEvenWhenTheAnswerIsNot(t *testing.T) {
 	fake := scriptCLI(t, []string{
 		passEvent(0.02, 100, `{"findings":"a","completeness":0.2,"stopped_at":"most of it"}`),
 		passEvent(0.05, 200, `{"findings":"ab","completeness":0.4,"stopped_at":"the rest"}`),
+		// All-zero usage, which is what the real event carries -- see
+		// TestTheTokensOfAKilledTurnSurviveItsReceipt for the measurement.
+		// An earlier version of this fixture invented `input_tokens: 900`
+		// here, a figure the CLI does not print on this path.
 		`{"type":"result","subtype":"error_max_budget_usd","is_error":true,` +
 			`"terminal_reason":"budget_exhausted","errors":["Reached maximum budget ($0.50)"],` +
-			`"usage":{"input_tokens":900,"output_tokens":10},"total_cost_usd":0.55}`,
+			`"usage":{"input_tokens":0,"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0,"output_tokens":0},"total_cost_usd":0.55}`,
 	}, "Reached maximum budget ($0.50)", 1)
 
 	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
@@ -1075,6 +1080,49 @@ func TestTheReceiptIsTheLastEventEvenWhenTheAnswerIsNot(t *testing.T) {
 	if answer.Spent.USD == nil || *answer.Spent.USD != 0.55 {
 		t.Errorf("USD = %v, want 0.55 -- what the turn spent, including the pass that died",
 			answer.Spent.USD)
+	}
+}
+
+// A turn killed at its ceiling is charged for tokens the receipt does not
+// carry, and the stream's own account of them has to survive.
+//
+// Measured 2026-08-16 against the live CLI, reproducing the four deaths of
+// wf1786845363956-1 in 4.4 seconds for $0.41 -- these are that stream's real
+// numbers. The result event carried `total_cost_usd: 0.41228` and usage zero
+// in EVERY lane, while its two assistant events -- one message id, usage
+// restated -- carried 40,956 cache-creation tokens. Read out of the shipped
+// binary, the price is a cost ledger charged as the work happens and the usage
+// is summed only at `message_stop`, which a killed message never reaches.
+//
+// Preferring the receipt recorded a dollar figure against no usage at all, so
+// no reader of that row could tell whether the step read anything. That is the
+// shape of all four rows, and it is what this test refuses.
+func TestTheTokensOfAKilledTurnSurviveItsReceipt(t *testing.T) {
+	fake := scriptCLI(t, []string{
+		assistantEvent("msg_killed", 2, 40956, 0, 1),
+		assistantEvent("msg_killed", 2, 40956, 0, 1),
+		`{"type":"result","subtype":"error_max_budget_usd","is_error":true,` +
+			`"terminal_reason":"budget_exhausted","errors":["Reached maximum budget ($0.25)"],` +
+			`"usage":{"input_tokens":0,"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0,"output_tokens":0},"total_cost_usd":0.41228}`,
+	}, "Reached maximum budget ($0.25)", 1)
+
+	answer, err := fake.client(t).Turn(t.Context(), reservedRequest())
+	if err == nil {
+		t.Fatal("a turn that answered no pass came back without a failure")
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.41228 {
+		t.Errorf("USD = %v, want 0.41228 -- the CLI's own price, the only one there is",
+			answer.Spent.USD)
+	}
+	// Once, not twice: two events, one message id, one request's usage.
+	if got := answer.Spent.CacheWriteTokens; got != 40956 {
+		t.Errorf("CacheWriteTokens = %d, want 40956 -- what the stream said this "+
+			"money bought; 0 is the receipt's own field and 81912 is the same "+
+			"message counted twice", got)
+	}
+	if got := answer.Spent.OutputTokens; got != 1 {
+		t.Errorf("OutputTokens = %d, want 1 -- short, and the only count the CLI gave", got)
 	}
 }
 

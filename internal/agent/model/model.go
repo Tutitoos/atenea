@@ -1378,25 +1378,55 @@ func (conv *conversation) weighed() int {
 	return max(weigh(conv.read()), weigh(conv.receipt.Usage))
 }
 
-// charge is what the turn cost.
+// charge is what the turn cost: the CLI's own price, against whichever
+// account of the tokens is larger.
 //
-// The result event is the authority when one arrived: it carries the CLI's own
-// cumulative usage and the CLI's own price. When none did -- the exact shape
-// of the 12 deaths this path exists for -- the assistant events are all there
-// is, and per message they are the same field-by-field total the CLI would
-// have printed (measured: 39,193 cache-creation tokens either way). It carries
-// no dollar figure, because the CLI never printed one, and a price invented
-// here is precisely what contract.Charge.PricedBy exists to make impossible.
+// The price can only come from the result event -- the CLI never prints one
+// anywhere else -- and a price invented here is precisely what
+// contract.Charge.PricedBy exists to make impossible. The TOKENS are a
+// separate question, and the result event is not the authority on them.
 //
-// The streamed output_tokens run short -- 6 against the 1,067 the same turn's
-// result event reported -- because an assistant event is printed while its
-// message is still being written. Short and honest beats invented: it is the
-// count the CLI gave, and the alternative is arithmetic nobody measured.
+// Measured 2026-08-16 on the live CLI, reproducing the four deaths of
+// wf1786845363956-1 in 4.4 seconds for $0.41: a turn killed at
+// --max-budget-usd prints `terminal_reason: budget_exhausted` with
+// `total_cost_usd: 0.41228` and `usage` ALL ZEROS -- every lane, not a small
+// figure but no figure. Read out of the shipped binary (2.1.232), the two
+// come from different accumulators: `total_cost_usd: OA()` is
+// `costLedger.totalCostUSD()`, charged as the work happens, while
+// `usage: this.totalUsage` is summed only at `message_stop`, which a killed
+// message never reaches. The same stream's assistant events carried 40,956
+// cache-creation tokens for that money. Preferring the receipt threw them
+// away and recorded a dollar figure against no usage -- a row from which
+// nobody can tell whether the step read anything at all.
+//
+// So the larger reading wins, which is what weighed() already does for the
+// allowance and for the same reason: whole, never blended lane by lane, so
+// the figure is always one the CLI actually printed and never an arithmetic
+// combination nobody measured. Where a turn settled its messages normally the
+// receipt is larger and still wins, because the streamed output_tokens run
+// short -- 6 against the 1,067 the same turn's result event reported -- an
+// assistant event being printed while its message is still being written.
+//
+// When no result event arrived at all -- the exact shape of the 12 deaths this
+// path exists for -- the assistant events are all there is, and per message
+// they are the same field-by-field total the CLI would have printed
+// (measured: 39,193 cache-creation tokens either way). That charge carries no
+// dollar figure, because the CLI never printed one.
 func (conv *conversation) charge() contract.Charge {
-	if conv.rounds > 0 {
-		return chargeFrom(conv.receipt)
+	streamed := conv.read()
+	if conv.rounds == 0 {
+		return chargeFrom(envelope{Usage: streamed})
 	}
-	return chargeFrom(envelope{Usage: conv.read()})
+	charge := chargeFrom(conv.receipt)
+	if weigh(streamed) <= weigh(conv.receipt.Usage) {
+		return charge
+	}
+	// The receipt's price against the stream's tokens. Both halves are
+	// measured; only the pairing is this package's, and it is the pairing the
+	// record needs to be readable.
+	out := chargeFrom(envelope{Usage: streamed})
+	out.USD, out.PricedBy = charge.USD, charge.PricedBy
+	return out
 }
 
 // spend takes one assistant event's account of itself and fires the finalize
