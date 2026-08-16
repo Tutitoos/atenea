@@ -104,7 +104,8 @@ func citations(s string) []citation {
 			if err != nil {
 				continue
 			}
-			found = append(found, citeMatch{m[0], m[1], line[m[2]:m[3]], n})
+			start, end := widenOverBackticks(line, m[0], m[1])
+			found = append(found, citeMatch{start, end, line[m[2]:m[3]], n})
 		}
 		for _, m := range formB.FindAllStringSubmatchIndex(line, -1) {
 			n, err := strconv.Atoi(line[m[2]:m[3]])
@@ -122,6 +123,22 @@ func citations(s string) []citation {
 		}
 	}
 	return out
+}
+
+// widenOverBackticks extends [start, end) to include a backtick
+// immediately before start and one immediately after end, when both are
+// present. Form B's grammar already spans its own optional backticks; Form
+// A's does not, so without this a citation written as “ `path:line` “
+// (a normal way to cite a location in markdown) leaves its wrapping
+// backticks looking like an ordinary quoted span in soleQuote below, and
+// the citation gets checked against its own text instead of against
+// nothing -- a mismatch, on every single such citation, regardless of
+// whether the citation itself is right.
+func widenOverBackticks(line string, start, end int) (int, int) {
+	if start > 0 && end < len(line) && line[start-1] == '`' && line[end] == '`' {
+		return start - 1, end + 1
+	}
+	return start, end
 }
 
 // soleQuote returns the one quoted excerpt on line to pair with every

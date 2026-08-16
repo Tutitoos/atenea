@@ -243,3 +243,24 @@ func TestAnExactPathIsPreferredOverBaseNameFallback(t *testing.T) {
 		t.Fatalf("content_checked = %v, want 1 (the root a.txt, not the ambiguous fallback)", got.Result["content_checked"])
 	}
 }
+
+// A citation written wrapped in backticks -- “ `path:line` “, an
+// ordinary way to cite a location in markdown -- with no separate code
+// excerpt on the line is existence-only, not a mismatch against its own
+// text. Found live: a real reviewer run against a real answer refused a
+// citation this way, comparing "path:line" against the source line and
+// calling the mismatch a defect.
+func TestABacktickWrappedCitationWithNoExcerptIsExistenceOnly(t *testing.T) {
+	got := run(t, card(t, "one\ntwo\n", map[string]any{
+		"findings": "The only cited instance is `a.txt:2`, which I did not reach.",
+	}, "ok"))
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %s (%v), want ok", got.Verdict, got.Reason)
+	}
+	if got.Result["existence_only"] != float64(1) {
+		t.Fatalf("existence_only = %v, want 1", got.Result["existence_only"])
+	}
+	if got.Result["content_checked"] != float64(0) {
+		t.Fatalf("content_checked = %v, want 0 -- the backticks wrap the citation, not a code excerpt", got.Result["content_checked"])
+	}
+}
