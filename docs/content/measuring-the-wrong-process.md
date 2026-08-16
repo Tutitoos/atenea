@@ -1789,6 +1789,22 @@ that enter the build make it stale, and which files those are is discovered by r
 `//go:embed` directives rather than by a list that would drift. Its first run against this
 machine found the binary stale *again*, from a `model.go` change committed an hour earlier.
 
+**Addendum, 2026-08-16: the rule was broken twice more in one day, and the second time it
+cost money rather than a reading.** Both were scratch binaries built from a dirty tree and
+run before the commit — `/tmp/atenea-bin` for a migration check, and `/tmp/atenea-measure`
+carrying an uncommitted fix to `floor measure`'s spend notice. The first contaminated
+nothing and was caught at the phase gate. The second was run to see the new notice's
+wording and spent **$0.3487** on a cold `plan` turn nobody asked for.
+
+That is a consequence this entry did not have. Everything above is about a stale binary
+producing a **wrong reading** — recoverable by re-running against the right bytes. A binary
+built from a dirty tree to inspect a *money* path spends the money while you are still
+deciding whether the code is right. `stale-deploy` would not have caught either one: both
+were *ahead* of HEAD, not behind it, and it is deliberately silent about that. The gap is
+not in the instrument; it is that "build a scratch binary to look at one line of output" is
+the cheapest-feeling action available and, on a command that spends unattended, one of the
+most expensive.
+
 
 ## A twenty-ninth instrument: the same quantity corrected three times in one night
 
