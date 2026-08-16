@@ -462,6 +462,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+- **`atenea floor`'s `COLD USD` column priced the prefix, not the turn.** It
+  printed the stored figure — the prefix's slice of the receipt a first-call probe
+  paid — beside a `WARM USD` column that already covered the whole start, so two
+  columns of one table had different spans. Measured 2026-08-16 by paying both:
+  `explore` read `$0.14` for a `$0.27` turn and `reader` `$0.05` for a `$0.45`
+  one, while a row with no first-call probe agreed exactly — putting the error
+  only on the rows measured by the better instrument. Now
+  `Measurement.ColdStartUSD`, falling back to the stored figure for a legacy row
+  with no span to widen over, the same way the token column beside it says
+  `(not recorded)` rather than `0`.
+- **`atenea workflow show`'s per-step `COST` counted the live attempt only.** The
+  run-level balance defect one level down: `admin-config` printed `$0.68` for a
+  step that had cost `$1.29`, under a header corrected the same day to `$7.32` —
+  so the column no longer summed to the total two lines above it. It now totals
+  every attempt (dollars, never the archive's tokens, for the reason
+  `workflow.Spend` gives). A step mid-redo — unmeasured live row, priced archive —
+  read `unmeasured` while `$0.62` had been spent, and now reports it.
 - **`atenea floor measure --agent` is required: a default that spends is not a
   default.** It carried `plan`, which made the shortest form of the only command
   here that spends unattended also the one that chose what to spend on. Measured

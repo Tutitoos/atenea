@@ -13,7 +13,7 @@ import (
 // A step nobody could meter reads `unmeasured` in the cost column, never a
 // dash or a $0.00 that would print a measurement nothing took.
 func TestAnUnmeasuredStepCostReadsUnmeasuredNeverADashOrZero(t *testing.T) {
-	if got := stepCost(workflow.StepRow{}); got != "unmeasured" {
+	if got := stepCost(workflow.Run{}, workflow.StepRow{}); got != "unmeasured" {
 		t.Fatalf("stepCost = %q, want %q", got, "unmeasured")
 	}
 }
@@ -22,7 +22,7 @@ func TestAnUnmeasuredStepCostReadsUnmeasuredNeverADashOrZero(t *testing.T) {
 // never a fabricated dollar figure.
 func TestATokenOnlyStepCostShowsTokensNotADollarFigure(t *testing.T) {
 	row := workflow.StepRow{Spent: contract.Charge{InputTokens: 40, OutputTokens: 12}}
-	if got := stepCost(row); got != "52 tok" {
+	if got := stepCost(workflow.Run{}, row); got != "52 tok" {
 		t.Fatalf("stepCost = %q, want the token count", got)
 	}
 }
@@ -31,8 +31,54 @@ func TestATokenOnlyStepCostShowsTokensNotADollarFigure(t *testing.T) {
 func TestAPricedStepCostShowsTheDollarFigure(t *testing.T) {
 	usd := 0.5
 	row := workflow.StepRow{Spent: contract.Charge{USD: &usd, PricedBy: "anthropic"}}
-	if got := stepCost(row); got != "$0.50" {
+	if got := stepCost(workflow.Run{}, row); got != "$0.50" {
 		t.Fatalf("stepCost = %q, want the dollar figure", got)
+	}
+}
+
+// The column has to sum to the total the header prints two lines above it. A
+// redo overwrites the live row, so the step's own figure is only its last
+// attempt: admin-config finished at $0.6756 having already spent $0.6182 on the
+// dispatch it replaced, and the column said $0.68 for a step that cost $1.29.
+func TestARedoneStepCostTotalsEveryAttempt(t *testing.T) {
+	live, dead := 0.6756, 0.6182
+	run := workflow.Run{
+		Steps: []workflow.StepRow{{
+			Step:  workflow.Step{ID: "admin-config"},
+			Spent: contract.Charge{USD: &live, PricedBy: "a test"},
+		}},
+		Superseded: []workflow.AttemptRow{{
+			StepID: "admin-config", Attempt: 1,
+			Spent: contract.Charge{USD: &dead, PricedBy: "a test"},
+		}},
+	}
+	if got := stepCost(run, run.Steps[0]); got != "$1.29" {
+		t.Errorf("stepCost = %q, want $1.29 -- $0.6756 live plus $0.6182 replaced", got)
+	}
+	// And the archive of ANOTHER step must not land on this one.
+	other := workflow.StepRow{
+		Step:  workflow.Step{ID: "census"},
+		Spent: contract.Charge{USD: &live, PricedBy: "a test"},
+	}
+	if got := stepCost(run, other); got != "$0.68" {
+		t.Errorf("stepCost = %q, want $0.68 -- census has no archived attempt", got)
+	}
+}
+
+// A redo sets the step pending, so between dispatch and finish the live row is
+// unmeasured while the archive already holds real money. "unmeasured" there
+// would report a step that has spent $0.62 as one nothing could meter.
+func TestAStepMidRedoReportsWhatItsReplacedAttemptSpent(t *testing.T) {
+	dead := 0.6182
+	run := workflow.Run{
+		Steps: []workflow.StepRow{{Step: workflow.Step{ID: "admin-config"}}},
+		Superseded: []workflow.AttemptRow{{
+			StepID: "admin-config", Attempt: 1,
+			Spent: contract.Charge{USD: &dead, PricedBy: "a test"},
+		}},
+	}
+	if got := stepCost(run, run.Steps[0]); got != "$0.62" {
+		t.Errorf("stepCost = %q, want $0.62 -- the attempt it replaced was priced", got)
 	}
 }
 

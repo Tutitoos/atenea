@@ -128,11 +128,11 @@ func floorList(settingsPath string, out io.Writer) error {
 		// number is admitted.
 		//
 		// From the WARM weight, because that is what a step pays and what
-		// `workflow create` refuses against: the USD column beside it is
-		// already the cold one-time figure, prefix priced as cache write,
-		// paid by whichever run establishes the prefix and by no other.
-		// The two columns are the split, and reading either as the other
-		// is the mistake measured out on 2026-08-15.
+		// `workflow create` refuses against, while COLD USD beside it is the
+		// one-time cost of establishing the cache. Both now cover the SAME
+		// span -- prefix plus the block arriving with the first tool call --
+		// so the pair is a cache-state split and nothing else. Reading either
+		// as the other is the mistake measured out on 2026-08-15.
 		//
 		// WarmStartWeight falls back to CacheWriteTokens the same way
 		// Prefix does, so a legacy row missing PrefixTokens still prices
@@ -145,13 +145,30 @@ func floorList(settingsPath string, out io.Writer) error {
 			rescuable = formatUSD(math.Ceil(allowance.MinShareUSD(w)*100) / 100)
 		}
 		// WARM USD is what a step pays and COLD USD what establishing the
-		// cache costs once -- see floor.Measurement.WarmUSD. Both are costs,
-		// so both round the way every other money line in this CLI does; only
-		// RESCUABLE above ceilings, because it is a figure a person types back
-		// as a share and rounding it down would print a number that refuses
-		// them. A dash rather than "$0.00" where no probe has priced the first
-		// tool call: the warm figure is unknown for that row, and `workflow
-		// create` says so by falling back to the cold one in its refusal.
+		// cache costs once -- see floor.Measurement.WarmUSD and ColdStartUSD.
+		// Both are costs, so both round the way every other money line in this
+		// CLI does; only RESCUABLE above ceilings, because it is a figure a
+		// person types back as a share and rounding it down would print a
+		// number that refuses them. A dash rather than "$0.00" where no probe
+		// has priced the first tool call: the warm figure is unknown for that
+		// row, and `workflow create` says so by falling back to the cold one
+		// in its refusal.
+		//
+		// COLD USD is ColdStartUSD and not the stored USD, which is only the
+		// PREFIX's slice of the receipt a first-call probe paid. Printing the
+		// slice here understated a cold turn by 2.00x on explore and 9.84x on
+		// reader (measured 2026-08-16 by paying both), and it did so beside a
+		// WARM column that already covered the whole start -- so two columns
+		// of one table had different spans and a reader comparing rows could
+		// not tell which they had. Worse, a row with no first-call probe
+		// agreed exactly, which put the error only on the rows measured by
+		// the better instrument.
+		//
+		// Falls back to the stored figure when there is nothing to scale by:
+		// a legacy row whose prefix is unknown has a real dollar amount and
+		// no span to widen it over, and printing "$0.00" for it would lose
+		// the measurement -- the same reason the token column above says
+		// "(not recorded)" rather than "0".
 		warm, firstCall := "-", "-"
 		if w := m.WarmUSD(); w > 0 {
 			warm = formatUSD(w)
@@ -159,8 +176,12 @@ func floorList(settingsPath string, out io.Writer) error {
 		if m.FirstCallTokens > 0 {
 			firstCall = groupedInt(m.FirstCallTokens)
 		}
+		cold := m.ColdStartUSD()
+		if cold == 0 {
+			cold = m.USD
+		}
 		fmt.Fprintf(out, "%-20s %-9s %-16s %9s %9s %13s %13s %10s %-11s measured %s%s\n",
-			m.Repository, m.Agent, modelName, warm, formatUSD(m.USD), tokens, firstCall,
+			m.Repository, m.Agent, modelName, warm, formatUSD(cold), tokens, firstCall,
 			rescuable, version, formatAge(now.Sub(m.MeasuredAt)), mark)
 	}
 	if stale > 0 {

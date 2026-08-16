@@ -2214,6 +2214,51 @@ defaults.
 | `plan` cold (unintended) | - | $0.35 |
 | **total** | **$0.31** | **$1.09** |
 
+**The audit the overspend earned, and both fixes.** One line quoting a slice cost $0.42 of
+an authorization, so every other money surface in the CLI was checked for the same defect.
+Two had it. Both are now fixed; the rest audited clean, and *why* each is clean is the more
+useful half.
+
+**`atenea floor`'s `COLD USD` column printed the prefix's slice beside a `WARM USD` column
+that did not.** Two columns of one table with different spans:
+
+| row | `COLD USD` showed | a cold turn is billed | out by |
+|---|---|---|---|
+| `explore` | $0.14 | $0.27 | **2.00x** |
+| `reader` | $0.05 | $0.45 | **9.84x** |
+| `plan` | $0.35 | $0.35 | 1.00x |
+
+`WarmUSD` scales by `StartTokens/Prefix`; the cold column printed `USD` raw. `plan` agreed
+only because no first-call probe has ever run against it — so **the error appeared exactly on
+the rows measured by the better instrument**, which is the worst place for it: a reader
+comparing two rows could not tell which quantity they had. Now `ColdStartUSD`, falling back
+to the stored figure for a legacy row with no span to widen over, for the same reason the
+token column beside it says `(not recorded)` rather than `0`.
+
+**`atenea workflow show`'s per-step `COST` printed the live attempt only.** The run-level
+balance defect one level down: `admin-config` read `$0.68` where the step had cost `$1.29`,
+under a header that had just been corrected to `$7.32` — so the column no longer summed to
+the total two lines above it. Now every attempt. On the real record the 19 rows sum to
+`$7.33` against a `$7.32` header, one cent of independent rounding.
+
+A second defect fell out of writing that: a step mid-redo has an unmeasured live row and a
+priced archive, and the column called it `unmeasured` while `$0.62` had been spent. Both are
+defended by tests that fail on mutation — and the `plan` row passes under either arithmetic,
+which is the discriminator that makes the first test worth having.
+
+**Clean, each for a reason worth keeping.** The engine's refusal clauses name their own scope
+in prose (`starting a turn costs ~$X, and no probe has priced this row's first tool call` for
+a prefix-only row against `~$X warm -- N tokens of prefix and first tool call` for a
+whole-start one), so a reader is told which quantity they hold. `CostByType` reads the
+successful attempt on purpose: the question there is what a step costs to *finish*.
+`gatestore`'s allocation lines and `Reshare`'s raise check compare shares against a grant,
+never a receipt against a slice. `claudecode`'s per-turn note prices one turn against its own
+ceiling. `atenea traces` prints no money at all and already labels a redo `try 2` with the
+dispatch it replaced.
+
+The pattern in all five: **a figure is safe when the line carrying it names its own span.**
+Every defective one printed a number into a column heading that named a different quantity.
+
 
 ## A thirty-seventh instrument: re-running a known failure, which is the only way to price one
 

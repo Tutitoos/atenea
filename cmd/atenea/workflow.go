@@ -403,7 +403,7 @@ func printRun(out io.Writer, run workflow.Run) {
 			truncate(step.Step.TypeName, 14),
 			step.Pool,
 			run.State(step),
-			stepCost(step),
+			stepCost(run, step),
 			stepDetail(run, step))
 	}
 
@@ -477,12 +477,35 @@ func printGates(out io.Writer, gates []workflow.Gate) {
 // once one exists, the tokens when something measured but nobody priced it,
 // and `unmeasured` when nothing could say. Never $0.00 or a dash for that
 // last case -- either would print a measurement nothing took.
-func stepCost(step workflow.StepRow) string {
+//
+// EVERY attempt, not the live one. `workflow_step` holds exactly one, so a
+// redo overwrites the row and files the previous dispatch in the archive: this
+// column showed $0.68 for a step that had cost $1.29 (measured 2026-08-16 on
+// the first real redo), and it did so under a run header that had just been
+// fixed to say $7.32 -- so the column no longer summed to the total two lines
+// above it. The run line names the superseded portion, which is where a reader
+// goes for the split; this column is the step's whole bill.
+//
+// Dollars are totalled and tokens are not, for the reason [workflow.Spend]
+// gives: a cut attempt's token record is the one the killed-turn accounting
+// fix exists to correct, and importing it here would understate a total that
+// is already correct in dollars.
+func stepCost(run workflow.Run, step workflow.StepRow) string {
+	usd, priced := 0.0, false
+	if step.Spent.USD != nil {
+		usd, priced = *step.Spent.USD, true
+	}
+	for _, attempt := range run.Superseded {
+		if attempt.StepID == step.Step.ID && attempt.Spent.USD != nil {
+			usd += *attempt.Spent.USD
+			priced = true
+		}
+	}
+	if priced {
+		return fmt.Sprintf("$%.2f", usd)
+	}
 	if !step.Spent.Measured() {
 		return "unmeasured"
-	}
-	if step.Spent.USD != nil {
-		return fmt.Sprintf("$%.2f", *step.Spent.USD)
 	}
 	return fmt.Sprintf("%d tok", step.Spent.Tokens())
 }

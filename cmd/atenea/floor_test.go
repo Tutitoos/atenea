@@ -425,6 +425,81 @@ func TestFloorMeasureWithNoAgentRefusesRatherThanPickingOne(t *testing.T) {
 	}
 }
 
+// COLD USD is what a cold turn is BILLED, which is the prefix and the block
+// arriving with the first tool call -- the same span WARM USD prices. It showed
+// the stored figure, the prefix's slice alone, so the two columns of one table
+// had different scopes: measured 2026-08-16 by paying both, explore read 2.00x
+// low and reader 9.84x low, while a row with no first-call probe agreed exactly.
+// The error therefore appeared only on the rows measured by the better probe,
+// which is the worst place for it -- a reader comparing two rows could not tell
+// which quantity they had.
+func TestTheFloorTableColdColumnIsTheWholeStartNotThePrefixsSlice(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := floor.Open("")
+	if err != nil {
+		t.Fatalf("floor.Open: %v", err)
+	}
+	now := time.Now().UTC()
+	// The two real rows, and a third with no first-call probe: that one has no
+	// span to widen over and must print its stored figure unchanged.
+	for _, row := range []floor.Measurement{
+		{
+			Repository: "taxiprime-backend", Agent: "explore", Model: "claude-opus-5",
+			USD: 0.13600522528262304, USDPerToken: 5.291208577755332e-06,
+			PrefixTokens: 25_704, FirstCallTokens: 25_778,
+			InputTokens: 2, OutputTokens: 17, Cold: true, MeasuredAt: now,
+		},
+		{
+			Repository: "taxiprime-backend", Agent: "reader", Model: "claude-opus-5",
+			USD: 0.045499885632274126, USDPerToken: 1.0039692328392349e-05,
+			PrefixTokens: 4_532, FirstCallTokens: 40_061,
+			InputTokens: 2, OutputTokens: 17, Cold: true, MeasuredAt: now,
+		},
+		{
+			Repository: "taxiprime-backend", Agent: "plan", Model: "claude-opus-5",
+			USD: 0.3487, USDPerToken: 1.000315556958031e-05,
+			PrefixTokens: 34_859, InputTokens: 2, OutputTokens: 4,
+			Cold: true, MeasuredAt: now,
+		},
+	} {
+		if err := store.Put(row); err != nil {
+			t.Fatalf("seeding %s: %v", row.Agent, err)
+		}
+	}
+
+	out, err := cli(t, "--config", floorSettings(t, ""), "floor")
+	if err != nil {
+		t.Fatalf("floor: %v", err)
+	}
+	// The rows start with the repository, so lineWith's line-start anchor does
+	// not reach the agent column: matched on the agent surrounded by spaces,
+	// which is unambiguous here because "reader" is not a substring of another
+	// declared name in this fixture.
+	rowFor := func(agent string) string {
+		t.Helper()
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.Contains(line, " "+agent+" ") {
+				return line
+			}
+		}
+		t.Fatalf("no %q row on the screen:\n%s", agent, out)
+		return ""
+	}
+	for _, want := range []struct{ agent, cold, wrong string }{
+		{"explore", "$0.27", "$0.14"},
+		{"reader", "$0.45", "$0.05"},
+		{"plan", "$0.35", ""}, // no first-call probe: the stored figure IS the receipt
+	} {
+		line := rowFor(want.agent)
+		if !strings.Contains(line, want.cold) {
+			t.Errorf("%s row = %q, want COLD USD %s", want.agent, line, want.cold)
+		}
+		if want.wrong != "" && strings.Contains(line, want.wrong) {
+			t.Errorf("%s row = %q still prints the prefix's slice %s", want.agent, line, want.wrong)
+		}
+	}
+}
+
 // firstCallReading is the event stream of a probe that made one tool call,
 // with the two real figures measured 2026-08-15: a 5,647-token prefix and the
 // 41,927-token block that arrives with the first tool result, billed $0.4935
