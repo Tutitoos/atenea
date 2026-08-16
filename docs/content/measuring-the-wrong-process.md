@@ -1962,6 +1962,53 @@ which is the correct reading and worth stating plainly: coverage `1` of a refusa
 of the objective, and a funding rule that guarantees a step can finish reading guarantees
 nothing about whether there was anything to read.
 
+## A thirty-third instrument: the quantity the shares were built on
+
+Measured 2026-08-16, on the re-run of the same 23-step inventory in the tree it was written
+for. Both roots were verified to agree before spawning, the manifest watched the tree that was
+served, and it came back `0 added, 0 removed, 0 changed` about a tree that was genuinely read.
+The instruments were right this time. The plan was wrong, in a way no instrument was watching.
+
+**The fifth wrong quantity was file size, and the run that used it refuted it.** Every share in
+that plan was derived from the bytes each step would read: `spine` 13,035 bytes got `$0.10`,
+`admin-reservas` a 207,098-byte file got `$0.51`. The receipts put a **35x range of bytes inside
+a 2x range of cost**:
+
+| step | bytes | share | spent | finished |
+|---|---|---|---|---|
+| `mechanism` | 5,888 | $0.09 | $0.22 | no |
+| `public-mod` | 29,703 | $0.38 | $0.32 | yes |
+| `booking-b` | 66,069 | $0.40 | $0.30 | yes |
+| `admin-reservas` | 207,098 | $0.51 | $0.44 | yes |
+
+Five steps finished, at `$0.30`-`$0.44`. Eighteen died at their ceilings having read real files
+and written nothing, `$4.41` for no deliverable. The split is not need and not size: **every
+step funded `$0.38` or more finished, and every step funded less than that died.** A step costs
+about what a step costs.
+
+The quantity was mine to pick and it was picked for a plausible reason — a bigger file is more
+work — which is how all five of these arrive. What makes it the same failure as the four before
+it is not the guess but the absence: nothing compared the derived shares to a receipt for the
+shape being funded, and the previous night's receipts were sitting in the same database the
+whole time. Fourteen clean rows of exactly this agent type on exactly this repository were on
+the record before the run started, with a median of `$0.30`. The plan asked for `$0.09`.
+
+**What the probes could not have caught.** The floor and the rescuable threshold were both
+correct and both cleared: they price a probe — one turn that starts, makes at most one tool
+call, and stops. That is `$0.06` warm on this row. Neither is a wrong measurement; they measure
+starting, and nothing in this system measured *finishing* until the rows existed to do it. The
+fix is a third admission rule reading the median of the runs that finished, which is now the
+only number in the check derived from the whole act.
+
+**The rule's own weakness, stated where it will be found.** `verdict = ok` is not "did the
+work". Of the fourteen rows behind that `$0.30`, eight are from the wrong-repository run in the
+entry above — correct refusals that cost about what real reading costs — and one is the
+`auth-mod` row that recorded `ok` while saying it had read nothing. The median of the five that
+truly did the work is `$0.33`. The contamination is 10% and it biases the requirement *low*,
+which is the permissive direction, so the rule under-refuses rather than over-refuses. It stays
+until `completeness` is trustworthy enough to filter on; that is the open item recorded in
+`not-built-yet.md`, and this is the second rule now waiting on it.
+
 
 ## The general lesson
 
@@ -2314,6 +2361,31 @@ nothing about whether there was anything to read.
     truth", but "is the thing it is watching the thing that acts". When those
     are separately configured, they are separately wrong, and a clean report is
     then indistinguishable from a report about nothing.
+
+34. **A plausible name is not the record, and I trusted one twice in two days.**
+    Both times the mistake was identical in shape and invisible in the output. A
+    launch was served the repository called `current` because no flag named one,
+    and `current` is a real declared repository pointing at Atenea's own tree --
+    a plausible name, a valid answer, the wrong subject. Then, classifying the
+    routes that run produced, `places.routes.ts` was filed as unauthenticated
+    because the file sits under `public/` -- a plausible name again, while the
+    step's own answer said `CONTEXT HOOK VERDICT: PRESENT` and cited line 105,
+    which said `fastify.addHook('preHandler', fastify.authenticate)` when read.
+    The evidence was already in hand and was overridden by a directory name. The
+    second one would have shipped five authenticated routes into a security
+    write-up as open. Same fix in both directions: when a name and a record
+    disagree, the record wins, and when they agree, it was still the record that
+    settled it.
+
+35. **Deriving a number from a plausible driver is how every wrong quantity on
+    this page arrived.** Five now: the parent pid, the input frozen at the wrong
+    stage, cache warmth, the probe's self-checked rate, and file size as the cost
+    of a step. None was a careless guess; each was the obvious quantity for its
+    question. What they share is that no receipt for the shape being estimated
+    was ever put beside the estimate -- and in the last case fourteen such
+    receipts were already in the database the planner could read. Before deriving
+    a figure, ask what has already been *paid* for this exact shape. If the
+    answer is "nothing", the derivation is a hypothesis and must be labelled one.
 
 The design of this project is one long argument that a system should never claim
 more than it has looked at. This was that argument arriving from the outside, at

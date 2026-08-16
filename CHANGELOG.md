@@ -17,6 +17,24 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- **`workflow create` now refuses a share below what that agent type has cost to
+  FINISH, not just to start.** The floor and the rescuable threshold both price a
+  probe: one turn that starts, makes at most one tool call, and stops — `$0.06`
+  warm on the row this was measured against. A step that does the work costs
+  several times that. On a 23-step inventory on 2026-08-16 every share cleared
+  both probe rules; five steps finished at `$0.30`-`$0.44` and eighteen died at
+  their ceilings having read real files and written nothing, `$4.41` for no
+  deliverable. The third rule is the median of the rows that finished, read from
+  the same `CostByType` table `atenea metrics` already prints, and it needs three
+  clean rows before it may refuse anybody — a median of two is a rumour and the
+  middle of two rows is an endpoint. Rows that stopped at their ceiling are
+  excluded, as they always were: they are lower bounds, and pricing admission off
+  them would quote this system's failures back as the cost of success. A type no
+  probe has priced is no longer skipped either — finished rows need no probe, and
+  exempting the types with the most evidence because a probe was missing was
+  backwards. The refusal names which of the three bound, and prints the median
+  with its row count and scope.
+
 - **`atenea floor measure` now makes a real tool call, and prices what comes
   back warm.** A probe that answered without touching a tool measured the one
   event nothing is refused against: the prefix alone, before any tool schema
@@ -380,6 +398,14 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   reading older than the longest window to land there.
 
 ### Fixed
+
+- **A refusal no longer invents a cent that was never measured.** `centsUp`
+  rounds a requirement up so the figure printed is one a person can type back as
+  a share. A requirement of exactly `$0.55` arrives from the store as
+  `0.5500000000000000444`, and a bare ceiling turned that into `$0.56` — a cent
+  nobody measured, printed beside a median as if it were part of it. It now
+  subtracts the same `moneyEpsilon` the rest of the check compares money with.
+  Found by a test on an observed median, not in the field.
 
 - **A run is no longer executed against a repository other than the one it was
   created for.** A 23-step plan created with `--repository taxiprime-backend`

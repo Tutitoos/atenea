@@ -263,6 +263,15 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	return run, gate, nil
 }
 
+// observedMinRows is how many clean, completed rows a median needs before it
+// is allowed to refuse a plan.
+//
+// Three, because Observed's own doc says a median of two is a rumor, and the
+// middle of two rows is just an endpoint. It is not a measured constant and
+// does not pretend to be: it is the point where this project agreed a median
+// starts meaning something, written once instead of in each caller.
+const observedMinRows = 3
+
 // underfunded is one step, the share it was handed, and why that share does
 // not clear this repository's requirements for the agent type and model it
 // runs against.
@@ -272,14 +281,15 @@ type underfunded struct {
 	agent string
 	model string
 	floor Floor
-	// needUSD is the larger of what the floor requires and what the
-	// allowance rule requires -- the number a person raises the share to.
-	// Zero when the measurement carries no token count at all, so the
-	// second requirement cannot be computed and bound is "unmeasured".
+	// needUSD is the largest of what the floor requires, what the allowance
+	// rule requires, and what a step of this type has actually cost to
+	// FINISH -- the number a person raises the share to. Zero when the
+	// measurement carries no token count at all, so the second requirement
+	// cannot be computed and bound is "unmeasured".
 	needUSD float64
 	// bound names which requirement needUSD came from: "floor", "allowance",
-	// or "unmeasured" when the row carries no token count to check either
-	// rule against.
+	// "observed", or "unmeasured" when the row carries no token count to
+	// check either probe rule against.
 	bound string
 	// weight is the row's StartWeight: the input-equivalent weight of
 	// the turn's own first assistant event, cold-equivalent. Zero only when
@@ -288,6 +298,18 @@ type underfunded struct {
 	// tokens is what the funded share actually buys, in the same
 	// input-equivalent unit as weight -- allowance.Tokens(usd).
 	tokens int
+	// observed is the median of what CLEAN, completed steps of this agent
+	// type have cost, with n behind it and the scope those rows were read
+	// at. Zero when nothing has been measured, which is not zero cost: it is
+	// no claim, and then only the two probe rules apply.
+	//
+	// This is the only one of the three bounds derived from a step that did
+	// the work rather than a probe that started a turn and stopped. Measured
+	// 2026-08-16: the probe rules asked $0.06 where a real reader step cost
+	// $0.30-$0.44, and eighteen of twenty-three steps died in the gap.
+	observed      float64
+	observedN     int
+	observedScope string
 }
 
 // checkFunding refuses a plan that funds a step below either of two measured
@@ -317,10 +339,22 @@ type underfunded struct {
 // funded above the floor -- died empty anyway: $5.24 spent against a $3.52
 // grant. A measurement that stays a comment is documentation, not a control.
 //
-// Both rules are evaluated in one pass, and every underfunded step is
-// reported once, against whichever requirement is larger for its own
+// The observed half, added 2026-08-16: both rules above price a PROBE -- one
+// turn that starts, makes at most one tool call, and stops. A step that does
+// the work costs several times that, and the two probe rules cannot see it.
+// Twenty-three steps on taxiprime-backend, every share cleared by both rules
+// on the day: five finished at $0.30-$0.44 and eighteen died at their
+// ceilings having read real files and written nothing, for $4.41 and no
+// deliverable. The third rule is the median of the rows that FINISHED, which
+// is the only number in this system measured on the whole act. It is also
+// why the shares were wrong in a shape no probe could have caught: they were
+// scaled by file bytes, and the receipts put a 35x byte range inside a 2x
+// cost range. A step costs about what a step costs.
+//
+// All three rules are evaluated in one pass, and every underfunded step is
+// reported once, against whichever requirement is largest for its own
 // measured row -- see underfunded and refusal -- so a person raises a share
-// once rather than clearing one gate and hitting the other on the next
+// once rather than clearing one gate and hitting the next on the following
 // attempt.
 //
 // A row with no token count at all cannot answer the threshold question, and
@@ -328,12 +362,17 @@ type underfunded struct {
 // back to the weaker rule whenever the stronger one cannot be evaluated is
 // the exact defect this whole rule exists to end.
 //
-// THE ENGINE NEVER TOPS A STEP UP TO EITHER REQUIREMENT. Quietly raising a
-// share to make a plan runnable is Atenea spending money nobody approved,
-// and it is worse than the defect above because it is silent: the reader of
-// the receipt would have no way to tell the figure they authorized from the
-// one the engine preferred. Refusing is the honest move. The shares in a
-// plan are its author's, and they stay its author's.
+// A type NO PROBE has priced is not skipped any more. It has no floor and no
+// threshold, and the observed rule needs neither: finished rows are finished
+// rows. Exempting the types this machine has the most evidence about, because
+// the one thing missing was a probe, was backwards.
+//
+// THE ENGINE NEVER TOPS A STEP UP TO ANY OF THE THREE REQUIREMENTS. Quietly
+// raising a share to make a plan runnable is Atenea spending money nobody
+// approved, and it is worse than the defect above because it is silent: the
+// reader of the receipt would have no way to tell the figure they authorized
+// from the one the engine preferred. Refusing is the honest move. The shares
+// in a plan are its author's, and they stay its author's.
 func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 	if e.floors == nil || e.modelFor == nil {
 		return nil
@@ -347,6 +386,14 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 		known bool
 	}
 	asked := make(map[key]lookup, 2)
+	// What a completed step of each type has actually cost, read once. A
+	// failure here is not a refusal: the two probe rules still apply, and a
+	// store that cannot answer what things cost is not evidence that a share
+	// is adequate.
+	costs := CostTable{Types: map[string]Observed{}}
+	if got, err := e.store.CostByType(ctx, e.repo); err == nil {
+		costs = got
+	}
 	var under []underfunded
 	for i := range plan.Graph.Steps {
 		step := &plan.Graph.Steps[i]
@@ -370,10 +417,33 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			got = lookup{floor: floor, known: known}
 			asked[k] = got
 		}
+		usd := step.Permission.BudgetUSD
+		// What completed steps of this type have cost. Read before the probe
+		// gating below, because it is the one rule that does not need a probe
+		// to have run: a type nobody measured a turn for can still have five
+		// finished rows on the record, and skipping the check there would
+		// exempt exactly the types this machine knows the most about.
+		obs := costs.Types[step.TypeName]
+		observedUSD := 0.0
+		if obs.N >= observedMinRows {
+			observedUSD = obs.MedianUSD
+		}
 		if !got.known {
+			if observedUSD > 0 && usd+moneyEpsilon < observedUSD {
+				under = append(under, underfunded{
+					step:          step.ID,
+					usd:           usd,
+					agent:         step.TypeName,
+					model:         model,
+					needUSD:       observedUSD,
+					bound:         "observed",
+					observed:      obs.MedianUSD,
+					observedN:     obs.N,
+					observedScope: costs.Repository,
+				})
+			}
 			continue
 		}
-		usd := step.Permission.BudgetUSD
 		if got.floor.WarmStartWeight == 0 {
 			// The row cannot answer the threshold question at all. Refuse
 			// rather than fall back to the floor alone, whatever usd is --
@@ -412,14 +482,21 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 		if got.floor.WarmUSD > 0 {
 			floorUSD, floorKind = got.floor.WarmUSD, "warm-floor"
 		}
+		// The third rule, and the only one measured on work rather than on a
+		// probe: what a step of this type has cost to FINISH -- read above,
+		// with why three rows is the smallest median allowed to refuse.
 		okFloor := usd+moneyEpsilon >= floorUSD
 		okAllowance := tokens > got.floor.WarmStartWeight
-		if okFloor && okAllowance {
+		okObserved := usd+moneyEpsilon >= observedUSD
+		if okFloor && okAllowance && okObserved {
 			continue
 		}
 		needUSD, bound := floorUSD, floorKind
 		if rescuable := allowance.MinShareUSD(got.floor.WarmStartWeight); rescuable > needUSD {
 			needUSD, bound = rescuable, "allowance"
+		}
+		if observedUSD > needUSD {
+			needUSD, bound = observedUSD, "observed"
 		}
 		under = append(under, underfunded{
 			step:    step.ID,
@@ -431,6 +508,12 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			bound:   bound,
 			weight:  got.floor.WarmStartWeight,
 			tokens:  tokens,
+			// Carried whatever bound won, and whatever N is: a share refused
+			// by a probe rule while real rows say something larger is a
+			// person's next question, not a footnote.
+			observed:      obs.MedianUSD,
+			observedN:     obs.N,
+			observedScope: costs.Repository,
 		})
 	}
 	if len(under) == 0 {
@@ -496,6 +579,16 @@ func refusal(repository string, steps int, under []underfunded) string {
 			continue
 		}
 		told = append(told, row)
+		// No probe ever priced this row, so there is no floor to date or
+		// version. Saying so is the provenance: the number that refused this
+		// step came from finished runs, and a reader who goes looking for a
+		// floor measurement must not be sent after one that does not exist.
+		if u.floor.MeasuredAt.IsZero() {
+			fmt.Fprintf(&b, "\nno probe has priced %s as %s with %s on this machine; the "+
+				"requirement above is what %d finished runs of it cost.\n",
+				where, u.agent, u.model, u.observedN)
+			continue
+		}
 		line := fmt.Sprintf("\nthe floor for %s as %s with %s was measured %s",
 			where, u.agent, u.model, u.floor.MeasuredAt.Local().Format("2006-01-02 15:04"))
 		if u.floor.CLIVersion != "" {
@@ -556,6 +649,14 @@ func clause(u underfunded) string {
 		return fmt.Sprintf("half a share buys %s tokens of reading; its prompt and first "+
 			"tool call weigh %s, read from cache",
 			grouped(u.tokens), grouped(u.weight))
+	case "observed":
+		scope := "on this machine"
+		if u.observedScope != "" {
+			scope = "on " + u.observedScope
+		}
+		return fmt.Sprintf("a step of this type has cost $%.2f to finish, median of %d "+
+			"completed runs %s -- the probes price starting a turn, these priced doing "+
+			"the work", u.observed, u.observedN, scope)
 	case "warm-floor":
 		return fmt.Sprintf("starting a step costs ~$%.2f warm -- %s tokens of prefix and "+
 			"first tool call, read from cache",
@@ -569,8 +670,14 @@ func clause(u underfunded) string {
 // centsUp rounds usd up to the nearest cent. The number in a refusal is one a
 // person may type back as a share; rounding down would print a figure that
 // still refuses the person who typed it.
+//
+// The epsilon is the one the rest of this check compares money with, and it is
+// load-bearing here rather than decorative: a requirement of exactly $0.55
+// arrives as 0.5500000000000000444, and a bare ceiling turns that into $0.56 --
+// a cent nobody measured, printed as if it were the measurement. Found by a
+// test on an observed median 2026-08-16.
 func centsUp(usd float64) float64 {
-	return math.Ceil(usd*100) / 100
+	return math.Ceil(usd*100-moneyEpsilon) / 100
 }
 
 // grouped writes an integer with thousands separators. The token count in a

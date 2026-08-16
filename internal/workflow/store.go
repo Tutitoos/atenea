@@ -927,10 +927,17 @@ func itoa(n int) string {
 
 // Observed is what one agent type has actually cost on this machine.
 //
-// It is evidence, not a price. Nothing here is a ceiling and nothing here is
-// enforced: a planner dividing a grant is better off knowing that exploring
-// this repository has cost $1.63 than dividing evenly, and that is the whole
-// claim.
+// It was evidence and nothing else until 2026-08-16, when checkFunding began
+// refusing a share below MedianUSD. It is still not a ceiling -- nothing here
+// stops a running turn -- but it is now an admission requirement, and it is
+// the only one derived from steps that FINISHED rather than from a probe that
+// started a turn and stopped. See engine.go's observedMinRows for how many
+// rows it takes before this number is allowed to refuse anybody.
+//
+// Measured 2026-08-16: the probe-derived rules asked $0.06 of a reader step
+// on taxiprime-backend while five completed reader steps cost $0.30-$0.44,
+// and eighteen of twenty-three steps died in the gap having read real files
+// and written no answer.
 type Observed struct {
 	// TypeName is the agent type these rows ran as.
 	TypeName string
