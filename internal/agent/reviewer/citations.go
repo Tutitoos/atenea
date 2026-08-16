@@ -320,6 +320,7 @@ func judgeCitations(in assignment, s *subject) report {
 		delete(out.Result, "checked")
 		out.Result["existence_only"] = existOnly
 		out.Result["content_checked"] = contentChecked
+		out.Result["unresolved"] = len(unresolved)
 		out.Result["scope"] = citationScope
 		return out
 	}

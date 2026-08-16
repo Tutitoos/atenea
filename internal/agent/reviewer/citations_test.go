@@ -106,6 +106,9 @@ func TestAnUnresolvableCitationIsIncomplete(t *testing.T) {
 	if !strings.Contains(got.Reason.Text, "missing.txt") {
 		t.Fatalf("reason %q does not name what it could not read", got.Reason.Text)
 	}
+	if got.Result["unresolved"] != float64(1) {
+		t.Fatalf("unresolved = %v, want 1 -- a caller should not have to count semicolons in the reason text", got.Result["unresolved"])
+	}
 }
 
 // Bare ":N" shorthand with no path attached is not resolved -- inferring
