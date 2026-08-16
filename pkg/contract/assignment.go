@@ -83,53 +83,68 @@ func (t Task) Clone() Task {
 // Permission.BudgetUSD, because money is an authorization a person gave while
 // these two are guards the caller sets.
 //
-// Neither field is a ceiling something enforces on a model turn. MaxDuration
-// reaches one, as model.Request.Timeout. MaxTokens reaches nothing -- see its
-// own doc. Required and validated is not the same as honored, and this struct
-// promised the second for both fields until 2026-08-16.
+// MaxDuration is a ceiling something enforces: it reaches a model turn as
+// model.Request.Timeout. MaxTokens is not, and no longer claims to be -- see
+// its own doc. This struct promised the first for both fields until
+// 2026-08-16.
 type Limits struct {
 	// MaxDuration is the wall clock the agent may take.
 	MaxDuration time.Duration
-	// MaxTokens is the token count the caller decided this run should be
-	// held to, input and output together.
+	// MaxTokens is the token count the caller declared this run should be
+	// held to, input and output together. It is ADVISORY: a declaration of
+	// intent that travels with the assignment, and zero means the caller
+	// declared none.
 	//
-	// NOTHING ENFORCES IT, and it is not a ceiling. Measured 2026-08-16: it
-	// is validated positive here, encoded onto the wire as
-	// `limits.max_tokens`, decoded by internal/agent/planner into a struct
-	// field -- and read by nobody. model.Request has no token cap to carry
-	// it to, and no flag hands it to a provider. A turn may spend any number
-	// of tokens this field names, and did.
+	// NOTHING ENFORCES IT. Measured 2026-08-16: it is encoded onto the wire
+	// as `limits.max_tokens`, decoded by internal/agent/planner into a struct
+	// field -- and read by nobody, not even the prompt, so the model is never
+	// told. model.Request has no token cap to carry it to, and the shipped
+	// CLI (2.1.232) has no flag to hand it to: 65 flags, and the only spend
+	// bound among them is --max-budget-usd, in dollars.
 	//
-	// It is worse than absent while it looks required: Validate refuses a
-	// zero precisely so that "nobody decided" cannot pass for "no limit",
-	// which tells a reader the number is load-bearing. It is not. Kept
-	// rather than deleted because the field is the right shape for the bound
-	// this system does not have -- a per-turn token cap is the only thing
-	// that could bound a searching turn, since money is checked between
-	// messages and never within one. Wiring it is the expensive half of
-	// docs/content/not-built-yet.md, undecided.
+	// Validate required it positive until 2026-08-16, so that "nobody
+	// decided" could not pass for "no limit". That refusal bought invented
+	// numbers instead of decisions, and the live settings file said so in a
+	// comment: three agent types declared `max_tokens = 1` with "it spends no
+	// tokens; the ceiling still has to be a real number". The two that back a
+	// model declared 200,000, which steps that finished `ok` already exceed --
+	// 224,148 cache-read tokens on one of them. Honoring any of those numbers
+	// would have cut work that completes.
+	//
+	// Kept rather than deleted because the field is the right shape for the
+	// bound this system does not have -- a per-turn token cap is the only
+	// thing that could bound a searching turn, since money is checked between
+	// messages and never within one. Wiring it needs values somebody measured
+	// first; see docs/content/not-built-yet.md.
 	MaxTokens int
 }
 
-// Validate checks that both numbers were decided, which is all this can check:
-// whether either is then enforced is not a property of the struct. See
-// MaxTokens for the one that is not.
+// Validate checks the one number that is enforced. MaxTokens is advisory and
+// any value is accepted, including zero -- see its own doc for why requiring
+// it produced invented numbers rather than decisions.
 func (l Limits) Validate() error {
 	if l.MaxDuration <= 0 {
 		return Fail(FailureInvalidInput,
 			"limits: max duration must be positive, got %v", l.MaxDuration)
 	}
-	if l.MaxTokens <= 0 {
+	if l.MaxTokens < 0 {
 		return Fail(FailureInvalidInput,
-			"limits: max tokens must be positive, got %d", l.MaxTokens)
+			"limits: max tokens cannot be negative, got %d", l.MaxTokens)
 	}
 	return nil
 }
 
 // Fits reports whether these limits are inside the parent's. A child may ask
 // for less than its parent, never more.
+//
+// A parent that declared no token count constrains none, which is what zero
+// now means. Read the other way -- zero as a ceiling of nothing -- a parent
+// that simply did not declare would refuse every child that did.
 func (l Limits) Fits(parent Limits) bool {
-	return l.MaxDuration <= parent.MaxDuration && l.MaxTokens <= parent.MaxTokens
+	if l.MaxDuration > parent.MaxDuration {
+		return false
+	}
+	return parent.MaxTokens == 0 || l.MaxTokens <= parent.MaxTokens
 }
 
 // AgentTypeSpec is a declared agent type: its name, its kind, and the shape

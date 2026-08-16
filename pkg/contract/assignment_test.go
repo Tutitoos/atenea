@@ -119,6 +119,47 @@ func TestChildCannotWidenItsParentsLimits(t *testing.T) {
 	}
 }
 
+// A token count nobody declared is not a mistake, because nothing enforces the
+// number anyway.
+//
+// Validate required it positive until 2026-08-16, on the reasoning that
+// "nobody decided" must not pass for "no limit". Measured that day: no
+// provider takes a token cap (65 flags on CLI 2.1.232, the only spend bound
+// being --max-budget-usd in dollars), and the requirement bought invented
+// numbers rather than decisions -- three agent types in the live settings
+// declared `max_tokens = 1` beside the comment "it spends no tokens; the
+// ceiling still has to be a real number". No test defended the requirement.
+func TestATokenCountNobodyDeclaredIsAccepted(t *testing.T) {
+	none := contract.Limits{MaxDuration: time.Minute}
+	if err := none.Validate(); err != nil {
+		t.Errorf("Validate: %v -- the count is advisory, and zero declares none", err)
+	}
+
+	// Negative is still a mistake: it is not a declaration of anything.
+	backwards := contract.Limits{MaxDuration: time.Minute, MaxTokens: -1}
+	if err := backwards.Validate(); err == nil {
+		t.Error("a negative token count was accepted")
+	}
+}
+
+// A parent that declared no token count constrains none of its children.
+//
+// Read the other way -- zero as a ceiling of nothing -- a parent that simply
+// did not declare would refuse every child that did, which is the narrowing
+// rule inverted by an absence.
+func TestAParentThatDeclaredNoTokenCountConstrainsNone(t *testing.T) {
+	silent := contract.Limits{MaxDuration: time.Hour}
+	asking := contract.Limits{MaxDuration: time.Minute, MaxTokens: 200_000}
+	if !asking.Fits(silent) {
+		t.Error("a child that declared a token count was refused by a parent that declared none")
+	}
+	// The wall clock is enforced, so it narrows regardless.
+	overtime := contract.Limits{MaxDuration: 2 * time.Hour, MaxTokens: 1}
+	if overtime.Fits(silent) {
+		t.Error("an absent token count waved through more wall clock than the parent holds")
+	}
+}
+
 // Rule: depth is capped at three levels. The third may not hand out work, and
 // a card claiming depth four is refused even if somebody builds it by hand.
 func TestDepthIsCappedAtThreeLevels(t *testing.T) {

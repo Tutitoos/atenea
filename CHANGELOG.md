@@ -397,7 +397,60 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   provider with no live window at startup stays absent until restart — it takes a
   reading older than the longest window to land there.
 
+- **A retry now files the attempt it replaced.** `workflow_step` holds exactly one
+  attempt: `Claim` clears the outcome columns on every re-claim and `Reset`
+  overwrites the terminal status with `pending`, so the row a retry replaced was
+  gone. New append-only `workflow_attempt` table, one row per superseded dispatch
+  — trace, status, verdict, reason, the share it ran under, spend with all four
+  token counts, completeness, the answer, and when it was superseded. One shared
+  statement called from both writes, each inside the transaction with the write
+  that destroys the row, so the copy and the erasure cannot come apart. The share
+  is per attempt because that is the figure that differs between them.
+
+  It does not make the admission rule usable yet, and the reason is not the
+  linkage: **nothing can produce the pair.** A step cut at its ceiling finishes
+  `incomplete` — it reported, so it was judged — and two refusals stand between
+  that row and a second attempt: the run is `already finished`, and `--redo` is
+  `for steps nobody judged`. In the local record 2 steps were ever re-dispatched,
+  against 150 cut at a ceiling with no path to a retry.
+
+- **`Limits.MaxTokens` is advisory, and `Validate` no longer requires it.** It was
+  required, validated positive, encoded on the wire and decoded by the planner
+  into a field nothing reads — not even the prompt, so the model was never told.
+  Three facts closed it: the shipped CLI (2.1.232) has no token cap among its 65
+  flags, so honouring it would mean a new local mechanism rather than wiring;
+  three agent types in the live settings declared `max_tokens = 1` beside the
+  comment "it spends no tokens; the ceiling still has to be a real number", which
+  is a value written to pass validation; and the `200000` the model-backed types
+  declare is already exceeded by steps that finish `ok` — 224,148 cache-read
+  tokens on one. Zero now means the caller declared none, and `Fits` reads a
+  parent's zero as constraining nothing, since otherwise an absence would refuse
+  every child that did declare. A negative is still refused. No test anywhere
+  asserted the old requirement, so the suite passed unchanged when it came out.
+
 ### Fixed
+
+- **A turn killed at its ceiling no longer records a price against no usage.**
+  `conversation.charge` preferred the result event whenever one arrived, and on a
+  budget-exhausted turn that event carries a real `total_cost_usd` and `usage`
+  that is zero in every lane — so the row said what the step cost and nothing
+  about what it bought. Reproduced on the live CLI in 4.4 seconds for `$0.41`:
+  `total_cost_usd: 0.41228` beside all-zero usage, while the same stream's
+  assistant events carried 40,956 cache-creation tokens. Read out of the shipped
+  binary (2.1.232) they are different accumulators — the price is a cost ledger
+  charged as the work happens, the usage is summed only at `message_stop`, which a
+  killed message never reaches. `charge` now takes the larger of the two readings,
+  whole and never blended lane by lane, which is what `weighed()` already does for
+  the allowance and for the same reason: every figure is one the CLI printed. The
+  price still comes only from the receipt. A settled turn's receipt is still larger
+  and still wins, because streamed `output_tokens` run short. 29 rows in the local
+  record have the old shape, every one a ceiling death, `$9.61` charged with
+  nothing said about what it read.
+
+  The `claudecode` adapter has the same envelope and no fix available: it asks for
+  `--output-format json`, so there is no event stream to recover tokens from. Its
+  comment claimed the usage was there; it now records the measurement and names
+  the limit.
 
 - **A refusal no longer invents a cent that was never measured.** `centsUp`
   rounds a requirement up so the figure printed is one a person can type back as

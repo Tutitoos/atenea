@@ -1388,15 +1388,34 @@ plan whose shares were set believing a turn was capped.
 **Not deleted, on purpose.** The field is the right shape for the bound this system lacks. Money
 cannot bound a searching turn -- it is checked between messages, and a glob over a tree with no
 matches pays for a tool result and the model's next thought inside one message. Tokens can, and
-`MaxTokens` is already declared, validated, and on the wire in every assignment. What is missing
-is the two ends: a `Request` field and a provider flag that honours it.
+`MaxTokens` is already declared and on the wire in every assignment. What is missing is the two
+ends: a `Request` field, and a cap the provider will take.
 
-**Done when:** either `MaxTokens` reaches a provider that enforces it, or the field stops
-claiming to be a ceiling and `Validate` stops requiring it. The doc now says it enforces nothing,
-which closes the lie and not the gap.
+**Decided 2026-08-16: the field stopped claiming to be a ceiling, and `Validate` stopped
+requiring it.** Three facts settled it, all measured that day and none of them cheap to guess:
 
-**Not decided:** which. It is the same decision as the expensive half above, and it should be
-taken once, for both.
+- **No provider takes a token cap.** 65 flags on CLI 2.1.232; the only spend bound among them is
+  `--max-budget-usd`, in dollars. "Honour it" could not mean passing it along -- it would mean
+  atenea enforcing it locally, a new mechanism, not a wiring job.
+- **The requirement bought invented numbers, and the settings file admits it.** Three agent types
+  declared `max_tokens = 1` beside the comment *"it spends no tokens; the ceiling still has to be
+  a real number"*. That is a value written to satisfy `Validate`, not a decision.
+- **The one number that looks real is already exceeded by work that finishes.** The two
+  model-backed types declare `200000`; `auth-mod` completed `ok` on 224,148 cache-read tokens
+  alone. Honouring today's declarations would kill steps that succeed.
+
+So `MaxTokens` is now advisory, zero means the caller declared none, and `Fits` reads a parent's
+zero as constraining nothing -- otherwise an absence would refuse every child that did declare.
+`Validate` still refuses a negative, which is not a declaration of anything.
+
+**What is still not built** is the bound itself, and the decision above does not pretend
+otherwise: it removes a false claim, not the gap. Wiring a real per-turn token cap needs values
+somebody measured first, and the discipline the third fact names -- every declared number today
+would have cut work that completes, so the values are the hard part, not the mechanism.
+
+One thing the requirement never had: **a test.** No test anywhere asserted that a non-positive
+`MaxTokens` was refused, so the full suite passed unchanged when the check came out. A rule
+nothing defends is a rule already half-gone.
 
 ## A share funded above the observed maximum still died, four times - 2026-08-16
 

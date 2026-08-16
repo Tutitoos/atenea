@@ -1960,8 +1960,10 @@ func (l fileLocalAgents) build(source string) (LocalAgents, error) {
 		out.Limits.MaxDuration = parsed
 	}
 	if l.MaxTokens != nil {
-		if *l.MaxTokens <= 0 {
-			return fail("max_tokens must be positive, got %d", *l.MaxTokens)
+		// Zero is a declaration of no token limit, not a mistake -- the value
+		// is advisory and nothing enforces it. See contract.Limits.MaxTokens.
+		if *l.MaxTokens < 0 {
+			return fail("max_tokens cannot be negative, got %d", *l.MaxTokens)
 		}
 		out.Limits.MaxTokens = *l.MaxTokens
 	}
