@@ -264,3 +264,26 @@ func TestABacktickWrappedCitationWithNoExcerptIsExistenceOnly(t *testing.T) {
 		t.Fatalf("content_checked = %v, want 0 -- the backticks wrap the citation, not a code excerpt", got.Result["content_checked"])
 	}
 }
+
+// A bare filename mentioned in backticks beside an unrelated citation on
+// the same line is not treated as the citation's excerpt -- it is a path
+// reference in the prose, not a code excerpt. Found live: a real reviewer
+// run refused `src/server.ts:243` because the line also named
+// “ `src/modules/admin/admin.routes.ts` “ in passing, and compared that
+// unrelated filename against the source at server.ts:243 as if it were a
+// quoted excerpt.
+func TestABareFilenameBesideAnUnrelatedCitationIsNotItsQuote(t *testing.T) {
+	got := run(t, card(t, "one\ntwo\n", map[string]any{
+		"findings": "Nothing else was read. Line 317 and `a.txt:2` are cited as given, " +
+			"per `other.routes.ts`.",
+	}, "ok"))
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %s (%v), want ok", got.Verdict, got.Reason)
+	}
+	if got.Result["existence_only"] != float64(1) {
+		t.Fatalf("existence_only = %v, want 1", got.Result["existence_only"])
+	}
+	if got.Result["content_checked"] != float64(0) {
+		t.Fatalf("content_checked = %v, want 0 -- `other.routes.ts` is a filename mention, not this citation's excerpt", got.Result["content_checked"])
+	}
+}

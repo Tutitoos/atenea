@@ -23,11 +23,12 @@
 //
 // A quoted excerpt is paired with a citation only when the pairing cannot
 // be a guess: exactly one citation and exactly one backtick-quoted span
-// (not the citation's own, possibly backtick-wrapped, path) share the
-// line. A line naming two citations, or carrying a citation beside two
-// unrelated quotes -- both common in dense technical prose -- has no
-// textual signal saying which quote goes with which claim, so none of the
-// citations on that line get a quote at all; they fall back to
+// (not the citation's own, possibly backtick-wrapped, path, and not
+// itself a bare filename mentioned in passing -- see barePath's doc)
+// share the line. A line naming two citations, or carrying a citation
+// beside two unrelated quotes -- both common in dense technical prose --
+// has no textual signal saying which quote goes with which claim, so none
+// of the citations on that line get a quote at all; they fall back to
 // existence-only. Guessing "the nearest one" on a crowded line is exactly
 // the inference this file exists to refuse: measured against real
 // answers, it silently misattributes a quote from one clause to a
@@ -79,6 +80,13 @@ var (
 	// wrapped in backticks, "Line"/"of" case-insensitive.
 	formB  = regexp.MustCompile(`(?i)\bline\s+(\d+)\s+of\s+` + "`" + `?([\w./-]+\.[A-Za-z]{1,5})` + "`" + `?`)
 	quoted = regexp.MustCompile("`([^`]+)`")
+	// barePath matches a backtick-quoted span whose entire content is a
+	// path token like formA's, minus the trailing ":line" -- e.g.
+	// `src/server.ts` or `./config.js` named in passing beside an
+	// unrelated citation on the same line. Such a span is a file
+	// reference in the prose, never a code excerpt: real source lines
+	// carry punctuation, keywords, or values a bare filename does not.
+	barePath = regexp.MustCompile(`^[\w./-]+\.[A-Za-z]{1,5}$`)
 )
 
 // citeMatch is one Form A / Form B match found on a line, before it is
@@ -145,7 +153,8 @@ func widenOverBackticks(line string, start, end int) (int, int) {
 // citation found there, or "" when pairing would be a guess -- see the
 // package doc above. It returns a quote only when found has exactly one
 // citation and the line has exactly one backtick-quoted span that is not
-// that citation's own (possibly backtick-wrapped) path.
+// that citation's own (possibly backtick-wrapped) path and does not
+// itself look like a bare file path -- see barePath's doc.
 func soleQuote(line string, found []citeMatch) string {
 	if len(found) != 1 {
 		return ""
@@ -155,7 +164,11 @@ func soleQuote(line string, found []citeMatch) string {
 		if m[0] >= found[0].start && m[1] <= found[0].end {
 			continue // the citation's own backtick-wrapped path, not an excerpt beside it
 		}
-		free = append(free, line[m[2]:m[3]])
+		content := line[m[2]:m[3]]
+		if barePath.MatchString(content) {
+			continue // a filename mentioned in passing, not a code excerpt
+		}
+		free = append(free, content)
 	}
 	if len(free) != 1 {
 		return ""
