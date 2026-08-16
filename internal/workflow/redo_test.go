@@ -323,6 +323,123 @@ func TestARaisedShareStillUnderTheFloorIsRefused(t *testing.T) {
 	}
 }
 
+// A step's own dead spend is a stronger claim than the type median, and this
+// is the rule that reads it: a raise that clears the ratio times what the
+// step already burned is admitted; a raise that does not is refused, naming
+// the step-specific figure rather than the population one.
+func TestARaiseBelowItsOwnDeadSpendTimesTheRatioIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	cheap := floorsOf("current", "reader", "claude-opus-5", measuredFloor(0.01))
+	h := newHarnessWith(t, workflow.Options{
+		Lanes: noCeiling(), Repository: "current", Floors: cheap,
+		ModelFor: func(string) string { return "claude-opus-5" },
+	}, dir, declared("reader", cutAtCeiling(t, dir, "reader", 0.50), config.PoolAgent))
+
+	run, err := h.engine.Start(t.Context(), commissioned(funded("a", "reader", 0.10)))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := statuses(t, run)["a"]; got != "incomplete" {
+		t.Fatalf("step a is %s, want incomplete", got)
+	}
+
+	// $0.50 dead spend x 1.08 = $0.54. $0.52 is a valid raise (over the old
+	// $0.10 share) and still under it.
+	_, err = h.engine.Redo(t.Context(), run.ID,
+		[]workflow.Raise{{StepID: "a", USD: 0.52}}, 0.52)
+	if err == nil {
+		t.Fatal("a raise under its own dead spend x 1.08 was dispatched")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		"a", "funded $0.52", "needs $0.54",
+		"this step already spent $0.50 dying at its own ceiling once in this run",
+		"a step-specific figure, not a population one",
+		"median 1.08x more to finish (n=3 measured pairs, not a floor",
+		"the lowest of the three finished for less than it had already spent",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, message)
+		}
+	}
+}
+
+// The complement: a raise that clears the same arithmetic is admitted, and
+// the step is free to finish for LESS than it burned dying -- the ratio
+// predicts a need, it does not promise the step will spend that much.
+func TestARaiseThatClearsItsOwnDeadSpendTimesTheRatioIsAdmitted(t *testing.T) {
+	dir := t.TempDir()
+	cheap := floorsOf("current", "reader", "claude-opus-5", measuredFloor(0.01))
+	h := newHarnessWith(t, workflow.Options{
+		Lanes: noCeiling(), Repository: "current", Floors: cheap,
+		ModelFor: func(string) string { return "claude-opus-5" },
+	}, dir, declared("reader", cutThenAnswers(t, dir, "reader", 0.50, 0.40), config.PoolAgent))
+
+	run, err := h.engine.Start(t.Context(), commissioned(funded("a", "reader", 0.10)))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// $0.50 x 1.08 = $0.54; $0.55 clears it and reaches dispatch, where the
+	// stub finishes for $0.40 -- less than what it spent dying.
+	out, err := h.engine.Redo(t.Context(), run.ID,
+		[]workflow.Raise{{StepID: "a", USD: 0.55}}, 0.55)
+	if err != nil {
+		t.Fatalf("Redo: %v", err)
+	}
+	if got := statuses(t, out)["a"]; got != "ok" {
+		t.Fatalf("step a is %s after the redo, want ok", got)
+	}
+	live, ok := rowFor(out, "a")
+	if !ok {
+		t.Fatal("the run has no step a")
+	}
+	if live.Spent.USD == nil || *live.Spent.USD != 0.40 {
+		t.Errorf("the finished spend is %v, want $0.40 -- less than the $0.50 it burned dying",
+			live.Spent.USD)
+	}
+}
+
+// The dead-spend predictor SUPERSEDES the type median, not merely maxes with
+// it: a step whose own history is cheap is admitted at a share far under a
+// population median that would otherwise have refused it.
+func TestItsOwnDeadSpendSupersedesAHighTypeMedian(t *testing.T) {
+	dir := t.TempDir()
+	cheap := floorsOf("current", "reader", "claude-opus-5", measuredFloor(0.01))
+	h := newHarnessWith(t, workflow.Options{
+		Lanes: noCeiling(), Repository: "current", Floors: cheap,
+		ModelFor: func(string) string { return "claude-opus-5" },
+	}, dir, declared("reader", cutThenAnswers(t, dir, "reader", 0.10, 0.09), config.PoolAgent))
+
+	run, err := h.engine.Start(t.Context(), commissioned(funded("a", "reader", 0.05)))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := statuses(t, run)["a"]; got != "incomplete" {
+		t.Fatalf("step a is %s, want incomplete", got)
+	}
+
+	// A population median of $5.00 for "reader" on this repository -- far
+	// above the $0.108 this step's own history implies -- arrives only now,
+	// from other runs finishing between the death and the redo. Seeded into
+	// the same store the harness's engine reads CostByType from.
+	priced(t, h.state, "wf-pop-1", "current", "reader", 10.00, usd(4.00))
+	priced(t, h.state, "wf-pop-2", "current", "reader", 10.00, usd(5.00))
+	priced(t, h.state, "wf-pop-3", "current", "reader", 10.00, usd(6.00))
+
+	// $0.10 x 1.08 = $0.108. $0.15 clears it and would be refused by the
+	// $5.00 population median alone.
+	out, err := h.engine.Redo(t.Context(), run.ID,
+		[]workflow.Raise{{StepID: "a", USD: 0.15}}, 0.15)
+	if err != nil {
+		t.Fatalf("Redo refused a raise its own dead spend clears, citing the population "+
+			"median instead: %v", err)
+	}
+	if got := statuses(t, out)["a"]; got != "ok" {
+		t.Fatalf("step a is %s after the redo, want ok", got)
+	}
+}
+
 // Naming one step twice is a typo whose silent reading is "the last one wins",
 // and what it silently changes is how much money a step gets.
 func TestAStepNamedTwiceIsRefused(t *testing.T) {

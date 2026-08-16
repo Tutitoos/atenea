@@ -243,7 +243,7 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	if err != nil {
 		return Run{}, Gate{}, err
 	}
-	if err := e.checkFunding(ctx, plan); err != nil {
+	if err := e.checkFunding(ctx, "", plan); err != nil {
 		return Run{}, Gate{}, err
 	}
 	id := e.ids()
@@ -272,6 +272,27 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 // starts meaning something, written once instead of in each caller.
 const observedMinRows = 3
 
+// deadSpendRatio converts what a step already spent dying at its own
+// ceiling, once, in the SAME run, into a prediction of what it needs to
+// finish -- see Redo's own doc for why every row workflow_attempt holds got
+// there by dying first.
+//
+// Measured 2026-08-16 on wf1786845363956-1: three steps redone at a raised
+// share, after conversation.charge was fixed, finished at 0.92x, 1.08x and
+// 1.09x of what they had already spent dying -- median 1.08x, n=3
+// (deadSpendRatioN). It is a median, not a floor: the lowest of the three
+// finished for LESS than it had already burned, so this rule can ask for
+// less than a step already spent, and that is not a defect in it.
+//
+// It is preferred over the type median (below) whenever it exists, because
+// it is a narrower and stronger claim: what THIS step needed, not what the
+// rest of its type needed. Averaging a step's own receipt into fifteen
+// others' would throw the more specific number away.
+const (
+	deadSpendRatio  = 1.08
+	deadSpendRatioN = 3
+)
+
 // underfunded is one step, the share it was handed, and why that share does
 // not clear this repository's requirements for the agent type and model it
 // runs against.
@@ -282,14 +303,15 @@ type underfunded struct {
 	model string
 	floor Floor
 	// needUSD is the largest of what the floor requires, what the allowance
-	// rule requires, and what a step of this type has actually cost to
-	// FINISH -- the number a person raises the share to. Zero when the
-	// measurement carries no token count at all, so the second requirement
-	// cannot be computed and bound is "unmeasured".
+	// rule requires, and what this step needs to finish -- either its OWN
+	// dead spend, redone, when it died once already in this run, or (when
+	// it never has) the type median. The number a person raises the share
+	// to. Zero when the measurement carries no token count at all, so the
+	// second requirement cannot be computed and bound is "unmeasured".
 	needUSD float64
 	// bound names which requirement needUSD came from: "floor", "allowance",
-	// "observed", or "unmeasured" when the row carries no token count to
-	// check either probe rule against.
+	// "dead-spend", "observed", or "unmeasured" when the row carries no
+	// token count to check either probe rule against.
 	bound string
 	// weight is the row's StartWeight: the input-equivalent weight of
 	// the turn's own first assistant event, cold-equivalent. Zero only when
@@ -298,21 +320,26 @@ type underfunded struct {
 	// tokens is what the funded share actually buys, in the same
 	// input-equivalent unit as weight -- allowance.Tokens(usd).
 	tokens int
+	// deadSpendUSD is what this exact step already spent the one time it
+	// died at its own ceiling in this run, when bound is "dead-spend". Zero
+	// otherwise -- including when the step DID die but a different rule won,
+	// which is why this is not read as "has this step ever died".
+	deadSpendUSD float64
 	// observed is the median of what CLEAN, completed steps of this agent
 	// type have cost, with n behind it and the scope those rows were read
 	// at. Zero when nothing has been measured, which is not zero cost: it is
 	// no claim, and then only the two probe rules apply.
 	//
-	// This is the only one of the three bounds derived from a step that did
-	// the work rather than a probe that started a turn and stopped. Measured
-	// 2026-08-16: the probe rules asked $0.06 where a real reader step cost
-	// $0.30-$0.44, and eighteen of twenty-three steps died in the gap.
+	// Population, not this step: it is superseded by deadSpendUSD for any
+	// step that has its own dead-spend figure. Measured 2026-08-16: the
+	// probe rules asked $0.06 where a real reader step cost $0.30-$0.44,
+	// and eighteen of twenty-three steps died in the gap.
 	observed      float64
 	observedN     int
 	observedScope string
 }
 
-// checkFunding refuses a plan that funds a step below either of two measured
+// checkFunding refuses a plan that funds a step below any of four measured
 // requirements, for the agent type that step runs and the model that agent
 // type spends against on this repository: the floor, what starting a turn
 // costs before any file is read; and the rescuable threshold, the point past
@@ -351,7 +378,14 @@ type underfunded struct {
 // scaled by file bytes, and the receipts put a 35x byte range inside a 2x
 // cost range. A step costs about what a step costs.
 //
-// All three rules are evaluated in one pass, and every underfunded step is
+// The fourth rule, added 2026-08-16, is the only one keyed to a single step
+// rather than a population: a step that already died once in THIS run
+// carries its own receipt for what finishing it needs, and that figure
+// supersedes the type median for that step alone -- see deadSpendRatio for
+// the arithmetic and its provenance. What the type median asks of everyone
+// else, this step answers for itself.
+//
+// All four rules are evaluated in one pass, and every underfunded step is
 // reported once, against whichever requirement is largest for its own
 // measured row -- see underfunded and refusal -- so a person raises a share
 // once rather than clearing one gate and hitting the next on the following
@@ -367,13 +401,13 @@ type underfunded struct {
 // rows. Exempting the types this machine has the most evidence about, because
 // the one thing missing was a probe, was backwards.
 //
-// THE ENGINE NEVER TOPS A STEP UP TO ANY OF THE THREE REQUIREMENTS. Quietly
+// THE ENGINE NEVER TOPS A STEP UP TO ANY OF THE FOUR REQUIREMENTS. Quietly
 // raising a share to make a plan runnable is Atenea spending money nobody
 // approved, and it is worse than the defect above because it is silent: the
 // reader of the receipt would have no way to tell the figure they authorized
 // from the one the engine preferred. Refusing is the honest move. The shares
 // in a plan are its author's, and they stay its author's.
-func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
+func (e *Engine) checkFunding(ctx context.Context, id string, plan Plan) error {
 	if e.floors == nil || e.modelFor == nil {
 		return nil
 	}
@@ -418,25 +452,35 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			asked[k] = got
 		}
 		usd := step.Permission.BudgetUSD
-		// What completed steps of this type have cost. Read before the probe
-		// gating below, because it is the one rule that does not need a probe
-		// to have run: a type nobody measured a turn for can still have five
-		// finished rows on the record, and skipping the check there would
-		// exempt exactly the types this machine knows the most about.
+		// This exact step's own history, first: id is empty at Create --
+		// a brand-new plan has no run to look an attempt up against -- and
+		// non-empty at Redo, where it is the one place this can ever be
+		// non-zero, on the one step being raised.
+		deadUSD, hadDeath := e.deadSpend(ctx, id, step.ID)
+		// What completed steps of this type have cost, population-wide.
+		// Read before the probe gating below, because it is the one rule
+		// that does not need a probe to have run: a type nobody measured a
+		// turn for can still have five finished rows on the record, and
+		// skipping the check there would exempt exactly the types this
+		// machine knows the most about.
 		obs := costs.Types[step.TypeName]
-		observedUSD := 0.0
-		if obs.N >= observedMinRows {
-			observedUSD = obs.MedianUSD
+		predictedUSD, predictedBound := 0.0, ""
+		switch {
+		case hadDeath:
+			predictedUSD, predictedBound = deadSpendRatio*deadUSD, "dead-spend"
+		case obs.N >= observedMinRows:
+			predictedUSD, predictedBound = obs.MedianUSD, "observed"
 		}
 		if !got.known {
-			if observedUSD > 0 && usd+moneyEpsilon < observedUSD {
+			if predictedUSD > 0 && usd+moneyEpsilon < predictedUSD {
 				under = append(under, underfunded{
 					step:          step.ID,
 					usd:           usd,
 					agent:         step.TypeName,
 					model:         model,
-					needUSD:       observedUSD,
-					bound:         "observed",
+					needUSD:       predictedUSD,
+					bound:         predictedBound,
+					deadSpendUSD:  deadUSD,
 					observed:      obs.MedianUSD,
 					observedN:     obs.N,
 					observedScope: costs.Repository,
@@ -482,21 +526,22 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 		if got.floor.WarmUSD > 0 {
 			floorUSD, floorKind = got.floor.WarmUSD, "warm-floor"
 		}
-		// The third rule, and the only one measured on work rather than on a
-		// probe: what a step of this type has cost to FINISH -- read above,
-		// with why three rows is the smallest median allowed to refuse.
+		// The third and fourth rules, and the only ones measured on work
+		// rather than on a probe: what this step needed to finish after its
+		// own death, or -- absent that -- what a step of this type has cost
+		// to FINISH. See deadSpendRatio and observedMinRows.
 		okFloor := usd+moneyEpsilon >= floorUSD
 		okAllowance := tokens > got.floor.WarmStartWeight
-		okObserved := usd+moneyEpsilon >= observedUSD
-		if okFloor && okAllowance && okObserved {
+		okPredicted := usd+moneyEpsilon >= predictedUSD
+		if okFloor && okAllowance && okPredicted {
 			continue
 		}
 		needUSD, bound := floorUSD, floorKind
 		if rescuable := allowance.MinShareUSD(got.floor.WarmStartWeight); rescuable > needUSD {
 			needUSD, bound = rescuable, "allowance"
 		}
-		if observedUSD > needUSD {
-			needUSD, bound = observedUSD, "observed"
+		if predictedUSD > needUSD {
+			needUSD, bound = predictedUSD, predictedBound
 		}
 		under = append(under, underfunded{
 			step:    step.ID,
@@ -508,9 +553,10 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 			bound:   bound,
 			weight:  got.floor.WarmStartWeight,
 			tokens:  tokens,
-			// Carried whatever bound won, and whatever N is: a share refused
-			// by a probe rule while real rows say something larger is a
-			// person's next question, not a footnote.
+			// Carried whatever bound won, and whatever else is known: a
+			// share refused by a probe rule while real rows say something
+			// larger is a person's next question, not a footnote.
+			deadSpendUSD:  deadUSD,
 			observed:      obs.MedianUSD,
 			observedN:     obs.N,
 			observedScope: costs.Repository,
@@ -521,6 +567,35 @@ func (e *Engine) checkFunding(ctx context.Context, plan Plan) error {
 	}
 	return contract.Fail(contract.FailureInvalidInput, "%s",
 		refusal(e.repo, len(plan.Graph.Steps), under))
+}
+
+// deadSpend returns what step stepID already spent the one time it was cut
+// at its own ceiling within run id, and whether it has one.
+//
+// id empty (Create, where no run exists yet to hold an attempt) or the
+// lookup itself failing both read as "no death" rather than an error: this
+// predictor is an upgrade over the type median, never the only source of
+// truth, so a store that cannot answer falls back to the population rule
+// exactly as CostByType's own failure does above.
+//
+// Every row workflow_attempt holds arrived through Redo, and Redo only
+// archives a step CutAtItsCeiling -- see that table's own doc -- so the
+// figure this returns, when it returns one, is always a killed attempt,
+// never a live one. The last one, when a step has died more than once: the
+// most recent dead spend is the best available estimate of what it needs.
+func (e *Engine) deadSpend(ctx context.Context, id, stepID string) (float64, bool) {
+	if id == "" {
+		return 0, false
+	}
+	attempts, err := e.store.Attempts(ctx, id, stepID)
+	if err != nil || len(attempts) == 0 {
+		return 0, false
+	}
+	last := attempts[len(attempts)-1]
+	if last.Spent.USD == nil {
+		return 0, false
+	}
+	return *last.Spent.USD, true
 }
 
 // refusal writes what a person needs in order to act: the arithmetic for
@@ -649,6 +724,12 @@ func clause(u underfunded) string {
 		return fmt.Sprintf("half a share buys %s tokens of reading; its prompt and first "+
 			"tool call weigh %s, read from cache",
 			grouped(u.tokens), grouped(u.weight))
+	case "dead-spend":
+		return fmt.Sprintf("this step already spent $%.2f dying at its own ceiling once in "+
+			"this run -- a step-specific figure, not a population one: steps redone after a "+
+			"death needed a median %.2fx more to finish (n=%d measured pairs, not a floor -- "+
+			"the lowest of the three finished for less than it had already spent)",
+			u.deadSpendUSD, deadSpendRatio, deadSpendRatioN)
 	case "observed":
 		scope := "on this machine"
 		if u.observedScope != "" {
@@ -970,14 +1051,14 @@ type Raise struct {
 // steps cut at a ceiling, 2 were ever re-dispatched, and the only path was to
 // write a new plan.
 //
-// What it leaves behind is the pair the admission rule has never had. Reset
-// files the dead attempt into workflow_attempt with the share it ran under
-// before anything is rewritten, then Reshare writes the new one -- so the
-// record holds "cut at $0.62" and "finished at $0.80" as two rows of one step,
-// and the second is a measurement of what the first needed. Nothing else on
-// this machine produces that pair: CostByType excludes ceiling deaths because
-// their spend is a lower bound, so the admission rule is built entirely on the
-// population that never needed it.
+// What it leaves behind is the pair the admission rule now reads directly.
+// Reset files the dead attempt into workflow_attempt with the share it ran
+// under before anything is rewritten, then Reshare writes the new one -- so
+// the record holds "cut at $0.62" and "finished at $0.80" as two rows of one
+// step, and the second is a measurement of what the first needed. Measured
+// 2026-08-16: checkFunding reads this pair for the exact step being raised
+// and prefers it over CostByType's population median, which still excludes
+// ceiling deaths because their spend is a lower bound -- see deadSpendRatio.
 //
 // grant is the run's new total, or zero to leave it alone. A raise that no
 // longer fits under the grant is refused by [Store.Ask] naming what is left,
@@ -1084,7 +1165,7 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	// funded past its old ceiling and still under what starting a turn costs is
 	// doomed for the second reason, and finding that out by spending it is what
 	// this check exists to prevent.
-	if err := e.checkFunding(ctx, plan); err != nil {
+	if err := e.checkFunding(ctx, id, plan); err != nil {
 		return run, err
 	}
 	if err := e.store.Own(ctx, id, e.pid); err != nil {
