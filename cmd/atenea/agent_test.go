@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -81,4 +82,22 @@ func declaredIn(cfg config.Config) string {
 		return "internal/config/default.toml"
 	}
 	return cfg.Source
+}
+
+// truncate's budget n is a byte count, and a naive s[:n-1] can land inside a
+// multi-byte rune's encoding -- there is no rule that the cut point falls
+// between two runes. Shape that actually trips it: an 8-byte ASCII prefix
+// followed by a 3-byte rune, truncated at n=10 so the cut lands after the
+// rune's first byte and before its second and third. Under the byte-slice-
+// only version of truncate this returned "12345678\xe4…", which
+// utf8.ValidString rejects; that is the failure this test defends against.
+func TestTruncateNeverCutsAMultiByteRuneInHalf(t *testing.T) {
+	s := "12345678" + "世界" + " more text past the cut, so len(s) > n either way"
+	got := truncate(s, 10)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate(%q, 10) = %q, which is not valid UTF-8", s, got)
+	}
+	if want := "12345678…"; got != want {
+		t.Errorf("truncate(%q, 10) = %q, want %q", s, got, want)
+	}
 }

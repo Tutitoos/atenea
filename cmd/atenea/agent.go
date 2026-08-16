@@ -452,10 +452,15 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
+	// A byte slice at n or n-1 can land inside a multi-byte rune -- the
+	// column budget n is a byte count, not a rune count, and neither
+	// boundary is guaranteed to fall between two runes. ToValidUTF8 drops
+	// exactly the incomplete trailing sequence that cut produces, leaving
+	// a shorter but always-valid string underneath the ellipsis.
 	if n <= 1 {
-		return s[:n]
+		return strings.ToValidUTF8(s[:n], "")
 	}
-	return s[:n-1] + "…"
+	return strings.ToValidUTF8(s[:n-1], "") + "…"
 }
 
 func plural(n int, one, many string) string {
