@@ -18,9 +18,10 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
-	"github.com/Tutitoos/atenea/internal/adapter/ladygraph"
+	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
+	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
@@ -464,8 +465,10 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 		})
 	case config.RunnerSerena:
 		return buildSerenaRunner(cfg, procs)
-	case config.RunnerLadygraph:
-		return buildLadygraphRunner(cfg, procs)
+	case config.RunnerKivgraph:
+		return buildKivgraphRunner(cfg, procs)
+	case config.RunnerTokensave:
+		return buildTokensaveRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -536,32 +539,66 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 	return guard(runner, procs, instanceID), nil
 }
 
-// buildLadygraphRunner builds the ladygraph adapter. Unlike Serena there is
+// buildKivgraphRunner builds the kivgraph adapter. Unlike Serena there is
 // no unmanaged mode to fall back to: a stdio server has no address, only
 // two pipes, so a settings file that names this runner without a Process
 // block has nothing this adapter could ever dial -- refused here rather
 // than reaching Run only to fail on the first call.
-func buildLadygraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
-	if cfg.Orchestrator.Ladygraph.Process == nil {
+func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	if cfg.Orchestrator.Kivgraph.Process == nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: ladygraph has no process to launch -- a stdio server has no address to dial without one",
+			"settings %s: kivgraph has no process to launch -- a stdio server has no address to dial without one",
 			cfg.Source)
 	}
-	runner, err := ladygraph.New(ladygraph.Options{
-		Implementations: cfg.Orchestrator.Ladygraph.Implementations,
-		Timeout:         cfg.Orchestrator.Ladygraph.Timeout,
+	runner, err := kivgraph.New(kivgraph.Options{
+		Implementations: cfg.Orchestrator.Kivgraph.Implementations,
+		Timeout:         cfg.Orchestrator.Kivgraph.Timeout,
 		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
-			return procs.Session(config.RunnerLadygraph)
+			return procs.Session(config.RunnerKivgraph)
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	// The declaration is instance = "shared" only (see ladygraphSpecs in
+	// The declaration is instance = "shared" only (see kivgraphSpecs in
 	// guard.go, which refuses per_repository before a Supervisor is ever
 	// built), so the instance id every call guards against is the one
 	// constant name, never a per-repository lookup the way Serena needs.
-	instanceID := func(contract.Repository) string { return config.RunnerLadygraph }
+	instanceID := func(contract.Repository) string { return config.RunnerKivgraph }
+	return guard(runner, procs, instanceID), nil
+}
+
+// buildTokensaveRunner builds the tokensave adapter. Same refusal as
+// Kivgraph's for a missing process table -- a stdio server has no address --
+// plus one of its own: the root every path on that wire is relative to has to
+// be declared, because this adapter translates repository-relative paths in
+// both directions and cannot invent where the served project begins.
+func buildTokensaveRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	if cfg.Orchestrator.Tokensave.Process == nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: tokensave has no process to launch -- a stdio server has no address to dial without one",
+			cfg.Source)
+	}
+	if cfg.Orchestrator.Tokensave.Root == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.tokensave.root is required -- every path tokensave reports is relative to it",
+			cfg.Source)
+	}
+	runner, err := tokensave.New(tokensave.Options{
+		Root:            cfg.Orchestrator.Tokensave.Root,
+		Implementations: cfg.Orchestrator.Tokensave.Implementations,
+		Sensitive:       cfg.Security.Sensitive,
+		Timeout:         cfg.Orchestrator.Tokensave.Timeout,
+		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
+			return procs.Session(config.RunnerTokensave)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// One server for the whole root, so one instance id: the graph is the
+	// project's, not a repository's, exactly as with Kivgraph's global corpus.
+	instanceID := func(contract.Repository) string { return config.RunnerTokensave }
 	return guard(runner, procs, instanceID), nil
 }
 

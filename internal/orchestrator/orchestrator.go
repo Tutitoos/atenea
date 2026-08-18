@@ -127,7 +127,7 @@ const (
 // be asked for even when everything below it is ready to answer.
 const repositoryIndexCapability = "repository.index"
 
-// The four Ladygraph answers. Named here for the reason stated above and for
+// The four Kivgraph answers. Named here for the reason stated above and for
 // no other: none of them is planned into a commission either. Three read one
 // symbol's cross-repository consumers, its identity by stable key, and the
 // references that resolved to nothing; the fourth reports the published

@@ -1,4 +1,4 @@
-// Package ladygraph is the fifth adapter, and the first whose far side is a
+// Package kivgraph is the fifth adapter, and the first whose far side is a
 // process Atenea itself launches and holds the pipes of.
 //
 // Every earlier client speaks over an address: omp and Claude Code as a
@@ -11,8 +11,8 @@
 // *mcpstdio.Session already attached to a process it is not this package's
 // job to start, watch or restart.
 //
-// The graph itself is one global corpus, not one per repository. ladygraph
-// indexes a whole workspace by hand (`ladygraph index --full`, ahead of
+// The graph itself is one global corpus, not one per repository. kivgraph
+// indexes a whole workspace by hand (`kivgraph index --full`, ahead of
 // time, never from inside Atenea) and publishes a single snapshot every
 // reader shares by atomic generation; there is no per-repository index to
 // warm or retarget the way Serena's active project has to be, which is why
@@ -20,11 +20,27 @@
 // internal/core's wiring for the refusal when a settings file asks for
 // anything else.
 //
+// # Two versions, one far side
+//
+// This package is named for the binary that answers on this machine,
+// `kivgraph` 0.2.1. Its upstream lineage is ladygraph, and several shapes in
+// here were first measured against ladygraph v0.5.1: where a comment names
+// one version or the other, it is saying which server that fact was measured
+// on, not which one is required. Three of those facts differ between the
+// two, and every one of them is decoded both ways rather than picked by
+// version number -- a server is asked, never by number:
+//   - get_file_outline groups declarations under "files":[{"symbols":[...]}]
+//     on 0.2.1 and directly under "symbols" on v0.5.1 (see declarations()).
+//   - find_cross_repo_consumers answers {"subject":..,"consumers":[..]} on
+//     0.2.1 and a bare list on v0.5.1 (see consumerRows).
+//   - an outline row carries stable_key on v0.5.1 and none on 0.2.1, where
+//     the address costs one extra get_symbol call (see stableKeyOf).
+//
 // # The empty-graph trap
 //
-// A fresh `ladygraph serve` with no config scaffolds an empty config and
+// A fresh `kivgraph serve` with no config scaffolds an empty config and
 // publishes an empty graph, and answers every query with nothing --
-// successfully, isError:false, zero counts. Measured against v0.5.1: this is
+// successfully, isError:false, zero counts. Measured against ladygraph v0.5.1: this is
 // the actual failure mode, not a hypothetical one, and it looks nothing like
 // an error. Every one of the four capabilities below pays for one
 // graph_status call before trusting any other answer (checkGraphReady), and
@@ -45,7 +61,7 @@
 //
 // # The vocabulary gap
 //
-// The capability declarations were written from the design; ladygraph's own
+// The capability declarations were written from the design; kivgraph's own
 // wire was measured separately, and the two do not use the same words for
 // the same fact. consumer_repository_key is a KEY ("repository:backend"),
 // not a bare name -- there is no consumer_repository_name field -- so the
@@ -53,7 +69,7 @@
 // get_unresolved_references carries no line number, only start_offset, a
 // byte offset, so symbol.unresolved's declared output is "offset", not
 // "line": synthesizing a line by reading the file back would be a second,
-// unverified guess about a position ladygraph itself never reported.
+// unverified guess about a position kivgraph itself never reported.
 // find_cross_repo_consumers classifies each row with "category", whose real
 // values (exact_symbol, package, candidate, unresolved) are kept verbatim as
 // the declared "resolution" rather than normalized to the coverage
@@ -61,7 +77,7 @@
 // candidate, unresolved_related) -- and a package-level row proves the
 // consumer depends on the provider PACKAGE, never the symbol, so it is never
 // folded into exact_symbol by anything in this file, and its file path is
-// left out of the record entirely rather than invented, because ladygraph
+// left out of the record entirely rather than invented, because kivgraph
 // itself never sets one for that row.
 //
 // # Position resolution inside symbol.consumers
@@ -71,7 +87,7 @@
 // is no stable_key input, on purpose. A capability whose required input
 // only one provider could ever produce is not a capability, it is that
 // provider's tool passthrough wearing a funnel costume: no language server
-// and no future provider could ever mint a ladygraph stable_key, so
+// and no future provider could ever mint a kivgraph stable_key, so
 // accepting one as input would make this capability permanently
 // unimplementable by anyone else, and unreachable for any caller holding
 // only a file and a line, which is what callers actually hold.
@@ -84,7 +100,7 @@
 // actually falls inside of. Containment can nest -- a method inside a
 // class -- so the innermost (smallest) span wins; the declared optional
 // "name" input, when it names exactly one candidate or matches a
-// candidate's qualified_name exactly (ladygraph disambiguates repeated
+// candidate's qualified_name exactly (kivgraph disambiguates repeated
 // names with suffixes like "reservas#2"), settles it outright instead.
 //
 // Three honesty requirements follow from resolving rather than refusing:
@@ -109,15 +125,16 @@
 //
 // # What this package does not do
 //
-// It does not build the graph: no `ladygraph index`, no requires_index probe
+// It does not build the graph: no `kivgraph index`, no requires_index probe
 // that tries to fix what it finds missing. It only reads. And it never
 // reports Outcome.ToolVersion: mcpstdio.Session exposes no serverInfo getter
 // by design, and none of the four tools' own payloads carries a version
 // string either, so an upgrade on disk is invisible to this adapter the same
 // honest way Serena is when its own server declines to introduce itself.
-package ladygraph
+package kivgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -141,13 +158,13 @@ const (
 	CapabilityUnresolved  = "symbol.unresolved"
 	CapabilityGraphStatus = "graph.status"
 
-	ImplConsumers  = "ladygraph.cross_repo_consumers"
-	ImplGet        = "ladygraph.get"
-	ImplUnresolved = "ladygraph.unresolved_references"
-	ImplStatus     = "ladygraph.status"
+	ImplConsumers  = "kivgraph.cross_repo_consumers"
+	ImplGet        = "kivgraph.get"
+	ImplUnresolved = "kivgraph.unresolved_references"
+	ImplStatus     = "kivgraph.status"
 )
 
-// The MCP tool names behind each capability, on ladygraph's own far side.
+// The MCP tool names behind each capability, on kivgraph's own far side.
 // get_file_outline answers no capability of its own -- symbol.consumers
 // calls it internally, through resolvePosition, to turn a position into
 // the stable_key find_cross_repo_consumers actually requires.
@@ -159,13 +176,13 @@ const (
 	toolOutline    = "get_file_outline"
 )
 
-// repositoryKeyPrefix is how ladygraph addresses a repository inside a key
+// repositoryKeyPrefix is how kivgraph addresses a repository inside a key
 // such as consumer_repository_key. There is no bare-name field beside it, so
 // stripping this is the only way to answer the declared "repository" output
-// in atenea's own vocabulary rather than ladygraph's addressing scheme.
+// in atenea's own vocabulary rather than kivgraph's addressing scheme.
 const repositoryKeyPrefix = "repository:"
 
-// DefaultTimeout caps one call. ladygraph opens a published graph snapshot
+// DefaultTimeout caps one call. kivgraph opens a published graph snapshot
 // and walks it, which sits at the same class of cost Serena and
 // codebase-memory already pay for a cold cache -- slow long before it is
 // stuck -- so this matches their own ceiling rather than inventing a new
@@ -185,7 +202,7 @@ type Options struct {
 	Implementations []string
 	// Timeout caps one call.
 	Timeout time.Duration
-	// Session returns the live MCP session for the supervised ladygraph
+	// Session returns the live MCP session for the supervised kivgraph
 	// child. It is a function, not a stored value, because the process
 	// behind it may not exist yet when New runs (on_demand lifecycle) and
 	// may be replaced by a restart later: every call asks again rather than
@@ -193,7 +210,7 @@ type Options struct {
 	Session func(ctx context.Context) (*mcpstdio.Session, error)
 }
 
-// Runner is the ladygraph far side of contract.Runner.
+// Runner is the kivgraph far side of contract.Runner.
 type Runner struct {
 	implementations []string
 	timeout         time.Duration
@@ -204,7 +221,7 @@ type Runner struct {
 func New(opts Options) (*Runner, error) {
 	if opts.Session == nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"ladygraph adapter: session is required -- a stdio server has no address to dial without one")
+			"kivgraph adapter: session is required -- a stdio server has no address to dial without one")
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -212,7 +229,7 @@ func New(opts Options) (*Runner, error) {
 	}
 	if timeout < 0 {
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"ladygraph adapter: timeout must not be negative, got %s", timeout)
+			"kivgraph adapter: timeout must not be negative, got %s", timeout)
 	}
 	impls := slices.Clone(opts.Implementations)
 	if impls == nil {
@@ -227,7 +244,7 @@ func New(opts Options) (*Runner, error) {
 }
 
 // ID names the runner on the status screen.
-func (r *Runner) ID() string { return "ladygraph" }
+func (r *Runner) ID() string { return "kivgraph" }
 
 // Serves reports whether this adapter answers for that implementation.
 func (r *Runner) Serves(implementationID string) bool {
@@ -252,7 +269,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 	if !r.Serves(req.Implementation.ID) {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
-			"ladygraph adapter does not serve implementation %s", req.Implementation.ID)
+			"kivgraph adapter does not serve implementation %s", req.Implementation.ID)
 	}
 
 	started := time.Now()
@@ -294,7 +311,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		result, notes, err = r.runGraphStatus(status, req)
 	default:
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
-			"ladygraph adapter has no implementation of %s", req.Capability.ID)
+			"kivgraph adapter has no implementation of %s", req.Capability.ID)
 	}
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
@@ -303,7 +320,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
-		// No memory figure: like Serena, ladygraph runs in a process the
+		// No memory figure: like Serena, kivgraph runs in a process the
 		// supervisor owns, not one this call spawned, so there is nothing
 		// here to weigh.
 		Spent: contract.Sample{Duration: time.Since(started)},
@@ -340,7 +357,7 @@ func (r *Runner) repositoryInPlay(req contract.RunRequest) (string, error) {
 }
 
 // statusResult is graph_status's single-object "results", measured live
-// against v0.5.1: unlike the other three tools this is one object, not a
+// against ladygraph v0.5.1: unlike the other three tools this is one object, not a
 // list. storage and worker are deliberately not decoded here: both read
 // "not_applicable" on a healthy server that only ever reads its own
 // published snapshot rather than opening the database itself, so keying
@@ -389,14 +406,14 @@ func (r *Runner) fetchStatus(ctx context.Context, sess *mcpstdio.Session) (*stat
 	}
 	var answer statusAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return nil, fmt.Errorf("ladygraph %s: unreadable answer: %w", toolStatus, err)
+		return nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolStatus, err)
 	}
 	return answer.Results, nil
 }
 
 // checkGraphReady is the guard every capability shares: before any tool's
-// answer is trusted, the graph itself has to be real. ladygraph's own
-// failure mode, measured against v0.5.1, is not an error -- it is
+// answer is trusted, the graph itself has to be real. kivgraph's own
+// failure mode, measured against ladygraph v0.5.1, is not an error -- it is
 // isError:false with every count at zero, an empty config's empty answer to
 // any question at all -- so this inspects the decoded payload rather than
 // sniffing text, and refuses before a caller ever sees a VerdictOK built on
@@ -409,17 +426,17 @@ func (r *Runner) fetchStatus(ctx context.Context, sess *mcpstdio.Session) (*stat
 func checkGraphReady(status *statusResult, repository string) error {
 	if status == nil || status.Status != "ready" {
 		return contract.Fail(contract.FailureUnavailable,
-			"ladygraph has no published graph to answer from (status %q)", statusLabel(status))
+			"kivgraph has no published graph to answer from (status %q)", statusLabel(status))
 	}
 	if status.Symbols == 0 && status.Edges == 0 && status.Files == 0 {
-		return contract.Fail(contract.FailureUnavailable, "ladygraph's published graph is empty")
+		return contract.Fail(contract.FailureUnavailable, "kivgraph's published graph is empty")
 	}
 	if repository == "" {
 		return nil
 	}
 	if _, ok := findRepositoryFreshness(status.RepositoryFreshness, repository); !ok {
 		return contract.Fail(contract.FailureUnavailable,
-			"ladygraph's published graph does not include repository %s", repository)
+			"kivgraph's published graph does not include repository %s", repository)
 	}
 	return nil
 }
@@ -479,22 +496,85 @@ func normalizeRepoPath(p string) string {
 
 // consumerRecord is one row of find_cross_repo_consumers' own
 // CrossRepoConsumerSummary (internal/mcp/tools/find_cross_repo_consumers.go
-// in the ladygraph source, v0.5.1), narrowed to the fields this adapter
-// maps into the declared output. category, confidence and
-// consumer_repository_key are the only fields the far side always sets;
-// consumer_file_path in particular is absent for a package-level row -- see
-// runConsumers.
+// in the upstream ladygraph source, v0.5.1), narrowed to the fields this adapter
+// maps into the declared output. category and confidence are always set;
+// the consuming file in particular is absent for a package-level row --
+// see runConsumers.
+//
+// The repository and the file arrive under two different names on the two
+// servers this adapter was measured against, so both are decoded and
+// repositoryName/consumerPath pick whichever was filled: ladygraph v0.5.1 sets
+// consumer_repository_key ("repository:backend") and consumer_file_path,
+// kivgraph 0.2.1 sets a bare repository ("admin.kena.lan") and file_path.
+// Reading only one pair answers with an empty repository on the other
+// server -- a row shaped right and saying nothing.
 type consumerRecord struct {
 	Category              string `json:"category"`
 	ConsumerRepositoryKey string `json:"consumer_repository_key"`
 	ConsumerFilePath      string `json:"consumer_file_path"`
+	Repository            string `json:"repository"`
+	FilePath              string `json:"file_path"`
 }
 
-// consumerAnswer is find_cross_repo_consumers' envelope.
+// repositoryName answers the declared "repository" output. A key is
+// stripped to its bare name (repositoryNameFromKey); a name that arrived
+// bare is already the answer.
+func (row consumerRecord) repositoryName() string {
+	if row.ConsumerRepositoryKey != "" {
+		return repositoryNameFromKey(row.ConsumerRepositoryKey)
+	}
+	return row.Repository
+}
+
+// consumerPath is the file holding the consuming reference, and empty for
+// a package-level row on either server -- never invented, see runConsumers.
+func (row consumerRecord) consumerPath() string {
+	if row.ConsumerFilePath != "" {
+		return row.ConsumerFilePath
+	}
+	return row.FilePath
+}
+
+// consumerAnswer is find_cross_repo_consumers' envelope. truncated and
+// next_cursor sit beside results on both servers; results itself does not
+// -- see consumerRows.
 type consumerAnswer struct {
-	Results    []consumerRecord `json:"results"`
-	Truncated  bool             `json:"truncated"`
-	NextCursor string           `json:"next_cursor"`
+	Results    consumerRows `json:"results"`
+	Truncated  bool         `json:"truncated"`
+	NextCursor string       `json:"next_cursor"`
+}
+
+// consumerRows is find_cross_repo_consumers' "results" in either measured
+// shape: ladygraph v0.5.1 answers with the bare list of rows every neighboring tool
+// returns, kivgraph 0.2.1 wraps it as {"subject": {...}, "consumers":
+// [...]} -- the subject being the symbol the stable_key named, which this
+// adapter already knows because it is the one that resolved it, and so
+// never decodes.
+//
+// Dispatching on the first byte rather than trying one shape and falling
+// back to the other on error keeps a genuinely malformed payload an error:
+// a list that fails to decode must not be retried as an object and
+// reported as an object that happened to hold no consumers.
+type consumerRows struct {
+	rows []consumerRecord
+}
+
+func (c *consumerRows) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '[' {
+		return json.Unmarshal(trimmed, &c.rows)
+	}
+	var grouped struct {
+		Consumers []consumerRecord `json:"consumers"`
+	}
+	if err := json.Unmarshal(trimmed, &grouped); err != nil {
+		return err
+	}
+	c.rows = grouped.Consumers
+	return nil
 }
 
 // consumerResolutions is the closed set symbol.consumers' own declared
@@ -507,7 +587,7 @@ var consumerResolutions = []string{"exact_symbol", "package", "candidate", "unre
 // runConsumers answers symbol.consumers.
 //
 // The declared input is position-first (file/line/column), matching
-// symbol.references; ladygraph names a symbol by stable_key instead, so
+// symbol.references; kivgraph names a symbol by stable_key instead, so
 // this resolves the position to one via resolvePosition before ever calling
 // find_cross_repo_consumers -- see the package doc comment for why the
 // capability itself takes no stable_key input, and what the resolution
@@ -524,11 +604,11 @@ var consumerResolutions = []string{"exact_symbol", "package", "candidate", "unre
 func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, status *statusResult, req contract.RunRequest) (map[string]any, []string, error) {
 	file, ok := stringAt(req.Payload, "file")
 	if !ok || file == "" {
-		return nil, nil, contract.Fail(contract.FailureInvalidInput, "ladygraph symbol.consumers: file is required")
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.consumers: file is required")
 	}
 	line, ok := intAt(req.Payload, "line")
 	if !ok {
-		return nil, nil, contract.Fail(contract.FailureInvalidInput, "ladygraph symbol.consumers: line is required")
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.consumers: line is required")
 	}
 	// column is required by the declared capability -- already enforced by
 	// req.Validate() before Run ever dispatched here -- but get_file_outline's
@@ -538,7 +618,7 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 	resolution, _ := stringAt(req.Payload, "resolution")
 	if resolution != "" && !slices.Contains(consumerResolutions, resolution) {
 		return nil, nil, contract.Fail(contract.FailureInvalidInput,
-			"ladygraph symbol.consumers: resolution %q is not one of %s", resolution, strings.Join(consumerResolutions, ", "))
+			"kivgraph symbol.consumers: resolution %q is not one of %s", resolution, strings.Join(consumerResolutions, ", "))
 	}
 
 	root, err := filepath.Abs(req.Repository.Path)
@@ -546,16 +626,16 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 		return nil, nil, contract.Fail(contract.FailureInvalidInput,
 			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
 	}
-	// get_file_outline is addressed in ladygraph's own vocabulary, not
+	// get_file_outline is addressed in kivgraph's own vocabulary, not
 	// atenea's repository id: the shared guard already matched root against
 	// repository_freshness to reach this dispatch, so that entry's own Name
 	// is reused here rather than assuming the two ids happen to agree.
-	ladygraphRepo := req.Repository.ID
+	kivgraphRepo := req.Repository.ID
 	if fresh, ok := findRepositoryFreshness(status.RepositoryFreshness, root); ok && fresh.Name != "" {
-		ladygraphRepo = fresh.Name
+		kivgraphRepo = fresh.Name
 	}
 
-	stableKey, notes, err := r.resolvePosition(ctx, sess, ladygraphRepo, file, line, name)
+	stableKey, notes, err := r.resolvePosition(ctx, sess, kivgraphRepo, file, line, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -566,24 +646,24 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 	}
 	var answer consumerAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return nil, nil, fmt.Errorf("ladygraph %s: unreadable answer: %w", toolConsumers, err)
+		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolConsumers, err)
 	}
 
-	records := make([]any, 0, len(answer.Results))
-	for _, row := range answer.Results {
+	records := make([]any, 0, len(answer.Results.rows))
+	for _, row := range answer.Results.rows {
 		if resolution != "" && row.Category != resolution {
 			continue
 		}
 		record := map[string]any{
-			"repository": repositoryNameFromKey(row.ConsumerRepositoryKey),
+			"repository": row.repositoryName(),
 			"resolution": row.Category,
 		}
 		// A package-level row proves the consumer depends on the provider
-		// PACKAGE, never the symbol -- ladygraph does not set
-		// consumer_file_path for one, and this emits the row without
-		// inventing a path for it rather than dropping it.
-		if row.ConsumerFilePath != "" {
-			record["path"] = row.ConsumerFilePath
+		// PACKAGE, never the symbol -- neither server sets a consuming file
+		// for one, and this emits the row without inventing a path for it
+		// rather than dropping it.
+		if consumerPath := row.consumerPath(); consumerPath != "" {
+			record["path"] = consumerPath
 		}
 		records = append(records, record)
 	}
@@ -592,17 +672,17 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 		return nil, nil, err
 	}
 
-	notes = append(notes, fmt.Sprintf("ladygraph answered symbol.consumers for %s with %d consumer(s)",
+	notes = append(notes, fmt.Sprintf("kivgraph answered symbol.consumers for %s with %d consumer(s)",
 		req.Repository.ID, len(records)))
 	if answer.Truncated {
 		notes = append(notes, fmt.Sprintf(
-			"ladygraph truncated this answer; more consumers exist past cursor %q", answer.NextCursor))
+			"kivgraph truncated this answer; more consumers exist past cursor %q", answer.NextCursor))
 	}
 	return result, notes, nil
 }
 
 // outlineDeclaration is one row of get_file_outline: a declaration's span
-// and the stable_key that names it, measured live against v0.5.1.
+// and the stable_key that names it, measured live against ladygraph v0.5.1.
 type outlineDeclaration struct {
 	Name          string `json:"name"`
 	QualifiedName string `json:"qualified_name"`
@@ -615,14 +695,39 @@ type outlineDeclaration struct {
 // outlineAnswer is get_file_outline's envelope. Unlike every other tool
 // here, its "results" is a single object describing the file -- path,
 // repository, languages, packages, counts -- and the declarations hang off
-// its "symbols" field. Decoding it as a list of rows, the shape the
-// neighbors use, costs nothing at compile time and fails on the wire with
-// "cannot unmarshal object into ... []outlineDeclaration": measured against
-// v0.5.1, and only caught by asking the real server.
+// it. Decoding it as a list of rows, the shape the neighbors use, costs
+// nothing at compile time and fails on the wire with "cannot unmarshal
+// object into ... []outlineDeclaration": measured against ladygraph v0.5.1, and only
+// caught by asking the real server.
+//
+// Where the declarations hang off it differs between the two servers this
+// adapter was measured against, which is why both fields are decoded and
+// declarations() joins them: ladygraph v0.5.1 puts them directly under "symbols",
+// kivgraph 0.2.1 groups them per file under "files":[{"path":...,
+// "symbols":[...]}] -- one file per answer in practice, since this adapter
+// only ever asks about one. Reading only "symbols" against 0.2.1 decodes
+// cleanly into nothing, and an empty outline reports every position as
+// naming no declaration: a wrong answer that looks like a resolved one.
 type outlineAnswer struct {
 	Results struct {
 		Symbols []outlineDeclaration `json:"symbols"`
+		Files   []struct {
+			Symbols []outlineDeclaration `json:"symbols"`
+		} `json:"files"`
 	} `json:"results"`
+}
+
+// declarations is every declaration the outline carried, whichever of the
+// two shapes it arrived in. Both are read rather than one-or-the-other: a
+// server that ever filled both would otherwise have half its answer
+// silently dropped, and a duplicate row is harmless here because the
+// narrowest span wins and identical rows resolve to the same key.
+func (a outlineAnswer) declarations() []outlineDeclaration {
+	out := a.Results.Symbols
+	for _, file := range a.Results.Files {
+		out = append(out, file.Symbols...)
+	}
+	return out
 }
 
 // resolvePosition is the detour symbol.consumers pays that no other
@@ -642,19 +747,19 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 		// bin. Nothing has been searched yet, so nothing can honestly be
 		// reported missing -- this is deliberately pre-classified rather than
 		// left for failureFor's NOT_FOUND sniffing, which would misread
-		// ladygraph refusing to produce an outline at all as a resolved
+		// kivgraph refusing to produce an outline at all as a resolved
 		// "not found".
 		return "", nil, contract.Fail(contract.FailureUnavailable,
-			"ladygraph symbol.consumers: could not read %s's outline to resolve %s:%d: %v", repository, file, line, err)
+			"kivgraph symbol.consumers: could not read %s's outline to resolve %s:%d: %v", repository, file, line, err)
 	}
 	var answer outlineAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return "", nil, contract.Fail(contract.FailureUnavailable,
-			"ladygraph symbol.consumers: unreadable outline for %s: %v", file, err)
+			"kivgraph symbol.consumers: unreadable outline for %s: %v", file, err)
 	}
 
 	var candidates []outlineDeclaration
-	for _, decl := range answer.Results.Symbols {
+	for _, decl := range answer.declarations() {
 		if line >= decl.StartLine && line <= decl.EndLine {
 			candidates = append(candidates, decl)
 		}
@@ -665,10 +770,10 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 		// would claim this position was searched and answered, when nothing
 		// in the outline ever matched it.
 		return "", nil, contract.Fail(contract.FailureNotFound,
-			"ladygraph symbol.consumers: %s:%d names no declaration in %s's outline", file, line, repository)
+			"kivgraph symbol.consumers: %s:%d names no declaration in %s's outline", file, line, repository)
 	}
 
-	// name, when it disambiguates outright, wins over span alone: ladygraph
+	// name, when it disambiguates outright, wins over span alone: kivgraph
 	// disambiguates repeated declaration names with qualified_name suffixes
 	// like "reservas#2", so an exact qualified_name hit is preferred to a
 	// bare name match among several same-named candidates.
@@ -681,11 +786,13 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 		}
 		for _, decl := range byName {
 			if decl.QualifiedName == name {
-				return decl.StableKey, nil, nil
+				key, err := r.stableKeyOf(ctx, sess, repository, file, decl)
+				return key, nil, err
 			}
 		}
 		if len(byName) == 1 {
-			return byName[0].StableKey, nil, nil
+			key, err := r.stableKeyOf(ctx, sess, repository, file, byName[0])
+			return key, nil, err
 		}
 		if len(byName) > 0 {
 			candidates = byName
@@ -697,7 +804,12 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 	if len(candidates) > 1 {
 		var passedOver []string
 		for _, decl := range candidates {
-			if decl.StableKey == innermost.StableKey {
+			// Compared by position and name, never by stable_key: kivgraph
+			// 0.2.1 leaves that field empty on every row, so keying identity
+			// on it would make each candidate look like the chosen one and
+			// report an ambiguity nobody was told about as unanimity.
+			if decl.StartLine == innermost.StartLine && decl.EndLine == innermost.EndLine &&
+				decl.QualifiedName == innermost.QualifiedName && decl.Name == innermost.Name {
 				continue
 			}
 			passedOver = append(passedOver,
@@ -713,7 +825,75 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 				file, line, len(candidates), innermost.Name, strings.Join(passedOver, ", ")))
 		}
 	}
-	return innermost.StableKey, notes, nil
+	key, err := r.stableKeyOf(ctx, sess, repository, file, innermost)
+	if err != nil {
+		return "", nil, err
+	}
+	return key, notes, nil
+}
+
+// stableKeyOf is the second hop kivgraph 0.2.1 forces and ladygraph v0.5.1 does not.
+//
+// ladygraph v0.5.1 carries a stable_key on every outline row, so the position
+// resolved above is already an address and this returns it untouched. 0.2.1
+// carries none -- measured: its outline rows hold name, kind, signature,
+// exported, start_line, end_line, and a qualified_name only for methods --
+// so the declaration has to be looked up once more, by the one addressing
+// scheme that server does answer to: get_symbol keyed by repository, path
+// and qualified name, whose payload does carry stable_key.
+//
+// The name used is qualified_name when the row has one and the bare name
+// otherwise: for a package-level declaration 0.2.1 sets no qualified_name
+// and get_symbol accepts the bare name in its place (measured: NewClient in
+// api-db-go resolves that way). One extra call per resolution on that
+// server, never a wrong answer, and nothing at all on a server that fills
+// the field.
+func (r *Runner) stableKeyOf(ctx context.Context, sess *mcpstdio.Session,
+	repository, file string, decl outlineDeclaration) (string, error) {
+
+	if decl.StableKey != "" {
+		return decl.StableKey, nil
+	}
+	qualified := decl.QualifiedName
+	if qualified == "" {
+		qualified = decl.Name
+	}
+	if qualified == "" {
+		return "", contract.Fail(contract.FailureNotFound,
+			"kivgraph symbol.consumers: the declaration at %s:%d has neither a stable key nor a name to look one up with",
+			file, decl.StartLine)
+	}
+	text, err := sess.Call(ctx, toolGet, map[string]any{
+		"repository":     repository,
+		"path":           file,
+		"qualified_name": qualified,
+	})
+	if err != nil {
+		// A dead pipe, a timeout or a refusal that is not "nothing by that
+		// name" keeps whatever bin failureFor -- the one function here paid
+		// to know this provider's error vocabulary -- puts it in. Its own
+		// SYMBOL_NOT_FOUND is not a provider going down, and calling it
+		// unavailable would pull kivgraph out of the funnel over one
+		// symbol the graph simply does not hold.
+		failure := r.failureFor(err, ctx)
+		if failure.Kind != contract.FailureNotFound {
+			return "", failure
+		}
+		return "", contract.Fail(contract.FailureNotFound,
+			"kivgraph symbol.consumers: %s carries no stable key in %s's outline and %s could not supply one: %s",
+			qualified, repository, toolGet, failure.Message)
+	}
+	var answer getSymbolAnswer
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return "", contract.Fail(contract.FailureUnavailable,
+			"kivgraph symbol.consumers: unreadable %s answer while resolving %s: %v", toolGet, qualified, err)
+	}
+	if answer.Results == nil || answer.Results.StableKey == "" {
+		return "", contract.Fail(contract.FailureNotFound,
+			"kivgraph symbol.consumers: neither %s nor %s gives a stable key for %s at %s:%d",
+			toolOutline, toolGet, qualified, file, decl.StartLine)
+	}
+	return answer.Results.StableKey, nil
 }
 
 // narrowestSpan returns the declaration with the smallest [start_line,
@@ -733,16 +913,21 @@ func narrowestSpan(candidates []outlineDeclaration) outlineDeclaration {
 }
 
 // symbolRecord is get_symbol's answer, narrowed to the four fields
-// symbol.get declares: path, line, name and kind all come back required.
+// symbol.get declares -- path, line, name and kind all come back required --
+// plus the stable_key symbol.get itself never needs, because it was the
+// input. That fifth field is here for the other caller: stableKeyOf, which
+// asks this same tool for the address kivgraph 0.2.1's outline does not
+// carry.
 type symbolRecord struct {
 	FilePath  string `json:"file_path"`
 	StartLine int    `json:"start_line"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
+	StableKey string `json:"stable_key"`
 }
 
 // getSymbolAnswer is get_symbol's envelope. Unlike every other tool here its
-// "results" is a single object, not a list -- confirmed live against v0.5.1
+// "results" is a single object, not a list -- confirmed live against ladygraph v0.5.1
 // -- and nil exactly when the key names nothing the far side could resolve.
 type getSymbolAnswer struct {
 	Results *symbolRecord `json:"results"`
@@ -765,7 +950,7 @@ type getSymbolAnswer struct {
 func (r *Runner) runGet(ctx context.Context, sess *mcpstdio.Session, req contract.RunRequest) (map[string]any, []string, error) {
 	stableKey, ok := stringAt(req.Payload, "stable_key")
 	if !ok || stableKey == "" {
-		return nil, nil, contract.Fail(contract.FailureInvalidInput, "ladygraph symbol.get: stable_key is required")
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.get: stable_key is required")
 	}
 
 	text, err := sess.Call(ctx, toolGet, map[string]any{"stable_key": stableKey})
@@ -774,7 +959,7 @@ func (r *Runner) runGet(ctx context.Context, sess *mcpstdio.Session, req contrac
 	}
 	var answer getSymbolAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return nil, nil, fmt.Errorf("ladygraph %s: unreadable answer: %w", toolGet, err)
+		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolGet, err)
 	}
 
 	records := []any{}
@@ -791,7 +976,7 @@ func (r *Runner) runGet(ctx context.Context, sess *mcpstdio.Session, req contrac
 		return nil, nil, err
 	}
 
-	notes := []string{fmt.Sprintf("ladygraph answered symbol.get for %s with %d row", req.Repository.ID, len(records))}
+	notes := []string{fmt.Sprintf("kivgraph answered symbol.get for %s with %d row", req.Repository.ID, len(records))}
 	return result, notes, nil
 }
 
@@ -815,7 +1000,7 @@ type unresolvedAnswer struct {
 // runUnresolved answers symbol.unresolved. get_unresolved_references
 // carries no line number, only start_offset -- so the declared output field
 // is "offset", not "line": synthesizing a line by reading the file back
-// would be inventing a position ladygraph itself never reported.
+// would be inventing a position kivgraph itself never reported.
 //
 // reason, requested_package and limit are the only declared inputs -- repo,
 // package, requested_symbol, language and cursor are real arguments on the
@@ -840,7 +1025,7 @@ func (r *Runner) runUnresolved(ctx context.Context, sess *mcpstdio.Session, req 
 	}
 	var answer unresolvedAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return nil, nil, fmt.Errorf("ladygraph %s: unreadable answer: %w", toolUnresolved, err)
+		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolUnresolved, err)
 	}
 
 	records := make([]any, 0, len(answer.Results))
@@ -860,11 +1045,11 @@ func (r *Runner) runUnresolved(ctx context.Context, sess *mcpstdio.Session, req 
 		return nil, nil, err
 	}
 
-	notes := []string{fmt.Sprintf("ladygraph answered symbol.unresolved for %s with %d row(s)",
+	notes := []string{fmt.Sprintf("kivgraph answered symbol.unresolved for %s with %d row(s)",
 		req.Repository.ID, len(records))}
 	if answer.Truncated {
 		notes = append(notes, fmt.Sprintf(
-			"ladygraph truncated this answer; more unresolved references exist past cursor %q", answer.NextCursor))
+			"kivgraph truncated this answer; more unresolved references exist past cursor %q", answer.NextCursor))
 	}
 	return result, notes, nil
 }
@@ -896,12 +1081,12 @@ func (r *Runner) runGraphStatus(status *statusResult, req contract.RunRequest) (
 		return nil, nil, err
 	}
 
-	notes := []string{fmt.Sprintf("ladygraph answered graph.status: %d symbol(s), %d edge(s) across %d repositories",
+	notes := []string{fmt.Sprintf("kivgraph answered graph.status: %d symbol(s), %d edge(s) across %d repositories",
 		status.Symbols, status.Edges, status.Repositories)}
 	return result, notes, nil
 }
 
-// ProbeIndex asks ladygraph whether root already has a place in the
+// ProbeIndex asks kivgraph whether root already has a place in the
 // published graph, without asking it to build one.
 //
 // It mirrors codebasememory's own three-way contract exactly: a working
@@ -922,7 +1107,7 @@ func (r *Runner) ProbeIndex(ctx context.Context, root string) (bool, string, err
 	}
 	repoAbs, err := filepath.Abs(root)
 	if err != nil {
-		return false, "", contract.Fail(contract.FailureInvalidInput, "ladygraph probe: path %q: %v", root, err)
+		return false, "", contract.Fail(contract.FailureInvalidInput, "kivgraph probe: path %q: %v", root, err)
 	}
 	switch probeErr := checkGraphReady(status, repoAbs); {
 	case probeErr == nil:
@@ -934,11 +1119,11 @@ func (r *Runner) ProbeIndex(ctx context.Context, root string) (bool, string, err
 	}
 }
 
-// repositoryNameFromKey strips ladygraph's own "repository:" key prefix.
+// repositoryNameFromKey strips kivgraph's own "repository:" key prefix.
 // consumer_repository_key is a KEY ("repository:backend"), not a bare name
 // -- there is no consumer_repository_name field on CrossRepoConsumerSummary
 // -- and the declared "repository" output is atenea's existing vocabulary
-// (see symbol.references), so the prefix belongs to ladygraph's own
+// (see symbol.references), so the prefix belongs to kivgraph's own
 // addressing scheme, not to the answer this adapter hands back.
 func repositoryNameFromKey(key string) string {
 	return strings.TrimPrefix(key, repositoryKeyPrefix)
@@ -949,20 +1134,20 @@ func repositoryNameFromKey(key string) string {
 // An already-binned failure -- ValidateOutput, resolvePosition's own
 // not-found and unavailable refusals, a required-field refusal -- travels
 // unchanged: re-reading its own text would be the adapter guessing about
-// itself. ladygraph's own
+// itself. kivgraph's own
 // isError text is the exception worth a rule of its own: every refusal
-// measured against v0.5.1 takes the form "UPPERCASE_CODE: message"
+// measured against ladygraph v0.5.1 takes the form "UPPERCASE_CODE: message"
 // (SYMBOL_NOT_FOUND, ...), and a caller passing a stale or mistyped
 // stable_key must land in contract.FailureNotFound, never
 // contract.FailureUnavailable -- that bin drives provider health to down and
-// pulls ladygraph out of the funnel over one bad key, not one dead provider.
+// pulls kivgraph out of the funnel over one bad key, not one dead provider.
 func (r *Runner) failureFor(err error, ctx context.Context) *contract.Failure {
 	var known *contract.Failure
 	if errors.As(err, &known) {
 		// mcpstdio bins every tool that ran and refused as
 		// FailureInvalidInput. That is the right default for a transport,
 		// which must not learn one provider's error vocabulary -- and it is
-		// wrong for this one: ladygraph's SYMBOL_NOT_FOUND says the key
+		// wrong for this one: kivgraph's SYMBOL_NOT_FOUND says the key
 		// names nothing, not that the argument was malformed, and a caller
 		// told "invalid input" would go on correcting a stable_key that was
 		// never the problem. Correcting the bin here is the whole job of an
@@ -975,32 +1160,32 @@ func (r *Runner) failureFor(err error, ctx context.Context) *contract.Failure {
 			if raw == "" {
 				raw = known.Message
 			}
-			return contract.Fail(contract.FailureNotFound, "ladygraph: %s", message).WithRaw(raw)
+			return contract.Fail(contract.FailureNotFound, "kivgraph: %s", message).WithRaw(raw)
 		}
 		return known
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Stopped(ctxErr, "ladygraph", r.timeout).WithRaw(err.Error())
+		return contract.Stopped(ctxErr, "kivgraph", r.timeout).WithRaw(err.Error())
 	}
 	text := strings.TrimSpace(err.Error())
 	if code, message, ok := providerCode(text); ok && strings.Contains(code, "NOT_FOUND") {
-		return contract.Fail(contract.FailureNotFound, "ladygraph: %s", message).WithRaw(text)
+		return contract.Fail(contract.FailureNotFound, "kivgraph: %s", message).WithRaw(text)
 	}
 	lower := strings.ToLower(text)
 	switch {
 	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"),
 		strings.Contains(lower, "econnrefused"), strings.Contains(lower, "closed pipe"),
 		strings.Contains(lower, "file already closed"), strings.Contains(lower, "broken pipe"):
-		return contract.Fail(contract.FailureUnavailable, "ladygraph is not reachable").WithRaw(text)
+		return contract.Fail(contract.FailureUnavailable, "kivgraph is not reachable").WithRaw(text)
 	case strings.Contains(lower, "deadline exceeded"), strings.Contains(lower, "timeout"), strings.Contains(lower, "timed out"):
-		return contract.Fail(contract.FailureTimeout, "ladygraph took longer than allowed").WithRaw(text)
+		return contract.Fail(contract.FailureTimeout, "kivgraph took longer than allowed").WithRaw(text)
 	case strings.Contains(lower, "permission denied"), strings.Contains(lower, "forbidden"):
-		return contract.Fail(contract.FailurePermissionDenied, "ladygraph refused access").WithRaw(text)
+		return contract.Fail(contract.FailurePermissionDenied, "kivgraph refused access").WithRaw(text)
 	}
-	return contract.Fail(contract.FailureUnavailable, "ladygraph did not answer").WithRaw(text)
+	return contract.Fail(contract.FailureUnavailable, "kivgraph did not answer").WithRaw(text)
 }
 
-// isUpperCode reports whether s looks like ladygraph's own error-code
+// isUpperCode reports whether s looks like kivgraph's own error-code
 // prefix: SCREAMING_SNAKE_CASE, nothing else. A message that merely
 // contains a colon ("path: /repo/x") must not be misread as one.
 func isUpperCode(s string) bool {
@@ -1016,7 +1201,7 @@ func isUpperCode(s string) bool {
 	return true
 }
 
-// providerCode finds ladygraph's own error code in a message that may have
+// providerCode finds kivgraph's own error code in a message that may have
 // been prefixed on the way here. mcpstdio labels a refusal with the tool
 // that refused ("find_cross_repo_consumers: SYMBOL_NOT_FOUND: ..."), so the
 // code is not reliably the first segment and cutting once would miss it --

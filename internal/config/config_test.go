@@ -91,16 +91,18 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codebase-memory.impact",
 		"codebase-memory.index",
 		"codebase-memory.overview",
-		"ladygraph.cross_repo_consumers",
-		"ladygraph.get",
-		"ladygraph.status",
-		"ladygraph.unresolved_references",
+		"kivgraph.cross_repo_consumers",
+		"kivgraph.get",
+		"kivgraph.status",
+		"kivgraph.unresolved_references",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",
 		"serena.overview",
 		"serena.references",
 		"serena.search",
+		"tokensave.calls",
+		"tokensave.overview",
 	}
 	if !slices.Equal(shipped, want) {
 		t.Fatalf("implementations = %v, want %v", shipped, want)

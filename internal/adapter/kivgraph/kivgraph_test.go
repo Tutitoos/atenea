@@ -1,4 +1,4 @@
-package ladygraph
+package kivgraph
 
 import (
 	"bufio"
@@ -16,15 +16,15 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// --- fake ladygraph child ---------------------------------------------------
+// --- fake kivgraph child ---------------------------------------------------
 //
 // mcpstdio.Session is a concrete struct, not an interface: the only way to
-// hand the adapter a live one without spawning the real `ladygraph serve`
+// hand the adapter a live one without spawning the real `kivgraph serve`
 // binary is a peer that speaks the same newline-delimited JSON-RPC over an
 // io.Pipe pair. It auto-answers initialize; every other call is dispatched
 // by tool name to a test-registered handler, and every call is recorded so
 // a test can assert not just the answer but what was actually asked.
-type fakeLadygraph struct {
+type fakeKivgraph struct {
 	mu       sync.Mutex
 	calls    []fakeCall
 	handlers map[string]func(args map[string]any) (result string, isError bool)
@@ -35,11 +35,11 @@ type fakeCall struct {
 	args map[string]any
 }
 
-func newFakeLadygraph(t *testing.T) (*fakeLadygraph, *mcpstdio.Session) {
+func newFakeKivgraph(t *testing.T) (*fakeKivgraph, *mcpstdio.Session) {
 	t.Helper()
 	stdinR, stdinW := io.Pipe()   // the Session writes stdinW; the fake reads stdinR
 	stdoutR, stdoutW := io.Pipe() // the fake writes stdoutW; the Session reads stdoutR
-	f := &fakeLadygraph{handlers: map[string]func(map[string]any) (string, bool){}}
+	f := &fakeKivgraph{handlers: map[string]func(map[string]any) (string, bool){}}
 	go f.serve(stdinR, stdoutW)
 	sess := mcpstdio.New(stdinW, stdoutR, mcpstdio.Options{})
 	t.Cleanup(func() {
@@ -53,13 +53,13 @@ func newFakeLadygraph(t *testing.T) (*fakeLadygraph, *mcpstdio.Session) {
 // handler fails loudly (isError=true) rather than hanging Call forever, so
 // a test that forgot to configure a tool it did not mean to reach finds out
 // from an assertion, not a timeout.
-func (f *fakeLadygraph) on(tool string, result string, isError bool) {
+func (f *fakeKivgraph) on(tool string, result string, isError bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handlers[tool] = func(map[string]any) (string, bool) { return result, isError }
 }
 
-func (f *fakeLadygraph) callsTo(tool string) []map[string]any {
+func (f *fakeKivgraph) callsTo(tool string) []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []map[string]any
@@ -71,7 +71,7 @@ func (f *fakeLadygraph) callsTo(tool string) []map[string]any {
 	return out
 }
 
-func (f *fakeLadygraph) serve(in io.Reader, out io.WriteCloser) {
+func (f *fakeKivgraph) serve(in io.Reader, out io.WriteCloser) {
 	reader := bufio.NewReaderSize(in, 1<<20)
 	for {
 		line, err := reader.ReadString('\n')
@@ -84,7 +84,7 @@ func (f *fakeLadygraph) serve(in io.Reader, out io.WriteCloser) {
 	}
 }
 
-func (f *fakeLadygraph) handle(line []byte, out io.Writer) {
+func (f *fakeKivgraph) handle(line []byte, out io.Writer) {
 	var msg struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -100,7 +100,7 @@ func (f *fakeLadygraph) handle(line []byte, out io.Writer) {
 	case "initialize":
 		f.reply(out, msg.ID, map[string]any{
 			"protocolVersion": "2025-06-18",
-			"serverInfo":      map[string]any{"name": "ladygraph", "version": "0.5.1"},
+			"serverInfo":      map[string]any{"name": "kivgraph", "version": "0.5.1"},
 			"capabilities":    map[string]any{},
 		})
 	case "tools/call":
@@ -130,7 +130,7 @@ func (f *fakeLadygraph) handle(line []byte, out io.Writer) {
 	}
 }
 
-func (f *fakeLadygraph) reply(out io.Writer, id json.RawMessage, result any) {
+func (f *fakeKivgraph) reply(out io.Writer, id json.RawMessage, result any) {
 	body, err := json.Marshal(struct {
 		Version string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
@@ -145,7 +145,7 @@ func (f *fakeLadygraph) reply(out io.Writer, id json.RawMessage, result any) {
 // --- fixtures ----------------------------------------------------------
 
 // readyStatus is a healthy graph_status answer registering one repository,
-// named repoName on ladygraph's own side, rooted at repoPath.
+// named repoName on kivgraph's own side, rooted at repoPath.
 func readyStatus(repoName, repoPath string) string {
 	body, err := json.Marshal(map[string]any{
 		"results": map[string]any{
@@ -160,8 +160,8 @@ func readyStatus(repoName, repoPath string) string {
 	return string(body)
 }
 
-// emptyStatus is ladygraph's own measured empty-config failure mode: a
-// fresh `ladygraph serve` with no config publishes this, successfully,
+// emptyStatus is kivgraph's own measured empty-config failure mode: a
+// fresh `kivgraph serve` with no config publishes this, successfully,
 // isError:false, for any question at all.
 const emptyStatus = `{"results":{"status":"ready","snapshot_id":1,"snapshot_built_at":"2026-08-14T17:23:13Z",` +
 	`"symbols":0,"edges":0,"files":0,"repositories":0,"unresolved":0,"repository_freshness":[]}}`
@@ -183,6 +183,23 @@ func consumersCapability() contract.Capability {
 			{Name: "column", Type: contract.TypeInt, Required: true},
 			{Name: "name", Type: contract.TypeString, Required: false},
 			{Name: "resolution", Type: contract.TypeString, Required: false},
+		},
+		// Mirrors the shipped capability's own output shape
+		// (internal/config/default.toml): without it ValidateOutput refuses
+		// every successfully shaped answer, and no test could reach past
+		// the first failing tool call.
+		Outputs: []contract.Field{
+			{
+				Name: "consumers", Type: contract.TypeRecordList, Required: true,
+				Fields: []contract.Field{
+					{Name: "repository", Type: contract.TypeString, Required: true},
+					{Name: "path", Type: contract.TypeString, Required: false},
+					{
+						Name: "resolution", Type: contract.TypeString, Required: true,
+						Enum: consumerResolutions,
+					},
+				},
+			},
 		},
 	}
 }
@@ -258,7 +275,7 @@ func request(t *testing.T, repo contract.Repository, capabilityID string, payloa
 	t.Helper()
 	return contract.RunRequest{
 		Capability:     capabilityFor(capabilityID),
-		Implementation: contract.Implementation{ID: implFor(capabilityID), Provider: "ladygraph", Capability: capabilityID},
+		Implementation: contract.Implementation{ID: implFor(capabilityID), Provider: "kivgraph", Capability: capabilityID},
 		Repository:     repo,
 		Payload:        payload,
 		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
@@ -344,8 +361,8 @@ func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if got := runner.ID(); got != "ladygraph" {
-		t.Errorf("ID() = %q, want %q", got, "ladygraph")
+	if got := runner.ID(); got != "kivgraph" {
+		t.Errorf("ID() = %q, want %q", got, "kivgraph")
 	}
 	if !runner.Serves(ImplGet) || !runner.Serves(ImplStatus) {
 		t.Errorf("Serves() = false for a declared implementation")
@@ -379,7 +396,7 @@ func TestRunRejectsAnImplementationItDoesNotServe(t *testing.T) {
 
 func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	runner := newTestRunner(t, sess)
 
@@ -395,7 +412,7 @@ func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 	}
 	req := contract.RunRequest{
 		Capability:     unknown,
-		Implementation: contract.Implementation{ID: ImplGet, Provider: "ladygraph", Capability: unknown.ID},
+		Implementation: contract.Implementation{ID: ImplGet, Provider: "kivgraph", Capability: unknown.ID},
 		Repository:     repo,
 		Payload:        map[string]any{},
 		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
@@ -413,8 +430,8 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 	for _, capabilityID := range capabilities {
 		t.Run(capabilityID, func(t *testing.T) {
 			repo := testRepo(t)
-			fake, sess := newFakeLadygraph(t)
-			// isError:false, every count zero -- ladygraph's own empty-config
+			fake, sess := newFakeKivgraph(t)
+			// isError:false, every count zero -- kivgraph's own empty-config
 			// failure mode. Nothing else is registered: reaching
 			// find_cross_repo_consumers, get_symbol or
 			// get_unresolved_references at all would itself be the bug this
@@ -448,7 +465,7 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 
 func TestRunRefusesWhenTheGraphIsNotReady(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, notReadyStatus, false)
 	runner := newTestRunner(t, sess)
 
@@ -461,7 +478,7 @@ func TestRunRefusesWhenTheGraphIsNotReady(t *testing.T) {
 
 func TestRunRefusesWhenTheRepositoryIsNotRegistered(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	// A real, non-empty graph -- just one that never indexed this
 	// repository: registered under a path that is deliberately not repo's.
 	fake.on(toolStatus, readyStatus("other", "/somewhere/else"), false)
@@ -481,7 +498,7 @@ func TestRunRefusesWhenTheRepositoryIsNotRegistered(t *testing.T) {
 
 func TestProbeIndexReportsReadyForARegisteredRepository(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	runner := newTestRunner(t, sess)
 
@@ -499,7 +516,7 @@ func TestProbeIndexReportsReadyForARegisteredRepository(t *testing.T) {
 
 func TestProbeIndexReportsNotReadyForAnUnregisteredRepository(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("other", "/somewhere/else"), false)
 	runner := newTestRunner(t, sess)
 
@@ -517,7 +534,7 @@ func TestProbeIndexReportsNotReadyForAnUnregisteredRepository(t *testing.T) {
 
 func TestProbeIndexReturnsTheErrorForAnythingElse(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	// A malformed answer to graph_status: unreadable, so fetchStatus itself
 	// fails rather than deciding the graph is absent -- the caller must not
 	// correct indexed_by on a probe that could not reach a verdict at all.
@@ -540,8 +557,8 @@ func TestProbeIndexReturnsTheErrorForAnythingElse(t *testing.T) {
 
 func TestRunConsumersResolvesAPositionBeforeCallingFindCrossRepoConsumers(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
-	// ladygraph's own name for this repository ("backend") need not match
+	fake, sess := newFakeKivgraph(t)
+	// kivgraph's own name for this repository ("backend") need not match
 	// atenea's repository id ("current") -- runConsumers has to read that
 	// translation off the very entry the shared guard already matched, not
 	// assume the two ids agree.
@@ -571,7 +588,7 @@ func TestRunConsumersResolvesAPositionBeforeCallingFindCrossRepoConsumers(t *tes
 		t.Fatalf("get_file_outline called %d time(s), want 1", len(outlineCalls))
 	}
 	if got := outlineCalls[0]["repository"]; got != "backend" {
-		t.Errorf("get_file_outline repository = %v, want %q -- ladygraph's own registered name, not atenea's repository id", got, "backend")
+		t.Errorf("get_file_outline repository = %v, want %q -- kivgraph's own registered name, not atenea's repository id", got, "backend")
 	}
 	if got := outlineCalls[0]["path"]; got != "handler.go" {
 		t.Errorf("get_file_outline path = %v, want %q", got, "handler.go")
@@ -586,9 +603,212 @@ func TestRunConsumersResolvesAPositionBeforeCallingFindCrossRepoConsumers(t *tes
 	}
 }
 
+func TestRunConsumersNeverPaysTheSecondHopWhenTheOutlineCarriesTheKey(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("backend", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, `{"results":{"path":"handler.go","repository":"backend","symbols":[
+		{"name":"Handler","qualified_name":"Handler","kind":"func","stable_key":"go:pkg#Handler","start_line":10,"end_line":20}
+	]}}`, false)
+	fake.on(toolConsumers, `{"results":[],"total":0,"returned":0}`, false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{"file": "handler.go", "line": 15, "column": 3})
+	if _, err := runner.Run(context.Background(), req); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// The fast path is one outline call and nothing else: a row that
+	// already names its key must never pay for the get_symbol hop.
+	if calls := fake.callsTo(toolGet); len(calls) > 0 {
+		t.Errorf("get_symbol called %d time(s) although the outline already carried a stable_key", len(calls))
+	}
+}
+
+func TestRunConsumersResolvesTheStableKeyThroughGetSymbolWhenTheOutlineOmitsIt(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("api-db-go", absPath(t, repo.Path)), false)
+	// kivgraph 0.2.1's own measured outline: declarations grouped per file
+	// under "files", each row carrying name, kind, signature, exported and
+	// the span -- no stable_key at all, and no qualified_name either for a
+	// plain function.
+	fake.on(toolOutline, `{"results":{"repository":"api-db-go","path":"internal/infrastructure/redis/client.go","files":[
+		{"path":"internal/infrastructure/redis/client.go","symbols":[
+			{"name":"NewClient","kind":"func","signature":"func NewClient(ctx context.Context, cfg config.Redis) (*Client, error)","exported":true,"start_line":21,"end_line":41},
+			{"name":"Client","kind":"type","signature":"Client","exported":true,"start_line":14,"end_line":16}
+		]}
+	]}}`, false)
+	// get_symbol on that same server: one "results" object, and the
+	// stable_key the outline never carried.
+	fake.on(toolGet, `{"results":{"stable_key":"SE2NYIHQKFDA6NK7KX2PVB2SW5XFEUXWH4O6OCO4XD3ZF2B4N2GQ","repository":"api-db-go","file_path":"internal/infrastructure/redis/client.go","name":"NewClient","qualified_name":"NewClient","kind":"func","start_line":21,"end_line":41}}`, false)
+	fake.on(toolConsumers, `{"results":{"subject":{"qualified_name":"NewClient"},"consumers":null},"total":0,"returned":0}`, false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{
+		"file": "internal/infrastructure/redis/client.go", "line": 21, "column": 6,
+	})
+	out, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v -- an outline without stable_key is a version difference, not a missing declaration", err)
+	}
+	if out.Verdict != contract.VerdictOK {
+		t.Fatalf("verdict = %v, want %v", out.Verdict, contract.VerdictOK)
+	}
+
+	getCalls := fake.callsTo(toolGet)
+	if len(getCalls) != 1 {
+		t.Fatalf("get_symbol called %d time(s), want exactly 1 -- the second hop is paid once, only where the key is missing", len(getCalls))
+	}
+	if got := getCalls[0]["repository"]; got != "api-db-go" {
+		t.Errorf("get_symbol repository = %v, want %q", got, "api-db-go")
+	}
+	if got := getCalls[0]["path"]; got != "internal/infrastructure/redis/client.go" {
+		t.Errorf("get_symbol path = %v, want the file the position named", got)
+	}
+	// A server that only sets qualified_name for methods leaves the bare
+	// name as the row's only handle, and that is what get_symbol is asked by.
+	if got := getCalls[0]["qualified_name"]; got != "NewClient" {
+		t.Errorf("get_symbol qualified_name = %v, want %q", got, "NewClient")
+	}
+
+	consumersCalls := fake.callsTo(toolConsumers)
+	if len(consumersCalls) != 1 {
+		t.Fatalf("find_cross_repo_consumers called %d time(s), want 1", len(consumersCalls))
+	}
+	if got := consumersCalls[0]["stable_key"]; got != "SE2NYIHQKFDA6NK7KX2PVB2SW5XFEUXWH4O6OCO4XD3ZF2B4N2GQ" {
+		t.Errorf("find_cross_repo_consumers stable_key = %v, want the key get_symbol minted", got)
+	}
+}
+
+func TestRunConsumersAsksGetSymbolByQualifiedNameForAMethod(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("api-db-go", absPath(t, repo.Path)), false)
+	// The one row shape kivgraph 0.2.1 does qualify: a method. Its bare
+	// name names several declarations across the corpus, so the qualified
+	// one is what must travel.
+	fake.on(toolOutline, `{"results":{"repository":"api-db-go","path":"client.go","files":[
+		{"path":"client.go","symbols":[
+			{"name":"Close","qualified_name":"Client.Close","kind":"method","start_line":48,"end_line":53}
+		]}
+	]}}`, false)
+	fake.on(toolGet, `{"results":{"stable_key":"KEYCLOSE","file_path":"client.go","name":"Close","kind":"method","start_line":48}}`, false)
+	fake.on(toolConsumers, `{"results":{"consumers":[]}}`, false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{"file": "client.go", "line": 50, "column": 2})
+	if _, err := runner.Run(context.Background(), req); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	getCalls := fake.callsTo(toolGet)
+	if len(getCalls) != 1 {
+		t.Fatalf("get_symbol called %d time(s), want 1", len(getCalls))
+	}
+	if got := getCalls[0]["qualified_name"]; got != "Client.Close" {
+		t.Errorf("get_symbol qualified_name = %v, want %q -- the row's qualified_name wins over its bare name", got, "Client.Close")
+	}
+}
+
+func TestRunConsumersRefusesWhenNeitherHopCarriesAStableKey(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("api-db-go", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, `{"results":{"repository":"api-db-go","path":"client.go","files":[
+		{"path":"client.go","symbols":[{"name":"NewClient","kind":"func","start_line":21,"end_line":41}]}
+	]}}`, false)
+	// An answer without the one field the second hop exists to fetch.
+	fake.on(toolGet, `{"results":{"file_path":"client.go","name":"NewClient","kind":"func","start_line":21}}`, false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{"file": "client.go", "line": 30, "column": 1})
+	_, err := runner.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureNotFound, err)
+	}
+	// The declaration WAS found: a refusal claiming otherwise sends the
+	// caller hunting for a line that was never the problem.
+	if strings.Contains(err.Error(), "names no declaration") {
+		t.Errorf("message = %q, want it to report the missing key, not a missing declaration", err.Error())
+	}
+	if !strings.Contains(err.Error(), "NewClient") || !strings.Contains(err.Error(), "stable key") {
+		t.Errorf("message = %q, want the resolved declaration and the missing stable key named", err.Error())
+	}
+	if calls := fake.callsTo(toolConsumers); len(calls) > 0 {
+		t.Errorf("find_cross_repo_consumers was called with no stable key to query by")
+	}
+}
+
+func TestRunConsumersKeepsTheSecondHopsNotFoundOutOfTheUnavailableBin(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("api-db-go", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, `{"results":{"repository":"api-db-go","path":"client.go","files":[
+		{"path":"client.go","symbols":[{"name":"NewClient","kind":"func","start_line":21,"end_line":41}]}
+	]}}`, false)
+	// The far side's own "nothing by that name". Binning it as unavailable
+	// would drive provider health down over one symbol the graph does not
+	// hold, and pull kivgraph out of the funnel for every later question.
+	fake.on(toolGet, "SYMBOL_NOT_FOUND: no symbol NewClient in client.go", true)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{"file": "client.go", "line": 30, "column": 1})
+	_, err := runner.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureNotFound, err)
+	}
+	if !strings.Contains(err.Error(), "no symbol NewClient in client.go") {
+		t.Errorf("message = %q, want the far side's own words kept", err.Error())
+	}
+}
+
+func TestRunConsumersReadsAGroupedConsumersAnswer(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("library-logger", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, `{"results":{"repository":"library-logger","path":"src/index.ts","files":[
+		{"path":"src/index.ts","symbols":[{"name":"createLogger","kind":"function","start_line":41,"end_line":45}]}
+	]}}`, false)
+	fake.on(toolGet, `{"results":{"stable_key":"KEYCREATELOGGER","file_path":"src/index.ts","name":"createLogger","kind":"function","start_line":41}}`, false)
+	// kivgraph 0.2.1's own consumers envelope: "results" is an object
+	// holding the subject and the rows, and a row names its repository
+	// bare ("repository") with the consuming file under "file_path" --
+	// where v0.5.1 says consumer_repository_key and consumer_file_path.
+	fake.on(toolConsumers, `{"results":{"subject":{"qualified_name":"createLogger"},"consumers":[
+		{"category":"package","repository":"admin.kena.lan","package_name":"admin.kena.lan","confidence":"EXACT_TYPECHECKED"},
+		{"category":"unresolved","repository":"api-cdn","file_path":"src/shared/logger.ts","confidence":"UNRESOLVED"}
+	]},"total":2,"returned":2}`, false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityConsumers, map[string]any{"file": "src/index.ts", "line": 41, "column": 17})
+	out, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	consumers, ok := out.Result["consumers"].([]any)
+	if !ok || len(consumers) != 2 {
+		t.Fatalf("consumers = %#v, want the 2 rows the grouped answer carried", out.Result["consumers"])
+	}
+
+	pkg, _ := consumers[0].(map[string]any)
+	if pkg["repository"] != "admin.kena.lan" {
+		t.Errorf("package row repository = %v, want the bare name the row carried", pkg["repository"])
+	}
+	// A package-level row proves a dependency on the PACKAGE, never a use
+	// of the symbol: it carries no file, and none may be invented for it.
+	if _, has := pkg["path"]; has {
+		t.Errorf("package row carries path = %v, want none", pkg["path"])
+	}
+
+	unresolved, _ := consumers[1].(map[string]any)
+	if unresolved["repository"] != "api-cdn" || unresolved["path"] != "src/shared/logger.ts" {
+		t.Errorf("unresolved row = %#v, want repository api-cdn at src/shared/logger.ts", unresolved)
+	}
+}
+
 func TestRunConsumersRefusesAPositionInsideNoDeclaration(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	fake.on(toolOutline, `{"results":{"path":"handler.go","repository":"current","symbols":[
 		{"name":"Handler","qualified_name":"Handler","kind":"func","stable_key":"go:pkg#Handler","start_line":10,"end_line":20}
@@ -607,7 +827,7 @@ func TestRunConsumersRefusesAPositionInsideNoDeclaration(t *testing.T) {
 
 func TestRunConsumersRefusesAnUnknownResolutionValue(t *testing.T) {
 	repo := testRepo(t)
-	fake, sess := newFakeLadygraph(t)
+	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	runner := newTestRunner(t, sess)
 

@@ -228,21 +228,21 @@ runners = ["omp"]
   # cold one is slow long before it is stuck.
   timeout = "90s"
 
-  [orchestrator.ladygraph]
+  [orchestrator.kivgraph]
   # No `binary` and no `repository.index`: Atenea never builds this graph, only
-  # reads it. index_project / `ladygraph index` stay out of the funnel entirely
+  # reads it. index_project / `kivgraph index` stay out of the funnel entirely
   # (an auditor does not rebuild what it audits). The graph is built by hand with
-  # `ladygraph init` + `ladygraph index --full` before this is useful.
+  # `kivgraph init` + `kivgraph index --full` before this is useful.
   implementations = [
-    "ladygraph.cross_repo_consumers",
-    "ladygraph.get",
-    "ladygraph.unresolved_references",
-    "ladygraph.status",
+    "kivgraph.cross_repo_consumers",
+    "kivgraph.get",
+    "kivgraph.unresolved_references",
+    "kivgraph.status",
   ]
   timeout = "90s"             # opens a graph db cold, same class as serena/codebase-memory
 
-    # [orchestrator.ladygraph.process]
-    # Uncomment to have Atenea launch and supervise the ladygraph server
+    # [orchestrator.kivgraph.process]
+    # Uncomment to have Atenea launch and supervise the kivgraph server
     # itself, the same way [orchestrator.serena.process] above does but over
     # a stdio transport instead of http: Spec.Transport = stdio carries this
     # over the same restart-limit / on_demand / idle-timeout machinery every
@@ -256,12 +256,38 @@ runners = ["omp"]
     # global corpus and readers share it by atomic generation publishing, so a
     # second copy buys nothing. on_demand so an unused install costs no process.
     #
-    # command = "/home/tutitoos/.local/opt/ladygraph-eval/v0.5.1/bin/ladygraph"
+    # command = "/home/devlabs/.local/opt/kivgraph/bin/kivgraph"
     # args = ["serve"]
     # HOME is load-bearing and MUST be the real one: an isolated/empty HOME makes
     # `serve` scaffold a fresh EMPTY config and publish an empty graph that
     # answers nothing, successfully. Absolute, never ~ .
     # env = ["HOME=/home/tutitoos"]
+    # instance = "shared"
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+
+  [orchestrator.tokensave]
+  # tokensave is the second stdio far side, and the one that is not a corpus of
+  # repositories but ONE project rooted at a directory: it speaks paths relative
+  # to that root, so `root` is required and absolute. Every repository this
+  # provider can answer for has to live under it.
+  #
+  # No `repository.index` either, for a different reason than kivgraph's: this
+  # far side re-syncs its own index on every call, so there is nothing for the
+  # funnel to trigger.
+  # root = "/absolute/path/to/the/served/project"
+  implementations = [
+    "tokensave.calls",
+    "tokensave.overview",
+  ]
+  timeout = "90s"             # re-syncs an index before answering: same class as kivgraph
+
+    # [orchestrator.tokensave.process]
+    # Same shape as the kivgraph block above and left commented for the same
+    # reason: the command below is one machine's path.
+    #
+    # command = "tokensave"
+    # args = ["serve", "--path", "/absolute/path/to/the/served/project"]
     # instance = "shared"
     # lifecycle = "on_demand"
     # idle_timeout = "10m"
@@ -1082,14 +1108,14 @@ effects = ["write", "process"]
   summary = "How many graph edges the index now holds."
 
 # ---------------------------------------------------------------------------
-# Ladygraph capabilities. Four answers no attached provider gives today.
+# Kivgraph capabilities. Four answers no attached provider gives today.
 #
-# Why Ladygraph does NOT appear under symbol.definition / references /
+# Why Kivgraph does NOT appear under symbol.definition / references /
 # implementations / overview / calls, or code.impact: serena and
 # codebase-memory already answer those, and a second implementation would not
 # add an answer -- it would rank two providers for one the funnel already has,
 # and cost +1,688 tok in every fixed-prefix client's request, forever, for a
-# duplicate. Ladygraph is declared ONLY for what it alone resolves: consumers
+# duplicate. Kivgraph is declared ONLY for what it alone resolves: consumers
 # across repositories (a real edge, not a path-shape match), the stable-key
 # identity retrieval the position-first family cannot do, the graph's own
 # unresolved-reference blind spots, and the published graph's provenance.
@@ -1111,7 +1137,7 @@ repository depends on the provider PACKAGE, never that it uses this symbol, and 
 carries no path for exactly that reason. Counting it as a use nobody observed is the \
 one mistake this shape invites. \
 \
-Answering from a position costs one extra lookup inside the provider: Ladygraph \
+Answering from a position costs one extra lookup inside the provider: Kivgraph \
 addresses symbols by a stable key, not by position, so the implementation resolves \
 file/line/column to that key before it can ask the graph anything. That lookup is the \
 provider's own cost, never this capability's -- callers still pay in file and line, \
@@ -1181,7 +1207,7 @@ version = "1.0.0"
 summary = "Return one symbol by its stable key."
 semantics = """
 The identity retrieval the position-first family cannot do: a stable key every \
-Ladygraph answer carries, resolved back to the one symbol it names, so a reference \
+Kivgraph answer carries, resolved back to the one symbol it names, so a reference \
 held across an edit that moved its line still points at the same thing. The key is \
 the address; there is no file and no line to pass.\
 """
@@ -1268,7 +1294,7 @@ effects = ["read"]
     name = "offset"
     type = "int"
     required = true
-    summary = "Byte offset of the reference. Ladygraph records no line here, and this declares what it has rather than a line it would have to guess."
+    summary = "Byte offset of the reference. Kivgraph records no line here, and this declares what it has rather than a line it would have to guess."
 
     [[capability.output.field]]
     name = "reason"
@@ -1598,11 +1624,11 @@ capability = "repository.index"
   # whose token cost barely depends on repository size at all.
   estimated_tokens = 60
 
-# The four ladygraph implementations share one provider and one supervised
-# stdio-MCP process (see [orchestrator.ladygraph] above): one child process,
+# The four kivgraph implementations share one provider and one supervised
+# stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
 # four tools called against it over the same wire, no second index to build.
 #
-# None of the four ships a live measurement yet -- ladygraph is not attached
+# None of the four ships a live measurement yet -- kivgraph is not attached
 # to any shipped runners list, so nothing has ever actually called it through
 # this funnel. Duration below is not a guess: it comes from the provider's
 # own measured SLOs, not this page's usual "nearest shape already shipped"
@@ -1619,8 +1645,8 @@ capability = "repository.index"
 # here.
 
 [[implementation]]
-id = "ladygraph.cross_repo_consumers"
-provider = "ladygraph"
+id = "kivgraph.cross_repo_consumers"
+provider = "kivgraph"
 capability = "symbol.consumers"
 
   [implementation.constraints]
@@ -1633,8 +1659,8 @@ capability = "symbol.consumers"
   estimated_tokens = 900
 
 [[implementation]]
-id = "ladygraph.get"
-provider = "ladygraph"
+id = "kivgraph.get"
+provider = "kivgraph"
 capability = "symbol.get"
 
   [implementation.constraints]
@@ -1646,8 +1672,8 @@ capability = "symbol.get"
   estimated_tokens = 300
 
 [[implementation]]
-id = "ladygraph.unresolved_references"
-provider = "ladygraph"
+id = "kivgraph.unresolved_references"
+provider = "kivgraph"
 capability = "symbol.unresolved"
 
   [implementation.constraints]
@@ -1659,8 +1685,8 @@ capability = "symbol.unresolved"
   estimated_tokens = 1200
 
 [[implementation]]
-id = "ladygraph.status"
-provider = "ladygraph"
+id = "kivgraph.status"
+provider = "kivgraph"
 capability = "graph.status"
 
   [implementation.constraints]
@@ -1670,6 +1696,61 @@ capability = "graph.status"
   [implementation.cost]
   estimated_duration = "8ms"
   estimated_tokens = 200
+
+# ---------------------------------------------------------------------------
+# tokensave: the syntactic call graph of ONE rooted project.
+#
+# It answers two of the same capabilities the graph providers above do, and
+# that is the point: symbol.overview and symbol.calls finally have more than
+# one live candidate, so the funnel has something to rank instead of a single
+# survivor. What separates them is what each is right about -- serena reads a
+# language server, codebase-memory walks a prebuilt graph, tokensave keeps its
+# own index in step on every call and never needs one built ahead of time,
+# which is why neither implementation below declares requires_index.
+#
+# No code.search here: tokensave has no text engine, and answering a flat
+# search from a symbol index would be a different answer wearing the same
+# name. No symbol.definition either -- see the adapter's package doc.
+# ---------------------------------------------------------------------------
+
+[[implementation]]
+id = "tokensave.calls"
+provider = "tokensave"
+capability = "symbol.calls"
+
+  [implementation.constraints]
+  languages = []          # its parsers cover go, typescript, rust, python, js and more
+  requires_index = false  # it syncs its own index on every call
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Three tool calls for one answer -- status, entities, find_exact_symbol --
+  # plus one walk per direction. Measured on a 53-repository index: 478ms warm,
+  # 10.3s on the first call after the server starts, because tokensave re-syncs
+  # its index before answering. The number below sits between the two on
+  # purpose; the base replaces it with what this machine actually observes
+  # after two successful calls.
+  estimated_duration = "1s"
+  estimated_tokens = 500
+
+[[implementation]]
+id = "tokensave.overview"
+provider = "tokensave"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Two tool calls and one file read for the columns no provider reports.
+  # Measured: 4.3s warm on a 7.5k-file index, 14.4s cold. Same reasoning as
+  # tokensave.calls above.
+  estimated_duration = "2s"
+  estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.
