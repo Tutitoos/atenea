@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -230,6 +231,92 @@ func unresolvedCapability() contract.Capability {
 	}
 }
 
+// positionInputs is the input family symbol.definition, symbol.references
+// and symbol.consumers all share: a position, a name hint, and the snippet
+// intent. Declared once here for the same reason the shipped catalog
+// declares it three times -- these are one shape.
+func positionInputs(withScope bool) []contract.Field {
+	fields := []contract.Field{
+		{Name: "file", Type: contract.TypeString, Required: true},
+		{Name: "line", Type: contract.TypeInt, Required: true},
+		{Name: "column", Type: contract.TypeInt, Required: true},
+		{Name: "name", Type: contract.TypeString, Required: false},
+	}
+	if withScope {
+		fields = append(fields, contract.Field{Name: "scope", Type: contract.TypeStringList, Required: false})
+	}
+	return append(fields,
+		contract.Field{Name: "include_snippet", Type: contract.TypeBool, Required: false},
+		contract.Field{Name: "snippet_lines", Type: contract.TypeInt, Required: false},
+	)
+}
+
+func definitionCapability() contract.Capability {
+	return contract.Capability{
+		ID:      CapabilityDefinition,
+		Version: contract.Version{Major: 1},
+		Summary: "test double for symbol.definition",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs:  positionInputs(false),
+		Outputs: []contract.Field{
+			{
+				Name: "location", Type: contract.TypeRecord, Required: true,
+				Fields: []contract.Field{
+					{Name: "path", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+					{Name: "snippet", Type: contract.TypeString, Required: false},
+				},
+			},
+		},
+	}
+}
+
+func referencesCapability() contract.Capability {
+	return contract.Capability{
+		ID:      CapabilityReferences,
+		Version: contract.Version{Major: 1},
+		Summary: "test double for symbol.references",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs:  positionInputs(true),
+		Outputs: []contract.Field{
+			{
+				Name: "locations", Type: contract.TypeRecordList, Required: true,
+				Fields: []contract.Field{
+					{Name: "path", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+					{Name: "snippet", Type: contract.TypeString, Required: false},
+				},
+			},
+		},
+	}
+}
+
+func overviewCapability() contract.Capability {
+	return contract.Capability{
+		ID:      CapabilityOverview,
+		Version: contract.Version{Major: 1},
+		Summary: "test double for symbol.overview",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "file", Type: contract.TypeString, Required: true},
+			{Name: "depth", Type: contract.TypeInt, Required: false},
+		},
+		Outputs: []contract.Field{
+			{
+				Name: "symbols", Type: contract.TypeRecordList, Required: true,
+				Fields: []contract.Field{
+					{Name: "name", Type: contract.TypeString, Required: true},
+					{Name: "kind", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+					{Name: "column", Type: contract.TypeInt, Required: true},
+					{Name: "end_line", Type: contract.TypeInt, Required: false},
+					{Name: "parent", Type: contract.TypeString, Required: false},
+				},
+			},
+		},
+	}
+}
+
 func statusCapability() contract.Capability {
 	return contract.Capability{
 		ID:      CapabilityGraphStatus,
@@ -241,6 +328,12 @@ func statusCapability() contract.Capability {
 
 func capabilityFor(id string) contract.Capability {
 	switch id {
+	case CapabilityDefinition:
+		return definitionCapability()
+	case CapabilityReferences:
+		return referencesCapability()
+	case CapabilityOverview:
+		return overviewCapability()
 	case CapabilityConsumers:
 		return consumersCapability()
 	case CapabilityGet:
@@ -256,6 +349,12 @@ func capabilityFor(id string) contract.Capability {
 
 func implFor(capabilityID string) string {
 	switch capabilityID {
+	case CapabilityDefinition:
+		return ImplDefinition
+	case CapabilityReferences:
+		return ImplReferences
+	case CapabilityOverview:
+		return ImplOverview
 	case CapabilityConsumers:
 		return ImplConsumers
 	case CapabilityGet:
@@ -371,7 +470,10 @@ func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 		t.Errorf("Serves(%q) = true, want false: not in the declared set", ImplConsumers)
 	}
 	caps := runner.Capabilities()
-	for _, want := range []string{CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus} {
+	for _, want := range []string{
+		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
+		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+	} {
 		if !slicesContain(caps, want) {
 			t.Errorf("Capabilities() = %v, missing %q", caps, want)
 		}
@@ -426,7 +528,10 @@ func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 // --- the empty-graph guard: the headline behavior ---------------------------
 
 func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
-	capabilities := []string{CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus}
+	capabilities := []string{
+		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
+		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+	}
 	for _, capabilityID := range capabilities {
 		t.Run(capabilityID, func(t *testing.T) {
 			repo := testRepo(t)
@@ -442,8 +547,10 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 
 			var payload map[string]any
 			switch capabilityID {
-			case CapabilityConsumers:
+			case CapabilityDefinition, CapabilityReferences, CapabilityConsumers:
 				payload = map[string]any{"file": "a.go", "line": 1, "column": 1}
+			case CapabilityOverview:
+				payload = map[string]any{"file": "a.go"}
 			case CapabilityGet:
 				payload = map[string]any{"stable_key": "go:pkg#Foo"}
 			default:
@@ -454,7 +561,7 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 			if got := contract.KindOf(err); got != contract.FailureUnavailable {
 				t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureUnavailable, err)
 			}
-			for _, tool := range []string{toolConsumers, toolGet, toolUnresolved, toolOutline} {
+			for _, tool := range []string{toolConsumers, toolReferences, toolGet, toolUnresolved, toolOutline} {
 				if calls := fake.callsTo(tool); len(calls) > 0 {
 					t.Errorf("%s was called %d time(s) despite the empty-graph guard", tool, len(calls))
 				}
@@ -840,5 +947,408 @@ func TestRunConsumersRefusesAnUnknownResolutionValue(t *testing.T) {
 	}
 	if calls := fake.callsTo(toolOutline); len(calls) > 0 {
 		t.Errorf("get_file_outline was called despite an invalid resolution value")
+	}
+}
+
+// --- symbol.definition -------------------------------------------------
+
+// outlineWith builds a get_file_outline answer in kivgraph 0.2.1's own
+// measured shape: results.files[].symbols[], no stable_key, no column.
+func outlineWith(repo, file string, rows ...map[string]any) string {
+	body, err := json.Marshal(map[string]any{
+		"truncated": false,
+		"results": map[string]any{
+			"repository": repo,
+			"path":       file,
+			"files":      []map[string]any{{"path": file, "symbols": rows}},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
+func TestRunDefinitionAnswersFromTheDeclarationContainingThePosition(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	// The position asked about is line 15, inside Client.Get's 12-20 span:
+	// the definition is the declaration's own start line, not the position.
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "Client", "kind": "struct", "start_line": 5, "end_line": 9},
+		map[string]any{"name": "Get", "kind": "method", "qualified_name": "Client.Get", "start_line": 12, "end_line": 20},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityDefinition, map[string]any{"file": "client.go", "line": 15, "column": 3})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	location, ok := outcome.Result["location"].(map[string]any)
+	if !ok {
+		t.Fatalf("location = %#v, want a record", outcome.Result["location"])
+	}
+	if got := location["path"]; got != "client.go" {
+		t.Errorf("path = %v, want client.go", got)
+	}
+	if got := location["line"]; got != 12 {
+		t.Errorf("line = %v, want 12 (the declaration's start, not the position asked about)", got)
+	}
+	if _, present := location["snippet"]; present {
+		t.Errorf("snippet present without include_snippet: %v", location["snippet"])
+	}
+	// No stable_key hop: a declaration is already the definition.
+	if calls := fake.callsTo(toolGet); len(calls) > 0 {
+		t.Errorf("%s was called %d time(s); symbol.definition needs no stable key", toolGet, len(calls))
+	}
+}
+
+func TestRunDefinitionReadsTheSnippetOffDiskWhenAskedFor(t *testing.T) {
+	repo := testRepo(t)
+	source := "package main\n\nfunc Answer() int {\n\treturn 42\n}\n"
+	if err := os.WriteFile(filepath.Join(repo.Path, "main.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "main.go",
+		map[string]any{"name": "Answer", "kind": "func", "start_line": 3, "end_line": 5},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityDefinition, map[string]any{
+		"file": "main.go", "line": 3, "column": 6,
+		"include_snippet": true, "snippet_lines": 2,
+	})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	location := outcome.Result["location"].(map[string]any)
+	want := "func Answer() int {\n\treturn 42"
+	if got := location["snippet"]; got != want {
+		t.Errorf("snippet = %q, want %q", got, want)
+	}
+}
+
+func TestRunDefinitionRefusesAPositionInsideNoDeclaration(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "Get", "kind": "method", "qualified_name": "Client.Get", "start_line": 12, "end_line": 20},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	// Line 3 is inside nothing: a question with no subject, never a
+	// definition at line 0 nor an empty answer.
+	req := request(t, repo, CapabilityDefinition, map[string]any{"file": "client.go", "line": 3, "column": 1})
+	_, err := runner.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureNotFound, err)
+	}
+}
+
+// --- symbol.references -------------------------------------------------
+
+// referencesAnswerJSON builds find_references' measured envelope:
+// results.references[], each row carrying its own repository and file_path.
+func referencesAnswerJSON(truncated bool, rows ...map[string]any) string {
+	body, err := json.Marshal(map[string]any{
+		"truncated":   truncated,
+		"next_cursor": "",
+		"results": map[string]any{
+			"direction":  "incoming",
+			"references": rows,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
+func TestRunReferencesAddressesFindReferencesByQualifiedNameWithoutAStableKey(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "Get", "kind": "method", "qualified_name": "Client.Get", "start_line": 12, "end_line": 20},
+	), false)
+	fake.on(toolReferences, referencesAnswerJSON(false,
+		map[string]any{"name": "Handler", "repository": "current", "file_path": "http/handler.go", "start_line": 44},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityReferences, map[string]any{"file": "client.go", "line": 15, "column": 3})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	calls := fake.callsTo(toolReferences)
+	if len(calls) != 1 {
+		t.Fatalf("%s called %d time(s), want 1", toolReferences, len(calls))
+	}
+	if got := calls[0]["qualified_name"]; got != "Client.Get" {
+		t.Errorf("qualified_name = %v, want Client.Get", got)
+	}
+	if got := calls[0]["repository"]; got != "current" {
+		t.Errorf("repository = %v, want current", got)
+	}
+	if _, sent := calls[0]["stable_key"]; sent {
+		t.Errorf("stable_key was sent: this tool is addressable by qualified name, and the extra hop is not paid")
+	}
+	if calls := fake.callsTo(toolGet); len(calls) > 0 {
+		t.Errorf("%s was called %d time(s); no stable key is needed here", toolGet, len(calls))
+	}
+	locations, ok := outcome.Result["locations"].([]any)
+	if !ok || len(locations) != 1 {
+		t.Fatalf("locations = %#v, want one row", outcome.Result["locations"])
+	}
+	row := locations[0].(map[string]any)
+	if row["path"] != "http/handler.go" || row["line"] != 44 {
+		t.Errorf("row = %#v, want http/handler.go:44", row)
+	}
+}
+
+func TestRunReferencesDropsForeignRepositoriesAndCollapsesRepeatedSites(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "NewClient", "kind": "func", "start_line": 21, "end_line": 30},
+	), false)
+	// Measured against the real server: two calls inside one function come
+	// back as two rows naming that function's own declaration line, and a
+	// consumer in another repository comes back with its own repository set.
+	fake.on(toolReferences, referencesAnswerJSON(false,
+		map[string]any{"name": "NewAdapter", "repository": "current", "file_path": "redis/adapter.go", "start_line": 37},
+		map[string]any{"name": "NewAdapter", "repository": "current", "file_path": "redis/adapter.go", "start_line": 37},
+		map[string]any{"name": "Boot", "repository": "other-repo", "file_path": "cmd/main.go", "start_line": 9},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityReferences, map[string]any{"file": "client.go", "line": 21, "column": 6})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	locations := outcome.Result["locations"].([]any)
+	if len(locations) != 1 {
+		t.Fatalf("locations = %#v, want exactly one: the duplicate collapsed and the foreign row dropped", locations)
+	}
+	if row := locations[0].(map[string]any); row["path"] != "redis/adapter.go" {
+		t.Errorf("row = %#v, want the local one", row)
+	}
+	// Neither narrowing is silent: both travel back as discoveries.
+	var foreign, collapsed bool
+	for _, d := range outcome.Discoveries {
+		if strings.Contains(d.Note, "other repositories") {
+			foreign = true
+		}
+		if strings.Contains(d.Note, "already listed") {
+			collapsed = true
+		}
+	}
+	if !foreign {
+		t.Errorf("dropped a cross-repository reference without saying so: %+v", outcome.Discoveries)
+	}
+	if !collapsed {
+		t.Errorf("collapsed a repeated site without saying so: %+v", outcome.Discoveries)
+	}
+}
+
+func TestRunReferencesNarrowsToTheDeclaredScope(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "NewClient", "kind": "func", "start_line": 21, "end_line": 30},
+	), false)
+	fake.on(toolReferences, referencesAnswerJSON(false,
+		map[string]any{"repository": "current", "file_path": "redis/adapter.go", "start_line": 37},
+		map[string]any{"repository": "current", "file_path": "cmd/tool/main.go", "start_line": 12},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityReferences, map[string]any{
+		"file": "client.go", "line": 21, "column": 6,
+		"scope": []any{"redis"},
+	})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	locations := outcome.Result["locations"].([]any)
+	if len(locations) != 1 {
+		t.Fatalf("locations = %#v, want only the row under redis/", locations)
+	}
+	if row := locations[0].(map[string]any); row["path"] != "redis/adapter.go" {
+		t.Errorf("row = %#v, want redis/adapter.go", row)
+	}
+}
+
+// --- symbol.overview ---------------------------------------------------
+
+func TestRunOverviewRecoversTheColumnFromDiskAndTheParentFromTheQualifiedName(t *testing.T) {
+	repo := testRepo(t)
+	// Line 3 puts Get at column 18, which no kivgraph row ever reports.
+	source := "package redis\n\n" + "func (c *Client) Get(k string) error {\n\treturn nil\n}\n"
+	if err := os.WriteFile(filepath.Join(repo.Path, "client.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "client.go",
+		map[string]any{"name": "Get", "kind": "method", "qualified_name": "Client.Get", "start_line": 3, "end_line": 5},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityOverview, map[string]any{"file": "client.go"})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	symbols := outcome.Result["symbols"].([]any)
+	if len(symbols) != 1 {
+		t.Fatalf("symbols = %#v, want one row", symbols)
+	}
+	row := symbols[0].(map[string]any)
+	if got := row["column"]; got != 18 {
+		t.Errorf("column = %v, want 18 (where the name starts on line 3)", got)
+	}
+	if got := row["parent"]; got != "Client" {
+		t.Errorf("parent = %v, want Client (read off qualified_name, not guessed from spans)", got)
+	}
+	if got := row["end_line"]; got != 5 {
+		t.Errorf("end_line = %v, want 5", got)
+	}
+}
+
+func TestRunOverviewFallsBackToColumnOneAndSaysSoWhenTheFileIsMissing(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", "gone.go",
+		map[string]any{"name": "Answer", "kind": "func", "start_line": 3, "end_line": 3},
+	), false)
+	runner := newTestRunner(t, sess)
+
+	req := request(t, repo, CapabilityOverview, map[string]any{"file": "gone.go"})
+	outcome, err := runner.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	row := outcome.Result["symbols"].([]any)[0].(map[string]any)
+	if got := row["column"]; got != 1 {
+		t.Errorf("column = %v, want the fallback 1", got)
+	}
+	// A one-line declaration repeats nothing: end_line stays absent.
+	if _, present := row["end_line"]; present {
+		t.Errorf("end_line present for a single-line declaration: %v", row["end_line"])
+	}
+	var said bool
+	for _, d := range outcome.Discoveries {
+		if strings.Contains(d.Note, "falls back to 1") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("fell back to column 1 without saying so: %+v", outcome.Discoveries)
+	}
+}
+
+func TestRunOverviewAsksForMembersOnlyWhenDepthIsAboveZero(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    bool
+	}{
+		{name: "depth absent", payload: map[string]any{"file": "client.go"}, want: false},
+		{name: "depth zero", payload: map[string]any{"file": "client.go", "depth": 0}, want: false},
+		{name: "depth one", payload: map[string]any{"file": "client.go", "depth": 1}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := testRepo(t)
+			fake, sess := newFakeKivgraph(t)
+			fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+			fake.on(toolOutline, outlineWith("current", "client.go",
+				map[string]any{"name": "Client", "kind": "struct", "start_line": 5, "end_line": 9},
+			), false)
+			runner := newTestRunner(t, sess)
+
+			if _, err := runner.Run(context.Background(), request(t, repo, CapabilityOverview, tc.payload)); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			calls := fake.callsTo(toolOutline)
+			if len(calls) != 1 {
+				t.Fatalf("%s called %d time(s), want 1", toolOutline, len(calls))
+			}
+			_, sent := calls[0]["include_members"]
+			if sent != tc.want {
+				t.Errorf("include_members sent = %v, want %v", sent, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunOverviewRefusesASensitiveFileOutLoud(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	runner, err := New(Options{
+		Sensitive: []string{".env", "*.pem"},
+		Session:   func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := request(t, repo, CapabilityOverview, map[string]any{"file": "config/prod.pem"})
+	_, err = runner.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailurePermissionDenied, err)
+	}
+	// Refused before the graph was ever asked: nothing to leak, nothing spent.
+	if calls := fake.callsTo(toolOutline); len(calls) > 0 {
+		t.Errorf("%s was called for a sensitive file", toolOutline)
+	}
+}
+
+func TestRunDefinitionRefusesASnippetFromASensitiveFile(t *testing.T) {
+	repo := testRepo(t)
+	if err := os.WriteFile(filepath.Join(repo.Path, ".env"), []byte("TOKEN=shh\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolOutline, outlineWith("current", ".env",
+		map[string]any{"name": "TOKEN", "kind": "const", "start_line": 1, "end_line": 1},
+	), false)
+	runner, err := New(Options{
+		Sensitive: []string{".env"},
+		Session:   func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := request(t, repo, CapabilityDefinition, map[string]any{
+		"file": ".env", "line": 1, "column": 1, "include_snippet": true,
+	})
+	_, err = runner.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want %v (err=%v): a requested snippet is refused, never silently dropped", got, contract.FailurePermissionDenied, err)
+	}
+}
+
+func TestWithinRefusesAPathThatEscapesTheRepository(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"../outside.go", "/etc/passwd", "sub/../../outside.go"} {
+		if _, err := within(root, name); contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("within(%q) kind = %v, want %v", name, contract.KindOf(err), contract.FailureInvalidInput)
+		}
 	}
 }

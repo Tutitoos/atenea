@@ -552,6 +552,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 	}
 	runner, err := kivgraph.New(kivgraph.Options{
 		Implementations: cfg.Orchestrator.Kivgraph.Implementations,
+		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         cfg.Orchestrator.Kivgraph.Timeout,
 		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
 			return procs.Session(config.RunnerKivgraph)

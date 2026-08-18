@@ -134,12 +134,16 @@
 package kivgraph
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -153,11 +157,17 @@ import (
 // capability is the "what" and an implementation is the "who": another
 // provider may answer the same four capabilities tomorrow.
 const (
+	CapabilityDefinition  = "symbol.definition"
+	CapabilityReferences  = "symbol.references"
+	CapabilityOverview    = "symbol.overview"
 	CapabilityConsumers   = "symbol.consumers"
 	CapabilityGet         = "symbol.get"
 	CapabilityUnresolved  = "symbol.unresolved"
 	CapabilityGraphStatus = "graph.status"
 
+	ImplDefinition = "kivgraph.definition"
+	ImplReferences = "kivgraph.references"
+	ImplOverview   = "kivgraph.overview"
 	ImplConsumers  = "kivgraph.cross_repo_consumers"
 	ImplGet        = "kivgraph.get"
 	ImplUnresolved = "kivgraph.unresolved_references"
@@ -170,11 +180,21 @@ const (
 // the stable_key find_cross_repo_consumers actually requires.
 const (
 	toolConsumers  = "find_cross_repo_consumers"
+	toolReferences = "find_references"
 	toolGet        = "get_symbol"
 	toolUnresolved = "get_unresolved_references"
 	toolStatus     = "graph_status"
 	toolOutline    = "get_file_outline"
 )
+
+// maxSnippetBytes caps a file read for a snippet or a column. A minified
+// bundle or a checked-in blob is not something to pull into memory whole to
+// answer where a name starts on one line.
+const maxSnippetBytes = 1 << 20
+
+// defaultSnippetLines is the window read when a caller asks for a snippet
+// without saying how much. Small on purpose, as the declaration says.
+const defaultSnippetLines = 3
 
 // repositoryKeyPrefix is how kivgraph addresses a repository inside a key
 // such as consumer_repository_key. There is no bare-name field beside it, so
@@ -193,13 +213,18 @@ const DefaultTimeout = 90 * time.Second
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplConsumers, ImplGet, ImplUnresolved, ImplStatus}
+	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplUnresolved, ImplStatus}
 }
 
 // Options configure the adapter.
 type Options struct {
 	// Implementations the adapter answers for.
 	Implementations []string
+	// Sensitive holds the path patterns that carry secrets. kivgraph's own
+	// wire never carries file contents, so this only guards the one thing
+	// this adapter reads off the local disk: the line a snippet or a column
+	// comes from (see snippetAt and columnOf).
+	Sensitive []string
 	// Timeout caps one call.
 	Timeout time.Duration
 	// Session returns the live MCP session for the supervised kivgraph
@@ -213,6 +238,7 @@ type Options struct {
 // Runner is the kivgraph far side of contract.Runner.
 type Runner struct {
 	implementations []string
+	sensitive       []string
 	timeout         time.Duration
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
 }
@@ -231,6 +257,14 @@ func New(opts Options) (*Runner, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"kivgraph adapter: timeout must not be negative, got %s", timeout)
 	}
+	// A pattern that cannot compile is refused here rather than silently
+	// matching nothing at the one moment it was supposed to protect a file.
+	for _, pattern := range opts.Sensitive {
+		if _, err := path.Match(pattern, "probe"); err != nil {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"kivgraph adapter: sensitive pattern %q: %v", pattern, err)
+		}
+	}
 	impls := slices.Clone(opts.Implementations)
 	if impls == nil {
 		impls = DefaultImplementations()
@@ -238,6 +272,7 @@ func New(opts Options) (*Runner, error) {
 	slices.Sort(impls)
 	return &Runner{
 		implementations: impls,
+		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
 		session:         opts.Session,
 	}, nil
@@ -259,7 +294,10 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // settings file naming an implementation it has no case for is refused at
 // load rather than at the call.
 func (r *Runner) Capabilities() []string {
-	return []string{CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus}
+	return []string{
+		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
+		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+	}
 }
 
 // Run executes one step.
@@ -301,6 +339,12 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	var result map[string]any
 	var notes []string
 	switch req.Capability.ID {
+	case CapabilityDefinition:
+		result, notes, err = r.runDefinition(call, sess, status, req)
+	case CapabilityReferences:
+		result, notes, err = r.runReferences(call, sess, status, req)
+	case CapabilityOverview:
+		result, notes, err = r.runOverview(call, sess, status, req)
 	case CapabilityConsumers:
 		result, notes, err = r.runConsumers(call, sess, status, req)
 	case CapabilityGet:
@@ -621,18 +665,9 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 			"kivgraph symbol.consumers: resolution %q is not one of %s", resolution, strings.Join(consumerResolutions, ", "))
 	}
 
-	root, err := filepath.Abs(req.Repository.Path)
+	kivgraphRepo, _, err := r.repositoryNaming(status, req)
 	if err != nil {
-		return nil, nil, contract.Fail(contract.FailureInvalidInput,
-			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
-	}
-	// get_file_outline is addressed in kivgraph's own vocabulary, not
-	// atenea's repository id: the shared guard already matched root against
-	// repository_freshness to reach this dispatch, so that entry's own Name
-	// is reused here rather than assuming the two ids happen to agree.
-	kivgraphRepo := req.Repository.ID
-	if fresh, ok := findRepositoryFreshness(status.RepositoryFreshness, root); ok && fresh.Name != "" {
-		kivgraphRepo = fresh.Name
+		return nil, nil, err
 	}
 
 	stableKey, notes, err := r.resolvePosition(ctx, sess, kivgraphRepo, file, line, name)
@@ -681,6 +716,358 @@ func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, statu
 	return result, notes, nil
 }
 
+// repositoryNaming answers a repository in kivgraph's own vocabulary and in
+// the filesystem's, which are two different names for one repository and both
+// needed on every position-first call: the tools are addressed by kivgraph's
+// name, and a snippet is read from the absolute root.
+//
+// The shared guard already matched that root against repository_freshness to
+// reach any dispatch, so the matching entry's own Name is reused rather than
+// assuming atenea's repository id and kivgraph's happen to agree.
+func (r *Runner) repositoryNaming(status *statusResult, req contract.RunRequest) (name, root string, err error) {
+	root, err = filepath.Abs(req.Repository.Path)
+	if err != nil {
+		return "", "", contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
+	}
+	name = req.Repository.ID
+	if fresh, ok := findRepositoryFreshness(status.RepositoryFreshness, root); ok && fresh.Name != "" {
+		name = fresh.Name
+	}
+	return name, root, nil
+}
+
+// runDefinition answers symbol.definition.
+//
+// kivgraph needs no "go to definition" tool and has none: its graph is a
+// graph of DECLARATIONS, so the declaration a position falls inside of
+// already IS the definition. This is the same span walk symbol.consumers
+// pays (resolveDeclaration), stopping one hop earlier because no stable_key
+// is wanted here -- and deliberately not find_symbol, which searches by
+// name, while on this capability a name is a hint and never the subject.
+func (r *Runner) runDefinition(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+	req contract.RunRequest) (map[string]any, []string, error) {
+
+	file, ok := stringAt(req.Payload, "file")
+	if !ok || file == "" {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.definition: file is required")
+	}
+	line, ok := intAt(req.Payload, "line")
+	if !ok {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.definition: line is required")
+	}
+	// column arrives required -- req.Validate() enforced it before Run
+	// dispatched -- and stays unread for the same reason as in
+	// symbol.consumers: an outline declaration carries [start_line,
+	// end_line] and no column at all.
+	name, _ := stringAt(req.Payload, "name")
+
+	kivgraphRepo, root, err := r.repositoryNaming(status, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	decl, notes, err := r.resolveDeclaration(ctx, sess, CapabilityDefinition, kivgraphRepo, file, line, name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The definition is in the file that was asked about: the outline this
+	// resolved against is that one file's own, so the declared path is the
+	// caller's path and never a second guess at one.
+	location := map[string]any{"path": file, "line": decl.StartLine}
+	if boolAt(req.Payload, "include_snippet") {
+		snippet, err := r.snippetAt(root, file, decl.StartLine, snippetWindow(req.Payload))
+		if err != nil {
+			return nil, nil, err
+		}
+		if snippet != "" {
+			location["snippet"] = snippet
+		}
+	}
+	result := map[string]any{"location": location}
+	if err := req.Capability.ValidateOutput(result); err != nil {
+		return nil, nil, err
+	}
+
+	notes = append(notes, fmt.Sprintf("kivgraph resolved %s:%d to %s (%s) at line %d in %s",
+		file, line, decl.Name, decl.Kind, decl.StartLine, kivgraphRepo))
+	return result, notes, nil
+}
+
+// referenceRecord is one row of find_references' own "references", measured
+// live against kivgraph 0.2.1: name, qualified_name, kind, repository,
+// file_path, start_line, end_line, language, edge_kind, confidence,
+// provenance. Only the three fields the capability can honestly project are
+// decoded, plus the repository each row carries -- which is load-bearing, see
+// runReferences.
+type referenceRecord struct {
+	Name       string `json:"name"`
+	Repository string `json:"repository"`
+	FilePath   string `json:"file_path"`
+	StartLine  int    `json:"start_line"`
+}
+
+// referencesAnswer is find_references' envelope. Unlike its neighbours the
+// rows do not hang off "results" directly: results is an object carrying the
+// subject it resolved, the direction it walked and the rows themselves --
+// measured, not assumed, and decoding it as a bare list fails on the wire.
+type referencesAnswer struct {
+	Truncated  bool   `json:"truncated"`
+	NextCursor string `json:"next_cursor"`
+	Results    struct {
+		References []referenceRecord `json:"references"`
+	} `json:"results"`
+}
+
+// runReferences answers symbol.references.
+//
+// find_references is addressable by repository, path and qualified_name --
+// measured -- so unlike symbol.consumers this pays no stable_key hop: the
+// declaration resolved from the position carries the qualified name the tool
+// wants, and a package-level declaration whose qualified_name kivgraph 0.2.1
+// leaves empty is addressed by its bare name, which that same tool accepts
+// (measured: NewClient in api-db-go).
+//
+// Two narrowings happen client-side, and both are honesty rather than taste:
+//
+//   - Rows from OTHER repositories are dropped. The declared output is a
+//     path and a line and has no repository field, so emitting a foreign
+//     row would report a path relative to a root the caller never named --
+//     a location pointing at the wrong file, in the one field callers act
+//     on. How many were dropped travels back as a discovery, and the
+//     capability for that question is symbol.consumers.
+//   - Identical path/line rows are collapsed. kivgraph reports one row per
+//     graph EDGE, so two calls to the same symbol inside one function come
+//     back as two rows naming that function's own declaration line: true on
+//     the wire, indistinguishable in an output whose fields are path and
+//     line. The collapsed count is reported rather than silently lost.
+func (r *Runner) runReferences(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+	req contract.RunRequest) (map[string]any, []string, error) {
+
+	file, ok := stringAt(req.Payload, "file")
+	if !ok || file == "" {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.references: file is required")
+	}
+	line, ok := intAt(req.Payload, "line")
+	if !ok {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.references: line is required")
+	}
+	name, _ := stringAt(req.Payload, "name")
+	scope := scopeEntries(req.Payload)
+	wantSnippet := boolAt(req.Payload, "include_snippet")
+
+	kivgraphRepo, root, err := r.repositoryNaming(status, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	decl, notes, err := r.resolveDeclaration(ctx, sess, CapabilityReferences, kivgraphRepo, file, line, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	subject := decl.QualifiedName
+	if subject == "" {
+		subject = decl.Name
+	}
+
+	text, err := sess.Call(ctx, toolReferences, map[string]any{
+		"repository":     kivgraphRepo,
+		"path":           file,
+		"qualified_name": subject,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var answer referencesAnswer
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolReferences, err)
+	}
+
+	type site struct {
+		path string
+		line int
+	}
+	seen := map[site]struct{}{}
+	records := []any{}
+	foreign, collapsed, outOfScope := 0, 0, 0
+	for _, row := range answer.Results.References {
+		if row.Repository != "" && row.Repository != kivgraphRepo {
+			foreign++
+			continue
+		}
+		relative := filepath.ToSlash(path.Clean(row.FilePath))
+		if relative == "" || relative == "." || row.StartLine <= 0 {
+			continue
+		}
+		if !inScope(relative, scope) {
+			outOfScope++
+			continue
+		}
+		key := site{path: relative, line: row.StartLine}
+		if _, already := seen[key]; already {
+			collapsed++
+			continue
+		}
+		seen[key] = struct{}{}
+		record := map[string]any{"path": relative, "line": row.StartLine}
+		if wantSnippet {
+			snippet, err := r.snippetAt(root, relative, row.StartLine, snippetWindow(req.Payload))
+			if err != nil {
+				return nil, nil, err
+			}
+			if snippet != "" {
+				record["snippet"] = snippet
+			}
+		}
+		records = append(records, record)
+	}
+
+	result := map[string]any{"locations": records}
+	if err := req.Capability.ValidateOutput(result); err != nil {
+		return nil, nil, err
+	}
+
+	notes = append(notes, fmt.Sprintf("kivgraph answered symbol.references for %s in %s with %d site(s)",
+		subject, kivgraphRepo, len(records)))
+	if foreign > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"%d reference(s) live in other repositories and are not reported here: this output's paths are relative to %s, ask symbol.consumers for those",
+			foreign, req.Repository.ID))
+	}
+	if collapsed > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"%d further graph edge(s) landed on a path and line already listed -- several uses inside one declaration",
+			collapsed))
+	}
+	if outOfScope > 0 {
+		notes = append(notes, fmt.Sprintf("%d reference(s) fell outside the declared scope", outOfScope))
+	}
+	if answer.Truncated {
+		notes = append(notes, fmt.Sprintf(
+			"kivgraph truncated this answer; more references exist past cursor %q", answer.NextCursor))
+	}
+	return result, notes, nil
+}
+
+// runOverview answers symbol.overview straight from get_file_outline, which
+// is the one tool here whose whole job already is "what does this file
+// declare".
+//
+// Two facts about that wire shape the answer, both measured:
+//
+//   - There is no column on an outline row, so it is recovered from the file
+//     exactly the way the capability's own declaration says it is: by finding
+//     the symbol's name as a whole word on the line the provider reported
+//     (columnOf), with column 1 the honest fallback.
+//   - kivgraph reports a method at the file's own top level and names it
+//     "Client.Get" in qualified_name, so parent is read off that name rather
+//     than guessed from overlapping spans, and depth 0 does not drop methods:
+//     they are what this provider considers the file's top level. depth above
+//     0 asks include_members, which is where a struct's fields come from.
+func (r *Runner) runOverview(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+	req contract.RunRequest) (map[string]any, []string, error) {
+
+	file, ok := stringAt(req.Payload, "file")
+	if !ok || file == "" {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.overview: file is required")
+	}
+	relative := filepath.ToSlash(path.Clean(file))
+	// Refused outright, not answered with column 1: this capability reads the
+	// file on every call to recover a required output field, so a sensitive
+	// file is a read this adapter declines out loud -- the same refusal the
+	// other providers of symbol.overview make.
+	if r.isSensitive(relative) {
+		return nil, nil, contract.Fail(contract.FailurePermissionDenied,
+			"kivgraph symbol.overview: %s carries secrets: this adapter never reads it", relative)
+	}
+	depth, _ := intAt(req.Payload, "depth")
+	if depth < 0 {
+		return nil, nil, contract.Fail(contract.FailureInvalidInput,
+			"kivgraph symbol.overview: depth must not be negative, got %d", depth)
+	}
+
+	kivgraphRepo, root, err := r.repositoryNaming(status, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	args := map[string]any{"repository": kivgraphRepo, "path": relative}
+	if depth > 0 {
+		args["include_members"] = true
+	}
+	text, err := sess.Call(ctx, toolOutline, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	var answer outlineAnswer
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolOutline, err)
+	}
+
+	// Read once for every row's column, not once per row.
+	lines := readLines(filepath.Join(root, filepath.FromSlash(relative)))
+	symbols := []any{}
+	for _, decl := range answer.declarations() {
+		if decl.Name == "" || decl.StartLine <= 0 {
+			continue
+		}
+		record := map[string]any{
+			"name":   decl.Name,
+			"kind":   decl.Kind,
+			"line":   decl.StartLine,
+			"column": columnOf(lines, decl.StartLine, decl.Name),
+		}
+		// end_line only when it says something line does not.
+		if decl.EndLine > decl.StartLine {
+			record["end_line"] = decl.EndLine
+		}
+		if parent, ok := parentOf(decl); ok {
+			record["parent"] = parent
+		}
+		symbols = append(symbols, record)
+	}
+
+	result := map[string]any{"symbols": symbols}
+	if err := req.Capability.ValidateOutput(result); err != nil {
+		return nil, nil, err
+	}
+
+	notes := []string{fmt.Sprintf("kivgraph: %s declares %d symbol(s) in %s",
+		relative, len(symbols), kivgraphRepo)}
+	if lines == nil {
+		notes = append(notes, fmt.Sprintf(
+			"%s could not be read from disk, so every column falls back to 1; the lines are the graph's own", relative))
+	}
+	if answer.Truncated {
+		notes = append(notes, fmt.Sprintf(
+			"kivgraph truncated this outline; more declarations exist past cursor %q", answer.NextCursor))
+	}
+	return result, notes, nil
+}
+
+// parentOf reads the enclosing declaration's name off a qualified name.
+// kivgraph writes a method as "Client.Get", so the prefix before the row's
+// own name is its parent -- and a qualified name that is merely the bare name
+// repeated (what 0.2.1 writes for a package-level declaration) names no
+// parent at all.
+func parentOf(decl outlineDeclaration) (string, bool) {
+	if decl.QualifiedName == "" || decl.QualifiedName == decl.Name {
+		return "", false
+	}
+	suffix := "." + decl.Name
+	if !strings.HasSuffix(decl.QualifiedName, suffix) {
+		return "", false
+	}
+	parent := strings.TrimSuffix(decl.QualifiedName, suffix)
+	if parent == "" {
+		return "", false
+	}
+	// Only the innermost enclosing name, never the whole path to it: the
+	// declared field is the enclosing symbol's name.
+	if at := strings.LastIndex(parent, "."); at >= 0 {
+		parent = parent[at+1:]
+	}
+	return parent, parent != ""
+}
+
 // outlineDeclaration is one row of get_file_outline: a declaration's span
 // and the stable_key that names it, measured live against ladygraph v0.5.1.
 type outlineDeclaration struct {
@@ -709,7 +1096,13 @@ type outlineDeclaration struct {
 // cleanly into nothing, and an empty outline reports every position as
 // naming no declaration: a wrong answer that looks like a resolved one.
 type outlineAnswer struct {
-	Results struct {
+	// truncated and next_cursor sit beside results, not inside it, on the
+	// same envelope every other tool here uses. symbol.overview reports
+	// them: an outline cut short would otherwise read as a file that simply
+	// declares less than it does.
+	Truncated  bool   `json:"truncated"`
+	NextCursor string `json:"next_cursor"`
+	Results    struct {
 		Symbols []outlineDeclaration `json:"symbols"`
 		Files   []struct {
 			Symbols []outlineDeclaration `json:"symbols"`
@@ -730,16 +1123,23 @@ func (a outlineAnswer) declarations() []outlineDeclaration {
 	return out
 }
 
-// resolvePosition is the detour symbol.consumers pays that no other
-// capability here does -- see the package doc comment for why the
-// capability's own shape stays position-first rather than exposing
-// stable_key as input.
+// resolveDeclaration turns a position into the declaration containing it, by
+// walking one file's outline. It is the shared half of what symbol.consumers
+// used to do alone: symbol.definition answers from the declaration itself,
+// symbol.references addresses find_references by its qualified name, and
+// symbol.consumers goes one hop further for a stable_key (resolvePosition).
 //
-// Never cached: a stable_key is only stable within the generation that
-// minted it, and answering confidently from a key resolved against a
-// generation the graph has since rotated past is exactly the failure this
-// whole provider was measured against, so every call pays this again.
-func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, repository, file string, line int, name string) (string, []string, error) {
+// Never cached, for any caller: an outline is only true of the generation
+// that produced it, and answering confidently from a resolution the graph
+// has since rotated past is exactly the failure this whole provider was
+// measured against, so every call pays this again.
+//
+// capability names the caller in every refusal. It is passed rather than
+// inferred because the same wrong answer -- "this position names no
+// declaration" -- has to be readable as the question that asked it.
+func (r *Runner) resolveDeclaration(ctx context.Context, sess *mcpstdio.Session,
+	capability, repository, file string, line int, name string) (outlineDeclaration, []string, error) {
+
 	text, err := sess.Call(ctx, toolOutline, map[string]any{"repository": repository, "path": file})
 	if err != nil {
 		// The extra call is not free and must not be invisible: a failure
@@ -749,13 +1149,13 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 		// left for failureFor's NOT_FOUND sniffing, which would misread
 		// kivgraph refusing to produce an outline at all as a resolved
 		// "not found".
-		return "", nil, contract.Fail(contract.FailureUnavailable,
-			"kivgraph symbol.consumers: could not read %s's outline to resolve %s:%d: %v", repository, file, line, err)
+		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
+			"kivgraph %s: could not read %s's outline to resolve %s:%d: %v", capability, repository, file, line, err)
 	}
 	var answer outlineAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return "", nil, contract.Fail(contract.FailureUnavailable,
-			"kivgraph symbol.consumers: unreadable outline for %s: %v", file, err)
+		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
+			"kivgraph %s: unreadable outline for %s: %v", capability, file, err)
 	}
 
 	var candidates []outlineDeclaration
@@ -766,11 +1166,11 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 	}
 	if len(candidates) == 0 {
 		// A position that names no declaration is a question with no
-		// subject, not a symbol with no consumers: an empty consumers list
-		// would claim this position was searched and answered, when nothing
-		// in the outline ever matched it.
-		return "", nil, contract.Fail(contract.FailureNotFound,
-			"kivgraph symbol.consumers: %s:%d names no declaration in %s's outline", file, line, repository)
+		// subject, not a symbol with no answer: an empty list would claim
+		// this position was searched and answered, when nothing in the
+		// outline ever matched it.
+		return outlineDeclaration{}, nil, contract.Fail(contract.FailureNotFound,
+			"kivgraph %s: %s:%d names no declaration in %s's outline", capability, file, line, repository)
 	}
 
 	// name, when it disambiguates outright, wins over span alone: kivgraph
@@ -786,13 +1186,11 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 		}
 		for _, decl := range byName {
 			if decl.QualifiedName == name {
-				key, err := r.stableKeyOf(ctx, sess, repository, file, decl)
-				return key, nil, err
+				return decl, nil, nil
 			}
 		}
 		if len(byName) == 1 {
-			key, err := r.stableKeyOf(ctx, sess, repository, file, byName[0])
-			return key, nil, err
+			return byName[0], nil, nil
 		}
 		if len(byName) > 0 {
 			candidates = byName
@@ -825,7 +1223,23 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 				file, line, len(candidates), innermost.Name, strings.Join(passedOver, ", ")))
 		}
 	}
-	key, err := r.stableKeyOf(ctx, sess, repository, file, innermost)
+	return innermost, notes, nil
+}
+
+// resolvePosition is the detour symbol.consumers pays that no other
+// capability here does -- see the package doc comment for why the
+// capability's own shape stays position-first rather than exposing
+// stable_key as input.
+//
+// It is resolveDeclaration plus the one hop only this capability needs:
+// find_cross_repo_consumers is keyed by stable_key alone, while
+// find_references and the outline itself both answer to a qualified name.
+func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, repository, file string, line int, name string) (string, []string, error) {
+	decl, notes, err := r.resolveDeclaration(ctx, sess, CapabilityConsumers, repository, file, line, name)
+	if err != nil {
+		return "", nil, err
+	}
+	key, err := r.stableKeyOf(ctx, sess, repository, file, decl)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1262,4 +1676,188 @@ func intAt(payload map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// --- local reads -------------------------------------------------------
+//
+// kivgraph's wire carries positions and names, never file contents, so
+// everything below reads the working copy on disk. Two output fields need
+// it and no more: symbol.overview's required column, which no provider
+// behind that capability reports, and the optional snippet the three
+// position-first capabilities offer.
+
+// isSensitive matches the configured patterns against both the bare file
+// name and the repository-relative path, so ".env" catches a root file and
+// "config/*.pem" catches a nested one.
+func (r *Runner) isSensitive(relative string) bool {
+	slash := filepath.ToSlash(relative)
+	for _, pattern := range r.sensitive {
+		if ok, _ := path.Match(pattern, slash); ok {
+			return true
+		}
+		if ok, _ := path.Match(pattern, path.Base(slash)); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// within resolves a repository-relative path against root, refusing anything
+// that climbs out of it: an absolute path, a "..", or a symlink that lands
+// outside once resolved. A step carries permission for the repository it was
+// commissioned against, and a path that escapes it is reading something
+// nobody authorized.
+func within(root, name string) (string, error) {
+	if name == "" || filepath.IsAbs(filepath.FromSlash(name)) {
+		return "", contract.Fail(contract.FailureInvalidInput, "%q must be a relative path", name)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", contract.Fail(contract.FailureUnavailable, "cannot resolve repository root: %v", err)
+	}
+	joined := filepath.Join(rootAbs, filepath.FromSlash(name))
+	if err := contained(rootAbs, joined, name); err != nil {
+		return "", err
+	}
+	// A symlink can point outside the repository even when the lexical path
+	// does not climb out of it. EvalSymlinks fails on a path that does not
+	// exist, which is fine here: the caller's own read reports that case,
+	// and a snippet is optional anyway.
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return joined, nil
+		}
+		return "", contract.Fail(contract.FailureUnavailable, "cannot resolve %q: %v", name, err)
+	}
+	if err := contained(rootAbs, resolved, name); err != nil {
+		return "", err
+	}
+	return joined, nil
+}
+
+// contained reports whether path sits inside root, once both are absolute.
+func contained(root, target, name string) error {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return contract.Fail(contract.FailureInvalidInput, "%q escapes the repository", name)
+	}
+	return nil
+}
+
+// readLines reads a whole file for column recovery. A file that cannot be
+// read is not an error: columnOf has an honest fallback, and failing an
+// answer whose lines came from the graph over a column would be the tail
+// wagging the dog. The caller reports the fallback rather than hiding it.
+func readLines(name string) []string {
+	info, err := os.Stat(name)
+	if err != nil || info.IsDir() || info.Size() > maxSnippetBytes {
+		return nil
+	}
+	file, err := os.Open(name)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = file.Close() }()
+	var out []string
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxSnippetBytes)
+	for scanner.Scan() {
+		out = append(out, scanner.Text())
+	}
+	if scanner.Err() != nil {
+		return nil
+	}
+	return out
+}
+
+// columnOf finds where a symbol's own name starts on its line, as a whole
+// word. Column 1 is the answer when the file is unreadable or the name does
+// not appear there -- which happens for a generated name, and for a
+// declaration whose name sits on a line other than the one reported.
+func columnOf(lines []string, line int, name string) int {
+	if line <= 0 || line > len(lines) || name == "" {
+		return 1
+	}
+	word, err := regexp.Compile(`\b` + regexp.QuoteMeta(name) + `\b`)
+	if err != nil {
+		return 1
+	}
+	if at := word.FindStringIndex(lines[line-1]); at != nil {
+		return at[0] + 1
+	}
+	return 1
+}
+
+// snippetAt reads a window of lines starting at line, the convention this
+// capability family already uses: "how much of it to return" is a forward
+// look from the anchor, not a window centred on it.
+//
+// A sensitive file is refused out loud rather than answered without the
+// snippet that was explicitly asked for. A file that merely cannot be read
+// yields an empty snippet, because the location around it is still true.
+func (r *Runner) snippetAt(root, relative string, line, window int) (string, error) {
+	if r.isSensitive(relative) {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"%s carries secrets: this adapter never reads it", relative)
+	}
+	resolved, err := within(root, relative)
+	if err != nil {
+		return "", err
+	}
+	lines := readLines(resolved)
+	if line <= 0 || line > len(lines) {
+		return "", nil
+	}
+	to := min(line+window-1, len(lines))
+	return strings.Join(lines[line-1:to], "\n"), nil
+}
+
+// snippetWindow is how many lines a snippet covers: what the caller asked
+// for, or a deliberately small default.
+func snippetWindow(payload map[string]any) int {
+	if lines, ok := intAt(payload, "snippet_lines"); ok && lines > 0 {
+		return lines
+	}
+	return defaultSnippetLines
+}
+
+// scopeEntries reads the declared scope as repository-relative prefixes. An
+// empty scope means the whole repository, deliberately, so the default is
+// honest rather than quietly narrow.
+func scopeEntries(payload map[string]any) []string {
+	raw, ok := payload["scope"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		text, isText := item.(string)
+		if !isText || strings.TrimSpace(text) == "" {
+			continue
+		}
+		out = append(out, filepath.ToSlash(path.Clean(text)))
+	}
+	return out
+}
+
+// inScope reports whether one repository-relative path is under any declared
+// scope entry, matching a directory prefix or the file itself.
+func inScope(relative string, scope []string) bool {
+	if len(scope) == 0 {
+		return true
+	}
+	for _, entry := range scope {
+		if relative == entry || strings.HasPrefix(relative, entry+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// boolAt reads an optional boolean field. An absent one is false, which is
+// what every intent flag here means when nobody set it.
+func boolAt(payload map[string]any, key string) bool {
+	value, _ := payload[key].(bool)
+	return value
 }

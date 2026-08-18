@@ -234,6 +234,9 @@ runners = ["omp"]
   # (an auditor does not rebuild what it audits). The graph is built by hand with
   # `kivgraph init` + `kivgraph index --full` before this is useful.
   implementations = [
+    "kivgraph.definition",
+    "kivgraph.references",
+    "kivgraph.overview",
     "kivgraph.cross_repo_consumers",
     "kivgraph.get",
     "kivgraph.unresolved_references",
@@ -1624,25 +1627,33 @@ capability = "repository.index"
   # whose token cost barely depends on repository size at all.
   estimated_tokens = 60
 
-# The four kivgraph implementations share one provider and one supervised
+# The seven kivgraph implementations share one provider and one supervised
 # stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
-# four tools called against it over the same wire, no second index to build.
+# a handful of tools called against it over the same wire, no second index to
+# build.
 #
-# None of the four ships a live measurement yet -- kivgraph is not attached
-# to any shipped runners list, so nothing has ever actually called it through
-# this funnel. Duration below is not a guess: it comes from the provider's
-# own measured SLOs, not this page's usual "nearest shape already shipped"
-# fallback -- docs/performance/slo.md puts find_cross_repo_consumers at
-# p95 <= 5ms, and benchmarks/mcp-client/report.md measures the backend
-# itself at 0.014ms p95, both point queries against a published in-memory
-# snapshot. The estimates below sit in the low tens of milliseconds instead
-# of matching that directly, because they cost the stdio round trip on top
-# -- one write and one read against the child's pipes -- which neither
-# number above includes. Token sizes still follow the usual sizing-by-shape
-# reasoning: a cross-repo edge list, a point lookup, an unresolved scan, and
-# a handful of scalars, in that order. The moment real calls exist,
-# measurement takes over the way it does for every other implementation
-# here.
+# Duration below is not a guess: it comes from the provider's own measured
+# SLOs, not this page's usual "nearest shape already shipped" fallback --
+# docs/performance/slo.md puts find_cross_repo_consumers at p95 <= 5ms, and
+# benchmarks/mcp-client/report.md measures the backend itself at 0.014ms p95,
+# both point queries against a published in-memory snapshot. The estimates
+# below sit in the low tens of milliseconds instead of matching that
+# directly, because they cost the stdio round trip on top -- one write and
+# one read against the child's pipes -- which neither number above includes.
+# Token sizes follow the usual sizing-by-shape reasoning.
+#
+# The three position-first implementations pay a get_file_outline call before
+# their own tool, to turn a position into the declaration containing it, so
+# they are declared at roughly twice the cost of the point lookups beside
+# them. symbol.definition is the exception that pays only that one call: for
+# a graph of declarations, the declaration a position falls inside of already
+# IS the definition.
+#
+# What kivgraph is deliberately NOT declared for, so the funnel never
+# promises it: symbol.implementations (this server exposes no tool that
+# answers "who fulfils this interface" -- find_references reports uses, which
+# is a different question) and code.impact (its subject is a baseline diff,
+# and get_blast_radius walks out from a symbol, not from a change).
 
 [[implementation]]
 id = "kivgraph.cross_repo_consumers"
@@ -1657,6 +1668,45 @@ capability = "symbol.consumers"
   [implementation.cost]
   estimated_duration = "20ms"
   estimated_tokens = 900
+
+[[implementation]]
+id = "kivgraph.definition"
+provider = "kivgraph"
+capability = "symbol.definition"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "15ms"
+  estimated_tokens = 200
+
+[[implementation]]
+id = "kivgraph.references"
+provider = "kivgraph"
+capability = "symbol.references"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "25ms"
+  estimated_tokens = 800
+
+[[implementation]]
+id = "kivgraph.overview"
+provider = "kivgraph"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "15ms"
+  estimated_tokens = 700
 
 [[implementation]]
 id = "kivgraph.get"
