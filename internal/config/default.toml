@@ -281,6 +281,7 @@ runners = ["omp"]
   # root = "/absolute/path/to/the/served/project"
   implementations = [
     "tokensave.calls",
+    "tokensave.context",
     "tokensave.overview",
   ]
   timeout = "90s"             # re-syncs an index before answering: same class as kivgraph
@@ -451,6 +452,161 @@ context = ["repository"]
 # ---------------------------------------------------------------------------
 # Capabilities: the stable "what". Agnostic of any tool, by definition.
 # ---------------------------------------------------------------------------
+
+[[capability]]
+id = "code.context"
+version = "1.0.0"
+summary = "From a task in prose, find the code it is actually about before acting."
+semantics = """
+The cold-start move: given a task described in the person's own words, return \
+the declarations, related symbols, optional source and (when planning) tests \
+that make the task concrete. This is NOT literal text search -- code.search \
+answers that -- and not a position-first symbol lookup either: the caller does \
+not know a name or a file yet, which is exactly why it asks. Results are \
+repository-relative; a provider whose graph spans several repositories must \
+drop foreign rows rather than report paths relative to the wrong root, and say \
+that it did. mode is intent: explore maps the territory, plan additionally \
+names the tests that cover it.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "task"
+  type = "string"
+  required = true
+  summary = "Natural-language description of the task or question."
+
+  [[capability.input]]
+  name = "mode"
+  type = "string"
+  required = false
+  enum = ["explore", "plan"]
+  summary = "Whether to map the code generally or prepare an implementation plan. Defaults to explore."
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Maximum number of primary symbols. Defaults to 20."
+
+  [[capability.input]]
+  name = "keywords"
+  type = "string_list"
+  required = false
+  summary = "Extra domain words when the task's language may not match symbol names."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Repository-relative paths to include. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: include source blocks for the most relevant symbols."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "Maximum lines per source block when snippets were requested."
+
+  [[capability.output]]
+  name = "symbols"
+  type = "record_list"
+  required = true
+  summary = "The declarations most relevant to the task, ranked by the provider."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The declaration's name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "The provider's own kind for the declaration."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the declaration, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the declaration starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "signature"
+    type = "string"
+    required = false
+    summary = "The declaration's signature, when the provider reports it."
+
+    [[capability.output.field]]
+    name = "summary"
+    type = "string"
+    required = false
+    summary = "The declaration's own documentation, when the provider reports it."
+
+  [[capability.output]]
+  name = "related"
+  type = "record_list"
+  required = false
+  summary = "Other declarations connected to the primary symbols."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+  [[capability.output]]
+  name = "snippets"
+  type = "record_list"
+  required = false
+  summary = "Source blocks for primary symbols, only when asked for and never from sensitive files."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "code"
+    type = "string"
+    required = true
+
+  [[capability.output]]
+  name = "tests"
+  type = "string_list"
+  required = false
+  summary = "Tests that cover the relevant code, reported in plan mode."
 
 [[capability]]
 id = "code.search"
@@ -1750,17 +1906,36 @@ capability = "graph.status"
 # ---------------------------------------------------------------------------
 # tokensave: the syntactic call graph of ONE rooted project.
 #
-# It answers two of the same capabilities the graph providers above do, and
-# that is the point: symbol.overview and symbol.calls finally have more than
-# one live candidate, so the funnel has something to rank instead of a single
-# survivor. What separates them is what each is right about -- serena reads a
-# language server, codebase-memory walks a prebuilt graph, tokensave keeps its
+# It answers the cold-start capability code.context first, then two of the same
+# capabilities the graph providers above do. The cold start is why this adapter
+# exists as more than another call-graph reader: a client holding only a task in
+# prose cannot ask a position-first symbol question yet. tokensave keeps its
 # own index in step on every call and never needs one built ahead of time,
-# which is why neither implementation below declares requires_index.
+# which is why none of the implementations below declares requires_index.
 #
 # No code.search here: tokensave has no text engine, and answering a flat
 # search from a symbol index would be a different answer wearing the same
 # name. No symbol.definition either -- see the adapter's package doc.
+# ---------------------------------------------------------------------------
+
+[[implementation]]
+id = "tokensave.context"
+provider = "tokensave"
+capability = "code.context"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Two calls: status, then tokensave_context. Measured on the workspace root
+  # with snippets disabled: 1.3-4.6s warm depending on the query; the first
+  # call may additionally pay the index resync. The base replaces this after
+  # two successful calls.
+  estimated_duration = "3s"
+  estimated_tokens = 900
 # ---------------------------------------------------------------------------
 
 [[implementation]]

@@ -114,7 +114,7 @@ func (f *fakeRunner) Implementations() []string { return f.serves }
 // the fixture catalogs name, and the wiring check that reads this lives in
 // core, not here.
 func (f *fakeRunner) Capabilities() []string {
-	return []string{"code.search", "symbol.definition", "symbol.references",
+	return []string{"code.context", "code.search", "symbol.definition", "symbol.references",
 		"symbol.implementations", "symbol.overview", "symbol.calls",
 		"code.impact", "repository.index"}
 }
@@ -240,7 +240,7 @@ func TestTheOrchestratorDeclaresItselfAsAnOrchestrator(t *testing.T) {
 func TestTheCardHandedOutIsACopy(t *testing.T) {
 	agent, _ := build(t, &fakeRunner{}, 0, "")
 	agent.Card().Capabilities[0] = "file.write"
-	if agent.Card().Capabilities[0] != "code.search" {
+	if agent.Card().Capabilities[0] != "code.context" {
 		t.Fatal("Card handed out a pointer into the agent")
 	}
 }

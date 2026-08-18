@@ -40,7 +40,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -67,9 +67,20 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		}
 	}
 
-	capability := cfg.Capabilities[0]
-	// The output shape from the design: a list of records, each with a path and
-	// a line number.
+	// code.search's output shape from the design: a list of records, each
+	// with a path and a line number. Never address it by catalog position:
+	// adding an alphabetically-earlier capability must not turn this into a
+	// test of an unrelated output.
+	var capability contract.Capability
+	for _, candidate := range cfg.Capabilities {
+		if candidate.ID == "code.search" {
+			capability = candidate
+			break
+		}
+	}
+	if capability.ID == "" {
+		t.Fatal("code.search is absent from the shipped catalog")
+	}
 	matches := capability.Outputs[0]
 	if matches.Name != "matches" || matches.Type != contract.TypeRecordList {
 		t.Fatalf("outputs[0] = %+v", matches)
@@ -105,6 +116,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"serena.references",
 		"serena.search",
 		"tokensave.calls",
+		"tokensave.context",
 		"tokensave.overview",
 	}
 	if !slices.Equal(shipped, want) {

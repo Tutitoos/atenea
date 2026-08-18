@@ -148,6 +148,56 @@ const readyStatus = `{"node_count":116746,"edge_count":240721,"file_count":7492}
 // has never indexed answers every question successfully, with nothing.
 const emptyStatus = `{"node_count":0,"edge_count":0,"file_count":0}`
 
+func contextCapability() contract.Capability {
+	return contract.Capability{
+		ID:        CapabilityContext,
+		Version:   contract.Version{Major: 1},
+		Summary:   "test double for code.context",
+		Semantics: "cold-start context from a task in prose",
+		Effects:   []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "task", Type: contract.TypeString, Required: true, Summary: "task"},
+			{Name: "mode", Type: contract.TypeString, Enum: []string{"explore", "plan"}, Summary: "mode"},
+			{Name: "limit", Type: contract.TypeInt, Summary: "max symbols"},
+			{Name: "keywords", Type: contract.TypeStringList, Summary: "domain words"},
+			{Name: "scope", Type: contract.TypeStringList, Summary: "paths"},
+			{Name: "include_snippet", Type: contract.TypeBool, Summary: "return code"},
+			{Name: "snippet_lines", Type: contract.TypeInt, Summary: "code lines"},
+		},
+		Outputs: []contract.Field{
+			{
+				Name: "symbols", Type: contract.TypeRecordList, Required: true, Summary: "entry points",
+				Fields: []contract.Field{
+					{Name: "name", Type: contract.TypeString, Required: true},
+					{Name: "kind", Type: contract.TypeString, Required: true},
+					{Name: "path", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+					{Name: "signature", Type: contract.TypeString},
+					{Name: "summary", Type: contract.TypeString},
+				},
+			},
+			{
+				Name: "related", Type: contract.TypeRecordList, Summary: "related symbols",
+				Fields: []contract.Field{
+					{Name: "name", Type: contract.TypeString, Required: true},
+					{Name: "path", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+				},
+			},
+			{
+				Name: "snippets", Type: contract.TypeRecordList, Summary: "source",
+				Fields: []contract.Field{
+					{Name: "name", Type: contract.TypeString, Required: true},
+					{Name: "path", Type: contract.TypeString, Required: true},
+					{Name: "line", Type: contract.TypeInt, Required: true},
+					{Name: "code", Type: contract.TypeString, Required: true},
+				},
+			},
+			{Name: "tests", Type: contract.TypeStringList, Summary: "tests"},
+		},
+	}
+}
+
 func overviewCapability() contract.Capability {
 	return contract.Capability{
 		ID:        CapabilityOverview,
@@ -207,6 +257,8 @@ func callsCapability() contract.Capability {
 
 func capabilityFor(id string) contract.Capability {
 	switch id {
+	case CapabilityContext:
+		return contextCapability()
 	case CapabilityOverview:
 		return overviewCapability()
 	case CapabilityCalls:
@@ -218,6 +270,8 @@ func capabilityFor(id string) contract.Capability {
 
 func implFor(capabilityID string) string {
 	switch capabilityID {
+	case CapabilityContext:
+		return ImplContext
 	case CapabilityOverview:
 		return ImplOverview
 	case CapabilityCalls:

@@ -100,9 +100,13 @@ const (
 	PhaseAsk = "ask"
 )
 
-// searchCapability is what a commission is planned around: a text search is
-// how the orchestrator explores a repository and how it splits the work.
+// searchCapability is what a commission's mechanical fallback is planned
+// around: literal text search is how the orchestrator splits work when no
+// model-backed explorer is attached. A model holding only prose starts with
+// code.context instead (contextCapability below), because it does not know a
+// string or file yet.
 const searchCapability = "code.search"
+const contextCapability = "code.context"
 
 // The symbol capabilities, plus the two that read the call graph itself. The
 // orchestrator does not plan a commission around any of them -- it plans
@@ -200,6 +204,7 @@ var card = contract.Agent{
 	Type:    contract.AgentOrchestrator,
 	Summary: "Explores the repositories in scope, splits the commission into a graph of steps and hands them out.",
 	Capabilities: []string{
+		contextCapability,
 		searchCapability,
 		definitionCapability,
 		referencesCapability,

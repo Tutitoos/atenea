@@ -4,10 +4,11 @@
 // It is the kivgraph arrangement with one difference that changes everything
 // downstream: kivgraph publishes ONE global corpus addressed by repository
 // name, while tokensave serves ONE project rooted at a directory on disk and
-// speaks paths relative to that root. This workspace is 53 git repositories
-// under a single root with a single index at the top of it, so the mapping is
-// not optional: a repository is a path PREFIX inside tokensave's root, and
-// every path crossing this package is translated in both directions
+// speaks paths relative to that root. This workspace is 51 independent git
+// repositories plus cli/ under one umbrella root, and Atenea also declares
+// that root itself for workspace-wide code.context calls. The mapping is not
+// optional: an individual repository is a path PREFIX inside tokensave's
+// root, and every path crossing this package is translated in both directions
 // (toRoot/toRepository). A capability's declared output is
 // repository-relative; a tokensave answer never is.
 //
@@ -64,9 +65,11 @@ import (
 // The capabilities this adapter answers, and the implementation ids the
 // catalog gives them.
 const (
+	CapabilityContext  = "code.context"
 	CapabilityOverview = "symbol.overview"
 	CapabilityCalls    = "symbol.calls"
 
+	ImplContext  = "tokensave.context"
 	ImplOverview = "tokensave.overview"
 	ImplCalls    = "tokensave.calls"
 )
@@ -76,6 +79,7 @@ const (
 // to turn a resolved declaration into the node id callers/callees require.
 const (
 	toolStatus   = "tokensave_status"
+	toolContext  = "tokensave_context"
 	toolEntities = "tokensave_entities"
 	toolExact    = "tokensave_find_exact_symbol"
 	toolCallers  = "tokensave_callers"
@@ -98,7 +102,7 @@ const DefaultTimeout = 90 * time.Second
 
 // defaultDepth is how far symbol.calls walks when the caller does not say.
 // One hop: the capability declares depth "small by default, on purpose", and
-// on a graph spanning 53 repositories the second hop is where a readable
+// on a graph spanning the whole workspace the second hop is where a readable
 // answer turns into hundreds of rows nobody asked for.
 const defaultDepth = 1
 
@@ -140,7 +144,7 @@ var nestedKinds = map[string]bool{
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplCalls, ImplOverview}
+	return []string{ImplCalls, ImplContext, ImplOverview}
 }
 
 // Options configure the adapter.
@@ -231,7 +235,7 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // settings file naming an implementation it has no case for is refused at
 // load rather than at the call.
 func (r *Runner) Capabilities() []string {
-	return []string{CapabilityOverview, CapabilityCalls}
+	return []string{CapabilityContext, CapabilityOverview, CapabilityCalls}
 }
 
 // Sensitive lists the configured secret-carrying patterns, sorted.
@@ -280,6 +284,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		notes  []string
 	)
 	switch req.Capability.ID {
+	case CapabilityContext:
+		result, notes, err = r.runContext(call, sess, prefix, req)
 	case CapabilityOverview:
 		result, notes, err = r.runOverview(call, sess, prefix, req)
 	case CapabilityCalls:

@@ -29,9 +29,11 @@ anything.
 
 `)
 	if s.Capabilities {
-		b.WriteString(`Use the atenea tools you have been given. They are the point: code.search finds
-literal text, symbol.definition and symbol.references answer questions about a
-named symbol, symbol.overview lists what a file declares, and
+		b.WriteString(`Use the atenea tools you have been given. They are the point. Your FIRST move
+for a task stated only in prose is code.context: it finds the declarations,
+relationships and (in plan mode) tests the task is actually about. After that,
+code.search finds literal text; symbol.definition and symbol.references answer
+questions about a named symbol; symbol.overview lists what a file declares; and
 catalog.repositories says what is registered on this machine. Grep-by-eye over
 whole files is what these exist to replace.
 `)
