@@ -24,8 +24,10 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
+	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
+	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -290,7 +292,8 @@ type Orchestrator struct {
 	ClaudeCode     ClaudeCodeAdapter
 	Serena         SerenaAdapter
 	CodebaseMemory CodebaseMemoryAdapter
-	Ladygraph      LadygraphAdapter
+	Kivgraph       KivgraphAdapter
+	Tokensave      TokensaveAdapter
 }
 
 // Model fixes which model backs each of the two model-backed built-in
@@ -468,9 +471,9 @@ type SerenaAdapter struct {
 	Process *ManagedProcess
 }
 
-// LadygraphAdapter configures the Ladygraph adapter.
+// KivgraphAdapter configures the Kivgraph adapter.
 //
-// Ladygraph is the second far side that is not a CLI, but unlike Serena it
+// Kivgraph is the second far side that is not a CLI, but unlike Serena it
 // is never anything else: there is no proxy to point at and no externally
 // managed instance to assume is already running, so this struct has no
 // Endpoint field. The child is a persistent stdio-MCP server Atenea itself
@@ -478,17 +481,42 @@ type SerenaAdapter struct {
 // supervisor.TransportStdio -- and a process reached by talking to its own
 // stdin has no URL for an Endpoint to name, or to fall back to once Process
 // is unset.
-type LadygraphAdapter struct {
+type KivgraphAdapter struct {
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one call. It sits at Serena's and codebase-memory's own
 	// ceiling: opening a graph database cold is slow long before it is
 	// stuck.
 	Timeout time.Duration
-	// Process launches and supervises the ladygraph server itself, over a
+	// Process launches and supervises the kivgraph server itself, over a
 	// stdio transport rather than the http one Serena's Process uses.
 	// Unlike Serena, this is not optional: with no Endpoint to fall back to,
 	// a nil Process leaves the adapter with no child to talk to at all.
+	Process *ManagedProcess
+}
+
+// TokensaveAdapter configures the tokensave adapter.
+//
+// Same transport as Kivgraph -- a stdio MCP server Atenea spawns and
+// supervises -- and one field neither Kivgraph nor Serena needs: Root.
+// Kivgraph publishes one corpus addressed by repository NAME, while
+// tokensave serves ONE project rooted at a directory and speaks paths
+// relative to it, so the adapter cannot translate a repository-relative path
+// in either direction without being told where that root is. It is declared
+// rather than derived: a root guessed from the repository list would be
+// silently wrong the day a repository is added outside it.
+type TokensaveAdapter struct {
+	// Root is the directory the supervised server was pointed at, absolute.
+	// Every repository this adapter answers for lives under it.
+	Root string
+	// Implementations the adapter answers for.
+	Implementations []string
+	// Timeout caps one call. It sits at Kivgraph's own ceiling: tokensave
+	// re-syncs its index before answering, which is slow long before it is
+	// stuck.
+	Timeout time.Duration
+	// Process launches and supervises the tokensave server itself. As with
+	// Kivgraph this is not optional: a stdio server has no address to dial.
 	Process *ManagedProcess
 }
 
@@ -586,14 +614,15 @@ func DefaultLocalAgents() LocalAgents {
 }
 
 // RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory,
-// RunnerLadygraph and RunnerLocal are the values orchestrator.runners
-// accepts.
+// RunnerKivgraph, RunnerTokensave and RunnerLocal are the values
+// orchestrator.runners accepts.
 const (
 	RunnerOMP            = "omp"
 	RunnerClaudeCode     = "claudecode"
 	RunnerSerena         = "serena"
 	RunnerCodebaseMemory = "codebasememory"
-	RunnerLadygraph      = "ladygraph"
+	RunnerKivgraph       = "kivgraph"
+	RunnerTokensave      = "tokensave"
 	RunnerLocal          = "local"
 )
 
@@ -795,7 +824,8 @@ type fileOrchestrator struct {
 	ClaudeCode     fileClaudeCodeAdapter     `toml:"claudecode"`
 	Serena         fileSerenaAdapter         `toml:"serena"`
 	CodebaseMemory fileCodebaseMemoryAdapter `toml:"codebasememory"`
-	Ladygraph      fileLadygraphAdapter      `toml:"ladygraph"`
+	Kivgraph       fileKivgraphAdapter       `toml:"kivgraph"`
+	Tokensave      fileTokensaveAdapter      `toml:"tokensave"`
 }
 
 type fileLocalRunner struct {
@@ -835,12 +865,21 @@ type fileSerenaAdapter struct {
 	Process         *fileManagedProcess `toml:"process"`
 }
 
-// fileLadygraphAdapter is the TOML shape of LadygraphAdapter. It reuses
+// fileKivgraphAdapter is the TOML shape of KivgraphAdapter. It reuses
 // fileManagedProcess for its own .process table: the shape a supervised
 // server takes in the settings file does not depend on which transport it
 // talks over, only fileManagedProcess.build's caller does (see the section
 // parameter it takes below).
-type fileLadygraphAdapter struct {
+type fileKivgraphAdapter struct {
+	Implementations *[]string           `toml:"implementations"`
+	Timeout         string              `toml:"timeout"`
+	Process         *fileManagedProcess `toml:"process"`
+}
+
+// fileTokensaveAdapter is the TOML shape of TokensaveAdapter. `root` is the
+// one key its neighbor has no counterpart for: see TokensaveAdapter.Root.
+type fileTokensaveAdapter struct {
+	Root            string              `toml:"root"`
 	Implementations *[]string           `toml:"implementations"`
 	Timeout         string              `toml:"timeout"`
 	Process         *fileManagedProcess `toml:"process"`
@@ -1342,27 +1381,10 @@ var defaultSensitive = []string{
 // able to tell them apart.
 var defaultClaudeImplementations = []string{"claude.search"}
 
-// ladygraphDefaultTimeout and ladygraphDefaultImplementations mirror what
-// internal/adapter/ladygraph's own DefaultTimeout and DefaultImplementations
-// would say -- the same pattern serena.DefaultImplementations() and
-// codebasememory.DefaultImplementations() already follow above. They are
-// declared locally instead of imported because internal/adapter/ladygraph
-// does not exist in this tree yet (it lands in a separate, concurrent
-// change); importing a package that is not there would not compile, and
-// importing it the moment it lands could just as easily cycle back through
-// config the way internal/agent/model's own Options comment above warns
-// about. Once the adapter package exists, replace these three lines with an
-// import and a call, matching serena and codebasememory exactly.
-const ladygraphDefaultTimeout = 90 * time.Second
-
-func ladygraphDefaultImplementations() []string {
-	return []string{
-		"ladygraph.cross_repo_consumers",
-		"ladygraph.get",
-		"ladygraph.unresolved_references",
-		"ladygraph.status",
-	}
-}
+// Los defaults de kivgraph y tokensave se leen de sus propios paquetes, como
+// ya hacen serena y codebasememory: un numero declarado dos veces es un
+// numero que puede discrepar. Ninguno de los dos adapters importa
+// internal/config, asi que no hay ciclo posible.
 
 // contractRemedy names the edit that fixes a refused settings file, because
 // the two numbers alone do not say which of them is meant to move.
@@ -1411,9 +1433,13 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Implementations: codebasememory.DefaultImplementations(),
 			Timeout:         codebasememory.DefaultTimeout,
 		},
-		Ladygraph: LadygraphAdapter{
-			Implementations: ladygraphDefaultImplementations(),
-			Timeout:         ladygraphDefaultTimeout,
+		Kivgraph: KivgraphAdapter{
+			Implementations: kivgraph.DefaultImplementations(),
+			Timeout:         kivgraph.DefaultTimeout,
+		},
+		Tokensave: TokensaveAdapter{
+			Implementations: tokensave.DefaultImplementations(),
+			Timeout:         tokensave.DefaultTimeout,
 		},
 	}
 	if o.MaxParallel != nil {
@@ -1475,11 +1501,13 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLadygraph, RunnerLocal:
+			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerKivgraph,
+				RunnerTokensave, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s",
-					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerLadygraph, RunnerLocal)
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory,
+					RunnerKivgraph, RunnerTokensave, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -1525,11 +1553,16 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.CodebaseMemory = memory
-	graph, err := o.Ladygraph.build(source, out.Ladygraph)
+	graph, err := o.Kivgraph.build(source, out.Kivgraph)
 	if err != nil {
 		return Orchestrator{}, err
 	}
-	out.Ladygraph = graph
+	out.Kivgraph = graph
+	index, err := o.Tokensave.build(source, out.Tokensave)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Tokensave = index
 	return out, nil
 }
 
@@ -1755,28 +1788,66 @@ func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapte
 // build is additive over the passed-in defaults, never zeroing: an omitted
 // key keeps whatever the caller already put in out (the compiled-in
 // defaults), the same shape every other adapter's build follows. Unlike
-// fileSerenaAdapter.build there is no Endpoint branch: LadygraphAdapter has
+// fileSerenaAdapter.build there is no Endpoint branch: KivgraphAdapter has
 // no such field, so there is nothing here to leave alone.
-func (l fileLadygraphAdapter) build(source string, out LadygraphAdapter) (LadygraphAdapter, error) {
+func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (KivgraphAdapter, error) {
 	if l.Implementations != nil {
 		out.Implementations = *l.Implementations
 	}
 	if l.Timeout != "" {
 		timeout, err := time.ParseDuration(l.Timeout)
 		if err != nil {
-			return LadygraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.ladygraph.timeout %q: %v", source, l.Timeout, err)
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.timeout %q: %v", source, l.Timeout, err)
 		}
 		if timeout <= 0 {
-			return LadygraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.ladygraph.timeout must be above 0, got %s", source, timeout)
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
 	}
 	if l.Process != nil {
-		process, err := l.Process.build(source, "orchestrator.ladygraph.process")
+		process, err := l.Process.build(source, "orchestrator.kivgraph.process")
 		if err != nil {
-			return LadygraphAdapter{}, err
+			return KivgraphAdapter{}, err
+		}
+		out.Process = &process
+	}
+	return out, nil
+}
+
+// build is additive over the passed-in defaults, like every neighbor. The one
+// extra check is Root: a relative one is refused here rather than resolved,
+// because "resolved against what" has no honest answer -- the process that
+// loads the settings file is not the one that will read a path six months
+// later from a systemd unit with its own working directory.
+func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (TokensaveAdapter, error) {
+	if root := strings.TrimSpace(t.Root); root != "" {
+		if !filepath.IsAbs(root) {
+			return TokensaveAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.tokensave.root %q must be absolute", source, root)
+		}
+		out.Root = filepath.Clean(root)
+	}
+	if t.Implementations != nil {
+		out.Implementations = *t.Implementations
+	}
+	if t.Timeout != "" {
+		timeout, err := time.ParseDuration(t.Timeout)
+		if err != nil {
+			return TokensaveAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.tokensave.timeout %q: %v", source, t.Timeout, err)
+		}
+		if timeout <= 0 {
+			return TokensaveAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.tokensave.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	if t.Process != nil {
+		process, err := t.Process.build(source, "orchestrator.tokensave.process")
+		if err != nil {
+			return TokensaveAdapter{}, err
 		}
 		out.Process = &process
 	}
@@ -1787,7 +1858,7 @@ func (l fileLadygraphAdapter) build(source string, out LadygraphAdapter) (Ladygr
 // section is the settings key path this table lives at (e.g.
 // "orchestrator.serena.process"), used to name it in every error below --
 // this one function backs every supervised-process table in the file, and a
-// serena-shaped error naming ladygraph's own mistake would send the reader
+// serena-shaped error naming kivgraph's own mistake would send the reader
 // to the wrong block.
 func (p fileManagedProcess) build(source, section string) (ManagedProcess, error) {
 	if strings.TrimSpace(p.Command) == "" {

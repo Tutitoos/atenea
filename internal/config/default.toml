@@ -228,21 +228,24 @@ runners = ["omp"]
   # cold one is slow long before it is stuck.
   timeout = "90s"
 
-  [orchestrator.ladygraph]
+  [orchestrator.kivgraph]
   # No `binary` and no `repository.index`: Atenea never builds this graph, only
-  # reads it. index_project / `ladygraph index` stay out of the funnel entirely
+  # reads it. index_project / `kivgraph index` stay out of the funnel entirely
   # (an auditor does not rebuild what it audits). The graph is built by hand with
-  # `ladygraph init` + `ladygraph index --full` before this is useful.
+  # `kivgraph init` + `kivgraph index --full` before this is useful.
   implementations = [
-    "ladygraph.cross_repo_consumers",
-    "ladygraph.get",
-    "ladygraph.unresolved_references",
-    "ladygraph.status",
+    "kivgraph.definition",
+    "kivgraph.references",
+    "kivgraph.overview",
+    "kivgraph.cross_repo_consumers",
+    "kivgraph.get",
+    "kivgraph.unresolved_references",
+    "kivgraph.status",
   ]
   timeout = "90s"             # opens a graph db cold, same class as serena/codebase-memory
 
-    # [orchestrator.ladygraph.process]
-    # Uncomment to have Atenea launch and supervise the ladygraph server
+    # [orchestrator.kivgraph.process]
+    # Uncomment to have Atenea launch and supervise the kivgraph server
     # itself, the same way [orchestrator.serena.process] above does but over
     # a stdio transport instead of http: Spec.Transport = stdio carries this
     # over the same restart-limit / on_demand / idle-timeout machinery every
@@ -256,12 +259,39 @@ runners = ["omp"]
     # global corpus and readers share it by atomic generation publishing, so a
     # second copy buys nothing. on_demand so an unused install costs no process.
     #
-    # command = "/home/tutitoos/.local/opt/ladygraph-eval/v0.5.1/bin/ladygraph"
+    # command = "/home/devlabs/.local/opt/kivgraph/bin/kivgraph"
     # args = ["serve"]
     # HOME is load-bearing and MUST be the real one: an isolated/empty HOME makes
     # `serve` scaffold a fresh EMPTY config and publish an empty graph that
     # answers nothing, successfully. Absolute, never ~ .
     # env = ["HOME=/home/tutitoos"]
+    # instance = "shared"
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+
+  [orchestrator.tokensave]
+  # tokensave is the second stdio far side, and the one that is not a corpus of
+  # repositories but ONE project rooted at a directory: it speaks paths relative
+  # to that root, so `root` is required and absolute. Every repository this
+  # provider can answer for has to live under it.
+  #
+  # No `repository.index` either, for a different reason than kivgraph's: this
+  # far side re-syncs its own index on every call, so there is nothing for the
+  # funnel to trigger.
+  # root = "/absolute/path/to/the/served/project"
+  implementations = [
+    "tokensave.calls",
+    "tokensave.context",
+    "tokensave.overview",
+  ]
+  timeout = "90s"             # re-syncs an index before answering: same class as kivgraph
+
+    # [orchestrator.tokensave.process]
+    # Same shape as the kivgraph block above and left commented for the same
+    # reason: the command below is one machine's path.
+    #
+    # command = "tokensave"
+    # args = ["serve", "--path", "/absolute/path/to/the/served/project"]
     # instance = "shared"
     # lifecycle = "on_demand"
     # idle_timeout = "10m"
@@ -422,6 +452,161 @@ context = ["repository"]
 # ---------------------------------------------------------------------------
 # Capabilities: the stable "what". Agnostic of any tool, by definition.
 # ---------------------------------------------------------------------------
+
+[[capability]]
+id = "code.context"
+version = "1.0.0"
+summary = "From a task in prose, find the code it is actually about before acting."
+semantics = """
+The cold-start move: given a task described in the person's own words, return \
+the declarations, related symbols, optional source and (when planning) tests \
+that make the task concrete. This is NOT literal text search -- code.search \
+answers that -- and not a position-first symbol lookup either: the caller does \
+not know a name or a file yet, which is exactly why it asks. Results are \
+repository-relative; a provider whose graph spans several repositories must \
+drop foreign rows rather than report paths relative to the wrong root, and say \
+that it did. mode is intent: explore maps the territory, plan additionally \
+names the tests that cover it.\
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "task"
+  type = "string"
+  required = true
+  summary = "Natural-language description of the task or question."
+
+  [[capability.input]]
+  name = "mode"
+  type = "string"
+  required = false
+  enum = ["explore", "plan"]
+  summary = "Whether to map the code generally or prepare an implementation plan. Defaults to explore."
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Maximum number of primary symbols. Defaults to 20."
+
+  [[capability.input]]
+  name = "keywords"
+  type = "string_list"
+  required = false
+  summary = "Extra domain words when the task's language may not match symbol names."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Repository-relative paths to include. Empty means the whole repository."
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+  summary = "Intent: include source blocks for the most relevant symbols."
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+  summary = "Maximum lines per source block when snippets were requested."
+
+  [[capability.output]]
+  name = "symbols"
+  type = "record_list"
+  required = true
+  summary = "The declarations most relevant to the task, ranked by the provider."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "The declaration's name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "The provider's own kind for the declaration."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "File holding the declaration, relative to the repository root."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Line where the declaration starts, starting at 1."
+
+    [[capability.output.field]]
+    name = "signature"
+    type = "string"
+    required = false
+    summary = "The declaration's signature, when the provider reports it."
+
+    [[capability.output.field]]
+    name = "summary"
+    type = "string"
+    required = false
+    summary = "The declaration's own documentation, when the provider reports it."
+
+  [[capability.output]]
+  name = "related"
+  type = "record_list"
+  required = false
+  summary = "Other declarations connected to the primary symbols."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+  [[capability.output]]
+  name = "snippets"
+  type = "record_list"
+  required = false
+  summary = "Source blocks for primary symbols, only when asked for and never from sensitive files."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "code"
+    type = "string"
+    required = true
+
+  [[capability.output]]
+  name = "tests"
+  type = "string_list"
+  required = false
+  summary = "Tests that cover the relevant code, reported in plan mode."
 
 [[capability]]
 id = "code.search"
@@ -1082,14 +1267,14 @@ effects = ["write", "process"]
   summary = "How many graph edges the index now holds."
 
 # ---------------------------------------------------------------------------
-# Ladygraph capabilities. Four answers no attached provider gives today.
+# Kivgraph capabilities. Four answers no attached provider gives today.
 #
-# Why Ladygraph does NOT appear under symbol.definition / references /
+# Why Kivgraph does NOT appear under symbol.definition / references /
 # implementations / overview / calls, or code.impact: serena and
 # codebase-memory already answer those, and a second implementation would not
 # add an answer -- it would rank two providers for one the funnel already has,
 # and cost +1,688 tok in every fixed-prefix client's request, forever, for a
-# duplicate. Ladygraph is declared ONLY for what it alone resolves: consumers
+# duplicate. Kivgraph is declared ONLY for what it alone resolves: consumers
 # across repositories (a real edge, not a path-shape match), the stable-key
 # identity retrieval the position-first family cannot do, the graph's own
 # unresolved-reference blind spots, and the published graph's provenance.
@@ -1111,7 +1296,7 @@ repository depends on the provider PACKAGE, never that it uses this symbol, and 
 carries no path for exactly that reason. Counting it as a use nobody observed is the \
 one mistake this shape invites. \
 \
-Answering from a position costs one extra lookup inside the provider: Ladygraph \
+Answering from a position costs one extra lookup inside the provider: Kivgraph \
 addresses symbols by a stable key, not by position, so the implementation resolves \
 file/line/column to that key before it can ask the graph anything. That lookup is the \
 provider's own cost, never this capability's -- callers still pay in file and line, \
@@ -1181,7 +1366,7 @@ version = "1.0.0"
 summary = "Return one symbol by its stable key."
 semantics = """
 The identity retrieval the position-first family cannot do: a stable key every \
-Ladygraph answer carries, resolved back to the one symbol it names, so a reference \
+Kivgraph answer carries, resolved back to the one symbol it names, so a reference \
 held across an edit that moved its line still points at the same thing. The key is \
 the address; there is no file and no line to pass.\
 """
@@ -1268,7 +1453,7 @@ effects = ["read"]
     name = "offset"
     type = "int"
     required = true
-    summary = "Byte offset of the reference. Ladygraph records no line here, and this declares what it has rather than a line it would have to guess."
+    summary = "Byte offset of the reference. Kivgraph records no line here, and this declares what it has rather than a line it would have to guess."
 
     [[capability.output.field]]
     name = "reason"
@@ -1598,29 +1783,37 @@ capability = "repository.index"
   # whose token cost barely depends on repository size at all.
   estimated_tokens = 60
 
-# The four ladygraph implementations share one provider and one supervised
-# stdio-MCP process (see [orchestrator.ladygraph] above): one child process,
-# four tools called against it over the same wire, no second index to build.
+# The seven kivgraph implementations share one provider and one supervised
+# stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
+# a handful of tools called against it over the same wire, no second index to
+# build.
 #
-# None of the four ships a live measurement yet -- ladygraph is not attached
-# to any shipped runners list, so nothing has ever actually called it through
-# this funnel. Duration below is not a guess: it comes from the provider's
-# own measured SLOs, not this page's usual "nearest shape already shipped"
-# fallback -- docs/performance/slo.md puts find_cross_repo_consumers at
-# p95 <= 5ms, and benchmarks/mcp-client/report.md measures the backend
-# itself at 0.014ms p95, both point queries against a published in-memory
-# snapshot. The estimates below sit in the low tens of milliseconds instead
-# of matching that directly, because they cost the stdio round trip on top
-# -- one write and one read against the child's pipes -- which neither
-# number above includes. Token sizes still follow the usual sizing-by-shape
-# reasoning: a cross-repo edge list, a point lookup, an unresolved scan, and
-# a handful of scalars, in that order. The moment real calls exist,
-# measurement takes over the way it does for every other implementation
-# here.
+# Duration below is not a guess: it comes from the provider's own measured
+# SLOs, not this page's usual "nearest shape already shipped" fallback --
+# docs/performance/slo.md puts find_cross_repo_consumers at p95 <= 5ms, and
+# benchmarks/mcp-client/report.md measures the backend itself at 0.014ms p95,
+# both point queries against a published in-memory snapshot. The estimates
+# below sit in the low tens of milliseconds instead of matching that
+# directly, because they cost the stdio round trip on top -- one write and
+# one read against the child's pipes -- which neither number above includes.
+# Token sizes follow the usual sizing-by-shape reasoning.
+#
+# The three position-first implementations pay a get_file_outline call before
+# their own tool, to turn a position into the declaration containing it, so
+# they are declared at roughly twice the cost of the point lookups beside
+# them. symbol.definition is the exception that pays only that one call: for
+# a graph of declarations, the declaration a position falls inside of already
+# IS the definition.
+#
+# What kivgraph is deliberately NOT declared for, so the funnel never
+# promises it: symbol.implementations (this server exposes no tool that
+# answers "who fulfils this interface" -- find_references reports uses, which
+# is a different question) and code.impact (its subject is a baseline diff,
+# and get_blast_radius walks out from a symbol, not from a change).
 
 [[implementation]]
-id = "ladygraph.cross_repo_consumers"
-provider = "ladygraph"
+id = "kivgraph.cross_repo_consumers"
+provider = "kivgraph"
 capability = "symbol.consumers"
 
   [implementation.constraints]
@@ -1633,8 +1826,47 @@ capability = "symbol.consumers"
   estimated_tokens = 900
 
 [[implementation]]
-id = "ladygraph.get"
-provider = "ladygraph"
+id = "kivgraph.definition"
+provider = "kivgraph"
+capability = "symbol.definition"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "15ms"
+  estimated_tokens = 200
+
+[[implementation]]
+id = "kivgraph.references"
+provider = "kivgraph"
+capability = "symbol.references"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "25ms"
+  estimated_tokens = 800
+
+[[implementation]]
+id = "kivgraph.overview"
+provider = "kivgraph"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "15ms"
+  estimated_tokens = 700
+
+[[implementation]]
+id = "kivgraph.get"
+provider = "kivgraph"
 capability = "symbol.get"
 
   [implementation.constraints]
@@ -1646,8 +1878,8 @@ capability = "symbol.get"
   estimated_tokens = 300
 
 [[implementation]]
-id = "ladygraph.unresolved_references"
-provider = "ladygraph"
+id = "kivgraph.unresolved_references"
+provider = "kivgraph"
 capability = "symbol.unresolved"
 
   [implementation.constraints]
@@ -1659,8 +1891,8 @@ capability = "symbol.unresolved"
   estimated_tokens = 1200
 
 [[implementation]]
-id = "ladygraph.status"
-provider = "ladygraph"
+id = "kivgraph.status"
+provider = "kivgraph"
 capability = "graph.status"
 
   [implementation.constraints]
@@ -1670,6 +1902,80 @@ capability = "graph.status"
   [implementation.cost]
   estimated_duration = "8ms"
   estimated_tokens = 200
+
+# ---------------------------------------------------------------------------
+# tokensave: the syntactic call graph of ONE rooted project.
+#
+# It answers the cold-start capability code.context first, then two of the same
+# capabilities the graph providers above do. The cold start is why this adapter
+# exists as more than another call-graph reader: a client holding only a task in
+# prose cannot ask a position-first symbol question yet. tokensave keeps its
+# own index in step on every call and never needs one built ahead of time,
+# which is why none of the implementations below declares requires_index.
+#
+# No code.search here: tokensave has no text engine, and answering a flat
+# search from a symbol index would be a different answer wearing the same
+# name. No symbol.definition either -- see the adapter's package doc.
+# ---------------------------------------------------------------------------
+
+[[implementation]]
+id = "tokensave.context"
+provider = "tokensave"
+capability = "code.context"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Two calls: status, then tokensave_context. Measured on the workspace root
+  # with snippets disabled: 1.3-4.6s warm depending on the query; the first
+  # call may additionally pay the index resync. The base replaces this after
+  # two successful calls.
+  estimated_duration = "3s"
+  estimated_tokens = 900
+# ---------------------------------------------------------------------------
+
+[[implementation]]
+id = "tokensave.calls"
+provider = "tokensave"
+capability = "symbol.calls"
+
+  [implementation.constraints]
+  languages = []          # its parsers cover go, typescript, rust, python, js and more
+  requires_index = false  # it syncs its own index on every call
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Three tool calls for one answer -- status, entities, find_exact_symbol --
+  # plus one walk per direction. Measured on a 53-repository index: 478ms warm,
+  # 10.3s on the first call after the server starts, because tokensave re-syncs
+  # its index before answering. The number below sits between the two on
+  # purpose; the base replaces it with what this machine actually observes
+  # after two successful calls.
+  estimated_duration = "1s"
+  estimated_tokens = 500
+
+[[implementation]]
+id = "tokensave.overview"
+provider = "tokensave"
+capability = "symbol.overview"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Two tool calls and one file read for the columns no provider reports.
+  # Measured: 4.3s warm on a 7.5k-file index, 14.4s cold. Same reasoning as
+  # tokensave.calls above.
+  estimated_duration = "2s"
+  estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.

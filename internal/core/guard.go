@@ -45,7 +45,7 @@ func (g guardedRunner) Run(ctx context.Context, req contract.RunRequest) (contra
 // assertion is how the core finds it. guardedRunner embeds contract.Runner,
 // an interface, so only that method set is promoted: ProbeIndex is dropped
 // on the floor, and the runner disappears from the detect sweep with no
-// error anywhere -- which is how ladygraph, the first supervised runner that
+// error anywhere -- which is how kivgraph, the first supervised runner that
 // also probes, silently reported no index for a graph it was holding. The
 // alternative, giving guardedRunner a ProbeIndex of its own, is worse: it
 // would make every guarded runner satisfy IndexProber, dragging in the ones
@@ -112,8 +112,15 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	if p := cfg.Orchestrator.Serena.Process; p != nil {
 		specs = append(specs, serenaSpecs(*p, cfg.Repositories)...)
 	}
-	if p := cfg.Orchestrator.Ladygraph.Process; p != nil {
-		added, err := ladygraphSpecs(cfg.Source, *p)
+	if p := cfg.Orchestrator.Kivgraph.Process; p != nil {
+		added, err := kivgraphSpecs(cfg.Source, *p)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, added...)
+	}
+	if p := cfg.Orchestrator.Tokensave.Process; p != nil {
+		added, err := tokensaveSpecs(cfg.Source, *p)
 		if err != nil {
 			return nil, err
 		}
@@ -188,30 +195,34 @@ func serenaSpec(id string, p config.ManagedProcess, args []string) supervisor.Sp
 	}
 }
 
-// ladygraphSpecs turns the settings file's ladygraph declaration into the
+// kivgraphSpecs turns the settings file's kivgraph declaration into the
 // one supervisor.Spec it launches. Unlike Serena there is only ever one:
 // the graph is one global corpus, published by atomic generation and read
 // by every repository alike (see the adapter's own package doc comment),
 // so per_repository has no meaning here and is refused loudly rather than
 // silently collapsed into the one shared server a caller might not have
 // meant.
-func ladygraphSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
+func kivgraphSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
 	if p.Instance == config.InstancePerRepository {
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: orchestrator.ladygraph.process.instance is %q, but ladygraph publishes one global "+
+			"settings %s: orchestrator.kivgraph.process.instance is %q, but kivgraph publishes one global "+
 				"graph -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
 	}
-	return []supervisor.Spec{ladygraphSpec(config.RunnerLadygraph, p)}, nil
+	return []supervisor.Spec{stdioSpec(config.RunnerKivgraph, p)}, nil
 }
 
-// ladygraphSpec turns the settings file's declaration into what the
-// supervisor package needs to launch and watch it. Transport is
-// TransportStdio, and Host, Port and EndpointPath are left zero: a stdio
-// server listens on nothing, and the supervisor package itself refuses a
-// spec that sets any of them rather than silently ignoring a likely config
-// mistake -- the same discipline serenaSpec applies to EndpointPath by
-// hand, just enforced one layer further in for this transport.
-func ladygraphSpec(id string, p config.ManagedProcess) supervisor.Spec {
+// stdioSpec turns the settings file's declaration into what the supervisor
+// package needs to launch and watch it. Transport is TransportStdio, and
+// Host, Port and EndpointPath are left zero: a stdio server listens on
+// nothing, and the supervisor package itself refuses a spec that sets any of
+// them rather than silently ignoring a likely config mistake -- the same
+// discipline serenaSpec applies to EndpointPath by hand, just enforced one
+// layer further in for this transport.
+//
+// Shared by both stdio far sides (kivgraph and tokensave) because the spec is
+// the same shape for either: only the id and the command differ, and those are
+// the caller's.
+func stdioSpec(id string, p config.ManagedProcess) supervisor.Spec {
 	return supervisor.Spec{
 		ID:           id,
 		Transport:    supervisor.TransportStdio,
@@ -226,6 +237,20 @@ func ladygraphSpec(id string, p config.ManagedProcess) supervisor.Spec {
 		IdleTimeout:  p.IdleTimeout,
 		StopGrace:    p.StopGrace,
 	}
+}
+
+// tokensaveSpecs turns the settings file's tokensave declaration into the one
+// supervisor.Spec it launches. Like kivgraph there is only ever one, and for
+// the same reason read the other way round: the graph belongs to the served
+// root, and a second copy of a server pointed at the same root would index
+// the same files twice into the same database.
+func tokensaveSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
+	if p.Instance == config.InstancePerRepository {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.tokensave.process.instance is %q, but tokensave serves one rooted "+
+				"project -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
+	}
+	return []supervisor.Spec{stdioSpec(config.RunnerTokensave, p)}, nil
 }
 
 // stopProcesses stops every server Atenea launched itself. A core with
