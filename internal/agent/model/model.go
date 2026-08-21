@@ -30,11 +30,19 @@ import (
 	"strings"
 	"time"
 
+	agentopencode "github.com/Tutitoos/atenea/internal/agent/opencode"
 	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+const (
+	// BackendClaude selects Claude Code's native envelope and stream protocol.
+	BackendClaude = "claude"
+	// BackendOpenCode selects OpenCode's isolated JSON event protocol.
+	BackendOpenCode = "opencode"
 )
 
 // DefaultBinary is the command looked up on PATH when Options names none.
@@ -75,6 +83,8 @@ const (
 // Options configure a Client. Everything here is what internal/config's
 // [model] table fixes, so retuning it never means touching Go.
 type Options struct {
+	// Backend selects the model CLI protocol. Empty means BackendClaude.
+	Backend string
 	// Binary is the CLI executable. A bare name is looked up on PATH.
 	Binary string
 	// Timeout is the fallback a Request takes when it does not set its own.
@@ -94,10 +104,12 @@ type Options struct {
 // per Turn. A caller working through both roles in the same run -- explore
 // then plan -- reuses the one Client instead of juggling two.
 type Client struct {
-	binary  string
-	timeout time.Duration
-	explore string
-	plan    string
+	backend  string
+	binary   string
+	timeout  time.Duration
+	explore  string
+	plan     string
+	opencode *agentopencode.Runner
 	// version answers what the CLI calls itself, for Floor's CLIVersion --
 	// memoised for the life of this Client, the same tradeoff
 	// internal/toolversion's own doc explains: an upgrade on disk underneath
@@ -117,17 +129,37 @@ func New(opts Options) (*Client, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"model client: timeout must not be negative, got %s", opts.Timeout)
 	}
+	backend := strings.ToLower(strings.TrimSpace(opts.Backend))
+	if backend == "" {
+		backend = BackendClaude
+	}
+	if backend != BackendClaude && backend != BackendOpenCode {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"model client: unknown backend %q", opts.Backend)
+	}
 	client := &Client{
+		backend: backend,
 		binary:  strings.TrimSpace(opts.Binary),
 		timeout: opts.Timeout,
 		explore: strings.TrimSpace(opts.Explore),
 		plan:    strings.TrimSpace(opts.Plan),
 	}
 	if client.binary == "" {
-		client.binary = DefaultBinary
+		if backend == BackendOpenCode {
+			client.binary = agentopencode.DefaultBinary
+		} else {
+			client.binary = DefaultBinary
+		}
 	}
 	if client.timeout == 0 {
 		client.timeout = DefaultTimeout
+	}
+	if backend == BackendOpenCode {
+		runner, err := agentopencode.New(agentopencode.Options{Binary: client.binary, Timeout: client.timeout})
+		if err != nil {
+			return nil, err
+		}
+		client.opencode = runner
 	}
 	client.version = toolversion.New(client.binary, "--version")
 	return client, nil
@@ -538,6 +570,9 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if timeout == 0 {
 		timeout = c.timeout
 	}
+	if c.backend == BackendOpenCode {
+		return c.turnOpenCode(ctx, dir, timeout, req)
+	}
 
 	if req.reservesAnswer() {
 		return c.converse(ctx, dir, timeout, req)
@@ -675,6 +710,10 @@ type FloorMeasurement struct {
 // at all has no USD to report honestly. A floor measured on a turn that did
 // work is not a floor.
 func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
+	if c.backend == BackendOpenCode {
+		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
+			"opencode floor probes are not supported: its event stream does not expose the Claude cache-prefix measurement")
+	}
 	turn := Request{
 		Role:     req.Role,
 		Prompt:   floorPrompt,
@@ -763,6 +802,10 @@ const firstCallPrompt = "Call the Glob tool exactly once, with the pattern " +
 // cache states and two receipts pretending to be one measurement, which is
 // the mistake internal/floor's own PrefixTokens doc records.
 func (c *Client) FirstCall(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
+	if c.backend == BackendOpenCode {
+		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
+			"opencode first-call probes are not supported: its event stream does not expose the Claude message accounting")
+	}
 	turn := Request{
 		Role:     req.Role,
 		Prompt:   firstCallPrompt,

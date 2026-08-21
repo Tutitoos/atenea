@@ -45,8 +45,9 @@ decisions or later contracts:
 
 - interactive permission confirmation: the current security model is explicit
   grant/refusal through policy and `--allow`, with no implicit prompt;
-- OpenCode as a local-model provider: OpenCode is supported as a client/wrapper,
-  but a provider adapter needs a stable invocation and result contract;
+- exact OpenCode parity with Claude Code: the opt-in provider adapter exists,
+  but OpenCode still lacks a native schema flag, a common cost cap and a
+  permanently reliable terminal event guarantee;
 - exact hard per-turn token enforcement: `budget_usd` is an authorization
   forecast, and `limits.max_tokens` narrows the observed `ReadTokens` boundary,
   but supported external providers do not expose one uniform hard cap;

@@ -35,6 +35,15 @@ func stub(t *testing.T, stdout string) string {
 	return path
 }
 
+func executableModelStub(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+		t.Fatalf("writing executable model stub: %v", err)
+	}
+	return path
+}
+
 // testClient builds a Client over a stub binary, both roles configured so
 // any Request.Role in a test resolves to a model name.
 func testClient(t *testing.T, stdout string) *Client {
@@ -215,6 +224,57 @@ func TestAnUnknownRoleIsRefused(t *testing.T) {
 	_, err := client.Turn(context.Background(), req)
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
+func TestOpenCodeBackendUsesItsOwnEventProtocol(t *testing.T) {
+	binary := stub(t, "")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\ncat <<'JSON'\n"+
+		`{"type":"text","part":{"id":"text-1","type":"text","text":"{\"completeness\":1,\"summary\":\"done\"}","time":{"end":2}}}`+"\n"+
+		`{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":2,"output":1,"cache":{"read":0,"write":0}},"cost":0.01}}`+"\nJSON\n"), 0o700); err != nil {
+		t.Fatalf("write OpenCode stub: %v", err)
+	}
+	client, err := New(Options{Backend: BackendOpenCode, Binary: binary, Explore: "anthropic/sonnet", Plan: "anthropic/opus"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := client.Turn(context.Background(), Request{
+		Role:      RoleExplore,
+		Prompt:    "answer",
+		Schema:    map[string]any{"type": "object"},
+		BudgetUSD: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Completeness == nil || *answer.Completeness != 1 {
+		t.Fatalf("completeness = %v, want 1", answer.Completeness)
+	}
+}
+
+func TestOpenCodeBackendHonorsRequestTimeout(t *testing.T) {
+	binary := executableModelStub(t, "sleep 30")
+	client, err := New(Options{
+		Backend: BackendOpenCode,
+		Binary:  binary,
+		Timeout: time.Minute,
+		Explore: "anthropic/sonnet",
+		Plan:    "anthropic/opus",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	started := time.Now()
+	_, err = client.Turn(context.Background(), Request{
+		Role:    RoleExplore,
+		Prompt:  "answer",
+		Timeout: 50 * time.Millisecond,
+	})
+	if contract.KindOf(err) != contract.FailureTimeout {
+		t.Fatalf("Turn error kind = %v, want timeout: %v", contract.KindOf(err), err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("request timeout took %s", elapsed)
 	}
 }
 

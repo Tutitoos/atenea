@@ -38,9 +38,17 @@ silently introduced into a process that may be running unattended.
 
 ## Provider boundaries
 
-OpenCode is supported as a client/wrapper surface. It is not registered as a
-local-model provider because that requires a stable invocation, cancellation,
-usage and result contract that is independent of OpenCode's client protocol.
+OpenCode has an opt-in local-model backend through `[model].backend =
+"opencode"`. Its event parser is isolated from Claude Code and requires a
+completed `step_finish` event plus text before accepting an answer. It supports
+model selection, repository confinement, cancellation, observed usage and MCP
+configuration translation; it does not pretend that OpenCode's JSON stream is
+Claude's final envelope.
+
+The backend remains deliberately narrower than Claude Code: OpenCode has no
+native JSON-schema flag or provider-independent budget flag. Atenea asks for
+structured JSON in the prompt, records `step_finish` usage/cost when present,
+and treats missing terminal events as unavailable rather than successful.
 
 Agent `limits.max_tokens` is carried, validated and used by the planner to
 narrow the model client's observed incremental read boundary when a grant

@@ -1232,9 +1232,35 @@ plan = "opus"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := config.Model{Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "opus"}
+	want := config.Model{Backend: "claude", Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "opus"}
 	if cfg.Model != want {
 		t.Errorf("Model = %+v, want %+v", cfg.Model, want)
+	}
+}
+
+func TestTheModelBlockCanSelectOpenCode(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+`
+[model]
+backend = "opencode"
+binary = "/tmp/opencode-test"
+explore = "anthropic/sonnet"
+plan = "anthropic/opus"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Model.Backend != "opencode" || cfg.Model.Binary != "/tmp/opencode-test" {
+		t.Fatalf("Model = %+v, want opencode backend and explicit binary", cfg.Model)
+	}
+}
+
+func TestAnUnknownModelBackendIsRefused(t *testing.T) {
+	_, err := config.Load(write(t, minimal+`
+[model]
+backend = "unknown"
+`))
+	if err == nil || !strings.Contains(err.Error(), "model.backend") {
+		t.Fatalf("error = %v, want model.backend validation", err)
 	}
 }
 

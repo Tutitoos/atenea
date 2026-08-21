@@ -304,11 +304,16 @@ type Orchestrator struct {
 // already imports internal/config); the caller that holds both packages
 // converts with a plain model.Options(cfg.Model) instead.
 //
-// Model choice is fixed here, per role, and not chosen per task: there is
+// Backend and model choice are fixed here, per role, and not chosen per task:
+// there is
 // no cost data yet a per-task choice could be justified against, and a knob
 // nobody can tune correctly is worse than one fixed default that is visible
 // in a file and changed by hand once it is wrong.
 type Model struct {
+	// Backend selects the model CLI protocol: "claude" or "opencode".
+	// Empty is normalized to "claude" by the model client for compatibility
+	// with older settings files.
+	Backend string
 	// Binary is the CLI executable that answers a model turn. A bare name
 	// is looked up on PATH.
 	Binary string
@@ -788,6 +793,7 @@ type file struct {
 
 // fileModel is [model] as written.
 type fileModel struct {
+	Backend string `toml:"backend"`
 	Binary  string `toml:"binary"`
 	Timeout string `toml:"timeout"`
 	Explore string `toml:"explore"`
@@ -2108,10 +2114,18 @@ func (c fileCore) build(source string) (Core, error) {
 const (
 	defaultModelBinary  = "claude"
 	defaultModelTimeout = 90 * time.Second
+	defaultModelBackend = "claude"
 )
 
 func (m fileModel) build(source string) (Model, error) {
-	out := Model{Binary: defaultModelBinary, Timeout: defaultModelTimeout}
+	out := Model{Backend: defaultModelBackend, Binary: defaultModelBinary, Timeout: defaultModelTimeout}
+	if strings.TrimSpace(m.Backend) != "" {
+		out.Backend = strings.ToLower(strings.TrimSpace(m.Backend))
+	}
+	if out.Backend != "claude" && out.Backend != "opencode" {
+		return Model{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: model.backend %q must be claude or opencode", source, m.Backend)
+	}
 	if strings.TrimSpace(m.Binary) != "" {
 		out.Binary = strings.TrimSpace(m.Binary)
 	}

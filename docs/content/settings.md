@@ -435,6 +435,7 @@ from one repository never refuses work on another.
 
 ```toml
 [model]
+backend = "claude"  # protocol: claude or opencode; omitted keeps claude
 binary = "claude"    # the CLI that answers a turn; a bare name is looked up on PATH
 timeout = "90s"      # per turn, the same ceiling orchestrator.claudecode uses
 explore = ""         # model for the agent that explores a repository
@@ -457,11 +458,20 @@ worse than a fixed default that is visible in this file and changed by hand
 once it is wrong. Fill in a model name or an alias your CLI resolves on its
 own (`sonnet`, `opus`, or a full name) to turn either agent on.
 
-Both roles read from the same `binary` and `timeout`: one CLI, one ceiling,
-whichever role is asking. `timeout` matches
+Both roles read from the same `backend`, `binary` and `timeout`: one protocol,
+one CLI and one ceiling, whichever role is asking. `timeout` matches
 `orchestrator.claudecode.timeout` for the same reason it is set there — it
 is the same client, on the same machine, so the same measured ceiling
 applies.
+
+The default backend is Claude Code. To opt into the isolated OpenCode event
+protocol, set `backend = "opencode"` and use a provider/model identifier such
+as `anthropic/claude-sonnet-4-5`. OpenCode receives an explicit `--format json`
+run, never `--auto`; Atenea requires a completed `step_finish` event and fails
+closed when OpenCode exits before producing one. OpenCode has no equivalent of
+Claude Code's `--json-schema` or `--max-budget-usd`: structured answers are
+requested in the prompt, and the reported cost is observational. The Claude
+cache floor probes do not apply to OpenCode.
 
 `orchestrator.claudecode.source` and `terminal_binary` keep Claude Code as a
 headless runner while Claude.app remains an MCP client. Do not configure the
