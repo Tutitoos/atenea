@@ -5,10 +5,11 @@ weight: 8
 
 # v1 contracts
 
-Fase 10 turns the remaining design questions into explicit contracts. A
-capability is complete when its behavior is code-backed and testable; a feature
-that needs a new provider or an interactive product decision is recorded as a
-deliberate boundary instead of being implied by configuration.
+Fases 10 y 11 convierten las preguntas de diseño restantes en contratos
+explícitos. Una capacidad está completa cuando su comportamiento tiene código y
+tests; una función que necesita otro provider o una decisión interactiva queda
+registrada como límite deliberado, no implícita en la configuración. La matriz
+operativa completa está en [v1.0 policy](v1-policy.md).
 
 ## Structural search
 
@@ -43,8 +44,10 @@ usage and result contract that is independent of OpenCode's client protocol.
 
 Agent `limits.max_tokens` is carried, validated and exposed in assignments, but
 is advisory. `budget_usd` is a forecast and authorization check, not a hard
-provider-side ceiling. The supported providers do not expose one uniform cap
-that Atenea can enforce without claiming precision it does not have.
+provider-side ceiling. `ReadTokens` provides an observed, incremental stop for
+the model client, but it is not equivalent to preventing the provider from
+finishing an in-flight event. The supported providers do not expose one uniform
+cap that Atenea can enforce without claiming precision it does not have.
 
 Citation evidence is retained by the reviewer and trace layers. It is not a
 hard acceptance gate until a threshold exists that handles abbreviated paths,

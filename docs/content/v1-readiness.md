@@ -5,9 +5,10 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the hardening phase. It separates what
-is implemented and tested in this repository from capabilities that would
-require a new contract or an external provider decision.
+This page is the acceptance record for the v1.0 candidate. It separates what is
+implemented and tested in this repository from capabilities that would require
+a new contract or an external provider decision. The normative policy is in
+[`v1.0 policy`](v1-policy.md).
 
 ## Code-backed and shipped
 
@@ -23,6 +24,7 @@ require a new contract or an external provider decision.
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/` | Native adapters compile and are tested |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
 | Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated |
+| v1.0 policy gate | `scripts/v1-policy-check.sh`, `docs/content/v1-policy.md` | The declared guarantees and deferred contracts have stable anchors |
 
 ## Acceptance command
 
@@ -38,7 +40,7 @@ suite and shell entry points. It does not publish a release.
 
 ## Deliberately deferred
 
-These are not hidden failures in the current product. They are explicit v1
+These are not hidden failures in the current product. They are explicit v1.0
 decisions or later contracts:
 
 - interactive permission confirmation: the current security model is explicit
@@ -46,8 +48,9 @@ decisions or later contracts:
 - OpenCode as a local-model provider: OpenCode is supported as a client/wrapper,
   but a provider adapter needs a stable invocation and result contract;
 - hard per-turn token enforcement: `budget_usd` is an authorization forecast,
-  and `limits.max_tokens` remains an advisory agent declaration because the
-  supported external providers do not expose one uniform hard cap;
+  `ReadTokens` can stop an observed conversation, and `limits.max_tokens`
+  remains an advisory agent declaration because the supported external providers
+  do not expose one uniform hard cap;
 - citation enforcement as a hard gate: citation evidence exists, but a safe
   threshold for abbreviated or renamed paths is not established.
 

@@ -1,0 +1,63 @@
+---
+title: v1.0 policy
+weight: 9
+---
+
+# Política de Atenea v1.0
+
+Esta página es el cierre operativo de los contratos que podían confundirse con
+funcionalidades incompletas. La regla es sencilla: una garantía solo se anuncia
+si Atenea puede observarla y hacerla cumplir de forma determinista en todos los
+proveedores soportados.
+
+## Matriz de garantías
+
+| Área | Garantía v1.0 | Evidencia | Límite conocido |
+| --- | --- | --- | --- |
+| Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo | `pkg/contract/workflow.go`, `internal/core/`, `--allow` | No hay confirmación interactiva; los procesos desatendidos requieren concesión explícita |
+| Tiempo | `limits.max_duration` limita el turno mediante el contexto de ejecución | `pkg/contract/assignment.go`, `internal/agent/model/model.go` | La terminación depende de que el proceso externo responda al cierre del contexto |
+| Coste | `budget_usd` autoriza y pronostica; el proveedor aplica su propio límite entre mensajes | `internal/agent/planner/`, ayuda de `workflow` | Un mensaje ya iniciado puede superar la previsión |
+| Tokens | `limits.max_tokens` se transporta, valida, hereda y registra como límite declarado | `pkg/contract/assignment.go`, `internal/agent/wire.go` | No es un hard cap: los proveedores no ofrecen una unidad ni una señal de corte uniforme |
+| Lectura incremental | `ReadTokens` puede pedir al cliente que deje de leer y produzca una respuesta parcial | `internal/agent/model/model.go` | El uso observado puede llegar con el evento en vuelo; no equivale a impedir cada token posterior |
+| Citas | Las citas `path:line` se comprueban y las citas con fragmento adyacente pueden verificar contenido | `internal/agent/reviewer/citations.go` | No se exige una cantidad mínima: abreviaturas, renombres y rutas compuestas no tienen una política segura común |
+| OpenCode | OpenCode funciona como superficie cliente/wrapper | `cmd/atenea/main.go`, `internal/clientconfig/` | No se anuncia como provider local: faltan contrato estable de invocación, cancelación, uso y resultado |
+| Búsqueda estructural | `symbol.search` devuelve declaraciones Serena filtradas y ordenadas de forma determinista | `internal/adapter/serena/serena.go`, `symbols.go` | Requiere índice Serena disponible; `code.search` sigue siendo búsqueda textual |
+
+## Decisiones de no-implementación
+
+Estas decisiones no son fallos silenciosos:
+
+1. No se añade un prompt interactivo de permisos a un daemon o adaptador que
+   puede ejecutarse sin una persona presente.
+2. No se presenta OpenCode como provider hasta disponer de un contrato propio
+   y testeable, independiente de su protocolo de cliente.
+3. No se convierte `limits.max_tokens` en una falsa garantía. La API no tiene
+   todavía un `max_tokens` común que todos los proveedores acepten y respeten.
+4. No se convierte la presencia de una cita en prueba de la narrativa completa.
+   El reviewer verifica ubicaciones y fragmentos, no el significado de cada
+   afirmación.
+
+## Criterios para v1.1
+
+Una futura ampliación puede cambiar cualquiera de estas decisiones solo si
+aporta, junto con código y tests:
+
+- una señal de uso/cancelación común y una semántica documentada para cada
+  provider;
+- un flujo de permisos interactivo con identidad de sesión, timeout y modo no
+  interactivo explícito;
+- un adapter OpenCode con lifecycle, errores, cancelación, resultado y uso;
+- una política de citas basada en un contrato de rutas estable, incluyendo
+  renombres y respuestas que mezclen varias fuentes.
+
+## Verificación
+
+El cierre reproducible es:
+
+```sh
+bash scripts/v1-readiness.sh
+```
+
+Ese gate valida la higiene del árbol, la ausencia de `codebase-memory` activo,
+formato, módulos, `vet`, build, tests con race y scripts operativos. La política
+de esta página se comprueba además por `scripts/v1-policy-check.sh`.

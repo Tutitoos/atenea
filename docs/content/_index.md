@@ -61,6 +61,7 @@ rewritten when they do.
 - [Operations]({{< relref "operations" >}}) — release smoke tests, recovery and incident response
 - [v1 readiness]({{< relref "v1-readiness" >}}) — the code-backed acceptance gate and deferred contracts
 - [v1 contracts]({{< relref "v1-contracts" >}}) — structural search, permission and provider decisions
+- [v1.0 policy]({{< relref "v1-policy" >}}) — garantías, límites y criterios de v1.1
 - [Day to day]({{< relref "day-to-day" >}}) — the five commands worth remembering
 - [Architecture]({{< relref "architecture" >}})
 - [Settings]({{< relref "settings" >}})

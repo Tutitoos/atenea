@@ -308,7 +308,9 @@ a 23-step run 2026-08-16: a $0.09 share spent $0.41, and a $5.22 grant was
 charged $5.88. Budget for the work, then expect a step to exceed its share by up
 to the cost of one turn, and the run to exceed its grant by the sum of those.
 
-Nothing here honors limits.max_tokens either; it is carried and unread.
+limits.max_tokens is carried and validated as an advisory declaration. The
+model client can use its separate ReadTokens allowance to stop an observed
+conversation, but no provider-independent hard token ceiling is promised.
 
 Flags come before the ids -- Go's parser stops at the first word that is not a
 flag, so anything after one is read as an id.

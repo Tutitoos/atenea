@@ -11,7 +11,7 @@ trap 'rm -rf "$build_dir"' EXIT
 cd "$root"
 export TMPDIR="${TMPDIR:-/tmp}"
 
-echo "[1/8] repository hygiene"
+echo "[1/9] repository hygiene"
 test -z "$(git status --short)" || {
 	echo "working tree must be clean" >&2
 	git status --short >&2
@@ -19,17 +19,18 @@ test -z "$(git status --short)" || {
 }
 git diff --check
 
-echo "[2/8] active codebase-memory references"
+echo "[2/9] active codebase-memory references"
 if rg -n -i 'codebase.?memory|codebase_memory' \
 	--glob '!docs/content/measuring-the-wrong-process.md' \
 	--glob '!docs/content/not-built-yet.md' \
+	--glob '!docs/content/v1-policy.md' \
 	--glob '!docs/content/v1-readiness.md' \
 	--glob '!scripts/v1-readiness.sh' .; then
 	echo "codebase-memory must not be active" >&2
 	exit 1
 fi
 
-echo "[3/8] formatting"
+echo "[3/9] formatting"
 unformatted="$(gofmt -l .)"
 test -z "$unformatted" || {
 	echo "gofmt would rewrite:" >&2
@@ -37,21 +38,22 @@ test -z "$unformatted" || {
 	exit 1
 }
 
-echo "[4/8] module graph"
+echo "[4/9] module graph"
 go mod tidy
 git diff --exit-code go.mod go.sum
 
-echo "[5/8] static validation"
+echo "[5/9] static validation"
 go vet ./...
 
-echo "[6/8] build"
+echo "[6/9] build"
 go build -trimpath -buildvcs=false -o "$build_dir/atenea" ./cmd/atenea
 
-echo "[7/8] race suite"
+echo "[7/9] race suite"
 go test -race -count=1 ./...
 
-echo "[8/8] shell entry points"
-bash -n scripts/install.sh scripts/release-smoke.sh scripts/v1-readiness.sh
+echo "[8/9] policy and shell entry points"
+bash -n scripts/install.sh scripts/release-smoke.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh
+scripts/v1-policy-check.sh
 "$build_dir/atenea" version
 
 echo "v1 readiness gate passed"
