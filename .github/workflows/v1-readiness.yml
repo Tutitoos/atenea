@@ -1,0 +1,62 @@
+name: v1-readiness
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: readiness gate
+    runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run reproducible pre-v1 gate
+        run: bash scripts/v1-readiness.sh
+
+  native-build:
+    name: native build / ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-14
+            os: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and report native binary
+        run: |
+          set -eu
+          go build -trimpath -buildvcs=false -o /tmp/atenea ./cmd/atenea
+          /tmp/atenea version

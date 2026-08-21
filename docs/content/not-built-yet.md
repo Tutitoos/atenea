@@ -15,6 +15,11 @@ not do yet, in the order the design itself put them. Each entry says how you wou
 know it was finished, because "done" is the word this page exists to be careful
 with.
 
+For the current implementation status, use [v1 readiness](v1-readiness.md).
+This page is a historical design ledger: several entries record decisions that
+were later implemented or deliberately narrowed, while the readiness page is the
+acceptance source for the shipped tree.
+
 ## Ranked code search, if anything ever wants it
 
 `code.search` used to declare a fourth graph implementation,
