@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func fakeCodex(t *testing.T, stdout string, exit int, delay time.Duration, stder
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = \"--version\" ]; then echo 'codex fake 1.0'; exit 0; fi\n" +
 		"cat >/dev/null\n" +
-		"sleep " + delay.String() + "\n" +
+		"sleep " + strconv.FormatFloat(delay.Seconds(), 'f', -1, 64) + "\n" +
 		"printf '%s\\n' " + quoted + "\n" +
 		"printf '%s\\n' '" + strings.ReplaceAll(stderr, "'", "'\\''") + "' >&2\n" +
 		"exit " + formatInt(exit) + "\n"
