@@ -40,10 +40,12 @@ const DefaultTerminalBinary = "codex"
 // DefaultAppBinary is the Codex executable bundled with the ChatGPT app.
 const DefaultAppBinary = "/Applications/ChatGPT.app/Contents/Resources/codex"
 
+// DefaultTimeout is the maximum duration of one Codex search turn.
 const DefaultTimeout = 90 * time.Second
 
 const defaultContextLines = 2
 
+// Options configures the Codex executable and the implementations it serves.
 type Options struct {
 	Binary          string
 	Source          string
@@ -54,6 +56,7 @@ type Options struct {
 	Timeout         time.Duration
 }
 
+// Runner adapts one Codex executable to Atenea's runner contract.
 type Runner struct {
 	binary          string
 	source          string
@@ -65,6 +68,7 @@ type Runner struct {
 	version         *toolversion.Probe
 }
 
+// New validates options and constructs a Codex runner.
 func New(opts Options) (*Runner, error) {
 	for _, pattern := range opts.Sensitive {
 		if _, err := path.Match(pattern, "probe"); err != nil {
@@ -139,20 +143,25 @@ func (r *Runner) Surface() string {
 	return resolved.Source + ":" + resolved.Path
 }
 
+// ID returns the stable adapter identifier.
 func (r *Runner) ID() string { return "codex" }
 
+// Serves reports whether the runner handles an implementation identifier.
 func (r *Runner) Serves(implementationID string) bool {
 	return slices.Contains(r.implementations, implementationID)
 }
 
+// Capabilities returns the capabilities supported by the runner.
 func (r *Runner) Capabilities() []string { return []string{CodeSearch} }
 
+// Implementations returns the configured implementation identifiers in order.
 func (r *Runner) Implementations() []string {
 	out := slices.Clone(r.implementations)
 	slices.Sort(out)
 	return out
 }
 
+// Run executes one funded, read-only Codex search turn.
 func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
 	defer func() { out.ToolVersion = r.version.Version(ctx) }()
 	if err := req.Validate(); err != nil {

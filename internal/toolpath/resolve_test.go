@@ -1,15 +1,24 @@
 package toolpath
 
 import (
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
+
+func goBinary(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestResolveAutoUsesDeclaredOrder(t *testing.T) {
 	got, err := Resolve("auto", []Candidate{
 		{Source: "terminal", Binary: "definitely-not-installed"},
-		{Source: "app", Binary: filepath.Join(runtime.GOROOT(), "bin", "go")},
+		{Source: "app", Binary: filepath.Join(filepath.Dir(goBinary(t)), "go")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +31,7 @@ func TestResolveAutoUsesDeclaredOrder(t *testing.T) {
 func TestResolveExplicitSourceDoesNotFallback(t *testing.T) {
 	_, err := Resolve("terminal", []Candidate{
 		{Source: "terminal", Binary: "definitely-not-installed"},
-		{Source: "app", Binary: filepath.Join(runtime.GOROOT(), "bin", "go")},
+		{Source: "app", Binary: filepath.Join(filepath.Dir(goBinary(t)), "go")},
 	})
 	if err == nil {
 		t.Fatal("explicit terminal source unexpectedly fell back to app")

@@ -768,7 +768,7 @@ func declarationAt(found []entity, line int, hint string) (entity, bool) {
 			best, ok = item, true
 		case hint != "" && item.Name == hint && best.Name != hint:
 			best = item
-		case span(item) < span(best) && !(hint != "" && best.Name == hint):
+		case span(item) < span(best) && (hint == "" || best.Name != hint):
 			best = item
 		}
 	}
