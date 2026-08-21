@@ -79,6 +79,10 @@ type process struct {
 	// writeMu serializes writes onto the one shared pipe.
 	writeMu sync.Mutex
 	stderr  *tail
+	// stderrDone closes when the copier has consumed the child's final
+	// diagnostics. stdout and stderr are separate pipes, so observing EOF on
+	// stdout does not by itself mean the last stderr line is already in tail.
+	stderrDone chan struct{}
 	// gone closes when the reader sees the process stop talking. Every caller
 	// waiting on an answer selects on it, so a server that dies mid-call fails
 	// its callers instead of hanging them until their timeouts expire one by
@@ -298,8 +302,17 @@ func (b *stdioBackend) spawn() (*process, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, b.fail(contract.FailureUnavailable, "%v", err)
 	}
-	proc := &process{cmd: cmd, stdin: stdin, stderr: &tail{}, gone: make(chan struct{})}
-	go func() { _, _ = io.Copy(proc.stderr, stderrPipe) }()
+	proc := &process{
+		cmd:        cmd,
+		stdin:      stdin,
+		stderr:     &tail{},
+		stderrDone: make(chan struct{}),
+		gone:       make(chan struct{}),
+	}
+	go func() {
+		defer close(proc.stderrDone)
+		_, _ = io.Copy(proc.stderr, stderrPipe)
+	}()
 	go b.read(proc, stdout)
 	return proc, nil
 }
@@ -460,6 +473,14 @@ func (p *process) write(body []byte) error {
 // stdio server that is usually where the reason is -- and wraps the sentinel
 // the retry looks for.
 func (b *stdioBackend) gone(proc *process, method string) error {
+	// The stdout reader can observe the process going away a few scheduler
+	// ticks before the stderr copier sees EOF. Give that copier a short chance
+	// to publish the server's own reason, while retaining a bound for malformed
+	// children that inherit the descriptor without exiting cleanly.
+	select {
+	case <-proc.stderrDone:
+	case <-time.After(250 * time.Millisecond):
+	}
 	reason := "the server stopped"
 	if proc.why != nil {
 		reason = proc.why.Error()

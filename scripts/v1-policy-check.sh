@@ -8,6 +8,16 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+contains() {
+	local pattern="$1"
+	shift
+	if command -v rg >/dev/null 2>&1; then
+		rg -q "$pattern" "$@"
+	else
+		grep -RIniEq --exclude-dir=.git "$pattern" "$@"
+	fi
+}
+
 required_files=(
 	"docs/content/v1-policy.md"
 	"docs/content/v1-contracts.md"
@@ -22,12 +32,12 @@ for file in "${required_files[@]}"; do
 done
 
 policy_docs=(docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md)
-rg -q 'limits\.max_tokens' "${policy_docs[@]}"
-rg -q 'advisory|hard cap|hard cap' "${policy_docs[@]}"
-rg -q 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/content/v1-contracts.md
-rg -q 'interactive permission|confirmación interactiva|interactivo' \
+contains 'limits\.max_tokens' "${policy_docs[@]}"
+contains 'advisory|hard cap' "${policy_docs[@]}"
+contains 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/content/v1-contracts.md
+contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-rg -q 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-rg -q 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 
 echo "v1 policy anchors passed"

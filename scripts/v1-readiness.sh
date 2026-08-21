@@ -20,12 +20,32 @@ test -z "$(git status --short)" || {
 git diff --check
 
 echo "[2/9] active codebase-memory references"
-if rg -n -i 'codebase.?memory|codebase_memory' \
-	--glob '!docs/content/measuring-the-wrong-process.md' \
-	--glob '!docs/content/not-built-yet.md' \
-	--glob '!docs/content/v1-policy.md' \
-	--glob '!docs/content/v1-readiness.md' \
-	--glob '!scripts/v1-readiness.sh' .; then
+if command -v rg >/dev/null 2>&1; then
+	active_refs=(
+		rg -n -i 'codebase.?memory|codebase_memory'
+		--glob '!docs/content/measuring-the-wrong-process.md'
+		--glob '!docs/content/not-built-yet.md'
+		--glob '!docs/content/v1-policy.md'
+		--glob '!docs/content/v1-readiness.md'
+		--glob '!scripts/v1-readiness.sh'
+		.
+	)
+else
+	# Ubuntu's stock runner does not include ripgrep. Keep the gate portable
+	# without weakening it when the preferred search tool is unavailable.
+	active_refs=(
+		grep -RIniE
+		--exclude-dir=.git
+		--exclude='measuring-the-wrong-process.md'
+		--exclude='not-built-yet.md'
+		--exclude='v1-policy.md'
+		--exclude='v1-readiness.md'
+		--exclude='v1-readiness.sh'
+		'codebase.?memory|codebase_memory'
+		.
+	)
+fi
+if "${active_refs[@]}"; then
 	echo "codebase-memory must not be active" >&2
 	exit 1
 fi
