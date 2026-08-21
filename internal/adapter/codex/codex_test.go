@@ -140,7 +140,9 @@ func TestCodexUnauthenticatedProcessIsRecoverable(t *testing.T) {
 }
 
 func TestCodexTimeoutIsRecoverable(t *testing.T) {
-	runner := newRunner(t, fakeCodex(t, "", 0, time.Second, ""), 20*time.Millisecond)
+	// Keep enough margin for macOS process-group startup; the fake still sleeps
+	// for a full second, so this remains an unambiguous timeout test.
+	runner := newRunner(t, fakeCodex(t, "", 0, time.Second, ""), 100*time.Millisecond)
 	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{"query": "x"}))
 	if contract.KindOf(err) != contract.FailureTimeout {
 		t.Fatalf("kind = %v, want timeout: %v", contract.KindOf(err), err)
