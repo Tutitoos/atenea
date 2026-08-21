@@ -294,6 +294,34 @@ func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
 	}
 }
 
+func TestDeclaredMaxTokensNarrowsTheObservedReadAllowance(t *testing.T) {
+	c := &stub{answer: whole(t, map[string]string{
+		"summary": "s", "findings": "f",
+	})}
+	in := exploreAssignment()
+	in.BudgetUSD = usd(0.80)
+	in.Limits.MaxTokens = 1234
+	explore(context.Background(), in, config.Config{}, withTools(c))
+
+	if c.seen.ReadTokens != 1234 {
+		t.Errorf("read tokens = %v, want declared max %v", c.seen.ReadTokens, 1234)
+	}
+}
+
+func TestDeclaredMaxTokensDoesNotWidenTheGrantAllowance(t *testing.T) {
+	c := &stub{answer: whole(t, map[string]string{
+		"summary": "s", "findings": "f",
+	})}
+	in := exploreAssignment()
+	in.BudgetUSD = usd(0.80)
+	in.Limits.MaxTokens = allowance.Tokens(0.80) + 1
+	explore(context.Background(), in, config.Config{}, withTools(c))
+
+	if want := allowance.Tokens(0.80); c.seen.ReadTokens != want {
+		t.Errorf("read tokens = %v, want grant allowance %v", c.seen.ReadTokens, want)
+	}
+}
+
 func TestAnUngrantedRunPassesNoCeiling(t *testing.T) {
 	c := &stub{answer: whole(t, map[string]string{
 		"summary": "s", "findings": "f",

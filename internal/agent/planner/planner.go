@@ -247,15 +247,26 @@ func answer(stdout io.Writer, out report) error {
 	return json.NewEncoder(stdout).Encode(out)
 }
 
-// readTokens is what model.Request.ReadTokens is given: allowance.Tokens of
-// the step's own dollar budget. budget(in) is zero for an ungranted run,
-// which makes this zero too -- off, the same reading ReadTokens gives every
-// zero. readShare and tokensPerUSD lived here until 2026-08-15 -- see
-// internal/allowance for the arithmetic and the measurements it is built
-// on, now enforced at workflow create rather than merely reserved from a
-// grant.
+// readTokens is the observed read boundary passed to model.Request. It starts
+// from allowance.Tokens of the step's own dollar budget and is narrowed by a
+// declared max_tokens when one is smaller. This is deliberately an observed
+// boundary, not a provider hard cap: model clients may receive an in-flight
+// event before they can stop reading. budget(in) is zero for an ungranted run,
+// which keeps ReadTokens at zero too. readShare and tokensPerUSD lived here
+// until 2026-08-15 -- see internal/allowance for the arithmetic and the
+// measurements it is built on, now enforced at workflow create rather than
+// merely reserved from a grant.
 func readTokens(in assignment) int {
-	return allowance.Tokens(budget(in))
+	grant := budget(in)
+	if grant <= 0 {
+		return 0
+	}
+
+	tokens := allowance.Tokens(grant)
+	if in.Limits.MaxTokens > 0 && in.Limits.MaxTokens < tokens {
+		return in.Limits.MaxTokens
+	}
+	return tokens
 }
 
 // Surface is the shape of the turn one built-in agent type gets: which of

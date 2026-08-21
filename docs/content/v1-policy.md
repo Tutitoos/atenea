@@ -17,7 +17,7 @@ proveedores soportados.
 | Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo | `pkg/contract/workflow.go`, `internal/core/`, `--allow` | No hay confirmación interactiva; los procesos desatendidos requieren concesión explícita |
 | Tiempo | `limits.max_duration` limita el turno mediante el contexto de ejecución | `pkg/contract/assignment.go`, `internal/agent/model/model.go` | La terminación depende de que el proceso externo responda al cierre del contexto |
 | Coste | `budget_usd` autoriza y pronostica; el proveedor aplica su propio límite entre mensajes | `internal/agent/planner/`, ayuda de `workflow` | Un mensaje ya iniciado puede superar la previsión |
-| Tokens | `limits.max_tokens` se transporta, valida, hereda y registra como límite declarado | `pkg/contract/assignment.go`, `internal/agent/wire.go` | No es un hard cap: los proveedores no ofrecen una unidad ni una señal de corte uniforme |
+| Tokens | `limits.max_tokens` se transporta, valida, hereda y estrecha el límite observado de lectura del planner cuando existe una concesión | `pkg/contract/assignment.go`, `internal/agent/planner/`, `internal/agent/model/model.go` | No es un hard cap: un evento en vuelo puede hacer que el uso observado se pase antes de pedir la respuesta final |
 | Lectura incremental | `ReadTokens` puede pedir al cliente que deje de leer y produzca una respuesta parcial | `internal/agent/model/model.go` | El uso observado puede llegar con el evento en vuelo; no equivale a impedir cada token posterior |
 | Citas | Las citas `path:line` se comprueban y las citas con fragmento adyacente pueden verificar contenido | `internal/agent/reviewer/citations.go` | No se exige una cantidad mínima: abreviaturas, renombres y rutas compuestas no tienen una política segura común |
 | OpenCode | OpenCode funciona como superficie cliente/wrapper | `cmd/atenea/main.go`, `internal/clientconfig/` | No se anuncia como provider local: faltan contrato estable de invocación, cancelación, uso y resultado |
@@ -31,8 +31,10 @@ Estas decisiones no son fallos silenciosos:
    puede ejecutarse sin una persona presente.
 2. No se presenta OpenCode como provider hasta disponer de un contrato propio
    y testeable, independiente de su protocolo de cliente.
-3. No se convierte `limits.max_tokens` en una falsa garantía. La API no tiene
-   todavía un `max_tokens` común que todos los proveedores acepten y respeten.
+3. No se convierte `limits.max_tokens` en una falsa garantía. Atenea sí aplica
+   ahora el valor como frontera observada del cliente cuando hay una concesión,
+   pero la API no tiene un `max_tokens` común que todos los proveedores acepten
+   y respeten como límite exacto.
 4. No se convierte la presencia de una cita en prueba de la narrativa completa.
    El reviewer verifica ubicaciones y fragmentos, no el significado de cada
    afirmación.

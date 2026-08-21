@@ -42,12 +42,12 @@ OpenCode is supported as a client/wrapper surface. It is not registered as a
 local-model provider because that requires a stable invocation, cancellation,
 usage and result contract that is independent of OpenCode's client protocol.
 
-Agent `limits.max_tokens` is carried, validated and exposed in assignments, but
-is advisory. `budget_usd` is a forecast and authorization check, not a hard
-provider-side ceiling. `ReadTokens` provides an observed, incremental stop for
-the model client, but it is not equivalent to preventing the provider from
-finishing an in-flight event. The supported providers do not expose one uniform
-cap that Atenea can enforce without claiming precision it does not have.
+Agent `limits.max_tokens` is carried, validated and used by the planner to
+narrow the model client's observed incremental read boundary when a grant
+exists. `budget_usd` is a forecast and authorization check, not a hard
+provider-side ceiling. The observed boundary is not equivalent to preventing
+the provider from finishing an in-flight event; Atenea deliberately does not
+claim an exact provider cap.
 
 Citation evidence is retained by the reviewer and trace layers. It is not a
 hard acceptance gate until a threshold exists that handles abbreviated paths,

@@ -47,10 +47,9 @@ decisions or later contracts:
   grant/refusal through policy and `--allow`, with no implicit prompt;
 - OpenCode as a local-model provider: OpenCode is supported as a client/wrapper,
   but a provider adapter needs a stable invocation and result contract;
-- hard per-turn token enforcement: `budget_usd` is an authorization forecast,
-  `ReadTokens` can stop an observed conversation, and `limits.max_tokens`
-  remains an advisory agent declaration because the supported external providers
-  do not expose one uniform hard cap;
+- exact hard per-turn token enforcement: `budget_usd` is an authorization
+  forecast, and `limits.max_tokens` narrows the observed `ReadTokens` boundary,
+  but supported external providers do not expose one uniform hard cap;
 - citation enforcement as a hard gate: citation evidence exists, but a safe
   threshold for abbreviated or renamed paths is not established.
 

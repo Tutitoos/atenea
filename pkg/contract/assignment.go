@@ -84,23 +84,21 @@ func (t Task) Clone() Task {
 // these two are guards the caller sets.
 //
 // MaxDuration is a ceiling something enforces: it reaches a model turn as
-// model.Request.Timeout. MaxTokens is not, and no longer claims to be -- see
-// its own doc. This struct promised the first for both fields until
-// 2026-08-16.
+// model.Request.Timeout. MaxTokens reaches the model client as an observed
+// read boundary when the assignment has a grant. Neither field promises to
+// stop an external process at an exact provider event boundary.
 type Limits struct {
 	// MaxDuration is the wall clock the agent may take.
 	MaxDuration time.Duration
 	// MaxTokens is the token count the caller declared this run should be
-	// held to, input and output together. It is ADVISORY: a declaration of
-	// intent that travels with the assignment, and zero means the caller
-	// declared none.
+	// held to, input and output together. When a grant exists, the planner
+	// uses it as the upper bound for the client's observed incremental read
+	// allowance; zero means the caller declared none.
 	//
-	// NOTHING ENFORCES IT. Measured 2026-08-16: it is encoded onto the wire
-	// as `limits.max_tokens`, decoded by internal/agent/planner into a struct
-	// field -- and read by nobody, not even the prompt, so the model is never
-	// told. model.Request has no token cap to carry it to, and the shipped
-	// CLI (2.1.232) has no flag to hand it to: 65 flags, and the only spend
-	// bound among them is --max-budget-usd, in dollars.
+	// This is not an exact provider hard cap. The client can observe an event
+	// after the boundary and must then request a final answer, so in-flight
+	// usage may overshoot. The distinction is intentional: Atenea now applies
+	// the declared boundary without claiming control over provider internals.
 	//
 	// Validate required it positive until 2026-08-16, so that "nobody
 	// decided" could not pass for "no limit". That refusal bought invented
@@ -111,17 +109,14 @@ type Limits struct {
 	// 224,148 cache-read tokens on one of them. Honoring any of those numbers
 	// would have cut work that completes.
 	//
-	// Kept rather than deleted because the field is the right shape for the
-	// bound this system does not have -- a per-turn token cap is the only
-	// thing that could bound a searching turn, since money is checked between
-	// messages and never within one. Wiring it needs values somebody measured
-	// first; see docs/content/not-built-yet.md.
+	// Kept as an assignment-level declaration so adapters and reports retain
+	// the caller's intent even when a provider cannot offer an exact cap. The
+	// historical investigation remains in docs/content/not-built-yet.md.
 	MaxTokens int
 }
 
-// Validate checks the one number that is enforced. MaxTokens is advisory and
-// any value is accepted, including zero -- see its own doc for why requiring
-// it produced invented numbers rather than decisions.
+// Validate checks the duration and rejects negative token declarations. Zero
+// means the caller declared no token boundary.
 func (l Limits) Validate() error {
 	if l.MaxDuration <= 0 {
 		return Fail(FailureInvalidInput,
