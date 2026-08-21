@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	DefaultBinary  = "opencode"
+	// DefaultBinary is the command used when no OpenCode binary is configured.
+	DefaultBinary = "opencode"
+	// DefaultTimeout is the fallback ceiling for one OpenCode turn.
 	DefaultTimeout = 5 * time.Minute
 )
 
