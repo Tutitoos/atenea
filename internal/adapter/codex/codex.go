@@ -28,13 +28,16 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// CodeSearch is the capability identifier for Codex-backed code search.
 const CodeSearch = "code.search"
 
 // DefaultBinary is retained for callers that configured one explicit binary.
 const DefaultBinary = "codex"
 
+// DefaultTerminalBinary is the terminal Codex executable used by Atenea.
 const DefaultTerminalBinary = "codex"
 
+// DefaultAppBinary is the Codex executable bundled with the ChatGPT app.
 const DefaultAppBinary = "/Applications/ChatGPT.app/Contents/Resources/codex"
 
 const DefaultTimeout = 90 * time.Second
@@ -268,7 +271,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 			"codex output schema could not be prepared")
 	}
 	schemaName := schemaFile.Name()
-	defer os.Remove(schemaName)
+	defer func() { _ = os.Remove(schemaName) }()
 	if _, err := schemaFile.Write(schema); err != nil {
 		_ = schemaFile.Close()
 		return response{}, 0, contract.Fail(contract.FailureUnavailable,

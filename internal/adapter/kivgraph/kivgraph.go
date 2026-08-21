@@ -807,7 +807,7 @@ type referenceRecord struct {
 	StartLine  int    `json:"start_line"`
 }
 
-// referencesAnswer is find_references' envelope. Unlike its neighbours the
+// referencesAnswer is find_references' envelope. Unlike its neighbors the
 // rows do not hang off "results" directly: results is an object carrying the
 // subject it resolved, the direction it walked and the rows themselves --
 // measured, not assumed, and decoding it as a bare list fails on the wire.
@@ -1791,7 +1791,7 @@ func columnOf(lines []string, line int, name string) int {
 
 // snippetAt reads a window of lines starting at line, the convention this
 // capability family already uses: "how much of it to return" is a forward
-// look from the anchor, not a window centred on it.
+// look from the anchor, not a window centered on it.
 //
 // A sensitive file is refused out loud rather than answered without the
 // snippet that was explicitly asked for. A file that merely cannot be read

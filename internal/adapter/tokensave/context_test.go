@@ -73,10 +73,10 @@ func TestParseContextReportReadsEveryMeasuredSection(t *testing.T) {
 }
 
 func TestRunContextTranslatesInputsAndDropsForeignRowsOutLoud(t *testing.T) {
-	root, repo := workspace(t)
+	root, _ := workspace(t)
 	// This repository is webs/apela.gg in the report, not services/api from
 	// workspace(), so make the fixture match the real prefix arrangement.
-	repo = contract.NewRepository("apela.gg", root+"/webs/apela.gg", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	repo := contract.NewRepository("apela.gg", root+"/webs/apela.gg", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	fake, sess := newFakeTokensave(t)
 	fake.on(toolStatus, readyStatus, false)
 	fake.on(toolContext, measuredContextReport, false)

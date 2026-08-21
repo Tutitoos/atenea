@@ -16,7 +16,7 @@ package tokensave
 //	### Entry Points
 //	- **readAppealId** (function) - modules/appeals-module/src/shared/review-action.ts:22
 //	  `function readAppealId(args: ArgsHandler): string | undefined`
-//	  Lee la id de la apelación de los argumentos del `custom_id`.
+//	  Lee la id de la apelación de los arguments del `custom_id`.
 //
 //	### Related Symbols
 //	- path/to/file.ts: run:31
@@ -40,7 +40,7 @@ package tokensave
 // Three consequences of that shape, each a decision rather than an accident:
 //
 //   - A section that is present but empty says so in prose, wrapped in
-//     underscores ("_No code blocks extracted._"). Those lines are recognised
+//     underscores ("_No code blocks extracted._"). Those lines are recognized
 //     and skipped, never parsed as a row and never reported as a result.
 //   - "No results" does not exist on this wire. tokensave ranks with BM25 and
 //     always returns its best matches, so a nonsense task comes back with
@@ -363,7 +363,7 @@ func contextMode(payload map[string]any) (string, error) {
 
 // parseContextReport reads tokensave's markdown report.
 //
-// It never fails: a section it does not recognise, or a row that does not
+// It never fails: a section it does not recognize, or a row that does not
 // match its own shape, is skipped rather than turned into an error. The
 // capability's promise is "the symbols this task lives in", and a report whose
 // Test Coverage section changed format must still answer with the entry points
