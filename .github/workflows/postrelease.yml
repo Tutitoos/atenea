@@ -1,0 +1,49 @@
+name: postrelease
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to smoke-test
+        required: true
+        default: 0.10.4
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    name: smoke / ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-14
+            os: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Test the public release lifecycle
+        env:
+          ATENEA_REPOSITORY: ${{ github.repository }}
+          RELEASE_VERSION: ${{ inputs.version || github.event.workflow_run.head_branch }}
+        run: bash scripts/release-smoke.sh "$RELEASE_VERSION"

@@ -58,6 +58,7 @@ rewritten when they do.
 ## Read next
 
 - [Getting started]({{< relref "getting-started" >}})
+- [Operations]({{< relref "operations" >}}) — release smoke tests, recovery and incident response
 - [Day to day]({{< relref "day-to-day" >}}) — the five commands worth remembering
 - [Architecture]({{< relref "architecture" >}})
 - [Settings]({{< relref "settings" >}})
