@@ -20,7 +20,7 @@ proveedores soportados.
 | Tokens | `limits.max_tokens` se transporta, valida, hereda y estrecha el límite observado de lectura del planner cuando existe una concesión | `pkg/contract/assignment.go`, `internal/agent/planner/`, `internal/agent/model/model.go` | No es un hard cap: un evento en vuelo puede hacer que el uso observado se pase antes de pedir la respuesta final |
 | Lectura incremental | `ReadTokens` puede pedir al cliente que deje de leer y produzca una respuesta parcial | `internal/agent/model/model.go` | El uso observado puede llegar con el evento en vuelo; no equivale a impedir cada token posterior |
 | Citas | Las citas `path:line` se comprueban y las citas con fragmento adyacente pueden verificar contenido | `internal/agent/reviewer/citations.go` | No se exige una cantidad mínima: abreviaturas, renombres y rutas compuestas no tienen una política segura común |
-| OpenCode | Backend de modelo opt-in mediante `[model].backend = "opencode"`; exige evento `step_finish` y texto antes de aceptar | `internal/agent/opencode/`, `internal/agent/model/`, `internal/config/` | No tiene `--json-schema` ni hard cap de coste común; uso/coste son observados y el stream puede quedar incompleto |
+| OpenCode | Backend opt-in mediante `[model].backend = "opencode"`; exige `step_finish`, texto y valida localmente el JSON estructurado | `internal/agent/opencode/`, `internal/agent/model/`, `internal/config/`, `scripts/opencode-smoke.sh` | No tiene `--json-schema` ni hard cap de coste común; el smoke real es opt-in y uso/coste siguen siendo observados |
 | Búsqueda estructural | `symbol.search` devuelve declaraciones Serena filtradas y ordenadas de forma determinista | `internal/adapter/serena/serena.go`, `symbols.go` | Requiere índice Serena disponible; `code.search` sigue siendo búsqueda textual |
 
 ## Decisiones de no-implementación
@@ -30,8 +30,9 @@ Estas decisiones no son fallos silenciosos:
 1. No se añade un prompt interactivo de permisos a un daemon o adaptador que
    puede ejecutarse sin una persona presente.
 2. OpenCode solo se presenta como provider cuando se selecciona explícitamente
-   su backend; el parser propio y sus tests son obligatorios, y un stream sin
-   terminal no se convierte en una respuesta válida.
+   su backend; el parser propio, la validación local del schema y sus tests son
+   obligatorios, y un stream sin terminal no se convierte en una respuesta
+   válida.
 3. No se convierte `limits.max_tokens` en una falsa garantía. Atenea sí aplica
    ahora el valor como frontera observada del cliente cuando hay una concesión,
    pero la API no tiene un `max_tokens` común que todos los proveedores acepten

@@ -11,9 +11,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -197,7 +199,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	}
 	answer := Answer{Text: text, Spent: stream.charge(), Passes: 1}
 	if len(req.Schema) > 0 {
-		structured, err := structuredObject(text)
+		structured, err := structuredObject(text, req.Schema)
 		if err != nil {
 			return Answer{Spent: answer.Spent, Passes: answer.Passes}, err
 		}
@@ -218,9 +220,10 @@ type eventStream struct {
 }
 
 type event struct {
-	Type  string          `json:"type"`
-	Part  json.RawMessage `json:"part"`
-	Error json.RawMessage `json:"error"`
+	Type       string          `json:"type"`
+	Part       json.RawMessage `json:"part"`
+	Error      json.RawMessage `json:"error"`
+	Properties json.RawMessage `json:"properties"`
 }
 
 type part struct {
@@ -250,9 +253,9 @@ func (s *eventStream) accept(raw []byte) error {
 	}
 	switch ev.Type {
 	case "text":
-		var p part
-		if err := json.Unmarshal(ev.Part, &p); err != nil {
-			return contract.Fail(contract.FailureUnavailable, "opencode text event is malformed: %v", err).WithRaw(string(raw))
+		p, err := decodePart(ev.Part, "text", raw)
+		if err != nil {
+			return err
 		}
 		if p.Text == "" || (p.Time.End == nil && p.ID != "") {
 			return nil
@@ -271,9 +274,9 @@ func (s *eventStream) accept(raw []byte) error {
 		}
 		s.text.WriteString(p.Text)
 	case "step_finish":
-		var p part
-		if err := json.Unmarshal(ev.Part, &p); err != nil {
-			return contract.Fail(contract.FailureUnavailable, "opencode step_finish event is malformed: %v", err).WithRaw(string(raw))
+		p, err := decodePart(ev.Part, "step_finish", raw)
+		if err != nil {
+			return err
 		}
 		s.finished = true
 		if p.Tokens != nil {
@@ -287,7 +290,7 @@ func (s *eventStream) accept(raw []byte) error {
 			s.costSeen = true
 		}
 	case "error", "session.error":
-		s.errText = rawError(ev.Error, raw)
+		s.errText = rawError(ev.Error, ev.Properties, raw)
 	}
 	return nil
 }
@@ -320,7 +323,7 @@ func promptWithSchema(prompt string, schema map[string]any) (string, error) {
 	return prompt + "\n\nReturn only one JSON object matching this JSON Schema. Do not use Markdown fences or explanatory text.\nJSON Schema:\n" + string(raw), nil
 }
 
-func structuredObject(text string) (json.RawMessage, error) {
+func structuredObject(text string, schema map[string]any) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "```") {
 		lines := strings.Split(trimmed, "\n")
@@ -329,15 +332,180 @@ func structuredObject(text string) (json.RawMessage, error) {
 		}
 		trimmed = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &object); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"opencode answered with invalid structured JSON: %v", err).WithRaw(text)
 	}
-	if object == nil {
+	if _, ok := value.(map[string]any); !ok {
 		return nil, contract.Fail(contract.FailureInvalidInput, "opencode structured answer is not a JSON object").WithRaw(text)
 	}
+	if err := validateSchemaValue(value, schema, "$"); err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"opencode structured answer violates its schema: %v", err).WithRaw(text)
+	}
 	return json.RawMessage(trimmed), nil
+}
+
+// validateSchemaValue covers the JSON Schema subset Atenea's planner emits:
+// object closure, required fields, primitive types, nested properties, enum
+// and numeric bounds. OpenCode has no native schema flag, so this local check
+// is the enforcement boundary after the prompt-level request.
+func validateSchemaValue(value any, schema map[string]any, path string) error {
+	if schema == nil {
+		return nil
+	}
+	if expected, ok := schema["type"].(string); ok && !schemaTypeMatches(value, expected) {
+		return fmt.Errorf("%s must be %s", path, expected)
+	}
+	switch expected := schema["type"].(string); expected {
+	case "object":
+		object := value.(map[string]any)
+		properties, _ := schema["properties"].(map[string]any)
+		for _, required := range schemaStrings(schema["required"]) {
+			if _, present := object[required]; !present {
+				return fmt.Errorf("%s.%s is required", path, required)
+			}
+		}
+		if additionalProperties, ok := schema["additionalProperties"].(bool); ok && !additionalProperties {
+			for name := range object {
+				if _, declared := properties[name]; !declared {
+					return fmt.Errorf("%s.%s is not declared", path, name)
+				}
+			}
+		}
+		for name, child := range properties {
+			childSchema, ok := child.(map[string]any)
+			if !ok {
+				return fmt.Errorf("schema for %s.%s is malformed", path, name)
+			}
+			if childValue, present := object[name]; present {
+				if err := validateSchemaValue(childValue, childSchema, path+"."+name); err != nil {
+					return err
+				}
+			}
+		}
+	case "array":
+		items, _ := schema["items"].(map[string]any)
+		for i, item := range value.([]any) {
+			if err := validateSchemaValue(item, items, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case "number", "integer":
+		number, err := schemaNumber(value)
+		if err != nil {
+			return fmt.Errorf("%s is not numeric", path)
+		}
+		if expected == "integer" && number != float64(int64(number)) {
+			return fmt.Errorf("%s must be an integer", path)
+		}
+		if minimum, ok := schemaNumberField(schema["minimum"]); ok && number < minimum {
+			return fmt.Errorf("%s must be at least %v", path, minimum)
+		}
+		if maximum, ok := schemaNumberField(schema["maximum"]); ok && number > maximum {
+			return fmt.Errorf("%s must be at most %v", path, maximum)
+		}
+	}
+	if enum, ok := schema["enum"].([]any); ok && !schemaContains(enum, value) {
+		return fmt.Errorf("%s has a value outside enum", path)
+	}
+	return nil
+}
+
+func schemaTypeMatches(value any, expected string) bool {
+	switch expected {
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		_, err := schemaNumber(value)
+		return err == nil
+	case "integer":
+		number, err := schemaNumber(value)
+		return err == nil && number == float64(int64(number))
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "null":
+		return value == nil
+	default:
+		return true
+	}
+}
+
+func schemaStrings(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return values
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, item := range values {
+			if name, ok := item.(string); ok {
+				out = append(out, name)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func schemaNumber(value any) (float64, error) {
+	switch number := value.(type) {
+	case json.Number:
+		return number.Float64()
+	case float64:
+		return number, nil
+	case float32:
+		return float64(number), nil
+	case int:
+		return float64(number), nil
+	case int64:
+		return float64(number), nil
+	default:
+		return 0, fmt.Errorf("not a number")
+	}
+}
+
+func schemaNumberField(value any) (float64, bool) {
+	number, err := schemaNumber(value)
+	return number, err == nil
+}
+
+func schemaContains(values []any, want any) bool {
+	for _, value := range values {
+		if reflect.DeepEqual(value, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodePart(raw json.RawMessage, name string, eventRaw []byte) (part, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return part{}, contract.Fail(contract.FailureUnavailable,
+			"opencode %s event is missing its part", name).WithRaw(string(eventRaw))
+	}
+	var decoded part
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return part{}, contract.Fail(contract.FailureUnavailable,
+			"opencode %s event is malformed: %v", name, err).WithRaw(string(eventRaw))
+	}
+	wantType := map[string]string{"text": "text", "step_finish": "step-finish"}[name]
+	if wantType != "" && decoded.Type != wantType {
+		return part{}, contract.Fail(contract.FailureUnavailable,
+			"opencode %s event has part type %q, want %q", name, decoded.Type, wantType).WithRaw(string(eventRaw))
+	}
+	return decoded, nil
 }
 
 type claudeConfig struct {
@@ -404,7 +572,15 @@ func appendWithout(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
-func rawError(raw json.RawMessage, fallback []byte) string {
+func rawError(raw, properties json.RawMessage, fallback []byte) string {
+	if len(raw) == 0 && len(properties) > 0 {
+		var nested struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(properties, &nested) == nil {
+			raw = nested.Error
+		}
+	}
 	if len(raw) == 0 {
 		return strings.TrimSpace(string(fallback))
 	}

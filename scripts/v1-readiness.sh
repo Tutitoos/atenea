@@ -72,7 +72,7 @@ echo "[7/9] race suite"
 go test -race -count=1 ./...
 
 echo "[8/9] policy and shell entry points"
-bash -n scripts/install.sh scripts/release-smoke.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh
+bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh
 scripts/v1-policy-check.sh
 "$build_dir/atenea" version
 

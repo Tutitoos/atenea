@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":1730000000000,"sessionID":"ses_fixture","part":{"id":"prt_step","sessionID":"ses_fixture","messageID":"msg_fixture","type":"step-start","snapshot":"sha256:fixture"}}
+{"type":"text","timestamp":1730000000100,"sessionID":"ses_fixture","part":{"id":"prt_text","sessionID":"ses_fixture","messageID":"msg_fixture","type":"text","text":"{\"summary\":\"done\",\"findings\":\"found\"}","time":{"start":1730000000000,"end":1730000000100}}}
+{"type":"step_finish","timestamp":1730000000200,"sessionID":"ses_fixture","part":{"id":"prt_finish","sessionID":"ses_fixture","messageID":"msg_fixture","type":"step-finish","reason":"stop","tokens":{"input":10,"output":4,"reasoning":1,"cache":{"read":20,"write":3}},"cost":0.12}}

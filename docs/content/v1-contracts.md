@@ -42,8 +42,14 @@ OpenCode has an opt-in local-model backend through `[model].backend =
 "opencode"`. Its event parser is isolated from Claude Code and requires a
 completed `step_finish` event plus text before accepting an answer. It supports
 model selection, repository confinement, cancellation, observed usage and MCP
-configuration translation; it does not pretend that OpenCode's JSON stream is
-Claude's final envelope.
+configuration translation. Its local boundary also validates the structured
+answer's required fields, primitive types, numeric bounds and closed object
+properties; it does not pretend that OpenCode's JSON stream is Claude's final
+envelope.
+
+`scripts/opencode-smoke.sh` runs an opt-in real-provider smoke test when
+`ATENEA_OPENCODE_SMOKE=1` and `ATENEA_OPENCODE_MODEL` are supplied. It is not
+part of ordinary CI because it may consume provider allowance.
 
 The backend remains deliberately narrower than Claude Code: OpenCode has no
 native JSON-schema flag or provider-independent budget flag. Atenea asks for

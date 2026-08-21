@@ -22,6 +22,7 @@ a new contract or an external provider decision. The normative policy is in
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
 | MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/` | Shared lifecycle, raw allow-list and effects are validated |
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/` | Native adapters compile and are tested |
+| OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh` | Opt-in adapter, local structured-schema enforcement, protocol fixtures and safe real-provider smoke command |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
 | Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated |
 | v1.0 policy gate | `scripts/v1-policy-check.sh`, `docs/content/v1-policy.md` | The declared guarantees and deferred contracts have stable anchors |
@@ -45,9 +46,10 @@ decisions or later contracts:
 
 - interactive permission confirmation: the current security model is explicit
   grant/refusal through policy and `--allow`, with no implicit prompt;
-- exact OpenCode parity with Claude Code: the opt-in provider adapter exists,
-  but OpenCode still lacks a native schema flag, a common cost cap and a
-  permanently reliable terminal event guarantee;
+- exact OpenCode parity with Claude Code: the opt-in provider adapter is
+  hardened and has an opt-in real smoke test, but OpenCode still lacks a
+  native schema flag, a common cost cap and a permanently reliable terminal
+  event guarantee;
 - exact hard per-turn token enforcement: `budget_usd` is an authorization
   forecast, and `limits.max_tokens` narrows the observed `ReadTokens` boundary,
   but supported external providers do not expose one uniform hard cap;

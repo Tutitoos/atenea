@@ -24,6 +24,7 @@ required_files=(
 	"docs/content/v1-readiness.md"
 	"pkg/contract/assignment.go"
 	"internal/agent/model/model.go"
+	"scripts/opencode-smoke.sh"
 	"internal/agent/reviewer/citations.go"
 	"internal/adapter/serena/serena.go"
 )

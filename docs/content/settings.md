@@ -473,6 +473,21 @@ Claude Code's `--json-schema` or `--max-budget-usd`: structured answers are
 requested in the prompt, and the reported cost is observational. The Claude
 cache floor probes do not apply to OpenCode.
 
+The real-provider smoke test is deliberately opt-in because it can consume a
+provider allowance. From a clean checkout, set the exact provider/model and
+run:
+
+```sh
+ATENEA_OPENCODE_SMOKE=1 \
+ATENEA_OPENCODE_MODEL=provider/model-id \
+bash scripts/opencode-smoke.sh
+```
+
+The smoke uses `--format json`, `--pure`, no Atenea MCP tools and no
+`--auto`; it checks a real completed event stream and the structured answer
+against the requested schema. Ordinary unit, race and CI suites use fake
+CLIs and never incur provider cost.
+
 `orchestrator.claudecode.source` and `terminal_binary` keep Claude Code as a
 headless runner while Claude.app remains an MCP client. Do not configure the
 GUI binary from `/Applications/Claude.app` as a provider executable. Codex

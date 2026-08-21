@@ -1,0 +1,1 @@
+{"type":"session.error","timestamp":1730000000300,"properties":{"sessionID":"ses_fixture","error":{"name":"PermissionDenied","data":{"message":"permission denied"}}}}
