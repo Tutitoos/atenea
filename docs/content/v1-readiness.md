@@ -39,6 +39,18 @@ The gate checks repository hygiene, removal of active `codebase-memory`
 references, formatting, module tidiness, vet, native build, the complete race
 suite and shell entry points. It does not publish a release.
 
+## Latest real-provider smoke
+
+On 2026-08-21, `scripts/opencode-smoke.sh` passed against the installed
+OpenCode `1.18.15` CLI and the `opencode/hy3-free` model. The run completed a
+real `--format json --pure` turn in 80.03 seconds, produced text plus a
+structured `{ "ok": true }` answer, and passed Atenea's local schema check.
+It supplied no Atenea MCP tools and did not use `--auto`.
+
+This is evidence for one real model and one local CLI version, not a guarantee
+for every OpenCode provider or future release. The smoke remains opt-in and
+may create the provider client's normal local session state.
+
 ## Deliberately deferred
 
 These are not hidden failures in the current product. They are explicit v1.0

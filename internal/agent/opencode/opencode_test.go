@@ -270,6 +270,8 @@ func TestLiveOpenCodeSmoke(t *testing.T) {
 	if answer.Text == "" || len(answer.Structured) == 0 {
 		t.Fatalf("OpenCode smoke returned no structured answer: %+v", answer)
 	}
+	t.Logf("OpenCode smoke passed: model=%s version=%s input_tokens=%d output_tokens=%d", model,
+		runner.Version(t.Context()), answer.Spent.InputTokens, answer.Spent.OutputTokens)
 }
 
 func shellQuote(value string) string {
