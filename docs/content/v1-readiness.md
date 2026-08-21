@@ -18,6 +18,7 @@ require a new contract or an external provider decision.
 | Permission effects | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | Explicit grants and `--allow` are enforced |
 | Measurements and wandering | `internal/metrics/summary.go`, `internal/metrics/compact.go`, migrations `0006` and `0007` | `out_of_scope` is persisted, rolled up and reported |
 | Completeness reporting | `internal/agent/model/model.go`, `internal/agent/planner/` | Missing or partial coverage is represented and tested |
+| Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
 | MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/` | Shared lifecycle, raw allow-list and effects are validated |
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/` | Native adapters compile and are tested |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
@@ -37,17 +38,16 @@ suite and shell entry points. It does not publish a release.
 
 ## Deliberately deferred
 
-These are not hidden failures in the current product. Each needs a new contract
-or a product decision before implementation:
+These are not hidden failures in the current product. They are explicit v1
+decisions or later contracts:
 
-- ranked structural search: it needs output fields for containing symbols and
-  ranking, not another implementation of the existing text-search contract;
 - interactive permission confirmation: the current security model is explicit
   grant/refusal through policy and `--allow`, with no implicit prompt;
 - OpenCode as a local-model provider: OpenCode is supported as a client/wrapper,
   but a provider adapter needs a stable invocation and result contract;
 - hard per-turn token enforcement: `budget_usd` is an authorization forecast,
-  not a provider-side token cap;
+  and `limits.max_tokens` remains an advisory agent declaration because the
+  supported external providers do not expose one uniform hard cap;
 - citation enforcement as a hard gate: citation evidence exists, but a safe
   threshold for abbreviated or renamed paths is not established.
 

@@ -69,6 +69,23 @@ func parseSymbols(text string) ([]symbol, error) {
 	return out, nil
 }
 
+// searchRank gives callers a stable ordering on top of Serena's structural
+// matches. Exact qualified names win, then exact leaf names, then names that
+// contain the requested text; provider order never affects the result.
+func searchRank(query string, symbol symbol) int {
+	query = strings.TrimSpace(query)
+	if symbol.NamePath == query {
+		return 0
+	}
+	if lastSegment(symbol.NamePath) == query {
+		return 1
+	}
+	if strings.Contains(strings.ToLower(symbol.NamePath), strings.ToLower(query)) {
+		return 2
+	}
+	return 3
+}
+
 // parseSymbol reads a find_declaration answer: one symbol object, not an
 // array. The object has the same shape as one entry of parseSymbols' array --
 // both come off the same symbol_dict on Serena's side -- so a query for

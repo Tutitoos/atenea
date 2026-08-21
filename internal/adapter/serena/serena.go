@@ -57,11 +57,13 @@ const (
 	CapabilityReferences      = "symbol.references"
 	CapabilityImplementations = "symbol.implementations"
 	CapabilityOverview        = "symbol.overview"
+	CapabilitySearch          = "symbol.search"
 
 	ImplDefinition      = "serena.definition"
 	ImplReferences      = "serena.references"
 	ImplImplementations = "serena.implementations"
 	ImplOverview        = "serena.overview"
+	ImplSearch          = "serena.symbol_search"
 )
 
 // DefaultEndpoint is where the ToolHive proxy puts Serena when the port is
@@ -88,7 +90,7 @@ const protocolVersion = "2025-06-18"
 // not a package-level slice because a caller that appended to a shared one
 // would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplImplementations, ImplOverview}
+	return []string{ImplDefinition, ImplReferences, ImplImplementations, ImplOverview, ImplSearch}
 }
 
 // Options configure the adapter.
@@ -281,7 +283,7 @@ func (r *Runner) Serves(implementationID string) bool {
 // settings file naming an implementation it has no case for is refused at
 // load rather than at the call.
 func (r *Runner) Capabilities() []string {
-	return []string{CapabilityDefinition, CapabilityReferences, CapabilityImplementations, CapabilityOverview}
+	return []string{CapabilityDefinition, CapabilityReferences, CapabilityImplementations, CapabilityOverview, CapabilitySearch}
 }
 
 // Run executes one step.
@@ -310,6 +312,11 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		// lock, activation, failure translation -- it shares by calling the
 		// same methods this pipeline calls, not by joining the switch.
 		outcome, version, runErr := r.runOverview(ctx, req)
+		toolVersion = version
+		return outcome, runErr
+	}
+	if req.Capability.ID == CapabilitySearch {
+		outcome, version, runErr := r.runSearch(ctx, req)
 		toolVersion = version
 		return outcome, runErr
 	}
@@ -379,6 +386,146 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 			req.Capability.ID, req.Repository.ID, len(records)),
 	})
 	return outcome, nil
+}
+
+// searchEntry is the provider-independent shape of one structural match.
+// Rank is lower-is-better and is assigned from the symbol identity, never from
+// the order Serena happened to return.
+type searchEntry struct {
+	Name string
+	Kind string
+	Path string
+	Line int
+	End  int
+	Rank int
+}
+
+// runSearch is symbol.search's exchange. Unlike symbol.overview it does not
+// start from a file, and unlike the position-first family it asks Serena's
+// indexed symbol search directly. The adapter owns filtering, ranking and
+// sensitive-path removal so the capability remains stable across providers.
+func (r *Runner) runSearch(ctx context.Context, req contract.RunRequest) (contract.Outcome, string, error) {
+	a, err := readSearchAsk(req.Payload)
+	if err != nil {
+		return contract.Outcome{}, "", err
+	}
+	started := time.Now()
+	call, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	root, err := filepath.Abs(req.Repository.Path)
+	if err != nil {
+		return contract.Outcome{}, "", contract.Fail(contract.FailureInvalidInput,
+			"repository %s: path %q: %v", req.Repository.ID, req.Repository.Path, err)
+	}
+	c, err := r.connFor(req.Repository)
+	if err != nil {
+		return contract.Outcome{}, "", err
+	}
+	c.mu.Lock()
+	entries, notes, runErr := r.search(call, c, root, a)
+	c.wireMu.Lock()
+	toolVersion := c.version
+	c.wireMu.Unlock()
+	c.mu.Unlock()
+	if runErr != nil {
+		return contract.Outcome{}, toolVersion, r.failureFor(runErr, call)
+	}
+	result, err := shapeSearch(entries, req.Capability)
+	if err != nil {
+		return contract.Outcome{}, toolVersion, err
+	}
+	outcome := contract.Outcome{
+		Result:  result,
+		Verdict: contract.VerdictOK,
+		Spent:   contract.Sample{Duration: time.Since(started)},
+	}
+	for _, note := range notes {
+		if note != "" {
+			outcome.Discoveries = append(outcome.Discoveries,
+				contract.Discovery{Level: contract.ContextRepository, Note: note})
+		}
+	}
+	outcome.Discoveries = append(outcome.Discoveries, contract.Discovery{
+		Level: contract.ContextRepository,
+		Note: fmt.Sprintf("serena answered %s for %s with %d match(es)",
+			req.Capability.ID, req.Repository.ID, len(entries)),
+	})
+	return outcome, toolVersion, nil
+}
+
+// search runs while c.mu is held. Serena's find_symbol result is deliberately
+// not returned in its order: JSON order is provider-owned, while Atenea's
+// rank must be deterministic for selection, traces and callers.
+func (r *Runner) search(ctx context.Context, c *conn, root string, a searchAsk) ([]searchEntry, []string, error) {
+	retargeted, previous, err := r.activate(ctx, c, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	var notes []string
+	if retargeted {
+		notes = append(notes, fmt.Sprintf("serena retargeted %s from %s to %s", c.endpoint, previous, root))
+	}
+	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
+		"name_path_pattern": a.query,
+		"include_body":      false,
+	})
+	if err != nil {
+		return nil, notes, err
+	}
+	found, err := parseSymbols(raw)
+	if err != nil {
+		return nil, notes, err
+	}
+	entries := make([]searchEntry, 0, len(found))
+	for _, symbol := range found {
+		if r.isSensitive(symbol.Path) || !withinOneScope(symbol.Path, a.scope) {
+			continue
+		}
+		if a.kind != "" && !strings.EqualFold(a.kind, symbol.Kind) {
+			continue
+		}
+		entries = append(entries, searchEntry{
+			Name: symbol.NamePath,
+			Kind: symbol.Kind,
+			Path: symbol.Path,
+			Line: toContractLine(symbol.Location.StartLine),
+			End:  toContractLine(symbol.Location.EndLine),
+			Rank: searchRank(a.query, symbol),
+		})
+	}
+	slices.SortFunc(entries, func(a, b searchEntry) int {
+		if a.Rank != b.Rank {
+			return a.Rank - b.Rank
+		}
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Path, b.Path); c != 0 {
+			return c
+		}
+		return a.Line - b.Line
+	})
+	if len(entries) > a.limit {
+		entries = entries[:a.limit]
+	}
+	return entries, notes, nil
+}
+
+func withinOneScope(path string, scope []string) bool {
+	if len(scope) == 0 {
+		return true
+	}
+	for _, prefix := range scope {
+		clean := filepath.Clean(prefix)
+		if clean == "." {
+			return true
+		}
+		if path == clean || strings.HasPrefix(path, clean+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // runOverview is symbol.overview's own Run: the same shared steps -- timing,
@@ -638,6 +785,45 @@ func list(value any) []string {
 		return out
 	}
 	return nil
+}
+
+// searchAsk is symbol.search's request. query is Serena's name_path_pattern,
+// intentionally exposed as a structural pattern rather than pretending this
+// capability is a second literal-text search.
+type searchAsk struct {
+	query string
+	scope []string
+	kind  string
+	limit int
+}
+
+func readSearchAsk(payload map[string]any) (searchAsk, error) {
+	query, _ := payload["query"].(string)
+	out := searchAsk{query: strings.TrimSpace(query), limit: 50}
+	if out.query == "" {
+		return searchAsk{}, contract.Fail(contract.FailureInvalidInput,
+			"%s: query is empty", CapabilitySearch)
+	}
+	out.scope = list(payload["scope"])
+	for i, scope := range out.scope {
+		clean := filepath.Clean(strings.TrimSpace(scope))
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return searchAsk{}, contract.Fail(contract.FailureInvalidInput,
+				"%s: scope %q must be relative to the repository root", CapabilitySearch, scope)
+		}
+		out.scope[i] = clean
+	}
+	if kind, ok := payload["kind"].(string); ok {
+		out.kind = strings.TrimSpace(kind)
+	}
+	if n, ok := whole(payload["limit"]); ok {
+		if n < 1 || n > 200 {
+			return searchAsk{}, contract.Fail(contract.FailureInvalidInput,
+				"%s: limit must be between 1 and 200, got %d", CapabilitySearch, n)
+		}
+		out.limit = n
+	}
+	return out, nil
 }
 
 // overviewAsk is symbol.overview's own payload, once checked: a file and how
@@ -1055,6 +1241,27 @@ func (r *Runner) findImplementations(ctx context.Context, c *conn, root string, 
 		return nil, err
 	}
 	return withinScope(r.locationsFrom(root, found, a), a.scope), nil
+}
+
+// shapeSearch converts structural matches into the capability's public shape
+// and validates the result before it crosses the adapter boundary.
+func shapeSearch(entries []searchEntry, capability contract.Capability) (map[string]any, error) {
+	records := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		records = append(records, map[string]any{
+			"name":     entry.Name,
+			"kind":     entry.Kind,
+			"path":     entry.Path,
+			"line":     entry.Line,
+			"end_line": entry.End,
+			"rank":     entry.Rank + 1,
+		})
+	}
+	result := map[string]any{"matches": records}
+	if err := capability.ValidateOutput(result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // withinScope enforces the scope the caller declared.

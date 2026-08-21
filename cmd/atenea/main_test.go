@@ -338,9 +338,9 @@ func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The two providers that need a warm index are dropped on constraints, and
-	// the trace says why rather than leaving the choice unexplained.
-	if !strings.Contains(out, "needs an index") {
+	// Providers without an attached runner are dropped explicitly, and the
+	// trace says why rather than leaving the choice unexplained.
+	if !strings.Contains(out, "dropped in every step") {
 		t.Errorf("the funnel did not explain its drops:\n%s", out)
 	}
 

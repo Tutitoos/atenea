@@ -227,18 +227,48 @@ func overviewCapability() contract.Capability {
 	}
 }
 
+func searchCapability() contract.Capability {
+	return contract.Capability{
+		ID: CapabilitySearch, Version: contract.Version{Major: 1},
+		Summary: "Find declarations structurally.",
+		Effects: []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "query", Type: contract.TypeString, Required: true},
+			{Name: "scope", Type: contract.TypeStringList},
+			{Name: "kind", Type: contract.TypeString},
+			{Name: "limit", Type: contract.TypeInt},
+		},
+		Outputs: []contract.Field{{
+			Name: "matches", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "kind", Type: contract.TypeString, Required: true},
+				{Name: "path", Type: contract.TypeString, Required: true},
+				{Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "end_line", Type: contract.TypeInt, Required: true},
+				{Name: "rank", Type: contract.TypeInt, Required: true},
+			},
+		}},
+	}
+}
+
 func capabilityFor(id string) contract.Capability {
 	switch id {
 	case CapabilityDefinition:
 		return definitionCapability()
 	case CapabilityOverview:
 		return overviewCapability()
+	case CapabilitySearch:
+		return searchCapability()
 	default:
 		return listCapability(id)
 	}
 }
 
 func implFor(capabilityID string) contract.Implementation {
+	if capabilityID == CapabilitySearch {
+		return contract.Implementation{ID: ImplSearch, Provider: "serena", Capability: capabilityID}
+	}
 	return contract.Implementation{
 		ID:         strings.Replace(capabilityID, "symbol.", "serena.", 1),
 		Provider:   "serena",
@@ -330,6 +360,45 @@ const referenceAnswer = `{"main.go":{"Function":[{"name_path":"twice","body_loca
 // symbolAnswer's single entry has, since both come off the same symbol_dict
 // on Serena's side.
 const declarationAnswer = `{"name_path":"Shape/area","kind":"Method","relative_path":"pkg/shapes.go","body_location":{"start_line":1,"end_line":2}}`
+
+func TestStructuralSearchRanksFiltersAndBoundsSymbols(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.answers["find_symbol"] = `[` +
+		`{"name_path":"Shape/areaHelper","kind":"Method","relative_path":"pkg/shapes.go","body_location":{"start_line":10,"end_line":12}},` +
+		`{"name_path":"Other/area","kind":"Function","relative_path":"pkg/other.go","body_location":{"start_line":20,"end_line":22}},` +
+		`{"name_path":"Shape/area","kind":"Method","relative_path":"pkg/shapes.go","body_location":{"start_line":1,"end_line":3}},` +
+		`{"name_path":"area","kind":"Function","relative_path":".env","body_location":{"start_line":0,"end_line":1}}` +
+		`]`
+	runner := newRunner(t, endpoint)
+
+	outcome, err := run(t, runner, CapabilitySearch, repo(t, map[string]string{
+		"pkg/shapes.go": "type Shape struct{}\n",
+		"pkg/other.go":  "func area() {}\n",
+		".env":          "SECRET=value\n",
+	}), map[string]any{"query": "area", "scope": []string{"pkg"}, "limit": 2})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	call, ok := s.calledWith("find_symbol", "name_path_pattern", "area")
+	if !ok {
+		t.Fatalf("find_symbol was not called with the structural query; tools = %v", s.toolNames())
+	}
+	if call["include_body"] != false {
+		t.Errorf("include_body = %v, want false", call["include_body"])
+	}
+	matches, ok := outcome.Result["matches"].([]any)
+	if !ok || len(matches) != 2 {
+		t.Fatalf("matches = %#v, want 2 ranked results", outcome.Result["matches"])
+	}
+	first := matches[0].(map[string]any)
+	if first["name"] != "Other/area" || first["rank"] != 2 || first["line"] != 21 {
+		t.Errorf("matches[0] = %+v, want Other/area rank 2 at line 21", first)
+	}
+	second := matches[1].(map[string]any)
+	if second["name"] != "Shape/area" || second["rank"] != 2 || second["line"] != 2 {
+		t.Errorf("matches[1] = %+v, want Shape/area rank 2 at line 2", second)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // The translation: position in, name out

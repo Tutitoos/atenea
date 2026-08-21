@@ -175,7 +175,7 @@ runners = ["omp"]
   # here: this adapter is wired for the symbol capabilities, and claiming a
   # text search it has no code for would make the funnel promise an answer
   # nobody can give.
-  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview"]
+  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview", "serena.symbol_search"]
   # How long one call may take. A language server that has to index a cold
   # repository is slow long before it is stuck, so this sits above omp's
   # ceiling and well below a model turn's.
@@ -690,6 +690,84 @@ effects = ["read", "process"]
     type = "string"
     required = false
     summary = "The matching line with its surrounding context."
+
+[[capability]]
+id = "symbol.search"
+version = "1.0.0"
+summary = "Find declarations by structural name and rank them."
+semantics = """
+Structural symbol search against a provider's language-aware index. The query is
+the provider's name-path pattern, so results are declarations rather than text
+matches; each result carries its qualified name, kind, source range and a
+deterministic rank. Use code.search when the question is about literal text.
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "query"
+  type = "string"
+  required = true
+  summary = "A structural name or name-path pattern."
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+  summary = "Repository-relative directories or files to keep."
+
+  [[capability.input]]
+  name = "kind"
+  type = "string"
+  required = false
+  summary = "Optional provider symbol kind, such as function or class."
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Maximum number of ranked matches; defaults to 50 and caps at 200."
+
+  [[capability.output]]
+  name = "matches"
+  type = "record_list"
+  required = true
+  summary = "Ranked structural declarations, best match first."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "Provider-qualified symbol name."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "Provider symbol kind."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+    summary = "Repository-relative source path."
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "Declaration start line, starting at 1."
+
+    [[capability.output.field]]
+    name = "end_line"
+    type = "int"
+    required = true
+    summary = "Declaration end line, starting at 1."
+
+    [[capability.output.field]]
+    name = "rank"
+    type = "int"
+    required = true
+    summary = "Stable rank, where 1 is the strongest match."
 
 [[capability]]
 id = "symbol.definition"
@@ -1421,21 +1499,6 @@ scope_guarantee = "confined"   # targets() refuses any path outside scope before
   estimated_tokens = 400
 
 [[implementation]]
-id = "serena.search"
-provider = "serena"
-capability = "code.search"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "600ms"
-  estimated_tokens = 900
-
-[[implementation]]
 id = "claude.search"
 provider = "claude-code"
 capability = "code.search"
@@ -1471,14 +1534,15 @@ scope_guarantee = "filtered"   # Codex is instructed to stay inside the reposito
   estimated_duration = "12s"
   estimated_tokens = 20000
 
-# The three symbol implementations share a provider, and therefore share an
+# The five Serena symbol implementations share a provider, and therefore share an
 # index and a language list. Serena drives a language server per language: it
 # understands only the ones it has a server for, and it is useless on a
 # repository it has not indexed. Both facts are constraints, so both live here
 # and not in the capability -- a capability that grew a language list would
 # stop being swappable, which is the whole point of having one.
 #
-# The cost of all three is one activation plus two round trips: the adapter
+# The position-first implementations cost one activation plus their own round
+# trips: the adapter
 # turns the position the capability speaks into the name path Serena speaks,
 # and it asks Serena itself to do it rather than parsing code on its own.
 
@@ -1555,6 +1619,21 @@ capability = "symbol.overview"
   # gopls's own indexing is not the bottleneck this estimate needs to cover.
   estimated_duration = "700ms"
   estimated_tokens = 1900
+
+[[implementation]]
+id = "serena.symbol_search"
+provider = "serena"
+capability = "symbol.search"
+
+  [implementation.constraints]
+  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
+  requires_index = true
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  estimated_duration = "1s"
+  estimated_tokens = 1300
 
 # The seven kivgraph implementations share one provider and one supervised
 # stdio-MCP process (see [orchestrator.kivgraph] above): one child process,

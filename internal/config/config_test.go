@@ -39,7 +39,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.search", "graph.status", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.search", "graph.status", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -105,7 +105,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"serena.implementations",
 		"serena.overview",
 		"serena.references",
-		"serena.search",
+		"serena.symbol_search",
 		"tokensave.calls",
 		"tokensave.context",
 		"tokensave.overview",
@@ -127,9 +127,9 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			if impl.ScopeGuarantee != contract.ScopeFiltered {
 				t.Errorf("claude.search ships with scope_guarantee=%s, want filtered", impl.ScopeGuarantee)
 			}
-		case "serena.search":
+		case "serena.symbol_search":
 			if impl.ScopeGuarantee != contract.ScopeUnspecified {
-				t.Errorf("%s ships with scope_guarantee=%s, want unspecified: no adapter answers it yet",
+				t.Errorf("%s ships with scope_guarantee=%s, want unspecified: structural scope is filtered after the provider query",
 					impl.ID, impl.ScopeGuarantee)
 			}
 		}
