@@ -15,6 +15,15 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-08-21
+
+### Added
+
+- **`atenea wrap omp` is now a supported wrapper alias.** It checks and
+  reports Atenea's declared MCP servers before launching OMP, while preserving
+  OMP's own file-based MCP configuration because the CLI has no ephemeral MCP
+  overlay.
+
 ## [0.10.2] - 2026-08-21
 
 ### Added
@@ -2726,6 +2735,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[0.10.3]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.3
 [0.10.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.1
 [0.10.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.0
 [0.9.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.9.1

@@ -111,6 +111,14 @@ func TestNoFlagsMeansNoSeparator(t *testing.T) {
 	}
 }
 
+func TestOMPIsAFlaglessWrapAlias(t *testing.T) {
+	got := clientArgv("omp", nil, []string{"-p", "hello"}, false)
+	want := []string{"omp", "-p", "hello"}
+	if !slices.Equal(got, want) {
+		t.Errorf("argv = %q, want %q", got, want)
+	}
+}
+
 // Ordering, pinned: the binary is resolved before anything is probed.
 //
 // The other order is the one that looks harmless and is not -- eleven

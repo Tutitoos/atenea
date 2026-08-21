@@ -500,11 +500,13 @@ Supported clients:
   opencode  OPENCODE_CONFIG_CONTENT, deep-merged over its own config
   claude    --mcp-config <json>, added to every other source it resolves
   codex     one -c mcp_servers.<id>={...} per server, merged into the table
+  omp       launched with its existing MCP discovery and configuration
 
-Not supported: omp. Its MCP servers are read from mcp.json files and
-nothing else -- no config-content variable, and its --config overlay
-carries settings, not servers. Wrapping it would mean writing that file,
-which is the one thing this command promises not to do.
+OMP is a pass-through alias for now. Its MCP servers are read from
+.omp/mcp.json, mcp.json or .mcp.json, and the current OMP CLI has no
+ephemeral MCP overlay that wrap can use without writing one of those files.
+The wrapper therefore preserves OMP's own configuration and arguments while
+still checking and reporting Atenea's declared servers.
 `,
 }
 
@@ -2936,11 +2938,11 @@ func orAny(repository string) string {
 // guarantee a file edit cannot make, so a client configurable only by editing
 // a file is left out and named as left out rather than quietly served less.
 //
-// Two shapes, because the clients have two. OpenCode reads one variable and
-// deep-merges it. Claude Code and codex take theirs as arguments: one
-// `--mcp-config <json>` carrying every server, and one `-c
-// mcp_servers.<id>={...}` per server respectively. All three are additive
-// against whatever the user already declares.
+// Three clients accept an ephemeral Atenea overlay: OpenCode reads one
+// variable and deep-merges it, while Claude Code and codex take theirs as
+// arguments. OMP is deliberately included as a pass-through alias: its MCP
+// discovery is file-based and it has no equivalent overlay flag, so wrap must
+// not write over the user's project or global configuration.
 var clients = map[string]struct {
 	env    string
 	render func(wrap.Plan, wrap.Core) (string, error)
@@ -2963,6 +2965,7 @@ var clients = map[string]struct {
 	"opencode": {env: "OPENCODE_CONFIG_CONTENT", render: wrap.Plan.OpenCodePayload},
 	"claude":   {flags: wrap.Plan.ClaudeArgs, variadic: true},
 	"codex":    {flags: wrap.Plan.CodexArgs},
+	"omp":      {},
 }
 
 func cmdWrap(settingsPath string, args []string, out io.Writer) error {
