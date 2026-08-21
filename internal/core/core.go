@@ -18,6 +18,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
+	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
@@ -452,9 +453,22 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 	case config.RunnerClaudeCode:
 		return claudecode.New(claudecode.Options{
 			Binary:          cfg.Orchestrator.ClaudeCode.Binary,
+			Source:          cfg.Orchestrator.ClaudeCode.Source,
+			TerminalBinary:  cfg.Orchestrator.ClaudeCode.TerminalBinary,
+			AppBinary:       cfg.Orchestrator.ClaudeCode.AppBinary,
 			Implementations: cfg.Orchestrator.ClaudeCode.Implementations,
 			Sensitive:       cfg.Security.Sensitive,
 			Timeout:         cfg.Orchestrator.ClaudeCode.Timeout,
+		})
+	case config.RunnerCodex:
+		return codex.New(codex.Options{
+			Binary:          cfg.Orchestrator.Codex.Binary,
+			Source:          cfg.Orchestrator.Codex.Source,
+			TerminalBinary:  cfg.Orchestrator.Codex.TerminalBinary,
+			AppBinary:       cfg.Orchestrator.Codex.AppBinary,
+			Implementations: cfg.Orchestrator.Codex.Implementations,
+			Sensitive:       cfg.Security.Sensitive,
+			Timeout:         cfg.Orchestrator.Codex.Timeout,
 		})
 	case config.RunnerCodebaseMemory:
 		return codebasememory.New(codebasememory.Options{
@@ -768,6 +782,16 @@ func (c *Core) Settings() config.Config { return c.settings }
 // Select answers which implementation should serve a capability on a
 // repository, along with the trace that justifies it.
 func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, error) {
+	return c.selectWithPreference(capabilityID, repositoryID, "")
+}
+
+// SelectWithPreference applies a one-call implementation preference without
+// changing the settings file or its standing selector rules.
+func (c *Core) SelectWithPreference(capabilityID, repositoryID, prefer string) (selector.Decision, error) {
+	return c.selectWithPreference(capabilityID, repositoryID, prefer)
+}
+
+func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (selector.Decision, error) {
 	if err := c.enter(); err != nil {
 		return selector.Decision{}, err
 	}
@@ -792,6 +816,7 @@ func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, err
 		Candidates: candidates,
 		Reachable:  c.reach(),
 		Measuring:  measuring,
+		Prefer:     prefer,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	return decision, err

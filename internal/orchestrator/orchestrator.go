@@ -511,6 +511,9 @@ type Question struct {
 	// repository the same positional question would answer about files that
 	// merely share a path.
 	Repository string
+	// Prefer selects one implementation for this question when it survives
+	// constraints, reach and health. It does not alter standing configuration.
+	Prefer string
 	// Payload is the capability's declared input. It is checked against the
 	// schema by the runner, not here: one gate, at the door it belongs to.
 	Payload map[string]any
@@ -596,6 +599,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 			Task:    text,
 			Effects: []contract.Effect{contract.EffectRead},
 		}.Grant(q.Floor.Or(a.standingEffects)).Grant(q.Effects),
+		Prefer: q.Prefer,
 	}}}
 	if err := plan.Validate(); err != nil {
 		return result, err
@@ -1108,6 +1112,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		Reachable:  a.runner.Implementations(),
 		Measuring:  measuring,
 		Payload:    step.Payload,
+		Prefer:     step.Prefer,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision

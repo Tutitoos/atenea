@@ -78,8 +78,8 @@ checkpoints = true
 # Empty means $XDG_STATE_HOME/atenea/runs, or ~/.local/state/atenea/runs.
 checkpoint_dir = ""
 
-# Who actually executes a step: any of "omp", "claudecode", "serena" and
-# "local".
+# Who actually executes a step: any of "omp", "claudecode", "codex",
+# "serena" and "local".
 #
 # Atenea decides and delegates, so execution always happens on the far side of
 # this line, and that far side is an adapter: a dumb translator with no logic
@@ -88,9 +88,10 @@ checkpoint_dir = ""
 # implementations, and two of them claiming the same one is refused at load.
 #
 # "omp" is the adapter that ships. "claudecode" drives the Claude Code CLI and
-# is off by default because it costs money per call. "serena" is not a CLI at
-# all: it is an MCP server, attached the same way because a capability does not
-# care whether its provider is a command or a server. "local" is a stand-in
+# "codex" drives the native Codex CLI; both are off by default because they
+# cost money per call. "serena" is not a CLI at all: it is an MCP server,
+# attached the same way because a capability does not care whether its provider
+# is a command or a server. "local" is a stand-in
 # that searches the disk directly, for a machine with no client installed. It
 # and omp both serve ripgrep, so attaching both is refused at load: the choice
 # is exclusive. The stand-in spawns nothing and is far faster for it -- 28-65x
@@ -118,8 +119,10 @@ runners = ["omp"]
   timeout = "30s"
 
   [orchestrator.claudecode]
-  # The claude executable. A bare name is looked up on PATH.
-  binary = "claude"
+  # Claude Code is the headless runner. Claude.app is a GUI client and is
+  # consumed through MCP rather than launched as a provider process.
+  source = "auto"
+  terminal_binary = "claude"
   # Implementations the adapter answers for. This is a different id from
   # ripgrep's on purpose: the same question answered by a model is not the same
   # answer at the same price, and the funnel has to be able to tell them apart.
@@ -141,6 +144,17 @@ runners = ["omp"]
   # It does not overlap with budget_usd: money stops a client working too
   # expensively, this stops one that is not working at all. A client wedged on
   # a lock spends nothing, so no grant will ever end it.
+  timeout = "90s"
+
+  [orchestrator.codex]
+  # Codex CLI's native non-interactive entry point. Atenea prefers the
+  # terminal CLI and falls back to the CLI bundled in ChatGPT.app. This
+  # adapter uses Codex's own JSONL event stream and output schema, not Claude
+  # Code flags.
+  source = "auto"
+  terminal_binary = "codex"
+  app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
+  implementations = ["codex.search"]
   timeout = "90s"
 
   [orchestrator.serena]
@@ -1597,6 +1611,22 @@ scope_guarantee = "filtered"   # the model is only asked nicely; every returned 
   # the funnel is cost-aware, so declaring this honestly is what keeps a model
   # from being chosen for work a tool already does well. It wins when the
   # cheaper providers are unhealthy or cannot work here at all.
+  estimated_duration = "12s"
+  estimated_tokens = 20000
+
+[[implementation]]
+id = "codex.search"
+provider = "codex"
+capability = "code.search"
+scope_guarantee = "filtered"   # Codex is instructed to stay inside the repository; the adapter filters every answer again
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
   estimated_duration = "12s"
   estimated_tokens = 20000
 

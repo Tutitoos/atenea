@@ -467,6 +467,31 @@ func TestRankingPrefersAliveThenScoreThenID(t *testing.T) {
 	}
 }
 
+func TestOneCallPreferenceWinsAndFallsBackWhenUnavailable(t *testing.T) {
+	candidates := []contract.Implementation{
+		impl("ripgrep", health(contract.HealthAlive, 1)),
+		impl("codex.search", health(contract.HealthAlive, 0.1)),
+	}
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search", Repository: smallGoRepo(), Candidates: candidates,
+		Prefer: "codex.search",
+	})
+	if err != nil || decision.Chosen.ID != "codex.search" {
+		t.Fatalf("preferred decision = %s, err=%v", decision.Chosen.ID, err)
+	}
+	candidates[1].Health = contract.Health{State: contract.HealthDown, Reason: "not authenticated"}
+	decision, err = mustSelector(t).Select(selector.Request{
+		Capability: "code.search", Repository: smallGoRepo(), Candidates: candidates,
+		Prefer: "codex.search",
+	})
+	if err != nil || decision.Chosen.ID != "ripgrep" {
+		t.Fatalf("fallback decision = %s, err=%v", decision.Chosen.ID, err)
+	}
+	if len(decision.Notices) == 0 || !strings.Contains(decision.Notices[0], "falling back") {
+		t.Fatalf("notices = %v, want explicit fallback notice", decision.Notices)
+	}
+}
+
 // The user's word outranks Atenea's own ranking, even against a healthier
 // provider.
 func TestUserRuleOutranksTheAutomaticChoice(t *testing.T) {

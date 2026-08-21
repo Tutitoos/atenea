@@ -118,6 +118,9 @@ type Step struct {
 	Capability string
 	// Repository is the unit of work it runs against.
 	Repository string
+	// Prefer is an optional one-call implementation preference. Empty means
+	// the selector's standing rules and automatic ranking decide.
+	Prefer string
 	// Payload is the capability input, checked against the declared schema
 	// before anything runs.
 	Payload map[string]any

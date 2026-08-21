@@ -43,6 +43,13 @@ type Runner interface {
 	Run(ctx context.Context, req RunRequest) (Outcome, error)
 }
 
+// SurfaceReporter is an optional status detail for runners that have more
+// than one executable surface, such as a terminal CLI and an app-bundled CLI.
+// The string must not contain credentials or environment values.
+type SurfaceReporter interface {
+	Surface() string
+}
+
 // IndexProber is implemented by a runner that can say whether it already
 // holds a ready index for a repository, without being asked to build one.
 //

@@ -102,6 +102,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codebase-memory.impact",
 		"codebase-memory.index",
 		"codebase-memory.overview",
+		"codex.search",
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
 		"kivgraph.get",
@@ -140,7 +141,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			if impl.ScopeGuarantee != contract.ScopeConfined {
 				t.Errorf("ripgrep ships with scope_guarantee=%s, want confined", impl.ScopeGuarantee)
 			}
-		case "claude.search":
+		case "claude.search", "codex.search":
 			if impl.ScopeGuarantee != contract.ScopeFiltered {
 				t.Errorf("claude.search ships with scope_guarantee=%s, want filtered", impl.ScopeGuarantee)
 			}
@@ -1003,6 +1004,37 @@ runners = ["claudecode"]
 	claude := cfg.Orchestrator.ClaudeCode
 	if claude.Binary != "/opt/bin/claude" || claude.Timeout != 2*time.Minute {
 		t.Errorf("claudecode = %+v", claude)
+	}
+}
+
+func TestTheClientSurfaceBlocksAreRead(t *testing.T) {
+	body := minimal + `
+[orchestrator]
+runners = ["claudecode", "codex"]
+
+  [orchestrator.claudecode]
+  source = "auto"
+  terminal_binary = "claude-terminal"
+  app_binary = "/opt/claude-code"
+  implementations = ["claude.search"]
+
+  [orchestrator.codex]
+  source = "app"
+  terminal_binary = "codex"
+  app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
+  implementations = ["codex.search"]
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	claude := cfg.Orchestrator.ClaudeCode
+	if claude.Source != "auto" || claude.TerminalBinary != "claude-terminal" || claude.AppBinary != "/opt/claude-code" {
+		t.Errorf("claudecode surfaces = %+v", claude)
+	}
+	codex := cfg.Orchestrator.Codex
+	if codex.Source != "app" || codex.TerminalBinary != "codex" || codex.AppBinary == "" {
+		t.Errorf("codex surfaces = %+v", codex)
 	}
 }
 

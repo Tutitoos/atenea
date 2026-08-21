@@ -126,6 +126,7 @@ Ask the funnel who would answer a capability, without spending anything.
 
 Flags:
   --repo ID   repository id (defaults to the only one registered)
+  --prefer ID one-call implementation preference (e.g. ripgrep, codex.search, claude.search)
 `,
 	"task": `Usage: atenea task "TEXT" [flags]
 
@@ -151,6 +152,7 @@ Flags:
   --allow EFFECT  effect beyond reading to grant this question; repeat for
                   several (default: none)
   --budget USD    what this question may spend (default: the settings file)
+  --prefer ID     one-call implementation preference (e.g. ripgrep, codex.search, claude.search)
   --trace         print the plan, the funnel and every review
   --json          print the result as json instead of prose (always
                   complete, ignores --trace)
@@ -780,6 +782,7 @@ func printStatus(out io.Writer, status core.Status) error {
 	fmt.Fprintf(out, "  asks for   %s\n", strings.Join(agent.Capabilities, ", "))
 	fmt.Fprintf(out, "  context    %s\n", strings.Join(agent.Context, ", "))
 	fmt.Fprintf(out, "  runners    %s\n", orDash(strings.Join(agent.Runners, ", ")))
+	fmt.Fprintf(out, "  surfaces   %s\n", orDash(strings.Join(agent.Surfaces, ", ")))
 	fmt.Fprintf(out, "  serves     %s\n", orDash(strings.Join(agent.Serves, ", ")))
 	if len(agent.Unreachable) > 0 {
 		fmt.Fprintf(out, "  no runner  %s\n", strings.Join(agent.Unreachable, ", "))
@@ -1689,9 +1692,11 @@ func cmdSelect(settingsPath string, args []string, out io.Writer) error {
 	capabilityID, args := args[0], args[1:]
 
 	var repository string
+	var prefer string
 	flags := flag.NewFlagSet("select", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository id (defaults to the only one registered)")
+	flags.StringVar(&prefer, "prefer", "", "one-call implementation preference")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -1714,7 +1719,7 @@ func cmdSelect(settingsPath string, args []string, out io.Writer) error {
 		repository = repos[0].ID
 	}
 
-	decision, selectErr := atenea.Select(capabilityID, repository)
+	decision, selectErr := atenea.SelectWithPreference(capabilityID, repository, prefer)
 	printDecision(out, decision, selectErr)
 	return selectErr
 }
@@ -1856,12 +1861,14 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	var trace bool
 	var jsonOut bool
 	var budget float64
+	var prefer string
 	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository to ask about (required when several are registered)")
 	flags.Var(&fields, "set", "payload field as name=value; repeat for several")
 	flags.Var(&allow, "allow", "effect beyond reading to grant this question; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
+	flags.StringVar(&prefer, "prefer", "", "one-call implementation preference")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
@@ -1916,6 +1923,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		Payload:    payload,
 		Effects:    effects,
 		BudgetUSD:  budget,
+		Prefer:     prefer,
 	})
 	if result != nil {
 		if jsonOut {

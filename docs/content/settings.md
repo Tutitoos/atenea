@@ -151,10 +151,18 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   skip_dirs = [".git", "node_modules", "vendor", "dist", "build", ".venv", "target"]
 
   [orchestrator.claudecode]
-  binary = "claude"                    # bare name is looked up on PATH
+  source = "auto"                      # terminal or auto; Claude.app is a GUI client
+  terminal_binary = "claude"            # Claude Code headless executable
   implementations = ["claude.search"]  # a different id from ripgrep's, on purpose
   # no ceiling here: what a call may spend arrives with the commission
   timeout = "90s"                      # ~13 model turns; the grant bites first
+
+  [orchestrator.codex]
+  source = "auto"                      # terminal, app or auto
+  terminal_binary = "codex"             # Codex CLI on PATH
+  app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
+  implementations = ["codex.search"]
+  timeout = "90s"
 
   [orchestrator.serena]
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
@@ -459,6 +467,13 @@ whichever role is asking. `timeout` matches
 `orchestrator.claudecode.timeout` for the same reason it is set there — it
 is the same client, on the same machine, so the same measured ceiling
 applies.
+
+`orchestrator.claudecode.source` and `terminal_binary` keep Claude Code as a
+headless runner while Claude.app remains an MCP client. Do not configure the
+GUI binary from `/Applications/Claude.app` as a provider executable. Codex
+`source = "auto"` tries the terminal CLI first and then the CLI bundled in
+ChatGPT.app; these are two executable surfaces of one provider, not two
+selector candidates. The legacy `binary` key remains an explicit override.
 
 ## The measurement base
 

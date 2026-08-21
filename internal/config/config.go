@@ -24,6 +24,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
+	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
@@ -290,6 +291,7 @@ type Orchestrator struct {
 	Local          LocalRunner
 	OMP            OMPAdapter
 	ClaudeCode     ClaudeCodeAdapter
+	Codex          CodexAdapter
 	Serena         SerenaAdapter
 	CodebaseMemory CodebaseMemoryAdapter
 	Kivgraph       KivgraphAdapter
@@ -358,12 +360,41 @@ type OMPAdapter struct {
 // spending would be a bad surprise however good the answers were.
 type ClaudeCodeAdapter struct {
 	// Binary is the claude executable. A bare name is looked up on PATH.
+	// It is kept for compatibility with older settings; new settings should
+	// use Source and TerminalBinary.
 	Binary string
+	// Source selects the CLI surface. "auto" currently means the terminal
+	// Claude Code executable; Claude.app itself is a GUI client, not a
+	// headless runner Atenea can safely invoke.
+	Source string
+	// TerminalBinary is the Claude Code executable used by the terminal and by
+	// app installations that share Claude Code's user authentication state.
+	TerminalBinary string
+	// AppBinary is optional and must be a headless Claude Code executable if a
+	// future app distribution provides one. Claude.app's GUI binary must not be
+	// configured here.
+	AppBinary string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one invocation. A model turn is slower than a tool call by
 	// nature, so this sits far above omp's ceiling.
 	Timeout time.Duration
+}
+
+// CodexAdapter configures the native Codex CLI adapter. It is kept separate
+// from ClaudeCodeAdapter because the two CLIs have different invocation and
+// output contracts.
+type CodexAdapter struct {
+	// Binary is a legacy explicit override. When set it wins over the source
+	// candidates, so existing settings remain valid.
+	Binary string
+	// Source is "terminal", "app" or "auto". Auto tries the terminal binary
+	// first and then the app-bundled CLI.
+	Source          string
+	TerminalBinary  string
+	AppBinary       string
+	Implementations []string
+	Timeout         time.Duration
 }
 
 // Instance is how many copies of a managed server there should be, and what
@@ -613,12 +644,13 @@ func DefaultLocalAgents() LocalAgents {
 	}
 }
 
-// RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory,
+// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerCodebaseMemory,
 // RunnerKivgraph, RunnerTokensave and RunnerLocal are the values
 // orchestrator.runners accepts.
 const (
 	RunnerOMP            = "omp"
 	RunnerClaudeCode     = "claudecode"
+	RunnerCodex          = "codex"
 	RunnerSerena         = "serena"
 	RunnerCodebaseMemory = "codebasememory"
 	RunnerKivgraph       = "kivgraph"
@@ -822,6 +854,7 @@ type fileOrchestrator struct {
 	Local          fileLocalRunner           `toml:"local"`
 	OMP            fileOMPAdapter            `toml:"omp"`
 	ClaudeCode     fileClaudeCodeAdapter     `toml:"claudecode"`
+	Codex          fileCodexAdapter          `toml:"codex"`
 	Serena         fileSerenaAdapter         `toml:"serena"`
 	CodebaseMemory fileCodebaseMemoryAdapter `toml:"codebasememory"`
 	Kivgraph       fileKivgraphAdapter       `toml:"kivgraph"`
@@ -854,6 +887,18 @@ type fileLocalAgents struct {
 
 type fileClaudeCodeAdapter struct {
 	Binary          string    `toml:"binary"`
+	Source          string    `toml:"source"`
+	TerminalBinary  string    `toml:"terminal_binary"`
+	AppBinary       string    `toml:"app_binary"`
+	Implementations *[]string `toml:"implementations"`
+	Timeout         string    `toml:"timeout"`
+}
+
+type fileCodexAdapter struct {
+	Binary          string    `toml:"binary"`
+	Source          string    `toml:"source"`
+	TerminalBinary  string    `toml:"terminal_binary"`
+	AppBinary       string    `toml:"app_binary"`
 	Implementations *[]string `toml:"implementations"`
 	Timeout         string    `toml:"timeout"`
 }
@@ -1381,6 +1426,8 @@ var defaultSensitive = []string{
 // able to tell them apart.
 var defaultClaudeImplementations = []string{"claude.search"}
 
+var defaultCodexImplementations = []string{"codex.search"}
+
 // Los defaults de kivgraph y tokensave se leen de sus propios paquetes, como
 // ya hacen serena y codebasememory: un numero declarado dos veces es un
 // numero que puede discrepar. Ninguno de los dos adapters importa
@@ -1419,9 +1466,17 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Timeout:         omp.DefaultTimeout,
 		},
 		ClaudeCode: ClaudeCodeAdapter{
-			Binary:          claudecode.DefaultBinary,
+			Source:          "auto",
+			TerminalBinary:  claudecode.DefaultBinary,
 			Implementations: defaultClaudeImplementations,
 			Timeout:         claudecode.DefaultTimeout,
+		},
+		Codex: CodexAdapter{
+			Source:          "auto",
+			TerminalBinary:  codex.DefaultTerminalBinary,
+			AppBinary:       codex.DefaultAppBinary,
+			Implementations: defaultCodexImplementations,
+			Timeout:         codex.DefaultTimeout,
 		},
 		Serena: SerenaAdapter{
 			Endpoint:        serena.DefaultEndpoint,
@@ -1501,13 +1556,13 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory, RunnerKivgraph,
+			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerCodebaseMemory, RunnerKivgraph,
 				RunnerTokensave, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
-					source, name, RunnerOMP, RunnerClaudeCode, RunnerSerena, RunnerCodebaseMemory,
-					RunnerKivgraph, RunnerTokensave, RunnerLocal)
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena,
+					RunnerCodebaseMemory, RunnerKivgraph, RunnerTokensave, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -1543,6 +1598,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.ClaudeCode = claude
+	codexAdapter, err := o.Codex.build(source, out.Codex)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Codex = codexAdapter
 	symbols, err := o.Serena.build(source, out.Serena)
 	if err != nil {
 		return Orchestrator{}, err
@@ -1738,6 +1798,15 @@ func (c fileClaudeCodeAdapter) build(source string, out ClaudeCodeAdapter) (Clau
 	if strings.TrimSpace(c.Binary) != "" {
 		out.Binary = strings.TrimSpace(c.Binary)
 	}
+	if strings.TrimSpace(c.Source) != "" {
+		out.Source = strings.TrimSpace(c.Source)
+	}
+	if strings.TrimSpace(c.TerminalBinary) != "" {
+		out.TerminalBinary = strings.TrimSpace(c.TerminalBinary)
+	}
+	if strings.TrimSpace(c.AppBinary) != "" {
+		out.AppBinary = strings.TrimSpace(c.AppBinary)
+	}
 	if c.Implementations != nil {
 		out.Implementations = *c.Implementations
 	}
@@ -1750,6 +1819,37 @@ func (c fileClaudeCodeAdapter) build(source string, out ClaudeCodeAdapter) (Clau
 		if timeout <= 0 {
 			return ClaudeCodeAdapter{}, contract.Fail(contract.FailureInvalidInput,
 				"settings %s: orchestrator.claudecode.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	return out, nil
+}
+
+func (c fileCodexAdapter) build(source string, out CodexAdapter) (CodexAdapter, error) {
+	if strings.TrimSpace(c.Binary) != "" {
+		out.Binary = strings.TrimSpace(c.Binary)
+	}
+	if strings.TrimSpace(c.Source) != "" {
+		out.Source = strings.TrimSpace(c.Source)
+	}
+	if strings.TrimSpace(c.TerminalBinary) != "" {
+		out.TerminalBinary = strings.TrimSpace(c.TerminalBinary)
+	}
+	if strings.TrimSpace(c.AppBinary) != "" {
+		out.AppBinary = strings.TrimSpace(c.AppBinary)
+	}
+	if c.Implementations != nil {
+		out.Implementations = *c.Implementations
+	}
+	if c.Timeout != "" {
+		timeout, err := time.ParseDuration(c.Timeout)
+		if err != nil {
+			return CodexAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.codex.timeout %q: %v", source, c.Timeout, err)
+		}
+		if timeout <= 0 {
+			return CodexAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.codex.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
 	}

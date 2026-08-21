@@ -323,6 +323,9 @@ type OrchestratorStatus struct {
 	Context      []string
 	// Runners lists the ids of the far sides attached, empty when none is.
 	Runners []string
+	// Surfaces names the executable surface selected by runners that expose
+	// one, for example codex=terminal:/opt/homebrew/bin/codex.
+	Surfaces []string
 	// Serves lists the implementations the attached runners can execute
 	// between them.
 	Serves []string
@@ -758,7 +761,11 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 
 	for _, runner := range c.runners {
 		out.Runners = append(out.Runners, runner.ID())
+		if reporter, ok := runner.(contract.SurfaceReporter); ok {
+			out.Surfaces = append(out.Surfaces, runner.ID()+"="+reporter.Surface())
+		}
 	}
+	slices.Sort(out.Surfaces)
 	for _, capability := range c.catalog.Capabilities() {
 		impls, err := c.catalog.ImplementationsFor(capability.ID)
 		if err != nil {

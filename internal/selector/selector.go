@@ -120,6 +120,9 @@ type Request struct {
 	// absent is not checked either way, so a dry run reads exactly like a
 	// call that named no values, which is what it is.
 	Payload map[string]any
+	// Prefer is a one-call override, normally supplied by `atenea ask/select
+	// --prefer`. It outranks a standing rule for this request only.
+	Prefer string
 }
 
 // Drop records one implementation leaving the funnel, and why.
@@ -382,6 +385,15 @@ func inBreakIn(impl contract.Implementation) bool {
 // catalog always produces the same answer.
 func (s *Selector) choose(req Request, survivors []contract.Implementation) (contract.Implementation, string, []string) {
 	var notices []string
+	if preferred := strings.TrimSpace(req.Prefer); preferred != "" {
+		if idx := slices.IndexFunc(survivors, func(i contract.Implementation) bool {
+			return i.ID == preferred
+		}); idx >= 0 {
+			return survivors[idx], fmt.Sprintf("one-call preference selects %s", preferred), nil
+		}
+		notices = append(notices, fmt.Sprintf(
+			"one-call preference selects %s, which did not survive the funnel; falling back", preferred))
+	}
 	if rule, ok := s.ruleFor(req.Capability, req.Repository.ID); ok {
 		if idx := slices.IndexFunc(survivors, func(i contract.Implementation) bool {
 			return i.ID == rule.Prefer

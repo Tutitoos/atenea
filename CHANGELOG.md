@@ -15,6 +15,8 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-21
+
 ### Added
 
 - **`atenea workflow redo` dispatches a step that was cut at its own spending

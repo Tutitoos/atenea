@@ -34,6 +34,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/procstat"
+	"github.com/Tutitoos/atenea/internal/toolpath"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -75,7 +76,15 @@ const defaultContextLines = 2
 // it four times and no adapter could see the others doing the same.
 type Options struct {
 	// Binary is the claude executable. A bare name is looked up on PATH.
+	// It is a legacy explicit override; new settings should use Source and the
+	// candidate binaries below.
 	Binary string
+	// Source is "auto", "terminal" or "app". The app candidate, when used,
+	// must be a headless Claude Code executable; Claude.app's GUI process is not
+	// a supported runner.
+	Source         string
+	TerminalBinary string
+	AppBinary      string
 	// Implementations this adapter answers for, by implementation id.
 	Implementations []string
 	// Sensitive holds the path patterns that carry secrets. Unlike a tool
@@ -91,6 +100,9 @@ type Options struct {
 // Runner answers capabilities by driving the Claude Code CLI.
 type Runner struct {
 	binary          string
+	source          string
+	terminalBinary  string
+	appBinary       string
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
@@ -118,18 +130,61 @@ func New(opts Options) (*Runner, error) {
 	}
 	runner := &Runner{
 		binary:          strings.TrimSpace(opts.Binary),
+		source:          strings.TrimSpace(opts.Source),
+		terminalBinary:  strings.TrimSpace(opts.TerminalBinary),
+		appBinary:       strings.TrimSpace(opts.AppBinary),
 		implementations: slices.Clone(opts.Implementations),
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         opts.Timeout,
 	}
+	if runner.terminalBinary == "" {
+		runner.terminalBinary = DefaultBinary
+	}
 	if runner.binary == "" {
-		runner.binary = DefaultBinary
+		if err := toolpath.ValidateSource(runner.source, runner.candidates()); err != nil {
+			return nil, contract.Fail(contract.FailureInvalidInput, "claude-code adapter: %v", err)
+		}
 	}
 	if runner.timeout == 0 {
 		runner.timeout = DefaultTimeout
 	}
-	runner.version = toolversion.New(runner.binary, "--version")
+	versionBinary := runner.binary
+	if versionBinary == "" {
+		if resolved, err := runner.resolve(); err == nil {
+			versionBinary = resolved.Path
+		} else {
+			versionBinary = runner.terminalBinary
+		}
+	}
+	runner.version = toolversion.New(versionBinary, "--version")
 	return runner, nil
+}
+
+func (r *Runner) resolve() (toolpath.Resolved, error) {
+	if r.binary != "" {
+		return toolpath.Resolve("explicit", []toolpath.Candidate{{Source: "explicit", Binary: r.binary}})
+	}
+	return toolpath.Resolve(r.source, r.candidates())
+}
+
+func (r *Runner) candidates() []toolpath.Candidate {
+	return []toolpath.Candidate{
+		{Source: "terminal", Binary: r.terminalBinary},
+		{Source: "app", Binary: r.appBinary},
+	}
+}
+
+// Surface reports the selected headless executable. Claude.app's GUI process
+// is intentionally never selected by the default configuration.
+func (r *Runner) Surface() string {
+	if r.binary != "" {
+		return "explicit:" + r.binary
+	}
+	resolved, err := r.resolve()
+	if err != nil {
+		return r.source + ":unavailable"
+	}
+	return resolved.Source + ":" + resolved.Path
 }
 
 // ID names the runner on the status screen.
@@ -392,10 +447,10 @@ func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
 // two minutes and then errored still occupied the machine for two minutes, and
 // a baseline that only counted the successes would rank it as cheap.
 func (r *Runner) invoke(ctx context.Context, root string, req contract.RunRequest, ask search) (envelope, int64, error) {
-	binary, err := exec.LookPath(r.binary)
+	resolved, err := r.resolve()
 	if err != nil {
 		return envelope{}, 0, contract.Fail(contract.FailureUnavailable,
-			"claude code is not installed: %q is not on PATH", r.binary)
+			"claude code executable is unavailable for source %q", r.source)
 	}
 	argv, err := r.args(req, ask)
 	if err != nil {
@@ -404,7 +459,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, argv...)
+	cmd := exec.CommandContext(ctx, resolved.Path, argv...)
 	cmd.Dir = root
 	// A model turn spawns a tree -- tool subprocesses, and whatever the client
 	// starts for itself. Without this, canceling leaves them running and
