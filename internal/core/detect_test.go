@@ -2,8 +2,8 @@ package core
 
 // DetectIndexes' own logic -- which runners get asked, which repositories,
 // what a probe error does and does not touch -- is what these tests cover.
-// ProbeIndex's own classification of a real codebase-memory-mcp answer is
-// already covered where that adapter lives; here a scripted double stands
+// ProbeIndex's own classification of a real provider answer is
+// already covered by the provider; here a scripted double stands
 // in for any contract.IndexProber, the same way maintenance_test.go reaches
 // for a real component only when there is something worth faking.
 
@@ -79,7 +79,7 @@ func ready(root string) map[string]struct {
 
 func TestDetectIndexesCorrectsTheCatalog(t *testing.T) {
 	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	prober := &fakeProber{id: "codebase-memory", answers: ready(repo.Path)}
+	prober := &fakeProber{id: "graph", answers: ready(repo.Path)}
 	c := coreWithRepos(t, []contract.Runner{prober}, repo)
 
 	reports, err := c.DetectIndexes(context.Background(), "")
@@ -90,14 +90,14 @@ func TestDetectIndexesCorrectsTheCatalog(t *testing.T) {
 		t.Fatalf("reports = %+v, want exactly one", reports)
 	}
 	got := reports[0]
-	if got.Repository != "api" || got.Provider != "codebase-memory" || !got.Ready || got.Hint != "" || got.Err != "" {
+	if got.Repository != "api" || got.Provider != "graph" || !got.Ready || got.Hint != "" || got.Err != "" {
 		t.Fatalf("report = %+v", got)
 	}
 	fresh, err := c.catalog.Repository("api")
 	if err != nil {
 		t.Fatalf("Repository: %v", err)
 	}
-	if !fresh.IndexedBy("codebase-memory") {
+	if !fresh.IndexedBy("graph") {
 		t.Error("a ready probe did not correct the catalog's indexed_by")
 	}
 }
@@ -106,7 +106,7 @@ func TestDetectIndexesCorrectsTheCatalog(t *testing.T) {
 // simply not part of it, the same as a provider health never probed.
 func TestDetectIndexesSkipsRunnersWithoutIndexProber(t *testing.T) {
 	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	prober := &fakeProber{id: "codebase-memory", answers: ready(repo.Path)}
+	prober := &fakeProber{id: "graph", answers: ready(repo.Path)}
 	plain := &fakeRunner{id: "serena"}
 	c := coreWithRepos(t, []contract.Runner{plain, prober}, repo)
 
@@ -114,7 +114,7 @@ func TestDetectIndexesSkipsRunnersWithoutIndexProber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DetectIndexes: %v", err)
 	}
-	if len(reports) != 1 || reports[0].Provider != "codebase-memory" {
+	if len(reports) != 1 || reports[0].Provider != "graph" {
 		t.Fatalf("reports = %+v, want only the prober's own", reports)
 	}
 }
@@ -123,9 +123,9 @@ func TestDetectIndexesSkipsRunnersWithoutIndexProber(t *testing.T) {
 // guess: "could not tell" and "confirmed absent" are different facts, and
 // only the second may touch indexed_by.
 func TestDetectIndexesDoesNotCorrectTheCatalogOnProbeError(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, []string{"codebase-memory"})
-	boom := errors.New("codebase-memory-mcp crashed")
-	prober := &fakeProber{id: "codebase-memory", answers: map[string]struct {
+	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, []string{"graph"})
+	boom := errors.New("graph backend crashed")
+	prober := &fakeProber{id: "graph", answers: map[string]struct {
 		ready bool
 		hint  string
 		err   error
@@ -143,7 +143,7 @@ func TestDetectIndexesDoesNotCorrectTheCatalogOnProbeError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Repository: %v", err)
 	}
-	if !fresh.IndexedBy("codebase-memory") {
+	if !fresh.IndexedBy("graph") {
 		t.Error("a failed probe must leave the catalog's prior belief untouched")
 	}
 }
@@ -151,7 +151,7 @@ func TestDetectIndexesDoesNotCorrectTheCatalogOnProbeError(t *testing.T) {
 func TestDetectIndexesNarrowsToOneRepositoryWhenNamed(t *testing.T) {
 	api := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	web := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	prober := &fakeProber{id: "codebase-memory", answers: map[string]struct {
+	prober := &fakeProber{id: "graph", answers: map[string]struct {
 		ready bool
 		hint  string
 		err   error
@@ -182,7 +182,7 @@ func TestDetectIndexesUnknownRepositoryIsNotFound(t *testing.T) {
 // not still pay for every repository left in the loop.
 func TestDetectIndexesStopsOnCanceledContext(t *testing.T) {
 	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	prober := &fakeProber{id: "codebase-memory", answers: ready(repo.Path)}
+	prober := &fakeProber{id: "graph", answers: ready(repo.Path)}
 	c := coreWithRepos(t, []contract.Runner{prober}, repo)
 
 	ctx, cancel := context.WithCancel(context.Background())

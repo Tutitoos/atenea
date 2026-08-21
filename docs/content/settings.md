@@ -135,7 +135,7 @@ max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
-runners = ["omp"]           # any of omp, claudecode, serena, codebasememory, local; [] dispatches nowhere
+  runners = ["omp"]           # any of omp, claudecode, serena, kivgraph, tokensave, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
@@ -186,10 +186,6 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   idle_timeout = "5m"                  # on_demand only; refused beside persistent
   stop_grace = "5s"                    # SIGTERM, then SIGKILL
 
-  [orchestrator.codebasememory]
-  binary = "codebase-memory-mcp"       # bare name is looked up on PATH
-  implementations = ["codebase-memory.calls", "codebase-memory.overview", "codebase-memory.impact", "codebase-memory.index"]
-  timeout = "90s"                      # opening an index cold is slow, not stuck
 ```
 
 `max_parallel` is the real brake on total memory: four steps of one wave run at
@@ -211,9 +207,8 @@ can be attached at once. `omp` is the client adapter that ships attached.
 the only far side that costs money per call. `serena` is not a CLI at all: it
 is an MCP server, which is why its block takes a URL instead of a binary, and
 it answers the four symbol capabilities rather than a text search.
-`codebasememory` is a CLI again, like `omp`, but answers from a call graph it
-keeps on disk instead of searching or parsing anything live. `local` is
-a stand-in that searches the disk directly, for a machine with no client
+`kivgraph` and `tokensave` are graph-backed MCP providers. `local` is a
+stand-in that searches the disk directly, for a machine with no client
 installed. An empty list leaves the core able to plan and choose but unable to
 dispatch — a working core with nobody attached, and the status screen says so
 rather than failing halfway through a commission.
@@ -701,7 +696,7 @@ declared integer input by name, inclusive, and it binds only when the call
 actually names that input — an omitted value is the capability's own default,
 which every implementation must honour, so nothing is dropped for it.
 
-`codebase-memory.overview` ships `{ depth = 0 }`: its graph holds what a file
+The graph provider ships `{ depth = 0 }`: its graph holds what a file
 declares at its own top level and nothing nested inside those declarations, so
 a deeper ask would return the same list and read as a complete answer.
 At `depth = 0` both providers are candidates and the funnel ranks them; at
@@ -758,9 +753,8 @@ cannot mark a working provider down for every other repository on the machine.
 The example above is a repository somebody classified. The shipped file is not:
 it leaves `scale` empty, because a fresh install has measured nothing and a
 guess is not free. Writing `small` there drops every implementation that asks
-for a medium repository or bigger -- on this catalog that is `symbol.calls` and
-`code.impact`, which then look unimplemented rather than unclassified. Set it
-once you know, and the two come back.
+for a medium repository or bigger, which then looks unimplemented rather than
+unclassified. Set it once you know, and the implementation comes back.
 
 `indexed_by` is a starting point the operator typed by hand, not a live
 fact -- a settings file does not watch the disk, so it can drift the moment
@@ -771,9 +765,8 @@ of that process's run, the same one-place-a-catalog-entry-changes-while-
 running exception `SetHealth` already is for a provider's health -- it
 writes nothing back to this file, so a later invocation starts again from
 what is declared here. When a provider genuinely has nothing to detect,
-`atenea ask repository.index --repo ID` builds one instead: `write` and
-`process` effects, gated the same as any other capability that touches the
-machine rather than only answering from it.
+the provider's own indexing tool must build one instead. Atenea only records
+the resulting provider state and does not build indexes itself.
 
 ## Agents
 
@@ -1246,10 +1239,10 @@ timeout = "5s"                       # bounds the check; omitted takes the defau
 expose = "off"                       # off (default) points the client here; raw is a passthrough
 
 [[mcp_server]]
-id = "codebase-memory"
-command = ["codebase-memory-mcp"]    # stdio; started once per check, then killed
+id = "graph"
+command = ["graph-backend"]           # stdio; started once per check, then killed
 [mcp_server.env]
-CODEBASE_MEMORY_UI = "false"
+GRAPH_BACKEND_UI = "false"
 ```
 
 This list is not the catalog and nothing dispatches against it. Atenea reaches

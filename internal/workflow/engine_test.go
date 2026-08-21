@@ -103,7 +103,6 @@ func TestTheLanesDoNotShareTheirCeilings(t *testing.T) {
 		declared("audit", counter(t, dir, "audit", "review", 250*time.Millisecond), config.PoolReview),
 	)
 
-	started := time.Now()
 	run, err := h.engine.Start(t.Context(), graphOf(
 		step("seed", "seed", nil),
 		step("w1", "work", nil),
@@ -114,7 +113,6 @@ func TestTheLanesDoNotShareTheirCeilings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	elapsed := time.Since(started)
 	if got := statuses(t, run); len(got) != 5 {
 		t.Fatalf("statuses = %v", got)
 	}
@@ -124,11 +122,10 @@ func TestTheLanesDoNotShareTheirCeilings(t *testing.T) {
 	if got := peak(t, dir, "review"); got != 1 {
 		t.Fatalf("review lane peaked at %d, want its ceiling of 1", got)
 	}
-	// Four quarter-second steps through one shared ceiling would take a
-	// second. Through two lanes they pair up, so anything under three
-	// quarters proves the reviewers were not queued behind the work.
-	if elapsed > 750*time.Millisecond {
-		t.Fatalf("took %v: the lanes look like one queue, not two", elapsed)
+	// The shared marker is stronger than wall-clock timing: it proves one
+	// agent and one reviewer were alive at the same time even under -race.
+	if got := peak(t, dir, "all"); got != 2 {
+		t.Fatalf("all lanes peaked at %d, want 2: the lanes did not overlap", got)
 	}
 }
 
@@ -261,7 +258,8 @@ func TestResumeRedoesReadOnlyWorkAndFinishes(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		// Ensure the stub has entered its long-running branch before cutting it.
+		time.Sleep(time.Second)
 		cancel()
 	}()
 	cut, err := h.engine.Start(ctx, graphOf(
@@ -327,7 +325,9 @@ func TestAnInterruptedWriterWaitsForRedo(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		// Let the writer create its marker before cutting the long-running
+		// process; this test is about redo policy, not startup scheduling.
+		time.Sleep(time.Second)
 		cancel()
 	}()
 	cut, err := h.engine.Start(ctx, graph)

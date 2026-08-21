@@ -265,7 +265,7 @@ func TestNothingDeclaredStillHandsTheClientTheDoor(t *testing.T) {
 
 // The defect this phase existed to fix, pinned so it cannot come back.
 //
-// `serena` and `codebase-memory` carry every capability on the machine this
+// `serena` carries every relevant capability on the machine this
 // was measured on, and wrap put both in the payload. The client then reached
 // the funnel's own backends without going through the funnel: no allow list,
 // no effect check, no receipt. The command that exists to point a client at
@@ -297,12 +297,12 @@ func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
 // looking in the settings file for something that is working as designed.
 func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 	plan := wrap.Check(t.Context(), []config.MCPServer{
-		{ID: "codebase-memory", URL: live(t)},
-	}, map[string]bool{"codebase-memory": true})
+		{ID: "graph", URL: live(t)},
+	}, map[string]bool{"graph": true})
 
 	var report strings.Builder
 	plan.Report(&report, "opencode")
-	if !strings.Contains(report.String(), "codebase-memory") {
+	if !strings.Contains(report.String(), "graph") {
 		t.Errorf("report = %q, want the held backend named", report.String())
 	}
 }
@@ -313,7 +313,7 @@ func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 // because capabilities run on it is not re-offered at all.
 //
 // Measured on this machine on 2026-08-09, against the binary as shipped: wrap
-// announced raw.serena.<tool> and raw.codebase-memory.<tool>, and `atenea mcp`
+// announced raw.serena.<tool>, and `atenea mcp`
 // served neither -- 19 raw tools, every one of them chrome-devtools, context7
 // or semgrep, the three that carry expose. The check that exists to stop a
 // client believing an unverified claim was making two of its own.

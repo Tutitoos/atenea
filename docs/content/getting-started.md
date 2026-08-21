@@ -16,6 +16,36 @@ go build -o bin/atenea ./cmd/atenea
 ./bin/atenea version
 ```
 
+### Install a published release
+
+The published Linux and macOS artifacts can be installed with the repository's
+checksum-verified installer. Pin the version explicitly; the installer never
+silently chooses a moving `latest` binary:
+
+```sh
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v0.10.4/atenea-install.sh \
+  -o /tmp/atenea-install.sh
+bash /tmp/atenea-install.sh --version 0.10.4
+```
+
+It writes `~/.local/bin/atenea`. Add `--service` when the background service is
+wanted; starting it remains an explicit command:
+
+```sh
+bash /tmp/atenea-install.sh --version 0.10.4 --service
+systemctl --user start atenea.service
+```
+
+The release contains native binaries for Linux `amd64`/`arm64` and macOS
+`amd64`/`arm64`. Other systems require building from source. Linux uses
+systemd; macOS uses launchd.
+
+Running the installer again with another pinned version updates the binary and
+keeps one rollback copy at `~/.local/bin/atenea.previous`. Restore it with
+`bash /tmp/atenea-install.sh --rollback`; remove the binary with
+`bash /tmp/atenea-install.sh --uninstall`, adding `--service` to remove the
+background service too.
+
 A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
@@ -95,47 +125,6 @@ indexed_by = ["serena"]
 Miss either and the funnel drops it at `reach` or `constraints` and says which
 — a provider nobody wired up is not a provider that is broken.
 
-### Attaching codebase-memory
-
-`codebase-memory` answers `symbol.calls` and `code.impact` by walking a call
-graph it keeps on disk instead of parsing anything live, and `repository.index`
-builds that graph in the first place — the one thing neither a grep nor a
-language server has. It is a CLI like `omp`, so the
-setting is a binary name, not a URL:
-
-```toml
-[orchestrator]
-runners = ["omp", "codebasememory"]
-
-  [orchestrator.codebasememory]
-  binary = "codebase-memory-mcp"
-```
-
-Both implementations declare `requires_index = true` and a `min_scale =
-"medium"` floor: unlike Serena, this provider only ever answers from an
-index built ahead of time, so a repository nothing has indexed, or one too
-small to have declared its scale, is refused rather than sent to a provider
-with nothing on disk to answer from — the funnel drops it at `constraints`
-or `reach` and says which, the same as any other unattached provider.
-
-`code.impact` alone also declares `requires_vcs = true`: it measures against a
-point in the repository's history, and there is none to measure against on a
-directory with no version control at its root. A repository nobody has said
-either way about is not refused for it — only one explicitly declared
-`vcs = "absent"` is, the same up-front, no-dispatch drop as the index case
-above instead of a git failure surfacing mid-call.
-
-Either belief can go stale independently of anything breaking: an index
-built after the settings file already named the repository leaves
-`indexed_by` still reading "none" for a real one, and the funnel has no way
-to tell the difference from the outside. `atenea detect --repo current` asks
-every attached provider that can answer and corrects the belief for the
-rest of that process's run — nothing on disk changes, so a later invocation
-starts again from what the file declares, the same as health already does.
-A repository truly untouched needs `atenea ask repository.index --repo
-current` instead, which spawns the build itself: `write` and `process`
-effects, the one action detecting is built to never take on its own.
-
 ## Write your own settings
 
 ```sh
@@ -176,7 +165,7 @@ chosen      ripgrep  (the only surviving implementation)
 
 funnel
   constraints  3 in -> 2 out: claude.search, ripgrep
-      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
   reach        2 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep
@@ -223,15 +212,15 @@ plan
 steps
   explore-current      explore  ripgrep                  778ms
       review   child=ok parent=ok (output matches the capability)
-      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go
+      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/kivgraph/kivgraph.go
                and 9 more file(s): atenea ask code.search --repo current --json
   search-current       work     ripgrep                  426ms
       review   child=ok parent=ok (output matches the capability)
-      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/codebasememory/calls.go, internal/adapter/codebasememory/impact.go, internal/adapter/codebasememory/index.go
+      found    CHANGELOG.md, README.md, docs/content/getting-started.md, internal/adapter/claudecode/claudecode.go, internal/adapter/claudecode/claudecode_test.go, internal/adapter/kivgraph/kivgraph.go
                and 9 more file(s): atenea ask code.search --repo current --json
 
 dropped in every step
-  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
   claude.search: no attached runner serves it
 ```
 
@@ -364,7 +353,7 @@ systemctl --user start atenea.service
 atenea service status      # where it stands
 ```
 
-A user unit, never a system one. Atenea holds no privilege worth borrowing and
+A per-user service, never a system one. Atenea holds no privilege worth borrowing and
 everything it touches is inside your home, so `sudo` would only widen what a
 bug could reach. The price is that a user unit needs lingering to survive a
 logout; `service status` prints whether you have it, and the command to get it

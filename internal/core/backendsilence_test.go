@@ -48,7 +48,7 @@ func rowFor(t *testing.T, atenea *core.Core, id string) core.ServerStatus {
 // The name is kept short on purpose: t.TempDir() carries it into the socket
 // path, and a unix socket dies past 103 bytes.
 func TestDeadCommandIsAbsentAndRedOnScreen(t *testing.T) {
-	atenea := buildService(t, deadServer(t, "codebase-memory", "/nonexistent/codebase-memory-mcp"))
+	atenea := buildService(t, deadServer(t, "graph", "/nonexistent/graph-backend"))
 	defer serve(t, atenea)()
 
 	c := dial(t)
@@ -58,7 +58,7 @@ func TestDeadCommandIsAbsentAndRedOnScreen(t *testing.T) {
 	tools, _ := got["tools"].([]any)
 	for _, entry := range tools {
 		tool, _ := entry.(map[string]any)
-		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.codebase-memory.") {
+		if name, _ := tool["name"].(string); strings.HasPrefix(name, "raw.graph.") {
 			t.Errorf("a backend that cannot spawn offered %q", name)
 		}
 	}
@@ -69,7 +69,7 @@ func TestDeadCommandIsAbsentAndRedOnScreen(t *testing.T) {
 		t.Error("tools/list is empty; the catalog went down with the backend")
 	}
 
-	row := rowFor(t, atenea, "codebase-memory")
+	row := rowFor(t, atenea, "graph")
 	if row.State != core.BackendFailed {
 		t.Errorf("state = %q, want %q", row.State, core.BackendFailed)
 	}
@@ -132,33 +132,33 @@ func TestUnexercisedServerReadsUnknownNotOK(t *testing.T) {
 	}
 }
 
-// Test B for a non-raw server -- the case that literally bit codebase-memory,
+// Test B for a non-raw server -- the case that literally bit a non-raw backend,
 // whose four capabilities vanished while nothing was exposed as raw.
 //
 // It is deliberately two halves joined at the seam the orchestrator uses,
 // because a non-raw server is never asked for tools and so can never have a
 // first-hand reading: the adapter classifies the failed spawn (proved in
-// internal/adapter/codebasememory, where a bare name off PATH returns
+// where a bare name off PATH returns
 // FailureUnavailable naming PATH), the orchestrator records that against the
 // implementation, and this test asserts the half that was missing -- that a
 // recorded unavailable for an implementation reaches the row of the server its
 // provider names.
 //
 // Writing this as one dispatch through the real adapter would need
-// codebase-memory-mcp installed on whatever machine runs the suite, which is
+// a backend installed on whatever machine runs the suite, which is
 // how a test starts passing for the wrong reason on CI.
 func TestANonRawServerGoesRedFromItsProvidersRecordedHealth(t *testing.T) {
-	settings := catalog + "\n[[mcp_server]]\nid = \"codebase-memory\"\n" +
-		"command = [\"codebase-memory-mcp\"]\nexpose = \"off\"\n"
+	settings := catalog + "\n[[mcp_server]]\nid = \"graph\"\n" +
+		"command = [\"graph-backend\"]\nexpose = \"off\"\n"
 	atenea := build(t, settings)
 
-	if row := rowFor(t, atenea, "codebase-memory"); row.State != core.BackendUnknown {
+	if row := rowFor(t, atenea, "graph"); row.State != core.BackendUnknown {
 		t.Fatalf("state = %q before anything ran, want %q", row.State, core.BackendUnknown)
 	}
 
 	// What the orchestrator does when a call comes back unavailable, with the
 	// adapter's own words for the cause.
-	const reason = `codebase-memory-mcp is not installed: "codebase-memory-mcp" is not on PATH`
+	const reason = `graph-backend is not installed: "graph-backend" is not on PATH`
 	if err := atenea.Registry().SetHealth("api", "graph.search", contract.Health{
 		State:  contract.HealthDown,
 		Reason: reason,
@@ -166,7 +166,7 @@ func TestANonRawServerGoesRedFromItsProvidersRecordedHealth(t *testing.T) {
 		t.Fatalf("SetHealth: %v", err)
 	}
 
-	row := rowFor(t, atenea, "codebase-memory")
+	row := rowFor(t, atenea, "graph")
 	if row.State != core.BackendFailed {
 		t.Errorf("state = %q, want %q: the provider's implementation is down", row.State, core.BackendFailed)
 	}

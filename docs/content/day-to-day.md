@@ -117,7 +117,7 @@ steps
       review   child=ok parent=ok (output matches the capability)
       found    cmd/atenea/cancel_test.go, cmd/atenea/json_test.go, cmd/atenea/main.go, cmd/atenea/main_test.go, cmd/atenea/money_test.go, docs/content/day-to-day.md, internal/adapter/claudecode/cancel_test.go, internal/adapter/claudecode/completeness_test.go
                and 16 more file(s): atenea ask code.search --repo current --json
-      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
       dropped  claude.search: no attached runner serves it
 ```
 

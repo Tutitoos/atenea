@@ -1,24 +1,23 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package platform
 
 import (
+	"path/filepath"
 	"runtime"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+func unitPath(name string) string {
+	return filepath.Join(filepath.Dir(ConfigDir()), "services", name+".service")
+}
+
 // Atenea knows how to install itself as a background service on Linux and
-// nowhere else yet, and says so rather than guessing.
-//
-// The next platform is macOS and the implementation is a launchd plist, which
-// is deliberately not here. A plist written from the documentation and never
-// run on a Mac would be worse than this error: it would install cleanly,
-// report success, and then not start. This box exists so that whoever does
-// have a Mac to test on has exactly one file to write, next to this one.
+// macOS. Other systems say so rather than guessing.
 func unsupported(verb string) error {
 	return contract.Fail(contract.FailureUnavailable,
-		"atenea cannot %s a background service on %s; only linux is implemented, through systemd --user",
+		"atenea cannot %s a background service on %s; supported managers are Linux systemd --user and macOS launchd",
 		verb, runtime.GOOS)
 }
 
@@ -33,5 +32,6 @@ func Query(name string) (ServiceState, error) {
 	return ServiceState{}, unsupported("look up")
 }
 
-// LingerCommand has no counterpart off systemd, so there is no advice to give.
+// LingerCommand has no counterpart on unsupported systems, so there is no
+// advice to give.
 func LingerCommand() string { return "" }

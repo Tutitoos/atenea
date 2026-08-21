@@ -15,7 +15,7 @@ func TestNewRepositoryNormalisesInput(t *testing.T) {
 	if !repo.IndexedBy("serena") {
 		t.Fatal("provider index should be found case-insensitively")
 	}
-	if repo.IndexedBy("codebase-memory") {
+	if repo.IndexedBy("graph") {
 		t.Fatal("unindexed provider reported as indexed")
 	}
 }
@@ -23,9 +23,9 @@ func TestNewRepositoryNormalisesInput(t *testing.T) {
 // An index belongs to the tool that built it, not to one implementation of it:
 // two implementations of the same provider share the same warm index.
 func TestIndexesAreKeyedByProvider(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleLarge, contract.VCSUnspecified, []string{"serena", "codebase-memory"})
+	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleLarge, contract.VCSUnspecified, []string{"serena", "graph"})
 	got := repo.Indexes()
-	if !slices.Equal(got, []string{"codebase-memory", "serena"}) {
+	if !slices.Equal(got, []string{"graph", "serena"}) {
 		t.Fatalf("Indexes() = %v, want sorted providers", got)
 	}
 }
@@ -71,18 +71,18 @@ func TestRepositoryCloneDoesNotShareState(t *testing.T) {
 // it, the same way SetHealth corrects an implementation.
 func TestRepositorySetIndexedCorrectsBelief(t *testing.T) {
 	repo := contract.NewRepository("web", "/srv/web", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
-	if repo.IndexedBy("codebase-memory") {
+	if repo.IndexedBy("graph") {
 		t.Fatal("nothing declared indexed yet")
 	}
-	found := repo.SetIndexed("Codebase-Memory", true)
-	if !found.IndexedBy("codebase-memory") {
+	found := repo.SetIndexed("Graph", true)
+	if !found.IndexedBy("graph") {
 		t.Error("SetIndexed(true) should mark the provider indexed, case-insensitively")
 	}
-	if repo.IndexedBy("codebase-memory") {
+	if repo.IndexedBy("graph") {
 		t.Error("SetIndexed must return a copy, not mutate the receiver")
 	}
-	cleared := found.SetIndexed("codebase-memory", false)
-	if cleared.IndexedBy("codebase-memory") {
+	cleared := found.SetIndexed("graph", false)
+	if cleared.IndexedBy("graph") {
 		t.Error("SetIndexed(false) should clear the provider")
 	}
 }

@@ -204,7 +204,7 @@ func translateOne(request Request, byProvider map[string][]contract.Implementati
 //
 // Mechanical only: case, surrounding space, and the `-mcp` / `mcp-` decoration
 // that the same tool is packaged with in one client and without in another --
-// `codebase-memory-mcp` and `codebase-memory` are one backend. Anything
+// MCP packaging decorations are one backend. Anything
 // beyond that would be a policy about which tool means which capability, and
 // a policy belongs in the settings file where it can be read, not in a table
 // compiled into the binary where it cannot.

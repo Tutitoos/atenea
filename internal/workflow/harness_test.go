@@ -202,14 +202,22 @@ func stepOf(t *testing.T, run workflow.Run, id string) workflow.StepRow {
 func counter(t *testing.T, dir, name, lane string, hold time.Duration) string {
 	t.Helper()
 	live := filepath.Join(dir, "live-"+lane)
+	all := filepath.Join(dir, "live-all")
 	if err := os.MkdirAll(live, 0o750); err != nil {
 		t.Fatalf("making the liveness dir: %v", err)
 	}
+	if err := os.MkdirAll(all, 0o750); err != nil {
+		t.Fatalf("making the shared liveness dir: %v", err)
+	}
 	body := "d=" + live + "\n" +
+		"a=" + all + "\n" +
 		"touch \"$d/$$\"\n" +
+		"touch \"$a/$$\"\n" +
 		"ls \"$d\" | wc -l >> " + filepath.Join(dir, "counts-"+lane) + "\n" +
+		"ls \"$a\" | wc -l >> " + filepath.Join(dir, "counts-all") + "\n" +
 		"sleep " + strconv.FormatFloat(hold.Seconds(), 'f', 2, 64) + "\n" +
 		"rm -f \"$d/$$\"\n" +
+		"rm -f \"$a/$$\"\n" +
 		`echo '{"result":{"ok":true},"verdict":"ok"}'`
 	return stub(t, dir, name, body)
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
-	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
@@ -287,15 +286,14 @@ type Orchestrator struct {
 	// both first-class: with one slot, whichever client lost would have every
 	// implementation it serves permanently unreachable. An empty list leaves
 	// the core able to plan and choose, with nothing to dispatch to.
-	Runners        []string
-	Local          LocalRunner
-	OMP            OMPAdapter
-	ClaudeCode     ClaudeCodeAdapter
-	Codex          CodexAdapter
-	Serena         SerenaAdapter
-	CodebaseMemory CodebaseMemoryAdapter
-	Kivgraph       KivgraphAdapter
-	Tokensave      TokensaveAdapter
+	Runners    []string
+	Local      LocalRunner
+	OMP        OMPAdapter
+	ClaudeCode ClaudeCodeAdapter
+	Codex      CodexAdapter
+	Serena     SerenaAdapter
+	Kivgraph   KivgraphAdapter
+	Tokensave  TokensaveAdapter
 }
 
 // Model fixes which model backs each of the two model-backed built-in
@@ -515,7 +513,7 @@ type SerenaAdapter struct {
 type KivgraphAdapter struct {
 	// Implementations the adapter answers for.
 	Implementations []string
-	// Timeout caps one call. It sits at Serena's and codebase-memory's own
+	// Timeout caps one call. It sits at Serena's own
 	// ceiling: opening a graph database cold is slow long before it is
 	// stuck.
 	Timeout time.Duration
@@ -549,23 +547,6 @@ type TokensaveAdapter struct {
 	// Process launches and supervises the tokensave server itself. As with
 	// Kivgraph this is not optional: a stdio server has no address to dial.
 	Process *ManagedProcess
-}
-
-// CodebaseMemoryAdapter configures the codebase-memory-mcp adapter.
-//
-// Unlike Serena, this far side needs no Process block: codebase-memory-mcp
-// is a one-shot CLI, not a server, so there is no endpoint to reach and
-// nothing for Atenea's supervisor to keep alive.
-type CodebaseMemoryAdapter struct {
-	// Binary is the codebase-memory-mcp executable. A bare name is looked up
-	// on PATH.
-	Binary string
-	// Implementations the adapter answers for.
-	Implementations []string
-	// Timeout caps one call. It sits at Serena's own ceiling: both open an
-	// index before they can answer, and a cold one is slow long before it is
-	// stuck.
-	Timeout time.Duration
 }
 
 // Security is the one place delicate files are declared.
@@ -644,18 +625,17 @@ func DefaultLocalAgents() LocalAgents {
 	}
 }
 
-// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerCodebaseMemory,
-// RunnerKivgraph, RunnerTokensave and RunnerLocal are the values
+// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
+// RunnerTokensave and RunnerLocal are the values
 // orchestrator.runners accepts.
 const (
-	RunnerOMP            = "omp"
-	RunnerClaudeCode     = "claudecode"
-	RunnerCodex          = "codex"
-	RunnerSerena         = "serena"
-	RunnerCodebaseMemory = "codebasememory"
-	RunnerKivgraph       = "kivgraph"
-	RunnerTokensave      = "tokensave"
-	RunnerLocal          = "local"
+	RunnerOMP        = "omp"
+	RunnerClaudeCode = "claudecode"
+	RunnerCodex      = "codex"
+	RunnerSerena     = "serena"
+	RunnerKivgraph   = "kivgraph"
+	RunnerTokensave  = "tokensave"
+	RunnerLocal      = "local"
 )
 
 // DefaultPath returns where Atenea looks for its settings when nothing else
@@ -850,15 +830,14 @@ type fileOrchestrator struct {
 	// Runners uses a pointer so an omitted list and an explicitly empty one
 	// are different things: leaving the block out keeps the shipped adapter,
 	// while writing an empty list is how a user says "dispatch nowhere".
-	Runners        *[]string                 `toml:"runners"`
-	Local          fileLocalRunner           `toml:"local"`
-	OMP            fileOMPAdapter            `toml:"omp"`
-	ClaudeCode     fileClaudeCodeAdapter     `toml:"claudecode"`
-	Codex          fileCodexAdapter          `toml:"codex"`
-	Serena         fileSerenaAdapter         `toml:"serena"`
-	CodebaseMemory fileCodebaseMemoryAdapter `toml:"codebasememory"`
-	Kivgraph       fileKivgraphAdapter       `toml:"kivgraph"`
-	Tokensave      fileTokensaveAdapter      `toml:"tokensave"`
+	Runners    *[]string             `toml:"runners"`
+	Local      fileLocalRunner       `toml:"local"`
+	OMP        fileOMPAdapter        `toml:"omp"`
+	ClaudeCode fileClaudeCodeAdapter `toml:"claudecode"`
+	Codex      fileCodexAdapter      `toml:"codex"`
+	Serena     fileSerenaAdapter     `toml:"serena"`
+	Kivgraph   fileKivgraphAdapter   `toml:"kivgraph"`
+	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
 }
 
 type fileLocalRunner struct {
@@ -948,13 +927,6 @@ type fileManagedProcess struct {
 	IdleTimeout  string   `toml:"idle_timeout"`
 	StopGrace    string   `toml:"stop_grace"`
 	Instance     string   `toml:"instance"`
-}
-
-// fileCodebaseMemoryAdapter is the TOML shape of CodebaseMemoryAdapter.
-type fileCodebaseMemoryAdapter struct {
-	Binary          string    `toml:"binary"`
-	Implementations *[]string `toml:"implementations"`
-	Timeout         string    `toml:"timeout"`
 }
 
 // fileSecurity uses a pointer so an omitted list and an explicitly empty one
@@ -1429,7 +1401,7 @@ var defaultClaudeImplementations = []string{"claude.search"}
 var defaultCodexImplementations = []string{"codex.search"}
 
 // Los defaults de kivgraph y tokensave se leen de sus propios paquetes, como
-// ya hacen serena y codebasememory: un numero declarado dos veces es un
+// ya hace serena: un numero declarado dos veces es un
 // numero que puede discrepar. Ninguno de los dos adapters importa
 // internal/config, asi que no hay ciclo posible.
 
@@ -1482,11 +1454,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Endpoint:        serena.DefaultEndpoint,
 			Implementations: serena.DefaultImplementations(),
 			Timeout:         serena.DefaultTimeout,
-		},
-		CodebaseMemory: CodebaseMemoryAdapter{
-			Binary:          codebasememory.DefaultBinary,
-			Implementations: codebasememory.DefaultImplementations(),
-			Timeout:         codebasememory.DefaultTimeout,
 		},
 		Kivgraph: KivgraphAdapter{
 			Implementations: kivgraph.DefaultImplementations(),
@@ -1556,13 +1523,13 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerCodebaseMemory, RunnerKivgraph,
+			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
 				RunnerTokensave, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena,
-					RunnerCodebaseMemory, RunnerKivgraph, RunnerTokensave, RunnerLocal)
+					RunnerKivgraph, RunnerTokensave, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -1608,11 +1575,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Serena = symbols
-	memory, err := o.CodebaseMemory.build(source, out.CodebaseMemory)
-	if err != nil {
-		return Orchestrator{}, err
-	}
-	out.CodebaseMemory = memory
 	graph, err := o.Kivgraph.build(source, out.Kivgraph)
 	if err != nil {
 		return Orchestrator{}, err
@@ -1654,28 +1616,6 @@ func (o fileOMPAdapter) build(source string, out OMPAdapter) (OMPAdapter, error)
 		if timeout <= 0 {
 			return OMPAdapter{}, contract.Fail(contract.FailureInvalidInput,
 				"settings %s: orchestrator.omp.timeout must be above 0, got %s", source, timeout)
-		}
-		out.Timeout = timeout
-	}
-	return out, nil
-}
-
-func (c fileCodebaseMemoryAdapter) build(source string, out CodebaseMemoryAdapter) (CodebaseMemoryAdapter, error) {
-	if strings.TrimSpace(c.Binary) != "" {
-		out.Binary = strings.TrimSpace(c.Binary)
-	}
-	if c.Implementations != nil {
-		out.Implementations = *c.Implementations
-	}
-	if c.Timeout != "" {
-		timeout, err := time.ParseDuration(c.Timeout)
-		if err != nil {
-			return CodebaseMemoryAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.codebasememory.timeout %q: %v", source, c.Timeout, err)
-		}
-		if timeout <= 0 {
-			return CodebaseMemoryAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.codebasememory.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
 	}

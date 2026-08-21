@@ -567,7 +567,7 @@ func TestErrorsMapOntoDistinctExitCodes(t *testing.T) {
 	}{
 		{"unknown command", []string{"explode"}, 2},
 		{"select without a capability", []string{"select"}, 2},
-		{"unknown capability", []string{"select", "code.impact"}, 3},
+		{"unknown capability", []string{"select", "graph.impact"}, 3},
 		{"unknown config subcommand", []string{"config", "wat"}, 2},
 	}
 	path := settingsFile(t)

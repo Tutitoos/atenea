@@ -1345,13 +1345,13 @@ Measured on 2026-08-15, deciding whether two API keys could be deleted from `~/.
 The file said this, and had said it for months:
 
 ```
-# Added by codebase-memory-mcp install
+# Added by legacy graph backend installation
 export MINIMAX_API_KEY="sk-cp-..."
 export GEMINI_API_KEY="AQ.Ab..."
 ```
 
 Three people read that comment and drew the same conclusion — that the keys belong to
-codebase-memory-mcp, so the question of deleting them is a question about that one tool. The
+the legacy graph MCP backend, so the question of deleting them is a question about that one tool. The
 investigation that followed was careful and it was aimed one step to the left of the target. It
 proved, with a scrubbed environment (`env -i`, both variables confirmed unset inside the call),
 that the tool returns a complete graph without either key. Correct, reproducible, and not the
@@ -1368,7 +1368,7 @@ every terminal on this machine runs does, for 54 models.**
 The comment was never false. That is the whole shape. A false provenance note — the kind
 corrected elsewhere on this page, where a test comment claimed files were untracked when `git
 log` showed the diff had existed since July — is a lie you can catch by checking it. This one
-survives every check, because `codebase-memory-mcp install` really did write those lines. It is a
+survives every check, because the legacy graph backend installer really did write those lines. It is a
 true statement about 2026-06 read as a statement about today, and the reader supplies the tense.
 
 What makes it systematic rather than unlucky is an asymmetry in who annotates. **Installers
@@ -1394,7 +1394,7 @@ answer to the wrong question.
 
 ## A twenty-first instrument: three identical answers from a verdict that had already gone stale
 
-Measured 2026-08-15, testing `code.impact` against `taxiprime` once codebase-memory was reachable
+Measured 2026-08-15, testing `code.impact` against `taxiprime` once the graph backend was reachable
 again. Three calls, each varying `baseline` or `scope`, returned the same sentence: `unavailable:
 every implementation of code.impact is down for repository taxiprime`. Three independent-looking
 readings agreeing with each other is exactly the shape this page opened with, and it was exactly
@@ -1402,7 +1402,7 @@ as misleading here: they were not three readings of the provider. They were one 
 process asking about it, taken three times.
 
 `symbol.calls`, same repository, same minute, no restart in between, answered cleanly — a real
-call graph off codebase-memory. The provider was not down. Only `code.impact`'s belief about it
+call graph off the graph backend. The provider was not down. Only `code.impact`'s belief about it
 was, and nothing asking `code.impact` again could ever discover that, because each ask reads the
 same cached verdict rather than the provider. `systemctl --user restart atenea`, and nothing else,
 cleared it: the next call succeeded on the first try, against the same repository.
@@ -1420,7 +1420,7 @@ this path re-asks a provider it has already formed an opinion about.
 
 ## A twenty-second instrument: a store that cannot tell failure from empty
 
-Measured 2026-08-15, reading codebase-memory's own installed README (v0.8.1, undated) for the
+Measured 2026-08-15, reading the legacy graph backend's installed README (v0.8.1, undated) for the
 first time this session. It describes the cache holding three projects — `4mans-beta`,
 `taxiprime-app`, `Kena` — 72,464 nodes, 179,600 edges, 148MB on disk. None of the three exist
 today. `list_projects`, called live, returns two projects on the entire machine: the current
@@ -1712,7 +1712,7 @@ bound -- not the number that was actually asked for.
 With the direct test ruled out, the next move was to look for the value somewhere cheaper:
 somewhere Atenea already reports on itself. It is not in `atenea status`. The `servers` table
 there lists all eight configured stdio backends -- `serena`, `context7`, `semgrep`,
-`codebase-memory`, `agent-device`, `maestro`, `headroom`, `chrome-devtools` -- uniformly, one row
+the graph backend, `agent-device`, `maestro`, `headroom`, `chrome-devtools` -- uniformly, one row
 each, with columns for health, transport, `expose`, `checked`, and the full command line. No
 column carries a timeout, for any of the eight; the absence is a property of the table's format,
 not of any one backend's entry in it. It is not in `atenea catalog` either -- that command walks
@@ -2835,7 +2835,7 @@ the same name.
     is not immunity from it, which is the reason to keep a check rather than a resolution.
 
 25. **A comment records who wrote a line, never who reads it.** `# Added by
-    codebase-memory-mcp install` above two API keys in `~/.bashrc` was true, months old, and
+    legacy graph backend installation above two API keys in `~/.bashrc` was true, months old, and
     read by three people as a statement about who needs them. Measured 2026-08-15: the named
     installer runs fine with both unset, while `omp` — unmentioned, because consumers do not
     annotate other people's dotfiles — resolves 54 of its 86 models through exactly those two

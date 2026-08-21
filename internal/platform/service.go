@@ -2,7 +2,9 @@ package platform
 
 import (
 	"fmt"
+	"html"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,8 +18,9 @@ const ServiceName = "atenea"
 
 // Service is Atenea as a thing the machine starts on its own.
 //
-// It is a systemd *user* service, at ~/.config/systemd/user, and never a
-// system one under /etc. The target machine forces that -- an unprivileged
+// On Linux it is a systemd *user* service, at ~/.config/systemd/user, and never
+// a system one under /etc. On macOS it is a launchd per-user agent under
+// ~/Library/LaunchAgents. The target machine forces that -- an unprivileged
 // account with no sudo -- but it is also the only shape that works. Atenea
 // drives CLIs that are already logged in as this user: Claude Code holds an
 // OAuth session under this home, and every byte Atenea writes lands under this
@@ -92,17 +95,6 @@ func NewService(exec string, stopGrace time.Duration) (Service, error) {
 	}, nil
 }
 
-// unitPath is where the unit file goes: the user's own config root, cut from
-// the same place ConfigDir is. Sharing the root is what makes a test that
-// moves XDG_CONFIG_HOME move this too, so nothing can write into the real home
-// by accident.
-//
-// On a machine with no systemd the path means nothing, and nothing reads it:
-// the three verbs that touch the machine refuse first.
-func unitPath(name string) string {
-	return filepath.Join(filepath.Dir(ConfigDir()), "systemd", "user", name+".service")
-}
-
 // The unit below is rendered here, in the portable half of this package, and
 // not beside the code that installs it. It is pure text: no machine is asked
 // anything to produce it. Keeping it here means the unit a Debian box will get
@@ -151,9 +143,32 @@ WantedBy=default.target
 // unit carrying a timestamp or the order of a map walk differs from itself for
 // no reason anyone can act on.
 func (s Service) UnitText() string {
+	if runtime.GOOS == "darwin" {
+		return launchdText(s)
+	}
 	// Rounded up, because systemd counts TimeoutStopSec in whole seconds and
 	// rounding a 10.5s grace down to 10 would put the kill back inside the
 	// window the margin exists to clear.
 	seconds := int64((s.StopGrace + stopMargin + time.Second - 1) / time.Second)
 	return fmt.Sprintf(unitTemplate, s.Exec, seconds)
+}
+
+// launchdText is kept beside the common renderer so Service.UnitText remains
+// the one public inspection point on every supported platform. launchd plist
+// values are escaped because an absolute binary path is still user input.
+func launchdText(s Service) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.tutitoos.atenea</string>
+	<key>ProgramArguments</key>
+	<array><string>%s</string><string>run</string></array>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>5</integer>
+	<key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
+`, html.EscapeString(s.Exec))
 }

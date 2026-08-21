@@ -226,24 +226,8 @@ runners = ["omp"]
   # own, so leave port unset and let Atenea pick them.
   # instance = "shared"
 
-  [orchestrator.codebasememory]
-  # The codebase-memory-mcp executable. A bare name is looked up on PATH.
-  binary = "codebase-memory-mcp"
-  # Implementations the adapter answers for. This adapter is wired for the two
-  # capabilities that read the call graph itself -- symbol.calls and
-  # code.impact -- for symbol.overview, which reads the same graph at rest
-  # rather than walking it, and for the one that writes what they all read:
-  # repository.index. It has no code path for code.search, and naming one here
-  # is now refused at load rather than discovered at the call: core checks this
-  # list against what the adapter can actually dispatch.
-  implementations = ["codebase-memory.calls", "codebase-memory.overview", "codebase-memory.impact", "codebase-memory.index"]
-  # How long one codebase-memory-mcp or git invocation may take. It sits at
-  # Serena's own ceiling: both open an index before they can answer, and a
-  # cold one is slow long before it is stuck.
-  timeout = "90s"
-
   [orchestrator.kivgraph]
-  # No `binary` and no `repository.index`: Atenea never builds this graph, only
+  # No `binary`: Atenea never builds this graph, only
   # reads it. index_project / `kivgraph index` stay out of the funnel entirely
   # (an auditor does not rebuild what it audits). The graph is built by hand with
   # `kivgraph init` + `kivgraph index --full` before this is useful.
@@ -256,7 +240,7 @@ runners = ["omp"]
     "kivgraph.unresolved_references",
     "kivgraph.status",
   ]
-  timeout = "90s"             # opens a graph db cold, same class as serena/codebase-memory
+  timeout = "90s"             # opens a graph db cold, same class as serena
 
     # [orchestrator.kivgraph.process]
     # Uncomment to have Atenea launch and supervise the kivgraph server
@@ -289,7 +273,7 @@ runners = ["omp"]
   # to that root, so `root` is required and absolute. Every repository this
   # provider can answer for has to live under it.
   #
-  # No `repository.index` either, for a different reason than kivgraph's: this
+  # No index-building implementation either, for a different reason than kivgraph's: this
   # far side re-syncs its own index on every call, so there is nothing for the
   # funnel to trigger.
   # root = "/absolute/path/to/the/served/project"
@@ -1137,155 +1121,12 @@ effects = ["read"]
     required = false
     summary = "The line at the call, present only when it was asked for."
 
-[[capability]]
-id = "code.impact"
-version = "1.0.0"
-summary = "From a change, find what it reaches."
-semantics = """
-What a change reaches, not merely what it touched -- touched is the easy half, \
-the list of files different from the baseline, and it comes back too because the \
-graph answer is unreadable without it. The hard half is everything that calls \
-into what changed and would feel it: this is symbol.calls, asked once for every \
-symbol the change actually touched instead of once by hand for each. A directly \
-changed symbol is simply the zero-distance entry -- no separate flag marks it, \
-because depth already says so. baseline names the far side of the comparison as \
-intent, a point in the repository's history to measure the current state \
-against, the same reason code.search's options are intent and not one version \
-control system's own syntax. depth bounds the walk the same way and for the same \
-reason as its sibling's.\
-"""
-effects = ["read"]
-
-  [[capability.input]]
-  name = "baseline"
-  type = "string"
-  required = true
-  summary = "A point in the repository's history to compare the current state against."
-
-  [[capability.input]]
-  name = "scope"
-  type = "string_list"
-  required = false
-  summary = "Paths to narrow which changed files count. Empty means every file the baseline changed."
-
-  [[capability.input]]
-  name = "depth"
-  type = "int"
-  required = false
-  summary = "How many hops of the call graph to follow out from each changed symbol. Small by default, on purpose."
-
-  [[capability.input]]
-  name = "include_snippet"
-  type = "bool"
-  required = false
-  summary = "Intent: return the line at each affected symbol, not only where it is."
-
-  [[capability.input]]
-  name = "snippet_lines"
-  type = "int"
-  required = false
-  summary = "How much to return around each affected symbol. Small by default, on purpose."
-
-  [[capability.output]]
-  name = "changed_files"
-  type = "string_list"
-  required = true
-  summary = "Every file different from the baseline, relative to the repository root."
-
-  [[capability.output]]
-  name = "affected_symbols"
-  type = "record_list"
-  required = true
-  summary = "Every symbol the change reaches, nearest first."
-
-    [[capability.output.field]]
-    name = "path"
-    type = "string"
-    required = true
-    summary = "File holding the symbol, relative to the repository root."
-
-    [[capability.output.field]]
-    name = "line"
-    type = "int"
-    required = true
-    summary = "Line where the symbol starts, starting at 1."
-
-    [[capability.output.field]]
-    name = "name"
-    type = "string"
-    required = true
-    summary = "The symbol's name."
-
-    [[capability.output.field]]
-    name = "kind"
-    type = "string"
-    required = false
-    summary = "The provider's own name for what kind of symbol this is (function, struct, route, ...), when it reports one."
-
-    [[capability.output.field]]
-    name = "depth"
-    type = "int"
-    required = true
-    summary = "How many hops from a directly changed symbol, starting at 0 for the changed symbol itself."
-
-    [[capability.output.field]]
-    name = "snippet"
-    type = "string"
-    required = false
-    summary = "The line at the symbol, present only when it was asked for."
-
-[[capability]]
-id = "repository.index"
-version = "1.0.0"
-summary = "Build or refresh a provider's index for a repository."
-semantics = """
-Detection reads a provider's own claim about a repository; this capability \
-is what gives it a claim to read. A repository nothing has ever indexed \
-answers detection truthfully as "not ready" forever, because looking harder \
-never builds what was never there -- something has to actually run the \
-tool that walks the repository and writes the graph, and that is this. \
-\
-It is deliberately its own capability and not a mode of any read one: \
-building writes to disk and spawns a process that can run for minutes on a \
-large repository, which is exactly the action detection itself must never \
-take silently on a caller's behalf. mode is intent, not a provider's own \
-vocabulary -- how thorough the build should be, coarse enough that a \
-provider without the concept can simply ignore it -- the same reasoning \
-code.search's own options already follow.\
-"""
-effects = ["write", "process"]
-
-  [[capability.input]]
-  name = "mode"
-  type = "string"
-  required = false
-  summary = "How thorough the index should be: \"fast\", \"moderate\" or \"full\" (default: the provider's own)."
-  enum = ["fast", "moderate", "full"]
-
-  [[capability.output]]
-  name = "status"
-  type = "string"
-  required = true
-  summary = "What the provider reports when indexing finishes, in its own words."
-
-  [[capability.output]]
-  name = "nodes"
-  type = "int"
-  required = true
-  summary = "How many graph nodes the index now holds."
-
-  [[capability.output]]
-  name = "edges"
-  type = "int"
-  required = true
-  summary = "How many graph edges the index now holds."
-
 # ---------------------------------------------------------------------------
 # Kivgraph capabilities. Four answers no attached provider gives today.
 #
 # Why Kivgraph does NOT appear under symbol.definition / references /
-# implementations / overview / calls, or code.impact: serena and
-# codebase-memory already answer those, and a second implementation would not
+# implementations / overview / calls, or graph impact queries: serena and
+# other graph providers already answer those, and a second implementation would not
 # add an answer -- it would rank two providers for one the funnel already has,
 # and cost +1,688 tok in every fixed-prefix client's request, forever, for a
 # duplicate. Kivgraph is declared ONLY for what it alone resolves: consumers
@@ -1715,104 +1556,6 @@ capability = "symbol.overview"
   estimated_duration = "700ms"
   estimated_tokens = 1900
 
-# codebase-memory answers three of these from one call graph -- no second
-# index, no second provider concept, just three questions the one graph can
-# answer.
-
-[[implementation]]
-id = "codebase-memory.calls"
-provider = "codebase-memory"
-capability = "symbol.calls"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-  min_scale = "medium"    # the graph only pays for itself on a big repository
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "900ms"
-  estimated_tokens = 600
-
-[[implementation]]
-id = "codebase-memory.overview"
-provider = "codebase-memory"
-capability = "symbol.overview"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-  min_scale = ""         # see below: unlike its siblings, this one does not walk
-  max_scale = ""
-  # depth 0 only. The graph holds what a file declares at its own top level
-  # and nothing inside those declarations -- a struct's fields are not nodes
-  # -- so a deeper ask would come back with the same list and read as a
-  # complete answer to a different question. Serena descends properly and
-  # keeps the deeper asks.
-  max_input = { depth = 0 }
-  # The kind this one reports is the graph's node label, and it will not
-  # always be the word serena.overview uses for the same symbol. Measured: a
-  # Go const comes back as "Variable" here and "Constant" from Serena. That
-  # is not a defect to normalise away -- the graph has no Constant label and
-  # no property separating a const from a var, so the distinction it would
-  # have to report is one it never read. The capability says kind is the
-  # provider's own word for this reason.
-
-  [implementation.cost]
-  # One query_graph round trip and one pass over the file to recover columns.
-  # Its two siblings are held to min_scale = "medium" because a graph walk
-  # only pays for its own index on a big repository; this one never walks --
-  # it is a point lookup on an index that, by requires_index, already exists.
-  # It also answers for markdown, where the headings are what the file
-  # declares and no language server has anything to say.
-  estimated_duration = "800ms"
-  estimated_tokens = 400
-
-[[implementation]]
-id = "codebase-memory.impact"
-provider = "codebase-memory"
-capability = "code.impact"
-
-  [implementation.constraints]
-  languages = []
-  requires_index = true
-  requires_vcs = true     # walks a git diff against baseline; needs a repository under version control
-  min_scale = "medium"
-  max_scale = ""
-
-  [implementation.cost]
-  # Dearer than a single call-graph walk: one git diff plus one graph walk
-  # per directly changed symbol, so cost scales with how much a commission
-  # actually touched instead of staying flat like the others.
-  estimated_duration = "2.5s"
-  estimated_tokens = 1500
-
-[[implementation]]
-id = "codebase-memory.index"
-provider = "codebase-memory"
-capability = "repository.index"
-
-  # Unrestricted on purpose, unlike its read-only siblings above: a small
-  # repository the funnel would never pick this implementation for on a
-  # *read* still has to be reachable for an explicit *build* -- that is the
-  # whole path out of the false negative detection alone cannot fix.
-  [implementation.constraints]
-  languages = []
-  requires_index = false  # this is how one gets built
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  # A whole-repository walk, not one query against a graph already built --
-  # measured at 0.5s / 2294 nodes on this repository's own source, cold
-  # cache. Above codebase-memory.impact's own ceiling on purpose: this is
-  # the expensive one, and mode="full" on a much larger repository would
-  # spend more still.
-  estimated_duration = "3s"
-  # The answer is three scalars, not a list -- the one implementation here
-  # whose token cost barely depends on repository size at all.
-  estimated_tokens = 60
-
 # The seven kivgraph implementations share one provider and one supervised
 # stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
 # a handful of tools called against it over the same wire, no second index to
@@ -1838,7 +1581,7 @@ capability = "repository.index"
 # What kivgraph is deliberately NOT declared for, so the funnel never
 # promises it: symbol.implementations (this server exposes no tool that
 # answers "who fulfils this interface" -- find_references reports uses, which
-# is a different question) and code.impact (its subject is a baseline diff,
+# is a different question) and graph impact queries (their subject is a baseline diff,
 # and get_blast_radius walks out from a symbol, not from a change).
 
 [[implementation]]
@@ -2152,7 +1895,7 @@ summary = "Looks at the project through Atenea's own capabilities and reports wh
 command = "$atenea"
 args = ["agent-exec", "explore"]
 # The whole point of this one: it reaches code.search, symbol.* and
-# repository.index through the service, so it needs the repository level and
+# provider-side indexing through the service, so it needs the repository level and
 # the history of what earlier runs of it already found.
 context = ["repository", "history"]
 effects = ["read"]
@@ -2280,18 +2023,6 @@ max_tokens = 200000
 #   [[mcp_server.tool]]                # optional: narrower, for one tool
 #   name = "semgrep_scan"
 #   effects = ["read", "process"]
-
-# [[mcp_server]]
-# id = "codebase-memory"
-# command = ["codebase-memory-mcp"]    # stdio server
-# expose = "raw"                       # one process for every chat, instead of
-#                                      # one per client: a stdio server has no
-#                                      # address, so a client that is not given
-#                                      # this one spawns a private copy
-# tools = ["search_code", "get_architecture"]
-# effects = ["read"]
-# [mcp_server.env]
-# CODEBASE_MEMORY_UI = "false"
 
 # ---------------------------------------------------------------------------
 # Selector rules: the user's word, above any automatic ranking.

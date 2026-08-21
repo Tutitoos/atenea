@@ -369,7 +369,7 @@ func implFor(capabilityID string) string {
 }
 
 // request builds a valid RunRequest against repo for one capability, the
-// same shape codebasememory_test.go's own request helper builds.
+// same shape as the provider request helper.
 func request(t *testing.T, repo contract.Repository, capabilityID string, payload map[string]any) contract.RunRequest {
 	t.Helper()
 	return contract.RunRequest{

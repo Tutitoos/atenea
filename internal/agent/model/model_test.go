@@ -1267,7 +1267,9 @@ func TestATimeoutAfterAPassKeepsTheAnswer(t *testing.T) {
 	}, "", 0)
 	fake.hangs(t)
 	req := reservedRequest()
-	req.Timeout = 300 * time.Millisecond
+	// Keep enough headroom for the race detector and process startup; the
+	// fixture remains far below the fake's intentionally unbounded hang.
+	req.Timeout = 2 * time.Second
 
 	started := time.Now()
 	answer, err := fake.client(t).Turn(t.Context(), req)

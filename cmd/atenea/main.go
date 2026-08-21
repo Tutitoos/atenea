@@ -113,8 +113,8 @@ List every capability, its providers, and every registered repository.
 
 Ask every attached provider that can tell whether it already holds a ready
 index, and correct indexed_by in memory with whatever it finds. Read-only
-about the repository -- it asks, it never builds; atenea ask repository.index
-builds one.
+about the repository -- it asks providers and never builds an index; providers
+must be indexed externally.
 
 Flags:
   --repo ID   repository to check (default: every repository registered)
@@ -2517,7 +2517,7 @@ func serviceInstall(settingsPath string, out io.Writer) error {
 	fmt.Fprintf(out, "unit      %s\n", service.Unit)
 	fmt.Fprintf(out, "starts    %s run\n", service.Exec)
 	fmt.Fprintf(out, "enabled   %s\n", yesNo(state.Enabled))
-	if !state.Linger {
+	if !state.Linger && platform.LingerCommand() != "" {
 		// Enabled is only half of "starts with the system" on a user manager.
 		// Without lingering the unit waits for a login that a machine
 		// rebooting unattended never performs. Atenea cannot switch it on for
@@ -2560,9 +2560,13 @@ func serviceStatus(out io.Writer) error {
 	fmt.Fprintf(out, "installed %s\n", yesNo(state.Installed))
 	fmt.Fprintf(out, "enabled   %s\n", yesNo(state.Enabled))
 	fmt.Fprintf(out, "active    %s\n", yesNo(state.Active))
-	fmt.Fprintf(out, "linger    %s\n", yesNo(state.Linger))
+	if platform.LingerCommand() == "" {
+		fmt.Fprintln(out, "linger    n/a")
+	} else {
+		fmt.Fprintf(out, "linger    %s\n", yesNo(state.Linger))
+	}
 	fmt.Fprintf(out, "detail    %s\n", oneLine(state.Detail))
-	if state.Installed && !state.Linger {
+	if state.Installed && !state.Linger && platform.LingerCommand() != "" {
 		// The same warning install gives, at the moment somebody is actually
 		// looking for why nothing came up after a reboot. A count with no
 		// address is a nag, and so is a "no" with no remedy.

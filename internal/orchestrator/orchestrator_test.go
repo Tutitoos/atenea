@@ -116,7 +116,7 @@ func (f *fakeRunner) Implementations() []string { return f.serves }
 func (f *fakeRunner) Capabilities() []string {
 	return []string{"code.context", "code.search", "symbol.definition", "symbol.references",
 		"symbol.implementations", "symbol.overview", "symbol.calls",
-		"code.impact", "repository.index"}
+		"graph.impact", "graph.index"}
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {

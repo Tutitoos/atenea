@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,6 +36,9 @@ func TestServiceRefusesAWordItDoesNotKnow(t *testing.T) {
 // knowable without asking systemd anything, and "install it where?" is the
 // first thing the operator needs.
 func TestServiceStatusReportsOnAMachineWithNothingInstalled(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd unit paths are only meaningful on Linux")
+	}
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
 

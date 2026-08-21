@@ -22,7 +22,7 @@ weight: 3
        |            |            |            |
     adapter      adapter      adapter      adapter     <- dumb translators
        |            |            |            |
-      omp      Claude Code    Serena   codebase-memory
+      omp      Claude Code    Serena   graph providers
 ```
 
 ## Capability vs implementation
@@ -346,10 +346,9 @@ writing and reaching outside the machine are not.
 ### The runner seam
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
-far side belongs to somebody else: an adapter. Four ship — one drives `omp`,
-one drives the Claude Code CLI, one speaks MCP to Serena, one walks a call
-graph codebase-memory keeps on disk — and a local stand-in sits in the same
-place for a machine where nothing is installed. One interface,
+far side belongs to somebody else: an adapter. OMP, Claude Code, Codex and
+Serena use the same seam, and a local stand-in sits in the same place for a
+machine where nothing is installed. One interface,
 several possible far sides, and swapping them changes nothing above the line.
 
 Several can be attached at once. Each declares the implementations it answers
@@ -599,9 +598,11 @@ wrong.
 
 ## Staying up
 
-Atenea installs itself as a `systemd --user` unit and nothing more. There is no
-system unit and no daemon user: everything it touches is under one person's
-home, so a system unit would hand a bug reach it never needs.
+Atenea installs itself as a per-user background service and nothing more. Linux
+uses a `systemd --user` unit; macOS uses a `launchd` agent in
+`~/Library/LaunchAgents`. There is no system unit and no daemon user:
+everything it touches is under one person's home, so a system service would
+hand a bug reach it never needs.
 
 It listens on exactly one thing: a Unix socket under the state root, opened by
 the service and by nothing else. No port, no token, no network. `atenea status`
@@ -882,7 +883,7 @@ files in silence because a missed hit costs nothing; a caller pointing at one
 exact position inside one is refused out loud, because "nothing here" would be
 a lie.
 
-### What that costs in practice: the codebase-memory adapter
+### What that costs in practice: a graph provider
 
 The fourth far side is a second CLI, but not one built for a human like omp:
 it already speaks JSON on both sides, a request out on stdin and an answer
@@ -890,7 +891,7 @@ back on stdout, one process per call with nothing kept running between them.
 A failure comes back the same way, as JSON on stderr with an `error` field
 rather than a distinct exit path of its own.
 
-| What codebase-memory-mcp does | What the adapter does about it |
+| What the graph backend does | What the adapter does about it |
 | --- | --- |
 | Speaks JSON already, on both stdin and stdout | Nothing to parse from a rendered format — the request goes out, the answer comes back, one process per call |
 | Reports failure as JSON on stderr, not a distinct channel | Reads stderr's `error` field the same way stdout's answer is read, and sorts it into the same six bins as any other far side |
@@ -898,8 +899,8 @@ rather than a distinct exit path of its own.
 | Can only ever answer from a graph it built ahead of time, which may already be behind the working tree | Attaches a best-effort `notice` — an `index_status` call plus `git status --porcelain`, together cheaper than the answer they are checking — when HEAD has moved or the tree holds changes the graph never saw; a failed check reports nothing rather than refusing an answer that already succeeded |
 
 It answers two capabilities neither omp nor Serena can: `symbol.calls` walks
-the call graph codebase-memory already built from the repository, and
-`code.impact` asks that same graph what a git diff reaches. Both need a call
+the call graph the backend already built from the repository, and
+the graph impact query asks that same graph what a git diff reaches. Both need a call
 graph, which is the one thing neither a grep nor a language server keeps.
 `code.search` already has three cheaper or equally-capable providers, so this
 adapter does not claim it — a fourth identical answer would only give the

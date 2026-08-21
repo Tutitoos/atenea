@@ -14,7 +14,25 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: build / ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+          - os: macos-14
+            arch: arm64
+          - os: macos-15-intel
+            arch: amd64
+    env:
+      # macOS has a short Unix-socket path limit. Keeping temporary test
+      # fixtures under /tmp makes the same suite reproducible locally and in
+      # Actions instead of depending on the runner's long temp directory.
+      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +62,17 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -n 1
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+          if-no-files-found: error
 
   lint:
     runs-on: ubuntu-latest

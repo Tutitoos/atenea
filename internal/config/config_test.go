@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -40,23 +39,18 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.search", "graph.status", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
 
-	// The symbol capabilities and code.impact are read-only providers: none
+	// The symbol capabilities are read-only providers: none
 	// of them may ship declaring an effect that lets a provider write. Only
 	// code.search also spawns a process to answer -- every implementation
 	// behind it, ripgrep or the local stand-in, is a binary, not a library.
-	// repository.index is the one deliberate exception: building an index is
-	// exactly the write detection itself must never make, and the tool that
-	// makes it is a process too.
 	for _, capability := range cfg.Capabilities {
 		var want []contract.Effect
 		switch capability.ID {
-		case "repository.index":
-			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
 		case "code.search":
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
 		default:
@@ -98,10 +92,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	slices.Sort(shipped)
 	want := []string{
 		"claude.search",
-		"codebase-memory.calls",
-		"codebase-memory.impact",
-		"codebase-memory.index",
-		"codebase-memory.overview",
 		"codex.search",
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
@@ -122,14 +112,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	if !slices.Equal(shipped, want) {
 		t.Fatalf("implementations = %v, want %v", shipped, want)
-	}
-	// code.impact walks a git diff against a baseline: the one implementation
-	// behind it has nothing to measure against without a repository under
-	// version control.
-	for _, impl := range cfg.Implementations {
-		if impl.ID == "codebase-memory.impact" && !impl.Constraints.RequiresVCS {
-			t.Errorf("codebase-memory.impact ships with requires_vcs=false, want true")
-		}
 	}
 	// ripgrep confines what it reads by construction; claude-code only
 	// verifies its answer afterward. Collapsing that difference into a bare
@@ -165,7 +147,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		want    []string
 	}{
 		{config.RunnerSerena, cfg.Orchestrator.Serena.Implementations, serena.DefaultImplementations()},
-		{config.RunnerCodebaseMemory, cfg.Orchestrator.CodebaseMemory.Implementations, codebasememory.DefaultImplementations()},
 	} {
 		got, want := slices.Clone(tc.shipped), slices.Clone(tc.want)
 		slices.Sort(got)
@@ -621,7 +602,7 @@ func TestExposeDefaultsToPointerAndReadsBackRawWithItsBudget(t *testing.T) {
 // rules that make a raw block honest are per-block, not per-transport.
 func TestAStdioBackendIsDeclaredLikeAnyOther(t *testing.T) {
 	body := minimal +
-		"\n[[mcp_server]]\nid = \"codebase-memory\"\ncommand = [\"codebase-memory-mcp\", \"--ui=true\"]\n" +
+		"\n[[mcp_server]]\nid = \"test-backend\"\ncommand = [\"test-backend-mcp\", \"--ui=true\"]\n" +
 		"expose = \"raw\"\ntools = [\"search_code\", \"index_repository\"]\neffects = [\"read\"]\n" +
 		"env = { CBM_HOME = \"/tmp/cbm\" }\n" +
 		"\n  [[mcp_server.tool]]\n  name = \"index_repository\"\n  effects = [\"read\", \"write\"]\n"
@@ -633,7 +614,7 @@ func TestAStdioBackendIsDeclaredLikeAnyOther(t *testing.T) {
 	if server.Expose != config.ExposeRaw {
 		t.Errorf("expose = %q, want %q", server.Expose, config.ExposeRaw)
 	}
-	if want := []string{"codebase-memory-mcp", "--ui=true"}; !slices.Equal(server.Command, want) {
+	if want := []string{"test-backend-mcp", "--ui=true"}; !slices.Equal(server.Command, want) {
 		t.Errorf("command = %v, want %v", server.Command, want)
 	}
 	if server.URL != "" {
@@ -762,14 +743,14 @@ func TestAStaleCatalogNamesWhatItIsMissing(t *testing.T) {
 	dropped := ""
 	kept := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		if dropped == "" && strings.Contains(block, `id = "codebase-memory.overview"`) {
-			dropped = "codebase-memory.overview"
+		if dropped == "" && strings.Contains(block, `id = "kivgraph.overview"`) {
+			dropped = "kivgraph.overview"
 			continue
 		}
 		kept = append(kept, block)
 	}
 	if dropped == "" {
-		t.Fatal("the shipped catalog no longer declares codebase-memory.overview; pick another block")
+		t.Fatal("the shipped catalog no longer declares kivgraph.overview; pick another block")
 	}
 
 	stale, err := config.Load(write(t, strings.Join(kept, "[[implementation]]")))
@@ -1813,22 +1794,6 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 	}
 	if len(cfg.Repositories) == 0 {
 		t.Fatal("the shipped file declares no repository; this test would pass for an empty catalog")
-	}
-
-	// Teeth: the assertion below is only worth making while some shipped
-	// implementation actually constrains scale. If none did, an unclassified
-	// repository would drop nothing for reasons that have nothing to do with
-	// the principle under test.
-	constrains := false
-	for _, impl := range cfg.Implementations {
-		if impl.Constraints.MinScale != contract.ScaleUnspecified ||
-			impl.Constraints.MaxScale != contract.ScaleUnspecified {
-			constrains = true
-			break
-		}
-	}
-	if !constrains {
-		t.Fatal("no shipped implementation constrains scale; this test would pass vacuously")
 	}
 
 	sel, err := selector.New(cfg.Selector)

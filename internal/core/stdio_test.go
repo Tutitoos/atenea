@@ -92,7 +92,7 @@ func stdioSettings(t *testing.T, ledger string) string {
 		t.Fatalf("write: %v", err)
 	}
 	settings := strings.Replace(socketSettings, `path = "/tmp"`, fmt.Sprintf("path = %q", repo), 1)
-	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"codebase-memory\"\n"+
+	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"graph\"\n"+
 		"command = [%q, \"-test.run=TestStdioHelperProcess\"]\n"+
 		"env = { ATENEA_CORE_STDIO_HELPER = \"1\", HELPER_LEDGER = %q }\n"+
 		"expose = \"raw\"\ntools = [\"search_code\", \"index_repository\"]\neffects = [\"read\"]\n"+
@@ -117,11 +117,11 @@ func TestAStdioBackendReachesAChat(t *testing.T) {
 	for _, entry := range tools {
 		tool, _ := entry.(map[string]any)
 		switch tool["name"] {
-		case "raw.codebase-memory.search_code":
+		case "raw.graph.search_code":
 			found = tool
 		case "code.search":
 			capability = tool
-		case "raw.codebase-memory.delete_project":
+		case "raw.graph.delete_project":
 			t.Error("a tool outside the budget was offered to a chat")
 		}
 	}
@@ -138,7 +138,7 @@ func TestAStdioBackendReachesAChat(t *testing.T) {
 	// And it answers. A listing that worked over a pipe the call cannot use
 	// would be a passthrough that only looks connected.
 	answer := result(t, c.call("tools/call", map[string]any{
-		"name":      "raw.codebase-memory.search_code",
+		"name":      "raw.graph.search_code",
 		"arguments": map[string]any{"query": "TODO"},
 	}), "tools/call")
 	if text := answerText(answer); !strings.Contains(text, "query=TODO") {
@@ -161,7 +161,7 @@ func TestEveryChatSharesOneStdioProcess(t *testing.T) {
 		c := dial(t)
 		c.handshake("omp")
 		answer := result(t, c.call("tools/call", map[string]any{
-			"name":      "raw.codebase-memory.search_code",
+			"name":      "raw.graph.search_code",
 			"arguments": map[string]any{"query": "x"},
 		}), "tools/call")
 		text := answerText(answer)

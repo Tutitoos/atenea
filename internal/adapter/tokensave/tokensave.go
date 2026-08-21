@@ -35,7 +35,7 @@
 // # What this package does not do
 //
 // It does not index: tokensave keeps its own index in step by itself, so
-// there is no repository.index implementation here and nothing in this file
+// there is no repository indexing implementation here and nothing in this file
 // ever writes. It answers the two capabilities its far side can answer
 // honestly -- what a file declares, and where a symbol sits on the call graph
 // -- and deliberately not symbol.definition: resolving the symbol under a

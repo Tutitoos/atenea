@@ -3,7 +3,7 @@
 //
 // Every earlier client speaks over an address: omp and Claude Code as a
 // binary invoked once per call, Serena as an MCP server behind a fixed URL,
-// codebase-memory-mcp as a fresh process per call. A stdio MCP server has no
+// another graph CLI as a fresh process per call. A stdio MCP server has no
 // address at all -- there is nothing to dial, only two pipes -- so it can
 // only ever be reached by something that spawned it and kept them open. That
 // something is internal/supervisor, extended with a stdio transport for
@@ -204,7 +204,7 @@ const repositoryKeyPrefix = "repository:"
 
 // DefaultTimeout caps one call. kivgraph opens a published graph snapshot
 // and walks it, which sits at the same class of cost Serena and
-// codebase-memory already pay for a cold cache -- slow long before it is
+// graph providers already pay for a cold cache -- slow long before it is
 // stuck -- so this matches their own ceiling rather than inventing a new
 // one.
 const DefaultTimeout = 90 * time.Second
@@ -1503,7 +1503,7 @@ func (r *Runner) runGraphStatus(status *statusResult, req contract.RunRequest) (
 // ProbeIndex asks kivgraph whether root already has a place in the
 // published graph, without asking it to build one.
 //
-// It mirrors codebasememory's own three-way contract exactly: a working
+// It mirrors the graph provider's three-way contract exactly: a working
 // probe with a definite verdict returns (ready, hint, nil); only the probe
 // itself failing to reach a verdict returns a non-nil err, because a caller
 // must never correct indexed_by on a guess.
@@ -1714,6 +1714,9 @@ func within(root, name string) (string, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", contract.Fail(contract.FailureUnavailable, "cannot resolve repository root: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootAbs = resolved
 	}
 	joined := filepath.Join(rootAbs, filepath.FromSlash(name))
 	if err := contained(rootAbs, joined, name); err != nil {

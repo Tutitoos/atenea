@@ -127,7 +127,7 @@ func TestDuplicatesAreRefused(t *testing.T) {
 func TestUnknownLookupsAreNotFound(t *testing.T) {
 	reg := seeded(t)
 	for name, err := range map[string]error{
-		"capability":     mustErr(reg.Capability("code.impact")),
+		"capability":     mustErr(reg.Capability("graph.impact")),
 		"implementation": mustErr(reg.Implementation("grep")),
 		"repository":     mustErr(reg.Repository("web")),
 	} {
@@ -135,7 +135,7 @@ func TestUnknownLookupsAreNotFound(t *testing.T) {
 			t.Errorf("%s: kind = %v, want not_found", name, contract.KindOf(err))
 		}
 	}
-	if _, err := reg.ImplementationsFor("code.impact"); contract.KindOf(err) != contract.FailureNotFound {
+	if _, err := reg.ImplementationsFor("graph.impact"); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("ImplementationsFor: kind = %v", contract.KindOf(err))
 	}
 }
@@ -281,17 +281,17 @@ func TestSetIndexedCorrectsRepository(t *testing.T) {
 	if err := reg.AddRepository(repo); err != nil {
 		t.Fatalf("AddRepository: %v", err)
 	}
-	if err := reg.SetIndexed("web", "codebase-memory", true); err != nil {
+	if err := reg.SetIndexed("web", "graph", true); err != nil {
 		t.Fatalf("SetIndexed: %v", err)
 	}
 	got, err := reg.Repository("web")
 	if err != nil {
 		t.Fatalf("Repository: %v", err)
 	}
-	if !got.IndexedBy("codebase-memory") {
+	if !got.IndexedBy("graph") {
 		t.Fatal("SetIndexed(true) did not stick")
 	}
-	if err := reg.SetIndexed("nope", "codebase-memory", true); contract.KindOf(err) != contract.FailureNotFound {
+	if err := reg.SetIndexed("nope", "graph", true); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("unknown repository: kind = %v", contract.KindOf(err))
 	}
 }

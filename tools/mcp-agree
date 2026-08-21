@@ -7,7 +7,7 @@ It guards the three ways this stack drifts without erroring:
 
   1. omp's toggle       /mcp enable|disable writes ~/.omp/agent/mcp.json behind you.
   2. the installer      `kena agent setup` fillMissing()s serena, context7, semgrep
-                        and codebase-memory back into omp AND claude as enabled:true.
+                        and graph backends back into omp AND claude as enabled:true.
                         45 -> ~80 tools, with atenea's own backends running twice.
                         disabledServers does NOT stop it: that list only covers
                         DISCOVERED servers, not ones declared at user scope.
@@ -86,8 +86,8 @@ BIN = os.path.join(HOME, ".local", "bin")
 # therefore named differently in every one of them - the count can be unified,
 # the name cannot.
 CORE = {"atenea", "headroom"}
-BACKENDS = {"serena", "context7", "semgrep", "codebase-memory"}  # atenea owns these
-OMP_SUPPRESSED = {"chrome-devtools", "claude-mem", "codebase-memory",
+BACKENDS = {"serena", "context7", "semgrep"}  # atenea owns these
+OMP_SUPPRESSED = {"chrome-devtools", "claude-mem",
                   "context7", "semgrep", "serena"}
 KENA_WS = os.path.join(HOME, "kena-workspace")
 

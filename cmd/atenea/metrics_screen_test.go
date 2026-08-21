@@ -44,21 +44,21 @@ func measured(t *testing.T, rows ...metrics.Measurement) string {
 }
 
 // The long names are the real ones: symbol.implementations answered by
-// codebase-memory.overview is not a pairing this catalog ships, but both
+// graph.overview is not a pairing this catalog ships, but both
 // strings are shipped lengths, and the screen has to hold the longest of each
 // column rather than a width somebody guessed once.
 func longRows() []metrics.Measurement {
 	at := time.Now()
 	return []metrics.Measurement{{
 		At: at, RunID: "r1", StepID: "s1",
-		Capability: "symbol.implementations", Implementation: "codebase-memory.overview",
-		Provider: "codebase-memory", Repository: "current",
-		ToolVersion: "codebase-memory-mcp 0.9.0",
+		Capability: "symbol.implementations", Implementation: "graph.overview",
+		Provider: "graph", Repository: "current",
+		ToolVersion: "graph-backend 0.9.0",
 		Spent:       contract.Sample{Duration: 40 * time.Millisecond}, OK: true,
 	}, {
 		At: at, RunID: "r2", StepID: "s1",
-		Capability: "symbol.implementations", Implementation: "codebase-memory.overview",
-		Provider: "codebase-memory", Repository: "current",
+		Capability: "symbol.implementations", Implementation: "graph.overview",
+		Provider: "graph", Repository: "current",
 		// No version: the call was refused before anything ran, so nobody
 		// could ask the far side what it was.
 		Spent: contract.Sample{Duration: 147 * time.Microsecond}, OK: false,
@@ -77,7 +77,7 @@ func TestTheMetricsScreenNamesWhatSplitTheRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
-	if !strings.Contains(out, "codebase-memory-mcp 0.9.0") {
+	if !strings.Contains(out, "graph-backend 0.9.0") {
 		t.Errorf("the screen splits rows by tool version and never prints one:\n%s", out)
 	}
 	// The attempt that never reached a tool still has to be readable as a row
@@ -139,13 +139,13 @@ func TestTheMetricsScreenLinesUp(t *testing.T) {
 	}
 	for _, row := range rows {
 		at(row, "capability", "symbol.implementations")
-		at(row, "implementation", "codebase-memory.overview")
+		at(row, "implementation", "graph.overview")
 		at(row, "repository", "current")
 		// The refused attempt has no version to print, and the dash is the
 		// column doing its job rather than a blank to skip over.
 		version := "-"
-		if strings.Contains(row, "codebase-memory-mcp") {
-			version = "codebase-memory-mcp 0.9.0"
+		if strings.Contains(row, "graph-backend") {
+			version = "graph-backend 0.9.0"
 		}
 		at(row, "version", version)
 	}

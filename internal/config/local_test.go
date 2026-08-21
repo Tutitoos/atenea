@@ -54,7 +54,7 @@ func base(t *testing.T, root string) Config {
 	second, err := fileRepository{
 		ID: "workspace", Path: root,
 		Languages: []string{"go", "typescript"}, Scale: "large", VCS: "present",
-		IndexedBy: []string{"codebase-memory"},
+		IndexedBy: []string{"graph"},
 	}.build("global")
 	if err != nil {
 		t.Fatalf("subject: %v", err)
@@ -116,7 +116,7 @@ func TestDeclaredKeyWinsAndOmittedKeyInherits(t *testing.T) {
 	if subject.VCS.String() != "present" {
 		t.Errorf("vcs = %q, want the global value inherited", subject.VCS)
 	}
-	if got := strings.Join(subject.Indexes(), ","); got != "codebase-memory" {
+	if got := strings.Join(subject.Indexes(), ","); got != "graph" {
 		t.Errorf("indexed_by = %q, want the global value inherited", got)
 	}
 }

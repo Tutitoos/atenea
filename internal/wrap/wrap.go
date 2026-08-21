@@ -62,7 +62,7 @@ type Plan struct {
 	// Two kinds qualify, and until 2026-08-09 only the first did. A raw
 	// backend is held because Atenea filters it. A backend behind a
 	// capability is held for the same reason and was being handed over
-	// anyway: `serena` and `codebase-memory` carry all eight capabilities
+	// anyway: graph providers carry the symbol capabilities
 	// on this machine, and wrap was putting both in the payload, so the
 	// client reached the funnel's own backends around the funnel. The
 	// command that exists to point clients at the core was pointing them

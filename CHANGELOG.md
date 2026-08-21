@@ -15,6 +15,20 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-08-21
+
+### Added
+
+- Native release targets for Linux `amd64`/`arm64` and macOS `amd64`/`arm64`.
+- macOS `launchd` service installation alongside Linux `systemd --user`.
+- Checksum-verified installer updates with rollback and uninstall support.
+- CI and release validation across the supported native architectures.
+
+### Removed
+
+- The obsolete external graph adapter and its configuration, registry, and
+  test surface.
+
 ## [0.10.3] - 2026-08-21
 
 ### Added
@@ -736,7 +750,7 @@ what it thought of; this list is mostly what the plan did not.
 
 - **`wrap` handed every client the backends Atenea answers for, and never
   handed it Atenea.** The command exists to point clients at the core, but it
-  emitted `serena` and `codebase-memory` — the two backends behind all eight
+  emitted `serena` and the graph backend — the two backends behind all eight
   capabilities — straight into the client's configuration, so a client pointed
   at them reached past the funnel to the servers the funnel is made of, under
   no allow list and no effect check. Atenea itself appeared in no payload at
@@ -747,7 +761,7 @@ what it thought of; this list is mostly what the plan did not.
   report prints a reason beside every held server, and printed the same one
   for both kinds of hold: `served as raw.<id>.<tool>`. Only a backend carrying
   `expose = "raw"` is re-offered under that name. `serena` and
-  `codebase-memory` are held because the capabilities run on them, and Atenea
+  the graph backend are held because the capabilities run on them, and Atenea
   serves no tool of theirs at all — measured on the machine this was found on,
   `tools/list` returned 19 raw tools, every one of them `chrome-devtools`,
   `context7` or `semgrep`, the three that declare `expose`. So the report sent
@@ -903,7 +917,7 @@ old one reads.
   per chat, holds stdin open for the life of the process -- a stdio server
   reads EOF on stdin as its client leaving -- and routes each answer back to
   the chat that asked by request id. Measured against the real
-  `codebase-memory-mcp`: three chats, one child, the budget refusing a tool
+  the graph MCP backend: three chats, one child, the budget refusing a tool
   outside it, and the child gone when Atenea stopped.
 - **A dead call is not silently repeated.** A `tools/list` that died is asked
   again of the replacement process, because nothing happened. A `tools/call` is
@@ -1223,7 +1237,7 @@ old one reads.
   ran has no version at all, which is exactly when the duplicate shows up. The
   version is now a column, `-` when there is none. The columns were also fixed
   widths guessed before the catalog existed: `symbol.implementations` and
-  `codebase-memory.overview` both outgrew theirs and shifted every row six
+  the graph overview implementation both outgrew theirs and shifted every row six
   characters off its header. Widths now come from the rows.
 
 - **The status screen counted one call as a measurement while every decision
@@ -1438,7 +1452,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
 
 - **The permission gate was copy-pasted into five adapters and absent from the
   core's dispatch path; it is now one site the core owns.** `claudecode.go`,
-  `codebasememory.go`, `omp.go`, `serena.go` and the local stand-in each
+  the graph adapter, `omp.go`, `serena.go` and the local stand-in each
   carried the same three lines checking `req.Allowed()`, and nothing sat on the
   seam every dispatch actually crosses. That is the most security-relevant
   decision in the system living in five dumb translators -- and `pkg/contract`
@@ -1589,7 +1603,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
 ### Added
 
 - **`symbol.overview` has a second provider, and a way to say what it cannot
-  be asked.** `codebase-memory.overview` answers the capability from the graph
+  be asked.** The graph overview implementation answers the capability from the graph
   the provider already built: one `query_graph` round trip for what the file
   declares, one pass over the file to recover the columns the graph does not
   store. It answers markdown too, where the headings are what the file
@@ -1666,11 +1680,11 @@ told the opposite, because no edit to it can help: upgrade the binary.
   package now says which half of it the version promise covers, and that the
   change which has to be major is the one that opens the interface to outside
   implementers, not a method added after it.
-- **`codebase-memory.search` was declared with nothing behind it.** Measured
-  before removing it: on a medium repository declaring a codebase-memory index,
+- **The legacy graph search implementation was declared with nothing behind it.** Measured
+  before removing it: on a medium repository declaring a graph index,
   with the id added to the adapter's served list, the config loaded, the status
   screen said the adapter served it, the funnel chose it, and the call returned
-  `not_found: codebase-memory adapter has no implementation of code.search`.
+  `not_found: graph adapter has no implementation of code.search`.
   The catalogue entry is gone. `ripgrep` already answers `code.search`
   correctly and cheaply everywhere with no index; a graph-backed search's real
   advantage is ranking hits into their containing symbols, which `code.search`
@@ -1996,10 +2010,10 @@ told the opposite, because no edit to it can help: upgrade the binary.
   direction, with nothing in Atenea to catch it.** The settings file states
   it by hand, as a starting point, and nothing ever went back to check it
   against the provider it names -- verified on this repository itself:
-  `indexed_by = ["serena"]` for `current` while `codebase-memory-mcp`
+  `indexed_by = ["serena"]` for `current` while the graph MCP backend
   already held a real, ready index for the exact same path. `symbol.calls`
   and `code.impact` each have exactly one implementation, both
-  `codebase-memory`'s and both `requires_index = true` with no fallback, so
+  the graph backend's and both `requires_index = true` with no fallback, so
   the stale belief did not degrade either capability against this
   repository -- it made both completely unusable, `not_found` on every
   call, for a reason nothing on the status screen or in a funnel trace
@@ -2007,7 +2021,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
 
   `contract.IndexProber` is a new, optional interface a runner implements
   when it can answer "do you already have one" without being asked to
-  build it: `codebase-memory` answers by calling `index_status`, the same
+  build it: the graph backend answers by calling `index_status`, the same
   tool its freshness check already calls for its own reasons; Serena
   explicitly does not implement it, because `activate_project` succeeds
   silently on an empty project and cannot tell "indexed" from "nothing
@@ -2027,7 +2041,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
   an actual build, which is the second, deliberately separate half:
   `repository.index` (effects `write` + `process`, a `mode` input of
   `"fast"`/`"moderate"`/`"full"` defaulting to `"moderate"`) drives
-  `codebase-memory-mcp`'s own `index_repository` tool and reports back
+  the graph MCP backend's own `index_repository` tool and reports back
   `status`/`nodes`/`edges`. The constraints-stage drop reason for a
   missing index now names both:
   `needs an index from provider %s, repository has none -- atenea detect
@@ -2045,10 +2059,10 @@ told the opposite, because no edit to it can help: upgrade the binary.
   one. The sketch and the effects model it predates are not compatible,
   and the model that was actually built and defended wins. Verified
   against the compiled binary and this repository's own settings file:
-  `select symbol.calls --repo current` dropped `codebase-memory.calls` for
+  `select symbol.calls --repo current` dropped the graph call implementation for
   "no index" and answered `not_found`; `detect --repo current` reported
-  `codebase-memory ready`; correcting `indexed_by` to include
-  `codebase-memory` by hand afterward cleared that drop, leaving only the
+  the graph backend ready`; correcting `indexed_by` to include
+  the graph backend by hand afterward cleared that drop, leaving only the
   pre-existing, unrelated `min_scale = "medium"` floor this small
   repository was always going to hit. Contract `1.8.0`.
 
@@ -2448,8 +2462,8 @@ told the opposite, because no edit to it can help: upgrade the binary.
   running after the command exited.
 
 - **`symbol.calls` and `code.impact` answer for the first time, through a
-  fourth adapter: `codebase-memory`.** Both walk the call graph
-  `codebase-memory-mcp` keeps on disk rather than parsing anything live,
+  fourth adapter: the graph backend.** Both walk the call graph
+  its MCP process keeps on disk rather than parsing anything live,
   which is also why both implementations declare `requires_index = true`
   and a `min_scale = "medium"` floor — unlike Serena, which reads a file the
   moment it is asked, this provider only ever answers from an index built
@@ -2471,7 +2485,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
   now names both.
 
 - **`symbol.calls` and `code.impact` now say when their own answer might
-  already be behind.** Both walk a call graph `codebase-memory-mcp` built at
+  already be behind.** Both walk a call graph the MCP backend built at
   some point in the past, and nothing forces a rebuild before the next
   question: a commit lands, a file changes on disk, and the graph never
   hears about either — there is no watcher, no hook, nothing that reindexes

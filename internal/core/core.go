@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
-	"github.com/Tutitoos/atenea/internal/adapter/codebasememory"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
@@ -469,13 +468,6 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			Implementations: cfg.Orchestrator.Codex.Implementations,
 			Sensitive:       cfg.Security.Sensitive,
 			Timeout:         cfg.Orchestrator.Codex.Timeout,
-		})
-	case config.RunnerCodebaseMemory:
-		return codebasememory.New(codebasememory.Options{
-			Binary:          cfg.Orchestrator.CodebaseMemory.Binary,
-			Implementations: cfg.Orchestrator.CodebaseMemory.Implementations,
-			Sensitive:       cfg.Security.Sensitive,
-			Timeout:         cfg.Orchestrator.CodebaseMemory.Timeout,
 		})
 	case config.RunnerSerena:
 		return buildSerenaRunner(cfg, procs)
@@ -977,8 +969,7 @@ type IndexReport struct {
 // repositoryID is empty, and corrects the catalog's own belief -- indexed_by,
 // as the settings file declared it -- with whatever it finds.
 //
-// This is the read half of the pair repository.index is the write half of:
-// detection only ever asks, it never builds, and SetIndexed is the same
+// Detection only ever asks, it never builds, and SetIndexed is the same
 // in-memory correction SetHealth already makes for a provider's own
 // liveness, on the same reasoning. It runs on demand rather than on every
 // startup because a probe is itself a subprocess call per repository per

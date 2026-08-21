@@ -21,6 +21,10 @@ const (
 	loginctlBin  = "loginctl"
 )
 
+func unitPath(name string) string {
+	return filepath.Join(filepath.Dir(ConfigDir()), "systemd", "user", name+".service")
+}
+
 // manager runs one of the two systemd command-line tools.
 //
 // The three outcomes are kept apart because only one of them ends the

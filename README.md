@@ -10,14 +10,14 @@ it serves. omp, Claude Code and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `0.10.3`, speaking contract `3.0.0` — alpha: `0.x.y` until it goes
+Version `0.10.4`, speaking contract `3.1.0` — alpha: `0.x.y` until it goes
 stable. What landed is in the
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
 them in waves and reviews every answer. Four adapters ship: two client CLIs
 (`omp`, Claude Code) for text search, Serena over MCP for symbols, and
-`codebase-memory` for the call graph. Every
+graph providers for symbol navigation. Every
 attempt is measured — time, tokens and peak memory, per capability and per
 implementation — into an embedded DuckDB base, and the funnel ranks on it:
 what a step cost on the way out is what decides who answers next time in.
@@ -118,17 +118,40 @@ there after a reboot.
 
 ```sh
 go build -o ~/.local/bin/atenea ./cmd/atenea
-~/.local/bin/atenea service install     # writes a systemd --user unit
+~/.local/bin/atenea service install     # systemd user unit or macOS launchd agent
+# Linux:
 systemctl --user start atenea.service
+# macOS:
+launchctl kickstart -k gui/$(id -u)/com.tutitoos.atenea
 ```
 
-A user unit, never a system one, and no port: the only thing it listens on is a
-Unix socket in your own state root, `0600` in a `0700` directory, with every
+A per-user service, never a system one, and no port: the only thing it listens
+on is a Unix socket in your own state root, `0600` in a `0700` directory, with every
 caller checked against the kernel's answer for who they are before a byte is
 read. Atenea holds no privilege worth borrowing, so `sudo` would only widen
 what a bug could reach. `atenea status` asks the running service, because the
 uptime and the chats open right now are only true of the process that keeps
 them; with nothing running it falls back to disk and says so.
+
+### Install a release
+
+Published Linux and macOS releases can be installed with the checksum-verified installer:
+
+```sh
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v0.10.4/atenea-install.sh \
+  -o /tmp/atenea-install.sh
+bash /tmp/atenea-install.sh --version 0.10.4
+```
+
+The installer supports Linux and macOS on `amd64` and `arm64`, writes to
+`~/.local/bin`, and never enables a service unless `--service` is passed
+explicitly. Linux uses a systemd user unit; macOS uses a per-user launchd
+agent. Other systems require a source build.
+
+Re-running it with a different pinned version updates the binary and keeps the
+previous one as `~/.local/bin/atenea.previous`. Use
+`bash /tmp/atenea-install.sh --rollback` to restore that copy, or
+`--uninstall --service` to remove the binary and its background service.
 
 What runs on its own: the measurement batch reaches disk every 30s, the history
 is folded hourly, and every six hours a hard-linked copy of everything Atenea
@@ -147,7 +170,6 @@ background
 cmd/atenea/         entry point: the service and the operator commands
 internal/           the brain, not importable from outside
   adapter/claudecode/      the client adapter: translates for the Claude Code CLI
-  adapter/codebasememory/  the call-graph adapter: symbol.calls, symbol.overview, code.impact and repository.index from its own index
   adapter/omp/             the client adapter: translates for the omp CLI
   adapter/serena/          the symbol adapter: MCP over HTTP, positions to names and back
   checkpoint/              run receipts on disk
@@ -191,7 +213,7 @@ Atenea leans on work other people did first. A thank-you, with a link to each:
 
 - [ripgrep](https://github.com/BurntSushi/ripgrep) — the search engine behind the first capability
 - [Serena](https://github.com/oraios/serena) — symbol-level navigation and editing
-- [Codebase Memory](https://github.com/entrepeneur4lyf/codegraph-rust) — the code knowledge graph
+- Graph providers — repository symbol and relationship indexes exposed through MCP
 - [Semgrep](https://github.com/semgrep/semgrep) — static analysis
 - [Context7](https://github.com/upstash/context7) — version-accurate library documentation
 - [ToolHive](https://github.com/stacklok/toolhive) — isolation and lifecycle for shared MCP servers

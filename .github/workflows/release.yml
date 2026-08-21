@@ -1,11 +1,8 @@
-# A release is a tag, and the one thing a tag can silently get wrong is being a
-# different number from the binary it names. Nothing else in the build catches
-# that: the code compiles, the tests pass, and the artifact ships announcing a
-# version nobody released.
-#
-# So the tag is checked against the binary before anything is published, by
-# asking the binary rather than by reading the source -- the same question an
-# operator asks, answered the same way.
+# A tag is publishable only after the same source tree has passed the normal
+# gates and produced native binaries on every supported release runner. DuckDB
+# is a cgo dependency, so these builds intentionally happen on native hosts;
+# pretending a cross-compiled binary is covered would make the release claim
+# stronger than its validation.
 name: release
 
 on:
@@ -16,13 +13,13 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
         with:
-          # The version test compares the tag to what the working tree says, so
-          # the tag has to be here. A shallow checkout arrives without it.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
@@ -34,70 +31,107 @@ jobs:
         run: |
           set -eu
           want="${GITHUB_REF_NAME#v}"
-          go build -o /tmp/atenea ./cmd/atenea
-          # Build metadata after the + says which tree this came from; the
-          # release number is what has to match.
+          go build -trimpath -buildvcs=false -o /tmp/atenea ./cmd/atenea
           got="$(/tmp/atenea version | awk '/^atenea/ {print $2}' | cut -d+ -f1)"
-          if [ "$want" != "$got" ]; then
+          test "$want" = "$got" || {
             echo "tag ${GITHUB_REF_NAME} claims ${want}, the binary reports ${got}"
-            echo "bump internal/buildinfo.Version, or tag the version that is there"
             exit 1
-          fi
-          echo "tag ${GITHUB_REF_NAME} == binary ${got}"
+          }
 
-      # Same linter, same version, same configuration as CI -- and, now, the
-      # same mechanism. The previous version of this step claimed to run "the
-      # same gate CI runs on main" while actually piping install.sh from the
-      # linter's *master* branch into sh, which CI never does. The claim was
-      # false, and being false is what let v0.6.0 through: on 2026-08-07 that
-      # script downloaded the release's .sbom.json instead of the tarball,
-      # failed its own checksum, and killed the release -- while CI on the very
-      # same commit was green, because the action resolved the download
-      # correctly. An equivalence that two different mechanisms have to keep
-      # true is an equivalence that stops being true without telling anyone.
-      # Three releases were cut on top of a red pipeline because nobody asked
-      # this question at tag time; a fourth was blocked because the asking
-      # itself was broken.
-      - name: Lint must be clean (the same gate CI runs on main)
+      - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
 
-      - name: The changelog must have this release in it
+      - name: Changelog entry
         run: |
           set -eu
           want="${GITHUB_REF_NAME#v}"
-          grep -q "^## \[${want}\]" CHANGELOG.md || {
-            echo "CHANGELOG.md has no '## [${want}]' section"
-            exit 1
-          }
+          grep -q "^## \[${want}\]" CHANGELOG.md
 
       - name: Test
         run: go test -race -count=1 ./...
 
-      # The measurement base is an embedded DuckDB, which is a cgo dependency,
-      # so there is no free cross-compile: every target needs a C toolchain for
-      # that target. `CGO_ENABLED=0` does not degrade gracefully either -- the
-      # platform bindings are cgo-gated, so the build fails on undefined
-      # symbols rather than producing a slower binary.
-      #
-      # So the release carries the one platform whose suite just passed on this
-      # runner, and nothing else. A binary for a machine nobody has run Atenea
-      # on is a claim the project cannot back: `atenea service install` is
-      # implemented for systemd and says so everywhere else. Other platforms
-      # build from source, which is what the README documents anyway.
-      - name: Build the artifact
+  build:
+    needs: verify
+    name: artifact / ${{ matrix.goos }} / ${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - runner: macos-14
+            goos: darwin
+            goarch: arm64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and smoke-test artifact
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
+          artifact="atenea-${version}-${GOOS}-${GOARCH}"
           mkdir -p dist
-          # Built from a tree with no VCS stamp, so it reports the bare number
-          # -- which is what a release should say.
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -trimpath -buildvcs=false \
-            -o "dist/atenea-${version}-linux-amd64" ./cmd/atenea
-          ./dist/"atenea-${version}-linux-amd64" version
-          cd dist && sha256sum atenea-* > SHA256SUMS
+          go build -trimpath -buildvcs=false -o "dist/$artifact" ./cmd/atenea
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64|Linux/amd64) host="linux/amd64" ;;
+            Linux/aarch64|Linux/arm64) host="linux/arm64" ;;
+            Darwin/x86_64|Darwin/amd64) host="darwin/amd64" ;;
+            Darwin/arm64|Darwin/aarch64) host="darwin/arm64" ;;
+            *) host="unknown" ;;
+          esac
+          if [ "$host" = "$GOOS/$GOARCH" ]; then
+            "dist/$artifact" version
+          else
+            file "dist/$artifact"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/atenea-*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add installer and checksums
+        run: |
+          set -eu
+          cp scripts/install.sh dist/atenea-install.sh
+          chmod 0755 dist/atenea-install.sh
+          (cd dist && sha256sum atenea-* > SHA256SUMS)
 
       - name: Publish
         env:
@@ -105,27 +139,16 @@ jobs:
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
-          # The notes come out of the changelog rather than being written
-          # twice. The section runs from this version's heading to the next
-          # one -- or, for the oldest section in the file, to the link
-          # definitions that collect at the bottom.
           awk -v v="## [${version}]" '
             $0 ~ "^## \\[" { if (found) exit; if (index($0, v) == 1) { found = 1; next } }
             found && $0 ~ "^\\[.*\\]: http" { exit }
             found { print }
           ' CHANGELOG.md > /tmp/notes.md
-          test -s /tmp/notes.md || { echo "no notes extracted for ${version}"; exit 1; }
-
-          # Alpha ships as a pre-release. 0.x.y is not a stable promise and
-          # GitHub should not offer it as "latest" to somebody who never read
-          # the version number.
+          test -s /tmp/notes.md
           prerelease=""
-          case "${version}" in
-            0.*) prerelease="--prerelease" ;;
-          esac
-
-          # shellcheck disable=SC2086 # prerelease is one flag or nothing
-          gh release create "${GITHUB_REF_NAME}" \
+          case "$version" in 0.*) prerelease="--prerelease" ;; esac
+          # shellcheck disable=SC2086
+          gh release create "$GITHUB_REF_NAME" \
             --title "Atenea ${version}" \
             --notes-file /tmp/notes.md \
             ${prerelease} \

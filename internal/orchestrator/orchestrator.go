@@ -120,7 +120,6 @@ const (
 	implementationsCapability = "symbol.implementations"
 	overviewCapability        = "symbol.overview"
 	callsCapability           = "symbol.calls"
-	impactCapability          = "code.impact"
 )
 
 // repositoryIndexCapability builds what detection can only ever read.
@@ -129,7 +128,6 @@ const (
 // read-only exploration must not carry -- but it still has to be named here
 // for the same reason they are: a capability the card does not name cannot
 // be asked for even when everything below it is ready to answer.
-const repositoryIndexCapability = "repository.index"
 
 // The four Kivgraph answers. Named here for the reason stated above and for
 // no other: none of them is planned into a commission either. Three read one
@@ -211,8 +209,6 @@ var card = contract.Agent{
 		implementationsCapability,
 		overviewCapability,
 		callsCapability,
-		impactCapability,
-		repositoryIndexCapability,
 		consumersCapability,
 		symbolGetCapability,
 		unresolvedCapability,

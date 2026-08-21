@@ -137,7 +137,7 @@ func helper(t *testing.T, allowed []string, env map[string]string) passthrough.B
 		full[k] = v
 	}
 	b := passthrough.New(passthrough.Spec{
-		ID:      "codebase-memory",
+		ID:      "graph",
 		Command: []string{self, "-test.run=TestHelperProcess", "-test.v=false"},
 		Env:     full,
 		Timeout: 10 * time.Second,

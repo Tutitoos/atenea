@@ -28,8 +28,7 @@ and broken are different findings, and only the second is worth debugging.
 
 ```text
 serves     ripgrep
-no runner  claude.search, codebase-memory.calls, codebase-memory.impact,
-           codebase-memory.index, codebase-memory.overview,
+no runner  claude.search,
            serena.definition, serena.implementations, serena.overview,
            serena.references, serena.search
 ```
@@ -53,7 +52,7 @@ and refuses to claim a text search it has no code for. So the coverage is
 lopsided in a way the capability list alone does not show: text search stands on
 a local binary, and **every symbol capability stands on one transport**.
 `symbol.overview` is the only one with a second provider declared —
-`codebase-memory.overview`, over a local binary — and it is not attached in
+the graph overview provider, over a local binary — and it is not attached in
 this configuration, so it does not soften the outage below.
 
 Now break that transport.
@@ -173,7 +172,7 @@ chosen      ripgrep  (the only surviving implementation)
 
 funnel
   constraints  3 in -> 2 out: claude.search, ripgrep
-      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one, atenea ask repository.index --repo current builds one
+      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
   reach        2 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep

@@ -102,7 +102,7 @@ capability = "code.search"
 
 [[implementation]]
 id = "graph.search"
-provider = "codebase-memory"
+provider = "graph"
 capability = "code.search"
 
   [implementation.constraints]
@@ -320,7 +320,7 @@ func traceReason(stages []selector.Stage, stageName, implementation string) stri
 
 func TestUnknownCapabilityAndRepositoryAreNotFound(t *testing.T) {
 	atenea := build(t, catalog)
-	if _, err := atenea.Select("code.impact", "api"); contract.KindOf(err) != contract.FailureNotFound {
+	if _, err := atenea.Select("graph.impact", "api"); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("unknown capability: kind = %v", contract.KindOf(err))
 	}
 	if _, err := atenea.Select("code.search", "web"); contract.KindOf(err) != contract.FailureNotFound {
@@ -334,7 +334,7 @@ func TestBrokenRulesStopTheBoot(t *testing.T) {
 	cases := map[string]string{
 		"unknown capability": `
 [[selector.rule]]
-capability = "code.impact"
+capability = "graph.impact"
 prefer = "ripgrep"
 `,
 		"unknown implementation": `
@@ -344,13 +344,13 @@ prefer = "grep"
 `,
 		"implementation of another capability": `
 [[capability]]
-id = "code.impact"
+id = "graph.impact"
 version = "1.0.0"
 summary = "Estimate the blast radius of a change."
 effects = ["read"]
 
 [[selector.rule]]
-capability = "code.impact"
+capability = "graph.impact"
 prefer = "ripgrep"
 `,
 		"unknown repository": `

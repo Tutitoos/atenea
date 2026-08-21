@@ -17,9 +17,9 @@ with.
 
 ## Ranked code search, if anything ever wants it
 
-`code.search` used to declare a fourth implementation, `codebase-memory.search`,
+`code.search` used to declare a fourth graph implementation,
 with no adapter behind it. It is now deleted. The entry was selectable and
-impossible: on a medium repository that declared a codebase-memory index, and
+impossible: on a medium repository that declared a graph index, and
 with the id added to the adapter's served list, the funnel chose it and the
 call came back `not_found`. A catalogue entry nothing can run is not a
 placeholder for future work, it is a promise the funnel keeps making and
@@ -230,13 +230,13 @@ first thing asked of Atenea that its central principle does not obviously allow.
 The measurement first. On this machine there are **eight MCP servers and
 thirty-four declarations of them** across five client configuration files:
 `chrome-devtools` (29 tools, the only one every client agrees on), `serena` (30),
-`codebase-memory` (8 cold, 14 warm), `semgrep` (4 filtered over HTTP, 7 raw over
+the graph backend (8 cold, 14 warm), `semgrep` (4 filtered over HTTP, 7 raw over
 stdio), `context7` (2, and `omp` talks to 3.2.5 while everyone else talks to
 4.0.0), `headroom` (3), `claude-mem`, and a second `serena` on `:9121` that only
 Atenea's own settings declared -- both of those `serena` units are what
 `instance = "per_repository"` replaces, and they come out when it is installed.
 A client sees between 43 and 85 tools depending on
-which one it is. Atenea offers **seven**. Six `codebase-memory` processes were
+which one it is. Atenea offers **seven**. Six graph backend processes were
 running at once, one per client session, beside a seventh that a hand-written
 shim keeps alive for its web UI with a replayed `initialize` and a FIFO -- so
 somebody already needed one shared instance and solved it once, for one server,
@@ -290,8 +290,8 @@ refusal it already has:
 
 ```toml
 [[mcp_server]]
-id = "codebase-memory"
-command = ["codebase-memory-mcp", "--ui=true"]
+id = "graph-backend"
+command = ["graph-backend-mcp", "--ui=true"]
 expose = "raw"          # off, today's behaviour: wrap only, nothing dispatches
 instance = "shared"     # shared, per_repository, per_chat
 tools = ["search_code", "search_graph", "trace_path"]   # deny by default
@@ -348,7 +348,7 @@ and shared, which is the entry above this one.
 
 Capability ids are dotted, and so are implementation ids: the base is keyed by
 `capability, implementation, repository`, and today's implementations are
-`ripgrep`, `claude.search`, `serena.definition`, `codebase-memory.impact`. So
+`ripgrep`, `claude.search`, `serena.definition`, and the graph impact provider. So
 `serena.find_symbol` is not merely ugly, it is ambiguous with an implementation id
 in every receipt and every metrics row. Passthrough tools take a reserved first
 segment -- `raw.serena.find_symbol` -- and loading refuses `raw.` as the first
@@ -397,7 +397,7 @@ that shipped in `0.9.1`: a missing working directory blamed on the binary.
 `command` block may now be declared `expose = "raw"`. Atenea spawns the process
 on the first call that needs it, replays the handshake once per spawn, holds
 stdin open for the life of the process, and routes each answer back to the chat
-that asked by JSON-RPC id. Measured against the real `codebase-memory-mcp`:
+that asked by JSON-RPC id. Measured against the real graph MCP backend:
 three chats, one child process, and the child gone when Atenea stopped.
 
 **Landed on 2026-08-08 for `per_repository` too, on the server that needed
@@ -424,7 +424,7 @@ repository, which is the honest key in both policies.
 What is left of the seam:
 
 - **`shared`** -- stateless, or state that is globally consistent:
-  `codebase-memory`, `semgrep`, `context7`. Built, and the default.
+  the graph backend, `semgrep`, `context7`. Built, and the default.
 - **`per_repository`** -- the state *is* the project: `serena`. Built.
 - **`per_chat`** -- the state is the conversation. Not built. Saves no
   processes, but would keep the server declared in one file instead of five.
@@ -435,7 +435,7 @@ Server-initiated notifications are also still dropped. A message with no id
 answers nobody, and handing one to a chat that did not ask would be inventing a
 recipient; `tools/list_changed` is the one that would matter, and it does not
 matter yet because the list is re-read on every `tools/list` rather than cached.
-A backend's tool list is not a constant -- `codebase-memory` advertises eight
+A backend's tool list is not a constant -- the graph backend advertises eight
 tools cold and fourteen once its store is open -- so that re-read is the design,
 not an optimisation waiting to happen. Measured again while building this: the
 same server advertised `get_graph_schema` and not `list_projects` on a cold
@@ -518,7 +518,7 @@ declared repository is the only barrier left once the mounts are gone.
    together with the receipt gap above, not after it.
 3. Declared effects, and `unknown` refused without a grant. Proven the way the
    undeclared key already is: a real client refused over the wire.
-4. stdio fan-in on `codebase-memory`. Proven by process count -- six to one --
+4. stdio fan-in on the graph backend. Proven by process count -- six to one --
    with two chats attached at once and the fourteen-tool surface intact.
 5. `per_repository` on serena, folding `:9121` in, units included. **Done
    2026-08-08**, and it cost a contract major (`3.0.0`): the per-repository
@@ -552,7 +552,7 @@ field is a major, and the contract now reads `3.0.0`. It is still not a `1.0.0`
 conversation.
 
 **Done when:** a client's configuration names `atenea`, `headroom` and
-`claude-mem` and nothing else; `pgrep -c codebase-memory-mcp` reports one with
+`claude-mem` and nothing else; the backend process count reports one with
 two chats attached; and a raw call that Atenea cannot interpret still leaves a
 receipt that says, in its own field, that it had no funnel because it never had a
 choice.
@@ -802,14 +802,14 @@ to every request from all three fixed-prefix clients: omp 12,130 → 12,866
 pays nothing fixed. That is a permanent per-request tax on three clients, and this
 week it would have bought four answers not once needed. The one that justifies it
 — cross-repository consumers, the single answer neither a language server nor
-codebase-memory's path-shape edges can give — matters for a question not yet
-asked. Mirroring the seven serena/codebase-memory duplicates instead would have
+the graph backend's path-shape edges can give — matters for a question not yet
+asked. Mirroring the seven serena/graph duplicates instead would have
 cost +1,688; the narrow shape refuses that, but narrow-and-unused is still 736
 tokens of nothing, forever.
 
 **It was not a declaration, and that is precisely what got built.** The three
 existing providers are one HTTP-MCP server (serena) and two per-call CLIs (omp,
-codebase-memory). Ladygraph's `serve` is a persistent **stdio** MCP server — a
+the legacy graph backend). Ladygraph's `serve` is a persistent **stdio** MCP server — a
 third transport shape Atenea did not have. That shape now exists:
 `internal/mcpstdio` (one session per child, `initialize` then `tools/call` over
 its stdin and stdout), `supervisor.TransportStdio` carrying it over the same
@@ -1074,7 +1074,7 @@ un-latches; `indexed_by` latches up (whatever the file says) and never re-confir
 has to cover both, or the second one just gets rebuilt as a copy of the first with the same gap.
 
 **A separate fault, not fixed by any of this.** Measured the same day: restoring `indexed_by =
-[..., "codebase-memory"]` across six repositories was done by hand, from a backup, reconstructing
+[..., "graph-backend"]` across six repositories was done by hand, from a backup, reconstructing
 what the value had been before an earlier retirement — and a fresh `detect` per repository, run
 afterward, found the claim true for exactly one of six. That is not the design gap above. Nothing
 about the missing reconciliation mechanism made those five values wrong; running `detect` before
@@ -1113,7 +1113,7 @@ a claim the runtime can't see next to the runtime's own answer.
 it looks reachable right now. Extend it to print what it currently hides — the state this
 process already has on file *before* the fresh probe, and how old it was — declared, observed
 state, observed age, last failure text if any. Today's five wrong-but-silent `indexed_by`
-entries would have shown as `codebase-memory: declared alive, health unknown (never probed)` —
+entries would have shown as `graph-backend: declared alive, health unknown (never probed)` —
 visibly a claim without a confirmation, not a fact.
 
 **Done when:** a `Health` entry recorded before this ships is never read as current after it —

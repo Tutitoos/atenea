@@ -31,7 +31,7 @@ const (
 	// EffectExternal leaves the machine: network, external services.
 	EffectExternal
 	// EffectProcess spawns an OS process to answer. ripgrep via omp, the
-	// claude CLI, and git for code.impact all cause it, each alongside
+	// claude CLI and other external tools all cause it, each alongside
 	// whichever of the other three effects that same call also causes.
 	EffectProcess
 )

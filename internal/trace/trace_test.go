@@ -83,7 +83,11 @@ func TestSweepClosesARowWhoseWriterIsGone(t *testing.T) {
 
 	// A pid that is really gone: spawn something, wait for it, then use its
 	// pid. Inventing a number could collide with a live process.
-	dead := exec.Command("/bin/true")
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("true is not available on PATH")
+	}
+	dead := exec.Command(truePath)
 	if err := dead.Run(); err != nil {
 		t.Fatalf("running the throwaway process: %v", err)
 	}

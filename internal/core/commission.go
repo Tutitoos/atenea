@@ -16,7 +16,7 @@ import (
 //
 // It lives here rather than in the adapters, and that placement is the whole
 // point. The same three lines used to be copy-pasted into five of them --
-// claudecode, codebasememory, omp, serena and the local stand-in -- with
+// claudecode, omp, serena and the local stand-in -- with
 // nothing at all on the core's own dispatch path. The architecture says
 // adapters are dumb translators and the brain lives in the core; this is the
 // most security-relevant decision in the system, and it was living in five

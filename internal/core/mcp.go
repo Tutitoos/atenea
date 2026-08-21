@@ -545,7 +545,7 @@ func (v *conversation) repositoriesTool() map[string]any {
 			"Symbol tools (symbol.*) require serena and a language server for the repo's languages; " +
 			"Dart does not currently have a serena language server, so symbol tools are refused for " +
 			"Dart-only repositories. Code-search and impact tools require the repository to be " +
-			"indexed by codebase-memory (check indexed_by).",
+			"indexed by the provider (check indexed_by).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 	}
 }

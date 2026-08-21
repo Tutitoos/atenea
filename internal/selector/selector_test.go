@@ -254,9 +254,8 @@ func TestMaxInputAcceptsAWholeFloat(t *testing.T) {
 	}
 }
 
-// The drop reason for a missing index used to be a dead end. Now it names
-// the two commands that resolve it: detect corrects a stale belief, ask
-// repository.index builds a missing one.
+// The drop reason for a missing index names the detection command and leaves
+// the actual indexing to the provider's own tooling.
 func TestMissingIndexReasonNamesTheFix(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
@@ -278,7 +277,7 @@ func TestMissingIndexReasonNamesTheFix(t *testing.T) {
 	if !ok {
 		t.Fatalf("serena.search was not dropped: %+v", constraints.Dropped)
 	}
-	for _, want := range []string{"atenea detect", "atenea ask repository.index --repo api"} {
+	for _, want := range []string{"atenea detect", "indexed externally"} {
 		if !strings.Contains(reason, want) {
 			t.Errorf("reason %q does not mention %q", reason, want)
 		}
@@ -330,7 +329,7 @@ func TestNoVCSDisqualifiesAnImplementationThatRequiresIt(t *testing.T) {
 		Repository: repo,
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
-			impl("codebase-memory.impact", needsVCS()),
+			impl("graph.impact", needsVCS()),
 		},
 	})
 	if err != nil {
@@ -354,12 +353,12 @@ func TestUnspecifiedVCSNeverDisqualifies(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: repo,
-		Candidates: []contract.Implementation{impl("codebase-memory.impact", needsVCS())},
+		Candidates: []contract.Implementation{impl("graph.impact", needsVCS())},
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if decision.Chosen.ID != "codebase-memory.impact" {
+	if decision.Chosen.ID != "graph.impact" {
 		t.Fatalf("chosen = %s", decision.Chosen.ID)
 	}
 }

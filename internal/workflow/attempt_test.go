@@ -192,7 +192,10 @@ func TestARedoneStepFilesTheAttemptItReplaced(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		// Let the stub enter its long-running branch before cutting it. The
+		// race detector and the full repository suite can make process startup
+		// take more than a second.
+		time.Sleep(3 * time.Second)
 		cancel()
 	}()
 	cut, err := h.engine.Start(ctx, graph)
@@ -291,7 +294,9 @@ func TestAStepCutAtItsCeilingCannotBeRedone(t *testing.T) {
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		// Let the fast, judged step finish before cutting the slow sibling.
+		// Process startup on macOS can exceed a few hundred milliseconds.
+		time.Sleep(time.Second)
 		cancel()
 	}()
 	open, err := h2.engine.Start(ctx, graphOf(

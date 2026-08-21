@@ -264,7 +264,7 @@ func (r *Runner) ID() string { return "serena" }
 // nothing indexed yet (it opens an empty project rather than erring), so it
 // cannot serve as a readiness check, and there is no cheaper call that
 // answers "is this repository's index actually warm" the way index_status
-// answers it for codebase-memory. Detection skips a runner with nothing to
+// answers it for graph providers. Detection skips a runner with nothing to
 // probe rather than guess; indexed_by for serena stays exactly what the
 // settings file declares until a real probe exists to correct it.
 

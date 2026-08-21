@@ -211,10 +211,10 @@ func TestARequestShapedRefusalNeverCondemnsTheProvider(t *testing.T) {
 	for _, bin := range []string{"not_found", "permission_denied", "invalid_input", "canceled"} {
 		s := store(t, Options{})
 		for i := range 5 {
-			s.Record(broke(now.Add(time.Duration(i)*time.Second), "codebase-memory.overview",
+			s.Record(broke(now.Add(time.Duration(i)*time.Second), "graph.overview",
 				bin, bin+": the request could not be served"))
 		}
-		fault := faultOf(t, s, "codebase-memory.overview")
+		fault := faultOf(t, s, "graph.overview")
 		if fault.Streak != 0 {
 			t.Errorf("%s: streak = %d, want 0: the provider answered correctly every time",
 				bin, fault.Streak)

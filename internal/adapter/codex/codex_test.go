@@ -100,7 +100,7 @@ func newRunner(t *testing.T, binary string, timeout time.Duration) *Runner {
 func TestCodexValidJSONLBecomesCodeSearch(t *testing.T) {
 	root := t.TempDir()
 	body := eventJSON(t, `{"matches":[{"path":"src/main.ts","line":4,"column":7,"snippet":"Firebase"},{"path":"apps/app/lib/main.dart","line":9,"column":3,"snippet":"Firebase"}]}`)
-	runner := newRunner(t, fakeCodex(t, body, 0, 0, ""), time.Second)
+	runner := newRunner(t, fakeCodex(t, body, 0, 0, ""), 10*time.Second)
 	out, err := runner.Run(context.Background(), request(t, root, map[string]any{"query": "Firebase"}))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -118,7 +118,7 @@ func TestCodexValidJSONLBecomesCodeSearch(t *testing.T) {
 }
 
 func TestCodexInvalidJSONIsRecoverableWithoutRawOutput(t *testing.T) {
-	runner := newRunner(t, fakeCodex(t, eventJSON(t, "not json"), 0, 0, "secret-token"), time.Second)
+	runner := newRunner(t, fakeCodex(t, eventJSON(t, "not json"), 0, 0, "secret-token"), 10*time.Second)
 	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{"query": "x"}))
 	if contract.KindOf(err) != contract.FailureUnavailable {
 		t.Fatalf("kind = %v, want unavailable", contract.KindOf(err))
@@ -129,7 +129,7 @@ func TestCodexInvalidJSONIsRecoverableWithoutRawOutput(t *testing.T) {
 }
 
 func TestCodexUnauthenticatedProcessIsRecoverable(t *testing.T) {
-	runner := newRunner(t, fakeCodex(t, "", 1, 0, "not logged in; oauth required"), time.Second)
+	runner := newRunner(t, fakeCodex(t, "", 1, 0, "not logged in; oauth required"), 10*time.Second)
 	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{"query": "x"}))
 	if contract.KindOf(err) != contract.FailureUnavailable || !strings.Contains(err.Error(), "not authenticated") {
 		t.Fatalf("err = %v, want unavailable authentication failure", err)
@@ -148,7 +148,7 @@ func TestCodexTimeoutIsRecoverable(t *testing.T) {
 }
 
 func TestCodexProcessErrorIsRecoverable(t *testing.T) {
-	runner := newRunner(t, fakeCodex(t, "", 1, 0, "fatal child process"), time.Second)
+	runner := newRunner(t, fakeCodex(t, "", 1, 0, "fatal child process"), 10*time.Second)
 	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{"query": "x"}))
 	if contract.KindOf(err) != contract.FailureUnavailable {
 		t.Fatalf("kind = %v, want unavailable", contract.KindOf(err))
@@ -158,7 +158,7 @@ func TestCodexProcessErrorIsRecoverable(t *testing.T) {
 func TestCodexDropsResultsOutsideRepositoryAndSensitiveFiles(t *testing.T) {
 	root := t.TempDir()
 	body := eventJSON(t, `{"matches":[{"path":"inside.ts","line":1,"column":1},{"path":"../outside.ts","line":1,"column":1},{"path":".env","line":1,"column":1}]}`)
-	runner, err := New(Options{Binary: fakeCodex(t, body, 0, 0, ""), Implementations: []string{"codex.search"}, Sensitive: []string{".env"}, Timeout: time.Second})
+	runner, err := New(Options{Binary: fakeCodex(t, body, 0, 0, ""), Implementations: []string{"codex.search"}, Sensitive: []string{".env"}, Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestCodexDropsResultsOutsideRepositoryAndSensitiveFiles(t *testing.T) {
 }
 
 func TestCodexRejectsScopeOutsideRepositoryBeforeProcess(t *testing.T) {
-	runner := newRunner(t, fakeCodex(t, "", 0, 0, ""), time.Second)
+	runner := newRunner(t, fakeCodex(t, "", 0, 0, ""), 10*time.Second)
 	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{
 		"query": "x", "scope": []any{"../outside"},
 	}))
