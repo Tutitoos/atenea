@@ -22,7 +22,9 @@ git diff --check
 echo "[2/8] active codebase-memory references"
 if rg -n -i 'codebase.?memory|codebase_memory' \
 	--glob '!docs/content/measuring-the-wrong-process.md' \
-	--glob '!docs/content/not-built-yet.md' .; then
+	--glob '!docs/content/not-built-yet.md' \
+	--glob '!docs/content/v1-readiness.md' \
+	--glob '!scripts/v1-readiness.sh' .; then
 	echo "codebase-memory must not be active" >&2
 	exit 1
 fi
