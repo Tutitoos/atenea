@@ -3,9 +3,11 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -55,6 +57,24 @@ func TestResolveConfigIncludesKivgraphViewer(t *testing.T) {
 	}
 }
 
+func TestDashboardCatalogRejectsMissingAndDuplicateDeclarations(t *testing.T) {
+	if _, err := ResolveConfig(config.Config{}, "kivgraph"); err == nil || !strings.Contains(err.Error(), "no dashboard") {
+		t.Fatalf("missing Kivgraph dashboard error = %v", err)
+	}
+	servers := []config.MCPServer{
+		{ID: "same", Dashboard: "http://127.0.0.1:1"},
+		{ID: "same", Dashboard: "http://127.0.0.1:2"},
+	}
+	if _, err := All(servers); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("duplicate dashboard error = %v", err)
+	}
+	cfg := config.Config{MCPServers: []config.MCPServer{{ID: KivgraphID, Dashboard: "http://127.0.0.1:1"}}}
+	cfg.Orchestrator.Kivgraph.Dashboard = "http://127.0.0.1:2"
+	if _, err := AllConfig(cfg); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("Kivgraph alias conflict = %v", err)
+	}
+}
+
 func TestCheckAcceptsLiveNon5xxDashboard(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -62,6 +82,19 @@ func TestCheckAcceptsLiveNon5xxDashboard(t *testing.T) {
 	defer server.Close()
 	if err := Check(context.Background(), server.URL); err != nil {
 		t.Fatalf("Check: %v", err)
+	}
+}
+
+func TestCheckRejectsServerErrorsAndMalformedURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	if err := Check(context.Background(), server.URL); err == nil || !strings.Contains(err.Error(), "502") {
+		t.Fatalf("server error = %v", err)
+	}
+	if err := Check(context.Background(), "://bad"); err == nil {
+		t.Fatal("malformed URL unexpectedly passed")
 	}
 }
 
@@ -94,6 +127,27 @@ func TestDiscoverSerenaMatchesTheActiveProject(t *testing.T) {
 	}
 }
 
+func TestDiscoverSerenaSkipsOtherProjects(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "atenea")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"active_project": map[string]string{"name": "other", "path": filepath.Join(t.TempDir(), "other")},
+		})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoverSerena(context.Background(), root, port, 1); err == nil || !strings.Contains(err.Error(), "no active Serena") {
+		t.Fatalf("missing project error = %v", err)
+	}
+}
+
 func TestPlanHostsPreservesForeignEntriesAndIsIdempotent(t *testing.T) {
 	existing := "127.0.0.1 localhost\n# a user entry\n127.0.0.1 old\n" +
 		managedBegin + "\n127.0.0.1 stale\n" + managedEnd + "\n"
@@ -118,5 +172,40 @@ func TestPlanHostsRejectsForeignAliasConflict(t *testing.T) {
 	_, err := PlanHosts("127.0.0.1 headroom\n", []Entry{{Alias: "headroom"}}, false)
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("err = %v, want alias conflict", err)
+	}
+}
+
+func TestPlanHostsRejectsMalformedBlocksAndDuplicateAliases(t *testing.T) {
+	if _, err := PlanHosts(managedBegin+"\n127.0.0.1 stale\n", nil, false); !errors.Is(err, ErrInvalidHosts) {
+		t.Fatalf("unterminated block error = %v", err)
+	}
+	_, err := PlanHosts("", []Entry{{Alias: "same"}, {Alias: "same"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("duplicate alias error = %v", err)
+	}
+}
+
+func TestPlanHostsKeepsUnremovedManagedEntriesAndHostsRoundTrip(t *testing.T) {
+	existing := managedBegin + "\n127.0.0.1 old\n" + managedEnd + "\n"
+	plan, err := PlanHosts(existing, []Entry{{Alias: "new"}}, false)
+	if err != nil {
+		t.Fatalf("PlanHosts: %v", err)
+	}
+	if !strings.Contains(plan.Content, "127.0.0.1 old") || !strings.Contains(plan.Content, "127.0.0.1 new") {
+		t.Fatalf("managed entries were not preserved:\n%s", plan.Content)
+	}
+	path := filepath.Join(t.TempDir(), "hosts")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHosts(path, plan.Content); err != nil {
+		t.Fatalf("WriteHosts: %v", err)
+	}
+	got, err := ReadHosts(path)
+	if err != nil {
+		t.Fatalf("ReadHosts: %v", err)
+	}
+	if got != plan.Content {
+		t.Fatalf("hosts round trip = %q, want %q", got, plan.Content)
 	}
 }
