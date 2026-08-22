@@ -120,6 +120,16 @@ the index command's final JSONL result. Both paths have unit coverage; impact in
 foreign repositories because its contract returns repository-relative paths
 without a repository field.
 
+The final workspace recheck also ran the official index command from the
+TaxiPrime workspace root. It completed as generation `000011` with 5 logical
+repositories, 656 files, 19,885 symbols, 72,034 edges and 5,080 unresolved
+references. `taxiprime-root` remains intentionally absent from the published
+graph: it is the aggregate workspace root, while Kivgraph registers the five
+logical repositories beneath it. Atenea therefore keeps `indexed_by=[]` for
+that aggregate target; marking it as ready would misrepresent the provider's
+repository model. The five logical repositories remain ready and provider
+backed.
+
 Tokensave `7.10.0` was installed from the official Homebrew tap, initialized
 for `/Users/gtrave/Documents/atenea`, and configured as an on-demand runner.
 Its live MCP server reported 11,586 nodes, 27,170 status edges and 311 files;

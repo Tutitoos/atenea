@@ -26,6 +26,9 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - Rechecked the read-only claude-mem matrix and the destructive MCP fixtures;
   no memory writes or real destructive actions were performed.
 - Passed the free OpenCode provider/MCP matrix in all six cases.
+- Refreshed the official Kivgraph index to generation `000011` for the five
+  registered TaxiPrime repositories. The aggregate `taxiprime-root` workspace
+  remains intentionally unregistered rather than being reported as ready.
 
 ## [1.0.0] - 2026-08-22
 

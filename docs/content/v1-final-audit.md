@@ -323,6 +323,25 @@ Headroom y Maestro, además del proceso `kivgraph-dashboard` en `ready`, mientra
 `dashboard serena` resuelve la URL dinámica por proyecto. Esta actualización
 local no era una publicación: no creaba commit, tag, push ni release.
 
+## Revalidación final del workspace — 2026-08-22
+
+La reindexación oficial de Kivgraph desde la raíz de TaxiPrime terminó con
+éxito en la generación `000011`: 5 repositorios lógicos, 656 archivos,
+19.885 símbolos, 72.034 edges y 5.080 referencias no resueltas. Los cinco
+repositorios registrados quedaron listos para consultas.
+
+`taxiprime-root` no se añadió al grafo publicado porque representa el
+workspace agregado, no un sexto repositorio lógico de Kivgraph. Atenea conserva
+correctamente `indexed_by=[]` para ese target y `detect` lo muestra como no
+listo con la explicación del provider. No se debe marcar artificialmente como
+`ready`: el resultado es una limitación de modelado intencional, no un fallo de
+la indexación de los repositorios reales.
+
+La diferencia entre los contadores de `repository.index` y `graph.status` se
+mantiene documentada: el primero describe relaciones producidas por el
+indexador y el segundo el grafo consultable publicado; no son métricas que
+deban sumarse.
+
 ## Publicación 1.0.0
 
 La publicación de `1.0.0` se realizó mediante el workflow `release.yml`. El

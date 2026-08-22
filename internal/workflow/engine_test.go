@@ -342,8 +342,21 @@ func TestAnInterruptedWriterWaitsForRedo(t *testing.T) {
 	go func() {
 		// Let the writer create its marker before cutting the long-running
 		// process; this test is about redo policy, not startup scheduling.
-		time.Sleep(time.Second)
-		cancel()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(runs); err == nil {
+				// The marker is written by the child before its long sleep;
+				// give the runner time to observe that child as active.
+				time.Sleep(250 * time.Millisecond)
+				cancel()
+				return
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}()
 	cut, err := h.engine.Start(ctx, graph)
 	if err == nil {
