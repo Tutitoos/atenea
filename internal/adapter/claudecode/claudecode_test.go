@@ -643,6 +643,19 @@ func TestAnEmptyQueryIsRefusedBeforeTheTurnStarts(t *testing.T) {
 	}
 }
 
+func TestAStreamEventKeepsTypeAndEnvelopeFields(t *testing.T) {
+	event, ok, err := parseStreamLine(`{"type":"result","total_cost_usd":1.25}`)
+	if err != nil || !ok {
+		t.Fatalf("parseStreamLine() = %#v, %v, %v; want a valid event", event, ok, err)
+	}
+	if event.Type != "result" || event.Envelope.Type != "result" {
+		t.Fatalf("types = %q and %q, want result", event.Type, event.Envelope.Type)
+	}
+	if event.Envelope.TotalCostUSD != 1.25 || !event.costSeen {
+		t.Fatalf("cost = %v, seen = %v; want 1.25, true", event.Envelope.TotalCostUSD, event.costSeen)
+	}
+}
+
 // The only thing about this adapter that cannot be checked by reasoning: that
 // the flags it builds still exist. A renamed flag is refused by argument
 // parsing before the turn starts, in plain text on stderr with no envelope --
