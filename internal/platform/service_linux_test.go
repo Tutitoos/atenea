@@ -57,6 +57,41 @@ func TestLinuxManagerSeparatesSuccessRefusalAndUnavailable(t *testing.T) {
 	}
 }
 
+func TestLinuxServiceActionsUseTheUserManager(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, filepath.Join(binDir, "systemctl"), `#!/bin/sh
+if [ "$2" = "show" ]; then
+  printf 'LoadState=loaded\nUnitFileState=enabled\nActiveState=active\nSubState=running\nDescription=Atenea\n'
+fi
+`)
+	writeExecutable(t, filepath.Join(binDir, "loginctl"), `#!/bin/sh
+printf 'Linger=yes\n'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+
+	service, err := NewService(filepath.Join(t.TempDir(), "atenea"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Install(); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	state, err := Query(service.Name)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if !state.Installed || !state.Enabled || !state.Active || !state.Linger || !strings.Contains(state.Detail, "Atenea: active (running)") {
+		t.Fatalf("service state = %+v", state)
+	}
+	if err := service.Uninstall(); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if _, err := os.Stat(service.Unit); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("unit after uninstall: %v", err)
+	}
+}
+
 func TestLinuxWriteUnitAndDiskFailures(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "systemd", "user", "atenea.service")
@@ -88,5 +123,12 @@ func TestLinuxWriteUnitAndDiskFailures(t *testing.T) {
 	}
 	if got := contract.KindOf(writeUnit(existingDir, "text")); got != contract.FailureUnavailable {
 		t.Fatalf("rename failure kind = %v", got)
+	}
+}
+
+func writeExecutable(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(text), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
