@@ -37,8 +37,17 @@ type client struct {
 
 func dial(t *testing.T) *client {
 	t.Helper()
-	conn, err := net.Dial("unix", core.SocketPath())
-	if err != nil {
+	deadline := time.Now().Add(10 * time.Second)
+	var conn net.Conn
+	var err error
+	for time.Now().Before(deadline) {
+		conn, err = net.Dial("unix", core.SocketPath())
+		if err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err != nil || conn == nil {
 		t.Fatalf("dial: %v", err)
 	}
 	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {

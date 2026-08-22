@@ -322,7 +322,10 @@ sleep 30
 	if answer.Text != "answer" {
 		t.Errorf("text = %q", answer.Text)
 	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
+	// The child is deliberately held for 30 seconds. Ten seconds leaves a
+	// generous margin for the race detector and loaded CI hosts while still
+	// proving the observed allowance stops the process well before that hold.
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
 		t.Fatalf("observed stop took %s", elapsed)
 	}
 }
