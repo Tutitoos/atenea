@@ -33,6 +33,59 @@ func TestSpecWithDefaultsZeroValueTransportIsHTTP(t *testing.T) {
 	}
 }
 
+func TestSupervisorPublicLifecycleAndStatus(t *testing.T) {
+	persistent := fakeSpec("persistent", Persistent, nil)
+	onDemand := fakeSpec("on-demand", OnDemand, nil)
+	sup, err := New(persistent, onDemand)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	endpoint, err := sup.Endpoint(persistent.ID)
+	if err != nil || endpoint == "" {
+		t.Fatalf("Endpoint = %q, %v", endpoint, err)
+	}
+	if _, err := sup.Endpoint("missing"); err == nil {
+		t.Fatal("Endpoint accepted an unknown server")
+	}
+	if got := len(sup.Status()); got != 2 {
+		t.Fatalf("initial status length = %d, want 2", got)
+	}
+
+	sup.WarmUp(ctx)
+	if _, err := sup.EnsureReady(ctx, persistent.ID); err != nil {
+		t.Fatalf("persistent EnsureReady: %v", err)
+	}
+	sup.Start(ctx)
+	sup.Start(ctx)
+	sup.Acquire(onDemand.ID)
+	sup.Release(onDemand.ID)
+	sup.Acquire("missing")
+	sup.Release("missing")
+	if got := sup.Status()[0].State; got != StateReady {
+		t.Fatalf("persistent state = %v, want ready", got)
+	}
+	sup.Stop()
+	sup.Stop()
+	if got := sup.Status()[0].State; got != StateStopped {
+		t.Fatalf("persistent final state = %v, want stopped", got)
+	}
+}
+
+func TestStateStringCoversKnownAndUnknownValues(t *testing.T) {
+	wants := map[State]string{
+		StateStopped: "stopped", StateStarting: "starting", StateReady: "ready",
+		StateRestarting: "restarting", StateDown: "down", State(255): "unknown",
+	}
+	for state, want := range wants {
+		if got := state.String(); got != want {
+			t.Errorf("State(%d).String() = %q, want %q", state, got, want)
+		}
+	}
+}
+
 // A stdio spec that also sets Host, Port or EndpointPath is almost always a
 // config mistake -- a stdio server listens on nothing -- and withDefaults
 // must say so rather than silently ignore fields that can never take
