@@ -1,7 +1,7 @@
 # Atenea
 
 An orchestration core for agents and MCP tooling that lives **outside** the CLIs
-it serves. omp, Claude Code and OpenCode all connect to the same core.
+it serves. omp, Claude Code, Codex and OpenCode all connect to the same core.
 
 > **Atenea decides and delegates, it does not execute.**
 > The flow is always `goal -> capability -> implementation`.
@@ -53,10 +53,11 @@ command exits `6` — a commission that failed, not a crash. On a machine with n
 client installed, set `runners = ["local"]` for the stand-in that searches the
 disk directly.
 
-Claude Code is the second client adapter. It is off by default because it is
-the only far side that costs money per call; `runners = ["omp", "claudecode"]`
-attaches both, and the funnel then ranks on cost, so a flat text search still
-goes to `ripgrep` and the model is kept for what only a model can answer.
+Claude Code and Codex are optional client adapters and are off by default because
+they may incur provider-side cost; `runners = ["omp", "claudecode", "codex"]`
+attaches them, and the funnel ranks the available implementations on cost and
+health, so a flat text search can still go to `ripgrep` when that is the best
+choice.
 
 Money is a permission, granted per commission and split between its steps:
 `budget_usd` under `[orchestrator]` is what one `task` may spend in total, not
@@ -71,11 +72,11 @@ because every implementation of it is a binary. `[orchestrator] effects =
 default so the P0 capability works out of the box; `--allow EFFECT` grants
 one more to a single commission.
 
-Symbols are the second family of capabilities: `symbol.definition`,
-`symbol.references`, `symbol.implementations` and `symbol.overview`. They are
-answered by Serena, which is not a CLI at all but an MCP server behind a local
-proxy, so the third adapter speaks JSON-RPC over HTTP instead of spawning a
-process.
+Symbols include `symbol.search`, `symbol.definition`, `symbol.references`,
+`symbol.implementations`, `symbol.overview`, `symbol.calls`,
+`symbol.consumers`, `symbol.get` and `symbol.unresolved`. Serena answers the
+language-server symbol operations over MCP; Kivgraph and Tokensave provide the
+graph-backed operations where an indexed repository is required.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
@@ -164,7 +165,7 @@ what the cut left half-written *before* accepting any work, and says so.
 ```text
 background
   rhythms      metrics.flush 30s, metrics.compact 1h, backup 6h
-  copies       1 of 5 kept in /home/tutitoos/.local/state/atenea-backups, newest 2026-08-02 21:26
+  copies       1 of 5 kept in ~/.local/state/atenea-backups
 ```
 
 ## Layout
@@ -223,12 +224,12 @@ Atenea leans on work other people did first. A thank-you, with a link to each:
 - Graph providers — repository symbol and relationship indexes exposed through MCP
 - [Semgrep](https://github.com/semgrep/semgrep) — static analysis
 - [Context7](https://github.com/upstash/context7) — version-accurate library documentation
-- [ToolHive](https://github.com/stacklok/toolhive) — isolation and lifecycle for shared MCP servers
 - [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) — browser diagnostics
 - [claude-mem](https://github.com/thedotmack/claude-mem) — persistent memory across sessions
 - [DuckDB](https://github.com/duckdb/duckdb) — the analytical store the measurement base runs on
 - [Hugo](https://github.com/gohugoio/hugo) and [hugo-book](https://github.com/alex-shpak/hugo-book) — these docs
 - [lefthook](https://github.com/evilmartians/lefthook) and [Air](https://github.com/air-verse/air) — the development loop
 
-That list is a human thank-you. What Atenea actually imports is in
-[`go.mod`](go.mod), which is the technical answer to the same question.
+That list is a human thank-you. The Go dependencies imported by Atenea are in
+[`go.mod`](go.mod); external CLIs, MCP servers and documentation tools are
+configured or installed separately.
