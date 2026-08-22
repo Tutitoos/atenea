@@ -17,9 +17,10 @@ records the evidence and the remaining provider-dependent limits. What landed is
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
-them in waves and reviews every answer. Four adapters ship: two client CLIs
-(`omp`, Claude Code) for text search, Serena over MCP for symbols, and
-graph providers for symbol navigation. Every
+them in waves and reviews every answer. Six native adapters ship: `omp`, Claude
+Code and Codex for client CLIs, Serena over MCP for symbols, and Kivgraph and
+Tokensave for graph/context operations. OpenCode is an optional model backend,
+not a native adapter. Every
 attempt is measured — time, tokens and peak memory, per capability and per
 implementation — into an embedded DuckDB base, and the funnel ranks on it:
 what a step cost on the way out is what decides who answers next time in.
@@ -172,8 +173,11 @@ background
 cmd/atenea/         entry point: the service and the operator commands
 internal/           the brain, not importable from outside
   adapter/claudecode/      the client adapter: translates for the Claude Code CLI
+  adapter/codex/            the client adapter: translates for the Codex CLI
+  adapter/kivgraph/         graph adapter: impact, indexing and structural queries
   adapter/omp/             the client adapter: translates for the omp CLI
   adapter/serena/          the symbol adapter: MCP over HTTP, positions to names and back
+  adapter/tokensave/        context and call adapter for the indexed repository
   checkpoint/              run receipts on disk
   clock/                   the one lane every background rhythm runs in
   config/                  the single settings file

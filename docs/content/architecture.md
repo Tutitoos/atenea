@@ -19,10 +19,10 @@ weight: 3
    |        Orchestrator (agent): explores,       |
    |        splits, dispatches, reviews           |
    +----------------------------------------------+
-       |            |            |            |
-    adapter      adapter      adapter      adapter     <- dumb translators
-       |            |            |            |
-      omp      Claude Code    Serena   graph providers
+       |       |       |       |       |       |
+    adapter adapter adapter adapter adapter adapter <- dumb translators
+       |       |       |       |       |       |
+      omp   Claude   Codex  Serena Kivgraph Tokensave
 ```
 
 ## Capability vs implementation
@@ -906,7 +906,7 @@ graph, which is the one thing neither a grep nor a language server keeps.
 adapter does not claim it — a fourth identical answer would only give the
 funnel one more thing to rank.
 
-All four adapters translate into the same six failure bins and the same output
+All native adapters translate into the same six failure bins and the same output
 shape. That is the whole point of the seam: the funnel above them ranks a tool
 call against a model turn against a language server without knowing that any of
 them exists.

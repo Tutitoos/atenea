@@ -504,7 +504,7 @@ Three rules come with owning it, and each one is a check rather than a promise:
   prompt that tells them how to connect a provider.
 - **A client that changes its footer breaks a build.** The shape of that
   component — every string it draws, every field it reads, how many elements it
-  builds — is pinned in `testdata/opencode-footer.json` and compared against the
+  builds — is pinned in `internal/statusline/testdata/opencode-footer.json` and compared against the
   client installed on the machine. The pre-commit hook runs it here; a scheduled
   workflow installs the newest published client each morning and runs it there.
   When they add a line, that fails and names it, instead of the line quietly

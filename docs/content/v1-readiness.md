@@ -45,8 +45,7 @@ CI also applies a 75.0% global coverage floor. The latest local observation is
 75.2%; the floor is deliberately a regression barrier, not a claim that every
 semantic path is exhaustively covered.
 
-On 2026-08-22, Hugo `0.165.0` built `docs/` locally and generated 106 HTML and
-static files. `atenea wrap opencode --version` completed MCP handshakes for all
+On 2026-08-22, Hugo `0.165.0` built `docs/` locally without errors. `atenea wrap opencode --version` completed MCP handshakes for all
 8 configured team servers: 2 were declared directly and 6 were retained as
 raw or without a direct surface; no external tool was invoked.
 
@@ -141,7 +140,7 @@ with explicit test/index permissions, plus `symbol.unresolved` through
 Kivgraph, a large-file `symbol.overview` through Tokensave, and
 `symbol.calls` through a real indexed symbol. Serena and Kivgraph alternative
 implementations also returned `ok`; `atenea detect --repo atenea` reached all
-8 configured MCP servers. Hugo `0.165.0` generated 106 documentation files.
+8 configured MCP servers. Hugo `0.165.0` built the documentation site successfully.
 The two minimal Claude/Codex searches used the configured budget; the OpenCode
 matrix used the configured free models. The release workflow and post-release
 smoke also passed.

@@ -23,7 +23,7 @@ cobertura de código ni una promesa de compatibilidad universal.
 | Estado, trazas y almacenamiento | DuckDB, checkpoints, métricas, notebook, backups y trace store implementados | Suite de `trace`, `metrics`, `checkpoint`, `backup`, `notebook` y gate | 95% | Sin bloqueo técnico identificado |
 | Tests y CI | CI multi-arquitectura, lint, race, coverage y readiness workflows declarados | Suite funcional completa, `vet`, build, policy, Hugo, matriz de capabilities, OpenCode 6/6 y `-race` completo; readiness 9/9 en copia limpia | 99% | La cobertura y compatibilidad universal de proveedores siguen siendo límites deliberados |
 | Instalación y release | Installer checksum, update, rollback, uninstall y workflows de release | `bash scripts/release-smoke.sh 1.0.0` pasó en macOS arm64; el release público `1.0.0` y sus cuatro artefactos pasan el gate de publicación | 100% | Los artefactos del viewer Kivgraph se distribuyen aparte |
-| Documentación | Arquitectura, settings, operaciones, contratos, política y readiness presentes | Anclas de política, Hugo `0.165.0` local y 106 archivos generados; referencias operativas actualizadas tras `1.0.0` | 100% | El módulo docs no pasa `go mod tidy` sin eliminar la dependencia indirecta de Hugo |
+| Documentación | Arquitectura, settings, operaciones, contratos, política y readiness presentes | Anclas de política, Hugo `0.165.0` local y build del sitio correcto; referencias operativas actualizadas tras `1.0.0` | 100% | El módulo docs no pasa `go mod tidy` sin eliminar la dependencia indirecta de Hugo |
 | **Repositorio Atenea** | El núcleo funcional y sus contratos están implementados | Suite funcional, `vet`, build, policy, Hugo, race completo, matriz ampliada, OpenCode 6/6 y publicación `1.0.0` | **99%** | Quedan límites de cobertura del grafo y compatibilidad universal de proveedores externos |
 
 ## Herramientas y MCP externos
@@ -208,7 +208,7 @@ Kivgraph se recompiló con LadybugDB `v0.13.1` y expone
 `get_unresolved_references`; el overlay global ya lo anuncia y la capability
 responde `ok`. Tokensave conserva su índice oficial y el adapter particiona por
 `kinds` las respuestas grandes, fusionando y deduplicando 45 símbolos reales.
-Hugo `0.165.0` quedó instalado y generó 106 archivos de documentación. La
+Hugo `0.165.0` quedó instalado y construyó correctamente el sitio de documentación. La
 matriz completa de 13 capabilities activas pasó; `code.impact` y
 `repository.index` ya están en el catálogo y pasaron ejecución real con permisos explícitos.
 
