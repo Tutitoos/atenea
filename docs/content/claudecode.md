@@ -30,3 +30,11 @@ not the headless `claude -p` contract.
 Use `atenea wrap claude ...` when Claude Code should consume Atenea's checked
 MCP configuration. The wrapper is ephemeral and does not rewrite the client's
 configuration files.
+
+## Current audit status
+
+On 2026-08-22 the authenticated CLI was rechecked against `taxiprime-backend`
+with the configured `0.25 USD` budget and `90s` timeout. Claude Code stopped at
+its spending ceiling and returned no accepted search result; the provider
+reported `0.310367 USD` observed usage. It remains an optional provider, and
+the audit did not increase either the budget or the timeout.

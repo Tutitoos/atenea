@@ -22,8 +22,8 @@
 // # Two versions, one far side
 //
 // This package is named for the binary that answers on this machine,
-// `kivgraph` 0.2.1. Its upstream lineage is ladygraph, and several shapes in
-// here were first measured against ladygraph v0.5.1: where a comment names
+// `kivgraph` 0.2.1. Several shapes here were first measured against the
+// predecessor-compatible Kivgraph v0.5.1: where a comment names
 // one version or the other, it is saying which server that fact was measured
 // on, not which one is required. Three of those facts differ between the
 // two, and every one of them is decoded both ways rather than picked by
@@ -39,7 +39,7 @@
 //
 // A fresh `kivgraph serve` with no config scaffolds an empty config and
 // publishes an empty graph, and answers every query with nothing --
-// successfully, isError:false, zero counts. Measured against ladygraph v0.5.1: this is
+// successfully, isError:false, zero counts. Measured against Kivgraph v0.5.1: this is
 // the actual failure mode, not a hypothetical one, and it looks nothing like
 // an error. Every one of the four capabilities below pays for one
 // graph_status call before trusting any other answer (checkGraphReady), and
@@ -446,7 +446,7 @@ func (r *Runner) repositoryInPlay(req contract.RunRequest) (string, error) {
 }
 
 // statusResult is graph_status's single-object "results", measured live
-// against ladygraph v0.5.1: unlike the other three tools this is one object, not a
+// against Kivgraph v0.5.1: unlike the other three tools this is one object, not a
 // list. storage and worker are deliberately not decoded here: both read
 // "not_applicable" on a healthy server that only ever reads its own
 // published snapshot rather than opening the database itself, so keying
@@ -502,7 +502,7 @@ func (r *Runner) fetchStatus(ctx context.Context, sess *mcpstdio.Session) (*stat
 
 // checkGraphReady is the guard every capability shares: before any tool's
 // answer is trusted, the graph itself has to be real. kivgraph's own
-// failure mode, measured against ladygraph v0.5.1, is not an error -- it is
+// failure mode, measured against Kivgraph v0.5.1, is not an error -- it is
 // isError:false with every count at zero, an empty config's empty answer to
 // any question at all -- so this inspects the decoded payload rather than
 // sniffing text, and refuses before a caller ever sees a VerdictOK built on
@@ -585,14 +585,14 @@ func normalizeRepoPath(p string) string {
 
 // consumerRecord is one row of find_cross_repo_consumers' own
 // CrossRepoConsumerSummary (internal/mcp/tools/find_cross_repo_consumers.go
-// in the upstream ladygraph source, v0.5.1), narrowed to the fields this adapter
+// in the upstream Kivgraph source, v0.5.1), narrowed to the fields this adapter
 // maps into the declared output. category and confidence are always set;
 // the consuming file in particular is absent for a package-level row --
 // see runConsumers.
 //
 // The repository and the file arrive under two different names on the two
 // servers this adapter was measured against, so both are decoded and
-// repositoryName/consumerPath pick whichever was filled: ladygraph v0.5.1 sets
+// repositoryName/consumerPath pick whichever was filled: Kivgraph v0.5.1 sets
 // consumer_repository_key ("repository:backend") and consumer_file_path,
 // kivgraph 0.2.1 sets a bare repository ("admin.kena.lan") and file_path.
 // Reading only one pair answers with an empty repository on the other
@@ -634,7 +634,7 @@ type consumerAnswer struct {
 }
 
 // consumerRows is find_cross_repo_consumers' "results" in either measured
-// shape: ladygraph v0.5.1 answers with the bare list of rows every neighboring tool
+// shape: Kivgraph v0.5.1 answers with the bare list of rows every neighboring tool
 // returns, kivgraph 0.2.1 wraps it as {"subject": {...}, "consumers":
 // [...]} -- the subject being the symbol the stable_key named, which this
 // adapter already knows because it is the one that resolved it, and so
@@ -1114,7 +1114,7 @@ func parentOf(decl outlineDeclaration) (string, bool) {
 }
 
 // outlineDeclaration is one row of get_file_outline: a declaration's span
-// and the stable_key that names it, measured live against ladygraph v0.5.1.
+// and the stable_key that names it, measured live against Kivgraph v0.5.1.
 type outlineDeclaration struct {
 	Name          string `json:"name"`
 	QualifiedName string `json:"qualified_name"`
@@ -1129,12 +1129,12 @@ type outlineDeclaration struct {
 // repository, languages, packages, counts -- and the declarations hang off
 // it. Decoding it as a list of rows, the shape the neighbors use, costs
 // nothing at compile time and fails on the wire with "cannot unmarshal
-// object into ... []outlineDeclaration": measured against ladygraph v0.5.1, and only
+// object into ... []outlineDeclaration": measured against Kivgraph v0.5.1, and only
 // caught by asking the real server.
 //
 // Where the declarations hang off it differs between the two servers this
 // adapter was measured against, which is why both fields are decoded and
-// declarations() joins them: ladygraph v0.5.1 puts them directly under "symbols",
+// declarations() joins them: Kivgraph v0.5.1 puts them directly under "symbols",
 // kivgraph 0.2.1 groups them per file under "files":[{"path":...,
 // "symbols":[...]}] -- one file per answer in practice, since this adapter
 // only ever asks about one. Reading only "symbols" against 0.2.1 decodes
@@ -1343,9 +1343,9 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 	return key, notes, nil
 }
 
-// stableKeyOf is the second hop kivgraph 0.2.1 forces and ladygraph v0.5.1 does not.
+// stableKeyOf is the second hop Kivgraph 0.2.1 forces and Kivgraph v0.5.1 does not.
 //
-// ladygraph v0.5.1 carries a stable_key on every outline row, so the position
+// Kivgraph v0.5.1 carries a stable_key on every outline row, so the position
 // resolved above is already an address and this returns it untouched. 0.2.1
 // carries none -- measured: its outline rows hold name, kind, signature,
 // exported, start_line, end_line, and a qualified_name only for methods --
@@ -1438,7 +1438,7 @@ type symbolRecord struct {
 }
 
 // getSymbolAnswer is get_symbol's envelope. Unlike every other tool here its
-// "results" is a single object, not a list -- confirmed live against ladygraph v0.5.1
+// "results" is a single object, not a list -- confirmed live against Kivgraph v0.5.1
 // -- and nil exactly when the key names nothing the far side could resolve.
 type getSymbolAnswer struct {
 	Results *symbolRecord `json:"results"`
@@ -1647,7 +1647,7 @@ func repositoryNameFromKey(key string) string {
 // unchanged: re-reading its own text would be the adapter guessing about
 // itself. kivgraph's own
 // isError text is the exception worth a rule of its own: every refusal
-// measured against ladygraph v0.5.1 takes the form "UPPERCASE_CODE: message"
+// measured against Kivgraph v0.5.1 takes the form "UPPERCASE_CODE: message"
 // (SYMBOL_NOT_FOUND, ...), and a caller passing a stale or mistyped
 // stable_key must land in contract.FailureNotFound, never
 // contract.FailureUnavailable -- that bin drives provider health to down and

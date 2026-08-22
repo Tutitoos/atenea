@@ -100,3 +100,10 @@ filters configured sensitive paths, rejects scopes outside the repository, and
 drops returned matches that are outside the requested scope. It intentionally
 omits file content from returned `snippet` fields, so Codex cannot expose a
 secret or sensitive source fragment through the search result.
+
+## Current audit status
+
+On 2026-08-22 the authenticated `codex-cli 0.149.0` binary was rechecked
+against `taxiprime-backend` with the configured `0.25 USD` budget and `90s`
+timeout. The minimal `code.search` call reached the timeout without a result.
+Codex remains optional; no timeout or budget was increased.

@@ -1104,7 +1104,7 @@ before the floor existed. Nothing was written.
 
 ## A sixteenth instrument: four fixtures that encoded the belief and then confirmed it
 
-Measured on 2026-08-14, building the Ladygraph provider into Atenea: a stdio-MCP
+Measured on 2026-08-14, building the Kivgraph provider into Atenea: a stdio-MCP
 transport, an adapter, four capabilities, and a unit-test suite written alongside
 all three. Every package was green. `go test ./... -race` passed. Then the thing
 was pointed at the real server for the first time and four defects fell out in a
@@ -1116,7 +1116,7 @@ the surface is different each time:
 1. **`core.guardedRunner` swallowed an optional interface.** It embeds
    `contract.Runner` — an interface, so only that method set is promoted.
    `contract.IndexProber` is optional and found by type assertion, and the
-   assertion fails on the wrapper. Ladygraph is the first supervised runner that
+   assertion fails on the wrapper. Kivgraph is the first supervised runner that
    also probes, so it reported no index for a graph it was holding, with no error
    anywhere. The tests for the adapter's own `ProbeIndex` all passed: they called
    it directly, which is the one path production never takes.
@@ -1154,7 +1154,7 @@ call.
 
 The corrective is not more tests. It is one call to the real thing before the
 fixtures are written down: five minutes of a JSON-RPC driver over
-`ladygraph serve`'s stdin printed the exact envelopes, and every one of the four
+`kivgraph serve`'s stdin printed the exact envelopes, and every one of the four
 would have been impossible to write. The fixtures that shipped were rewritten
 from those payloads afterwards, which is the same work in the correct order. The
 ordering is the whole finding — the shapes were measurable at any point, and were

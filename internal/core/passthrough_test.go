@@ -20,8 +20,9 @@ import (
 // fakeBackend is a declared server: it answers a handshake, lists one tool
 // with a schema of its own, and echoes the arguments it was called with.
 type fakeBackend struct {
-	mu    sync.Mutex
-	calls []map[string]any
+	mu         sync.Mutex
+	calls      []map[string]any
+	extraTools []string
 }
 
 func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +49,11 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			`{"name":"semgrep_scan","description":"scan code",` +
 			`"inputSchema":{"type":"object","properties":{"code_files":{"type":"array"}},"required":["code_files"]}},` +
 			`{"name":"semgrep_fix","description":"rewrite findings","inputSchema":{"type":"object"}},` +
-			`{"name":"execute_shell_command","description":"run anything","inputSchema":{"type":"object"}}` +
-			`]}`
+			`{"name":"execute_shell_command","description":"run anything","inputSchema":{"type":"object"}}`
+		for _, name := range f.extraTools {
+			result += fmt.Sprintf(`,{"name":%q,"description":"mutating test tool","inputSchema":{"type":"object"}}`, name)
+		}
+		result += `]}`
 	case "tools/call":
 		f.mu.Lock()
 		f.calls = append(f.calls, msg.Params.Arguments)
@@ -226,6 +230,53 @@ func TestAToolOutsideTheAllowListIsRefusedWhenCalledAnyway(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.calls) != 0 {
 		t.Errorf("the backend was reached %d times by a tool nobody allowed", len(fake.calls))
+	}
+}
+
+// Destructive tools are represented by fixtures only. The client has no
+// effect grant in this test, so write, external and process calls must all be
+// refused before the fake backend receives a tools/call request.
+func TestDestructiveRawEffectsAreDeniedBeforeExecution(t *testing.T) {
+	fake := &fakeBackend{extraTools: []string{"send_message", "install_package"}}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	settings := rawSettings(t, backend.URL)
+	settings = strings.Replace(settings, "[orchestrator]\n", "[orchestrator]\nclient_effects = []\n", 1)
+	settings = strings.Replace(settings, `tools = ["semgrep_scan", "semgrep_fix"]`,
+		`tools = ["semgrep_scan", "semgrep_fix", "send_message", "install_package"]`, 1)
+	settings += `
+  [[mcp_server.tool]]
+  name = "send_message"
+  effects = ["external"]
+
+  [[mcp_server.tool]]
+  name = "install_package"
+  effects = ["process"]
+`
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	for _, tool := range []string{
+		"raw.semgrep.semgrep_fix",
+		"raw.semgrep.send_message",
+		"raw.semgrep.install_package",
+	} {
+		got := result(t, c.call("tools/call", map[string]any{
+			"name": tool, "arguments": map[string]any{},
+		}), "tools/call")
+		if got["isError"] != true {
+			t.Errorf("destructive tool %s was executed: %v", tool, got)
+		}
+		if text := answerText(got); !strings.Contains(text, "may not authorize") {
+			t.Errorf("refusal for %s = %q, want an effect denial", tool, text)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Errorf("destructive tools reached backend %d time(s)", len(fake.calls))
 	}
 }
 

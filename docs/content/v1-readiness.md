@@ -61,8 +61,9 @@ device action; the later provider validation is recorded below.
 Claude Code and Codex remain optional provider surfaces. The earlier minimal
 `code.search` for `CapabilityIndex` passed through each wrapper within the
 configured `0.25 USD` ceiling: Claude reported `0.210193 USD` and Codex did
-not report monetary usage. In the later external-target recheck, Codex again
-passed while Claude Code reached its 90-second timeout. The MCP health display
+not report monetary usage. In the latest external-target recheck, Claude Code
+reached its spending ceiling with `0.310367 USD` observed usage and Codex
+reached its 90-second timeout. The MCP health display
 remains on-demand by design; a handshake proves reachability, not the behavior
 of every raw tool.
 
@@ -194,10 +195,13 @@ is Atenea, which is the expected scope boundary. claude-mem answered but its
 structural search found no symbols in the TypeScript target and its outline
 could not parse `server.ts`.
 
-The optional model providers were also exercised against `taxiprime-backend`:
-Codex returned a correct `code.search` result in 78.6 seconds with no monetary
-usage reported by its CLI; Claude Code reached its configured 90-second timeout.
-Neither result changes the core readiness gate. The external calls did not
+The optional model providers were also exercised again against
+`taxiprime-backend` with the existing `0.25 USD` budget and `90s` timeout.
+Claude Code was authenticated but stopped at its spending ceiling; the
+provider reported `0.310367 USD` observed usage, including `0.060367 USD`
+above the requested ceiling, and returned no search result. Codex reached its
+`90s` timeout on this run. Neither result changes the core readiness gate. The
+external calls did not
 index repositories, launch apps, open a persistent browser, or perform
 mutating device/MCP operations.
 

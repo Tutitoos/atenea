@@ -785,7 +785,7 @@ the set.
 
 ## A second code graph, built, declared, and still unjustified — 2026-08-14
 
-Ladygraph — a code knowledge graph with its own persistent store — was cloned,
+Kivgraph — a code knowledge graph with its own persistent store — was cloned,
 source-built and evaluated on this machine for one hour, and then, later the same
 day, built into Atenea as a structural provider. Both halves of that sentence are
 true and neither cancels the other: **the plumbing is finished and the
@@ -815,17 +815,17 @@ tokens of nothing, forever.
 
 **It was not a declaration, and that is precisely what got built.** The three
 existing providers are one HTTP-MCP server (serena) and two per-call CLIs (omp,
-the legacy graph backend). Ladygraph's `serve` is a persistent **stdio** MCP server — a
+the legacy graph backend). Kivgraph's `serve` is a persistent **stdio** MCP server — a
 third transport shape Atenea did not have. That shape now exists:
 `internal/mcpstdio` (one session per child, `initialize` then `tools/call` over
 its stdin and stdout), `supervisor.TransportStdio` carrying it over the same
 restart-limit, on-demand and idle-reaper machinery the HTTP process blocks
-already used, and `internal/adapter/ladygraph` on top of both. This paragraph
+already used, and `internal/adapter/kivgraph` on top of both. This paragraph
 predicted a build rather than a config line, and it was right. That was a reason
 to hesitate, never a reason it could not be done.
 
 **Then it was measured, which is the third ground.** The graph was built by hand —
-`ladygraph init` + `index --full` over taxiprime, no Atenea in the middle — and
+`kivgraph init` + `index --full` over taxiprime, no Atenea in the middle — and
 asked the real question over `serve`'s stdio. A full index of four disjoint
 repositories takes **4.07 s**, peak RSS **~794 MB**, and publishes 3,068 symbols /
 14,753 nodes / 26,194 edges into a 22 MB `graph.db`. The state directory reports
@@ -855,7 +855,7 @@ prose). That edge cannot be indexed here because:
    asked for is not expressible at all.
 2. **No project.** `migration/` has a named `package.json` but no `tsconfig`, so
    its `ProjectPath` is empty and `internal/indexer/full.go:449` skips it by
-   design — Ladygraph refuses to guess the root `tsconfig` (ADR 0009). The warning
+   design — Kivgraph refuses to guess the root `tsconfig` (ADR 0009). The warning
    it prints, `declares no package`, is loose wording for "declares no project".
 
 The resolver itself is not the problem: `ts-worker`'s `cross-repository` suite
@@ -863,7 +863,7 @@ passes, five tests. The capability works; this codebase never presents a case it
 can index.
 
 **Dart does not show up at all: 231 files, zero symbols, a registry entry with no
-coverage.** Ladygraph is a graph for Go and TypeScript, with a Rust loader.
+coverage.** Kivgraph is a graph for Go and TypeScript, with a Rust loader.
 Registering `app` succeeds, indexing it reports `app declares no package, so it
 contributes nothing`, and the published graph holds not one Dart symbol. For
 taxiprime — whose client *is* the Flutter app — that single line decides the
@@ -880,10 +880,10 @@ returns `FailureUnavailable` instead of an empty success.
 
 Proven by causing the trap rather than reasoning about it: the same binary, run
 with an isolated `HOME`, which is exactly what makes `serve` scaffold an empty
-graph. All four capabilities fail with `unavailable: ladygraph has no published
+graph. All four capabilities fail with `unavailable: kivgraph has no published
 graph to answer from (status "empty")`, and `detect` reports every repository
 `not ready` with that same sentence. A repository merely absent from a healthy
-graph reads differently and correctly — `ladygraph's published graph does not
+graph reads differently and correctly — `kivgraph's published graph does not
 include repository /home/tutitoos/Desktop/atenea` — and the funnel drops the
 implementation by name rather than answering empty. Down provider, not a
 repository with no matches, as required.
@@ -897,15 +897,15 @@ and the drift is invisible because both copies look authoritative. Read the file
 
 Four `[[capability]]` blocks — `symbol.consumers`, `symbol.get`,
 `symbol.unresolved`, `graph.status` — and four `[[implementation]]` blocks —
-`ladygraph.cross_repo_consumers`, `ladygraph.get`,
-`ladygraph.unresolved_references`, `ladygraph.status`, every one
-`requires_index = true` — plus `[orchestrator.ladygraph]`. The orchestrator's
+`kivgraph.cross_repo_consumers`, `kivgraph.get`,
+`kivgraph.unresolved_references`, `kivgraph.status`, every one
+`requires_index = true` — plus `[orchestrator.kivgraph]`. The orchestrator's
 compiled card in `internal/orchestrator/orchestrator.go` names all four; without
 that the catalog, the funnel and a live runner can all be ready and the ask is
 still refused with `agent orchestrator may not ask for …`.
 
 **Shipped unattached, deliberately.** `runners = ["omp"]` is unchanged and
-`[orchestrator.ladygraph.process]` ships commented out, the same way serena's own
+`[orchestrator.kivgraph.process]` ships commented out, the same way serena's own
 process block does, because `command` is an absolute path that exists on this
 machine and no other. Uncommenting it is a per-machine decision, not a compiled
 default.
@@ -924,7 +924,7 @@ optional; and `get_file_outline` returns an object whose declarations hang off
 (`file`, `line`, `column`) and never takes a `stable_key`, even though
 `find_cross_repo_consumers` requires one. A capability whose required input only
 one provider can mint is not a capability, it is a tool passthrough: no language
-server and no path-shape matcher can produce a Ladygraph stable key, so declaring
+server and no path-shape matcher can produce a Kivgraph stable key, so declaring
 it would make the capability permanently unimplementable by anyone else and
 unreachable for the caller who has a file and a line, which is what callers
 actually hold. The adapter pays the resolution instead — `get_file_outline`,
@@ -938,26 +938,26 @@ than folding into `catalog.graph_status`. Transport is the shared persistent
 stdio server, one for the machine, as drafted — per-call spawning was rejected
 because it pays a graph open on every request.
 
-**Adapter:** `internal/adapter/ladygraph`, one `initialize` then a `tools/call`
+**Adapter:** `internal/adapter/kivgraph`, one `initialize` then a `tools/call`
 per request over the child's stdio, mapping `symbol.consumers →
 find_cross_repo_consumers`, `symbol.get → get_symbol`, `symbol.unresolved →
 get_unresolved_references`, `graph.status → graph_status`. The binary is the
 checkout-independent build at
-`~/.local/opt/ladygraph-eval/v0.5.1/bin/ladygraph`.
+`~/.local/opt/kivgraph-eval/v0.5.1/bin/kivgraph`.
 
 **One prerequisite that fails silently, learned the hard way.** That install is
-Go-only: it ships no `ladygraph-ts-worker`, and `version --json` reports
+Go-only: it ships no `kivgraph-ts-worker`, and `version --json` reports
 `"node": null, "typescript": null` to say so. Indexing any TypeScript repository
 without a worker on `PATH` dies with `decode TypeScript facts: unexpected end of
 JSON input` — not "worker missing". A worker must dispatch `facts …` to
 `ts-worker/dist/facts-cli.js` and everything else to `dist/index.js`, which is a
 `hello`-only probe; pointing the whole command at `index.js` produces exactly the
 same misleading JSON error. Any launcher written for it must not hardcode a path
-into `~/Desktop/ladygraph`, which is what makes the install checkout-independent
+into `~/Desktop/kivgraph`, which is what makes the install checkout-independent
 in the first place.
 
 **What it costs today: nothing — and the baseline no longer describes it.**
-`~/fixed-cost-ladygraph-base.json` was measured against the draft's schemas with
+`~/fixed-cost-kivgraph-base.json` was measured against the draft's schemas with
 the provider attached, and predicted omp +736. The shipped schemas are leaner,
 the provider ships unattached, and this machine's own
 `~/.config/atenea/atenea.toml` is a complete catalog that does not name the four:
