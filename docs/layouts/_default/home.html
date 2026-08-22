@@ -1,0 +1,21 @@
+{{ define "main" }}
+  <article class="home-page">
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="eyebrow">Local orchestration for coding agents</p>
+        <h1>Decide what should happen. Delegate who does it.</h1>
+        <p class="hero-lede">Atenea is the orchestration core that sits outside the CLIs it serves. It keeps capabilities stable while implementations, providers and health change underneath.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="{{ relref . "getting-started" }}">Get started <span>→</span></a>
+          <a class="button secondary" href="{{ relref . "architecture" }}">Read the architecture</a>
+        </div>
+        <div class="hero-proof"><span class="status-dot green"></span> contract 3.1.0 <span>·</span> Atenea 1.0.1 <span>·</span> local-first</div>
+      </div>
+      <div class="hero-diagram" aria-label="Atenea flow: goal to capability to implementation">
+        <span>goal</span><i>→</i><span>capability</span><i>→</i><span class="diagram-accent">implementation</span>
+        <small>constraints · reach · health · cost</small>
+      </div>
+    </section>
+    <div class="markdown home-content">{{ .Content }}</div>
+  </article>
+{{ end }}

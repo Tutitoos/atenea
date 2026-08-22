@@ -1,0 +1,7 @@
+{{ define "main" }}
+  {{ if hugo.Data.benchmarks.latest }}
+    {{ partial "benchmark-dashboard.html" . }}
+  {{ else }}
+    <article class="doc-page"><header class="page-heading"><p class="eyebrow">Evidence / reproducible runs</p><h1>{{ .Title }}</h1></header><div class="markdown">{{ .Content }}</div></article>
+  {{ end }}
+{{ end }}

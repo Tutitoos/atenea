@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Tutitoos/atenea/internal/metrics
+cpu: Apple M5
+BenchmarkFlushMeasurement-10    	      16	   7195930 ns/op	    5735 B/op	     165 allocs/op
+PASS
+ok  	github.com/Tutitoos/atenea/internal/metrics	0.880s

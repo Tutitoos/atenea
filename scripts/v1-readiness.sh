@@ -68,7 +68,7 @@ echo "[7/9] race suite"
 go test -race -count=1 ./...
 
 echo "[8/9] policy, load and provider entry points"
-bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/mcp-live-check.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh scripts/benchmark-check.sh scripts/load-check.sh scripts/provider-matrix-check.sh scripts/coverage-check.sh scripts/coverage-history-check.sh
+bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/mcp-live-check.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh scripts/benchmark-check.sh scripts/load-check.sh scripts/benchmark-suite.sh scripts/render-benchmark-docs.sh scripts/validate-benchmark-summary.sh scripts/provider-matrix-check.sh scripts/coverage-check.sh scripts/coverage-history-check.sh
 scripts/v1-policy-check.sh
 scripts/benchmark-check.sh
 scripts/load-check.sh

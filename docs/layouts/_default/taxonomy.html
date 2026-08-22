@@ -1,0 +1,7 @@
+{{ define "main" }}
+  <article class="doc-page">
+    {{ partial "breadcrumbs.html" . }}
+    <header class="page-heading"><p class="eyebrow">Atenea index</p><h1>{{ .Title }}</h1></header>
+    <div class="page-list">{{ range .Pages }}<a href="{{ .RelPermalink }}"><span>{{ .Title }}</span><small>{{ .Summary | plainify | truncate 140 }}</small></a>{{ end }}</div>
+  </article>
+{{ end }}

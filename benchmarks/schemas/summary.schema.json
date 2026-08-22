@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tutitoos.github.io/atenea/benchmarks/summary.schema.json",
+  "title": "Atenea benchmark summary",
+  "type": "object",
+  "required": [
+    "manifest",
+    "tests",
+    "coverage_percent",
+    "coverage_floor",
+    "coverage_target",
+    "suites",
+    "benchmarks",
+    "overall_status"
+  ],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "profile",
+        "generated_at",
+        "command",
+        "commit",
+        "source_dirty",
+        "environment"
+      ],
+      "properties": {
+        "environment": {
+          "type": "object",
+          "required": ["machine_model", "memory_gb", "os", "arch", "go", "logical_cpus"]
+        }
+      }
+    },
+    "coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "coverage_floor": {"type": "number", "minimum": 0, "maximum": 100},
+    "coverage_target": {"type": "number", "minimum": 0, "maximum": 100},
+    "overall_status": {"enum": ["GREEN", "ORANGE", "RED"]},
+    "suites": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/suite"}
+    },
+    "benchmarks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/benchmark"}
+    }
+  },
+  "$defs": {
+    "status": {"enum": ["GREEN", "ORANGE", "RED"]},
+    "suite": {
+      "type": "object",
+      "required": ["package", "discovered", "executed", "passed", "failed", "skipped", "coverage_percent", "pass_rate", "status"],
+      "properties": {
+        "package": {"type": "string", "minLength": 1},
+        "discovered": {"type": "integer", "minimum": 0},
+        "executed": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "coverage_percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "pass_rate": {"type": "number", "minimum": 0, "maximum": 100},
+        "status": {"$ref": "#/$defs/status"}
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["name", "category", "package", "command", "samples", "valid", "status"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "category": {"type": "string", "minLength": 1},
+        "package": {"type": "string", "minLength": 1},
+        "command": {"type": "string", "minLength": 1},
+        "samples": {"type": "integer", "minimum": 0},
+        "ns_per_op": {"type": "number", "exclusiveMinimum": 0},
+        "bytes_per_op": {"type": "number", "minimum": 0},
+        "allocs_per_op": {"type": "number", "minimum": 0},
+        "throughput_per_second": {"type": "number", "exclusiveMinimum": 0},
+        "profiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "valid": {"type": "boolean"},
+        "status": {"$ref": "#/$defs/status"}
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="{{ site.Home.RelPermalink }}">Atenea</a>{{ with .Section }}<span>/</span><span>{{ . | humanize }}</span>{{ end }}{{ if and (not .IsHome) (not .IsSection) }}<span>/</span><span aria-current="page">{{ .Title }}</span>{{ end }}</nav>

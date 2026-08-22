@@ -9,19 +9,146 @@ locale = "en-us"
 title = "Atenea"
 enableGitInfo = false
 
+[params]
+  description = "Atenea decides and delegates: a local orchestration core for agents and MCP tooling."
+  version = "1.0.1"
+  github = "https://github.com/Tutitoos/atenea"
+  BookTheme = "auto"
+  BookSearch = true
+  BookSection = "*"
+  BooktoC = true
+  BookRepo = "https://github.com/Tutitoos/atenea"
+
+[[menus.main]]
+  name = "Start here"
+  identifier = "start"
+  weight = 10
+[[menus.main]]
+  name = "Getting started"
+  pageRef = "getting-started"
+  parent = "start"
+  weight = 1
+[[menus.main]]
+  name = "Day to day"
+  pageRef = "day-to-day"
+  parent = "start"
+  weight = 2
+
+[[menus.main]]
+  name = "Understand"
+  identifier = "understand"
+  weight = 20
+[[menus.main]]
+  name = "Architecture"
+  pageRef = "architecture"
+  parent = "understand"
+  weight = 1
+[[menus.main]]
+  name = "v1 contracts"
+  pageRef = "v1-contracts"
+  parent = "understand"
+  weight = 2
+[[menus.main]]
+  name = "Context windows"
+  pageRef = "context-windows"
+  parent = "understand"
+  weight = 3
+[[menus.main]]
+  name = "What a capability is worth"
+  pageRef = "what-a-capability-is-worth"
+  parent = "understand"
+  weight = 4
+
+[[menus.main]]
+  name = "Operate"
+  identifier = "operate"
+  weight = 30
+[[menus.main]]
+  name = "Operations"
+  pageRef = "operations"
+  parent = "operate"
+  weight = 1
+[[menus.main]]
+  name = "Settings"
+  pageRef = "settings"
+  parent = "operate"
+  weight = 2
+[[menus.main]]
+  name = "Diagnosing providers"
+  pageRef = "diagnosing-providers"
+  parent = "operate"
+  weight = 3
+
+[[menus.main]]
+  name = "Providers"
+  identifier = "providers"
+  weight = 40
+[[menus.main]]
+  name = "Claude Code"
+  pageRef = "claudecode"
+  parent = "providers"
+  weight = 1
+[[menus.main]]
+  name = "Codex"
+  pageRef = "codex"
+  parent = "providers"
+  weight = 2
+
+[[menus.main]]
+  name = "Evidence"
+  identifier = "evidence"
+  weight = 50
+[[menus.main]]
+  name = "Benchmarks"
+  pageRef = "benchmarks"
+  parent = "evidence"
+  weight = 1
+[[menus.main]]
+  name = "Metrics"
+  pageRef = "benchmarks/metrics"
+  parent = "evidence"
+  weight = 2
+[[menus.main]]
+  name = "Test inventory"
+  pageRef = "benchmarks/test-inventory"
+  parent = "evidence"
+  weight = 3
+[[menus.main]]
+  name = "Benchmark catalog"
+  pageRef = "benchmarks/benchmark-catalog"
+  parent = "evidence"
+  weight = 4
+
+[[menus.main]]
+  name = "Project"
+  identifier = "project"
+  weight = 60
+[[menus.main]]
+  name = "v1 readiness"
+  pageRef = "v1-readiness"
+  parent = "project"
+  weight = 1
+[[menus.main]]
+  name = "Open questions"
+  pageRef = "open-questions"
+  parent = "project"
+  weight = 2
+[[menus.main]]
+  name = "What is not built yet"
+  pageRef = "not-built-yet"
+  parent = "project"
+  weight = 3
+[[menus.main]]
+  name = "Final audit"
+  pageRef = "v1-final-audit"
+  parent = "project"
+  weight = 4
+
 # The theme is pulled as a Hugo module, so there is no vendored copy to keep in
 # sync and no git submodule to forget to initialise.
 [module]
   [[module.imports]]
     path = "github.com/alex-shpak/hugo-book"
-
-[params]
-  BookTheme = "auto"
-  BookSearch = true
-  # The pages live at the root of content/, not under content/docs/.
-  BookSection = "*"
-  BooktoC = true
-  BookRepo = "https://github.com/Tutitoos/atenea"
 
 [markup.goldmark.renderer]
   unsafe = false
