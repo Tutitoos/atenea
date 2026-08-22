@@ -301,7 +301,7 @@ headline capability on day one does not teach caution, it teaches people to
 turn the default off.
 
 A chat opened by a client holds this list. That sentence is younger than the
-key: through `0.10.0` a chat opened holding nothing at all, so
+key: in the historical `0.10.0` behavior a chat opened holding nothing at all, so
 `client_effects` was a ceiling with no way to reach it, and a raw tool
 declaring anything beyond `read` was refused on every machine whatever this
 file said. Deleting the key still hands clients whatever `effects` says — the
@@ -1400,7 +1400,7 @@ recorded exactly like one that ran, because an attempt that was stopped is
 what an audit is looking for.
 
 That middle line was captured against a chat holding nothing beyond `read`,
-which through `0.10.0` was every chat there was. The same call on a machine
+which in the historical `0.10.0` behavior was every chat there was. The same call on a machine
 whose `client_effects` grants `process` now runs: the refusal was the ceiling
 being unreachable, not `semgrep_scan` being forbidden.
 

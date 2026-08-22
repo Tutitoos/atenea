@@ -1432,7 +1432,7 @@ without interruption from 08-13 11:50 through 08-15 04:08, the exact minute of t
 retirement of the provider, with no delete event anywhere in that window. The installed binary
 went from v0.8.1 (the README's own version) to v0.9.0 — the version running today, binary mtime
 07-08 — on the same calendar day v0.9.0 was officially released. `daemon.log` recorded a
-`0.10.0` handshake on 07-06, two days *before* v0.9.0 itself was released and over a month before
+historical `0.10.0` handshake on 07-06, two days *before* v0.9.0 itself was released and over a month before
 DeusData published any real v0.10.0; that entry was a local build carrying a version string
 ahead of any tag this project ever cut, not an official artifact this install downgraded from.
 Checked two sessions later, in full: the 07-08 install is an ordinary same-day release-day

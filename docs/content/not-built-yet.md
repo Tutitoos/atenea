@@ -546,15 +546,16 @@ declared repository is the only barrier left once the mounts are gone.
    answered against this repository, and the two refusals are the effect gate
    answering instantly rather than anything hanging.
 
-   What is left is not code: repointing the four client configurations on a
+   What was left at that historical checkpoint was not code: repointing the four client configurations on a
    machine. That is the one step this repository cannot finish on its own,
    because those files are written by another repository's installer, and a
    cutover it does not know about is a cutover its next run silently reverts.
 
 A new tool namespace and a new receipt shape are additive, so those steps were a
 contract minor -- `2.3.0` -- and no adapter changes. Step 5 was not: removing a
-field is a major, and the contract now reads `3.0.0`. It is still not a `1.0.0`
-conversation.
+field is a major, and the contract then read `3.0.0`. At that historical
+checkpoint it was still not a `1.0.0` conversation; the current release status
+is recorded in [the final audit](v1-final-audit.md).
 
 **Done when:** a client's configuration names `atenea`, `headroom` and
 `claude-mem` and nothing else; the backend process count reports one with

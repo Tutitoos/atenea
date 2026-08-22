@@ -50,13 +50,14 @@ A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
 
-A binary built from a checkout stamps its own revision onto the version, so
-`version` prints `0.10.0+2cd1401` rather than the bare number quoted on these
-pages — and `0.10.0+2cd1401.modified` when the tree has uncommitted changes.
-That suffix is SemVer build metadata: it says which tree this came from and is
-ignored when versions are compared. A bare number means the build had nothing to
-stamp: a release artifact, or a build from a linked `git worktree`, which Go does
-not stamp even with `-buildvcs=true`. Do not read a bare number as proof of a
+A release binary prints its published version (`1.0.0` for the current release).
+A binary built from a checkout stamps its revision onto the version, so
+`version` may print `1.0.0+<revision>` and
+`1.0.0+<revision>.modified` when the tree has uncommitted changes. That suffix
+is SemVer build metadata: it says which tree this came from and is ignored when
+versions are compared. A bare number means the build had nothing to stamp: a
+release artifact, or a build from a linked `git worktree`, which Go does not
+stamp even with `-buildvcs=true`. Do not read a bare number as proof of a
 release on a machine where someone builds in worktrees.
 
 ```sh
@@ -404,8 +405,8 @@ reason:
 
 ```text
 $ atenea mcp --check
-atenea 0.10.0 is listening at ~/.local/state/atenea/run/core.sock
-8 capability(ies) would be offered as tools
+atenea 1.0.0 is listening at ~/.local/state/atenea/run/core.sock
+13 capability(ies) would be offered as tools
 2 chat(s) open right now
 ```
 
@@ -457,7 +458,7 @@ LSPs will activate as files are read
 ~/Desktop/atenea
 
 • OpenCode 1.18.16
-⊙ Atenea 0.10.1+751972f
+⊙ Atenea 1.0.0+<revision>
 ```
 
 **That column has to be on screen for any of them to appear.** It is 42 columns
@@ -538,7 +539,7 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ Atenea 0.10.1+751972f  2 sin leer
+⊙ Atenea 1.0.0+<revision>  2 sin leer
 ```
 
 One line, written the way the client writes its own version line: a coloured
@@ -552,7 +553,7 @@ than under it: in this column an empty line of its own would cost a visible blan
 row, measured against the real sidebar before the shape was chosen.
 
 The version is printed exactly as the service reports it, build metadata and all.
-Trimming `0.10.1+751972f.modified` down to `0.10.1` would hide the part that says
+Trimming `1.0.0+<revision>.modified` down to `1.0.0` would hide the part that says
 this binary is not the one that was tagged.
 
 ### Which model did the work
@@ -958,7 +959,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 0.10.0  contract 3.0.0  AMBER
+atenea 1.0.0  contract 3.1.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

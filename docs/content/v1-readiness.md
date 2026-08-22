@@ -5,7 +5,7 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the v1.0 candidate. It separates what is
+This page is the acceptance record for the published v1.0.0 release. It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
 [`v1.0 policy`](v1-policy.md).
@@ -105,7 +105,7 @@ can be truncated by the upstream server; Atenea detects that case and retries
 with the official `kinds` filter, then merges and deduplicates the bounded
 responses. A real large-file overview returned 45 symbols successfully.
 
-## Latest pre-v1 verification
+## Latest 1.0.0 verification
 
 On 2026-08-22 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate

@@ -60,7 +60,7 @@ rewritten when they do.
 - [Getting started]({{< relref "getting-started" >}})
 - [Operations]({{< relref "operations" >}}) — release smoke tests, recovery and incident response
 - [v1 readiness]({{< relref "v1-readiness" >}}) — the code-backed acceptance gate and deferred contracts
-- [Final pre-v1 audit]({{< relref "v1-final-audit" >}}) — repository, team configuration and remaining release limits
+- [Final 1.0.0 audit]({{< relref "v1-final-audit" >}}) — repository, team configuration and post-release limits
 - [v1 contracts]({{< relref "v1-contracts" >}}) — structural search, permission and provider decisions
 - [v1.0 policy]({{< relref "v1-policy" >}}) — garantías, límites y criterios de v1.1
 - [Day to day]({{< relref "day-to-day" >}}) — the five commands worth remembering

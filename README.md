@@ -11,7 +11,9 @@ reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
 Version `1.0.0`, speaking contract `3.1.0` — stable core with optional external
-providers. What landed is in the
+providers. The release is published with checksum-verified installers for
+Linux and macOS on `amd64` and `arm64`; the [final audit](docs/content/v1-final-audit.md)
+records the evidence and the remaining provider-dependent limits. What landed is in the
 [changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
@@ -204,8 +206,9 @@ pre-push runs the suite with `-race`.
 The hooks are a convenience, not the guarantee. **The enforced gate is the
 release workflow**, which re-runs the linter and the full suite at tag time and
 refuses to publish if either fails — it is the only check nobody can skip by
-forgetting a setup step. `v0.6.0` is a tag with no release behind it for
-exactly that reason; the [changelog](CHANGELOG.md) says why.
+forgetting a setup step. The historical `v0.6.0` tag has no release behind it
+for exactly that reason; the [changelog](CHANGELOG.md) says why. The current
+published release is `v1.0.0`.
 
 ## Credits
 
