@@ -80,6 +80,8 @@ jobs:
 
       - name: Coverage history regression
         if: matrix.os == 'ubuntu-latest'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/coverage-history-check.sh coverage.out
 
       - name: Benchmark thresholds
