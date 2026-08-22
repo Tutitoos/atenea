@@ -18,7 +18,7 @@ cobertura de código ni una promesa de compatibilidad universal.
 | CLI, agentes y workflows | Comandos, agentes, revisión, reintentos, checkpoints y servicio implementados | `atenea --help`, `version`, reviewer end-to-end, servicio launchd estable y suite completa | 97% | Validación de cada proveedor externo depende de sus procesos disponibles |
 | Catálogo y adaptadores nativos | 14 capacidades, 20 implementaciones y 6 familias de provider en `internal/adapter/` y `default.toml` | Tests de paquetes, Kivgraph generation renovada, Tokensave 7.10.0 y matriz real; impacto e indexado probados con Kivgraph | 100% | La cobertura de impacto depende de que el snapshot incluya el archivo cambiado |
 | MCP y passthrough | Lifecycle, allow-list, efectos y bridge implementados; el default del repositorio no declara servidores activos | Wrappers `opencode`, `claude` y `codex`: 8/8 handshakes; matriz raw externa de lectura/diagnóstico; `atenea detect`: 8/8 MCP alcanzables; dashboards con apertura automática desactivada, incluido Kivgraph | 99% | Algunas herramientas requieren objetivos externos y el health sigue siendo bajo demanda |
-| Wrappers de modelos | OMP, Claude Code, Codex y OpenCode tienen adapters o backend; OpenCode es opt-in | OpenCode pasó matriz gratuita 6/6; Claude Code alcanzó el techo de 0,25 USD; Codex completó una búsqueda aislada en 81,8 s con timeout diagnóstico de 180 s | 95% | No existe un hard cap común de coste/tokens ni compatibilidad probada con todos los providers |
+| Wrappers de modelos | OMP, Claude Code, Codex y OpenCode tienen adapters o backend; OpenCode es opt-in | OpenCode pasó matriz gratuita 6/6; Claude Code alcanzó el techo de 0,25 USD y ahora rechaza cualquier sobrecoste observado; Codex completó una búsqueda aislada en 81,8 s con timeout diagnóstico de 180 s | 96% | No existe un hard cap común de facturación/tokens en los providers externos |
 | Seguridad y permisos | Efectos, `--allow`, rutas sensibles, socket local y procesos contenidos | Tests de contratos, core, supervisor y workflow | 90% | No hay confirmación interactiva; los eventos externos en vuelo pueden superar límites observados |
 | Estado, trazas y almacenamiento | DuckDB, checkpoints, métricas, notebook, backups y trace store implementados | Suite de `trace`, `metrics`, `checkpoint`, `backup`, `notebook` y gate | 95% | Sin bloqueo técnico identificado |
 | Tests y CI | CI multi-arquitectura, lint, race, coverage y readiness workflows declarados | Suite funcional completa, `vet`, build, policy, Hugo, matriz de capabilities, OpenCode 6/6 y `-race` completo; readiness 9/9 en copia limpia | 99% | La cobertura y compatibilidad universal de proveedores siguen siendo límites deliberados |
@@ -66,7 +66,7 @@ acciones mutantes.
 | Headroom | Payload de auditoría de TaxiPrime | `stats`, compresión y recuperación por hash correctos | `alive` |
 | Chrome DevTools | `https://context7.com` | Navegación headless, snapshot y 150 peticiones observadas | `alive` |
 | Tokensave | `taxiprime-backend` fuera de `/Users/gtrave/Documents/atenea` | Rechazo explícito por raíz fuera de alcance | `blocked-by-scope` |
-| Claude Code | `taxiprime-backend`, `code.search` | Techo de 0,25 USD; 0,310367 USD observado y sin resultado aceptado | `permission_denied`, opcional |
+| Claude Code | `taxiprime-backend`, `code.search` | Techo de 0,25 USD; 0,310367 USD observado, sin resultado aceptado y sobrecoste rechazado por el adapter | `permission_denied`, opcional |
 | Codex | `taxiprime-backend`, `code.search` | Resultado válido en 81,8 s con diagnóstico aislado de 180 s; coste no reportado | `alive`, opcional, coste no medible |
 
 La matriz confirma que el core respeta los límites de cada provider: Tokensave
@@ -149,9 +149,10 @@ el Kivgraph instalado.
    el impacto omite foreign repos porque su salida no tiene campo repository.
 5. Los MCP externos tienen handshake válido y varias herramientas raw de lectura
    probadas. El health del panel sigue siendo bajo demanda y no convierte un
-   handshake en disponibilidad permanente. Claude Code y Codex ya tienen una
-   búsqueda real validada dentro del presupuesto configurado, pero siguen siendo
-   proveedores opcionales.
+   handshake en disponibilidad permanente. Codex tiene una búsqueda real
+   validada dentro del presupuesto configurado; Claude Code alcanzó su techo y
+   reportó un sobrecoste, que el adapter rechaza como permiso excedido. Ambos
+   siguen siendo proveedores opcionales.
 6. La cobertura global observada es 75,2%; el gate de 75,0% evita regresiones,
    pero no demuestra cobertura semántica total.
 7. Las herramientas raw no destructivas de Semgrep, Context7, Serena,

@@ -37,4 +37,13 @@ On 2026-08-22 the authenticated CLI was rechecked against `taxiprime-backend`
 with the configured `0.25 USD` budget and `90s` timeout. Claude Code stopped at
 its spending ceiling and returned no accepted search result; the provider
 reported `0.310367 USD` observed usage. It remains an optional provider, and
-the audit did not increase either the budget or the timeout.
+the audit did not increase either the budget or the timeout. Atenea now keeps
+that observed charge on the receipt and rejects any successful-looking answer
+whose reported cost exceeds the permission, as `permission_denied`.
+
+This is a safety classification, not a billing guarantee. Claude Code's
+`--max-budget-usd` is a provider-side stopping threshold and its final ledger
+can exceed the requested value. A run that must have more room should receive
+an explicitly larger budget, for example through the caller's existing
+`--budget` option; removing the limit globally is not required and is not the
+default.

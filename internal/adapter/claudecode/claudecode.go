@@ -270,6 +270,17 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if err != nil {
 		return weighed, err
 	}
+	if answer.TotalCostUSD > req.Permission.BudgetUSD {
+		// Claude Code's --max-budget-usd is a provider-side stopping hint, not
+		// a hard billing cap: the CLI can report a final ledger above the
+		// requested value. Never turn that into a successful Atenea result. The
+		// charge remains on the outcome so the receipt and the workflow can see
+		// what happened, while the permission verdict prevents an over-budget
+		// answer from being trusted or reused as a successful step.
+		return weighed, contract.Fail(contract.FailurePermissionDenied,
+			"claude code reported $%.4f spent against a $%.4f permission; its provider ceiling was exceeded",
+			answer.TotalCostUSD, req.Permission.BudgetUSD)
+	}
 
 	result, outOfScope, err := r.readAnswer(answer, req, ask)
 	if err != nil {

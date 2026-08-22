@@ -200,7 +200,9 @@ The optional model providers were also exercised again against
 `taxiprime-backend` with the existing `0.25 USD` budget. Claude Code was
 authenticated but stopped at its spending ceiling; the
 provider reported `0.310367 USD` observed usage, including `0.060367 USD`
-above the requested ceiling, and returned no search result. Codex completed the
+above the requested ceiling, and returned no search result. The adapter now
+also rejects a success envelope whose reported cost exceeds the permission,
+while retaining the observed charge. Codex completed the
 diagnostic search in `81.8s` with the timeout override. Neither result changes
 the core readiness gate. The
 external calls did not

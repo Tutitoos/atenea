@@ -150,6 +150,27 @@ func TestTheGrantedShareIsPassedToTheBinary(t *testing.T) {
 	}
 }
 
+// Claude Code may report a final ledger above --max-budget-usd. That is not a
+// successful Atenea step: retain the observed charge, but refuse the result so
+// an over-budget provider response cannot enter workflow history as valid.
+func TestObservedOverspendIsRefused(t *testing.T) {
+	overspent := strings.Replace(answered, `"total_cost_usd":0.0234`, `"total_cost_usd":0.310367`, 1)
+	runner := billing(t, overspent)
+	out, err := runner.Run(context.Background(), granted(t, 0.25, map[string]any{"query": "TODO"}))
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied", contract.KindOf(err))
+	}
+	if out.SpentUSD != 0.310367 {
+		t.Errorf("spent_usd = %v, want 0.310367", out.SpentUSD)
+	}
+	if out.Result != nil {
+		t.Error("an over-budget answer was returned as a successful result")
+	}
+	if !strings.Contains(err.Error(), "provider ceiling was exceeded") {
+		t.Errorf("error does not explain the provider limitation: %v", err)
+	}
+}
+
 // A commission with nothing left does not get a free call.
 //
 // This is the half that did not exist while the ceiling lived here: an adapter
