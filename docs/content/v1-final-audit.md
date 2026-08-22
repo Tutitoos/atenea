@@ -26,6 +26,26 @@ cobertura de código ni una promesa de compatibilidad universal.
 | Documentación | Arquitectura, settings, operaciones, contratos, política y readiness presentes | Anclas de política, Hugo `0.165.0` local y build del sitio correcto; referencias operativas actualizadas tras `1.0.0` | 100% | El módulo docs no pasa `go mod tidy` sin eliminar la dependencia indirecta de Hugo |
 | **Repositorio Atenea** | El núcleo funcional y sus contratos están implementados | Suite funcional, `vet`, build, policy, Hugo, race completo, matriz ampliada, OpenCode 6/6 y publicación `1.0.0` | **99%** | Quedan límites de cobertura del grafo y compatibilidad universal de proveedores externos |
 
+## Revisión de mantenimiento posterior
+
+El 2026-08-22 se corrigieron tres tests de workflow que dependían de sleeps
+fijos: ahora esperan marcadores escritos por el proceso hijo, con timeout de
+seguridad. `TMPDIR=/tmp go test -race -count=5 ./internal/workflow` pasó las
+cinco repeticiones.
+
+El arnés MCP pasó en normal y bajo `-race` para `internal/core`,
+`internal/passthrough`, `internal/mcpstdio` e `internal/mcpprobe`. Las pruebas
+falsas cubren `read`, `write`, `process` y `external`; las acciones mutantes
+son rechazadas antes de llegar al backend y las denegaciones dejan receipt.
+
+La matriz gratuita de OpenCode pasó 6/6 con `1.18.15`: tres modelos sin MCP y
+tres con el bridge aislado de Atenea, todos con coste observado `0.000000`.
+La nueva matriz read-only de `claude-mem` confirmó handshake y 14 herramientas,
+pero ningún corpus, ningún resultado de memoria para las búsquedas realizadas,
+0 símbolos estructurales en el árbol TypeScript externo y fallo de parseo de
+`src/server.ts`. Esto clasifica `claude-mem` como disponible pero funcionalmente
+degradado para ese objetivo.
+
 ## Herramientas y MCP externos
 
 | Herramienta | Código del repo | Configuración del equipo | Estado real de esta auditoría |
@@ -37,10 +57,10 @@ cobertura de código ni una promesa de compatibilidad universal.
 | Codex | Adapter nativo | Runner activo | Autenticado; búsqueda externa de `FastifyInstance` válida en 81,8 s; timeout efectivo 120 s |
 | Kivgraph | Adapter nativo y viewer separado con readiness HTTP | Runner stdio activo; viewer persistente configurado en `127.0.0.1:7777` | Kivgraph `0.3.4` recompilado con `webassets` y LadybugDB `v0.13.1`; raíz y asset HTTP `200`, `dashboard --check` correcto |
 | Tokensave | Adapter nativo y 3 implementaciones en defaults | Runner on-demand en el overlay global con `/opt/homebrew/bin/tokensave` | Tokensave 7.10.0 oficial; índice local de 311 archivos, 11.586 nodos y 27.170 edges de estado; context, overview y calls pasados, incluido un archivo grande mediante fallback por tipos |
-| OpenCode | Backend nativo aislado | No es el backend por defecto | Smoke y matriz real gratuitos pasados; opt-in |
+| OpenCode | Backend nativo aislado | No es el backend por defecto | Matriz real gratuita 6/6, con y sin MCP; coste observado `0.000000`; opt-in |
 | Semgrep | No hay adapter/capability nativa | MCP `raw`, allow-list de 4 herramientas, efecto `read` | `tools/list` y 5 llamadas no destructivas: schema, lenguajes, AST, scan y custom scan; todas correctas tras corregir ruta absoluta |
 | Context7 | No hay adapter/capability nativa | MCP `raw`, `resolve-library-id` y `query-docs` | Handshake, resolución de Go y consulta de documentación reales pasados |
-| claude-mem | No hay adapter/capability nativa | MCP `raw`, herramientas de memoria y efecto `read/process` | Handshake y 14 herramientas; llamadas read-only correctas, sin corpus, sin símbolos en búsqueda estructural y sin parseo de `server.ts` |
+| claude-mem | No hay adapter/capability nativa | MCP `raw`, herramientas de memoria y efecto `read/process` | Handshake y 14 herramientas; matriz read-only repetida, sin corpus, sin observaciones, sin símbolos en búsqueda estructural y sin parseo de `server.ts` |
 | Headroom | No hay adapter/capability nativa | MCP `off`, memoria desactivada por variables | `tools/list`, `headroom_stats` y compresión segura correctos; sigue fuera del catálogo Atenea |
 | Chrome DevTools, agent-device y Maestro | No hay adapter/capability nativa | MCPs del equipo con allow-list y efectos por herramienta | Chrome navegó en headless a Context7 y leyó snapshot/red; agent-device listó 15 dispositivos y doctor; Maestro listó dispositivos/cloud/cheat sheet; acciones mutantes excluidas |
 

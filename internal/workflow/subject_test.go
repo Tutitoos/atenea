@@ -328,13 +328,14 @@ func rowOf(t *testing.T, run workflow.Run, id string) workflow.StepRow {
 func TestASubjectSurvivesAResume(t *testing.T) {
 	dir := t.TempDir()
 	judge, saved := records(t, dir, "judge")
+	entered := filepath.Join(dir, "review-entered")
 	// The work answers, then the reviewer's slot is taken by a step that
 	// hangs until the run is cut -- so the review is dispatched only by the
 	// second process, reading an answer this one never saw.
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1, MaxParallelReview: 1},
 		declared("work", stub(t, dir, "work",
 			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
-		declared("hangs", stub(t, dir, "hangs", "sleep 5"), config.PoolReview),
+		declared("hangs", stub(t, dir, "hangs", "touch "+entered+"\nsleep 5"), config.PoolReview),
 		declared("judge", judge, config.PoolReview),
 	)
 
@@ -346,8 +347,23 @@ func TestASubjectSurvivesAResume(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
-		cancel()
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			if _, err := os.Stat(entered); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-deadline.C:
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}()
 	first, err := h.engine.Start(ctx, graphOf(
 		work,

@@ -247,20 +247,35 @@ func TestAbortCutsTheRunningAndSpawnsNothingQueued(t *testing.T) {
 // finishes.
 func TestResumeRedoesReadOnlyWorkAndFinishes(t *testing.T) {
 	dir := t.TempDir()
+	entered := filepath.Join(dir, "entered")
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1},
 		declared("slow", stub(t, dir, "slow",
 			"if [ -f "+filepath.Join(dir, "once")+" ]; then\n"+
 				`  echo '{"result":{"ok":true},"verdict":"ok"}'`+"\n"+
-				"else\n  touch "+filepath.Join(dir, "once")+"\n  sleep 5\nfi"),
+				"else\n  touch "+filepath.Join(dir, "once")+"\n  touch "+entered+"\n  sleep 5\nfi"),
 			config.PoolAgent),
 		declared("quick", answers(t, dir, "quick"), config.PoolAgent),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		// Ensure the stub has entered its long-running branch before cutting it.
-		time.Sleep(time.Second)
-		cancel()
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			if _, err := os.Stat(entered); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-deadline.C:
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}()
 	cut, err := h.engine.Start(ctx, graphOf(
 		step("first", "slow", nil),

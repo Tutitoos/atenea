@@ -180,12 +180,13 @@ func TestALoadedRunCarriesTheAttemptsItsBalanceNeeds(t *testing.T) {
 func TestARedoneStepFilesTheAttemptItReplaced(t *testing.T) {
 	dir := t.TempDir()
 	runs := filepath.Join(dir, "runs.txt")
+	entered := filepath.Join(dir, "entered")
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1},
 		declared("scribe", stub(t, dir, "scribe",
 			"echo run >> "+runs+"\n"+
 				"if [ -f "+filepath.Join(dir, "once")+" ]; then\n"+
 				"  echo '{\"result\":{\"ok\":true},\"verdict\":\"ok\"}'\n"+
-				"else\n  touch "+filepath.Join(dir, "once")+"\n  sleep 5\nfi"),
+				"else\n  touch "+filepath.Join(dir, "once")+"\n  touch "+entered+"\n  sleep 5\nfi"),
 			config.PoolAgent, contract.EffectRead, contract.EffectWrite),
 	)
 	graph := graphOf(withFiles(
@@ -193,11 +194,23 @@ func TestARedoneStepFilesTheAttemptItReplaced(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		// Let the stub enter its long-running branch before cutting it. The
-		// race detector and the full repository suite can make process startup
-		// take more than a second.
-		time.Sleep(3 * time.Second)
-		cancel()
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			if _, err := os.Stat(entered); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-deadline.C:
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 	}()
 	cut, err := h.engine.Start(ctx, graph)
 	if err == nil {

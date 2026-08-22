@@ -14,6 +14,19 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Fixed
+
+- Replaced timing sleeps in workflow resume tests with child-process start
+  markers, making repeated race-suite validation deterministic.
+- Kept Claude Code over-budget responses out of successful workflow history
+  while retaining the provider's observed charge in the receipt.
+
+### Validation
+
+- Rechecked the read-only claude-mem matrix and the destructive MCP fixtures;
+  no memory writes or real destructive actions were performed.
+- Passed the free OpenCode provider/MCP matrix in all six cases.
+
 ## [1.0.0] - 2026-08-22
 
 ### Added

@@ -76,6 +76,29 @@ interaction, write and destructive actions were excluded. On the external
 TypeScript target, claude-mem answered but its structural search returned no
 symbols and its outline could not parse `server.ts`.
 
+## Maintenance recheck
+
+The maintenance recheck on 2026-08-22 replaced timing sleeps in the workflow
+resume tests with process-start markers. `TMPDIR=/tmp go test -race -count=5
+./internal/workflow` passed all five repetitions. The MCP safety harness also
+passed in normal and race mode across `internal/core`, `internal/passthrough`,
+`internal/mcpstdio` and `internal/mcpprobe`; destructive `write`, `process` and
+`external` fixtures were denied before the backend and receipts remained
+available for refused calls.
+
+The configured `claude-mem` process (`13.15.3`) was queried read-only: its
+handshake and `tools/list` exposed 14 tools, `list_corpora` returned `[]`, the
+memory search returned no observations, the backend TypeScript tree scanned
+101 files but produced no structural symbols, and `src/server.ts` could not be
+parsed. No memory, corpus or session was written.
+
+The opt-in OpenCode matrix passed all 6 cases with version `1.18.15`: three
+free models without MCP and the same three with the isolated Atenea MCP bridge.
+All six reported `cost_usd=0.000000`; the MCP cases called
+`atenea_catalog_repositories`. Claude Code was not called again because its
+previous `0.310367 USD` observation already demonstrated the provider
+overspend; repeating it would add cost without new evidence.
+
 Kivgraph `0.3.4` was then configured with Atenea as a fifth repository and
 indexed successfully as generation `000009`. Atenea's real service detected
 the index as ready; `graph.status`, `symbol.definition`, `symbol.references`,
