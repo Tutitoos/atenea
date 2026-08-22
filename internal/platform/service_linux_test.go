@@ -58,7 +58,8 @@ func TestLinuxManagerSeparatesSuccessRefusalAndUnavailable(t *testing.T) {
 }
 
 func TestLinuxWriteUnitAndDiskFailures(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "systemd", "user", "atenea.service")
+	root := t.TempDir()
+	path := filepath.Join(root, "systemd", "user", "atenea.service")
 	if err := writeUnit(path, "[Service]\n"); err != nil {
 		t.Fatalf("writeUnit: %v", err)
 	}
@@ -72,5 +73,20 @@ func TestLinuxWriteUnitAndDiskFailures(t *testing.T) {
 	}
 	if got := contract.KindOf(diskFailure(path, errors.New("disk missing"))); got != contract.FailureUnavailable {
 		t.Fatalf("generic failure kind = %v", got)
+	}
+
+	parentFile := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(parentFile, []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := contract.KindOf(writeUnit(filepath.Join(parentFile, "unit"), "text")); got != contract.FailureUnavailable {
+		t.Fatalf("parent failure kind = %v", got)
+	}
+	existingDir := filepath.Join(root, "existing-directory")
+	if err := os.Mkdir(existingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := contract.KindOf(writeUnit(existingDir, "text")); got != contract.FailureUnavailable {
+		t.Fatalf("rename failure kind = %v", got)
 	}
 }
