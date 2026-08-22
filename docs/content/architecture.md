@@ -1056,8 +1056,8 @@ commission keeps working through whoever charges nothing.
 ## Contract versioning
 
 `pkg/contract` is versioned on its own, independently from the product. The
-product is in alpha at `0.x.y`; the wire format adapters compile against is
-already a commitment and starts at `1.0.0`.
+product is stable at `1.x.y`; the wire format adapters compile against is
+versioned independently and starts at `1.0.0`.
 
 An adapter lagging behind by a minor version keeps working — that is what lets
 adapters be updated after the core rather than in lockstep with it. An adapter

@@ -23,16 +23,16 @@ checksum-verified installer. Pin the version explicitly; the installer never
 silently chooses a moving `latest` binary:
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v0.10.4/atenea-install.sh \
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.0/atenea-install.sh \
   -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 0.10.4
+bash /tmp/atenea-install.sh --version 1.0.0
 ```
 
 It writes `~/.local/bin/atenea`. Add `--service` when the background service is
 wanted; starting it remains an explicit command:
 
 ```sh
-bash /tmp/atenea-install.sh --version 0.10.4 --service
+bash /tmp/atenea-install.sh --version 1.0.0 --service
 systemctl --user start atenea.service
 ```
 

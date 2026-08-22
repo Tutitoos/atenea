@@ -10,16 +10,15 @@ import (
 // Version is the Atenea product version: the number a release is tagged with.
 //
 // It follows three-number SemVer and is independent from the contract version
-// in pkg/contract: the product is in alpha (0.x.y) and reaches 1.0.0 only when
-// it goes stable, while the wire contract adapters compile against is already a
-// commitment.
+// in pkg/contract: the product is stable at 1.x.y, while the wire contract
+// adapters compile against is an independent commitment.
 //
 // It is a constant rather than a link-time variable on purpose. A version
 // injected with -ldflags is one somebody has to remember to inject, and the
 // build that forgets does not fail -- it ships claiming to be whatever the
 // source said, which is the one error nobody notices. Here the source is the
 // only answer, and the release workflow refuses a tag that disagrees with it.
-const Version = "0.10.4"
+const Version = "1.0.0"
 
 // Full is Version plus what this particular build knows about where it came
 // from, as SemVer build metadata.

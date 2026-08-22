@@ -15,7 +15,7 @@ Usage: install.sh --version VERSION [--service]
 
 Environment:
   ATENEA_REPOSITORY  GitHub repository, default Tutitoos/atenea
-  ATENEA_VERSION     release version, for example 0.10.4
+  ATENEA_VERSION     release version, for example 1.0.0
   ATENEA_INSTALL_DIR destination, default ~/.local/bin
 
 Update behavior:

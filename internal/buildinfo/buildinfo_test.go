@@ -21,17 +21,15 @@ func TestTheVersionIsAPlainThreeNumberSemVer(t *testing.T) {
 	}
 }
 
-// Alpha is a promise, not a default. This test is meant to be deleted, once,
-// by somebody who has decided Atenea is stable -- which is the only way that
-// decision should ever be taken.
-func TestTheProductIsStillInAlpha(t *testing.T) {
+// Reaching 1.0.0 is an explicit product decision. Keep the test so a future
+// accidental downgrade cannot silently turn a stable release back into alpha.
+func TestTheProductIsStable(t *testing.T) {
 	version, err := contract.ParseVersion(buildinfo.Version)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if version.Major != 0 {
-		t.Fatalf("Version = %q: 1.0.0 means stable, and reaching it is a decision, not a bump",
-			buildinfo.Version)
+	if version.Major != 1 {
+		t.Fatalf("Version = %q: stable releases must have major version 1", buildinfo.Version)
 	}
 }
 

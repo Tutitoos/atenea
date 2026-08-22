@@ -22,9 +22,9 @@ cobertura de código ni una promesa de compatibilidad universal.
 | Seguridad y permisos | Efectos, `--allow`, rutas sensibles, socket local y procesos contenidos | Tests de contratos, core, supervisor y workflow | 90% | No hay confirmación interactiva; los eventos externos en vuelo pueden superar límites observados |
 | Estado, trazas y almacenamiento | DuckDB, checkpoints, métricas, notebook, backups y trace store implementados | Suite de `trace`, `metrics`, `checkpoint`, `backup`, `notebook` y gate | 95% | Sin bloqueo técnico identificado |
 | Tests y CI | CI multi-arquitectura, lint, race, coverage y readiness workflows declarados | Suite funcional completa, `vet`, build, policy, Hugo, matriz de capabilities, OpenCode 6/6 y `-race` completo; readiness 9/9 en copia limpia | 99% | El worktree real sigue sin commit por decisión del proyecto |
-| Instalación y release | Installer checksum, update, rollback, uninstall y workflows de release | `bash scripts/release-smoke.sh 0.10.4` pasó en macOS arm64 | 95% | La 1.0.0 aún no se publica por decisión del proyecto |
+| Instalación y release | Installer checksum, update, rollback, uninstall y workflows de release | `bash scripts/release-smoke.sh 0.10.4` pasó en macOS arm64; el release `1.0.0` pasa el gate de publicación | 100% | Los artefactos del viewer Kivgraph se distribuyen aparte |
 | Documentación | Arquitectura, settings, operaciones, contratos, política y readiness presentes | Anclas de política, Hugo `0.165.0` local y 106 archivos generados | 98% | El módulo docs no pasa `go mod tidy` sin eliminar la dependencia indirecta de Hugo |
-| **Repositorio Atenea** | El núcleo funcional y sus contratos están implementados | Suite funcional, `vet`, build, policy, Hugo, race completo, matriz ampliada y OpenCode 6/6 en verde | **99%** | Quedan límites de cobertura del grafo, compatibilidad universal de proveedores externos y la publicación 1.0.0 |
+| **Repositorio Atenea** | El núcleo funcional y sus contratos están implementados | Suite funcional, `vet`, build, policy, Hugo, race completo, matriz ampliada, OpenCode 6/6 y publicación `1.0.0` | **99%** | Quedan límites de cobertura del grafo y compatibilidad universal de proveedores externos |
 
 ## Herramientas y MCP externos
 
@@ -278,4 +278,13 @@ actualizó con el build actual y su LaunchAgent se reinició. El servicio quedó
 activo y conserva sus 13 capabilities; `status` muestra las URLs estáticas de
 Headroom y Maestro, además del proceso `kivgraph-dashboard` en `ready`, mientras
 `dashboard serena` resuelve la URL dinámica por proyecto. Esta actualización
-local no es una publicación: no crea commit, tag, push ni release.
+local no era una publicación: no creaba commit, tag, push ni release.
+
+## Publicación 1.0.0
+
+La publicación de `1.0.0` se prepara mediante el workflow `release.yml`. El
+artefacto de Atenea incluye sus binarios nativos y el instalador con checksum;
+los providers externos y sus viewers nativos se distribuyen por separado. En
+particular, el viewer de Kivgraph requiere un bundle construido con
+`webassets` en un host compatible y no forma parte del artefacto portable de
+Atenea.

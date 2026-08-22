@@ -5,8 +5,7 @@ Notable changes to Atenea, newest first. The format follows
 
 Two numbers are versioned here and they move independently:
 
-- **Atenea**, the product, in alpha at `0.x.y`. It reaches `1.0.0` when it goes
-  stable, not before.
+- **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, already
   at `1.x.y`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
@@ -14,6 +13,34 @@ Two numbers are versioned here and they move independently:
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-08-22
+
+### Added
+
+- A complete capability registry and orchestrator for code search, symbols,
+  graph impact, repository indexing and provider-backed workflows.
+- Native adapters and wrappers for OMP, Claude Code, Codex, OpenCode, Serena,
+  Kivgraph and Tokensave, with optional raw MCP passthrough.
+- Persistent local MCP dashboards for Serena, Headroom, Maestro and Kivgraph
+  with explicit browser opening and loopback-only binding.
+- Strict citation validation, permission effects, provider health, checkpoints,
+  metrics, release gates and checksum-verified installation lifecycle.
+
+### Security
+
+- Destructive MCP actions remain outside the default execution path and require
+  explicit effect grants; external actions were validated through refusal or
+  simulation during the release audit.
+- Obsolete memory-runtime references were removed from the active product.
+
+### Release notes
+
+- Claude Code, Codex and OpenCode remain optional provider surfaces and depend
+  on the local CLI, account and provider availability.
+- The Kivgraph web viewer is an optional external bundle. The team configuration
+  uses a locally built `webassets` binary; the Atenea release does not claim to
+  redistribute that third-party native bundle.
 
 ## [0.10.4] - 2026-08-21
 
@@ -2749,6 +2776,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[1.0.0]: https://github.com/Tutitoos/atenea/releases/tag/v1.0.0
 [0.10.3]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.3
 [0.10.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.1
 [0.10.0]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.0
