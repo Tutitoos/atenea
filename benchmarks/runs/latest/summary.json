@@ -1,11 +1,11 @@
 {
   "manifest": {
     "schema_version": 1,
-    "run_id": "20260822T223757Z",
+    "run_id": "20260822T234454Z",
     "profile": "quick",
-    "generated_at": "2026-08-22T22:37:57.0521Z",
+    "generated_at": "2026-08-22T23:44:54.696353Z",
     "command": "go run ./cmd/atenea-benchmark --profile quick",
-    "commit": "5a24b4010ab212039a1d588e9ad20cf7600b460a",
+    "commit": "9630fd4dd43f8b977b892570b530288cc79d932d",
     "source_dirty": true,
     "environment": {
       "machine_model": "MacBook Air M5",
@@ -19,14 +19,14 @@
     }
   },
   "tests": {
-    "discovered": 2014,
-    "executed": 2005,
-    "passed": 2005,
+    "discovered": 2028,
+    "executed": 2019,
+    "passed": 2019,
     "failed": 0,
     "skipped": 9,
     "pass_rate": 100
   },
-  "coverage_percent": 78.678955453149,
+  "coverage_percent": 80.1644272654764,
   "coverage_floor": 60,
   "coverage_target": 80,
   "suites": [
@@ -37,22 +37,22 @@
       "passed": 227,
       "failed": 0,
       "skipped": 3,
-      "duration_ms": 36050,
+      "duration_ms": 46403,
       "coverage_percent": 72.29761347683669,
       "pass_rate": 100,
       "status": "ORANGE"
     },
     {
       "package": "github.com/Tutitoos/atenea/cmd/atenea-benchmark",
-      "discovered": 2,
-      "executed": 2,
-      "passed": 2,
+      "discovered": 6,
+      "executed": 6,
+      "passed": 6,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1736,
-      "coverage_percent": 6.761565836298933,
+      "duration_ms": 31351,
+      "coverage_percent": 71.14754098360656,
       "pass_rate": 100,
-      "status": "RED"
+      "status": "ORANGE"
     },
     {
       "package": "github.com/Tutitoos/atenea/internal/adapter/claudecode",
@@ -61,7 +61,7 @@
       "passed": 74,
       "failed": 0,
       "skipped": 1,
-      "duration_ms": 45609,
+      "duration_ms": 60739,
       "coverage_percent": 87.42857142857143,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -73,7 +73,7 @@
       "passed": 12,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 22181,
+      "duration_ms": 32520.000000000004,
       "coverage_percent": 81.65137614678899,
       "pass_rate": 100,
       "status": "GREEN"
@@ -85,7 +85,7 @@
       "passed": 55,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2980,
+      "duration_ms": 3084,
       "coverage_percent": 70.63583815028902,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -97,7 +97,7 @@
       "passed": 48,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 6109,
+      "duration_ms": 8013.999999999999,
       "coverage_percent": 92.27467811158799,
       "pass_rate": 100,
       "status": "GREEN"
@@ -109,7 +109,7 @@
       "passed": 50,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2799,
+      "duration_ms": 3286,
       "coverage_percent": 80.8411214953271,
       "pass_rate": 100,
       "status": "GREEN"
@@ -121,7 +121,7 @@
       "passed": 19,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2750,
+      "duration_ms": 3578,
       "coverage_percent": 77.67857142857143,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -133,7 +133,7 @@
       "passed": 31,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 47638,
+      "duration_ms": 68664,
       "coverage_percent": 81.14478114478115,
       "pass_rate": 100,
       "status": "GREEN"
@@ -145,7 +145,7 @@
       "passed": 9,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3403,
+      "duration_ms": 4531,
       "coverage_percent": 93.47826086956522,
       "pass_rate": 100,
       "status": "GREEN"
@@ -157,7 +157,7 @@
       "passed": 67,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 51799,
+      "duration_ms": 72582,
       "coverage_percent": 83.17757009345794,
       "pass_rate": 100,
       "status": "GREEN"
@@ -169,7 +169,7 @@
       "passed": 25,
       "failed": 0,
       "skipped": 2,
-      "duration_ms": 33891,
+      "duration_ms": 54002,
       "coverage_percent": 76.6891891891892,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -181,7 +181,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3892,
+      "duration_ms": 5404,
       "coverage_percent": 82.35294117647058,
       "pass_rate": 100,
       "status": "GREEN"
@@ -193,7 +193,7 @@
       "passed": 50,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 4380,
+      "duration_ms": 5133,
       "coverage_percent": 84.58646616541353,
       "pass_rate": 100,
       "status": "GREEN"
@@ -205,7 +205,7 @@
       "passed": 26,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3687.0000000000005,
+      "duration_ms": 4035.9999999999995,
       "coverage_percent": 91.26637554585153,
       "pass_rate": 100,
       "status": "GREEN"
@@ -217,7 +217,7 @@
       "passed": 5,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2834,
+      "duration_ms": 3618,
       "coverage_percent": 83.33333333333334,
       "pass_rate": 100,
       "status": "GREEN"
@@ -229,22 +229,22 @@
       "passed": 28,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2815,
+      "duration_ms": 3469.9999999999995,
       "coverage_percent": 71.01827676240208,
       "pass_rate": 100,
       "status": "ORANGE"
     },
     {
       "package": "github.com/Tutitoos/atenea/internal/benchmark",
-      "discovered": 9,
-      "executed": 9,
-      "passed": 9,
+      "discovered": 11,
+      "executed": 11,
+      "passed": 11,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2080,
-      "coverage_percent": 60,
+      "duration_ms": 2308,
+      "coverage_percent": 82.75862068965517,
       "pass_rate": 100,
-      "status": "ORANGE"
+      "status": "GREEN"
     },
     {
       "package": "github.com/Tutitoos/atenea/internal/buildinfo",
@@ -253,7 +253,7 @@
       "passed": 12,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1994,
+      "duration_ms": 2931,
       "coverage_percent": 86.95652173913044,
       "pass_rate": 100,
       "status": "GREEN"
@@ -265,7 +265,7 @@
       "passed": 39,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2335,
+      "duration_ms": 3144,
       "coverage_percent": 84.86486486486487,
       "pass_rate": 100,
       "status": "GREEN"
@@ -277,7 +277,7 @@
       "passed": 16,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1847.9999999999998,
+      "duration_ms": 3011,
       "coverage_percent": 88.18181818181819,
       "pass_rate": 100,
       "status": "GREEN"
@@ -289,7 +289,7 @@
       "passed": 11,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2722,
+      "duration_ms": 3835,
       "coverage_percent": 97.67441860465115,
       "pass_rate": 100,
       "status": "GREEN"
@@ -301,7 +301,7 @@
       "passed": 217,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3409,
+      "duration_ms": 4348,
       "coverage_percent": 87.33926805143423,
       "pass_rate": 100,
       "status": "GREEN"
@@ -313,7 +313,7 @@
       "passed": 157,
       "failed": 0,
       "skipped": 1,
-      "duration_ms": 16312.999999999998,
+      "duration_ms": 22376,
       "coverage_percent": 77.43055555555556,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -325,7 +325,7 @@
       "passed": 11,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3550,
+      "duration_ms": 5826,
       "coverage_percent": 85.71428571428571,
       "pass_rate": 100,
       "status": "GREEN"
@@ -337,7 +337,7 @@
       "passed": 22,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 3006,
+      "duration_ms": 4826,
       "coverage_percent": 84.78260869565217,
       "pass_rate": 100,
       "status": "GREEN"
@@ -349,7 +349,7 @@
       "passed": 7,
       "failed": 0,
       "skipped": 1,
-      "duration_ms": 2684,
+      "duration_ms": 3319,
       "coverage_percent": 72.72727272727273,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -361,7 +361,7 @@
       "passed": 21,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1806,
+      "duration_ms": 3534,
       "coverage_percent": 83.43949044585987,
       "pass_rate": 100,
       "status": "GREEN"
@@ -373,7 +373,7 @@
       "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1788,
+      "duration_ms": 2104,
       "coverage_percent": 85.91549295774648,
       "pass_rate": 100,
       "status": "GREEN"
@@ -385,7 +385,7 @@
       "passed": 63,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 6105,
+      "duration_ms": 7832,
       "coverage_percent": 82.86334056399133,
       "pass_rate": 100,
       "status": "GREEN"
@@ -397,7 +397,7 @@
       "passed": 22,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2661,
+      "duration_ms": 3410,
       "coverage_percent": 75.80645161290323,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -409,7 +409,7 @@
       "passed": 102,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 5650,
+      "duration_ms": 8880,
       "coverage_percent": 90.29304029304029,
       "pass_rate": 100,
       "status": "GREEN"
@@ -421,7 +421,7 @@
       "passed": 20,
       "failed": 0,
       "skipped": 1,
-      "duration_ms": 3294,
+      "duration_ms": 5930,
       "coverage_percent": 86.22950819672131,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -433,22 +433,22 @@
       "passed": 3,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 972,
+      "duration_ms": 4377,
       "coverage_percent": 94.44444444444444,
       "pass_rate": 100,
       "status": "GREEN"
     },
     {
       "package": "github.com/Tutitoos/atenea/internal/platform",
-      "discovered": 10,
-      "executed": 10,
-      "passed": 10,
+      "discovered": 18,
+      "executed": 18,
+      "passed": 18,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1218,
-      "coverage_percent": 48.35164835164835,
+      "duration_ms": 12204,
+      "coverage_percent": 81.31868131868131,
       "pass_rate": 100,
-      "status": "RED"
+      "status": "GREEN"
     },
     {
       "package": "github.com/Tutitoos/atenea/internal/procgroup",
@@ -457,7 +457,7 @@
       "passed": 4,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1206,
+      "duration_ms": 2253,
       "coverage_percent": 90.9090909090909,
       "pass_rate": 100,
       "status": "GREEN"
@@ -469,7 +469,7 @@
       "passed": 2,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1451,
+      "duration_ms": 2297,
       "coverage_percent": 75,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -481,7 +481,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1565,
+      "duration_ms": 2467,
       "coverage_percent": 85.36585365853658,
       "pass_rate": 100,
       "status": "GREEN"
@@ -493,7 +493,7 @@
       "passed": 24,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1600,
+      "duration_ms": 2727,
       "coverage_percent": 84.84848484848484,
       "pass_rate": 100,
       "status": "GREEN"
@@ -505,7 +505,7 @@
       "passed": 46,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1452,
+      "duration_ms": 2705,
       "coverage_percent": 91.62303664921467,
       "pass_rate": 100,
       "status": "GREEN"
@@ -517,7 +517,7 @@
       "passed": 28,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2049,
+      "duration_ms": 3337,
       "coverage_percent": 80.58252427184466,
       "pass_rate": 100,
       "status": "GREEN"
@@ -529,7 +529,7 @@
       "passed": 42,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 9120,
+      "duration_ms": 10392,
       "coverage_percent": 88.40970350404312,
       "pass_rate": 100,
       "status": "GREEN"
@@ -541,7 +541,7 @@
       "passed": 4,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1426,
+      "duration_ms": 2730,
       "coverage_percent": 92.85714285714286,
       "pass_rate": 100,
       "status": "GREEN"
@@ -553,7 +553,7 @@
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1591,
+      "duration_ms": 2724,
       "coverage_percent": 100,
       "pass_rate": 100,
       "status": "GREEN"
@@ -565,7 +565,7 @@
       "passed": 8,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 1286,
+      "duration_ms": 2969,
       "coverage_percent": 76.50602409638554,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -577,7 +577,7 @@
       "passed": 146,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 34575,
+      "duration_ms": 40254,
       "coverage_percent": 77.26683937823834,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -589,7 +589,7 @@
       "passed": 17,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2115,
+      "duration_ms": 3036,
       "coverage_percent": 80,
       "pass_rate": 100,
       "status": "GREEN"
@@ -601,7 +601,7 @@
       "passed": 161,
       "failed": 0,
       "skipped": 0,
-      "duration_ms": 2301,
+      "duration_ms": 3321,
       "coverage_percent": 78.79581151832461,
       "pass_rate": 100,
       "status": "ORANGE"
@@ -614,25 +614,25 @@
       "package": "./internal/selector",
       "command": "go test ./internal/selector -bench BenchmarkSelectMediumCatalog",
       "samples": 3,
-      "ns_per_op": 25533,
-      "bytes_per_op": 74240,
+      "ns_per_op": 35429,
+      "bytes_per_op": 74242,
       "allocs_per_op": 15,
-      "throughput_per_second": 39165.00215407512,
+      "throughput_per_second": 28225.465014536116,
       "latency_ms": {
         "samples": 3,
-        "min": 0.025515,
-        "median": 0.025533,
-        "p50": 0.025533,
-        "p90": 0.029149799999999997,
-        "p95": 0.029601899999999997,
-        "p99": 0.029963579999999997,
-        "max": 0.030053999999999997,
-        "mean": 0.027034,
-        "stddev": 0.002615412204605613,
-        "coefficient_of_variation": 9.67452912852561
+        "min": 0.031362,
+        "median": 0.035428999999999995,
+        "p50": 0.035428999999999995,
+        "p90": 0.0372154,
+        "p95": 0.0374387,
+        "p99": 0.03761734,
+        "max": 0.037662,
+        "mean": 0.03481766666666666,
+        "stddev": 0.0031941816374986146,
+        "coefficient_of_variation": 9.17402555455166
       },
-      "rss_bytes": 94257152,
-      "cpu_time_ms": 623.9970000000001,
+      "rss_bytes": 93962240,
+      "cpu_time_ms": 631.641,
       "valid": true,
       "limitations": [
         "Compare only with the same profile, dataset and compatible hardware."
@@ -645,25 +645,25 @@
       "package": "./internal/metrics",
       "command": "go test ./internal/metrics -bench BenchmarkRecord",
       "samples": 3,
-      "ns_per_op": 15958,
+      "ns_per_op": 17167,
       "bytes_per_op": 224,
       "allocs_per_op": 1,
-      "throughput_per_second": 62664.49429753102,
+      "throughput_per_second": 58251.29609133803,
       "latency_ms": {
         "samples": 3,
-        "min": 0.015583999999999999,
-        "median": 0.015958,
-        "p50": 0.015958,
-        "p90": 0.0183916,
-        "p95": 0.0186958,
-        "p99": 0.01893916,
-        "max": 0.019,
-        "mean": 0.016847333333333336,
-        "stddev": 0.0018736193138771103,
-        "coefficient_of_variation": 11.121162481958233
+        "min": 0.015791,
+        "median": 0.017166999999999998,
+        "p50": 0.017166999999999998,
+        "p90": 0.018399799999999997,
+        "p95": 0.018553899999999998,
+        "p99": 0.018677179999999998,
+        "max": 0.018708,
+        "mean": 0.017222,
+        "stddev": 0.0014592775609869424,
+        "coefficient_of_variation": 8.473333881006516
       },
-      "rss_bytes": 274972672,
-      "cpu_time_ms": 1399.931,
+      "rss_bytes": 274874368,
+      "cpu_time_ms": 1574.527,
       "valid": true,
       "limitations": [
         "Compare only with the same profile, dataset and compatible hardware.",
@@ -677,25 +677,25 @@
       "package": "./internal/metrics",
       "command": "go test ./internal/metrics -bench BenchmarkFlushMeasurement",
       "samples": 3,
-      "ns_per_op": 7394577,
-      "bytes_per_op": 5802,
-      "allocs_per_op": 166,
-      "throughput_per_second": 135.23423990310738,
+      "ns_per_op": 16188756,
+      "bytes_per_op": 6016,
+      "allocs_per_op": 167,
+      "throughput_per_second": 61.77126889799315,
       "latency_ms": {
         "samples": 3,
-        "min": 7.19593,
-        "median": 7.394577,
-        "p50": 7.394577,
-        "p90": 7.573625,
-        "p95": 7.596005999999999,
-        "p99": 7.613910799999999,
-        "max": 7.618386999999999,
-        "mean": 7.402964666666666,
-        "stddev": 0.21135336270410568,
-        "coefficient_of_variation": 2.8549827294970975
+        "min": 8.042765,
+        "median": 16.188755999999998,
+        "p50": 16.188755999999998,
+        "p90": 16.8690456,
+        "p95": 16.954081799999997,
+        "p99": 17.022110759999997,
+        "max": 17.039118,
+        "mean": 13.756879666666665,
+        "stddev": 4.966800650380718,
+        "coefficient_of_variation": 36.104122233586345
       },
-      "rss_bytes": 275431424,
-      "cpu_time_ms": 1654.5430000000001,
+      "rss_bytes": 275775488,
+      "cpu_time_ms": 2465.026,
       "valid": true,
       "limitations": [
         "Compare only with the same profile, dataset and compatible hardware."
@@ -708,25 +708,25 @@
       "package": "./pkg/contract",
       "command": "go test ./pkg/contract -bench BenchmarkPlanLayersMediumDAG",
       "samples": 3,
-      "ns_per_op": 154968,
-      "bytes_per_op": 162774,
+      "ns_per_op": 249781,
+      "bytes_per_op": 162773,
       "allocs_per_op": 303,
-      "throughput_per_second": 6452.945124154664,
+      "throughput_per_second": 4003.507072195243,
       "latency_ms": {
         "samples": 3,
-        "min": 0.152557,
-        "median": 0.154968,
-        "p50": 0.154968,
-        "p90": 0.1729192,
-        "p95": 0.1751631,
-        "p99": 0.17695821999999997,
-        "max": 0.17740699999999998,
-        "mean": 0.16164399999999998,
-        "stddev": 0.01370428243287476,
-        "coefficient_of_variation": 8.478064408746851
+        "min": 0.24184699999999998,
+        "median": 0.24978099999999998,
+        "p50": 0.24978099999999998,
+        "p90": 0.259061,
+        "p95": 0.260221,
+        "p99": 0.26114899999999996,
+        "max": 0.261381,
+        "mean": 0.251003,
+        "stddev": 0.009824166733112786,
+        "coefficient_of_variation": 3.913963870197881
       },
-      "rss_bytes": 96600064,
-      "cpu_time_ms": 656.135,
+      "rss_bytes": 94846976,
+      "cpu_time_ms": 665.914,
       "valid": true,
       "limitations": [
         "Compare only with the same profile, dataset and compatible hardware."
@@ -739,25 +739,25 @@
       "package": "./internal/orchestrator",
       "command": "go test ./internal/orchestrator -bench BenchmarkRunPlanConcurrentMediumDAG",
       "samples": 3,
-      "ns_per_op": 270733083,
-      "bytes_per_op": 3098560,
-      "allocs_per_op": 9726,
-      "throughput_per_second": 3.693674924833623,
+      "ns_per_op": 320015458,
+      "bytes_per_op": 3000776,
+      "allocs_per_op": 9655,
+      "throughput_per_second": 3.1248490502605657,
       "latency_ms": {
         "samples": 3,
-        "min": 270.478208,
-        "median": 270.73308299999997,
-        "p50": 270.73308299999997,
-        "p90": 273.84341659999995,
-        "p95": 274.23220829999997,
-        "p99": 274.54324166,
-        "max": 274.621,
-        "mean": 271.944097,
-        "stddev": 2.3217660454841265,
-        "coefficient_of_variation": 0.8537659287688552
+        "min": 317.23170899999997,
+        "median": 320.01545799999997,
+        "p50": 320.01545799999997,
+        "p90": 330.2393588,
+        "p95": 331.51734639999995,
+        "p99": 332.53973648,
+        "max": 332.79533399999997,
+        "mean": 323.3475003333333,
+        "stddev": 8.299607543040835,
+        "coefficient_of_variation": 2.5667764663357273
       },
-      "rss_bytes": 280182784,
-      "cpu_time_ms": 1697.752,
+      "rss_bytes": 275562496,
+      "cpu_time_ms": 2328.798,
       "valid": true,
       "limitations": [
         "Compare only with the same profile, dataset and compatible hardware."
@@ -765,5 +765,5 @@
       "status": "ORANGE"
     }
   ],
-  "overall_status": "RED"
+  "overall_status": "ORANGE"
 }

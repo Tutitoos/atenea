@@ -2,6 +2,6 @@ goos: darwin
 goarch: arm64
 pkg: github.com/Tutitoos/atenea/pkg/contract
 cpu: Apple M5
-BenchmarkPlanLayersMediumDAG-10    	     692	    177407 ns/op	  162774 B/op	     303 allocs/op
+BenchmarkPlanLayersMediumDAG-10    	     463	    249781 ns/op	  162773 B/op	     303 allocs/op
 PASS
-ok  	github.com/Tutitoos/atenea/pkg/contract	0.466s
+ok  	github.com/Tutitoos/atenea/pkg/contract	0.437s

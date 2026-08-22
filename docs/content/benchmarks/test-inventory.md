@@ -9,7 +9,7 @@ dashboard: inventory
 | Paquete | Descubiertos | Ejecutados | Pasados | Fallidos | Omitidos |
 |---|---:|---:|---:|---:|---:|
 | github.com/Tutitoos/atenea/cmd/atenea | 230 | 227 | 227 | 0 | 3 |
-| github.com/Tutitoos/atenea/cmd/atenea-benchmark | 2 | 2 | 2 | 0 | 0 |
+| github.com/Tutitoos/atenea/cmd/atenea-benchmark | 6 | 6 | 6 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/adapter/claudecode | 75 | 74 | 74 | 0 | 1 |
 | github.com/Tutitoos/atenea/internal/adapter/codex | 12 | 12 | 12 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/adapter/kivgraph | 55 | 55 | 55 | 0 | 0 |
@@ -25,7 +25,7 @@ dashboard: inventory
 | github.com/Tutitoos/atenea/internal/agent/reviewer | 26 | 26 | 26 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/allowance | 5 | 5 | 5 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/backup | 28 | 28 | 28 | 0 | 0 |
-| github.com/Tutitoos/atenea/internal/benchmark | 9 | 9 | 9 | 0 | 0 |
+| github.com/Tutitoos/atenea/internal/benchmark | 11 | 11 | 11 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/buildinfo | 12 | 12 | 12 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/checkpoint | 39 | 39 | 39 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/clientconfig | 16 | 16 | 16 | 0 | 0 |
@@ -42,7 +42,7 @@ dashboard: inventory
 | github.com/Tutitoos/atenea/internal/orchestrator | 102 | 102 | 102 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/passthrough | 21 | 20 | 20 | 0 | 1 |
 | github.com/Tutitoos/atenea/internal/pidlock | 3 | 3 | 3 | 0 | 0 |
-| github.com/Tutitoos/atenea/internal/platform | 10 | 10 | 10 | 0 | 0 |
+| github.com/Tutitoos/atenea/internal/platform | 18 | 18 | 18 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/procgroup | 4 | 4 | 4 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/procstat | 2 | 2 | 2 | 0 | 0 |
 | github.com/Tutitoos/atenea/internal/registry | 14 | 14 | 14 | 0 | 0 |

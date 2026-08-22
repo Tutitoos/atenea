@@ -19,24 +19,29 @@
   </head>
   <body class="atenea-shell{{ if .IsHome }} is-home{{ end }}">
     <a class="skip-link" href="#content">Skip to content</a>
-    <input class="visually-hidden" type="checkbox" id="menu-toggle">
     <header class="topbar">
       <div class="topbar-inner">
-        <label class="menu-button" for="menu-toggle" aria-label="Open navigation">☰</label>
+        <button class="menu-button" type="button" data-menu-toggle aria-expanded="false" aria-controls="documentation-nav" aria-label="Open navigation">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
         <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="Atenea home">
           <span class="brand-mark">A</span>
           <span>Atenea</span>
           <small>orchestration core</small>
         </a>
         <div class="topbar-actions">
-          <button class="icon-button" type="button" data-search-open aria-label="Search documentation">⌕ <span>Search</span><kbd>⌘K</kbd></button>
-          <button class="icon-button" type="button" data-theme-toggle aria-label="Change theme">◐ <span data-theme-label>Auto</span></button>
+          <button class="icon-button" type="button" data-search-open aria-label="Search documentation">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.2 4.2"/></svg><span>Search</span><kbd>⌘K</kbd>
+          </button>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="Change theme">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.5 8.5 0 1 0 20.5 15.2Z"/></svg><span data-theme-label>Auto</span>
+          </button>
           <a class="github-link" href="{{ site.Params.github }}">GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
     </header>
     <div class="site-grid">
-      <label class="drawer-overlay" for="menu-toggle"></label>
+      <button class="drawer-overlay" type="button" data-menu-close aria-label="Close navigation"></button>
       {{ partial "sidebar.html" . }}
       <main id="content" class="content-column">
         {{ block "main" . }}{{ end }}

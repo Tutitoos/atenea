@@ -18,6 +18,26 @@
     updateThemeLabel();
   });
 
+  const menuButton = document.querySelector('[data-menu-toggle]');
+  const menuCloseButtons = document.querySelectorAll('[data-menu-close]');
+  const sidebar = document.querySelector('.sidebar');
+  const mobileQuery = window.matchMedia('(max-width: 720px)');
+  const syncMenuAccessibility = () => {
+    if (root.dataset.menuOpen !== 'true') sidebar?.setAttribute('aria-hidden', String(mobileQuery.matches));
+  };
+  syncMenuAccessibility();
+  mobileQuery.addEventListener?.('change', syncMenuAccessibility);
+  const setMenuOpen = (open) => {
+    root.dataset.menuOpen = open ? 'true' : 'false';
+    menuButton?.setAttribute('aria-expanded', String(open));
+    menuButton?.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+    sidebar?.setAttribute('aria-hidden', String(!open));
+    if (open) sidebar?.querySelector('a')?.focus();
+  };
+  menuButton?.addEventListener('click', () => setMenuOpen(root.dataset.menuOpen !== 'true'));
+  menuCloseButtons.forEach(button => button.addEventListener('click', () => setMenuOpen(false)));
+  sidebar?.querySelectorAll('a').forEach(link => link.addEventListener('click', () => setMenuOpen(false)));
+
   const searchDialog = document.createElement('dialog');
   searchDialog.className = 'search-dialog';
   searchDialog.innerHTML = '<form method="dialog" class="search-panel"><div class="search-top"><input type="search" placeholder="Search Atenea docs" aria-label="Search documentation" autofocus><button value="cancel" aria-label="Close search">×</button></div><div class="search-results" aria-live="polite"></div></form>';
@@ -37,6 +57,10 @@
   const openSearch = () => { searchDialog.showModal(); searchInput.value = ''; renderResults(); searchInput.focus(); };
   document.querySelector('[data-search-open]')?.addEventListener('click', openSearch);
   searchInput.addEventListener('input', () => renderResults(searchInput.value));
-  document.addEventListener('keydown', event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); } if (event.key === '/' && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); openSearch(); } });
+  document.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
+    if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) { event.preventDefault(); openSearch(); }
+    if (event.key === 'Escape' && root.dataset.menuOpen === 'true') setMenuOpen(false);
+  });
   searchDialog.addEventListener('click', event => { if (event.target === searchDialog) searchDialog.close(); });
 })();

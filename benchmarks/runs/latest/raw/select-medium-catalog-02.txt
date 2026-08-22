@@ -2,6 +2,6 @@ goos: darwin
 goarch: arm64
 pkg: github.com/Tutitoos/atenea/internal/selector
 cpu: Apple M5
-BenchmarkSelectMediumCatalog-10    	    4460	     25515 ns/op	   74241 B/op	      15 allocs/op
+BenchmarkSelectMediumCatalog-10    	    3548	     31362 ns/op	   74240 B/op	      15 allocs/op
 PASS
-ok  	github.com/Tutitoos/atenea/internal/selector	0.333s
+ok  	github.com/Tutitoos/atenea/internal/selector	0.353s

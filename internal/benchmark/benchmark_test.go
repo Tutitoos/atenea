@@ -3,6 +3,7 @@ package benchmark
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -77,6 +78,63 @@ func TestWriteJSONAndTextPublishArtifacts(t *testing.T) {
 func TestUsageAcceptsNilProcessState(t *testing.T) {
 	if got := Usage((*os.ProcessState)(nil)); got.RSSBytes != 0 || got.CPUTimeMS != 0 {
 		t.Fatalf("nil process usage = %+v", got)
+	}
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Usage(cmd.ProcessState); got.CPUTimeMS < 0 {
+		t.Fatalf("process usage = %+v", got)
+	}
+}
+
+func TestAtomicWriteReportsPublishFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing-dir")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteText(path, "data"); err == nil {
+		t.Fatal("writing over a directory succeeded")
+	}
+}
+
+func TestStatusManifestAndValidationBranches(t *testing.T) {
+	for _, status := range []Status{Green, Orange, Red} {
+		if status.Indicator() == "" {
+			t.Fatalf("empty indicator for %s", status)
+		}
+	}
+	manifest := NewManifest(context.Background(), "quick", "test")
+	if manifest.SchemaVersion != SchemaVersion || manifest.Profile != "quick" || manifest.Environment.OS == "" {
+		t.Fatalf("manifest = %+v", manifest)
+	}
+	commit, _ := GitState(context.Background())
+	if commit == "" {
+		t.Fatal("git state did not capture a commit")
+	}
+	base := Summary{
+		Manifest: Manifest{SchemaVersion: SchemaVersion, RunID: "run", Profile: "quick", Environment: Environment{OS: "darwin", Arch: "arm64", Go: "go1.26.7"}},
+		Tests:    TestTotals{Discovered: 1, Executed: 1, Passed: 1}, CoveragePercent: 80, CoverageFloor: 60, CoverageTarget: 80, OverallStatus: Green,
+	}
+	cases := []func(*Summary){
+		func(s *Summary) { s.Manifest.SchemaVersion = 99 },
+		func(s *Summary) { s.Manifest.RunID = "" },
+		func(s *Summary) { s.Manifest.Environment.OS = "" },
+		func(s *Summary) { s.CoveragePercent = 101 },
+		func(s *Summary) { s.Tests.Discovered = 0 },
+		func(s *Summary) { s.OverallStatus = Status("UNKNOWN") },
+		func(s *Summary) { s.Suites = []TestSuite{{Package: "pkg", Passed: 1, Executed: 2, Status: Green}} },
+		func(s *Summary) {
+			s.Benchmarks = []BenchmarkResult{{Name: "bad", Package: "pkg", Status: Green, Valid: false}}
+		},
+	}
+	for index, mutate := range cases {
+		candidate := base
+		mutate(&candidate)
+		if err := ValidateSummary(candidate); err == nil {
+			t.Errorf("case %d was accepted", index)
+		}
 	}
 }
 

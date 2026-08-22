@@ -47,6 +47,9 @@ type benchSpec struct {
 	Benchtime string
 }
 
+var testPackages = []string{"./..."}
+var docsRoot = "."
+
 func main() {
 	ctx := context.Background()
 	output := flag.String("output", "benchmarks/runs/latest", "directory for run artifacts")
@@ -132,9 +135,16 @@ func main() {
 }
 
 func runTests(ctx context.Context, output string) testRun {
+	return runTestsForPackages(ctx, output, testPackages...)
+}
+
+func runTestsForPackages(ctx context.Context, output string, packages ...string) testRun {
 	profile := filepath.Join(output, "coverage.out")
-	cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-coverprofile", profile, "./...")
+	args := []string{"test", "-json", "-count=1", "-coverprofile", profile}
+	args = append(args, packages...)
+	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Env = benchmarkEnvironment()
+	cmd.Dir = repositoryRoot()
 	var raw bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &raw, &raw
 	err := cmd.Run()
@@ -283,6 +293,7 @@ func runBenchmarks(ctx context.Context, output string, runs int, profile string)
 			}
 			cmd := exec.CommandContext(ctx, "go", args...)
 			cmd.Env = benchmarkEnvironment()
+			cmd.Dir = repositoryRoot()
 			raw, err := cmd.CombinedOutput()
 			rawPath := filepath.Join(output, "raw", fmt.Sprintf("%s-%02d.txt", spec.Name, sample))
 			_ = os.WriteFile(rawPath, raw, 0o644)
@@ -336,6 +347,23 @@ func benchmarkEnvironment() []string {
 		}
 	}
 	return append(env, "TMPDIR=/tmp")
+}
+
+func repositoryRoot() string {
+	directory, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return ""
+		}
+		directory = parent
+	}
 }
 
 func applyBaseline(results []benchmark.BenchmarkResult, output string, current benchmark.Manifest) {
@@ -439,11 +467,15 @@ func writeReport(path string, summary benchmark.Summary) error {
 }
 
 func renderDocs(summary benchmark.Summary) error {
-	dir := filepath.Join("docs", "content", "benchmarks")
+	return renderDocsAt(summary, docsRoot)
+}
+
+func renderDocsAt(summary benchmark.Summary, root string) error {
+	dir := filepath.Join(root, "docs", "content", "benchmarks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	dataDir := filepath.Join("docs", "data", "benchmarks")
+	dataDir := filepath.Join(root, "docs", "data", "benchmarks")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}

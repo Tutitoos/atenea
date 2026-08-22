@@ -9,7 +9,7 @@ dashboard: metrics
 | Package | Ejecutados | Pasados | Fallidos | Omitidos | Pass rate | Cobertura | Estado |
 |---|---:|---:|---:|---:|---:|---:|---|
 | github.com/Tutitoos/atenea/cmd/atenea | 227 | 227 | 0 | 3 | 100.0% | 72.3% | 🟠 ORANGE |
-| github.com/Tutitoos/atenea/cmd/atenea-benchmark | 2 | 2 | 0 | 0 | 100.0% | 6.8% | 🔴 RED |
+| github.com/Tutitoos/atenea/cmd/atenea-benchmark | 6 | 6 | 0 | 0 | 100.0% | 71.1% | 🟠 ORANGE |
 | github.com/Tutitoos/atenea/internal/adapter/claudecode | 74 | 74 | 0 | 1 | 100.0% | 87.4% | 🟠 ORANGE |
 | github.com/Tutitoos/atenea/internal/adapter/codex | 12 | 12 | 0 | 0 | 100.0% | 81.7% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/adapter/kivgraph | 55 | 55 | 0 | 0 | 100.0% | 70.6% | 🟠 ORANGE |
@@ -25,7 +25,7 @@ dashboard: metrics
 | github.com/Tutitoos/atenea/internal/agent/reviewer | 26 | 26 | 0 | 0 | 100.0% | 91.3% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/allowance | 5 | 5 | 0 | 0 | 100.0% | 83.3% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/backup | 28 | 28 | 0 | 0 | 100.0% | 71.0% | 🟠 ORANGE |
-| github.com/Tutitoos/atenea/internal/benchmark | 9 | 9 | 0 | 0 | 100.0% | 60.0% | 🟠 ORANGE |
+| github.com/Tutitoos/atenea/internal/benchmark | 11 | 11 | 0 | 0 | 100.0% | 82.8% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/buildinfo | 12 | 12 | 0 | 0 | 100.0% | 87.0% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/checkpoint | 39 | 39 | 0 | 0 | 100.0% | 84.9% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/clientconfig | 16 | 16 | 0 | 0 | 100.0% | 88.2% | 🟢 GREEN |
@@ -42,7 +42,7 @@ dashboard: metrics
 | github.com/Tutitoos/atenea/internal/orchestrator | 102 | 102 | 0 | 0 | 100.0% | 90.3% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/passthrough | 20 | 20 | 0 | 1 | 100.0% | 86.2% | 🟠 ORANGE |
 | github.com/Tutitoos/atenea/internal/pidlock | 3 | 3 | 0 | 0 | 100.0% | 94.4% | 🟢 GREEN |
-| github.com/Tutitoos/atenea/internal/platform | 10 | 10 | 0 | 0 | 100.0% | 48.4% | 🔴 RED |
+| github.com/Tutitoos/atenea/internal/platform | 18 | 18 | 0 | 0 | 100.0% | 81.3% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/procgroup | 4 | 4 | 0 | 0 | 100.0% | 90.9% | 🟢 GREEN |
 | github.com/Tutitoos/atenea/internal/procstat | 2 | 2 | 0 | 0 | 100.0% | 75.0% | 🟠 ORANGE |
 | github.com/Tutitoos/atenea/internal/registry | 14 | 14 | 0 | 0 | 100.0% | 85.4% | 🟢 GREEN |
