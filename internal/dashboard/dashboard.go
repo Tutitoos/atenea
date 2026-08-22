@@ -29,10 +29,14 @@ const (
 )
 
 var (
-	ErrNotFound      = errors.New("dashboard MCP not found")
-	ErrNotDeclared   = errors.New("MCP has no dashboard")
+	// ErrNotFound means no configured MCP has the requested id.
+	ErrNotFound = errors.New("dashboard MCP not found")
+	// ErrNotDeclared means the MCP exists but does not expose a dashboard.
+	ErrNotDeclared = errors.New("MCP has no dashboard")
+	// ErrAliasConflict means a dashboard alias collides with an unmanaged entry.
 	ErrAliasConflict = errors.New("dashboard alias conflicts with an unmanaged hosts entry")
-	ErrInvalidHosts  = errors.New("invalid managed hosts block")
+	// ErrInvalidHosts means the managed hosts block cannot be parsed safely.
+	ErrInvalidHosts = errors.New("invalid managed hosts block")
 )
 
 // Entry is the stable public mapping used by the CLI and status renderers.
@@ -42,6 +46,7 @@ type Entry struct {
 	Alias string
 }
 
+// KivgraphID is the stable id used for the optional graph viewer dashboard.
 const KivgraphID = "kivgraph"
 
 // Resolve returns one configured dashboard by MCP id.
@@ -126,7 +131,7 @@ func Check(ctx context.Context, rawURL string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("dashboard returned %s", resp.Status)

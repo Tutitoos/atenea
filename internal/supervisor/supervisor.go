@@ -75,7 +75,9 @@ const (
 type Readiness string
 
 const (
-	ReadinessMCP  Readiness = "mcp"
+	// ReadinessMCP probes an MCP initialize exchange.
+	ReadinessMCP Readiness = "mcp"
+	// ReadinessHTTP probes a dashboard with a harmless HTTP GET.
 	ReadinessHTTP Readiness = "http"
 )
 

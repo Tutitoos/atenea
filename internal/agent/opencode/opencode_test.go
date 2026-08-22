@@ -413,7 +413,6 @@ func TestLiveOpenCodeMatrix(t *testing.T) {
 	}
 	tools := strings.TrimSpace(os.Getenv("ATENEA_OPENCODE_MCP_CONFIG"))
 	for _, model := range models {
-		model := model
 		t.Run(strings.NewReplacer("/", "_", ":", "_").Replace(model), func(t *testing.T) {
 			runner, err := New(Options{Binary: os.Getenv("ATENEA_OPENCODE_BINARY"), Timeout: 120 * time.Second})
 			if err != nil {
