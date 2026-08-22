@@ -155,7 +155,7 @@ runners = ["omp"]
   terminal_binary = "codex"
   app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
   implementations = ["codex.search"]
-  timeout = "90s"
+  timeout = "120s"
 
   [orchestrator.serena]
   # Where Serena is listening. It runs as an MCP server behind a local proxy

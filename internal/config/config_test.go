@@ -870,6 +870,9 @@ func TestTheOrchestratorHasWorkingDefaults(t *testing.T) {
 	if cfg.Orchestrator.ClaudeCode.Timeout <= cfg.Orchestrator.OMP.Timeout {
 		t.Error("a model turn given a tool's patience will be cut off mid-thought")
 	}
+	if cfg.Orchestrator.Codex.Timeout != 120*time.Second {
+		t.Errorf("codex timeout = %s, want 120s measured provider margin", cfg.Orchestrator.Codex.Timeout)
+	}
 	if cfg.Orchestrator.OMP.Binary == "" {
 		t.Error("the adapter has no command to run")
 	}

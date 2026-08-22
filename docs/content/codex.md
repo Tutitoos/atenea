@@ -46,7 +46,7 @@ runners = ["omp", "codex"]
   terminal_binary = "codex"
   app_binary = "/Applications/ChatGPT.app/Contents/Resources/codex"
   implementations = ["codex.search"]
-  timeout = "90s"
+  timeout = "120s"
 ```
 
 Codex is not added to the default runner list, so enabling it is explicit.
@@ -62,7 +62,7 @@ and `--ignore-rules`; it does not reuse Claude Code flags.
 Codex CLI currently does not report a monetary cost in its JSONL completion
 event. Atenea therefore gates the dispatch on the commission's budget and
 records the absence of a Codex price as a notice; it cannot enforce a native
-per-call dollar ceiling that Codex does not expose. The 90-second timeout is
+per-call dollar ceiling that Codex does not expose. The 120-second timeout is
 enforced by Atenea and kills the process tree.
 
 ## Choosing a provider
@@ -104,6 +104,8 @@ secret or sensitive source fragment through the search result.
 ## Current audit status
 
 On 2026-08-22 the authenticated `codex-cli 0.149.0` binary was rechecked
-against `taxiprime-backend` with the configured `0.25 USD` budget and `90s`
-timeout. The minimal `code.search` call reached the timeout without a result.
-Codex remains optional; no timeout or budget was increased.
+against `taxiprime-backend` with the configured `0.25 USD` budget. An isolated
+180-second diagnostic completed in `81.8s` with a valid result and no reported
+monetary usage. The default timeout is now `120s` to leave measured startup and
+provider variance margin; Codex remains optional and the budget was not
+increased.

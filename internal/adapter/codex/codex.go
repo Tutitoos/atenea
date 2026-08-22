@@ -40,8 +40,9 @@ const DefaultTerminalBinary = "codex"
 // DefaultAppBinary is the Codex executable bundled with the ChatGPT app.
 const DefaultAppBinary = "/Applications/ChatGPT.app/Contents/Resources/codex"
 
-// DefaultTimeout is the maximum duration of one Codex search turn.
-const DefaultTimeout = 90 * time.Second
+// DefaultTimeout is the maximum duration of one Codex search turn. It leaves
+// measured startup/provider variance margin without changing the money grant.
+const DefaultTimeout = 120 * time.Second
 
 const defaultContextLines = 2
 
