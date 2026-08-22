@@ -39,9 +39,14 @@ func codeSearch() contract.Capability {
 	}
 }
 
+type testHelper interface {
+	Helper()
+	Fatalf(string, ...any)
+}
+
 // catalog holds one capability, two providers and two repositories, which is
 // the smallest shape where the funnel has a real decision to make.
-func catalog(t *testing.T) *registry.Registry {
+func catalog(t testHelper) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
 	if err := reg.AddCapability(codeSearch()); err != nil {
@@ -176,7 +181,7 @@ func hits(paths ...string) contract.Outcome {
 	}
 }
 
-func build(t *testing.T, runner contract.Runner, maxParallel int, dir string) (*orchestrator.Agent, *registry.Registry) {
+func build(t testHelper, runner contract.Runner, maxParallel int, dir string) (*orchestrator.Agent, *registry.Registry) {
 	t.Helper()
 	reg := catalog(t)
 	if fake, ok := runner.(*fakeRunner); ok && fake.serves == nil {

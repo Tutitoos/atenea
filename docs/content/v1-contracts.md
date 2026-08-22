@@ -55,8 +55,8 @@ The backend remains deliberately narrower than Claude Code: OpenCode has no
 native JSON-schema flag or provider-independent budget flag. Atenea asks for
 structured JSON in the prompt, records `step_finish` usage/cost when present,
 rejects a completed result whose observed cost exceeds a positive requested
-budget, and treats missing terminal events as unavailable rather than
-successful. That budget check happens after the provider reports the turn; it
+budget, and the core repeats that rejection at the common runner boundary for
+every adapter. The check happens after the provider reports the turn; it
 cannot prevent an already-running event from overspending.
 
 Provider boundary errors are mapped into the shared bins: permission and

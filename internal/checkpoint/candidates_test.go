@@ -78,6 +78,21 @@ func TestRemainingCountsWhatLayersAfterStillOwes(t *testing.T) {
 	}
 }
 
+func TestRemainingCountsAUserSuppliedPlanWithoutInventingExploration(t *testing.T) {
+	r := checkpoint.Run{
+		Kind: checkpoint.KindPlan, Task: "review every login",
+		Plan:  twoStepPlan("review every login"),
+		Steps: []checkpoint.StepState{{ID: "explore-api", Review: "ok"}},
+	}
+	remaining, err := r.Remaining()
+	if err != nil {
+		t.Fatalf("Remaining: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("remaining = %d, want 1: a supplied plan resumes its own DAG", remaining)
+	}
+}
+
 func TestRemainingIsZeroOnceEveryStepPassedReview(t *testing.T) {
 	r := checkpoint.Run{
 		Task: "find every TODO",

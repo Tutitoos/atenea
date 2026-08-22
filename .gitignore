@@ -4,6 +4,7 @@
 /dist/
 /tmp/
 /atenea
+/coverage-summary.txt
 
 # Air hot reload
 /build-errors.log

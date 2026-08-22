@@ -405,7 +405,7 @@ reason:
 
 ```text
 $ atenea mcp --check
-atenea 1.0.0 is listening at ~/.local/state/atenea/run/core.sock
+atenea 1.0.1 is listening at ~/.local/state/atenea/run/core.sock
 13 capability(ies) would be offered as tools
 2 chat(s) open right now
 ```
@@ -458,7 +458,7 @@ LSPs will activate as files are read
 ~/Desktop/atenea
 
 • OpenCode 1.18.16
-⊙ Atenea 1.0.0+<revision>
+⊙ Atenea 1.0.1+<revision>
 ```
 
 **That column has to be on screen for any of them to appear.** It is 42 columns
@@ -539,7 +539,7 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ Atenea 1.0.0+<revision>  2 sin leer
+⊙ Atenea 1.0.1+<revision>  2 sin leer
 ```
 
 One line, written the way the client writes its own version line: a coloured
@@ -553,7 +553,7 @@ than under it: in this column an empty line of its own would cost a visible blan
 row, measured against the real sidebar before the shape was chosen.
 
 The version is printed exactly as the service reports it, build metadata and all.
-Trimming `1.0.0+<revision>.modified` down to `1.0.0` would hide the part that says
+Trimming `1.0.1+<revision>.modified` down to `1.0.1` would hide the part that says
 this binary is not the one that was tagged.
 
 ### Which model did the work
@@ -788,8 +788,15 @@ process counter would say "not yet" on a machine that has been copying all day.
 base. A file that changed is copied and the older snapshot keeps the older
 bytes. The sixth arrives and the oldest leaves. They live *beside* the state
 root, never inside it — a copy under the tree it copies recurses into itself.
-Restoring is `cp -a`: point `XDG_STATE_HOME` at the restored folder and Atenea
-opens it.
+List and restore without starting providers:
+
+```sh
+atenea backup list
+atenea backup restore 20260802T212600Z /tmp/atenea-restored
+```
+
+Restore refuses to overwrite an existing target. Inspect the new directory,
+then point `XDG_STATE_HOME` at it when you are ready to bring the state back.
 
 `STALE` appears when the newest copy is older than two rhythms. Two, not one:
 a beat can be seconds late and a light that flapped would train the eye to skip
@@ -959,7 +966,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 1.0.0  contract 3.1.0  AMBER
+atenea 1.0.1  contract 3.1.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

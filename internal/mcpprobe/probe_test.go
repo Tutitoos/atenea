@@ -149,6 +149,24 @@ func TestNothingToReachIsSaidPlainly(t *testing.T) {
 	}
 }
 
+func TestServerDescribesItsSelectedTransportAndProbeAllPreservesOrder(t *testing.T) {
+	httpServer := mcpprobe.Server{ID: "http", URL: "http://127.0.0.1:1"}
+	if httpServer.Transport() != "http" || httpServer.Where() != httpServer.URL {
+		t.Fatalf("HTTP server description = %q/%q", httpServer.Transport(), httpServer.Where())
+	}
+	stdioServer := mcpprobe.Server{ID: "stdio", Command: []string{"fake", "--check"}}
+	if stdioServer.Transport() != "stdio" || stdioServer.Where() != "fake --check" {
+		t.Fatalf("stdio server description = %q/%q", stdioServer.Transport(), stdioServer.Where())
+	}
+	if (mcpprobe.Server{}).Where() != "" {
+		t.Fatal("empty server had an address")
+	}
+	got := mcpprobe.ProbeAll(t.Context(), []mcpprobe.Server{{ID: "first"}, {ID: "second"}})
+	if len(got) != 2 || got[0].ID != "first" || got[1].ID != "second" {
+		t.Fatalf("ProbeAll order = %#v, want input order", got)
+	}
+}
+
 // --- stdio ---------------------------------------------------------------
 
 func TestAStdioServerAnswersOverThePipe(t *testing.T) {

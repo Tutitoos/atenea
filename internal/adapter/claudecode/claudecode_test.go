@@ -66,6 +66,19 @@ func newTestRunner(t *testing.T) *Runner {
 	return runner
 }
 
+func TestClaudeRunnerIdentitySurfaceAndCapabilities(t *testing.T) {
+	runner := newTestRunner(t)
+	if runner.ID() != "claude-code" || runner.Surface() == "" {
+		t.Fatalf("identity surface = %q", runner.Surface())
+	}
+	if got := runner.Capabilities(); len(got) != 1 || got[0] != CodeSearch {
+		t.Fatalf("capabilities = %v", got)
+	}
+	if got := runner.Implementations(); len(got) != 1 || got[0] != "claude.search" {
+		t.Fatalf("implementations = %v", got)
+	}
+}
+
 func request(t *testing.T, payload map[string]any, effects ...contract.Effect) contract.RunRequest {
 	t.Helper()
 	repo := contract.NewRepository("current", t.TempDir(), []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
@@ -118,7 +131,7 @@ func TestTheTurnIsPinnedDownBeforeItStarts(t *testing.T) {
 	}
 	joined := strings.Join(args, " ")
 
-	for _, want := range []string{"--print", "--output-format json", "--json-schema",
+	for _, want := range []string{"--print", "--output-format stream-json", "--verbose", "--json-schema",
 		"--safe-mode", "--no-session-persistence", "--max-budget-usd"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the command line is missing %q:\n%s", want, joined)
@@ -630,6 +643,19 @@ func TestAnEmptyQueryIsRefusedBeforeTheTurnStarts(t *testing.T) {
 	}
 }
 
+func TestAStreamEventKeepsTypeAndEnvelopeFields(t *testing.T) {
+	event, ok, err := parseStreamLine(`{"type":"result","total_cost_usd":1.25}`)
+	if err != nil || !ok {
+		t.Fatalf("parseStreamLine() = %#v, %v, %v; want a valid event", event, ok, err)
+	}
+	if event.Type != "result" || event.Envelope.Type != "result" {
+		t.Fatalf("types = %q and %q, want result", event.Type, event.Envelope.Type)
+	}
+	if event.Envelope.TotalCostUSD != 1.25 || !event.costSeen {
+		t.Fatalf("cost = %v, seen = %v; want 1.25, true", event.Envelope.TotalCostUSD, event.costSeen)
+	}
+}
+
 // The only thing about this adapter that cannot be checked by reasoning: that
 // the flags it builds still exist. A renamed flag is refused by argument
 // parsing before the turn starts, in plain text on stderr with no envelope --
@@ -651,9 +677,19 @@ func TestTheRealClientStillAcceptsEveryFlagWeBuild(t *testing.T) {
 	// The exit code is not the claim -- a machine with an expired login exits
 	// non-zero and is still fine. The claim is that the client understood
 	// what it was asked and answered in its own format.
-	if _, err := parse(stdout); err != nil {
+	if _, err := parse(stdout); err != nil && !hasStreamResult(stdout) {
 		t.Fatalf("the installed client did not accept this command line: %v\nargs: %v", err, args)
 	}
+}
+
+func hasStreamResult(stdout []byte) bool {
+	for _, line := range strings.Split(string(stdout), "\n") {
+		event, ok, err := parseStreamLine(strings.TrimSpace(line))
+		if err == nil && ok && (event.Type == "result" || event.Type == "") {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

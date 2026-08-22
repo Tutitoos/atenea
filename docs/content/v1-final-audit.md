@@ -10,6 +10,10 @@ la configuración efectiva del equipo y las funciones que solo aparecen en la
 documentación. Los porcentajes son una estimación de cierre por área, no una
 cobertura de código ni una promesa de compatibilidad universal.
 
+> Nota histórica: esta página conserva la evidencia de la publicación 1.0.0.
+> El estado vigente de la rama y las comprobaciones posteriores se mantienen en
+> [v1 readiness](v1-readiness.md), actualmente para 1.0.1.
+
 ## Matriz de cierre
 
 | Área | Código/configuración del repositorio | Evidencia ejecutada | Cierre | Pendiente |

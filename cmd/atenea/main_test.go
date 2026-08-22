@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	osexec "os/exec"
@@ -11,6 +12,11 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
+	"github.com/Tutitoos/atenea/internal/backup"
+	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -745,5 +751,385 @@ func TestTheScreenSaysWhenCopyingIsOff(t *testing.T) {
 	}
 	if !strings.Contains(out, "copies       off") {
 		t.Errorf("the screen does not say copying is off:\n%s", out)
+	}
+}
+
+func backupCLISetup(t *testing.T) (string, string, backup.Snapshot) {
+	t.Helper()
+	root := t.TempDir()
+	stateHome := filepath.Join(root, "state-home")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	state := filepath.Join(stateHome, "atenea")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "marker.txt"), []byte("before\n"), 0o600); err != nil {
+		t.Fatalf("marker: %v", err)
+	}
+	backupDir := filepath.Join(root, "backups")
+	configPath := filepath.Join(root, "settings.toml")
+	body := settings + "\n[metrics]\npath = \"" + filepath.Join(root, "metrics.duckdb") + "\"\n" +
+		"[backup]\ndir = \"" + backupDir + "\"\nkeep = 5\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	store, err := backup.New(backup.Options{Source: state, Dir: backupDir, Keep: 5})
+	if err != nil {
+		t.Fatalf("backup store: %v", err)
+	}
+	snapshot, err := store.Snapshot(context.Background(), time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snapshot.Name == "" {
+		t.Fatal("snapshot has no name")
+	}
+	return configPath, state, snapshot
+}
+
+func TestBackupCLIControlsSnapshotLifecycle(t *testing.T) {
+	configPath, state, snapshot := backupCLISetup(t)
+
+	out, err := cli(t, "--config", configPath, "backup", "list")
+	if err != nil {
+		t.Fatalf("backup list: %v", err)
+	}
+	if !strings.Contains(out, snapshot.Name) || !strings.Contains(out, snapshot.Path) {
+		t.Fatalf("backup list = %q", out)
+	}
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	out, err = cli(t, "--config", configPath, "backup", "restore", snapshot.Name, restored)
+	if err != nil {
+		t.Fatalf("backup restore: %v", err)
+	}
+	if !strings.Contains(out, "restored "+snapshot.Name) {
+		t.Fatalf("backup restore output = %q", out)
+	}
+	got, err := os.ReadFile(filepath.Join(restored, "marker.txt"))
+	if err != nil || string(got) != "before\n" {
+		t.Fatalf("restored marker = %q, err=%v", got, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(state, "marker.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatalf("change marker: %v", err)
+	}
+	out, err = cli(t, "--config", configPath, "backup", "restore", snapshot.Name, state, "--replace")
+	if err != nil {
+		t.Fatalf("backup replace: %v", err)
+	}
+	if !strings.Contains(out, ".atenea-previous") {
+		t.Fatalf("backup replace output = %q", out)
+	}
+	got, err = os.ReadFile(filepath.Join(state, "marker.txt"))
+	if err != nil || string(got) != "before\n" {
+		t.Fatalf("replaced marker = %q, err=%v", got, err)
+	}
+
+	out, err = cli(t, "--config", configPath, "backup", "promote", state)
+	if err != nil {
+		t.Fatalf("backup promote: %v", err)
+	}
+	if !strings.Contains(out, "promoted previous state") {
+		t.Fatalf("backup promote output = %q", out)
+	}
+	got, err = os.ReadFile(filepath.Join(state, "marker.txt"))
+	if err != nil || string(got) != "after\n" {
+		t.Fatalf("promoted marker = %q, err=%v", got, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(state, "marker.txt"), []byte("latest\n"), 0o600); err != nil {
+		t.Fatalf("change marker again: %v", err)
+	}
+	if _, err = cli(t, "--config", configPath, "backup", "restore", snapshot.Name, state, "--replace"); err != nil {
+		t.Fatalf("backup replace before discard: %v", err)
+	}
+	out, err = cli(t, "--config", configPath, "backup", "discard", state, "--confirm")
+	if err != nil {
+		t.Fatalf("backup discard: %v", err)
+	}
+	if !strings.Contains(out, "discarded previous state") {
+		t.Fatalf("backup discard output = %q", out)
+	}
+	if _, err := os.Stat(state + ".atenea-previous"); !os.IsNotExist(err) {
+		t.Fatalf("previous state remains, stat err=%v", err)
+	}
+}
+
+func TestBackupCLIReturnsExplicitInputErrors(t *testing.T) {
+	configPath, _, _ := backupCLISetup(t)
+	for _, args := range [][]string{
+		{"backup"},
+		{"backup", "list", "extra"},
+		{"backup", "promote"},
+		{"backup", "discard", "target"},
+		{"backup", "unknown"},
+	} {
+		_, err := cli(t, append([]string{"--config", configPath}, args...)...)
+		if contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("args %v: kind=%v, want invalid_input", args, contract.KindOf(err))
+		}
+	}
+}
+
+func TestConfigAndIntentReportsExposeTheirSources(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("repo dir: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatalf("git marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte(`{
+  "mcpServers": {
+    "ripgrep": {"type": "stdio", "command": "not-executed"},
+    "outside": {"type": "http", "url": "https://not-executed.invalid/mcp"}
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("mcp config: %v", err)
+	}
+	skill := filepath.Join(root, ".claude", "skills", "release", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o700); err != nil {
+		t.Fatalf("skill dir: %v", err)
+	}
+	if err := os.WriteFile(skill, []byte("---\nname: release\ndescription: ship safely\n---\n"), 0o600); err != nil {
+		t.Fatalf("skill: %v", err)
+	}
+	configPath := settingsFile(t)
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("cwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	out, err := cli(t, "--config", configPath, "config", "path")
+	if err != nil || !strings.Contains(out, configPath) {
+		t.Fatalf("config path = %q, err=%v", out, err)
+	}
+	out, err = cli(t, "--config", configPath, "config", "show")
+	if err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	for _, want := range []string{"global", "overlay  none", "security", "client config", "intent"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config show missing %q:\n%s", want, out)
+		}
+	}
+	overlay := filepath.Join(root, ".atenea", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(overlay), 0o700); err != nil {
+		t.Fatalf("overlay dir: %v", err)
+	}
+	if err := os.WriteFile(overlay, []byte(`[[repository]]
+languages = ["go"]
+scale = "small"
+vcs = "present"
+indexed_by = ["ripgrep"]
+
+[[selector.rule]]
+capability = "code.search"
+prefer = "ripgrep"
+
+[security]
+sensitive = ["*.local"]
+`), 0o600); err != nil {
+		t.Fatalf("overlay: %v", err)
+	}
+	out, err = cli(t, "--config", configPath, "config", "show")
+	if err != nil {
+		t.Fatalf("config show with overlay: %v", err)
+	}
+	for _, want := range []string{"overlay  ", "adds repository", "selector rules", "local", "+1 local sensitive   12 pattern(s)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("overlay config show missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = cli(t, "--config", configPath, "intent")
+	if err != nil {
+		t.Fatalf("intent: %v", err)
+	}
+	for _, want := range []string{"asked for", "ripgrep", "outside", "also carried: 1 skill(s)", "unmatched"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("intent missing %q:\n%s", want, out)
+		}
+	}
+	out, err = cli(t, "--config", configPath, "intent", "--json")
+	if err != nil {
+		t.Fatalf("intent json: %v", err)
+	}
+	var report struct {
+		Items     []map[string]any `json:"items"`
+		Unmatched int              `json:"unmatched"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("intent json %q: %v", out, err)
+	}
+	if len(report.Items) != 3 || report.Unmatched != 1 {
+		t.Fatalf("intent json report = %+v", report)
+	}
+}
+
+func TestConfigInspectionRejectsUnknownActions(t *testing.T) {
+	path := settingsFile(t)
+	for _, args := range [][]string{{"config"}, {"config", "nope"}, {"intent", "--bad"}, {"resume"}, {"resume", "--list", "extra"}} {
+		_, err := cli(t, append([]string{"--config", path}, args...)...)
+		if contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("args %v: kind=%v, want invalid_input", args, contract.KindOf(err))
+		}
+	}
+}
+
+func TestResumeListAndDisplayHelpers(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+	if err := os.MkdirAll(filepath.Join(os.Getenv("XDG_STATE_HOME"), "atenea", "runs"), 0o700); err != nil {
+		t.Fatalf("runs directory: %v", err)
+	}
+	out, err := cli(t, "--config", settingsFile(t), "resume", "--list")
+	if err != nil || !strings.Contains(out, "nothing to resume") {
+		t.Fatalf("resume list = %q, err=%v", out, err)
+	}
+	if got := removedOrAbsent(true, "/tmp/file"); got != "removed /tmp/file" {
+		t.Fatalf("removedOrAbsent true = %q", got)
+	}
+	if got := removedOrAbsent(false, "/tmp/file"); got != "was not there: /tmp/file" {
+		t.Fatalf("removedOrAbsent false = %q", got)
+	}
+	if shortDigest("") != "-" || shortDigest("0123456789abcdef") != "0123456789ab" {
+		t.Fatal("shortDigest did not use the display forms")
+	}
+	if orNone(nil) != "(none)" || orNone([]string{"go"}) != "go" ||
+		orUnset("") != "(unspecified)" || orAny("") != "every repository" {
+		t.Fatal("optional display helpers returned the wrong empty form")
+	}
+	if yesNo(true) != "yes" || yesNo(false) != "no" || ceiling(0) != "unlimited" || ceiling(2) != "2 step(s) at a time" {
+		t.Fatal("boolean and ceiling helpers returned the wrong form")
+	}
+	if clip(strings.Repeat("x", 161)) != strings.Repeat("x", 160)+"..." || clip("short") != "short" {
+		t.Fatal("clip did not preserve its limit")
+	}
+}
+
+func TestCommandArgumentGuardsDoNotStartExternalWork(t *testing.T) {
+	var out bytes.Buffer
+	guards := []struct {
+		name string
+		call func() error
+	}{
+		{name: "dashboard missing", call: func() error { return cmdDashboard("", nil, &out) }},
+		{name: "dashboard flag first", call: func() error { return cmdDashboard("", []string{"--check"}, &out) }},
+		{name: "dashboard hosts flag", call: func() error { return cmdDashboardHosts(config.Config{}, []string{"--bad"}, &out) }},
+		{name: "incidents unknown", call: func() error { return cmdIncidents("", []string{"unknown"}, &out) }},
+		{name: "metrics bad flag", call: func() error { return cmdMetrics("", []string{"--bad"}, &out) }},
+		{name: "backup missing", call: func() error { return cmdBackup("", nil, &out) }},
+		{name: "detect bad flag", call: func() error { return cmdDetect("", []string{"--bad"}, &out) }},
+		{name: "select missing", call: func() error { return cmdSelect("", nil, &out) }},
+		{name: "task missing", call: func() error { return cmdTask("", nil, &out) }},
+		{name: "ask missing", call: func() error { return cmdAsk("", nil, &out) }},
+		{name: "resume extra", call: func() error { return cmdResume("", []string{"run", "extra"}, &out) }},
+		{name: "resume bad flag", call: func() error { return cmdResume("", []string{"run", "--bad"}, &out) }},
+		{name: "service missing", call: func() error { return cmdService("", nil, &out) }},
+		{name: "service unknown", call: func() error { return cmdService("", []string{"unknown"}, &out) }},
+		{name: "statusline missing", call: func() error { return cmdStatusLine(nil, &out) }},
+		{name: "statusline unknown", call: func() error { return cmdStatusLine([]string{"unknown"}, &out) }},
+		{name: "statusline too many", call: func() error { return cmdStatusLine([]string{"status", "atenea", "extra"}, &out) }},
+		{name: "wrap missing", call: func() error { return cmdWrap("", nil, &out) }},
+		{name: "wrap unknown", call: func() error { return cmdWrap("", []string{"unknown"}, &out) }},
+	}
+	for _, guard := range guards {
+		t.Run(guard.name, func(t *testing.T) {
+			if err := guard.call(); err == nil {
+				t.Fatalf("%s unexpectedly succeeded", guard.name)
+			}
+		})
+	}
+	if err := cmdStatusLine([]string{"widgets"}, &out); err != nil {
+		t.Fatalf("statusline widgets: %v", err)
+	}
+	if out.Len() == 0 {
+		t.Fatal("statusline widgets printed nothing")
+	}
+}
+
+func TestReadOnlyStatusAndIndexRenderers(t *testing.T) {
+	var out bytes.Buffer
+	printIndexReports(&out, nil)
+	if !strings.Contains(out.String(), "no attached provider") {
+		t.Fatalf("empty index report = %q", out.String())
+	}
+	out.Reset()
+	printIndexReports(&out, []core.IndexReport{
+		{Repository: "api", Provider: "serena", Err: "probe failed"},
+		{Repository: "web", Provider: "serena", Ready: true},
+		{Repository: "docs", Provider: "serena", Hint: "index missing"},
+	})
+	for _, want := range []string{"could not tell: probe failed", "ready", "not ready: index missing"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("index report missing %q: %s", want, out.String())
+		}
+	}
+	out.Reset()
+	if err := cmdService("", []string{"status"}, &out); err != nil {
+		t.Fatalf("service status: %v", err)
+	}
+	if !strings.Contains(out.String(), "unit") {
+		t.Fatalf("service status = %q", out.String())
+	}
+	out.Reset()
+	if err := cmdStatusLine([]string{"status"}, &out); err != nil {
+		t.Fatalf("statusline status: %v", err)
+	}
+	if !strings.Contains(out.String(), "widget") {
+		t.Fatalf("statusline status = %q", out.String())
+	}
+}
+
+func TestDecisionAndAnswerRenderersShowTheirCompleteFacts(t *testing.T) {
+	var out bytes.Buffer
+	decision := selector.Decision{
+		Capability: "code.search", Repository: "api",
+		Chosen: contract.Implementation{ID: "ripgrep"}, Reason: "health",
+		Notices: []string{"preferred provider unavailable"},
+		Stages:  []selector.Stage{{Name: "reach", In: []string{"ripgrep", "codex.search"}, Out: []string{"ripgrep"}, Dropped: []selector.Drop{{Implementation: "codex.search", Reason: "not installed", Raw: "raw detail"}}}},
+	}
+	printDecision(&out, decision, nil)
+	for _, want := range []string{"capability  code.search", "chosen      ripgrep", "notice      preferred provider unavailable", "funnel", "dropped codex.search", "raw: raw detail"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("decision output missing %q: %s", want, out.String())
+		}
+	}
+	out.Reset()
+	printDecision(&out, decision, contract.Fail(contract.FailureUnavailable, "selection failed"))
+	if strings.Contains(out.String(), "chosen") {
+		t.Fatalf("failed decision still printed chosen implementation: %s", out.String())
+	}
+	out.Reset()
+	printDecision(&out, selector.Decision{}, nil)
+	if out.Len() != 0 {
+		t.Fatalf("empty decision output = %q", out.String())
+	}
+
+	result := &orchestrator.Result{Steps: []orchestrator.StepResult{{
+		Review:  orchestrator.Review{Parent: contract.VerdictOK},
+		Outcome: contract.Outcome{Result: map[string]any{"matches": []any{map[string]any{"path": "main.go", "line": 4}}}, Notices: []string{"one result was narrowed"}},
+	}}}
+	out.Reset()
+	printAnswer(&out, result, false)
+	for _, want := range []string{"notice   one result was narrowed", "answer", "matches (1)", "path", "main.go"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("answer output missing %q: %s", want, out.String())
+		}
+	}
+	out.Reset()
+	printAnswer(&out, result, true)
+	if strings.Contains(out.String(), "one result was narrowed") {
+		t.Fatalf("trace answer repeated notice: %s", out.String())
+	}
+	out.Reset()
+	printAnswer(&out, &orchestrator.Result{Steps: []orchestrator.StepResult{{Review: orchestrator.Review{Parent: contract.VerdictFailed}}}}, false)
+	if out.Len() != 0 {
+		t.Fatalf("failed answer output = %q", out.String())
 	}
 }

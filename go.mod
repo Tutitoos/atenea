@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/marcboeker/go-duckdb/v2 v2.4.3
+	golang.org/x/sys v0.35.0
 	modernc.org/sqlite v1.29.6
 )
 
@@ -34,7 +35,6 @@ require (
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/mod v0.27.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/tools v0.36.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect

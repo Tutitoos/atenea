@@ -490,6 +490,73 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	return result, err
 }
 
+// RunPlan executes a caller-supplied multi-capability DAG.
+//
+// Run is the opinionated commission flow: explore first, then derive work
+// from what was found. Workflows and integrations that already have a
+// reviewed graph should not have to fake an exploration phase just to reach
+// the same dispatcher. This method is the narrow bridge: contract.Plan owns
+// validation and dependency ordering, while the orchestrator still owns
+// selection, permissions, review, checkpoints and metering.
+//
+// The graph is copied before execution. A caller may reuse or inspect its
+// plan after this method returns without racing the per-step budget stamps
+// that dispatch adds while the run is active.
+func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float64) (result *Result, err error) {
+	if strings.TrimSpace(plan.Task) == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "plan: task is required")
+	}
+	if err := plan.Validate(); err != nil {
+		return nil, err
+	}
+	if budgetUSD < 0 || math.IsNaN(budgetUSD) || math.IsInf(budgetUSD, 0) {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"plan: budget must be finite and not negative, got %v", budgetUSD)
+	}
+	if a.runner == nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"no runner is attached, so nothing can be dispatched")
+	}
+	if budgetUSD == 0 {
+		budgetUSD = a.budget
+	}
+
+	plan = plan.Clone()
+	started := time.Now()
+	result = &Result{RunID: checkpoint.NewID(started), Task: plan.Task, Plan: plan}
+	record := checkpoint.Run{
+		ID: result.RunID, Kind: checkpoint.KindPlan, Task: plan.Task,
+		Started: started, BudgetUSD: budgetUSD,
+		ContractVersion: contract.Current.String(), Plan: plan,
+	}
+	seenRepos := make(map[string]struct{}, len(plan.Steps))
+	for _, step := range plan.Steps {
+		seenRepos[step.Repository] = struct{}{}
+	}
+	for repo := range seenRepos {
+		record.Repositories = append(record.Repositories, repo)
+	}
+	slices.Sort(record.Repositories)
+
+	defer func() {
+		result.Spent = totalSpent(result.Steps)
+		result.Elapsed = time.Since(started)
+		result.SpentUSD = totalUSD(result.Steps)
+		result.Verdict = overallVerdict(result.Steps, ctx.Err())
+		result.Matches = countMatches(result.Steps)
+		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
+		record.Closed = true
+		record.Verdict = result.Verdict.String()
+		record.Updated = time.Now()
+		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
+			err = saveErr
+		}
+	}()
+
+	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, newGrant(budgetUSD), nil)
+	return result, err
+}
+
 // Question is one capability asked of one repository, with the payload the
 // caller already knows how to build.
 //
@@ -723,6 +790,10 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	// there is anything left to do at all.
 	if record.Kind == checkpoint.KindAsk {
 		_, err = a.dispatch(ctx, record.Plan, PhaseAsk, result, &record, purse, record.OK())
+		return result, err
+	}
+	if record.Kind == checkpoint.KindPlan {
+		_, err = a.dispatch(ctx, record.Plan, PhaseWork, result, &record, purse, record.OK())
 		return result, err
 	}
 

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/platform"
 )
@@ -52,5 +53,19 @@ func TestAMachineWithNoHomeStillGetsAPath(t *testing.T) {
 		if got == "" {
 			t.Errorf("%s returned nothing", name)
 		}
+	}
+}
+
+func TestConfigHomeAndBackupServiceInputsStayDeterministic(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/config")
+	if got := platform.ConfigHome(); got != "/tmp/config" {
+		t.Fatalf("ConfigHome = %q, want /tmp/config", got)
+	}
+	service, err := platform.NewService("/opt/atenea", -time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.StopGrace != 0 || service.Name != platform.ServiceName {
+		t.Fatalf("service = %+v, want clamped grace and canonical name", service)
 	}
 }

@@ -66,6 +66,12 @@ funds one commission above it. A commission that runs out gets
 `permission_denied` on the paid steps and keeps going through whoever charges
 nothing.
 
+The core also verifies the provider's reported charge at the boundary, so an
+adapter cannot return a successful result above its stamped share. This is a
+postcondition, not a promise that every provider can cancel an already-running
+turn at the exact cent. Use `--confirm` on `task` or `ask` when a human
+should review the budget and effects in a TTY before dispatch.
+
 Effects work the same way: `code.search` causes `read` and `process` at once,
 because every implementation of it is a binary. `[orchestrator] effects =
 ["process"]` grants that standing to every commission and question, on by
@@ -142,9 +148,9 @@ them; with nothing running it falls back to disk and says so.
 Published Linux and macOS releases can be installed with the checksum-verified installer:
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.0/atenea-install.sh \
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.1/atenea-install.sh \
   -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 1.0.0
+bash /tmp/atenea-install.sh --version 1.0.1
 ```
 
 The installer supports Linux and macOS on `amd64` and `arm64`, writes to

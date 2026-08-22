@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"math"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -34,7 +36,41 @@ func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contrac
 		return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
 			"%s causes %s, which the commission does not cover", req.Capability.ID, missing)
 	}
-	return c.Runner.Run(ctx, req)
+	callCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var exceeded atomic.Bool
+	callCtx = contract.WithCostObserver(callCtx, func(update contract.CostUpdate) bool {
+		if !update.Known {
+			return true
+		}
+		if math.IsNaN(update.SpentUSD) || math.IsInf(update.SpentUSD, 0) ||
+			update.SpentUSD < 0 || update.SpentUSD > req.Permission.BudgetUSD+1e-9 {
+			exceeded.Store(true)
+			cancel()
+			return false
+		}
+		return true
+	})
+	outcome, err := c.Runner.Run(callCtx, req)
+	if exceeded.Load() {
+		return outcome, contract.Fail(contract.FailurePermissionDenied,
+			"%s exceeded its %.2f USD permission during execution", req.Capability.ID,
+			req.Permission.BudgetUSD)
+	}
+	// Adapters are deliberately untrusted translators. They may enforce their
+	// own provider-side ceiling, but the core owns the final authorization
+	// boundary. A provider that reports an invalid or over-budget charge may
+	// have run already, yet it must never be accepted as a successful answer.
+	if math.IsNaN(outcome.SpentUSD) || math.IsInf(outcome.SpentUSD, 0) || outcome.SpentUSD < 0 {
+		return outcome, contract.Fail(contract.FailurePermissionDenied,
+			"%s reported an invalid monetary charge", req.Capability.ID)
+	}
+	if outcome.SpentUSD > req.Permission.BudgetUSD+1e-9 {
+		return outcome, contract.Fail(contract.FailurePermissionDenied,
+			"%s reported a charge above its %.2f USD permission", req.Capability.ID,
+			req.Permission.BudgetUSD)
+	}
+	return outcome, err
 }
 
 // grounded refuses a step whose repository is not on this machine's disk.

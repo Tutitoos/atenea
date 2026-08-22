@@ -318,6 +318,22 @@ func TestAStoreWithNoSourceOrNoFolderIsRefused(t *testing.T) {
 	}
 }
 
+func TestAnExtraDestinationCannotEscapeTheSnapshot(t *testing.T) {
+	home := t.TempDir()
+	_, err := backup.New(backup.Options{
+		Source: filepath.Join(home, "state"),
+		Dir:    filepath.Join(home, "backups"),
+		Keep:   1,
+		Extras: []backup.Extra{{Source: filepath.Join(home, "secret"), Dest: "../secret"}},
+	})
+	if err == nil {
+		t.Fatal("an extra destination escaped the snapshot")
+	}
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input", got)
+	}
+}
+
 // An interval of zero is due at every tick, which is a backup running against
 // itself for as long as the machine is up.
 func TestAnIntervalThatIsNotAnIntervalIsRefused(t *testing.T) {
@@ -352,6 +368,112 @@ func TestACopyKeepsThePermissionsOfWhatItCopied(t *testing.T) {
 	for name, mode := range want {
 		if got := statFile(t, filepath.Join(snapshot.Path, name)).Mode().Perm(); got != mode {
 			t.Errorf("%s in the snapshot is %v, want the source's %v", name, got, mode)
+		}
+	}
+}
+
+func TestRestorePublishesACompleteSnapshotIntoANewDirectory(t *testing.T) {
+	store, source := newStore(t, 5)
+	writeFile(t, filepath.Join(source, "state", "db"), "restorable")
+	if err := os.Symlink("state/db", filepath.Join(source, "current")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	snapshot := mustSnapshot(t, store, base)
+	target := filepath.Join(t.TempDir(), "restored")
+	if err := store.Restore(context.Background(), snapshot.Name, target); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := readFile(t, filepath.Join(target, "state", "db")); got != "restorable" {
+		t.Fatalf("restored content = %q, want restorable", got)
+	}
+	link, err := os.Readlink(filepath.Join(target, "current"))
+	if err != nil || link != "state/db" {
+		t.Fatalf("restored symlink = %q, %v; want state/db", link, err)
+	}
+}
+
+func TestRestoreRefusesAnExistingTarget(t *testing.T) {
+	store, source := newStore(t, 5)
+	writeFile(t, filepath.Join(source, "state.db"), "rows")
+	snapshot := mustSnapshot(t, store, base)
+	target := t.TempDir()
+	if err := store.Restore(context.Background(), snapshot.Name, target); err == nil {
+		t.Fatal("Restore overwrote an existing target")
+	} else if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("Restore kind = %v, want invalid_input", got)
+	}
+}
+
+func TestRestoreInPlaceSwapsAndRetainsPreviousState(t *testing.T) {
+	store, source := newStore(t, 5)
+	writeFile(t, filepath.Join(source, "state.db"), "from snapshot")
+	snapshot := mustSnapshot(t, store, base)
+	target := filepath.Join(t.TempDir(), "live")
+	writeFile(t, filepath.Join(target, "state.db"), "current")
+
+	previous, err := store.RestoreInPlace(context.Background(), snapshot.Name, target)
+	if err != nil {
+		t.Fatalf("RestoreInPlace: %v", err)
+	}
+	if got := readFile(t, filepath.Join(target, "state.db")); got != "from snapshot" {
+		t.Fatalf("new state = %q, want from snapshot", got)
+	}
+	if got := readFile(t, filepath.Join(previous, "state.db")); got != "current" {
+		t.Fatalf("previous state = %q, want current", got)
+	}
+	if _, err := store.RestoreInPlace(context.Background(), snapshot.Name, target); err == nil {
+		t.Fatal("a second in-place restore overwrote the retained previous state")
+	}
+}
+
+func TestPreviousStateCanBePromotedOrExplicitlyDiscarded(t *testing.T) {
+	store, source := newStore(t, 5)
+	writeFile(t, filepath.Join(source, "state.db"), "snapshot")
+	snapshot := mustSnapshot(t, store, base)
+	target := filepath.Join(t.TempDir(), "live")
+	writeFile(t, filepath.Join(target, "state.db"), "current")
+
+	previous, err := store.RestoreInPlace(context.Background(), snapshot.Name, target)
+	if err != nil {
+		t.Fatalf("RestoreInPlace: %v", err)
+	}
+	current, err := store.PromotePrevious(context.Background(), target)
+	if err != nil {
+		t.Fatalf("PromotePrevious: %v", err)
+	}
+	if current != target+".atenea-current" || readFile(t, filepath.Join(target, "state.db")) != "current" {
+		t.Fatalf("promotion did not restore the previous state")
+	}
+	if got := readFile(t, filepath.Join(current, "state.db")); got != "snapshot" {
+		t.Fatalf("current state retained %q, want snapshot", got)
+	}
+	if _, err := os.Stat(previous); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("previous sidecar still exists after promotion: %v", err)
+	}
+
+	if _, err := store.RestoreInPlace(context.Background(), snapshot.Name, target); err != nil {
+		t.Fatalf("second RestoreInPlace: %v", err)
+	}
+	if err := store.DiscardPrevious(context.Background(), target); err != nil {
+		t.Fatalf("DiscardPrevious: %v", err)
+	}
+	if _, err := os.Stat(target + ".atenea-previous"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("previous sidecar still exists after discard: %v", err)
+	}
+}
+
+func TestPreviousStateCommandsRefuseMissingOrEmptyTargets(t *testing.T) {
+	store, _ := newStore(t, 5)
+	for _, check := range []func() error{
+		func() error { _, err := store.PromotePrevious(context.Background(), ""); return err },
+		func() error { return store.DiscardPrevious(context.Background(), "") },
+		func() error {
+			_, err := store.PromotePrevious(context.Background(), filepath.Join(t.TempDir(), "missing"))
+			return err
+		},
+	} {
+		if err := check(); err == nil {
+			t.Fatal("backup previous command accepted an invalid target")
 		}
 	}
 }

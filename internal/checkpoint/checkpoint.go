@@ -28,10 +28,9 @@ import (
 // Run is the paper copy of one commission in flight.
 type Run struct {
 	ID string `json:"id"`
-	// Kind tells a task-shaped commission apart from a single ask: the two
-	// resume differently, one through explore-then-split and the other as
-	// one step, and there is nothing else on a receipt that says which it
-	// was. "task" and "ask" are the only values.
+	// Kind tells a task-shaped commission apart from a single ask or a
+	// caller-supplied plan: task rebuilds explore-then-split, ask is one step,
+	// and plan resumes directly from its supplied DAG.
 	Kind string `json:"kind"`
 	// Session is the chat this run belongs to, when one owns it. History is
 	// common property across chats; knowing whose it was is what keeps it
@@ -69,10 +68,14 @@ type Run struct {
 	Steps []StepState   `json:"steps"`
 }
 
-// The three values Kind takes.
+// The four values Kind takes.
 const (
 	KindTask = "task"
 	KindAsk  = "ask"
+	// KindPlan is a caller-supplied multi-capability DAG. It resumes directly
+	// from the graph on file; unlike KindTask it has no implicit exploration
+	// phase to reconstruct.
+	KindPlan = "plan"
 	// KindRaw is a passthrough: one tool on a declared backend, forwarded
 	// verbatim. It resumes like neither of the others because it does not
 	// resume at all -- there is no plan to rebuild and no step to redispatch,
@@ -231,6 +234,7 @@ func (s *Store) Save(run Run) error {
 	if !runID.MatchString(run.ID) {
 		return contract.Fail(contract.FailureInvalidInput, "run id %q is not a safe file name", run.ID)
 	}
+	run = sanitizedRun(run)
 	body, err := json.MarshalIndent(run, "", "  ")
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "run %s: %v", run.ID, err)
@@ -263,14 +267,41 @@ func (s *Store) Save(run Run) error {
 		_ = temp.Close()
 		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return diskFailure(err, "run %s: syncing checkpoint: %v", run.ID, err)
+	}
 	if err := temp.Close(); err != nil {
 		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
 	if err := os.Rename(name, final); err != nil {
 		return diskFailure(err, "run %s: %v", run.ID, err)
 	}
+	if err := syncDirectory(s.dir); err != nil {
+		return diskFailure(err, "run %s: syncing checkpoint directory: %v", run.ID, err)
+	}
 	renamed = true
 	return nil
+}
+
+// sanitizedRun copies the pieces that can carry provider output before the
+// receipt is serialized. The caller keeps the original in-memory evidence;
+// only the durable copy is redacted.
+func sanitizedRun(run Run) Run {
+	run.Steps = append([]StepState(nil), run.Steps...)
+	for i := range run.Steps {
+		step := &run.Steps[i]
+		step.Raw = contract.RedactRaw(step.Raw)
+		step.Funnel.Stages = append([]FunnelStage(nil), step.Funnel.Stages...)
+		for j := range step.Funnel.Stages {
+			stage := &step.Funnel.Stages[j]
+			stage.Dropped = append([]FunnelDrop(nil), stage.Dropped...)
+			for k := range stage.Dropped {
+				stage.Dropped[k].Raw = contract.RedactRaw(stage.Dropped[k].Raw)
+			}
+		}
+	}
+	return run
 }
 
 // diskFailure describes a filesystem write that did not happen.
@@ -319,10 +350,10 @@ func (s *Store) Load(id string) (Run, error) {
 	}
 	var run Run
 	if err := json.Unmarshal(raw, &run); err != nil {
-		// A receipt that will not parse was torn by an ugly close: there is no
-		// fsync before the rename, so a cut can land a .json the kernel never
-		// finished writing. Setting it aside is the service's job and only the
-		// service's, so on a machine where the service has not started since
+		// A receipt that will not parse may have been torn by an ugly close even
+		// though Save flushes the file before renaming it. Setting it aside is the
+		// service's job, and only the service's, so on a machine where the service
+		// has not started since
 		// the cut nothing has done it yet -- and a parse error on its own is a
 		// dead end. It names a real fault and no way out of it, which is the
 		// same shape as reporting the missing .json above: honest, and no use

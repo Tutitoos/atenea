@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -32,7 +33,7 @@ import (
 // would go back to being empty.
 func cmdMCP(in io.Reader, out io.Writer) error {
 	warnIfTerminal(in)
-	conn, err := net.Dial("unix", core.SocketPath())
+	conn, err := ipc.Dial(core.SocketPath())
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable,
 			"no atenea service is listening at %s: start it with `systemctl --user start atenea.service` "+

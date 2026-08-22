@@ -14,9 +14,9 @@ proveedores soportados.
 
 | Área | Garantía v1.0 | Evidencia | Límite conocido |
 | --- | --- | --- | --- |
-| Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo | `pkg/contract/workflow.go`, `internal/core/`, `--allow` | No hay confirmación interactiva; los procesos desatendidos requieren concesión explícita |
+| Permisos | Un efecto no concedido se rechaza antes de ejecutar el trabajo; `--confirm` añade aprobación TTY para `task` y `ask` | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | La confirmación es opt-in; los procesos desatendidos requieren concesión explícita |
 | Tiempo | `limits.max_duration` limita el turno mediante el contexto de ejecución | `pkg/contract/assignment.go`, `internal/agent/model/model.go` | La terminación depende de que el proceso externo responda al cierre del contexto |
-| Coste | `budget_usd` autoriza y pronostica; el proveedor aplica su propio límite entre mensajes | `internal/agent/planner/`, ayuda de `workflow` | Un mensaje ya iniciado puede superar la previsión |
+| Coste | `budget_usd` autoriza; el core rechaza cualquier resultado cuyo coste reportado supere el permiso | `internal/orchestrator/`, `internal/core/commission.go` | Un mensaje ya iniciado puede superar el límite antes de reportarlo; no existe cancelación común por centavos |
 | Tokens | `limits.max_tokens` se transporta, valida, hereda y estrecha el límite observado de lectura del planner cuando existe una concesión | `pkg/contract/assignment.go`, `internal/agent/planner/`, `internal/agent/model/model.go` | No es un hard cap: un evento en vuelo puede hacer que el uso observado se pase antes de pedir la respuesta final |
 | Lectura incremental | `ReadTokens` puede pedir al cliente que deje de leer y produzca una respuesta parcial | `internal/agent/model/model.go` | El uso observado puede llegar con el evento en vuelo; no equivale a impedir cada token posterior |
 | Citas | Cada campo de prosa debe aportar al menos una cita `path:line` o `Line N of path`; se comprueban línea, fragmento y ruta realmente abierta, y se conserva la evidencia | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/config/default.toml` | El significado narrativo más allá de las ubicaciones citadas no es verificable de forma determinista; un renombre con distinto basename queda sin resolver, nunca se adivina |
@@ -28,8 +28,8 @@ proveedores soportados.
 
 Estas decisiones no son fallos silenciosos:
 
-1. No se añade un prompt interactivo de permisos a un daemon o adaptador que
-   puede ejecutarse sin una persona presente.
+1. No se añade un prompt interactivo de permisos al daemon o a un adaptador.
+   Solo los comandos directos solicitan `--confirm`, y fallan si no hay TTY.
 2. OpenCode solo se presenta como provider cuando se selecciona explícitamente
    su backend; el parser propio, la validación local del schema y sus tests son
    obligatorios, y un stream sin terminal no se convierte en una respuesta

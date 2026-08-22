@@ -62,6 +62,35 @@ Do not treat `health=unknown` as a failure. It means that this process has not
 observed a current answer yet. A down provider should carry a reason in the
 health line and in the incident record.
 
+For a human-reviewed direct execution, add the explicit TTY confirmation:
+
+```sh
+atenea task "find every TODO" --confirm
+atenea ask code.search --repo current --set query=TODO --confirm
+```
+
+`--confirm` refuses piped or unattended input. The summary shows the requested
+budget and effects before any provider is started.
+
+Backups are inspectable and restorable into a new directory:
+
+```sh
+atenea backup list
+atenea backup restore SNAPSHOT_NAME /tmp/atenea-restored
+atenea backup restore SNAPSHOT_NAME /path/to/current --replace
+atenea backup promote /path/to/current
+atenea backup discard /path/to/current --confirm
+```
+
+Restore never overwrites an existing target unless --replace is supplied.
+Replacement first renames the current directory to a retained
+TARGET.atenea-previous sidecar, publishes the restored snapshot atomically,
+and rolls back the rename if publication fails. A second replacement is refused
+until the retained previous state is dealt with explicitly. Snapshot and restore
+publication syncs file contents and directory entries where the platform supports it.
+Promote reverses the last replacement and retains the current state as
+TARGET.atenea-current. Discard is destructive and requires --confirm.
+
 ## Service recovery
 
 Linux uses a per-user systemd unit:

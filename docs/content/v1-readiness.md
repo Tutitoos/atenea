@@ -5,7 +5,7 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the published v1.0.0 release. It separates what is
+This page is the acceptance record for the published v1.0.1 release. It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
 [`v1.0 policy`](v1-policy.md).
@@ -17,6 +17,7 @@ a new contract or an external provider decision. The normative policy is in
 | Core, registry, selector and orchestrator | `pkg/contract/`, `internal/registry/`, `internal/selector/`, `internal/orchestrator/` | Implemented and covered |
 | Persistent history | `internal/agent/agent.go`, `internal/trace/`, `internal/metrics/` | Lazy history loading is wired; tests cover prior-run discoveries |
 | Permission effects | `pkg/contract/workflow.go`, `internal/core/`, `cmd/atenea/main.go` | Explicit grants and `--allow` are enforced |
+| Budget boundary and plan execution | `internal/core/commission.go`, `internal/orchestrator/orchestrator.go`, `pkg/contract/workflow.go` | Reported over-budget results are rejected centrally; reviewed multi-capability DAGs run through `RunPlan` and resume from `KindPlan` checkpoints |
 | Measurements and wandering | `internal/metrics/summary.go`, `internal/metrics/compact.go`, migrations `0006` and `0007` | `out_of_scope` is persisted, rolled up and reported |
 | Completeness reporting | `internal/agent/model/model.go`, `internal/agent/planner/` | Missing or partial coverage is represented and tested |
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
@@ -25,9 +26,11 @@ a new contract or an external provider decision. The normative policy is in
 | OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | Opt-in adapter, local structured-schema and observed-budget enforcement, protocol fixtures, safe real-provider smoke and free-provider/MCP matrix |
 | Citation traceability gate | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/agent/review_integration_test.go`, `internal/config/default.toml` | Every prose field requires evidence; paths, lines, fragments, abbreviated paths, directory renames and multiple sources are audited and retained in the report, including through the real Runner |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
-| Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated; CI rejects global coverage below 75.0% |
+| Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated; CI enforces 80.0% globally and records one canonical history artifact |
 | v1.0 policy gate | `scripts/v1-policy-check.sh`, `docs/content/v1-policy.md` | The declared guarantees and deferred contracts have stable anchors |
 | Kivgraph impact and indexing | `internal/adapter/kivgraph/impact_index.go`, `internal/config/default.toml` | `code.impact` and `repository.index` are catalogued and provider-backed; indexing remains explicit `write+process` |
+| Durable state and IPC | `internal/backup/`, `internal/checkpoint/`, `internal/ipc/` | Files and published directories are synced; Unix peer credentials are checked and unsupported platforms fail closed |
+| Performance regression barriers | `scripts/benchmark-check.sh`, `scripts/load-check.sh`, `pkg/contract/workflow_bench_test.go`, `.github/workflows/ci.yml` | Selector, metrics and medium DAG load benchmarks run with CI thresholds |
 
 ## Acceptance command
 
@@ -39,11 +42,23 @@ bash scripts/v1-readiness.sh
 
 The gate checks repository hygiene, removal of references to the retired
 backend, formatting, module tidiness, vet, native build, the complete race
-suite and shell entry points. It does not publish a release.
+suite, benchmark thresholds and shell entry points. It does not publish a release.
+The declared provider matrix is checked separately from live integrations by
+scripts/provider-matrix-check.sh. It proves that the shipped catalog still
+contains the required capability-to-provider edges and that the effective
+configuration parses. A live MCP probe is opt-in with ATENEA_MCP_CHECK=1;
+credentials, paid model calls and provider-side indexing are not fabricated by
+this local gate.
+The v1-readiness workflow exposes two opt-in jobs: ATENEA_LIVE_MCP starts an
+isolated service and performs the MCP bridge handshake, while
+ATENEA_OPENCODE_SMOKE runs the real provider/MCP matrix. Neither job runs on
+ordinary pull requests unless the repository variable is explicitly enabled.
 
-CI also applies a 75.0% global coverage floor. The latest local observation is
-75.2%; the floor is deliberately a regression barrier, not a claim that every
-semantic path is exhaustively covered.
+CI applies a 77.0% regression floor and a hard 80.0% global target. The latest
+local observation is 80.1% under the race-enabled command used by CI. GitHub
+Actions stores one canonical Linux coverage summary for 90 days and compares
+each successful main run with the previous successful main point, allowing a
+regression greater than one percentage point to fail.
 
 On 2026-08-22, Hugo `0.165.0` built `docs/` locally without errors. `atenea wrap opencode --version` completed MCP handshakes for all
 8 configured team servers: 2 were declared directly and 6 were retained as
@@ -139,12 +154,12 @@ can be truncated by the upstream server; Atenea detects that case and retries
 with the official `kinds` filter, then merges and deduplicates the bounded
 responses. A real large-file overview returned 45 symbols successfully.
 
-## Latest 1.0.0 verification
+## Latest 1.0.1 verification
 
 On 2026-08-22 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate
 could run. `bash scripts/v1-readiness.sh` passed all nine stages, including
-`go test -race -count=1 ./...`, policy anchors and the `1.0.0`/`3.1.0` build
+`go test -race -count=1 ./...`, policy anchors and the `1.0.1`/`3.1.0` build
 identity. The release was subsequently published by the release workflow.
 
 The end-to-end test
@@ -156,16 +171,16 @@ the reviewer trace points to the work run.
 The existing public release was also checked with:
 
 ```sh
-bash scripts/release-smoke.sh 1.0.0
+bash scripts/release-smoke.sh 1.0.1
 ```
 
 Checksum verification, install, same-version update, rollback and uninstall
-passed on macOS arm64. This validates the public `1.0.0` release lifecycle;
+passed on macOS arm64. This validates the public `1.0.1` release lifecycle;
 the smoke test itself does not publish a release.
 
 The current phase was rechecked on 2026-08-22. `TMPDIR=/tmp go test ./...`,
 `TMPDIR=/tmp go test -race -count=1 ./...`, `go vet ./...`, `go build ./...`,
-the policy gate and the `1.0.0` release smoke passed. The timing margins in
+the policy gate and the `1.0.1` release smoke passed. The timing margins in
 the Claude/OpenCode fixtures now tolerate loaded machines and the race
 detector while remaining below the child-process lifetime.
 
@@ -246,6 +261,15 @@ The readiness script now defaults its temporary test state to `/tmp` on macOS
 to stay below the kernel's UNIX-socket path limit; an explicit
 `ATENEA_TEST_TMPDIR` may be supplied when a different temporary root is
 required.
+
+The final local provider smoke used the installed Claude Code `2.1.228` and
+Codex CLI `0.149.0` against disposable repositories. Claude Code exposed two
+streaming cost events and was canceled by the observer at the test ceiling
+after reporting `0.055262 USD`. Codex initially exposed an invalid nested
+JSON-schema error; the adapter now closes nested objects with
+`additionalProperties: false`, and the follow-up smoke completed with `ok`, one
+match, 40,558 tokens and one provider observation. This validates the real
+Codex completion path as well as the adapter's streaming event path.
 
 ## Deliberately deferred
 

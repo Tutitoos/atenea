@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 const day = 24 * time.Hour
@@ -73,6 +75,22 @@ func TestFoldingTwiceCountsOnce(t *testing.T) {
 	attempts, _, _ := bucketFor(t, s, grainHour)
 	if attempts != 2 {
 		t.Fatalf("hour bucket counted %d attempts after three passes, want 2", attempts)
+	}
+}
+
+func TestCompactIfDueUsesTheOnDiskMaintenanceMark(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC().Truncate(time.Hour)
+	due, err := s.CompactIfDue(context.Background(), now, time.Hour)
+	if err != nil || !due {
+		t.Fatalf("first compact due=%v err=%v", due, err)
+	}
+	due, err = s.CompactIfDue(context.Background(), now.Add(30*time.Minute), time.Hour)
+	if err != nil || due {
+		t.Fatalf("second compact due=%v err=%v", due, err)
+	}
+	if _, err := s.CompactIfDue(context.Background(), now, 0); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("zero interval kind = %v", contract.KindOf(err))
 	}
 }
 

@@ -3,6 +3,7 @@ package checkpoint_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,6 +125,28 @@ func TestRoundTripKeepsTheFailureAndItsRawText(t *testing.T) {
 	}
 	if read.Steps[0].Raw != "no symbol matching 'Frame/consistent' found" {
 		t.Errorf("raw = %q, want the provider's own text", read.Steps[0].Raw)
+	}
+}
+
+func TestSaveRedactsProviderTextOnlyInTheDurableCopy(t *testing.T) {
+	store, err := checkpoint.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	record := run("20260802T131000-redact")
+	record.Steps[0].Raw = "Authorization: Bearer live-token"
+	if err := store.Save(record); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !strings.Contains(record.Steps[0].Raw, "live-token") {
+		t.Fatal("Save mutated the in-memory provider evidence")
+	}
+	read, err := store.Load(record.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if strings.Contains(read.Steps[0].Raw, "live-token") || !strings.Contains(read.Steps[0].Raw, "[REDACTED]") {
+		t.Fatalf("durable raw = %q, want redacted provider output", read.Steps[0].Raw)
 	}
 }
 
