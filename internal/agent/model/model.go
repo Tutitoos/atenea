@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +32,7 @@ import (
 	agentopencode "github.com/Tutitoos/atenea/internal/agent/opencode"
 	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -244,7 +244,7 @@ func ateneaToolsConfig() (string, error) {
 // the service is down should be told it the same way regardless of which
 // door it knocked on. Keep the two in sync by hand.
 func AteneaTools() (string, error) {
-	conn, err := net.Dial("unix", core.SocketPath())
+	conn, err := ipc.Dial(core.SocketPath())
 	if err != nil {
 		return "", contract.Fail(contract.FailureUnavailable,
 			"no atenea service is listening at %s: start it with `systemctl --user start atenea.service` "+

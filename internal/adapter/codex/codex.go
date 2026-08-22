@@ -201,10 +201,14 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		Tokens:   answer.Usage.total(),
 		PeakRSS:  peak,
 	}, SpentUSD: answer.CostUSD}
+	if !contract.ReportCost(ctx, contract.CostUpdate{SpentUSD: answer.CostUSD, Known: answer.CostSeen}) {
+		return outcome, contract.Fail(contract.FailurePermissionDenied,
+			"codex exceeded its monetary permission during the call")
+	}
 	if err != nil {
 		return outcome, err
 	}
-	if answer.CostUSD > req.Permission.BudgetUSD {
+	if answer.CostSeen && answer.CostUSD > req.Permission.BudgetUSD {
 		return outcome, contract.Fail(contract.FailurePermissionDenied,
 			"codex reported a cost above the commission budget")
 	}
@@ -224,7 +228,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
 			"%d match(es) fell outside the requested scope and were dropped", dropped))
 	}
-	if answer.CostUSD == 0 {
+	if !answer.CostSeen {
 		outcome.Notices = append(outcome.Notices,
 			"Codex CLI did not report monetary usage; the Atenea budget gated dispatch but could not be metered")
 	}
@@ -309,21 +313,52 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	cmd.Dir = root
 	cmd.Stdin = strings.NewReader(prompt(req, ask, r.sensitive))
 	procgroup.Contain(cmd)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return response{}, 0, contract.Fail(contract.FailureUnavailable,
+			"codex output stream could not be opened")
+	}
+	var stderr strings.Builder
 	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return response{}, 0, classifyFailure("", err)
+	}
+	var parsed eventStream
+	budgetStopped := false
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 4096), 4<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if err := parseEventLine(line, &parsed); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return response{}, peak, err
+		}
+		if parsed.CostSeen && !contract.ReportCost(ctx, contract.CostUpdate{
+			SpentUSD: parsed.CostUSD, Known: true,
+		}) {
+			budgetStopped = true
+			cancel()
+			break
+		}
+	}
+	scanErr := scanner.Err()
+	runErr := cmd.Wait()
 	peak = procstat.PeakRSS(cmd.ProcessState)
+	if scanErr != nil {
+		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+			"codex output could not be read")
+	}
+	if budgetStopped {
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak,
+			contract.Fail(contract.FailurePermissionDenied,
+				"codex exceeded its monetary permission during the event stream")
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return response{}, peak, contract.Stopped(ctxErr, "codex", r.timeout)
-	}
-	parsed, parseErr := parseEvents(stdout.String())
-	if parseErr != nil {
-		if runErr != nil {
-			return response{}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
-		}
-		return response{}, peak, parseErr
 	}
 	if runErr != nil {
 		return response{}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
@@ -339,6 +374,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	}
 	out.Usage = parsed.Usage
 	out.CostUSD = parsed.CostUSD
+	out.CostSeen = parsed.CostSeen
 	return out, peak, nil
 }
 
@@ -346,6 +382,7 @@ type response struct {
 	Structured map[string]any
 	Usage      usage
 	CostUSD    float64
+	CostSeen   bool
 }
 
 type usage struct {
@@ -365,6 +402,7 @@ type eventStream struct {
 	ErrorText string
 	Usage     usage
 	CostUSD   float64
+	CostSeen  bool
 }
 
 func parseEvents(stdout string) (eventStream, error) {
@@ -376,34 +414,8 @@ func parseEvents(stdout string) (eventStream, error) {
 		if line == "" {
 			continue
 		}
-		var raw map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			return out, contract.Fail(contract.FailureUnavailable,
-				"codex emitted invalid JSONL")
-		}
-		var kind string
-		_ = json.Unmarshal(raw["type"], &kind)
-		switch kind {
-		case "item.completed":
-			var item struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}
-			if err := json.Unmarshal(raw["item"], &item); err == nil && item.Type == "agent_message" {
-				out.Message = item.Text
-			}
-		case "turn.completed":
-			var done struct {
-				Usage   usage   `json:"usage"`
-				CostUSD float64 `json:"total_cost_usd"`
-			}
-			if err := json.Unmarshal(raw["usage"], &done.Usage); err != nil {
-				_ = json.Unmarshal(raw["usage"], &done)
-			}
-			_ = json.Unmarshal(raw["usage"], &out.Usage)
-			_ = json.Unmarshal(raw["total_cost_usd"], &out.CostUSD)
-		case "error", "turn.failed":
-			out.ErrorText += " " + eventMessage(raw)
+		if err := parseEventLine(line, &out); err != nil {
+			return out, err
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -415,6 +427,46 @@ func parseEvents(stdout string) (eventStream, error) {
 			"codex printed no JSONL events")
 	}
 	return out, nil
+}
+
+func parseEventLine(line string, out *eventStream) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"codex emitted invalid JSONL")
+	}
+	var kind string
+	_ = json.Unmarshal(raw["type"], &kind)
+	switch kind {
+	case "item.completed":
+		var item struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw["item"], &item); err == nil && item.Type == "agent_message" {
+			out.Message = item.Text
+		}
+	case "turn.completed":
+		_ = json.Unmarshal(raw["usage"], &out.Usage)
+		if cost, ok := costFromJSON(raw["total_cost_usd"]); ok {
+			out.CostUSD = cost
+			out.CostSeen = true
+		}
+	case "error", "turn.failed":
+		out.ErrorText += " " + eventMessage(raw)
+	}
+	return nil
+}
+
+func costFromJSON(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var cost float64
+	if err := json.Unmarshal(raw, &cost); err != nil {
+		return 0, false
+	}
+	return cost, true
 }
 
 func eventMessage(raw map[string]json.RawMessage) string {
@@ -465,6 +517,12 @@ func strictOutputSchema(capability contract.Capability) ([]byte, error) {
 // accepts the capability's looser contract on the way back.
 func makeStrict(node map[string]any) {
 	if properties, ok := node["properties"].(map[string]any); ok {
+		// Codex applies strict structured-output rules at every object depth,
+		// including objects nested under an array's items. The capability
+		// schema already closes the top-level object, but an output record can
+		// otherwise reach this boundary without an explicit refusal of extra
+		// keys and the CLI rejects the whole request before the model runs.
+		node["additionalProperties"] = false
 		names := make([]string, 0, len(properties))
 		for name, child := range properties {
 			names = append(names, name)

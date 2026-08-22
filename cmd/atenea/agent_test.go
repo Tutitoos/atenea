@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -99,5 +105,140 @@ func TestTruncateNeverCutsAMultiByteRuneInHalf(t *testing.T) {
 	}
 	if want := "12345678…"; got != want {
 		t.Errorf("truncate(%q, 10) = %q, want %q", s, got, want)
+	}
+}
+
+func TestAgentOutputAndWorkspaceHelpers(t *testing.T) {
+	declared := config.AgentType{Spec: contract.AgentTypeSpec{Name: "reader"}, Summary: "summarize files"}
+	if got := defaultObjective(declared, []string{" README.md "}); got != "read  README.md  and answer" {
+		t.Fatalf("defaultObjective(file) = %q", got)
+	}
+	if got := defaultObjective(declared, nil); got != "summarize files" {
+		t.Fatalf("defaultObjective(summary) = %q", got)
+	}
+	declared.Summary = ""
+	if got := defaultObjective(declared, nil); got != "run reader" {
+		t.Fatalf("defaultObjective(name) = %q", got)
+	}
+
+	cfg := config.Config{Repositories: []contract.Repository{
+		contract.NewRepository("zeta", "/zeta", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+		contract.NewRepository("alpha", "/alpha", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+	}}
+	ws := workspaceFor(cfg, "alpha")
+	if ws.RepositoryID != "alpha" || ws.RepositoryRoot != "/alpha" || strings.Join(ws.Repositories, ",") != "alpha,zeta" {
+		t.Fatalf("workspaceFor(named) = %#v", ws)
+	}
+	ws = workspaceFor(cfg, "missing")
+	if ws.RepositoryID != "current" || ws.RepositoryRoot == "" {
+		t.Fatalf("workspaceFor(missing) = %#v", ws)
+	}
+
+	if got := sortedKeys(map[string]any{"z": 1, "a": 2}); strings.Join(got, ",") != "a,z" {
+		t.Fatalf("sortedKeys = %v", got)
+	}
+	if got := resultLine(" first line\nsecond\nthird "); got != "first line… (3 lines)" {
+		t.Fatalf("resultLine(multiline) = %q", got)
+	}
+	if got := resultLine(strings.Repeat("x", 121)); len(got) <= 120 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("resultLine(long) = %q", got)
+	}
+	if got := resultLine(42); got != "42" {
+		t.Fatalf("resultLine(short) = %q", got)
+	}
+}
+
+func TestAgentReportsAndTracesAreReadable(t *testing.T) {
+	failed := contract.Report{
+		Verdict:    contract.VerdictFailed,
+		Reason:     contract.Reason{Kind: contract.FailureInvalidInput, Text: "bad shape"},
+		Result:     map[string]any{"z": strings.Repeat("x", 121), "a": "first\nsecond"},
+		Discovered: []contract.Discovery{{Level: contract.ContextRepository, Note: "fact"}},
+		Notices:    []string{"caveat"},
+	}
+	assignment := contract.Assignment{ID: "a-1", TypeName: "reader"}
+	var out bytes.Buffer
+	printReport(&out, assignment, failed, false)
+	text := out.String()
+	for _, want := range []string{"a-1  reader  failed", "invalid_input: bad shape", "a: first… (2 lines)", "discovered (repository): fact", "notice: caveat"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report output missing %q: %s", want, text)
+		}
+	}
+	out.Reset()
+	printReport(&out, contract.Assignment{}, failed, false)
+	if out.Len() != 0 {
+		t.Fatalf("empty assignment printed %q", out.String())
+	}
+
+	run := agent.ReviewedRun{Attempts: []agent.Attempt{
+		{Work: assignment, Report: failed},
+		{Work: contract.Assignment{ID: "a-2", TypeName: "reader"}, Report: contract.Report{Verdict: contract.VerdictOK}, Reviewed: true,
+			Review: contract.Assignment{ID: "r-2", TypeName: "reviewer"}, ReviewReport: contract.Report{Verdict: contract.VerdictOK}},
+	}}
+	out.Reset()
+	printReviewed(&out, run, false)
+	if !strings.Contains(out.String(), "attempt 1/2") || !strings.Contains(out.String(), "accepted") {
+		t.Fatalf("review output = %q", out.String())
+	}
+
+	path := filepath.Join(t.TempDir(), "traces.db")
+	store, err := openTraces(context.Background(), path, &out, false)
+	if err != nil {
+		t.Fatalf("openTraces: %v", err)
+	}
+	if store.Path() != path {
+		t.Fatalf("store path = %q", store.Path())
+	}
+	_ = store.Close()
+
+	now := time.Now()
+	rows := []trace.Row{
+		{TypeName: "reader", Objective: "inspect", StartedAt: now.Add(-time.Second), EndedAt: now, Verdict: contract.VerdictOK},
+		{TypeName: "reader", Objective: "retry", StartedAt: now, EndedAt: now, Attempt: 2, RetryOf: "a-1", Reason: contract.Reason{Kind: contract.FailureInvalidInput, Text: "needs work"}},
+		{TypeName: "reviewer", Objective: "audit", StartedAt: now, Reviews: "a-0"},
+	}
+	out.Reset()
+	printTraces(&out, rows, path)
+	for _, want := range []string{"STARTED", "reader", "try 2", "redoes a-1", "reviews a-0", "invalid_input: needs work", "3 traces"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("trace output missing %q: %s", want, out.String())
+		}
+	}
+	if got := verdictLabel(trace.Row{Verdict: contract.VerdictIncomplete, Swept: true, EndedAt: now}); got != "incomplete*" {
+		t.Fatalf("verdictLabel(swept) = %q", got)
+	}
+	if got := verdictLabel(trace.Row{}); got != "running" {
+		t.Fatalf("verdictLabel(open) = %q", got)
+	}
+	if got := took(trace.Row{}); got != "-" {
+		t.Fatalf("took(open) = %q", got)
+	}
+	if got := plural(1, "trace", "traces"); got != "1 trace" {
+		t.Fatalf("plural(one) = %q", got)
+	}
+	if got := plural(2, "trace", "traces"); got != "2 traces" {
+		t.Fatalf("plural(many) = %q", got)
+	}
+}
+
+func TestAgentAndTraceCommandValidation(t *testing.T) {
+	var out bytes.Buffer
+	for _, args := range [][]string{{}, {"reader", "--bad"}, {"reader", "file", "--traces"}} {
+		if err := cmdAgent("", args, &out); err == nil {
+			t.Errorf("cmdAgent(%v) unexpectedly succeeded", args)
+		}
+	}
+	for _, args := range [][]string{{"file"}, {"--verdict", "not-a-verdict"}, {"--since", "not-a-duration"}} {
+		if err := cmdTraces(args, &out); err == nil {
+			t.Errorf("cmdTraces(%v) unexpectedly succeeded", args)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "traces.db")
+	if err := cmdTraces([]string{"--traces", path}, &out); err != nil {
+		t.Fatalf("cmdTraces(empty): %v", err)
+	}
+	if !strings.Contains(out.String(), "no traces in "+path) {
+		t.Fatalf("cmdTraces(empty) = %q", out.String())
 	}
 }

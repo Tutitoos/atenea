@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -22,6 +23,32 @@ func (o *outsider) Capabilities() []string    { return []string{"code.search"} }
 func (o *outsider) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
 	o.ran++
 	return contract.Outcome{}, nil
+}
+
+type chargingOutsider struct {
+	outsider
+	cost float64
+}
+
+func (o *chargingOutsider) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
+	o.ran++
+	return contract.Outcome{SpentUSD: o.cost, Verdict: contract.VerdictOK}, nil
+}
+
+type streamingOutsider struct{ ran int }
+
+func (o *streamingOutsider) ID() string                { return "streaming" }
+func (o *streamingOutsider) Serves(string) bool        { return true }
+func (o *streamingOutsider) Implementations() []string { return []string{"streaming.search"} }
+func (o *streamingOutsider) Capabilities() []string    { return []string{"code.search"} }
+func (o *streamingOutsider) Run(ctx context.Context, _ contract.RunRequest) (contract.Outcome, error) {
+	o.ran++
+	if observer := contract.CostObserverFromContext(ctx); observer != nil {
+		if !observer(contract.CostUpdate{SpentUSD: 0.26, Known: true}) {
+			return contract.Outcome{}, ctx.Err()
+		}
+	}
+	return contract.Outcome{Verdict: contract.VerdictOK}, nil
 }
 
 func writingStep(allowed ...contract.Effect) contract.RunRequest {
@@ -58,6 +85,49 @@ func TestAnAdapterThatEnforcesNothingIsStillRefused(t *testing.T) {
 	}
 	if adapter.ran != 1 {
 		t.Errorf("the adapter ran %d time(s) for one covered step", adapter.ran)
+	}
+}
+
+func TestTheCoreRejectsAnOverBudgetAdapterEvenWhenItReportsSuccess(t *testing.T) {
+	adapter := &chargingOutsider{cost: 0.26}
+	seam := attach([]contract.Runner{adapter})
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Permission.BudgetUSD = 0.25
+
+	outcome, err := seam.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied", got)
+	}
+	if outcome.SpentUSD != 0.26 {
+		t.Fatalf("reported charge = %v, want 0.26", outcome.SpentUSD)
+	}
+}
+
+func TestTheCoreRejectsInvalidProviderCharges(t *testing.T) {
+	for _, cost := range []float64{-1, math.Inf(1)} {
+		adapter := &chargingOutsider{cost: cost}
+		seam := attach([]contract.Runner{adapter})
+		req := writingStep(contract.EffectRead, contract.EffectWrite)
+		req.Permission.BudgetUSD = 1
+		if _, err := seam.Run(context.Background(), req); contract.KindOf(err) != contract.FailurePermissionDenied {
+			t.Fatalf("cost %v: kind = %v, want permission_denied", cost, contract.KindOf(err))
+		}
+	}
+}
+
+func TestTheCoreCancelsWhenAProviderReportsAnIncrementalOverrun(t *testing.T) {
+	adapter := &streamingOutsider{}
+	seam := attach([]contract.Runner{adapter})
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Implementation.ID = "streaming.search"
+	req.Permission.BudgetUSD = 0.25
+
+	_, err := seam.Run(context.Background(), req)
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied", got)
+	}
+	if adapter.ran != 1 {
+		t.Fatal("streaming provider was not called exactly once")
 	}
 }
 

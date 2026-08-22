@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -217,6 +218,43 @@ func TestJSONCarriesDroppedCandidates(t *testing.T) {
 	}
 	if !strings.Contains(body, "claude.search") {
 		t.Errorf("the json does not name the dropped candidate:\n%s", body)
+	}
+}
+
+func TestDetectionJSONCarriesSourceAndProbeDetails(t *testing.T) {
+	detection := core.Detection{
+		PID:      1234,
+		Settings: "/tmp/atenea.toml",
+		Servers: []core.ServerProbe{{
+			ID: "filesystem", Transport: "stdio", Where: "local", Dashboard: "http://localhost:1",
+			Expose: "raw", OK: true, Name: "fs", Version: "1.2", Took: 1500 * time.Millisecond, PinnedPath: true,
+		}, {
+			ID: "broken", Transport: "stdio", Where: "local", Reason: "not found", Took: 2 * time.Millisecond,
+		}},
+		Indexes: []core.IndexReport{{Repository: "api", Provider: "serena", Ready: true}, {
+			Repository: "web", Provider: "serena", Hint: "index missing", Err: "probe failed",
+		}},
+	}
+	var out bytes.Buffer
+	printDetectionJSON(&out, detection, answeredBy{Service: true, PID: 99})
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("detection json invalid: %v", err)
+	}
+	answered := decoded["answered_by"].(map[string]any)
+	if answered["by"] != "service" || answered["pid"].(float64) != 99 {
+		t.Fatalf("answered_by = %#v", answered)
+	}
+	if len(decoded["servers"].([]any)) != 2 || len(decoded["indexes"].([]any)) != 2 {
+		t.Fatalf("detection arrays = %#v", decoded)
+	}
+	if !strings.Contains(out.String(), "filesystem") || !strings.Contains(out.String(), "probe failed") {
+		t.Fatalf("detection json omitted probe details: %s", out.String())
+	}
+	out.Reset()
+	printDetectionJSON(&out, detection, answeredBy{Elsewhere: "/other.toml", Refused: true})
+	if !strings.Contains(out.String(), "other.toml") || !strings.Contains(out.String(), "refused") {
+		t.Fatalf("fallback detection json = %s", out.String())
 	}
 }
 

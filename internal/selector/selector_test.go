@@ -85,7 +85,7 @@ func smallGoRepo(indexes ...string) contract.Repository {
 // forgets it is the bug this stage exists to prevent -- but repeating it in
 // every case here would bury what each one is actually pinning down. The reach
 // tests set it themselves.
-type funnel struct{ *selector.Selector }
+type funnel struct{ selector *selector.Selector }
 
 func (f funnel) Select(req selector.Request) (selector.Decision, error) {
 	if req.Reachable == nil {
@@ -93,7 +93,7 @@ func (f funnel) Select(req selector.Request) (selector.Decision, error) {
 			req.Reachable = append(req.Reachable, impl.ID)
 		}
 	}
-	return f.Selector.Select(req)
+	return f.selector.Select(req)
 }
 
 func mustSelector(t *testing.T, rules ...selector.Rule) funnel {

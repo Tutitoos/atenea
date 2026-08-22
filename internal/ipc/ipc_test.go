@@ -13,6 +13,37 @@ import (
 	"github.com/Tutitoos/atenea/internal/ipc"
 )
 
+func TestEndpointAndDialHelpersUseTheBoundService(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "run", "core.sock")
+	listener, err := ipc.Listen(path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	if got := ipc.Endpoint(root); got != path {
+		t.Fatalf("endpoint = %q, want %q", got, path)
+	}
+	conn, err := ipc.Dial(path)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		peer, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- peer
+		}
+	}()
+	select {
+	case peer := <-accepted:
+		peer.Close()
+	case <-time.After(time.Second):
+		t.Fatal("listener did not accept the helper dial")
+	}
+}
+
 // The ordinary case, and the one the peer check must not break: this user
 // reaching a socket this user owns.
 //

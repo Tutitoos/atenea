@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"path/filepath"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/ipc"
@@ -14,8 +13,8 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// socketFile is the door. It lives under the state root, in a directory of its
-// own, and the two halves of that are separate decisions.
+// SocketPath is derived from the state root and lives below a private
+// Unix-socket directory.
 //
 // Under the state root, and not in XDG_RUNTIME_DIR where a socket of this kind
 // ordinarily goes, for the reason the upkeep claim already documents: that
@@ -32,12 +31,8 @@ import (
 // notebook and the measurement base; whatever mode the operator has it at is
 // their business, and a socket appearing inside it is no reason to change that
 // underneath them.
-const socketDir = "run"
-const socketFile = "core.sock"
-
-// SocketPath is where the running service listens.
 func SocketPath() string {
-	return filepath.Join(platform.StateDir(), socketDir, socketFile)
+	return ipc.Endpoint(platform.StateDir())
 }
 
 // askTimeout bounds a client's whole exchange with the service. Generous
@@ -216,7 +211,7 @@ func (c *Core) closeSocket() {
 // service builds this from memory and answers in microseconds, so anything
 // near a second means it is not going to.
 func Asked() (Status, bool) {
-	conn, err := net.DialTimeout("unix", SocketPath(), askTimeout)
+	conn, err := ipc.DialTimeout(SocketPath(), askTimeout)
 	if err != nil {
 		return Status{}, false
 	}
@@ -251,7 +246,7 @@ func Asked() (Status, bool) {
 // Connecting is still bounded tightly. A door with nobody behind it is the
 // ordinary state of a machine, and the caller has a local sweep ready.
 func AskedDetect(ctx context.Context, repository string) (Detection, bool) {
-	conn, err := net.DialTimeout("unix", SocketPath(), askTimeout)
+	conn, err := ipc.DialTimeout(SocketPath(), askTimeout)
 	if err != nil {
 		return Detection{}, false
 	}

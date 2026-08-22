@@ -158,8 +158,6 @@ func (commandLauncher) Open(rawURL string) error {
 		name, args = "open", []string{rawURL}
 	case "linux":
 		name, args = "xdg-open", []string{rawURL}
-	case "windows":
-		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", rawURL}
 	default:
 		return fmt.Errorf("unsupported browser platform %s", runtime.GOOS)
 	}

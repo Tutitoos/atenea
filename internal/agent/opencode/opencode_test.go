@@ -64,6 +64,64 @@ func TestRunParsesCompletedJSONStream(t *testing.T) {
 	}
 }
 
+func TestSchemaAndErrorHelpersCoverProviderBoundaries(t *testing.T) {
+	for _, value := range []any{json.Number("1.5"), float64(2), float32(3), int(4), int64(5)} {
+		if _, err := schemaNumber(value); err != nil {
+			t.Errorf("schemaNumber(%T): %v", value, err)
+		}
+	}
+	if _, err := schemaNumber("nope"); err == nil {
+		t.Fatal("schemaNumber accepted text")
+	}
+	if !schemaContains([]any{"a", map[string]any{"b": 1}}, map[string]any{"b": 1}) {
+		t.Fatal("schemaContains missed a deep equal value")
+	}
+	if got := appendWithout([]string{"A=1", "B=2"}, "A", "3"); !slices.Equal(got, []string{"B=2", "A=3"}) {
+		t.Fatalf("appendWithout = %v", got)
+	}
+	if got := firstToken("  first second"); got != "first" || firstToken(" ") != "" {
+		t.Fatalf("firstToken = %q", got)
+	}
+	if got := rawError(nil, json.RawMessage(`{"error":{"data":{"message":"nested"}}}`), nil); got != "nested" {
+		t.Fatalf("nested rawError = %q", got)
+	}
+	if got := rawError(nil, nil, []byte("fallback")); got != "fallback" {
+		t.Fatalf("fallback rawError = %q", got)
+	}
+	for _, message := range []string{"rate limit", "unauthorized", "context window", "budget", "permission denied", "not found", "timeout", "other"} {
+		if failureFor(message, nil) == nil {
+			t.Fatalf("failureFor(%q) returned nil", message)
+		}
+	}
+}
+
+func TestOpenCodeSchemaAndPartHelpers(t *testing.T) {
+	if got := schemaStrings([]string{"a"}); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("schemaStrings strings = %v", got)
+	}
+	if got := schemaStrings([]any{"a", 1, "b"}); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("schemaStrings any = %v", got)
+	}
+	if len(schemaStrings(42)) != 0 {
+		t.Fatal("schemaStrings accepted a scalar")
+	}
+	if got, ok := schemaNumberField(float64(2)); !ok || got != 2 {
+		t.Fatalf("schemaNumberField = %v, %v", got, ok)
+	}
+	if _, ok := schemaNumberField("no"); ok {
+		t.Fatal("schemaNumberField accepted text")
+	}
+	if _, err := decodePart(json.RawMessage(`{"type":"text","text":"ok"}`), "text", nil); err != nil {
+		t.Fatalf("decodePart valid: %v", err)
+	}
+	if _, err := decodePart(nil, "text", []byte("event")); contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("decodePart missing kind = %v", contract.KindOf(err))
+	}
+	if _, err := decodePart(json.RawMessage(`{"type":"wrong"}`), "text", nil); contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("decodePart wrong type kind = %v", contract.KindOf(err))
+	}
+}
+
 func TestRunRecordsToolUseEventsAsEvidence(t *testing.T) {
 	binary := executable(t, `
 cat <<'JSON'

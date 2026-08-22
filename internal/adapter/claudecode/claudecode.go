@@ -20,9 +20,9 @@
 package claudecode
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"path"
@@ -267,6 +267,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		// would be a price list quietly poisoning a measurement.
 		SpentUSD: answer.TotalCostUSD,
 	}
+	if !contract.ReportCost(ctx, contract.CostUpdate{SpentUSD: answer.TotalCostUSD, Known: true}) {
+		return weighed, contract.Fail(contract.FailurePermissionDenied,
+			"claude code exceeded its monetary permission during the call")
+	}
 	if err != nil {
 		return weighed, err
 	}
@@ -426,7 +430,8 @@ func (r *Runner) args(req contract.RunRequest, ask search) ([]string, error) {
 	allowed := tools(req.Permission)
 	return []string{
 		"--print", prompt(req, ask, r.sensitive),
-		"--output-format", "json",
+		"--output-format", "stream-json",
+		"--verbose",
 		"--json-schema", schema,
 		// The catalog, the rules and the permissions live in Atenea. A
 		// CLAUDE.md in the repository under search must not be able to change
@@ -478,27 +483,91 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	// two seconds turned into a twenty-seven second wait and a twenty-seven
 	// second row in the base.
 	procgroup.Contain(cmd)
-	stdout, runErr := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return envelope{}, 0, contract.Fail(contract.FailureUnavailable,
+			"claude code output stream could not be opened")
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return envelope{}, 0, contract.Stopped(ctxErr, "claude code", r.timeout)
+		}
+		return envelope{}, 0, failureFor("", err)
+	}
+	var out envelope
+	hasOutput := false
+	budgetStopped := false
+	var legacyOutput strings.Builder
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 4096), 4<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		legacyOutput.WriteString(line)
+		legacyOutput.WriteByte('\n')
+		event, ok, err := parseStreamLine(line)
+		if err != nil {
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if event.Type == "result" || event.Type == "" {
+			out = event.Envelope
+			hasOutput = true
+		}
+		if event.costSeen {
+			out.TotalCostUSD = event.Envelope.TotalCostUSD
+			if !contract.ReportCost(ctx, contract.CostUpdate{
+				SpentUSD: out.TotalCostUSD, Known: true,
+			}) {
+				budgetStopped = true
+				cancel()
+				break
+			}
+		}
+	}
+	scanErr := scanner.Err()
+	runErr := cmd.Wait()
 	peak := procstat.PeakRSS(cmd.ProcessState)
-
-	var stderr string
-	var exit *exec.ExitError
-	if errors.As(runErr, &exit) {
-		stderr = strings.TrimSpace(string(exit.Stderr))
+	if scanErr != nil {
+		return out, peak, contract.Fail(contract.FailureUnavailable,
+			"claude code output could not be read")
+	}
+	if budgetStopped {
+		return out, peak, contract.Fail(contract.FailurePermissionDenied,
+			"claude code exceeded its monetary permission during the event stream")
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return envelope{}, peak, contract.Stopped(ctxErr, "claude code", r.timeout).WithRaw(stderr)
+		return out, peak, contract.Stopped(ctxErr, "claude code", r.timeout).
+			WithRaw(strings.TrimSpace(stderr.String()))
 	}
-
-	out, parseErr := parse(stdout)
-	if parseErr != nil {
-		// A turn that failed before it could print an envelope says so in
-		// plain text on stderr -- a rejected session id, a bad flag. There is
-		// no structure to sort, so the raw line travels for whoever debugs it.
-		if runErr != nil {
-			return envelope{}, peak, failureFor(stderr, runErr)
+	if !hasOutput {
+		if legacy, legacyErr := parse([]byte(legacyOutput.String())); legacyErr == nil {
+			out = legacy
+			hasOutput = true
+			if cost, ok := legacyOutputCost(legacyOutput.String()); ok {
+				_ = contract.ReportCost(ctx, contract.CostUpdate{
+					SpentUSD: cost, Known: true,
+				})
+			}
 		}
-		return envelope{}, peak, parseErr
+	}
+	if !hasOutput && runErr == nil {
+		return out, peak, contract.Fail(contract.FailureUnavailable,
+			"claude code printed no result event")
+	}
+	if runErr != nil && !out.IsError {
+		if !hasOutput {
+			// A turn that failed before it could print an envelope says so in
+			// plain text on stderr -- a rejected session id, a bad flag. There is
+			// no structure to sort, so the raw line travels for whoever debugs it.
+			return out, peak, failureFor(strings.TrimSpace(stderr.String()), runErr)
+		}
 	}
 	if out.IsError {
 		// The envelope travels with the error on purpose. A turn that ran for
@@ -512,9 +581,10 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		// is zero in every lane, because the price is a cost ledger charged as
 		// the work happens while usage is summed only at `message_stop`, which
 		// a killed message never reaches. This adapter asks for
-		// `--output-format json` -- one envelope, no event stream -- so unlike
-		// internal/agent/model's held-open turn there is no second reading to
-		// recover them from. See that package's conversation.charge.
+		// output-format stream-json makes the result one event among the
+		// stream, while assistant events can expose earlier usage/cost facts.
+		// Providers that only price the final result still remain final-only;
+		// the adapter does not invent a price from tokens.
 		//
 		// So a ceiling death here records a real dollar figure against zero
 		// tokens. That pairing is the codebase's existing way of saying "not
@@ -526,8 +596,10 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	return out, peak, nil
 }
 
-// envelope is the JSON one headless turn prints.
+// envelope is the JSON shape Claude Code uses for a result event. The adapter
+// also accepts the legacy one-envelope output used by older clients and tests.
 type envelope struct {
+	Type string `json:"type"`
 	// IsError is the only field that tells the truth about failure. Measured:
 	// a turn that failed to authenticate still reported subtype "success", so
 	// reading the subtype instead would call an error a result.
@@ -609,6 +681,41 @@ func parse(stdout []byte) (envelope, error) {
 			"claude code printed something this adapter cannot read").WithRaw(trimmed)
 	}
 	return out, nil
+}
+
+type streamEvent struct {
+	Envelope envelope
+	Type     string `json:"type"`
+	costSeen bool
+}
+
+func parseStreamLine(line string) (streamEvent, bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return streamEvent{}, false, contract.Fail(contract.FailureUnavailable,
+			"claude code emitted invalid JSONL")
+	}
+	var out streamEvent
+	if err := json.Unmarshal([]byte(line), &out); err != nil {
+		return streamEvent{}, false, contract.Fail(contract.FailureUnavailable,
+			"claude code emitted an unreadable event")
+	}
+	if err := json.Unmarshal([]byte(line), &out.Envelope); err != nil {
+		return streamEvent{}, false, contract.Fail(contract.FailureUnavailable,
+			"claude code emitted an unreadable event")
+	}
+	_, out.costSeen = raw["total_cost_usd"]
+	return out, true, nil
+}
+
+func legacyOutputCost(text string) (float64, bool) {
+	var raw struct {
+		TotalCostUSD *float64 `json:"total_cost_usd"`
+	}
+	if err := json.Unmarshal([]byte(text), &raw); err != nil || raw.TotalCostUSD == nil {
+		return 0, false
+	}
+	return *raw.TotalCostUSD, true
 }
 
 // failureFor sorts one Claude Code failure into the shared bins.

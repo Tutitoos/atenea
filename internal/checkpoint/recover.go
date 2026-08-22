@@ -21,10 +21,10 @@ type Recovery struct {
 // meant to run before the first commission is accepted.
 //
 // Save removes its temporary file with a defer, which covers an error return
-// and nothing else: a SIGKILL or a power cut leaves the <id>.<rand>.tmp on
-// disk. Nor is there an fsync before the rename, so the same cut can land a
-// <id>.json the kernel never finished writing. Neither shows up until something
-// tries to resume, which is the worst moment to find out.
+// and nothing else: a SIGKILL or a power cut can leave the <id>.<rand>.tmp on
+// disk. Save flushes the file and syncs its directory where the platform
+// exposes that operation, but recovery still treats an unreadable receipt as
+// possible evidence of an ugly close.
 //
 // It is safe to run twice: a swept dump is gone, and a torn receipt no longer
 // ends in .json, so the second pass finds nothing.

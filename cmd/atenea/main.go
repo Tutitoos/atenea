@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -72,6 +74,13 @@ Commands:
   metrics                What the base measured, per capability and provider;
                          'clear' empties it, narrowed by --capability,
                          --implementation or --repository, or --all for the lot
+  backup list            List complete state snapshots
+  backup restore NAME TARGET [--replace]
+                         Restore a snapshot into a new directory, or swap it
+                         over an existing directory with --replace
+  backup promote TARGET Promote the retained pre-restore directory
+  backup discard TARGET --confirm
+                         Permanently remove the retained pre-restore directory
   floor                  What starting one turn already costs, measured per
                          repository, per agent and per model; 'measure
                          --repo ID --agent TYPE' spends real money to find
@@ -151,6 +160,7 @@ Flags:
   --allow EFFECT  effect beyond reading to grant this commission; repeat for
                   several (default: none)
   --budget USD    what this commission may spend (default: the settings file)
+  --confirm       show the execution summary and require an interactive TTY confirmation
   --trace         print the plan, the funnel and every review
   --json          print the result as json instead of prose (always
                   complete, ignores --trace)
@@ -167,6 +177,7 @@ Flags:
                   several (default: none)
   --budget USD    what this question may spend (default: the settings file)
   --prefer ID     one-call implementation preference (e.g. ripgrep, codex.search, claude.search)
+  --confirm       show the execution summary and require an interactive TTY confirmation
   --trace         print the plan, the funnel and every review
   --json          print the result as json instead of prose (always
                   complete, ignores --trace)
@@ -389,6 +400,17 @@ Flags:
   --implementation ID   narrow to one implementation
   --repository ID       narrow to one repository
   --all                 with clear: confirm emptying the whole base
+`,
+	"backup": `Usage: atenea backup list
+       atenea backup restore SNAPSHOT TARGET [--replace]
+       atenea backup promote TARGET
+       atenea backup discard TARGET --confirm
+
+List complete state snapshots, restore one, or manage the retained state from
+an in-place restore. Without --replace, restore requires a new target. With
+--replace, the current target is retained as TARGET.atenea-previous. Promote
+rolls that state back and retains the current target as TARGET.atenea-current.
+Discard is destructive and requires --confirm.
 `,
 	"floor": `Usage: atenea floor
        atenea floor measure --repo ID --agent TYPE
@@ -671,6 +693,8 @@ func run(args []string, out io.Writer) error {
 		return cmdTraces(commandArgs, out)
 	case "metrics":
 		return cmdMetrics(settingsPath, commandArgs, out)
+	case "backup":
+		return cmdBackup(settingsPath, commandArgs, out)
 	case "floor":
 		return cmdFloor(settingsPath, commandArgs, out)
 	case "config":
@@ -1264,6 +1288,94 @@ func cmdMetrics(settingsPath string, args []string, out io.Writer) error {
 			"--all belongs to 'metrics clear'; reading already shows everything")
 	}
 	return printMetrics(atenea, filter, out)
+}
+
+// cmdBackup lists or restores state without starting the service or any
+// provider. In-place replacement is explicitly opt-in and retains the old
+// directory beside the new one for rollback.
+func cmdBackup(settingsPath string, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup needs 'list' or 'restore SNAPSHOT TARGET'")
+	}
+	cfg, err := config.LoadEffective(settingsPath)
+	if err != nil {
+		return err
+	}
+	store, err := backup.New(backup.Options{
+		Source: platform.StateDir(),
+		Dir:    cfg.Backup.Dir,
+		Keep:   cfg.Backup.Keep,
+	})
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return contract.Fail(contract.FailureInvalidInput, "backup list takes no arguments")
+		}
+		snapshots, err := store.List()
+		if err != nil {
+			return err
+		}
+		if len(snapshots) == 0 {
+			fmt.Fprintln(out, "no backups found")
+			return nil
+		}
+		for _, snapshot := range snapshots {
+			fmt.Fprintf(out, "%s\t%s\n", snapshot.Name, snapshot.Path)
+		}
+		return nil
+	case "restore":
+		replace := len(args) == 4 && args[3] == "--replace"
+		if len(args) != 3 && !replace {
+			return contract.Fail(contract.FailureInvalidInput,
+				"backup restore needs SNAPSHOT and TARGET, with optional --replace")
+		}
+		if len(args) == 4 && !replace {
+			return contract.Fail(contract.FailureInvalidInput,
+				"backup restore accepts only --replace after TARGET")
+		}
+		if replace {
+			previous, err := store.RestoreInPlace(context.Background(), args[1], args[2])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "restored %s into %s; previous state retained at %s\n", args[1], args[2], previous)
+			return nil
+		}
+		if err := store.Restore(context.Background(), args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "restored %s into %s\n", args[1], args[2])
+		return nil
+	case "promote":
+		if len(args) != 2 {
+			return contract.Fail(contract.FailureInvalidInput,
+				"backup promote needs TARGET")
+		}
+		current, err := store.PromotePrevious(context.Background(), args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "promoted previous state into %s; current state retained at %s\n",
+			args[1], current)
+		return nil
+	case "discard":
+		if len(args) != 3 || args[2] != "--confirm" {
+			return contract.Fail(contract.FailureInvalidInput,
+				"backup discard needs TARGET and --confirm")
+		}
+		if err := store.DiscardPrevious(context.Background(), args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "discarded previous state for %s\n", args[1])
+		return nil
+	default:
+		return contract.Fail(contract.FailureInvalidInput,
+			"unknown backup action %q; use list, restore, promote or discard", args[0])
+	}
 }
 
 // clearMetrics empties the base. Emptying all of it needs --all on top of the
@@ -1905,12 +2017,14 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	var allow effectList
 	var trace bool
 	var jsonOut bool
+	var confirm bool
 	var budget float64
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&repositories, "repo", "repository to act on; repeat for several (default: all)")
 	flags.Var(&allow, "allow", "effect beyond reading to grant this commission; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this commission may spend in usd (default: the settings file)")
+	flags.BoolVar(&confirm, "confirm", false, "require an interactive TTY confirmation before execution")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
@@ -1931,6 +2045,11 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 	defer func() { _ = atenea.Shutdown() }()
+	if confirm {
+		if err := confirmTTY(out, "task "+text, budget, effects); err != nil {
+			return err
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -1996,6 +2115,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	var repository string
 	var trace bool
 	var jsonOut bool
+	var confirm bool
 	var budget float64
 	var prefer string
 	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
@@ -2005,6 +2125,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	flags.Var(&allow, "allow", "effect beyond reading to grant this question; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
 	flags.StringVar(&prefer, "prefer", "", "one-call implementation preference")
+	flags.BoolVar(&confirm, "confirm", false, "require an interactive TTY confirmation before execution")
 	flags.BoolVar(&trace, "trace", false, "print the plan, the funnel and every review")
 	flags.BoolVar(&jsonOut, "json", false, "print the result as json instead of prose (always complete, ignores --trace)")
 	if err := flags.Parse(args); err != nil {
@@ -2048,6 +2169,11 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 				"--repo is required: %d repositories are registered", len(repos))
 		}
 		repository = repos[0].ID
+	}
+	if confirm {
+		if err := confirmTTY(out, "ask "+capabilityID+" on "+repository, budget, effects); err != nil {
+			return err
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -2313,6 +2439,48 @@ func (e effectList) effects() ([]contract.Effect, error) {
 		out = append(out, effect)
 	}
 	return out, nil
+}
+
+// confirmTTY is an explicit interactive safety boundary for direct commands.
+// Non-interactive callers keep the existing fail-closed behavior and can use
+// their deliberate --allow flags without a prompt that would block a script.
+// The opt-in flag makes the approval visible and auditable when a human is at
+// the terminal.
+func confirmTTY(out io.Writer, action string, budget float64, effects []contract.Effect) error {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"confirmation requires an interactive terminal: %v", err)
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"--confirm requires an interactive terminal; refusing non-interactive execution")
+	}
+	grant := "settings default"
+	if budget > 0 {
+		grant = fmt.Sprintf("$%.2f", budget)
+	}
+	allowed := "read"
+	if len(effects) > 0 {
+		names := make([]string, 0, len(effects)+1)
+		names = append(names, "read")
+		for _, effect := range effects {
+			names = append(names, effect.String())
+		}
+		allowed = strings.Join(names, ", ")
+	}
+	fmt.Fprintf(out, "about to execute %s\n", action)
+	fmt.Fprintf(out, "  budget: %s  effects: %s\n", grant, allowed)
+	fmt.Fprint(out, "confirm [y/N]: ")
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && len(answer) == 0 {
+		return contract.Fail(contract.FailureCanceled, "confirmation was not received")
+	}
+	if strings.EqualFold(strings.TrimSpace(answer), "y") ||
+		strings.EqualFold(strings.TrimSpace(answer), "yes") {
+		return nil
+	}
+	return contract.Fail(contract.FailureCanceled, "execution was not confirmed")
 }
 
 func printResult(out io.Writer, result *orchestrator.Result, trace bool) {

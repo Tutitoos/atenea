@@ -165,6 +165,33 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	}
 }
 
+func TestPersistedRawMeasurementIsRedacted(t *testing.T) {
+	s := store(t, Options{})
+	bad := attempt(time.Now(), "code.search", "ripgrep")
+	bad.OK = false
+	bad.Raw = "Authorization: Bearer live-token api_key=secret-value"
+	s.Record(bad)
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	db, err := s.connect(context.Background())
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer db.Close()
+	var raw string
+	if err := db.QueryRow("SELECT raw FROM measurement").Scan(&raw); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if strings.Contains(raw, "live-token") || strings.Contains(raw, "secret-value") {
+		t.Fatalf("stored raw contains a credential: %q", raw)
+	}
+	if !strings.Contains(raw, "[REDACTED]") {
+		t.Fatalf("stored raw lacks redaction marker: %q", raw)
+	}
+}
+
 // The count used to live for the length of one sentence: the adapter wrote
 // "N match(es) fell outside the requested scope and were dropped" onto the
 // answer, whoever asked read it once, and nothing that ranks providers ever
@@ -380,6 +407,36 @@ func TestAFastCallIsNotRecordedAsFree(t *testing.T) {
 	}
 	if rows[0].Slowest != 77*time.Microsecond {
 		t.Errorf("slowest = %v, want 77µs", rows[0].Slowest)
+	}
+}
+
+func TestFilterAndClearDescribeAndRemoveOnlyTheirRows(t *testing.T) {
+	if (Filter{}).Empty() == false {
+		t.Fatal("zero filter is not empty")
+	}
+	filter := Filter{Capability: "code.search", Repository: "current"}
+	if got := filter.String(); got != "capability code.search, repository current" {
+		t.Fatalf("filter string = %q", got)
+	}
+	if got, args := filter.where(); got != "capability = ? AND repository = ?" || len(args) != 2 {
+		t.Fatalf("where = %q, %v", got, args)
+	}
+	if got := (Cleared{Attempts: 2, Rollups: 3}).Total(); got != 5 {
+		t.Fatalf("cleared total = %d", got)
+	}
+
+	s := store(t, Options{})
+	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
+	s.Record(attempt(time.Now(), "other", "ripgrep"))
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	cleared, err := s.Clear(context.Background(), filter)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if cleared.Attempts != 1 || cleared.Total() != 1 {
+		t.Fatalf("cleared = %+v", cleared)
 	}
 }
 

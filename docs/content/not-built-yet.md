@@ -144,27 +144,22 @@ and which nothing today can express. Until then the honest description of
 answers, and the other seven capabilities are reachable only one at a time
 through `atenea ask`.
 
-## History is declared and never loaded
+## History is declared and loaded lazily
 
 `ContextHistory` — *"what happened in earlier sessions: user decisions and facts
 Atenea discovered, little and good, loaded lazily"* — is in the contract, and the
 orchestrator's card declares that it sees it.
 
-Discoveries are produced, reported on the result, and now survive within the
-commission that made them: a step `resume` correctly skips redispatching used
-to come back silent, because `Outcome.Discoveries` lived only in that
-process's memory and a step never rerun has no fresh `StepResult` to carry
-it. The receipt now keeps each step's discoveries, so a crash between two
-waves no longer costs the closed wave what it had already found. That is the
-whole of the fix: one commission's own discoveries surviving one commission's
-own crash. A *later* commission is still blind to it -- none of a finished
-run's discoveries are ever read back in when the next one starts, so the lazy
-loading the design describes still has no loader. Every run against a
-repository still starts knowing nothing about any run before it, including
-the one that finished a minute earlier.
+Discoveries are produced, reported on the result, survive resume in the
+checkpoint receipt, and are loaded into later agent dispatches through
+`trace.Store.List` and `ContextHistory`. The runner deduplicates discoveries
+across recent rows and only exposes facts from rows that ended `ok`.
+The loader is lazy: an agent that does not declare history receives no history
+payload, and a declared agent pays for the trace query only when it starts.
 
-**Done when:** a second commission against the same repository starts from what
-the first one found.
+**Done:** a second commission against the same repository can start from what
+the first one found. The tests live in `internal/agent/agent_test.go` and the
+workflow wiring is in `internal/workflow/serve.go`.
 
 ## Permissions cover four effects, and never ask
 
@@ -193,20 +188,23 @@ catalog. `ParseEffect("device")` is refused on purpose, and two tests exist
 to keep it that way — this stays four, honestly, until something in
 Atenea's own catalog genuinely needs a fifth.
 
-There is still no confirmation anywhere: an effect is either granted —
-standing, in the settings file, or one call at a time with `--allow` — or
-refused, and nothing is ever asked. The design's *"acciones peligrosas
-requieren política"* is satisfied for every effect the contract actually
-has; *"y confirmaciones"* is not, for any of them.
+Direct `task` and `ask` remain non-interactive by default: `--allow` is an
+explicit command-line grant, and MCP clients cannot widen their initialized
+client floor. Workflow operations provide the confirmation boundary as two
+commands: `create` writes the graph without spawning, and `launch` commits the
+grant and starts it; over MCP a plan and permission to run cannot arrive in one
+message.
 
-**Done when:** a write outside a granted path stops and asks, rather than
-being refused up front or allowed silently.
+**Implemented:** direct commands now also accept opt-in `--confirm`. It
+prints the requested budget and effects, requires a TTY and fails closed for
+piped or unattended input. Daemons and MCP adapters never prompt.
 
-## OpenCode, still parked
+## OpenCode is an opt-in model backend
 
 The design parked the third adapter deliberately: *"cuando el sistema esté rodado.
 No entra en el orden principal, pero queda como paso propio del plan para no
-olvidarlo."* This entry is the not-forgetting. Codex remains out.
+olvidarlo."* OpenCode now exists as an isolated, opt-in model backend. It is
+not a native capability provider and remains outside the default runner list.
 
 It is not redundant the way the specialist was — `omp` and `claudecode`
 already cover the two real approaches to `code.search`, literal text and a

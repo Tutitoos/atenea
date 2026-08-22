@@ -56,6 +56,17 @@ func (r Run) Remaining() (int, error) {
 		}
 		return len(r.Plan.Steps), nil
 	}
+	if r.Kind == KindPlan {
+		waves, err := r.Plan.LayersAfter(r.OK())
+		if err != nil {
+			return 0, err
+		}
+		n := 0
+		for _, wave := range waves {
+			n += len(wave)
+		}
+		return n, nil
+	}
 	hasWork := false
 	for _, step := range r.Plan.Steps {
 		if len(step.Needs) > 0 {

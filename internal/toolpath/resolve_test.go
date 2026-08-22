@@ -44,3 +44,21 @@ func TestResolveRejectsUnknownSource(t *testing.T) {
 		t.Fatal("unknown source was accepted")
 	}
 }
+
+func TestValidateSourceAndResolveEmptyCandidates(t *testing.T) {
+	candidates := []Candidate{{Source: "terminal", Binary: "go"}}
+	for _, source := range []string{"", "auto", " terminal "} {
+		if err := ValidateSource(source, candidates); err != nil {
+			t.Fatalf("ValidateSource(%q): %v", source, err)
+		}
+	}
+	if err := ValidateSource("desktop", candidates); err == nil {
+		t.Fatal("ValidateSource accepted an unknown source")
+	}
+	if _, err := Resolve("auto", nil); err == nil {
+		t.Fatal("Resolve accepted an empty candidate list")
+	}
+	if _, err := Resolve("terminal", []Candidate{{Source: "terminal", Binary: ""}}); err == nil {
+		t.Fatal("Resolve accepted an unavailable explicit candidate")
+	}
+}

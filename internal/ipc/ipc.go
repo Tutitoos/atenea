@@ -1,3 +1,5 @@
+//go:build linux || darwin || freebsd
+
 // Package ipc is the door a client on this machine knocks on.
 //
 // One unix socket, no port and no token. The kernel is the authenticator: a
@@ -46,6 +48,21 @@ const maxPath = 103
 
 // ErrInUse reports a socket that already has a live owner.
 var ErrInUse = errors.New("another process is already listening")
+
+// Endpoint returns the platform-neutral service endpoint for Unix systems.
+func Endpoint(stateRoot string) string {
+	return filepath.Join(stateRoot, "run", "core.sock")
+}
+
+// Dial connects to the service endpoint with a short local timeout.
+func Dial(path string) (net.Conn, error) {
+	return DialTimeout(path, 2*time.Second)
+}
+
+// DialTimeout connects to the service endpoint.
+func DialTimeout(path string, timeout time.Duration) (net.Conn, error) {
+	return net.DialTimeout("unix", path, timeout)
+}
 
 // Listener is a bound socket that only this user can reach.
 type Listener struct {

@@ -6,6 +6,7 @@ on:
   pull_request:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -67,21 +68,43 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
 
-      - name: Coverage threshold
-        run: |
-          total=$(go tool cover -func=coverage.out | awk '/^total:/ { gsub("%", "", $3); print $3 }')
-          awk -v total="$total" 'BEGIN {
-            if (total < 75.0) {
-              printf "coverage %.1f%% is below the 75.0%% floor\n", total
-              exit 1
-            }
-          }'
+      - name: Coverage canonical target
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/coverage-check.sh coverage.out
+
+      - name: Coverage matrix floor
+        if: matrix.os != 'ubuntu-latest'
+        env:
+          ATENEA_COVERAGE_TARGET: "77.0"
+        run: bash scripts/coverage-check.sh coverage.out
+
+      - name: Coverage history regression
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/coverage-history-check.sh coverage.out
+
+      - name: Benchmark thresholds
+        run: bash scripts/benchmark-check.sh
+
+      - name: DAG load smoke
+        run: bash scripts/load-check.sh
+
+      - name: Declared provider matrix
+        run: bash scripts/provider-matrix-check.sh
 
       - name: Upload coverage
         uses: actions/upload-artifact@v6
         with:
           name: coverage-${{ matrix.os }}
           path: coverage.out
+          if-no-files-found: error
+
+      - name: Upload coverage history point
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v6
+        with:
+          name: atenea-coverage-history
+          path: coverage-summary.txt
+          retention-days: 90
           if-no-files-found: error
 
   lint:

@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "3.0.0"
+contract = "3.1.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.

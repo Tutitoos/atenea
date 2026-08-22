@@ -39,6 +39,19 @@ func billing(t *testing.T, stdout string) *Runner {
 	return runner
 }
 
+func streamingStub(t *testing.T, first string, final string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' '" + strings.ReplaceAll(first, "'", "'\\''") + "'\n" +
+		"sleep 1\n" +
+		"printf '%s\\n' '" + strings.ReplaceAll(final, "'", "'\\''") + "'\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing streaming stub: %v", err)
+	}
+	return path
+}
+
 // granted is a commission that may spend usd, cut down to this one step.
 func granted(t *testing.T, usd float64, payload map[string]any) contract.RunRequest {
 	t.Helper()
@@ -168,6 +181,25 @@ func TestObservedOverspendIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provider ceiling was exceeded") {
 		t.Errorf("error does not explain the provider limitation: %v", err)
+	}
+}
+
+func TestClaudeStopsWhenAnIncrementalCostEventExceedsTheGrant(t *testing.T) {
+	first := "{\"type\":\"turn.completed\",\"total_cost_usd\":0.26}"
+	final := "{\"type\":\"result\",\"is_error\":false,\"subtype\":\"success\",\"structured_output\":{\"matches\":[]}}"
+	runner, err := New(Options{
+		Binary:          streamingStub(t, first, final),
+		Implementations: []string{"claude.search"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := contract.WithCostObserver(context.Background(), func(update contract.CostUpdate) bool {
+		return update.SpentUSD <= 0.25
+	})
+	_, err = runner.Run(ctx, granted(t, 0.25, map[string]any{"query": "TODO"}))
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied: %v", contract.KindOf(err), err)
 	}
 }
 

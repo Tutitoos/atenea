@@ -43,6 +43,48 @@ type Runner interface {
 	Run(ctx context.Context, req RunRequest) (Outcome, error)
 }
 
+// CostUpdate is an incremental provider observation. Providers that can
+// stream usage may publish updates while a call is running; a zero cost is a
+// valid observation for free work, while Unknown means the provider has not
+// exposed a monetary ledger.
+type CostUpdate struct {
+	SpentUSD float64
+	Known    bool
+}
+
+// CostObserver is the optional seam for provider-side budget enforcement.
+// Returning false tells the provider to cancel its in-flight operation. The
+// core still validates the final Outcome for every Runner, so providers that
+// cannot stream usage remain fail-safe even though they cannot stop at the
+// exact cent.
+type CostObserver func(CostUpdate) bool
+
+type costObserverKey struct{}
+
+// WithCostObserver attaches a cancellation-aware cost observer to a context.
+func WithCostObserver(ctx context.Context, observer CostObserver) context.Context {
+	if observer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, costObserverKey{}, observer)
+}
+
+// CostObserverFromContext retrieves the optional observer for an adapter.
+func CostObserverFromContext(ctx context.Context) CostObserver {
+	observer, _ := ctx.Value(costObserverKey{}).(CostObserver)
+	return observer
+}
+
+// ReportCost publishes one usage update when the caller supplied an observer.
+// It returns true when the provider may continue and false when it should stop
+// the in-flight operation.
+func ReportCost(ctx context.Context, update CostUpdate) bool {
+	if observer := CostObserverFromContext(ctx); observer != nil {
+		return observer(update)
+	}
+	return true
+}
+
 // SurfaceReporter is an optional status detail for runners that have more
 // than one executable surface, such as a terminal CLI and an app-bundled CLI.
 // The string must not contain credentials or environment values.

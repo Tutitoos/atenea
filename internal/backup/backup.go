@@ -149,6 +149,11 @@ func New(opts Options) (*Store, error) {
 			return nil, contract.Fail(contract.FailureInvalidInput,
 				"backup: extra %d destination must be a relative path, got %s", i, e.Dest)
 		}
+		clean := filepath.Clean(e.Dest)
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"backup: extra %d destination escapes the snapshot: %s", i, e.Dest)
+		}
 	}
 	return &Store{source: source, dir: dir, keep: opts.Keep, extras: opts.Extras}, nil
 }
@@ -191,6 +196,284 @@ func (s *Store) List() ([]Snapshot, error) {
 	}
 	slices.SortFunc(snapshots, func(a, b Snapshot) int { return b.At.Compare(a.At) })
 	return snapshots, nil
+}
+
+// Restore copies one complete snapshot into a new target directory.
+//
+// The target must not exist. Refusing to replace an existing tree makes the
+// operation recoverable: an operator can inspect the restored copy before
+// deciding how to swap it into place. The copy is assembled under a partial
+// name and published with one rename, so an interrupted restore never looks
+// like a complete target.
+func (s *Store) Restore(ctx context.Context, name, target string) error {
+	if err := ctx.Err(); err != nil {
+		return contract.Fail(contract.FailureCanceled, "backup restore stopped: %v", err)
+	}
+	if strings.TrimSpace(target) == "" {
+		return contract.Fail(contract.FailureInvalidInput, "backup: restore target is required")
+	}
+	if _, err := time.Parse(nameLayout, name); err != nil {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: snapshot %q is not a valid snapshot name", name)
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: restore target is not a usable path: %q", target)
+	}
+	snapshots, err := s.List()
+	if err != nil {
+		return err
+	}
+	var source string
+	for _, snapshot := range snapshots {
+		if snapshot.Name == name {
+			source = snapshot.Path
+			break
+		}
+	}
+	if source == "" {
+		return contract.Fail(contract.FailureNotFound,
+			"backup: snapshot %s was not found in %s", name, s.dir)
+	}
+	if under(target, source) || under(target, s.dir) {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: restore target %s must be outside the backup store", target)
+	}
+	if _, err := os.Lstat(target); err == nil {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: restore target %s already exists; choose a new directory", target)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect restore target %s: %v", target, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot create restore parent for %s: %v", target, err)
+	}
+	partial := target + ".atenea-restore.partial"
+	if _, err := os.Lstat(partial); err == nil {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: incomplete restore already exists at %s", partial)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect incomplete restore %s: %v", partial, err)
+	}
+	if _, err := s.copyTree(ctx, source, partial, ""); err != nil {
+		_ = os.RemoveAll(partial)
+		return err
+	}
+	if err := os.Rename(partial, target); err != nil {
+		_ = os.RemoveAll(partial)
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot publish restore %s: %v", target, err)
+	}
+	if err := syncDirectory(filepath.Dir(target)); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot durable-publish restore %s: %v", target, err)
+	}
+	return nil
+}
+
+// RestoreInPlace restores a snapshot over an existing directory using a
+// reversible two-rename swap. The old directory is retained at
+// target+".atenea-previous" so an operator can inspect or roll back it
+// explicitly; an existing previous path is refused rather than overwritten.
+func (s *Store) RestoreInPlace(ctx context.Context, name, target string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", contract.Fail(contract.FailureCanceled, "backup restore stopped: %v", err)
+	}
+	if strings.TrimSpace(target) == "" {
+		return "", contract.Fail(contract.FailureInvalidInput, "backup: restore target is required")
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: restore target is not a usable path: %q", target)
+	}
+	if under(target, s.dir) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: restore target %s must be outside the backup store", target)
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", contract.Fail(contract.FailureNotFound,
+			"backup: in-place restore target %s does not exist", target)
+	}
+	if err != nil {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect restore target %s: %v", target, err)
+	}
+	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: in-place restore target %s must be a real directory", target)
+	}
+	source, err := s.restoreSource(name)
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(target)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot create restore parent for %s: %v", target, err)
+	}
+	partial := target + ".atenea-restore.partial"
+	previous := target + ".atenea-previous"
+	for _, path := range []string{partial, previous} {
+		if _, err := os.Lstat(path); err == nil {
+			return "", contract.Fail(contract.FailureInvalidInput,
+				"backup: restore sidecar already exists at %s", path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot inspect restore sidecar %s: %v", path, err)
+		}
+	}
+	if _, err := s.copyTree(ctx, source, partial, ""); err != nil {
+		_ = os.RemoveAll(partial)
+		return "", err
+	}
+	if err := os.Rename(target, previous); err != nil {
+		_ = os.RemoveAll(partial)
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot stage current target %s: %v", target, err)
+	}
+	if err := os.Rename(partial, target); err != nil {
+		_ = os.Rename(previous, target)
+		_ = os.RemoveAll(partial)
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot publish in-place restore %s: %v", target, err)
+	}
+	if err := syncDirectory(parent); err != nil {
+		return previous, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot durable-publish in-place restore %s: %v", target, err)
+	}
+	return previous, nil
+}
+
+// PromotePrevious rolls back the last in-place restore. The current target is
+// retained at target+".atenea-current" so this rollback is itself reversible.
+func (s *Store) PromotePrevious(ctx context.Context, target string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", contract.Fail(contract.FailureCanceled, "backup rollback stopped: %v", err)
+	}
+	target, err := s.restoreTarget(target)
+	if err != nil {
+		return "", err
+	}
+	if under(target, s.dir) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: rollback target %s must be outside the backup store", target)
+	}
+	previous := target + ".atenea-previous"
+	current := target + ".atenea-current"
+	for _, entry := range []struct {
+		path  string
+		label string
+	}{{target, "rollback target"}, {previous, "previous state"}} {
+		info, statErr := os.Lstat(entry.path)
+		if statErr != nil {
+			if errors.Is(statErr, fs.ErrNotExist) {
+				return "", contract.Fail(contract.FailureNotFound,
+					"backup: %s %s does not exist", entry.label, entry.path)
+			}
+			return "", contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot inspect %s %s: %v", entry.label, entry.path, statErr)
+		}
+		if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+			return "", contract.Fail(contract.FailureInvalidInput,
+				"backup: %s %s must be a real directory", entry.label, entry.path)
+		}
+	}
+	if _, statErr := os.Lstat(current); statErr == nil {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: rollback sidecar already exists at %s", current)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect rollback sidecar %s: %v", current, statErr)
+	}
+	if err := os.Rename(target, current); err != nil {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot stage current target %s: %v", target, err)
+	}
+	if err := os.Rename(previous, target); err != nil {
+		_ = os.Rename(current, target)
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot promote previous state into %s: %v", target, err)
+	}
+	if err := syncDirectory(filepath.Dir(target)); err != nil {
+		return current, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot durable-publish rollback %s: %v", target, err)
+	}
+	return current, nil
+}
+
+// DiscardPrevious deletes the retained pre-restore directory. The CLI requires
+// an explicit confirmation flag before calling this destructive operation.
+func (s *Store) DiscardPrevious(ctx context.Context, target string) error {
+	if err := ctx.Err(); err != nil {
+		return contract.Fail(contract.FailureCanceled, "backup cleanup stopped: %v", err)
+	}
+	target, err := s.restoreTarget(target)
+	if err != nil {
+		return err
+	}
+	if under(target, s.dir) {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: cleanup target %s must be outside the backup store", target)
+	}
+	previous := target + ".atenea-previous"
+	info, err := os.Lstat(previous)
+	if errors.Is(err, fs.ErrNotExist) {
+		return contract.Fail(contract.FailureNotFound,
+			"backup: previous state %s does not exist", previous)
+	}
+	if err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect previous state %s: %v", previous, err)
+	}
+	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"backup: previous state %s must be a real directory", previous)
+	}
+	if err := os.RemoveAll(previous); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot discard previous state %s: %v", previous, err)
+	}
+	if err := syncDirectory(filepath.Dir(target)); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot durable-publish cleanup %s: %v", previous, err)
+	}
+	return nil
+}
+
+func (s *Store) restoreTarget(target string) (string, error) {
+	if strings.TrimSpace(target) == "" {
+		return "", contract.Fail(contract.FailureInvalidInput, "backup: target is required")
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: target is not a usable path: %q", target)
+	}
+	return target, nil
+}
+
+func (s *Store) restoreSource(name string) (string, error) {
+	if _, err := time.Parse(nameLayout, name); err != nil {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"backup: snapshot %q is not a valid snapshot name", name)
+	}
+	snapshots, err := s.List()
+	if err != nil {
+		return "", err
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.Name == name {
+			return snapshot.Path, nil
+		}
+	}
+	return "", contract.Fail(contract.FailureNotFound,
+		"backup: snapshot %s was not found in %s", name, s.dir)
 }
 
 // SnapshotIfDue takes a copy only when the newest one on disk is older than
@@ -317,6 +600,10 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot publish %s: %v", final, err)
 	}
+	if err := syncDirectory(s.dir); err != nil {
+		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot durable-publish %s: %v", final, err)
+	}
 	snapshot.Name = name
 	// The same instant the name carries, so a snapshot just taken and one read
 	// back by List compare the same way against the interval.
@@ -347,7 +634,7 @@ func (s *Store) rotate() error {
 				"backup: cannot remove %s: %v", old.Path, err)
 		}
 	}
-	return nil
+	return syncDirectory(s.dir)
 }
 
 // sweepPartials removes the trees of runs that never finished.
@@ -583,6 +870,10 @@ func copyFile(source, destination string, info fs.FileInfo) (int64, error) {
 	}
 	written, err := io.Copy(to, from)
 	if err != nil {
+		_ = to.Close()
+		return written, err
+	}
+	if err := to.Sync(); err != nil {
 		_ = to.Close()
 		return written, err
 	}

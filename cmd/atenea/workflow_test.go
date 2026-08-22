@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/workflow"
@@ -116,5 +119,142 @@ func TestPrintRunsCostColumnNeverShowsAMeasuredLookingZero(t *testing.T) {
 	if strings.Contains(out, "$0.00") {
 		t.Fatalf("output = %q: a measured-looking zero for an unmeasured step "+
 			"is the exact lie this avoids", out)
+	}
+}
+
+func TestWorkflowCommandReadersAndStateLabels(t *testing.T) {
+	if _, err := cli(t, "workflow"); err == nil {
+		t.Fatal("workflow without subcommand unexpectedly succeeded")
+	}
+	if _, err := cli(t, "workflow", "unknown"); err == nil {
+		t.Fatal("unknown workflow subcommand unexpectedly succeeded")
+	}
+
+	path := filepath.Join(t.TempDir(), "workflow.db")
+	out, err := cli(t, "workflow", "list", "--traces", path)
+	if err != nil {
+		t.Fatalf("workflow list: %v", err)
+	}
+	if !strings.Contains(out, "no workflows in "+path) {
+		t.Fatalf("workflow list = %q", out)
+	}
+	if _, err := cli(t, "workflow", "show", "missing", "--traces", path); err == nil {
+		t.Fatal("workflow show missing unexpectedly succeeded")
+	}
+
+	base := workflow.Run{ID: "wf-1", Task: "task"}
+	for _, tc := range []struct {
+		name string
+		run  workflow.Run
+		want string
+	}{
+		{name: "unlaunched", run: base, want: "unlaunched"},
+		{name: "finished", run: workflow.Run{Closed: true}, want: "finished"},
+		{name: "stopped", run: workflow.Run{Stop: workflow.StopRejected}, want: "rejected"},
+		{name: "running", run: workflow.Run{WriterPID: os.Getpid()}, want: "running"},
+		{name: "orphaned", run: workflow.Run{WriterPID: 99999999}, want: "orphaned"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := runState(tc.run); got != tc.want {
+				t.Fatalf("runState(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+
+	usd := 1.25
+	step := workflow.Step{ID: "search", TypeName: "reader", Task: contract.Task{Objective: "find TODO"}, Permission: contract.Permission{BudgetUSD: usd}}
+	run := workflow.Run{ID: "wf-1", Task: "inspect", GrantUSD: 2, Steps: []workflow.StepRow{{Step: step, Status: workflow.StatusPending}}}
+	gate := workflow.Gate{RunID: run.ID, Ordinal: 0, Kind: workflow.KindLaunch, Digest: "digest", Asked: time.Now(), Proposal: workflow.Proposal{Steps: []workflow.Step{step}, Replaces: []string{"old"}}}
+	var buf bytes.Buffer
+	printGate(&buf, run, gate)
+	for _, want := range []string{"wf-1  inspect", "gate 0 launch", "$1.25 of $2.00", "search", "replaces old", "workflow launch wf-1"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("gate output missing %q: %s", want, buf.String())
+		}
+	}
+	buf.Reset()
+	printGates(&buf, []workflow.Gate{{Ordinal: 0, Kind: workflow.KindLaunch, Decision: workflow.DecisionApproved, Digest: "digest", Asked: time.Now(), Hand: "tester"}, {Ordinal: 1, Kind: workflow.KindApprove, Decision: workflow.DecisionRejected, Digest: "digest2", Answered: time.Now(), Hand: "tester", Reason: "too broad"}})
+	if !strings.Contains(buf.String(), "too broad") || !strings.Contains(buf.String(), "GATE") {
+		t.Fatalf("gates output = %q", buf.String())
+	}
+	buf.Reset()
+	printGates(&buf, nil)
+	if buf.Len() != 0 {
+		t.Fatalf("empty gates output = %q", buf.String())
+	}
+}
+
+func TestWorkflowMutatingCommandsRejectMissingPositionals(t *testing.T) {
+	var out bytes.Buffer
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{name: "create", fn: func() error { return workflowCreate("", nil, &out) }},
+		{name: "launch", fn: func() error { return workflowLaunch("", nil, &out) }},
+		{name: "propose", fn: func() error { return workflowPropose(nil, &out) }},
+		{name: "approve", fn: func() error { return workflowAnswer(nil, &out, workflow.DecisionApproved) }},
+		{name: "reject", fn: func() error { return workflowAnswer(nil, &out, workflow.DecisionRejected) }},
+		{name: "run", fn: func() error { return workflowRun("", nil, &out) }},
+		{name: "resume", fn: func() error { return workflowResume("", nil, &out) }},
+		{name: "redo", fn: func() error { return workflowRedo("", nil, &out) }},
+		{name: "show", fn: func() error { return workflowShow(nil, &out) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.fn(); err == nil {
+				t.Fatalf("%s without positionals unexpectedly succeeded", tc.name)
+			}
+		})
+	}
+}
+
+func TestWorkflowRenderingAndFlagValueHelpers(t *testing.T) {
+	partial := 0.5
+	run := workflow.Run{Steps: []workflow.StepRow{
+		{Step: workflow.Step{ID: "alpha", Needs: []string{"base"}}, Status: workflow.StatusPending},
+		{Step: workflow.Step{ID: "result"}, Status: workflow.StatusOK, Result: map[string]any{"answer": "done"}},
+		{Step: workflow.Step{ID: "partial"}, Status: workflow.StatusOK, Completeness: &partial, StoppedAt: "remaining files"},
+		{Step: workflow.Step{ID: "failed"}, Status: workflow.StatusFailed, Reason: contract.Reason{Kind: contract.FailureUnavailable, Text: "provider down"}},
+	}}
+	if got := stepDetail(run, run.Steps[0]); got != "after base" {
+		t.Fatalf("pending stepDetail = %q", got)
+	}
+	if got := stepDetail(run, run.Steps[1]); got != "done" {
+		t.Fatalf("result stepDetail = %q", got)
+	}
+	if got := stepDetail(run, run.Steps[2]); !strings.Contains(got, "remaining files") {
+		t.Fatalf("partial stepDetail = %q", got)
+	}
+	if got := stepDetail(run, run.Steps[3]); !strings.Contains(got, "provider down") {
+		t.Fatalf("failed stepDetail = %q", got)
+	}
+	if got := firstKey(map[string]any{"z": 1, "a": 2}); got != "a" {
+		t.Fatalf("firstKey = %q", got)
+	}
+	if got := firstKey(nil); got != "" {
+		t.Fatalf("firstKey(empty) = %q", got)
+	}
+
+	var redo stringList
+	if err := redo.Set(" step-a "); err != nil || redo.String() != "step-a" {
+		t.Fatalf("stringList.Set = %v, %q", err, redo.String())
+	}
+	if err := redo.Set(" "); err == nil {
+		t.Fatal("empty stringList value unexpectedly accepted")
+	}
+	var raises raiseList
+	for _, value := range []string{"step-a=$1.25", "step-b=0.50"} {
+		if err := raises.Set(value); err != nil {
+			t.Fatalf("raiseList.Set(%q): %v", value, err)
+		}
+	}
+	if raises.String() != "step-a=1.25,step-b=0.50" {
+		t.Fatalf("raiseList.String = %q", raises.String())
+	}
+	for _, value := range []string{"bad", "=1", "step=nope", "step=0"} {
+		if err := raises.Set(value); err == nil {
+			t.Errorf("raiseList.Set(%q) unexpectedly succeeded", value)
+		}
 	}
 }
