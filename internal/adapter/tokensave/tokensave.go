@@ -140,6 +140,31 @@ var nestedKinds = map[string]bool{
 	"generic_param": true,
 }
 
+// entityKindFilters are the kinds accepted by the official tokensave_entities
+// tool. A large unfiltered answer can be clipped by the MCP client before it
+// reaches json.Unmarshal; asking one kind at a time keeps every response
+// below that transport ceiling. The less common kinds are included because
+// tokensave can serve polyglot projects, even though most Go files only use
+// function, struct and const.
+var entityKindFilters = []string{
+	"function",
+	"struct",
+	"enum",
+	"trait",
+	"impl",
+	"class",
+	"method",
+	"const",
+	"type",
+	"interface",
+	"variable",
+	"var",
+	"field",
+	"struct_tag",
+	"enum_variant",
+	"generic_param",
+}
+
 // DefaultImplementations is what the adapter answers for. It is a function
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
@@ -473,10 +498,66 @@ func (r *Runner) fetchEntities(ctx context.Context, sess *mcpstdio.Session, file
 		return nil, err
 	}
 	var answer entitiesAnswer
-	if err := json.Unmarshal(payloadOf(text), &answer); err != nil {
-		return nil, fmt.Errorf("tokensave %s: unreadable answer: %w", toolEntities, err)
+	if decodeErr := json.Unmarshal(payloadOf(text), &answer); decodeErr == nil {
+		return answer.Symbols, nil
 	}
-	return answer.Symbols, nil
+
+	// The server's unfiltered response is useful for small files, but the
+	// stdio client deliberately protects itself from an oversized frame. The
+	// official kinds filter gives us a bounded, lossless fallback without
+	// changing the server's global context settings.
+	var (
+		all       []entity
+		lastErr   error
+		succeeded bool
+	)
+	for _, kind := range entityKindFilters {
+		part, callErr := sess.Call(ctx, toolEntities, map[string]any{
+			"file":  file,
+			"kinds": []string{kind},
+		})
+		if callErr != nil {
+			lastErr = callErr
+			continue
+		}
+		var filtered entitiesAnswer
+		if decodeErr := json.Unmarshal(payloadOf(part), &filtered); decodeErr != nil {
+			lastErr = decodeErr
+			continue
+		}
+		succeeded = true
+		all = append(all, filtered.Symbols...)
+	}
+	if !succeeded {
+		if lastErr == nil {
+			lastErr = errors.New("no filtered entity query succeeded")
+		}
+		return nil, fmt.Errorf("tokensave %s: unreadable unfiltered answer and kind fallback: %w", toolEntities, lastErr)
+	}
+
+	seen := make(map[string]struct{}, len(all))
+	merged := all[:0]
+	for _, item := range all {
+		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", item.Kind, item.Name, item.Line, item.EndLine)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, item)
+	}
+	slices.SortFunc(merged, func(a, b entity) int {
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		if a.EndLine != b.EndLine {
+			return a.EndLine - b.EndLine
+		}
+		if n := strings.Compare(a.Kind, b.Kind); n != 0 {
+			return n
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return merged, nil
 }
 
 // runOverview answers symbol.overview from tokensave_entities.

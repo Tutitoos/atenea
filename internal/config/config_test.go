@@ -39,20 +39,21 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.search", "graph.status", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
 
-	// The symbol capabilities are read-only providers: none
-	// of them may ship declaring an effect that lets a provider write. Only
-	// code.search also spawns a process to answer -- every implementation
-	// behind it, ripgrep or the local stand-in, is a binary, not a library.
+	// Read capabilities may also declare process when they invoke a local
+	// command. repository.index additionally declares write because it publishes
+	// provider state.
 	for _, capability := range cfg.Capabilities {
 		var want []contract.Effect
 		switch capability.ID {
-		case "code.search":
+		case "code.search", "code.impact":
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
+		case "repository.index":
+			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
 		default:
 			want = []contract.Effect{contract.EffectRead}
 		}
@@ -96,6 +97,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
 		"kivgraph.get",
+		"kivgraph.impact",
+		"kivgraph.index",
 		"kivgraph.overview",
 		"kivgraph.references",
 		"kivgraph.status",
@@ -321,6 +324,45 @@ instance = "per_repository"
 	}
 }
 
+func TestKivgraphDashboardProcessIsReadBack(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+dashboard = "http://127.0.0.1:7777"
+
+[orchestrator.kivgraph.dashboard_process]
+command = "/usr/local/bin/kivgraph-ui"
+args = ["ui", "--addr", "127.0.0.1:7777"]
+lifecycle = "persistent"
+port = 7777
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Kivgraph.Dashboard != "http://127.0.0.1:7777" {
+		t.Fatalf("dashboard = %q", cfg.Orchestrator.Kivgraph.Dashboard)
+	}
+	process := cfg.Orchestrator.Kivgraph.DashboardProcess
+	if process == nil || process.Port != 7777 || process.Lifecycle != supervisor.Persistent {
+		t.Fatalf("dashboard process = %+v", process)
+	}
+}
+
+func TestKivgraphDashboardProcessRequiresMatchingFixedPort(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+dashboard = "http://127.0.0.1:7777"
+
+[orchestrator.kivgraph.dashboard_process]
+command = "kivgraph"
+lifecycle = "persistent"
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput || !strings.Contains(err.Error(), "dashboard_process.port") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
 // Absent means shared, which is what every managed server did before the key
 // existed. A file that never mentions it must not change behavior.
 func TestTheInstancePolicyDefaultsToShared(t *testing.T) {
@@ -449,16 +491,21 @@ func rawBlock(extra string) string {
 // reachable thing.
 func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 	cases := map[string]string{
-		"no id":            "\n[[mcp_server]]\nurl = \"http://127.0.0.1:1/mcp\"\n",
-		"neither":          "\n[[mcp_server]]\nid = \"x\"\n",
-		"both":             "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ncommand = [\"sh\"]\n",
-		"relative url":     "\n[[mcp_server]]\nid = \"x\"\nurl = \"/mcp\"\n",
-		"wrong scheme":     "\n[[mcp_server]]\nid = \"x\"\nurl = \"ws://127.0.0.1:1/mcp\"\n",
-		"empty argument":   "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
-		"bad timeout":      "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
-		"negative timeout": "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
-		"dotted id":        "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
-		"unknown expose":   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
+		"no id":                  "\n[[mcp_server]]\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"neither":                "\n[[mcp_server]]\nid = \"x\"\n",
+		"both":                   "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ncommand = [\"sh\"]\n",
+		"relative url":           "\n[[mcp_server]]\nid = \"x\"\nurl = \"/mcp\"\n",
+		"wrong scheme":           "\n[[mcp_server]]\nid = \"x\"\nurl = \"ws://127.0.0.1:1/mcp\"\n",
+		"dashboard relative":     "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"/ui\"\n",
+		"dashboard wrong scheme": "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"ws://127.0.0.1:1\"\n",
+		"dashboard credentials":  "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"http://user:pass@127.0.0.1:1\"\n",
+		"dashboard bad port":     "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\"]\ndashboard = \"http://127.0.0.1:65536\"\n",
+		"dashboard bad alias":    "\n[[mcp_server]]\nid = \"a_b\"\ncommand = [\"sh\"]\ndashboard = \"http://127.0.0.1:1\"\n",
+		"empty argument":         "\n[[mcp_server]]\nid = \"x\"\ncommand = [\"sh\", \"\"]\n",
+		"bad timeout":            "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"soon\"\n",
+		"negative timeout":       "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
+		"dotted id":              "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
+		"unknown expose":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
 		// A stdio raw block still has to carry the same budget as any other
 		// one; what is no longer refused is the transport itself, which
 		// TestAStdioBackendIsDeclaredLikeAnyOther pins from the other side.
@@ -528,7 +575,7 @@ func TestADuplicateMCPServerIDIsRefused(t *testing.T) {
 // The happy path, and the one thing about it worth pinning: a url is
 // normalized once here rather than at every point of use.
 func TestADeclaredMCPServerIsReadBack(t *testing.T) {
-	body := minimal + "\n[[mcp_server]]\nid = \"serena\"\nurl = \"http://127.0.0.1:40010/mcp\"\ntimeout = \"3s\"\n" +
+	body := minimal + "\n[[mcp_server]]\nid = \"serena\"\nurl = \"http://127.0.0.1:40010/mcp\"\ndashboard = \"http://127.0.0.1:40010/ui\"\ntimeout = \"3s\"\n" +
 		"\n[[mcp_server]]\nid = \"local\"\ncommand = [\"sh\", \"-c\", \"true\"]\n\n[mcp_server.env]\nK = \"v\"\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
@@ -537,7 +584,7 @@ func TestADeclaredMCPServerIsReadBack(t *testing.T) {
 	if len(cfg.MCPServers) != 2 {
 		t.Fatalf("servers = %d, want 2", len(cfg.MCPServers))
 	}
-	if got := cfg.MCPServers[0]; got.URL != "http://127.0.0.1:40010/mcp" || got.Timeout != 3*time.Second {
+	if got := cfg.MCPServers[0]; got.URL != "http://127.0.0.1:40010/mcp" || got.Dashboard != "http://127.0.0.1:40010/ui" || got.Timeout != 3*time.Second {
 		t.Errorf("first = %+v, want the declared url and timeout", got)
 	}
 	if got := cfg.MCPServers[1]; len(got.Command) != 3 || got.Env["K"] != "v" {

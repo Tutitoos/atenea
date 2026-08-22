@@ -12,8 +12,7 @@
 // job to start, watch or restart.
 //
 // The graph itself is one global corpus, not one per repository. kivgraph
-// indexes a whole workspace by hand (`kivgraph index --full`, ahead of
-// time, never from inside Atenea) and publishes a single snapshot every
+// indexes a whole workspace (`kivgraph index --full`) and publishes a single snapshot every
 // reader shares by atomic generation; there is no per-repository index to
 // warm or retarget the way Serena's active project has to be, which is why
 // the declared instance policy is "shared" and only "shared" -- see
@@ -123,14 +122,15 @@
 // every symbol.consumers call pays the resolution again rather than trust
 // one it resolved a moment ago.
 //
-// # What this package does not do
+// # Indexing and impact
 //
-// It does not build the graph: no `kivgraph index`, no requires_index probe
-// that tries to fix what it finds missing. It only reads. And it never
-// reports Outcome.ToolVersion: mcpstdio.Session exposes no serverInfo getter
-// by design, and none of the four tools' own payloads carries a version
-// string either, so an upgrade on disk is invisible to this adapter the same
-// honest way Serena is when its own server declines to introduce itself.
+// The read capabilities use the published snapshot only. repository.index is
+// the explicit mutation boundary: it runs Kivgraph's official full-index
+// command, then reads graph_status from the supervised server. code.impact
+// resolves the current declarations touched by a Git baseline diff and uses
+// get_blast_radius for each one. Both paths keep the provider's limitations
+// visible in their discoveries rather than pretending a global graph is a
+// per-repository one.
 package kivgraph
 
 import (
@@ -145,6 +145,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,6 +165,8 @@ const (
 	CapabilityGet         = "symbol.get"
 	CapabilityUnresolved  = "symbol.unresolved"
 	CapabilityGraphStatus = "graph.status"
+	CapabilityImpact      = "code.impact"
+	CapabilityIndex       = "repository.index"
 
 	ImplDefinition = "kivgraph.definition"
 	ImplReferences = "kivgraph.references"
@@ -172,6 +175,8 @@ const (
 	ImplGet        = "kivgraph.get"
 	ImplUnresolved = "kivgraph.unresolved_references"
 	ImplStatus     = "kivgraph.status"
+	ImplImpact     = "kivgraph.impact"
+	ImplIndex      = "kivgraph.index"
 )
 
 // The MCP tool names behind each capability, on kivgraph's own far side.
@@ -185,6 +190,7 @@ const (
 	toolUnresolved = "get_unresolved_references"
 	toolStatus     = "graph_status"
 	toolOutline    = "get_file_outline"
+	toolBlast      = "get_blast_radius"
 )
 
 // maxSnippetBytes caps a file read for a snippet or a column. A minified
@@ -213,8 +219,23 @@ const DefaultTimeout = 90 * time.Second
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplUnresolved, ImplStatus}
+	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplUnresolved, ImplStatus, ImplImpact, ImplIndex}
 }
+
+// IndexReport is the authoritative result of Kivgraph's full index command.
+// The persistent MCP server can observe the newly published generation a
+// little later, so repository.index returns these process-boundary counters
+// and uses graph_status only to verify readiness.
+type IndexReport struct {
+	Generation string
+	Nodes      int
+	Edges      int
+}
+
+// Indexer is the explicit process boundary for repository.index. Keeping it
+// injectable makes the mutation path testable without rebuilding a real
+// workspace in every adapter test.
+type Indexer func(context.Context, string, string) (IndexReport, error)
 
 // Options configure the adapter.
 type Options struct {
@@ -233,6 +254,10 @@ type Options struct {
 	// may be replaced by a restart later: every call asks again rather than
 	// trusting a session it cached itself.
 	Session func(ctx context.Context) (*mcpstdio.Session, error)
+	// Index runs the provider's official full-index command. It is nil for an
+	// unmanaged/test adapter and becomes the configured Kivgraph binary in the
+	// core wiring.
+	Index Indexer
 }
 
 // Runner is the kivgraph far side of contract.Runner.
@@ -241,6 +266,7 @@ type Runner struct {
 	sensitive       []string
 	timeout         time.Duration
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
+	index           Indexer
 }
 
 // New validates the options and returns the adapter.
@@ -275,6 +301,7 @@ func New(opts Options) (*Runner, error) {
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
 		session:         opts.Session,
+		index:           opts.Index,
 	}, nil
 }
 
@@ -297,6 +324,7 @@ func (r *Runner) Capabilities() []string {
 	return []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
 		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+		CapabilityImpact, CapabilityIndex,
 	}
 }
 
@@ -320,6 +348,17 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 	if err := sess.Initialize(call); err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
+	}
+
+	// Indexing is the one capability that is allowed to repair an absent or
+	// stale graph. It must run before the normal graph-ready gate; otherwise a
+	// missing snapshot would make the operation that creates it unreachable.
+	if req.Capability.ID == CapabilityIndex {
+		result, notes, err := r.runIndex(call, sess, req)
+		if err != nil {
+			return contract.Outcome{}, r.failureFor(err, call)
+		}
+		return r.outcome(started, result, notes), nil
 	}
 
 	// Every capability pays for one graph_status call before anything else
@@ -353,6 +392,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		result, notes, err = r.runUnresolved(call, sess, req)
 	case CapabilityGraphStatus:
 		result, notes, err = r.runGraphStatus(status, req)
+	case CapabilityImpact:
+		result, notes, err = r.runImpact(call, sess, status, req)
 	default:
 		return contract.Outcome{}, contract.Fail(contract.FailureNotFound,
 			"kivgraph adapter has no implementation of %s", req.Capability.ID)
@@ -361,6 +402,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
 
+	return r.outcome(started, result, notes), nil
+}
+
+func (r *Runner) outcome(started time.Time, result map[string]any, notes []string) contract.Outcome {
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
@@ -376,7 +421,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		outcome.Discoveries = append(outcome.Discoveries,
 			contract.Discovery{Level: contract.ContextRepository, Note: note})
 	}
-	return outcome, nil
+	return outcome
 }
 
 // repositoryInPlay resolves which repository the shared guard checks
@@ -1107,7 +1152,22 @@ type outlineAnswer struct {
 		Files   []struct {
 			Symbols []outlineDeclaration `json:"symbols"`
 		} `json:"files"`
+		Groups []outlineGroup `json:"groups"`
 	} `json:"results"`
+}
+
+// outlineGroup is the compact shape emitted by the installed kivgraph
+// release. Its get_file_outline response groups symbols by kind and encodes
+// each range as "Name@line" or "Name@start-end" instead of returning one
+// object per declaration. Keep this decoder beside the two older shapes
+// above: accepting a new wire shape here is cheaper and safer than letting a
+// valid graph look empty to every position-first capability.
+type outlineGroup struct {
+	Kind  string `json:"kind"`
+	Files []struct {
+		File string   `json:"file"`
+		At   []string `json:"at"`
+	} `json:"files"`
 }
 
 // declarations is every declaration the outline carried, whichever of the
@@ -1120,7 +1180,44 @@ func (a outlineAnswer) declarations() []outlineDeclaration {
 	for _, file := range a.Results.Files {
 		out = append(out, file.Symbols...)
 	}
+	for _, group := range a.Results.Groups {
+		for _, file := range group.Files {
+			for _, at := range file.At {
+				decl, ok := compactOutlineDeclaration(group.Kind, at)
+				if ok {
+					out = append(out, decl)
+				}
+			}
+		}
+	}
 	return out
+}
+
+func compactOutlineDeclaration(kind, encoded string) (outlineDeclaration, bool) {
+	at := strings.LastIndex(encoded, "@")
+	if at <= 0 || at == len(encoded)-1 {
+		return outlineDeclaration{}, false
+	}
+	name := encoded[:at]
+	span := strings.Split(encoded[at+1:], "-")
+	start, err := strconv.Atoi(span[0])
+	if err != nil || start <= 0 {
+		return outlineDeclaration{}, false
+	}
+	end := start
+	if len(span) == 2 {
+		end, err = strconv.Atoi(span[1])
+		if err != nil || end < start {
+			return outlineDeclaration{}, false
+		}
+	}
+	return outlineDeclaration{
+		Name:          name,
+		QualifiedName: name,
+		Kind:          kind,
+		StartLine:     start,
+		EndLine:       end,
+	}, true
 }
 
 // resolveDeclaration turns a position into the declaration containing it, by

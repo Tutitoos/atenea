@@ -115,6 +115,7 @@ func (c *Core) serverStatus(byProvider map[string]providerHealth) []ServerStatus
 			ID:        server.ID,
 			Transport: probe.Transport(),
 			Where:     probe.Where(),
+			Dashboard: server.Dashboard,
 			Expose:    string(server.Expose),
 			State:     BackendUnknown,
 		}

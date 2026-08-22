@@ -120,14 +120,13 @@ const (
 	implementationsCapability = "symbol.implementations"
 	overviewCapability        = "symbol.overview"
 	callsCapability           = "symbol.calls"
+	impactCapability          = "code.impact"
+	indexCapability           = "repository.index"
 )
 
-// repositoryIndexCapability builds what detection can only ever read.
-// Unlike its neighbors above it is never planned into a commission either --
-// asking by default for write and process is exactly the standing grant a
-// read-only exploration must not carry -- but it still has to be named here
-// for the same reason they are: a capability the card does not name cannot
-// be asked for even when everything below it is ready to answer.
+// code.impact and repository.index are direct, explicit questions. They are
+// not planned into ordinary exploration: indexing asks for write and process,
+// and impact asks for process in addition to the read that is always free.
 
 // The four Kivgraph answers. Named here for the reason stated above and for
 // no other: none of them is planned into a commission either. Three read one
@@ -209,6 +208,8 @@ var card = contract.Agent{
 		implementationsCapability,
 		overviewCapability,
 		callsCapability,
+		impactCapability,
+		indexCapability,
 		consumersCapability,
 		symbolGetCapability,
 		unresolvedCapability,

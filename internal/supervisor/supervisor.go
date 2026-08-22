@@ -32,6 +32,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +66,17 @@ const (
 	// meaningless for it, and withDefaults rejects a spec that sets any of
 	// them rather than silently ignoring a likely config mistake.
 	TransportStdio Transport = "stdio"
+)
+
+// Readiness selects the harmless request used to decide whether an HTTP
+// process is ready. MCP is the default for existing managed servers; a web
+// dashboard only needs to serve an HTTP page and must not be sent an MCP
+// initialize request.
+type Readiness string
+
+const (
+	ReadinessMCP  Readiness = "mcp"
+	ReadinessHTTP Readiness = "http"
 )
 
 // The defaults every zero-valued Spec field falls back to. They live here
@@ -154,6 +166,8 @@ type Spec struct {
 	// EndpointPath is appended to host:port to build the URL Endpoint
 	// returns and the probe calls.
 	EndpointPath string
+	// Readiness is the protocol used by the supervisor's startup probe.
+	Readiness Readiness
 	// IdleTimeout is how long an OnDemand server may sit with nothing in
 	// flight before the reaper stops it. Ignored for Persistent.
 	IdleTimeout time.Duration
@@ -216,6 +230,13 @@ func (s Spec) withDefaults() (Spec, error) {
 	default:
 		return Spec{}, fmt.Errorf("supervisor: spec %q transport must be %q or %q, got %q",
 			s.ID, TransportHTTP, TransportStdio, s.Transport)
+	}
+	if s.Readiness == "" {
+		s.Readiness = ReadinessMCP
+	}
+	if s.Readiness != ReadinessMCP && s.Readiness != ReadinessHTTP {
+		return Spec{}, fmt.Errorf("supervisor: spec %q readiness must be %q or %q, got %q",
+			s.ID, ReadinessMCP, ReadinessHTTP, s.Readiness)
 	}
 	if s.IdleTimeout <= 0 {
 		s.IdleTimeout = DefaultIdleTimeout
@@ -391,17 +412,29 @@ func (s *Supervisor) Release(id string) {
 	}
 }
 
-// WarmUp starts every Persistent server without waiting for any of them,
-// so a slow one does not hold up the others. Failures are not returned:
-// they land on that server's own status, exactly like a crash discovered any
-// other way.
+// WarmUp starts every Persistent server. Independent servers still start in
+// parallel, but Serena's per-repository instances are started in declaration
+// order. Serena chooses its dashboard port by scanning for the first free
+// port; parallel starts can all observe the same free port before any Flask
+// thread binds it, leaving some dashboards missing or pointing at another
+// repository. Waiting only within that family makes the dashboard allocation
+// deterministic without serializing unrelated MCPs.
 func (s *Supervisor) WarmUp(ctx context.Context) {
+	// Start independent persistent servers first. Serena is the exception:
+	// its per-repository children must be warmed in declaration order because
+	// each one claims the first free dashboard port.
 	for _, id := range s.order {
 		p := s.procs[id]
-		if p.spec.Lifecycle != Persistent {
+		if p.spec.Lifecycle != Persistent || strings.HasPrefix(id, "serena@") {
 			continue
 		}
 		go func(p *process) { _, _ = p.ensureReady(ctx) }(p)
+	}
+	for _, id := range s.order {
+		p := s.procs[id]
+		if p.spec.Lifecycle == Persistent && strings.HasPrefix(id, "serena@") {
+			_, _ = p.ensureReady(ctx)
+		}
 	}
 }
 

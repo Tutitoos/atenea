@@ -19,6 +19,23 @@ import (
 	"strings"
 )
 
+func probeHTTP(ctx context.Context, client *http.Client, endpoint string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("answered %s", resp.Status)
+	}
+	return nil
+}
+
 // protocolVersion is the MCP revision the probe declares in its handshake.
 // It matches internal/adapter/serena/mcp.go's own constant: a server that
 // cannot answer this revision should say so at the handshake, which is

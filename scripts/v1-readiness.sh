@@ -27,6 +27,7 @@ if command -v rg >/dev/null 2>&1; then
 		--glob '!docs/content/not-built-yet.md'
 		--glob '!docs/content/v1-policy.md'
 		--glob '!docs/content/v1-readiness.md'
+		--glob '!docs/content/v1-final-audit.md'
 		--glob '!scripts/v1-readiness.sh'
 		.
 	)
@@ -40,6 +41,7 @@ else
 		--exclude='not-built-yet.md'
 		--exclude='v1-policy.md'
 		--exclude='v1-readiness.md'
+		--exclude='v1-final-audit.md'
 		--exclude='v1-readiness.sh'
 		'codebase.?memory|codebase_memory'
 		.
@@ -72,7 +74,7 @@ echo "[7/9] race suite"
 go test -race -count=1 ./...
 
 echo "[8/9] policy and shell entry points"
-bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh
+bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh
 scripts/v1-policy-check.sh
 "$build_dir/atenea" version
 

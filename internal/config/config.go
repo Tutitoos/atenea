@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +113,9 @@ type MCPServer struct {
 	URL     string
 	Command []string
 	Env     map[string]string
+	// Dashboard is an optional HTTP(S) web UI belonging to this MCP. It is
+	// metadata only: Atenea never opens it during startup or probing.
+	Dashboard string
 	// Timeout bounds the readiness check. Zero takes the probe's default.
 	Timeout time.Duration
 	// Expose says whether the backend's own tools may be reached through
@@ -522,6 +526,12 @@ type KivgraphAdapter struct {
 	// ceiling: opening a graph database cold is slow long before it is
 	// stuck.
 	Timeout time.Duration
+	// Dashboard is the optional read-only web viewer exposed by a separate
+	// Kivgraph UI process. Kivgraph's MCP server remains stdio; the viewer is
+	// deliberately a different process and transport.
+	Dashboard string
+	// DashboardProcess is the optional supervised HTTP viewer process.
+	DashboardProcess *ManagedProcess
 	// Process launches and supervises the kivgraph server itself, over a
 	// stdio transport rather than the http one Serena's Process uses.
 	// Unlike Serena, this is not optional: with no Endpoint to fall back to,
@@ -901,9 +911,11 @@ type fileSerenaAdapter struct {
 // talks over, only fileManagedProcess.build's caller does (see the section
 // parameter it takes below).
 type fileKivgraphAdapter struct {
-	Implementations *[]string           `toml:"implementations"`
-	Timeout         string              `toml:"timeout"`
-	Process         *fileManagedProcess `toml:"process"`
+	Implementations  *[]string           `toml:"implementations"`
+	Timeout          string              `toml:"timeout"`
+	Dashboard        string              `toml:"dashboard"`
+	DashboardProcess *fileManagedProcess `toml:"dashboard_process"`
+	Process          *fileManagedProcess `toml:"process"`
 }
 
 // fileTokensaveAdapter is the TOML shape of TokensaveAdapter. `root` is the
@@ -1017,15 +1029,16 @@ type fileRepository struct {
 }
 
 type fileMCPServer struct {
-	ID      string            `toml:"id"`
-	URL     string            `toml:"url"`
-	Command []string          `toml:"command"`
-	Env     map[string]string `toml:"env"`
-	Timeout string            `toml:"timeout"`
-	Expose  string            `toml:"expose"`
-	Tools   []string          `toml:"tools"`
-	Effects []string          `toml:"effects"`
-	Tool    []fileMCPTool     `toml:"tool"`
+	ID        string            `toml:"id"`
+	URL       string            `toml:"url"`
+	Command   []string          `toml:"command"`
+	Env       map[string]string `toml:"env"`
+	Dashboard string            `toml:"dashboard"`
+	Timeout   string            `toml:"timeout"`
+	Expose    string            `toml:"expose"`
+	Tools     []string          `toml:"tools"`
+	Effects   []string          `toml:"effects"`
+	Tool      []fileMCPTool     `toml:"tool"`
 }
 
 type fileMCPTool struct {
@@ -1062,7 +1075,14 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	case !hasURL && !hasCommand:
 		return fail("mcp_server %s: needs a url or a command", id)
 	}
-	out := MCPServer{ID: id, Command: m.Command, Env: m.Env}
+	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, Dashboard: strings.TrimSpace(m.Dashboard)}
+	if out.Dashboard != "" {
+		validated, err := validateDashboardURL(source, "mcp_server", id, out.Dashboard)
+		if err != nil {
+			return MCPServer{}, err
+		}
+		out.Dashboard = validated
+	}
 	if hasURL {
 		parsed, err := url.Parse(strings.TrimSpace(m.URL))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -1178,6 +1198,38 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	return out, nil
 }
 
+func validateDashboardURL(source, section, id, raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: dashboard %q is not an absolute http(s) url", source, section, id, raw)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: dashboard scheme %q is not http or https", source, section, id, parsed.Scheme)
+	}
+	if parsed.User != nil {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: dashboard must not contain credentials", source, section, id)
+	}
+	if parsed.Hostname() == "" {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: dashboard has no host", source, section, id)
+	}
+	if port := parsed.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", contract.Fail(contract.FailureInvalidInput,
+				"settings %s: %s %s: dashboard port %q is invalid", source, section, id, port)
+		}
+	}
+	if !dnsLabel(id) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: id is not a valid DNS label for its dashboard alias", source, section, id)
+	}
+	return parsed.String(), nil
+}
+
 // namedTools trims an allow list and refuses a repeat. A name listed twice is
 // not a wider permission -- it is two people editing the same file, and the
 // second one may have meant a different tool.
@@ -1212,6 +1264,21 @@ func namedEffects(raw []string) ([]contract.Effect, error) {
 		out = append(out, effect)
 	}
 	return out, nil
+}
+
+// dnsLabel is deliberately narrower than a general hostname. Dashboard
+// aliases are one local label, not a path or a multi-label name, so the
+// mapping remains deterministic and safe to place in a hosts file.
+func dnsLabel(s string) bool {
+	if len(s) == 0 || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1340,6 +1407,7 @@ func parse(raw []byte, source string) (Config, error) {
 	// would never be probed or declared. Refusing is the only way the file
 	// can say which one it meant.
 	seen := make(map[string]bool, len(decoded.MCPServers))
+	dashboardAliases := make(map[string]string)
 	for _, raw := range decoded.MCPServers {
 		server, err := raw.build(source)
 		if err != nil {
@@ -1350,6 +1418,13 @@ func parse(raw []byte, source string) (Config, error) {
 				"settings %s: mcp_server %s is declared twice", source, server.ID)
 		}
 		seen[server.ID] = true
+		if server.Dashboard != "" {
+			if previous, exists := dashboardAliases[server.ID]; exists {
+				return Config{}, contract.Fail(contract.FailureInvalidInput,
+					"settings %s: dashboard alias %s is claimed by %s and %s", source, server.ID, previous, server.ID)
+			}
+			dashboardAliases[server.ID] = server.ID
+		}
 		cfg.MCPServers = append(cfg.MCPServers, server)
 	}
 	return cfg, nil
@@ -1851,6 +1926,33 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 				"settings %s: orchestrator.kivgraph.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
+	}
+	if strings.TrimSpace(l.Dashboard) != "" {
+		validated, err := validateDashboardURL(source, "orchestrator.kivgraph", "kivgraph", l.Dashboard)
+		if err != nil {
+			return KivgraphAdapter{}, err
+		}
+		out.Dashboard = validated
+	}
+	if l.DashboardProcess != nil {
+		process, err := l.DashboardProcess.build(source, "orchestrator.kivgraph.dashboard_process")
+		if err != nil {
+			return KivgraphAdapter{}, err
+		}
+		if process.Port == 0 {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.dashboard_process.port must be fixed when a dashboard URL is configured", source)
+		}
+		if out.Dashboard == "" {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.dashboard is required with dashboard_process", source)
+		}
+		parsed, _ := url.Parse(out.Dashboard)
+		if parsed.Port() == "" || parsed.Port() != strconv.Itoa(process.Port) {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.dashboard port must match dashboard_process.port %d", source, process.Port)
+		}
+		out.DashboardProcess = &process
 	}
 	if l.Process != nil {
 		process, err := l.Process.build(source, "orchestrator.kivgraph.process")

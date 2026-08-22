@@ -37,6 +37,7 @@ func (c *Client) turnOpenCode(ctx context.Context, dir string, timeout time.Dura
 		Structured: got.Structured,
 		Spent:      got.Spent,
 		Passes:     got.Passes,
+		ToolCalls:  append([]string(nil), got.ToolCalls...),
 	}
 	if err != nil {
 		return answer, err

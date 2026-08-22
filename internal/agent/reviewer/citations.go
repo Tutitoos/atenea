@@ -72,6 +72,18 @@ const (
 	citeUnresolved
 )
 
+// citationEvidence is the durable trace for one location mentioned by the
+// answer. CitedPath preserves what the agent wrote; ResolvedPath records what
+// this reviewer actually opened. Keeping both prevents an abbreviated path
+// or a directory rename from becoming invisible in the audit trail.
+type citationEvidence struct {
+	CitedPath    string `json:"cited_path"`
+	ResolvedPath string `json:"resolved_path,omitempty"`
+	Line         int    `json:"line"`
+	Quote        string `json:"quote,omitempty"`
+	Outcome      string `json:"outcome"`
+}
+
 var (
 	// Form A: a path token ending in a recognized extension, immediately
 	// followed by ":" and a line number with no whitespace between them.
@@ -252,7 +264,7 @@ func resolveByBasename(citedPath string, index map[string][]string) (string, boo
 // is this reviewer's shortfall, not proof the citation is wrong, because a
 // permission this process does not have looks identical to a path that was
 // never real.
-func checkCitation(in assignment, c citation, index map[string][]string) (citeOutcome, string) {
+func checkCitation(in assignment, c citation, index map[string][]string) (citeOutcome, string, string) {
 	name := c.Path
 	if root := repositoryRoot(in); root != "" && !filepath.IsAbs(name) {
 		name = filepath.Join(root, name)
@@ -266,101 +278,140 @@ func checkCitation(in assignment, c citation, index map[string][]string) (citeOu
 		}
 	}
 	if err != nil {
-		return citeUnresolved, fmt.Sprintf("%s:%d: cannot re-read %s: %v", c.Path, c.Line, name, err)
+		return citeUnresolved, fmt.Sprintf("%s:%d: cannot re-read %s: %v", c.Path, c.Line, name, err), ""
 	}
+	resolved := citationPathForReport(in, name)
 	lines := strings.Split(string(body), "\n")
 	if c.Line < 1 || c.Line > len(lines) {
-		return citeMismatched, fmt.Sprintf("%s:%d: the file has %d lines", c.Path, c.Line, len(lines))
+		return citeMismatched, fmt.Sprintf("%s:%d: the file has %d lines", c.Path, c.Line, len(lines)), resolved
 	}
 	if c.Quote == "" {
-		return citeMatched, ""
+		return citeMatched, "", resolved
 	}
 	actual := lines[c.Line-1]
 	if !roughlyMatches(c.Quote, actual) {
 		return citeMismatched, fmt.Sprintf("%s:%d: cited as %q, the line reads %q",
-			c.Path, c.Line, c.Quote, strings.TrimSpace(actual))
+			c.Path, c.Line, c.Quote, strings.TrimSpace(actual)), resolved
 	}
-	return citeMatched, ""
+	return citeMatched, "", resolved
+}
+
+// citationPathForReport makes the trace portable. A reviewer may run in a
+// temporary checkout or on another machine, so the report keeps paths
+// repository-relative whenever a repository root is available.
+func citationPathForReport(in assignment, path string) string {
+	root := repositoryRoot(in)
+	if root == "" || !filepath.IsAbs(path) {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // citationScope is printed on every report this file returns, ok or not.
 // It is the answer to "what did this actually check" and it travels in the
 // same field on every verdict, because the boundary matters most on the
 // verdict most likely to be read as "the answer is correct".
-const citationScope = "audited: that each cited file:line exists, and, where a quoted " +
-	"excerpt sits beside a citation, whether that excerpt is on the cited line. Not " +
-	"audited: any claim in the prose beyond the cited locations, including whether the " +
-	"narrative correctly characterizes what the surrounding code does."
+const citationScope = "audited: every non-empty prose result field has at least one " +
+	"file:line citation; each cited location exists, and, where a quoted excerpt sits " +
+	"beside it, that excerpt is checked against the cited line. Not audited: the meaning " +
+	"of claims beyond those locations or whether the narrative characterizes surrounding code."
 
 // judgeCitations audits a prose subject -- one whose result carries no
 // `path`, so check() has nothing to open -- by pulling every citation out
 // of every string field in its result and resolving each against disk.
 //
-// The aggregate rule: any mismatch fails the whole report, because a
-// provably wrong citation is the specific defect this check exists to
-// catch. Short of that, any citation this reviewer could not resolve at
-// all leaves the report incomplete -- it cannot honestly say the citations
-// hold when some of them were never checked. Only when every citation
-// found resolves and none mismatch does the report read ok, and even then
-// it says explicitly how much of that "ok" was existence-only versus a
-// checked quote, and what it never looked at.
+// The aggregate rule: any mismatch or uncited prose field fails the whole
+// report, because the answer then contains a directly wrong claim or a claim
+// with no location that this deterministic reviewer can audit. Short of that,
+// any citation this reviewer could not resolve leaves the report incomplete --
+// it cannot honestly say the citations hold when some were never checked.
+// Only when every prose field is grounded, every citation resolves and none
+// mismatch does the report read ok. The result also retains one evidence row
+// per citation, including the path actually opened.
 func judgeCitations(in assignment, s *subject) report {
 	var all []citation
+	fieldCitationCount := map[string]int{}
 	for _, key := range sortedResultKeys(s.Result) {
 		text, ok := s.Result[key].(string)
-		if !ok {
+		if !ok || strings.TrimSpace(text) == "" {
 			continue
 		}
-		all = append(all, citations(text)...)
+		found := citations(text)
+		fieldCitationCount[key] = len(found)
+		all = append(all, found...)
+	}
+	var uncitedFields []string
+	fieldKeys := make([]string, 0, len(fieldCitationCount))
+	for key := range fieldCitationCount {
+		fieldKeys = append(fieldKeys, key)
+	}
+	sort.Strings(fieldKeys)
+	for _, key := range fieldKeys {
+		if fieldCitationCount[key] == 0 {
+			uncitedFields = append(uncitedFields, key)
+		}
 	}
 	if len(all) == 0 {
-		return incomplete("the answer names no file:line citation in either form this " +
-			"reviewer reads (`path:line` or `Line N of path`); nothing here can verify prose alone")
+		out := refuse("the prose result has no file:line citation in either form this " +
+			"reviewer reads (`path:line` or `Line N of path`); every prose field needs " +
+			"a concrete location before it can be accepted")
+		out.Result = citationAuditResult(0, 0, 0, nil, uncitedFields)
+		return out
 	}
 
 	index := repoIndex(repositoryRoot(in))
 	var existOnly, contentChecked int
 	var mismatches, unresolved []string
+	evidence := make([]citationEvidence, 0, len(all))
 	for _, c := range all {
-		switch outcome, detail := checkCitation(in, c, index); outcome {
+		outcome, detail, resolved := checkCitation(in, c, index)
+		e := citationEvidence{CitedPath: filepath.ToSlash(c.Path), ResolvedPath: resolved, Line: c.Line, Quote: c.Quote}
+		switch outcome {
 		case citeMatched:
 			if c.Quote != "" {
 				contentChecked++
+				e.Outcome = "content_checked"
 			} else {
 				existOnly++
+				e.Outcome = "existence_only"
 			}
 		case citeMismatched:
 			mismatches = append(mismatches, detail)
+			e.Outcome = "mismatched"
 		case citeUnresolved:
 			unresolved = append(unresolved, detail)
+			e.Outcome = "unresolved"
 		}
+		evidence = append(evidence, e)
 	}
 
-	if len(mismatches) > 0 {
-		out := refuse(strings.Join(mismatches, "; "))
-		delete(out.Result, "checked")
-		out.Result["existence_only"] = existOnly
-		out.Result["content_checked"] = contentChecked
-		out.Result["unresolved"] = len(unresolved)
-		out.Result["scope"] = citationScope
+	base := citationAuditResult(len(all), existOnly, contentChecked, evidence, uncitedFields)
+	if len(mismatches) > 0 || len(uncitedFields) > 0 {
+		var defects []string
+		defects = append(defects, mismatches...)
+		if len(uncitedFields) > 0 {
+			defects = append(defects, "uncited prose fields: "+strings.Join(uncitedFields, ", "))
+		}
+		out := refuse(strings.Join(defects, "; "))
+		out.Result = base
 		return out
 	}
 	if len(unresolved) > 0 {
 		out := incomplete(strings.Join(unresolved, "; "))
-		delete(out.Result, "checked")
-		out.Result["existence_only"] = existOnly
-		out.Result["content_checked"] = contentChecked
+		out.Result = base
 		out.Result["unresolved"] = len(unresolved)
-		out.Result["scope"] = citationScope
 		return out
 	}
 	return report{
-		Result: map[string]any{
-			"existence_only":  existOnly,
-			"content_checked": contentChecked,
-			"scope":           citationScope,
-			"subject":         s.RunID,
-		},
+		Result: func() map[string]any {
+			out := base
+			out["subject"] = s.RunID
+			return out
+		}(),
 		Verdict: "ok",
 		Reason: &reason{
 			Kind: "not_found",
@@ -369,6 +420,25 @@ func judgeCitations(in assignment, s *subject) report {
 					"a quoted excerpt); nothing in the narrative beyond the cited locations was checked",
 				existOnly+contentChecked, plural(existOnly+contentChecked, "location", "locations"), contentChecked),
 		},
+	}
+}
+
+func citationAuditResult(count, existenceOnly, contentChecked int, evidence []citationEvidence, uncitedFields []string) map[string]any {
+	if evidence == nil {
+		evidence = []citationEvidence{}
+	}
+	if uncitedFields == nil {
+		uncitedFields = []string{}
+	}
+	return map[string]any{
+		"checked":         existenceOnly + contentChecked,
+		"citation_count":  count,
+		"citations":       evidence,
+		"existence_only":  existenceOnly,
+		"content_checked": contentChecked,
+		"unresolved":      0,
+		"uncited_fields":  uncitedFields,
+		"scope":           citationScope,
 	}
 }
 

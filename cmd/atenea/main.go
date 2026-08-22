@@ -27,6 +27,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/dashboard"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
@@ -52,6 +53,7 @@ Commands:
                          --budget USD replaces what remains of the grant.
                          resume --list shows every run still worth it
   catalog                List capabilities, providers and repositories in full
+  dashboard ID            Check and open a dashboard; use 'hosts' for aliases
   intent [--json]        Read the client config this repo carries and say how
                          Atenea answers it; launches nothing from it
   detect [--repo ID]     Ask attached providers whether they already hold a
@@ -108,6 +110,18 @@ Short health screen: one light for Atenea, one per provider it talks to.
 	"catalog": `Usage: atenea catalog
 
 List every capability, its providers, and every registered repository.
+`,
+	"dashboard": `Usage: atenea dashboard ID [--check]
+       atenea dashboard hosts [--dry-run] [--check] [--remove-obsolete]
+
+Check and open the configured dashboard for one MCP. Opening is always manual;
+starting or probing an MCP never opens a browser.
+
+Flags for an ID:
+  --check       check accessibility without opening the browser
+
+The hosts form manages only Atenea's marked block in /etc/hosts. Use --dry-run
+to preview changes, and --check to inspect the file without writing it.
 `,
 	"detect": `Usage: atenea detect [flags]
 
@@ -611,6 +625,8 @@ func run(args []string, out io.Writer) error {
 		return cmdStatus(settingsPath, out)
 	case "catalog":
 		return cmdCatalog(settingsPath, out)
+	case "dashboard":
+		return cmdDashboard(settingsPath, commandArgs, out)
 	case "detect":
 		return cmdDetect(settingsPath, commandArgs, out)
 	case "intent":
@@ -717,6 +733,116 @@ func build(settingsPath string, role core.Role) (*core.Core, error) {
 func cmdVersion(out io.Writer) error {
 	fmt.Fprintf(out, "atenea   %s\n", buildinfo.Full())
 	fmt.Fprintf(out, "contract %s\n", contract.Current)
+	return nil
+}
+
+// dashboardHostsPath is a seam for tests. The production value is the system
+// hosts file, but tests must be able to prove idempotency without touching it.
+var dashboardHostsPath = dashboard.HostsPath
+var dashboardOpen = func(rawURL string) error {
+	return dashboard.DefaultLauncher().Open(rawURL)
+}
+
+func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"dashboard needs an MCP id or 'hosts'")
+	}
+	cfg, err := config.LoadEffective(settingsPath)
+	if err != nil {
+		return err
+	}
+	if args[0] == "hosts" {
+		return cmdDashboardHosts(cfg, args[1:], out)
+	}
+	if args[0] == "--check" || args[0] == "--dry-run" {
+		return contract.Fail(contract.FailureInvalidInput,
+			"dashboard needs an MCP id before its flags")
+	}
+	flags := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	check := flags.Bool("check", false, "check without opening")
+	if err := flags.Parse(args[1:]); err != nil || len(flags.Args()) != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"dashboard %s takes only --check", args[0])
+	}
+	entry, err := dashboard.ResolveConfig(cfg, args[0])
+	if err != nil {
+		if args[0] == "serena" && (errors.Is(err, dashboard.ErrNotDeclared) || errors.Is(err, dashboard.ErrNotFound)) {
+			cwd, cwdErr := os.Getwd()
+			if cwdErr == nil {
+				if discovered, discoverErr := dashboard.DiscoverSerena(context.Background(), cwd); discoverErr == nil {
+					entry, err = discovered, nil
+				}
+			}
+		}
+	}
+	if err != nil {
+		if errors.Is(err, dashboard.ErrNotFound) || errors.Is(err, dashboard.ErrNotDeclared) {
+			return contract.Fail(contract.FailureNotFound, "%v", err)
+		}
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if err := dashboard.Check(context.Background(), entry.URL); err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"dashboard %s is not accessible at %s: %v", entry.ID, entry.URL, err)
+	}
+	if *check {
+		fmt.Fprintf(out, "dashboard %s accessible at %s\n", entry.ID, entry.URL)
+		return nil
+	}
+	if err := dashboardOpen(entry.URL); err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"could not open dashboard %s at %s: %v", entry.ID, entry.URL, err)
+	}
+	fmt.Fprintf(out, "opened dashboard %s at %s\n", entry.ID, entry.URL)
+	return nil
+}
+
+func cmdDashboardHosts(cfg config.Config, args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("dashboard hosts", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dryRun := flags.Bool("dry-run", false, "show the resulting file without writing")
+	check := flags.Bool("check", false, "check the resulting file without writing")
+	removeObsolete := flags.Bool("remove-obsolete", false, "remove stale Atenea-managed entries")
+	if err := flags.Parse(args); err != nil || len(flags.Args()) != 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"dashboard hosts takes --dry-run, --check or --remove-obsolete")
+	}
+	entries, err := dashboard.AllConfig(cfg)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	existing, err := dashboard.ReadHosts(dashboardHostsPath)
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"cannot read %s: %v", dashboardHostsPath, err)
+	}
+	plan, err := dashboard.PlanHosts(existing, entries, *removeObsolete)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if *check {
+		if plan.Changed {
+			fmt.Fprintf(out, "dashboard hosts out of date: %s\n", dashboardHostsPath)
+		} else {
+			fmt.Fprintf(out, "dashboard hosts up to date: %s\n", dashboardHostsPath)
+		}
+		return nil
+	}
+	if *dryRun {
+		fmt.Fprint(out, plan.Content)
+		return nil
+	}
+	if !plan.Changed {
+		fmt.Fprintf(out, "dashboard hosts already up to date: %s\n", dashboardHostsPath)
+		return nil
+	}
+	if err := dashboard.WriteHosts(dashboardHostsPath, plan.Content); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"cannot write %s: %v", dashboardHostsPath, err)
+	}
+	fmt.Fprintf(out, "dashboard hosts updated: %s\n", dashboardHostsPath)
 	return nil
 }
 
@@ -979,6 +1105,9 @@ func printServers(out io.Writer, status core.Status) {
 			state, s.ID, s.Transport, s.Expose, age, orDash(s.Where))
 		if note != "" {
 			line += "  " + note
+		}
+		if s.Dashboard != "" {
+			line += "  dashboard=" + s.Dashboard
 		}
 		fmt.Fprintln(out, strings.TrimRight(line, " "))
 	}
@@ -1433,6 +1562,9 @@ func printServerProbes(out io.Writer, servers []core.ServerProbe, by answeredBy)
 			verdict, s.ID, s.Transport, s.Expose, path,
 			s.Took.Truncate(time.Millisecond), orDash(detail))
 		fmt.Fprintf(out, "  %-11s %-16s where=%s\n", "", "", orDash(s.Where))
+		if s.Dashboard != "" {
+			fmt.Fprintf(out, "  %-11s %-16s dashboard=%s\n", "", "", s.Dashboard)
+		}
 	}
 	fmt.Fprintln(out, "  "+answeredLine(by))
 	// The caveat belongs to one branch only. When the service answered, these

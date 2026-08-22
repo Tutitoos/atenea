@@ -67,6 +67,16 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
 
+      - name: Coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { gsub("%", "", $3); print $3 }')
+          awk -v total="$total" 'BEGIN {
+            if (total < 75.0) {
+              printf "coverage %.1f%% is below the 75.0%% floor\n", total
+              exit 1
+            }
+          }'
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:

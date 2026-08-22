@@ -525,6 +525,9 @@ type Answer struct {
 	// still refused. Passes says what the money bought, not whether the
 	// caller got an answer -- the error says that.
 	Passes int
+	// ToolCalls is diagnostic evidence when the backend exposes tool-use
+	// events. It is empty for Claude's final envelope and tool-less turns.
+	ToolCalls []string
 }
 
 // resolveDir turns a Request's Dir into the absolute path invoke actually

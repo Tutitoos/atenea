@@ -23,3 +23,6 @@
 # holding a language-server setup and a memories folder that describe one
 # machine and belong to nobody else.
 /.serena/
+
+# TokenSave keeps a project-local semantic index and token ledger here.
+/.tokensave/

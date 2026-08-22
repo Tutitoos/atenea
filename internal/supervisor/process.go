@@ -422,6 +422,9 @@ func (p *process) readyNow(session *mcpstdio.Session) bool {
 		defer cancel()
 		return session.Initialize(ctx) == nil
 	}
+	if p.spec.Readiness == ReadinessHTTP {
+		return probeHTTP(context.Background(), p.spec.HTTP, p.endpoint) == nil
+	}
 	return probeReady(context.Background(), p.spec.HTTP, p.endpoint) == nil
 }
 

@@ -30,6 +30,14 @@ func TestACitationWithAMatchingQuotePasses(t *testing.T) {
 	if scope, _ := got.Result["scope"].(string); !strings.Contains(scope, "Not audited") {
 		t.Fatalf("scope %q does not name what was not audited", scope)
 	}
+	rows, ok := got.Result["citations"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("citations = %#v, want one evidence row", got.Result["citations"])
+	}
+	evidence, ok := rows[0].(map[string]any)
+	if !ok || evidence["cited_path"] != "a.txt" || evidence["resolved_path"] != "a.txt" || evidence["outcome"] != "content_checked" {
+		t.Fatalf("citation evidence = %#v, want cited/resolved a.txt and content_checked", rows[0])
+	}
 }
 
 // A citation with no quote beside it is checked for existence only, and the
@@ -113,17 +121,34 @@ func TestAnUnresolvableCitationIsIncomplete(t *testing.T) {
 
 // Bare ":N" shorthand with no path attached is not resolved -- inferring
 // which file it means from context is exactly the guess this checker
-// refuses to make -- so prose that only uses it is incomplete, the same as
-// prose with no citation at all.
+// refuses to make -- so prose that only uses it fails the citation gate.
 func TestBareLineShorthandIsNotACitation(t *testing.T) {
 	got := run(t, card(t, "one\n", map[string]any{
 		"findings": "The behavior is unchanged, declared here: :23.",
 	}, "ok"))
-	if got.Verdict != "incomplete" {
-		t.Fatalf("verdict = %s, want incomplete", got.Verdict)
+	if got.Verdict != "failed" {
+		t.Fatalf("verdict = %s, want failed", got.Verdict)
 	}
 	if !strings.Contains(got.Reason.Text, "no file:line citation") {
 		t.Fatalf("reason %q does not say nothing was found", got.Reason.Text)
+	}
+}
+
+// Every substantive prose field is independently auditable. A citation in
+// summary cannot silently cover an uncited findings field.
+func TestEveryProseFieldNeedsEvidence(t *testing.T) {
+	got := run(t, card(t, "one\ntwo\n", map[string]any{
+		"summary":  "Grounded at a.txt:1.",
+		"findings": "The second line is discussed without a location.",
+	}, "ok"))
+	if got.Verdict != "failed" {
+		t.Fatalf("verdict = %s, want failed", got.Verdict)
+	}
+	if fields, _ := got.Result["uncited_fields"].([]any); len(fields) != 1 || fields[0] != "findings" {
+		t.Fatalf("uncited_fields = %#v, want [findings]", got.Result["uncited_fields"])
+	}
+	if !strings.Contains(got.Reason.Text, "findings") {
+		t.Fatalf("reason %q does not name the uncited field", got.Reason.Text)
 	}
 }
 
@@ -206,6 +231,46 @@ func TestAUniqueBaseNameResolvesWithoutTheDirectory(t *testing.T) {
 	}
 	if got.Result["content_checked"] != float64(1) {
 		t.Fatalf("content_checked = %v, want 1", got.Result["content_checked"])
+	}
+	rows, _ := got.Result["citations"].([]any)
+	evidence, _ := rows[0].(map[string]any)
+	if evidence["cited_path"] != "drivers.routes.ts" || evidence["resolved_path"] != "src/modules/drivers/drivers.routes.ts" {
+		t.Fatalf("abbreviated path evidence = %#v", evidence)
+	}
+}
+
+// A directory rename with the same unique basename is visible in the audit
+// trail and remains safe: the reviewer records the new path it opened.
+func TestAUniqueBaseNameAfterDirectoryRenameIsTraceable(t *testing.T) {
+	got := run(t, cardOverTree(t, map[string]string{
+		"new/location/config.ts": "one\ntwo\n",
+	}, map[string]any{
+		"findings": "See old/location/config.ts:2, which reads `two`.",
+	}))
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %s (%v), want ok", got.Verdict, got.Reason)
+	}
+	rows, _ := got.Result["citations"].([]any)
+	evidence, _ := rows[0].(map[string]any)
+	if evidence["cited_path"] != "old/location/config.ts" || evidence["resolved_path"] != "new/location/config.ts" {
+		t.Fatalf("renamed path evidence = %#v", evidence)
+	}
+}
+
+// A rename that also changes the basename cannot be proven from the current
+// checkout. It stays unresolved rather than using fuzzy matching or guessing
+// from a nearby file.
+func TestARenameWithDifferentBaseNameStaysUnresolved(t *testing.T) {
+	got := run(t, cardOverTree(t, map[string]string{
+		"new/location/current.ts": "one\n",
+	}, map[string]any{
+		"findings": "See old/location/legacy.ts:1.",
+	}))
+	if got.Verdict != "incomplete" {
+		t.Fatalf("verdict = %s, want incomplete", got.Verdict)
+	}
+	if !strings.Contains(got.Reason.Text, "legacy.ts") {
+		t.Fatalf("reason %q does not name the unresolved renamed path", got.Reason.Text)
 	}
 }
 

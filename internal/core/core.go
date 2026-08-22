@@ -563,6 +563,14 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
+		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
+			process := cfg.Orchestrator.Kivgraph.Process
+			if process == nil {
+				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
+					"settings %s: kivgraph index has no process declaration", cfg.Source)
+			}
+			return kivgraph.RunConfiguredIndex(ctx, process.Command, process.Env, root, mode)
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -1043,6 +1051,7 @@ type ServerProbe struct {
 	ID        string
 	Transport string
 	Where     string
+	Dashboard string
 	Expose    string
 	OK        bool
 	// Name and Version are who answered, from the handshake. Empty when
@@ -1096,6 +1105,7 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 			ID:         server.ID,
 			Transport:  probes[i].Transport(),
 			Where:      probes[i].Where(),
+			Dashboard:  server.Dashboard,
 			Expose:     string(server.Expose),
 			OK:         results[i].OK,
 			Name:       results[i].Name,

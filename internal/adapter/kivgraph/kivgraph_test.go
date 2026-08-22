@@ -326,6 +326,44 @@ func statusCapability() contract.Capability {
 	}
 }
 
+func impactCapability() contract.Capability {
+	return contract.Capability{
+		ID: CapabilityImpact, Version: contract.Version{Major: 1}, Summary: "test double for code.impact",
+		Effects: []contract.Effect{contract.EffectRead, contract.EffectProcess},
+		Inputs: []contract.Field{
+			{Name: "baseline", Type: contract.TypeString, Required: true},
+			{Name: "scope", Type: contract.TypeStringList},
+			{Name: "depth", Type: contract.TypeInt},
+			{Name: "include_snippet", Type: contract.TypeBool},
+			{Name: "snippet_lines", Type: contract.TypeInt},
+		},
+		Outputs: []contract.Field{
+			{Name: "changed_files", Type: contract.TypeStringList, Required: true},
+			{Name: "affected_symbols", Type: contract.TypeRecordList, Required: true, Fields: []contract.Field{
+				{Name: "path", Type: contract.TypeString, Required: true},
+				{Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "kind", Type: contract.TypeString},
+				{Name: "depth", Type: contract.TypeInt, Required: true},
+				{Name: "snippet", Type: contract.TypeString},
+			}},
+		},
+	}
+}
+
+func indexCapability() contract.Capability {
+	return contract.Capability{
+		ID: CapabilityIndex, Version: contract.Version{Major: 1}, Summary: "test double for repository.index",
+		Effects: []contract.Effect{contract.EffectWrite, contract.EffectProcess},
+		Inputs:  []contract.Field{{Name: "mode", Type: contract.TypeString, Enum: []string{"full"}}},
+		Outputs: []contract.Field{
+			{Name: "status", Type: contract.TypeString, Required: true},
+			{Name: "nodes", Type: contract.TypeInt, Required: true},
+			{Name: "edges", Type: contract.TypeInt, Required: true},
+		},
+	}
+}
+
 func capabilityFor(id string) contract.Capability {
 	switch id {
 	case CapabilityDefinition:
@@ -342,6 +380,10 @@ func capabilityFor(id string) contract.Capability {
 		return unresolvedCapability()
 	case CapabilityGraphStatus:
 		return statusCapability()
+	case CapabilityImpact:
+		return impactCapability()
+	case CapabilityIndex:
+		return indexCapability()
 	default:
 		panic("capabilityFor: unknown capability " + id)
 	}
@@ -363,6 +405,10 @@ func implFor(capabilityID string) string {
 		return ImplUnresolved
 	case CapabilityGraphStatus:
 		return ImplStatus
+	case CapabilityImpact:
+		return ImplImpact
+	case CapabilityIndex:
+		return ImplIndex
 	default:
 		panic("implFor: unknown capability " + capabilityID)
 	}
@@ -377,8 +423,18 @@ func request(t *testing.T, repo contract.Repository, capabilityID string, payloa
 		Implementation: contract.Implementation{ID: implFor(capabilityID), Provider: "kivgraph", Capability: capabilityID},
 		Repository:     repo,
 		Payload:        payload,
-		Permission:     contract.Permission{Task: "probe", Effects: []contract.Effect{contract.EffectRead}},
+		Permission:     contract.Permission{Task: "probe", Effects: effectsFor(capabilityID)},
 	}
+}
+
+func effectsFor(capabilityID string) []contract.Effect {
+	if capabilityID == CapabilityIndex {
+		return []contract.Effect{contract.EffectWrite, contract.EffectProcess}
+	}
+	if capabilityID == CapabilityImpact {
+		return []contract.Effect{contract.EffectRead, contract.EffectProcess}
+	}
+	return []contract.Effect{contract.EffectRead}
 }
 
 func testRepo(t *testing.T) contract.Repository {
@@ -473,6 +529,7 @@ func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 	for _, want := range []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
 		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+		CapabilityImpact, CapabilityIndex,
 	} {
 		if !slicesContain(caps, want) {
 			t.Errorf("Capabilities() = %v, missing %q", caps, want)
@@ -967,6 +1024,24 @@ func outlineWith(repo, file string, rows ...map[string]any) string {
 		panic(err)
 	}
 	return string(body)
+}
+
+func TestOutlineDeclarationsAcceptsCompactGroupedRanges(t *testing.T) {
+	var answer outlineAnswer
+	input := `{"results":{"groups":[{"kind":"method","files":[{"file":"client.go","at":["Runner.Run@304-380","Runner.ID@282"]}]}]}}`
+	if err := json.Unmarshal([]byte(input), &answer); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	declarations := answer.declarations()
+	if len(declarations) != 2 {
+		t.Fatalf("declarations = %#v, want two compact rows", declarations)
+	}
+	if got := declarations[0]; got.Name != "Runner.Run" || got.QualifiedName != "Runner.Run" || got.Kind != "method" || got.StartLine != 304 || got.EndLine != 380 {
+		t.Fatalf("first declaration = %#v", got)
+	}
+	if got := declarations[1]; got.Name != "Runner.ID" || got.StartLine != 282 || got.EndLine != 282 {
+		t.Fatalf("second declaration = %#v", got)
+	}
 }
 
 func TestRunDefinitionAnswersFromTheDeclarationContainingThePosition(t *testing.T) {

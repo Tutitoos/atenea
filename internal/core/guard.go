@@ -119,6 +119,9 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 		}
 		specs = append(specs, added...)
 	}
+	if p := cfg.Orchestrator.Kivgraph.DashboardProcess; p != nil {
+		specs = append(specs, kivgraphDashboardSpec(*p))
+	}
 	if p := cfg.Orchestrator.Tokensave.Process; p != nil {
 		added, err := tokensaveSpecs(cfg.Source, *p)
 		if err != nil {
@@ -130,6 +133,28 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 		return nil, nil
 	}
 	return supervisor.New(specs...)
+}
+
+// kivgraphDashboardSpec is deliberately separate from kivgraphSpecs. The MCP
+// server speaks stdio and the viewer speaks HTTP; sharing a process id or
+// transport would make the dashboard look healthy while the MCP child was
+// actually the one being supervised.
+func kivgraphDashboardSpec(p config.ManagedProcess) supervisor.Spec {
+	return supervisor.Spec{
+		ID:           "kivgraph-dashboard",
+		Command:      p.Command,
+		Args:         p.Args,
+		Env:          p.Env,
+		Lifecycle:    p.Lifecycle,
+		Port:         p.Port,
+		EndpointPath: "/",
+		Readiness:    supervisor.ReadinessHTTP,
+		RestartLimit: p.RestartLimit,
+		RestartDelay: p.RestartDelay,
+		StableAfter:  p.StableAfter,
+		ReadyTimeout: p.ReadyTimeout,
+		StopGrace:    p.StopGrace,
+	}
 }
 
 // serenaSpecs turns one declaration into the servers it means: one, or one per

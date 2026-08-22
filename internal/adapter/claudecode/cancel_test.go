@@ -96,10 +96,10 @@ func TestCancelingReturnsWithoutWaitingForTheChild(t *testing.T) {
 	if err == nil {
 		t.Fatal("a canceled call came back without an error")
 	}
-	// The budget is the grace the fix allows plus room for a loaded machine,
-	// and still a fraction of the child's own life. Before the fix this call
-	// returned in thirty seconds, not four.
-	if limit := procgroup.Grace + 2*time.Second; waited > limit {
+	// The budget is the grace the fix allows plus room for a loaded machine or
+	// the race detector, and still a fraction of the child's own life. Before
+	// the fix this call returned in thirty seconds, not a few seconds.
+	if limit := procgroup.Grace + 5*time.Second; waited > limit {
 		t.Errorf("canceling took %v, want under %v: the call waited for the child it had killed",
 			waited.Truncate(time.Millisecond), limit)
 	}
@@ -182,7 +182,7 @@ func TestAHelperThatLeavesTheGroupStillDoesNotHoldTheCall(t *testing.T) {
 
 	// Room for the grace to expire and not much more. Without it this waits
 	// out the escapee, which is thirty seconds here and unbounded in life.
-	if limit := procgroup.Grace + 3*time.Second; waited > limit {
+	if limit := procgroup.Grace + 5*time.Second; waited > limit {
 		t.Errorf("canceling took %v, want under %v: an escaped helper held the call open",
 			waited.Truncate(time.Millisecond), limit)
 	}

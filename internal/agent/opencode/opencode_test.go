@@ -3,14 +3,22 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+// fixtureTimeout leaves room for process startup under -race and concurrent
+// package execution. Production timeouts are tested separately; these fake
+// clients should never fail because instrumentation delayed their first byte.
+const fixtureTimeout = 15 * time.Second
 
 func executable(t *testing.T, body string) string {
 	t.Helper()
@@ -32,7 +40,7 @@ func fixtureExecutable(t *testing.T, name string) string {
 
 func TestRunParsesCompletedJSONStream(t *testing.T) {
 	binary := fixtureExecutable(t, "completed.jsonl")
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -53,6 +61,27 @@ func TestRunParsesCompletedJSONStream(t *testing.T) {
 	}
 	if answer.Spent.USD == nil || *answer.Spent.USD != 0.12 {
 		t.Errorf("cost = %+v", answer.Spent.USD)
+	}
+}
+
+func TestRunRecordsToolUseEventsAsEvidence(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"tool_use","part":{"type":"tool","tool":"atenea_code_search"}}
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish"}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{Prompt: "answer"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(answer.ToolCalls, []string{"atenea_code_search"}) {
+		t.Fatalf("tool calls = %v, want [atenea_code_search]", answer.ToolCalls)
 	}
 }
 
@@ -84,7 +113,7 @@ func TestRunEnforcesTheRequestedStructuredSchema(t *testing.T) {
 			textEvent := `{"type":"text","part":{"id":"text-1","type":"text","text":` + string(encodedText) + `,"time":{"end":2}}}`
 			finishEvent := `{"type":"step_finish","part":{"type":"step-finish"}}`
 			binary := executable(t, "printf '%s\\n' "+shellQuote(textEvent)+"\nprintf '%s\\n' "+shellQuote(finishEvent))
-			runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+			runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -96,9 +125,76 @@ func TestRunEnforcesTheRequestedStructuredSchema(t *testing.T) {
 	}
 }
 
+func TestRunRefusesTrailingStructuredJSON(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"{\"ok\":true} trailing","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish"}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(context.Background(), Request{
+		Prompt: "answer",
+		Schema: map[string]any{"type": "object"},
+	})
+	if contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("Run error = %v, want invalid_input trailing-data error", err)
+	}
+}
+
+func TestRunRefusesAnObservedCostAboveTheBudget(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish","cost":0.26}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25})
+	if contract.KindOf(err) != contract.FailurePermissionDenied || answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
+		t.Fatalf("Run answer = %+v, error = %v, want budget permission denial with observed cost", answer, err)
+	}
+}
+
+func TestRunAcceptsAnObservedCostWithinTheBudget(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish","cost":0.25}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestRunRejectsNonFiniteBudgets(t *testing.T) {
+	binary := executable(t, `exit 99`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, budget := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: budget})
+		if contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("budget %v: kind = %v, want invalid_input", budget, contract.KindOf(err))
+		}
+	}
+}
+
 func TestRunRefusesAStreamWithoutTerminalStep(t *testing.T) {
 	binary := fixtureExecutable(t, "incomplete.jsonl")
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -113,7 +209,7 @@ func TestRunMapsPermissionErrors(t *testing.T) {
 echo '{"type":"error","error":{"name":"PermissionDenied","data":{"message":"permission denied"}}}'
 exit 1
 `)
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -125,7 +221,7 @@ exit 1
 
 func TestRunMapsNestedSessionErrors(t *testing.T) {
 	binary := executable(t, "cat "+shellQuote(filepath.Join("testdata", "session-error.jsonl"))+"\nexit 1")
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -135,11 +231,36 @@ func TestRunMapsNestedSessionErrors(t *testing.T) {
 	}
 }
 
+func TestRunMapsProviderBoundaryErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		kind contract.FailureKind
+	}{
+		{name: "rate limit", text: "429 too many requests", kind: contract.FailureUnavailable},
+		{name: "authentication", text: "unauthorized: API key required", kind: contract.FailureUnavailable},
+		{name: "context", text: "context length exceeded", kind: contract.FailureInvalidInput},
+		{name: "budget", text: "budget exhausted", kind: contract.FailurePermissionDenied},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binary := executable(t, "echo '"+test.text+"' >&2\nprintf '%s\\n' "+shellQuote(`{"type":"error","error":{"data":{"message":"`+test.text+`"}}}`)+"\nexit 1")
+			runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = runner.Run(context.Background(), Request{Prompt: "answer"})
+			if got := contract.KindOf(err); got != test.kind {
+				t.Fatalf("kind = %v, want %v: %v", got, test.kind, err)
+			}
+		})
+	}
+}
+
 func TestRunRefusesACompletedEventWithoutAPart(t *testing.T) {
 	binary := executable(t, `
 echo '{"type":"step_finish","part":null}'
 `)
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -159,7 +280,7 @@ cat <<'JSON'
 {"type":"step_finish","part":{"type":"step-finish"}}
 JSON
 `)
-	runner, err := New(Options{Binary: binary, Timeout: 5 * time.Second})
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -272,6 +393,91 @@ func TestLiveOpenCodeSmoke(t *testing.T) {
 	}
 	t.Logf("OpenCode smoke passed: model=%s version=%s input_tokens=%d output_tokens=%d", model,
 		runner.Version(t.Context()), answer.Spent.InputTokens, answer.Spent.OutputTokens)
+}
+
+func TestLiveOpenCodeMatrix(t *testing.T) {
+	if os.Getenv("ATENEA_OPENCODE_SMOKE") != "1" {
+		t.Skip("set ATENEA_OPENCODE_SMOKE=1 to run real provider matrix")
+	}
+	models := splitNonEmpty(os.Getenv("ATENEA_OPENCODE_MODELS"))
+	if len(models) == 0 {
+		t.Fatal("ATENEA_OPENCODE_MODELS must contain at least one provider/model")
+	}
+	dir := strings.TrimSpace(os.Getenv("ATENEA_OPENCODE_SMOKE_DIR"))
+	if dir == "" {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			t.Fatalf("working directory: %v", err)
+		}
+	}
+	tools := strings.TrimSpace(os.Getenv("ATENEA_OPENCODE_MCP_CONFIG"))
+	for _, model := range models {
+		model := model
+		t.Run(strings.NewReplacer("/", "_", ":", "_").Replace(model), func(t *testing.T) {
+			runner, err := New(Options{Binary: os.Getenv("ATENEA_OPENCODE_BINARY"), Timeout: 120 * time.Second})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			prompt := "Return exactly this JSON object and nothing else: {\"ok\":true}."
+			if tools != "" {
+				prompt = "Use the atenea MCP server. Call atenea_catalog_repositories, then return exactly this JSON object and nothing else: {\"mcp_used\":true}."
+			}
+			started := time.Now()
+			answer, err := runner.Run(t.Context(), Request{
+				Model:  model,
+				Dir:    dir,
+				Prompt: prompt,
+				Tools:  tools,
+				Schema: matrixSchema(tools != ""),
+			})
+			if err != nil {
+				t.Fatalf("OpenCode matrix failed: %v", err)
+			}
+			if tools != "" && !hasAteneaToolCall(answer.ToolCalls) {
+				t.Fatalf("MCP config did not produce an Atenea tool call: %v", answer.ToolCalls)
+			}
+			cost := "unmeasured"
+			if answer.Spent.USD != nil {
+				cost = fmt.Sprintf("%.6f", *answer.Spent.USD)
+			}
+			t.Logf("provider matrix passed: model=%s version=%s mcp=%t tool_calls=%v elapsed=%s input_tokens=%d output_tokens=%d cost_usd=%s",
+				model, runner.Version(t.Context()), tools != "", answer.ToolCalls, time.Since(started).Round(time.Millisecond),
+				answer.Spent.InputTokens, answer.Spent.OutputTokens, cost)
+		})
+	}
+}
+
+func matrixSchema(mcp bool) map[string]any {
+	property := "ok"
+	if mcp {
+		property = "mcp_used"
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{property: map[string]any{"type": "boolean"}},
+		"required":             []any{property},
+		"additionalProperties": false,
+	}
+}
+
+func hasAteneaToolCall(calls []string) bool {
+	for _, call := range calls {
+		if strings.HasPrefix(call, "atenea_") {
+			return true
+		}
+	}
+	return false
+}
+
+func splitNonEmpty(value string) []string {
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func shellQuote(value string) string {

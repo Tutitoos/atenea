@@ -219,6 +219,9 @@ type ServerStatus struct {
 	// cannot describe one server differently.
 	Transport string
 	Where     string
+	// Dashboard is optional web metadata. Status reports the configured URL
+	// but never probes or opens it.
+	Dashboard string
 	// Expose separates a pointer from a passthrough, and is on the screen
 	// because it is what decides which of the two memories above can ever
 	// say anything about this row.

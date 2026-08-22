@@ -55,6 +55,12 @@ func (f *fakeTokensave) on(tool string, result string, isError bool) {
 	f.handlers[tool] = func(map[string]any) (string, bool) { return result, isError }
 }
 
+func (f *fakeTokensave) onFunc(tool string, handler func(map[string]any) (string, bool)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.handlers[tool] = handler
+}
+
 func (f *fakeTokensave) callsTo(tool string) []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -642,5 +648,41 @@ func TestRunSurvivesTheMetricsLineOnEveryCall(t *testing.T) {
 	}
 	if got := rows(t, out, "symbols"); len(got) != 1 || got[0]["name"] != "NewClient" {
 		t.Fatalf("symbols = %#v, want the one declaration", got)
+	}
+}
+
+func TestFetchEntitiesPartitionsAClippedLargeAnswer(t *testing.T) {
+	fake, sess := newFakeTokensave(t)
+	fake.onFunc(toolEntities, func(args map[string]any) (string, bool) {
+		if _, filtered := args["kinds"]; !filtered {
+			// This is the shape observed from a real large-file response: the
+			// JSON string is cut before the envelope closes.
+			return `{"file":"internal/adapter/tokensave/tokensave.go","symbols":[{"kind":"function","name":"truncated`, false
+		}
+		kinds, ok := args["kinds"].([]any)
+		if !ok || len(kinds) != 1 {
+			return `{"symbols":[]}`, false
+		}
+		switch kinds[0] {
+		case "function":
+			return `{"symbols":[{"kind":"function","name":"Run","line":220,"end_line":240}]}`, false
+		case "struct":
+			return `{"symbols":[{"kind":"struct","name":"Runner","line":180,"end_line":210}]}`, false
+		default:
+			return `{"symbols":[]}`, false
+		}
+	})
+
+	got, err := newTestRunner(t, "/tmp/atenea", sess).fetchEntities(
+		context.Background(), sess, "internal/adapter/tokensave/tokensave.go")
+	if err != nil {
+		t.Fatalf("fetchEntities: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "Runner" || got[1].Name != "Run" {
+		t.Fatalf("entities = %#v, want sorted, deduplicated filtered results", got)
+	}
+	calls := fake.callsTo(toolEntities)
+	if len(calls) != 1+len(entityKindFilters) {
+		t.Fatalf("tokensave_entities calls = %d, want initial plus %d filters", len(calls), len(entityKindFilters))
 	}
 }

@@ -112,3 +112,20 @@ func TestProbeReadyFailsWhenNothingIsListening(t *testing.T) {
 		t.Fatal("probeReady succeeded against an address nothing is listening on")
 	}
 }
+
+func TestProbeHTTPAcceptsAWebPageWithoutMCPHandshake(t *testing.T) {
+	var gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html>viewer</html>"))
+	}))
+	defer srv.Close()
+
+	if err := probeHTTP(context.Background(), srv.Client(), srv.URL); err != nil {
+		t.Fatalf("probeHTTP: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Fatalf("method = %q, want GET", gotMethod)
+	}
+}

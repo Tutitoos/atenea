@@ -227,10 +227,9 @@ runners = ["omp"]
   # instance = "shared"
 
   [orchestrator.kivgraph]
-  # No `binary`: Atenea never builds this graph, only
-  # reads it. index_project / `kivgraph index` stay out of the funnel entirely
-  # (an auditor does not rebuild what it audits). The graph is built by hand with
-  # `kivgraph init` + `kivgraph index --full` before this is useful.
+  # The official binary is used for both the supervised read server and the
+  # explicit repository.index operation. Indexing remains permission-gated and
+  # is never triggered by detection or by a read capability.
   implementations = [
     "kivgraph.definition",
     "kivgraph.references",
@@ -239,8 +238,20 @@ runners = ["omp"]
     "kivgraph.get",
     "kivgraph.unresolved_references",
     "kivgraph.status",
+    "kivgraph.impact",
+    "kivgraph.index",
   ]
   timeout = "90s"             # opens a graph db cold, same class as serena
+
+  # Kivgraph's optional web viewer is a separate HTTP process. If enabled,
+  # dashboard must use a fixed port matching dashboard_process.port; the
+  # process binds locally and Atenea never opens a browser during startup.
+  # dashboard = "http://127.0.0.1:7777"
+  # [orchestrator.kivgraph.dashboard_process]
+  # command = "kivgraph"
+  # args = ["ui", "--addr", "127.0.0.1:7777"]
+  # lifecycle = "persistent"
+  # port = 7777
 
     # [orchestrator.kivgraph.process]
     # Uncomment to have Atenea launch and supervise the kivgraph server
@@ -1200,11 +1211,125 @@ effects = ["read"]
     summary = "The line at the call, present only when it was asked for."
 
 # ---------------------------------------------------------------------------
-# Kivgraph capabilities. Four answers no attached provider gives today.
+# Baseline impact and provider indexing.
+
+[[capability]]
+id = "code.impact"
+version = "1.0.0"
+summary = "From a change, find what it reaches."
+semantics = """
+Compare the current working tree with baseline, resolve declarations touched by
+the changed lines, and walk incoming graph consumers from those declarations.
+The directly changed declaration is depth 0. Paths are relative to the
+requested repository; a global provider must omit foreign repositories when the
+capability result has no repository field.
+"""
+effects = ["read", "process"]
+
+  [[capability.input]]
+  name = "baseline"
+  type = "string"
+  required = true
+
+  [[capability.input]]
+  name = "scope"
+  type = "string_list"
+  required = false
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+
+  [[capability.input]]
+  name = "include_snippet"
+  type = "bool"
+  required = false
+
+  [[capability.input]]
+  name = "snippet_lines"
+  type = "int"
+  required = false
+
+  [[capability.output]]
+  name = "changed_files"
+  type = "string_list"
+  required = true
+
+  [[capability.output]]
+  name = "affected_symbols"
+  type = "record_list"
+  required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = false
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "snippet"
+    type = "string"
+    required = false
+
+[[capability]]
+id = "repository.index"
+version = "1.0.0"
+summary = "Build or refresh a provider's index for a repository."
+semantics = """
+Run the provider's explicit indexing operation. This is separate from read
+capabilities because it writes provider state and can run a long-lived process;
+it is never an implicit repair performed by detection.
+"""
+effects = ["write", "process"]
+
+  [[capability.input]]
+  name = "mode"
+  type = "string"
+  required = false
+  enum = ["full"]
+
+  [[capability.output]]
+  name = "status"
+  type = "string"
+  required = true
+
+  [[capability.output]]
+  name = "nodes"
+  type = "int"
+  required = true
+
+  [[capability.output]]
+  name = "edges"
+  type = "int"
+  required = true
+
+# ---------------------------------------------------------------------------
+# Kivgraph capabilities. Cross-repository consumers, graph identity, impact
+# and explicit indexing are backed by the official Kivgraph adapter.
 #
 # Why Kivgraph does NOT appear under symbol.definition / references /
-# implementations / overview / calls, or graph impact queries: serena and
-# other graph providers already answer those, and a second implementation would not
+# implementations / overview / calls: serena and other graph providers already
+# answer those, and a second implementation would not
 # add an answer -- it would rank two providers for one the funnel already has,
 # and cost +1,688 tok in every fixed-prefix client's request, forever, for a
 # duplicate. Kivgraph is declared ONLY for what it alone resolves: consumers
@@ -1635,7 +1760,7 @@ capability = "symbol.search"
   estimated_duration = "1s"
   estimated_tokens = 1300
 
-# The seven kivgraph implementations share one provider and one supervised
+# The nine kivgraph implementations share one provider and one supervised
 # stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
 # a handful of tools called against it over the same wire, no second index to
 # build.
@@ -1657,11 +1782,9 @@ capability = "symbol.search"
 # a graph of declarations, the declaration a position falls inside of already
 # IS the definition.
 #
-# What kivgraph is deliberately NOT declared for, so the funnel never
-# promises it: symbol.implementations (this server exposes no tool that
-# answers "who fulfils this interface" -- find_references reports uses, which
-# is a different question) and graph impact queries (their subject is a baseline diff,
-# and get_blast_radius walks out from a symbol, not from a change).
+# What kivgraph is deliberately NOT declared for: symbol.implementations (this
+# server exposes no tool that answers "who fulfils this interface" --
+# find_references reports uses, which is a different question).
 
 [[implementation]]
 id = "kivgraph.cross_repo_consumers"
@@ -1754,6 +1877,34 @@ capability = "graph.status"
   [implementation.cost]
   estimated_duration = "8ms"
   estimated_tokens = 200
+
+[[implementation]]
+id = "kivgraph.impact"
+provider = "kivgraph"
+capability = "code.impact"
+scope_guarantee = "confined"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "2s"
+  estimated_tokens = 2500
+
+[[implementation]]
+id = "kivgraph.index"
+provider = "kivgraph"
+capability = "repository.index"
+scope_guarantee = "confined"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+
+  [implementation.cost]
+  estimated_duration = "5m"
+  estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
 # tokensave: the syntactic call graph of ONE rooted project.
@@ -1940,6 +2091,79 @@ pool = "review"
   required = false
   summary = "The run that was audited"
 
+  [[agent.result]]
+  name = "citation_count"
+  type = "int"
+  required = false
+  summary = "Number of file:line citations extracted from prose"
+
+  [[agent.result]]
+  name = "existence_only"
+  type = "int"
+  required = false
+  summary = "Citations whose file and line existed but had no adjacent quote"
+
+  [[agent.result]]
+  name = "content_checked"
+  type = "int"
+  required = false
+  summary = "Citations whose adjacent quote matched the cited source line"
+
+  [[agent.result]]
+  name = "unresolved"
+  type = "int"
+  required = false
+  summary = "Citations the reviewer could not open or resolve"
+
+  [[agent.result]]
+  name = "uncited_fields"
+  type = "string_list"
+  required = false
+  summary = "Non-empty prose result fields without a citation"
+
+  [[agent.result]]
+  name = "scope"
+  type = "string"
+  required = false
+  summary = "Exact boundary of what the citation audit did and did not verify"
+
+  [[agent.result]]
+  name = "citations"
+  type = "record_list"
+  required = false
+  summary = "Durable evidence row for every extracted citation"
+
+    [[agent.result.field]]
+    name = "cited_path"
+    type = "string"
+    required = true
+    summary = "Path as written by the answer"
+
+    [[agent.result.field]]
+    name = "resolved_path"
+    type = "string"
+    required = false
+    summary = "Repository-relative path actually opened by the reviewer"
+
+    [[agent.result.field]]
+    name = "line"
+    type = "int"
+    required = true
+    summary = "1-based line requested by the answer"
+
+    [[agent.result.field]]
+    name = "quote"
+    type = "string"
+    required = false
+    summary = "Adjacent quoted fragment, when one was unambiguously paired"
+
+    [[agent.result.field]]
+    name = "outcome"
+    type = "string"
+    required = true
+    enum = ["existence_only", "content_checked", "mismatched", "unresolved"]
+    summary = "Deterministic result of checking this citation"
+
 [[agent]]
 name = "plan-check"
 kind = "specialized"
@@ -2089,6 +2313,7 @@ max_tokens = 200000
 # [[mcp_server]]
 # id = "serena"                        # the name the client will see
 # url = "http://127.0.0.1:40010/mcp"   # http endpoint; ToolHive proxies live here
+# dashboard = "http://127.0.0.1:40010"  # optional web UI; never opened automatically
 # timeout = "5s"                       # bounds the check; omitted takes the default
 # expose = "off"                       # off | raw
 

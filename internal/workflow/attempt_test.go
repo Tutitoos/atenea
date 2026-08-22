@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -288,16 +289,30 @@ func TestAStepCutAtItsCeilingCannotBeRedone(t *testing.T) {
 	// reason and stays open -- and the incomplete step beside it is still
 	// refused, on its own status.
 	dir2 := t.TempDir()
+	fastDone := filepath.Join(dir2, "fast.done")
 	h2 := newHarness(t, config.Workflow{MaxParallelAgent: 2},
-		declared("reader", stub(t, dir2, "reader", cut), config.PoolAgent, contract.EffectRead),
+		declared("reader", stub(t, dir2, "reader", cut+"\ntouch "+fastDone), config.PoolAgent, contract.EffectRead),
 		declared("slow", stub(t, dir2, "slow", "sleep 5"), config.PoolAgent, contract.EffectRead),
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		// Let the fast, judged step finish before cutting the slow sibling.
-		// Process startup on macOS can exceed a few hundred milliseconds.
-		time.Sleep(time.Second)
-		cancel()
+		// Wait for the fast process to emit its report and mark completion
+		// instead of guessing how long process startup took. The marker is
+		// written after stdout, so the extra grace lets Runner reap that
+		// process and record `incomplete` before the slow sibling is cut.
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(fastDone); err == nil {
+				time.Sleep(250 * time.Millisecond)
+				cancel()
+				return
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}()
 	open, err := h2.engine.Start(ctx, graphOf(
 		step("a", "reader", nil, contract.EffectRead),

@@ -22,10 +22,13 @@ required_files=(
 	"docs/content/v1-policy.md"
 	"docs/content/v1-contracts.md"
 	"docs/content/v1-readiness.md"
+	"docs/content/v1-final-audit.md"
 	"pkg/contract/assignment.go"
 	"internal/agent/model/model.go"
 	"scripts/opencode-smoke.sh"
+	"scripts/opencode-matrix.sh"
 	"internal/agent/reviewer/citations.go"
+	"internal/agent/review_integration_test.go"
 	"internal/adapter/serena/serena.go"
 )
 for file in "${required_files[@]}"; do
@@ -39,6 +42,10 @@ contains 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/
 contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains 'Tokensave|Semgrep|Context7|claude-mem|Headroom' docs/content/v1-final-audit.md
 contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains '75\.0%' .github/workflows/ci.yml docs/content/v1-policy.md docs/content/v1-readiness.md
+contains 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md
 
 echo "v1 policy anchors passed"

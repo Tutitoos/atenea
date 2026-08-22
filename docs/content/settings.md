@@ -1260,6 +1260,7 @@ and finishes, because that graph is one somebody did approve.
 [[mcp_server]]
 id = "serena"                        # the name the client will see
 url = "http://127.0.0.1:40010/mcp"   # http endpoint
+dashboard = "http://127.0.0.1:40010/dashboard"  # optional web UI; opened only by `atenea dashboard <id>`
 timeout = "5s"                       # bounds the check; omitted takes the default
 expose = "off"                       # off (default) points the client here; raw is a passthrough
 
@@ -1274,6 +1275,43 @@ This list is not the catalog and nothing dispatches against it. Atenea reaches
 its own providers through adapters; these are endpoints `atenea wrap` hands to
 *someone else's* client so that client stops spawning a private copy of a
 server that is already running.
+
+`dashboard` is optional metadata for a real HTTP(S) web UI belonging to the
+MCP. Atenea validates its scheme, host and port, reports the URL in `status`
+and `detect`, and never opens a browser when the MCP starts or is probed. To
+open one explicitly, use `atenea dashboard <id>`. The command checks that the
+URL is reachable first. `atenea dashboard hosts --dry-run` previews the
+idempotent, Atenea-managed block in `/etc/hosts`; writing that file requires
+the explicit `atenea dashboard hosts` command and appropriate permissions.
+
+Serena is the exception to a static `dashboard` URL: Atenea launches one
+instance per repository and Serena assigns each web dashboard a dynamic port.
+`atenea dashboard serena` discovers the dashboard whose active project matches
+the current working directory. Serena instances are warmed sequentially so
+their dashboard port selection cannot collide; their browser opening remains
+manual.
+
+Kivgraph has two separate processes: its stdio MCP server and its optional
+read-only graph viewer. The viewer must be built with Kivgraph's `webassets`
+tag and can be supervised independently:
+
+```toml
+[orchestrator.kivgraph]
+dashboard = "http://127.0.0.1:7777"
+
+[orchestrator.kivgraph.dashboard_process]
+command = "/Users/gtrave/.local/opt/kivgraph-ui/bin/kivgraph"
+args = ["ui", "--addr", "127.0.0.1:7777"]
+env = ["HOME=/Users/gtrave"]
+lifecycle = "persistent"
+port = 7777
+```
+
+This process is checked with a normal HTTP GET, not an MCP handshake. It is
+kept bound to loopback and does not open a browser. Use `atenea dashboard
+kivgraph` when the page should be opened explicitly. A binary built without
+the web bundle is not a valid dashboard provider: adding its URL would claim
+a UI that cannot serve one.
 
 Each block sets `url` or `command`, never both; repeating an `id` is refused
 rather than resolved; and an `id` may not contain a dot. Those refusals are

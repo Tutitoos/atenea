@@ -44,8 +44,8 @@ completed `step_finish` event plus text before accepting an answer. It supports
 model selection, repository confinement, cancellation, observed usage and MCP
 configuration translation. Its local boundary also validates the structured
 answer's required fields, primitive types, numeric bounds and closed object
-properties; it does not pretend that OpenCode's JSON stream is Claude's final
-envelope.
+properties, rejects trailing JSON values and records provider tool-use events;
+it does not pretend that OpenCode's JSON stream is Claude's final envelope.
 
 `scripts/opencode-smoke.sh` runs an opt-in real-provider smoke test when
 `ATENEA_OPENCODE_SMOKE=1` and `ATENEA_OPENCODE_MODEL` are supplied. It is not
@@ -54,7 +54,15 @@ part of ordinary CI because it may consume provider allowance.
 The backend remains deliberately narrower than Claude Code: OpenCode has no
 native JSON-schema flag or provider-independent budget flag. Atenea asks for
 structured JSON in the prompt, records `step_finish` usage/cost when present,
-and treats missing terminal events as unavailable rather than successful.
+rejects a completed result whose observed cost exceeds a positive requested
+budget, and treats missing terminal events as unavailable rather than
+successful. That budget check happens after the provider reports the turn; it
+cannot prevent an already-running event from overspending.
+
+Provider boundary errors are mapped into the shared bins: permission and
+budget refusals become `permission_denied`, authentication, rate limits and
+quota exhaustion become `unavailable`, and context overflow becomes
+`invalid_input`. Timeout and caller cancellation remain distinct.
 
 Agent `limits.max_tokens` is carried, validated and used by the planner to
 narrow the model client's observed incremental read boundary when a grant
@@ -63,10 +71,19 @@ provider-side ceiling. The observed boundary is not equivalent to preventing
 the provider from finishing an in-flight event; Atenea deliberately does not
 claim an exact provider cap.
 
-Citation evidence is retained by the reviewer and trace layers. It is not a
-hard acceptance gate until a threshold exists that handles abbreviated paths,
-renames and composed routes without rejecting correct answers or accepting
-invented ones.
+Citation evidence is a hard acceptance gate for prose results. Every non-empty
+prose field must contain at least one recognized `path:line` or `Line N of path`
+citation. The reviewer rejects invented paths, out-of-range lines, incorrect
+adjacent excerpts and uncited prose fields. Each result retains `citation_count`,
+`existence_only`, `content_checked`, `uncited_fields` and one `citations` row per
+location with the written path, the repository-relative `resolved_path`, line,
+optional quote and outcome. A unique basename may resolve an abbreviated path;
+a rename with a different basename remains unresolved rather than being guessed.
+The gate validates the cited evidence, not the semantic meaning of surrounding
+narrative. `internal/agent/review_integration_test.go` also exercises this
+contract through the real `internal/agent.Runner` and the shipped
+`agent-exec reviewer`, so the strict result schema is checked at the process
+boundary rather than only through direct package tests.
 
 ## Acceptance
 

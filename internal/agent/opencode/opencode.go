@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +57,10 @@ type Answer struct {
 	Structured json.RawMessage
 	Spent      contract.Charge
 	Passes     int
+	// ToolCalls is diagnostic evidence from the JSON event stream. It is kept
+	// separate from Text because a model can claim to have used a tool without
+	// OpenCode ever emitting a tool_use event.
+	ToolCalls []string
 }
 
 // Runner invokes OpenCode without inheriting an interactive TUI or answering
@@ -95,9 +101,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return Answer{}, contract.Fail(contract.FailureInvalidInput, "opencode request: prompt is required")
 	}
-	if req.BudgetUSD < 0 {
+	if req.BudgetUSD < 0 || math.IsNaN(req.BudgetUSD) || math.IsInf(req.BudgetUSD, 0) {
 		return Answer{}, contract.Fail(contract.FailureInvalidInput,
-			"opencode request: budget_usd must not be negative, got %v", req.BudgetUSD)
+			"opencode request: budget_usd must be finite and non-negative, got %v", req.BudgetUSD)
 	}
 	if req.ReadTokens < 0 {
 		return Answer{}, contract.Fail(contract.FailureInvalidInput,
@@ -197,11 +203,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
 			"opencode completed a step without text output").WithRaw(strings.TrimSpace(stderr.String()))
 	}
-	answer := Answer{Text: text, Spent: stream.charge(), Passes: 1}
+	answer := Answer{Text: text, Spent: stream.charge(), Passes: 1, ToolCalls: append([]string(nil), stream.toolCalls...)}
+	if req.BudgetUSD > 0 && stream.costSeen && stream.cost > req.BudgetUSD {
+		return answer, contract.Fail(contract.FailurePermissionDenied,
+			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", stream.cost, req.BudgetUSD).
+			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", stream.cost, req.BudgetUSD))
+	}
 	if len(req.Schema) > 0 {
 		structured, err := structuredObject(text, req.Schema)
 		if err != nil {
-			return Answer{Spent: answer.Spent, Passes: answer.Passes}, err
+			return answer, err
 		}
 		answer.Structured = structured
 	}
@@ -209,14 +220,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 }
 
 type eventStream struct {
-	text     strings.Builder
-	textIDs  map[string]struct{}
-	finished bool
-	stopped  bool
-	errText  string
-	usage    contract.Charge
-	cost     float64
-	costSeen bool
+	text      strings.Builder
+	textIDs   map[string]struct{}
+	finished  bool
+	stopped   bool
+	errText   string
+	usage     contract.Charge
+	cost      float64
+	costSeen  bool
+	toolCalls []string
 }
 
 type event struct {
@@ -289,6 +301,15 @@ func (s *eventStream) accept(raw []byte) error {
 			s.cost += *p.Cost
 			s.costSeen = true
 		}
+	case "tool_use":
+		var tool struct {
+			Tool string `json:"tool"`
+		}
+		if err := json.Unmarshal(ev.Part, &tool); err != nil || strings.TrimSpace(tool.Tool) == "" {
+			return contract.Fail(contract.FailureUnavailable,
+				"opencode tool_use event is malformed").WithRaw(string(raw))
+		}
+		s.toolCalls = append(s.toolCalls, tool.Tool)
 	case "error", "session.error":
 		s.errText = rawError(ev.Error, ev.Properties, raw)
 	}
@@ -338,6 +359,15 @@ func structuredObject(text string, schema map[string]any) (json.RawMessage, erro
 	if err := decoder.Decode(&value); err != nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"opencode answered with invalid structured JSON: %v", err).WithRaw(text)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"opencode structured answer contains more than one JSON value").WithRaw(text)
+		}
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"opencode structured answer has trailing data: %v", err).WithRaw(text)
 	}
 	if _, ok := value.(map[string]any); !ok {
 		return nil, contract.Fail(contract.FailureInvalidInput, "opencode structured answer is not a JSON object").WithRaw(text)
@@ -608,6 +638,22 @@ func failureFor(message string, runErr error) *contract.Failure {
 	}
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "rate limit"), strings.Contains(lower, "rate_limit"),
+		strings.Contains(lower, "too many requests"), strings.Contains(lower, "quota"):
+		return contract.Fail(contract.FailureUnavailable,
+			"opencode provider is rate limited or out of quota").WithRaw(text)
+	case strings.Contains(lower, "authenticate"), strings.Contains(lower, "unauthorized"),
+		strings.Contains(lower, "not logged in"), strings.Contains(lower, "api key"),
+		strings.Contains(lower, "401"):
+		return contract.Fail(contract.FailureUnavailable,
+			"opencode provider is not authenticated on this machine").WithRaw(text)
+	case strings.Contains(lower, "context length"), strings.Contains(lower, "context window"),
+		strings.Contains(lower, "too many tokens"), strings.Contains(lower, "prompt is too long"):
+		return contract.Fail(contract.FailureInvalidInput,
+			"opencode rejected the request because its context is too large").WithRaw(text)
+	case strings.Contains(lower, "budget"):
+		return contract.Fail(contract.FailurePermissionDenied,
+			"opencode stopped at a spending ceiling").WithRaw(text)
 	case strings.Contains(lower, "permission"), strings.Contains(lower, "denied"), strings.Contains(lower, "auto-reject"):
 		return contract.Fail(contract.FailurePermissionDenied, "opencode refused the work").WithRaw(text)
 	case strings.Contains(lower, "not found"), strings.Contains(lower, "no such file"):
