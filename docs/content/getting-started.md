@@ -23,16 +23,16 @@ checksum-verified installer. Pin the version explicitly; the installer never
 silently chooses a moving `latest` binary:
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.0/atenea-install.sh \
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.1/atenea-install.sh \
   -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 1.0.0
+bash /tmp/atenea-install.sh --version 1.0.1
 ```
 
 It writes `~/.local/bin/atenea`. Add `--service` when the background service is
 wanted; starting it remains an explicit command:
 
 ```sh
-bash /tmp/atenea-install.sh --version 1.0.0 --service
+bash /tmp/atenea-install.sh --version 1.0.1 --service
 systemctl --user start atenea.service
 ```
 
@@ -50,10 +50,10 @@ A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
 
-A release binary prints its published version (`1.0.0` for the current release).
+A release binary prints its published version (`1.0.1` for the current release).
 A binary built from a checkout stamps its revision onto the version, so
-`version` may print `1.0.0+<revision>` and
-`1.0.0+<revision>.modified` when the tree has uncommitted changes. That suffix
+`version` may print `1.0.1+<revision>` and
+`1.0.1+<revision>.modified` when the tree has uncommitted changes. That suffix
 is SemVer build metadata: it says which tree this came from and is ignored when
 versions are compared. A bare number means the build had nothing to stamp: a
 release artifact, or a build from a linked `git worktree`, which Go does not

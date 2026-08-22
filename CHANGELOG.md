@@ -14,15 +14,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [1.0.1] - 2026-08-22
+
 ### Fixed
 
-- Replaced timing sleeps in workflow resume tests with child-process start
-  markers, making repeated race-suite validation deterministic.
+- Updated the GitHub Actions checkout, Go setup and artifact upload actions to
+  Node.js 24 runtimes, removing the Node.js 20 deprecation warning.
+- Stabilized the workflow race test by waiting for the child-process marker
+  and allowing the runner to observe the active process before cancellation.
 - Kept Claude Code over-budget responses out of successful workflow history
   while retaining the provider's observed charge in the receipt.
 
 ### Validation
 
+- Revalidated the pre-release gate, MCP safety harness and provider audit after
+  the `1.0.0` release.
 - Rechecked the read-only claude-mem matrix and the destructive MCP fixtures;
   no memory writes or real destructive actions were performed.
 - Passed the free OpenCode provider/MCP matrix in all six cases.
