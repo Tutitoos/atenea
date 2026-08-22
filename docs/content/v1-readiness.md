@@ -37,8 +37,8 @@ Run from a clean checkout:
 bash scripts/v1-readiness.sh
 ```
 
-The gate checks repository hygiene, removal of active `codebase-memory`
-references, formatting, module tidiness, vet, native build, the complete race
+The gate checks repository hygiene, removal of references to the retired
+backend, formatting, module tidiness, vet, native build, the complete race
 suite and shell entry points. It does not publish a release.
 
 CI also applies a 75.0% global coverage floor. The latest local observation is
@@ -59,18 +59,21 @@ agent-device `0.20.10`, Maestro `1.0.0`, Headroom `1.29.0` and Chrome DevTools
 MCP `1.7.0`. That handshake-only check performed no model turn, scan, write or
 device action; the later provider validation is recorded below.
 
-Claude Code and Codex remain optional provider surfaces. A minimal real
+Claude Code and Codex remain optional provider surfaces. The earlier minimal
 `code.search` for `CapabilityIndex` passed through each wrapper within the
 configured `0.25 USD` ceiling: Claude reported `0.210193 USD` and Codex did
-not report monetary usage. The MCP health display remains on-demand by design;
-a handshake proves reachability, not the behavior of every raw tool.
+not report monetary usage. In the later external-target recheck, Codex again
+passed while Claude Code reached its 90-second timeout. The MCP health display
+remains on-demand by design; a handshake proves reachability, not the behavior
+of every raw tool.
 
 The same day, direct calls through the official MCP transport passed against
 Serena, Context7 `4.0.2`, Semgrep `1.23.3`, claude-mem `13.15.3`,
 agent-device `0.20.10`, Maestro `1.0.0`, Headroom `1.29.0` and Chrome DevTools
 MCP `1.7.0`. Read-only and diagnostic tools were exercised; device, browser
-interaction, write and destructive actions were excluded. A general claude-mem
-search timed out without changing state.
+interaction, write and destructive actions were excluded. On the external
+TypeScript target, claude-mem answered but its structural search returned no
+symbols and its outline could not parse `server.ts`.
 
 Kivgraph `0.3.4` was then configured with Atenea as a fifth repository and
 indexed successfully as generation `000009`. Atenea's real service detected
@@ -104,11 +107,11 @@ responses. A real large-file overview returned 45 symbols successfully.
 
 ## Latest pre-v1 verification
 
-On 2026-08-21 the complete current snapshot was applied to an isolated
+On 2026-08-22 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate
 could run. `bash scripts/v1-readiness.sh` passed all nine stages, including
-`go test -race -count=1 ./...`, policy anchors and the `0.10.4`/`3.1.0` build
-identity. The main repository received no commit, push or release.
+`go test -race -count=1 ./...`, policy anchors and the `1.0.0`/`3.1.0` build
+identity. The release was subsequently published by the release workflow.
 
 The end-to-end test
 `internal/agent/review_integration_test.go` launched the real
@@ -119,16 +122,16 @@ the reviewer trace points to the work run.
 The existing public release was also checked with:
 
 ```sh
-bash scripts/release-smoke.sh 0.10.4
+bash scripts/release-smoke.sh 1.0.0
 ```
 
 Checksum verification, install, same-version update, rollback and uninstall
-passed on macOS arm64. This validates the existing release lifecycle and does
-not publish version 1.0.0.
+passed on macOS arm64. This validates the public `1.0.0` release lifecycle;
+the smoke test itself does not publish a release.
 
 The current phase was rechecked on 2026-08-22. `TMPDIR=/tmp go test ./...`,
 `TMPDIR=/tmp go test -race -count=1 ./...`, `go vet ./...`, `go build ./...`,
-the policy gate and the `0.10.4` release smoke passed. The timing margins in
+the policy gate and the `1.0.0` release smoke passed. The timing margins in
 the Claude/OpenCode fixtures now tolerate loaded machines and the race
 detector while remaining below the child-process lifetime.
 
@@ -139,8 +142,9 @@ Kivgraph, a large-file `symbol.overview` through Tokensave, and
 `symbol.calls` through a real indexed symbol. Serena and Kivgraph alternative
 implementations also returned `ok`; `atenea detect --repo atenea` reached all
 8 configured MCP servers. Hugo `0.165.0` generated 106 documentation files.
-No commit, push or release was made. The two minimal Claude/Codex searches used
-the configured budget; the OpenCode matrix used the configured free models.
+The two minimal Claude/Codex searches used the configured budget; the OpenCode
+matrix used the configured free models. The release workflow and post-release
+smoke also passed.
 
 The team service is now installed from `/Users/gtrave/.local/bin/atenea` rather
 than a Go build-cache path. Serena runs persistently for six repositories with
@@ -180,6 +184,23 @@ unit contract both verify the safe headless arguments `--format json --pure`
 and the absence of `--auto`; no paid model was used. This is evidence for three
 free models across two providers on one CLI version, not provider-wide
 compatibility.
+
+## External target recheck — 2026-08-22
+
+The optional MCPs were rechecked against the TaxiPrime workspace and a public
+documentation target using read-only or diagnostic calls. Serena, Kivgraph,
+Context7, Semgrep, agent-device, Maestro, Headroom and Chrome DevTools answered
+real calls. Tokensave refused `taxiprime-backend` because its configured root
+is Atenea, which is the expected scope boundary. claude-mem answered but its
+structural search found no symbols in the TypeScript target and its outline
+could not parse `server.ts`.
+
+The optional model providers were also exercised against `taxiprime-backend`:
+Codex returned a correct `code.search` result in 78.6 seconds with no monetary
+usage reported by its CLI; Claude Code reached its configured 90-second timeout.
+Neither result changes the core readiness gate. The external calls did not
+index repositories, launch apps, open a persistent browser, or perform
+mutating device/MCP operations.
 
 ## Deliberately deferred
 

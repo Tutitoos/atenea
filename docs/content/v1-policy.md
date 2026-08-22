@@ -70,6 +70,6 @@ El cierre reproducible es:
 bash scripts/v1-readiness.sh
 ```
 
-Ese gate valida la higiene del árbol, la ausencia de `codebase-memory` activo,
-formato, módulos, `vet`, build, tests con race y scripts operativos. La política
+Ese gate valida la higiene del árbol, la ausencia de referencias al backend
+retirado, formato, módulos, `vet`, build, tests con race y scripts operativos. La política
 de esta página se comprueba además por `scripts/v1-policy-check.sh`.

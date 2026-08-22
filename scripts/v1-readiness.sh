@@ -19,16 +19,15 @@ test -z "$(git status --short)" || {
 }
 git diff --check
 
-echo "[2/9] active codebase-memory references"
+echo "[2/9] retired backend references"
+# Keep the retired-backend check without retaining its historical product name
+# in repository text. The two fragments are joined only while the gate runs.
+legacy_prefix="codebase"
+legacy_suffix="memory"
+legacy_pattern="${legacy_prefix}.${legacy_suffix}|${legacy_prefix}_${legacy_suffix}"
 if command -v rg >/dev/null 2>&1; then
 	active_refs=(
-		rg -n -i 'codebase.?memory|codebase_memory'
-		--glob '!docs/content/measuring-the-wrong-process.md'
-		--glob '!docs/content/not-built-yet.md'
-		--glob '!docs/content/v1-policy.md'
-		--glob '!docs/content/v1-readiness.md'
-		--glob '!docs/content/v1-final-audit.md'
-		--glob '!scripts/v1-readiness.sh'
+		rg -n -i "$legacy_pattern"
 		.
 	)
 else
@@ -37,18 +36,12 @@ else
 	active_refs=(
 		grep -RIniE
 		--exclude-dir=.git
-		--exclude='measuring-the-wrong-process.md'
-		--exclude='not-built-yet.md'
-		--exclude='v1-policy.md'
-		--exclude='v1-readiness.md'
-		--exclude='v1-final-audit.md'
-		--exclude='v1-readiness.sh'
-		'codebase.?memory|codebase_memory'
+		"$legacy_pattern"
 		.
 	)
 fi
 if "${active_refs[@]}"; then
-	echo "codebase-memory must not be active" >&2
+	echo "retired backend references must not be present" >&2
 	exit 1
 fi
 
