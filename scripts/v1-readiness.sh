@@ -5,12 +5,14 @@ set -euo pipefail
 # publish a release: release publication remains owned by release.yml.
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_dir="$(mktemp -d "${TMPDIR:-/tmp}/atenea-v1-readiness.XXXXXX")"
+# macOS limits UNIX socket paths to 103 bytes. Keep the gate reproducible even
+# when the caller inherited a long system TMPDIR; callers that need another
+# location can opt in explicitly without changing the repository checkout.
+export TMPDIR="${ATENEA_TEST_TMPDIR:-/tmp}"
+build_dir="$(mktemp -d "$TMPDIR/atenea-v1-readiness.XXXXXX")"
 trap 'rm -rf "$build_dir"' EXIT
 
 cd "$root"
-export TMPDIR="${TMPDIR:-/tmp}"
-
 echo "[1/9] repository hygiene"
 test -z "$(git status --short)" || {
 	echo "working tree must be clean" >&2
