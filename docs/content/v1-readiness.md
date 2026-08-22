@@ -205,6 +205,11 @@ external calls did not
 index repositories, launch apps, open a persistent browser, or perform
 mutating device/MCP operations.
 
+The readiness script now defaults its temporary test state to `/tmp` on macOS
+to stay below the kernel's UNIX-socket path limit; an explicit
+`ATENEA_TEST_TMPDIR` may be supplied when a different temporary root is
+required.
+
 ## Deliberately deferred
 
 These are not hidden failures in the current product. They are explicit v1.0
