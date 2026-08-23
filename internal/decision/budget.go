@@ -26,6 +26,7 @@ type BudgetEstimator interface {
 // Opus roles, leaving room for the answer after the repository is read.
 type DefaultBudgetEstimator struct{}
 
+// Estimate returns a conservative role/model cost forecast.
 func (DefaultBudgetEstimator) Estimate(_, agent, model string) BudgetEstimate {
 	base := 0.35
 	switch agent {
@@ -57,6 +58,7 @@ type MeasuredBudgetEstimator struct {
 	Store *floor.Store
 }
 
+// Estimate returns the conservative forecast raised by a measured startup floor.
 func (e MeasuredBudgetEstimator) Estimate(repository, agent, model string) BudgetEstimate {
 	baseline := (DefaultBudgetEstimator{}).Estimate(repository, agent, model)
 	if e.Store == nil {

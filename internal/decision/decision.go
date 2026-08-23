@@ -21,6 +21,7 @@ import (
 // the same vocabulary without changing the compiler below it.
 type Kind string
 
+// Intent kinds supported by the deterministic decision compiler.
 const (
 	KindUnderstand Kind = "understand"
 	KindSearch     Kind = "search"
@@ -190,7 +191,9 @@ func (p Planner) Build(req Request) (Plan, error) {
 	if compileErr != nil {
 		plan.Valid = false
 		plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow", Message: compileErr.Error()})
-		return plan, nil
+		// A compile failure is part of the dry-run result, not a planner
+		// transport failure; callers receive the invalid plan and its reasons.
+		return plan, nil //nolint:nilerr // invalid plans are reported in-band
 	}
 	plan.Valid = modelsReady && toolsReady && plan.Budget.Sufficient
 	plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow",
@@ -402,14 +405,15 @@ func (p Planner) modelChoice(role, repository string) ModelChoice {
 
 func autoModelCandidates(role, backend string, declared []string) []string {
 	var defaults []string
-	if backend == "claude" {
+	switch backend {
+	case "claude":
 		switch role {
 		case "explore":
 			defaults = []string{"claude-sonnet-5", "claude-haiku-4-5"}
 		case "plan":
 			defaults = []string{"claude-opus-5"}
 		}
-	} else if backend == "opencode" {
+	case "opencode":
 		switch role {
 		case "explore":
 			defaults = []string{"anthropic/claude-sonnet-5", "anthropic/claude-haiku-4-5"}
@@ -621,13 +625,6 @@ func mergeEffects(base, extra []contract.Effect) []contract.Effect {
 		}
 	}
 	return out
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func waveCount(graph workflow.Graph) int {

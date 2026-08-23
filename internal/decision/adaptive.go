@@ -30,6 +30,8 @@ type AdaptiveModelRanker struct {
 	MinimumSaving  float64
 }
 
+// SelectModel promotes a declared fallback only when measured history clears
+// the configured sample and savings thresholds.
 func (r AdaptiveModelRanker) SelectModel(repository, role, primary string, candidates []string) (string, string) {
 	if primary == "" {
 		return "", "no primary model configured"
@@ -75,6 +77,7 @@ func (r AdaptiveModelRanker) SelectModel(repository, role, primary string, candi
 // StaticModelRanker is the offline policy when no history store can be read.
 type StaticModelRanker struct{}
 
+// SelectModel keeps the configured primary when adaptive history is unavailable.
 func (StaticModelRanker) SelectModel(_, _, primary string, _ []string) (string, string) {
 	return primary, "configured primary; adaptive history unavailable"
 }
