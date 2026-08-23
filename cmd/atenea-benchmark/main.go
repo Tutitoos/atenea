@@ -506,7 +506,7 @@ func renderDocsAt(summary benchmark.Summary, root string) error {
 		return err
 	}
 	var inventory strings.Builder
-	inventory.WriteString("---\ntitle: Test inventory\nweight: 2\ndashboard: inventory\n---\n\n# Inventario de tests\n\n| Paquete | Descubiertos | Ejecutados | Pasados | Fallidos | Omitidos |\n|---|---:|---:|---:|---:|---:|\n")
+	inventory.WriteString("---\ntitle: Test inventory\nweight: 2\ndashboard: inventory\n---\n\n# Test inventory\n\n| Paquete | Descubiertos | Ejecutados | Pasados | Fallidos | Omitidos |\n|---|---:|---:|---:|---:|---:|\n")
 	for _, suite := range summary.Suites {
 		fmt.Fprintf(&inventory, "| %s | %d | %d | %d | %d | %d |\n", suite.Package, suite.Discovered, suite.Executed, suite.Passed, suite.Failed, suite.Skipped)
 	}

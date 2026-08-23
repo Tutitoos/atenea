@@ -19,16 +19,22 @@ import (
 	"time"
 )
 
+// SchemaVersion is the version of the JSON evidence format.
 const SchemaVersion = 1
 
+// Status is the traffic-light result of a suite or benchmark.
 type Status string
 
 const (
-	Green  Status = "GREEN"
+	// Green means the evidence is valid and meets its target.
+	Green Status = "GREEN"
+	// Orange means the evidence is valid but has a comparability warning.
 	Orange Status = "ORANGE"
-	Red    Status = "RED"
+	// Red means the evidence is invalid, failed, or below its floor.
+	Red Status = "RED"
 )
 
+// Indicator returns the human-readable status marker used by reports.
 func (s Status) Indicator() string {
 	switch s {
 	case Green:
@@ -40,6 +46,7 @@ func (s Status) Indicator() string {
 	}
 }
 
+// Environment records the non-secret machine context of a run.
 type Environment struct {
 	MachineModel string `json:"machine_model"`
 	Chip         string `json:"chip"`
@@ -51,6 +58,7 @@ type Environment struct {
 	LogicalCPUs  int    `json:"logical_cpus"`
 }
 
+// Manifest identifies a benchmark run and the source/environment it measured.
 type Manifest struct {
 	SchemaVersion int         `json:"schema_version"`
 	RunID         string      `json:"run_id"`
@@ -62,6 +70,7 @@ type Manifest struct {
 	Environment   Environment `json:"environment"`
 }
 
+// TestSuite contains test counts and coverage for one Go package.
 type TestSuite struct {
 	Package         string  `json:"package"`
 	Discovered      int     `json:"discovered"`
@@ -75,6 +84,7 @@ type TestSuite struct {
 	Status          Status  `json:"status"`
 }
 
+// Distribution contains robust latency statistics for repeated samples.
 type Distribution struct {
 	Samples        int     `json:"samples"`
 	Min            float64 `json:"min"`
@@ -89,6 +99,7 @@ type Distribution struct {
 	CoefficientVar float64 `json:"coefficient_of_variation"`
 }
 
+// BenchmarkResult contains one benchmark's measurements and comparability data.
 type BenchmarkResult struct {
 	Name          string       `json:"name"`
 	Category      string       `json:"category"`
@@ -110,6 +121,7 @@ type BenchmarkResult struct {
 	Status        Status       `json:"status"`
 }
 
+// TestTotals aggregates test counts across all packages.
 type TestTotals struct {
 	Discovered int     `json:"discovered"`
 	Executed   int     `json:"executed"`
@@ -119,6 +131,7 @@ type TestTotals struct {
 	PassRate   float64 `json:"pass_rate"`
 }
 
+// Summary is the complete publishable evidence document for one run.
 type Summary struct {
 	Manifest        Manifest          `json:"manifest"`
 	Tests           TestTotals        `json:"tests"`
@@ -131,6 +144,7 @@ type Summary struct {
 	Warnings        []string          `json:"warnings,omitempty"`
 }
 
+// CollectEnvironment records the supported machine facts without hardware identity.
 func CollectEnvironment(ctx context.Context) Environment {
 	env := Environment{OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version(), LogicalCPUs: runtime.NumCPU()}
 	if runtime.GOOS != "darwin" {
@@ -170,6 +184,7 @@ func valueAfter(text, label string) string {
 	return ""
 }
 
+// GitState returns the current commit and whether tracked changes are present.
 func GitState(ctx context.Context) (commit string, dirty bool) {
 	commit = commandOutput(ctx, "git", "rev-parse", "HEAD")
 	cmd := exec.CommandContext(ctx, "git", "diff", "--quiet")
@@ -181,6 +196,7 @@ func GitState(ctx context.Context) (commit string, dirty bool) {
 	return commit, dirty
 }
 
+// NewManifest creates a run manifest from the current source and machine.
 func NewManifest(ctx context.Context, profile, command string) Manifest {
 	commit, dirty := GitState(ctx)
 	now := time.Now().UTC()
@@ -196,6 +212,7 @@ func NewManifest(ctx context.Context, profile, command string) Manifest {
 	}
 }
 
+// DistributionOf calculates latency statistics from repeated measurements.
 func DistributionOf(values []float64) Distribution {
 	if len(values) == 0 {
 		return Distribution{}
@@ -242,6 +259,7 @@ func percentile(sorted []float64, fraction float64) float64 {
 	return sorted[lower] + (sorted[upper]-sorted[lower])*weight
 }
 
+// PassRate returns passed tests as a percentage of executed tests.
 func PassRate(passed, executed int) float64 {
 	if executed == 0 {
 		return 0
@@ -249,6 +267,7 @@ func PassRate(passed, executed int) float64 {
 	return float64(passed) / float64(executed) * 100
 }
 
+// SuiteStatus classifies a package using its failure and coverage thresholds.
 func SuiteStatus(s TestSuite, floor, target float64) Status {
 	if s.Failed > 0 || s.Executed == 0 || s.CoveragePercent < floor {
 		return Red
@@ -259,6 +278,7 @@ func SuiteStatus(s TestSuite, floor, target float64) Status {
 	return Green
 }
 
+// OverallStatus combines suite, benchmark, test, and global coverage results.
 func OverallStatus(summary Summary) Status {
 	status := Green
 	for _, suite := range summary.Suites {
@@ -286,6 +306,7 @@ func OverallStatus(summary Summary) Status {
 	return status
 }
 
+// WriteJSON atomically publishes a JSON evidence artifact.
 func WriteJSON(path string, value any) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -294,6 +315,7 @@ func WriteJSON(path string, value any) error {
 	return atomicWrite(path, append(data, '\n'))
 }
 
+// WriteText atomically publishes a text evidence artifact.
 func WriteText(path, contents string) error {
 	return atomicWrite(path, []byte(contents))
 }

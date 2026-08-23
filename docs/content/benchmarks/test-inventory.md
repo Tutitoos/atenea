@@ -4,7 +4,7 @@ weight: 2
 dashboard: inventory
 ---
 
-# Inventario de tests
+# Test inventory
 
 | Paquete | Descubiertos | Ejecutados | Pasados | Fallidos | Omitidos |
 |---|---:|---:|---:|---:|---:|

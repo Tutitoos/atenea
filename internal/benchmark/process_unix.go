@@ -8,11 +8,13 @@ import (
 	"syscall"
 )
 
+// ProcessUsage contains resource usage collected after a child process exits.
 type ProcessUsage struct {
 	RSSBytes  int64
 	CPUTimeMS float64
 }
 
+// Usage converts the operating system process state into portable metrics.
 func Usage(state *os.ProcessState) ProcessUsage {
 	if state == nil {
 		return ProcessUsage{}
@@ -21,7 +23,7 @@ func Usage(state *os.ProcessState) ProcessUsage {
 	if !ok || usage == nil {
 		return ProcessUsage{}
 	}
-	rss := int64(usage.Maxrss)
+	rss := usage.Maxrss
 	if runtime.GOOS == "linux" {
 		rss *= 1024
 	}
