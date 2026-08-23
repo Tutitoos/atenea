@@ -358,6 +358,11 @@ max_parallel_agent = 4
 # is that the two cannot starve each other, not that one is cheaper.
 max_parallel_review = 4
 
+[selector]
+# Runtime health is evidence, not a permanent truth. Once this age passes the
+# provider returns to unknown and the next real dispatch can re-probe it.
+health_stale_after = "24h"
+
 [metrics]
 # The measurement base: what every attempt cost, on three axes -- time, tokens
 # and memory -- filed under the capability asked for and the implementation

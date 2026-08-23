@@ -1583,6 +1583,16 @@ Recorded as a standing posture decision to revisit, not a recommendation.
 ## Selector rules
 
 ```toml
+[selector]
+health_stale_after = "24h"
+```
+
+`health_stale_after` is how long a runtime provider observation remains
+trusted. When it expires, Atenea treats the provider as `unknown` and lets the
+next dispatch re-probe it; the setting does not age declarative health written
+in the catalog.
+
+```toml
 [[selector.rule]]
 capability = "code.search"
 repository = "api"          # omit to apply everywhere

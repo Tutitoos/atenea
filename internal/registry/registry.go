@@ -7,11 +7,14 @@
 package registry
 
 import (
+	"encoding/json"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -30,17 +33,63 @@ type Registry struct {
 	// declaration is what the operator believes about the provider, and this
 	// is what the last call against one repository actually got.
 	observed map[string]map[string]contract.Health
+	// indexOverrides stores probe results separately from the declared
+	// repository copy so they can be restored before repositories are added.
+	indexOverrides map[string]map[string]bool
+	statePath      string
 }
 
 // New returns an empty registry.
 func New() *Registry {
 	return &Registry{
-		capabilities: make(map[string]contract.Capability),
-		implementers: make(map[string]contract.Implementation),
-		repositories: make(map[string]contract.Repository),
-		byCapability: make(map[string][]string),
-		observed:     make(map[string]map[string]contract.Health),
+		capabilities:   make(map[string]contract.Capability),
+		implementers:   make(map[string]contract.Implementation),
+		repositories:   make(map[string]contract.Repository),
+		byCapability:   make(map[string][]string),
+		observed:       make(map[string]map[string]contract.Health),
+		indexOverrides: make(map[string]map[string]bool),
 	}
+}
+
+type persistedState struct {
+	Version   int                                   `json:"version"`
+	Health    map[string]map[string]contract.Health `json:"health,omitempty"`
+	IndexedBy map[string]map[string]bool            `json:"indexed_by,omitempty"`
+}
+
+// NewWithState restores runtime observations from a private state file.
+// Settings remain authoritative for declarations; this file contains only
+// probe evidence and may safely be removed to forget it.
+func NewWithState(path string) (*Registry, error) {
+	r := New()
+	r.statePath = strings.TrimSpace(path)
+	if r.statePath == "" {
+		return r, nil
+	}
+	raw, err := os.ReadFile(r.statePath)
+	if os.IsNotExist(err) {
+		return r, nil
+	}
+	if err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"registry state: reading %s: %v", r.statePath, err)
+	}
+	var state persistedState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"registry state: decoding %s: %v", r.statePath, err)
+	}
+	if state.Version != 0 && state.Version != 1 {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"registry state: unsupported version %d", state.Version)
+	}
+	if state.Health != nil {
+		r.observed = state.Health
+	}
+	for repo, providers := range state.IndexedBy {
+		r.indexOverrides[repo] = maps.Clone(providers)
+	}
+	return r, nil
 }
 
 // AddCapability registers a capability definition.
@@ -123,6 +172,11 @@ func (r *Registry) AddRepository(repo contract.Repository) error {
 	if _, exists := r.repositories[repo.ID]; exists {
 		return contract.Fail(contract.FailureInvalidInput,
 			"repository %s is already registered", repo.ID)
+	}
+	if overrides := r.indexOverrides[repo.ID]; len(overrides) > 0 {
+		for provider, ready := range overrides {
+			repo = repo.SetIndexed(provider, ready)
+		}
 	}
 	r.repositories[repo.ID] = repo.Clone()
 	return nil
@@ -321,13 +375,16 @@ func (r *Registry) SetHealth(repositoryID, implementationID string, health contr
 		return contract.Fail(contract.FailureNotFound,
 			"unknown repository %s", repositoryID)
 	}
+	if health.ObservedAt.IsZero() {
+		health.ObservedAt = time.Now().UTC()
+	}
 	byImpl, ok := r.observed[repositoryID]
 	if !ok {
 		byImpl = make(map[string]contract.Health)
 		r.observed[repositoryID] = byImpl
 	}
 	byImpl[implementationID] = health
-	return nil
+	return r.persistLocked()
 }
 
 // Observed returns the candidates as they stand for one repository: the
@@ -395,5 +452,56 @@ func (r *Registry) SetIndexed(repositoryID, provider string, ready bool) error {
 		return contract.Fail(contract.FailureNotFound, "unknown repository %s", repositoryID)
 	}
 	r.repositories[repositoryID] = repo.SetIndexed(provider, ready)
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if r.indexOverrides[repositoryID] == nil {
+		r.indexOverrides[repositoryID] = make(map[string]bool)
+	}
+	r.indexOverrides[repositoryID][provider] = ready
+	return r.persistLocked()
+}
+
+// persistLocked atomically writes runtime observations. Callers hold r.mu.
+func (r *Registry) persistLocked() error {
+	if r.statePath == "" {
+		return nil
+	}
+	raw, err := json.MarshalIndent(persistedState{
+		Version: 1, Health: r.observed, IndexedBy: r.indexOverrides,
+	}, "", "  ")
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable, "registry state: encoding: %v", err)
+	}
+	dir := filepath.Dir(r.statePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"registry state: creating %s: %v", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".registry-state-*.tmp")
+	if err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"registry state: creating temporary file: %v", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return contract.Fail(contract.FailurePermissionDenied,
+			"registry state: securing temporary file: %v", err)
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return contract.Fail(contract.FailurePermissionDenied, "registry state: writing: %v", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return contract.Fail(contract.FailureUnavailable, "registry state: syncing: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "registry state: closing: %v", err)
+	}
+	if err := os.Rename(tmpName, r.statePath); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"registry state: replacing %s: %v", r.statePath, err)
+	}
 	return nil
 }

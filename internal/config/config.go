@@ -970,7 +970,8 @@ type fileSecurity struct {
 }
 
 type fileSelector struct {
-	Rules []fileRule `toml:"rule"`
+	Rules            []fileRule `toml:"rule"`
+	HealthStaleAfter string     `toml:"health_stale_after"`
 }
 
 type fileRule struct {
@@ -1378,6 +1379,14 @@ func parse(raw []byte, source string) (Config, error) {
 			Repository: rule.Repository,
 			Prefer:     rule.Prefer,
 		})
+	}
+	if raw := strings.TrimSpace(decoded.Selector.HealthStaleAfter); raw != "" {
+		staleAfter, parseErr := time.ParseDuration(raw)
+		if parseErr != nil || staleAfter <= 0 {
+			return Config{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: selector.health_stale_after must be a positive duration", source)
+		}
+		cfg.Selector.HealthStaleAfter = staleAfter
 	}
 	for _, raw := range decoded.Capabilities {
 		capability, err := raw.build(source)

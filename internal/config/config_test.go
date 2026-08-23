@@ -32,6 +32,9 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	if cfg.Core.ShutdownGrace != 10*time.Second {
 		t.Errorf("ShutdownGrace = %v", cfg.Core.ShutdownGrace)
 	}
+	if cfg.Selector.HealthStaleAfter != 24*time.Hour {
+		t.Errorf("Selector.HealthStaleAfter = %v, want 24h", cfg.Selector.HealthStaleAfter)
+	}
 	// By name, not by count, and the same for the implementations below: a
 	// bare number says nothing about which entry went missing when it changes.
 	ids := make([]string, len(cfg.Capabilities))
@@ -1289,6 +1292,15 @@ func TestAnUnusableModelTimeoutIsRefused(t *testing.T) {
 		_, err := config.Load(write(t, minimal+"\n[model]\ntimeout = \""+timeout+"\"\n"))
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 			t.Errorf("timeout = %q -> %v, want invalid_input", timeout, got)
+		}
+	}
+}
+
+func TestAnInvalidHealthStaleAfterIsRefused(t *testing.T) {
+	for _, value := range []string{"never", "0s", "-5s"} {
+		_, err := config.Load(write(t, minimal+"\n[selector]\nhealth_stale_after = \""+value+"\"\n"))
+		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+			t.Errorf("health_stale_after = %s -> %v, want invalid_input", value, got)
 		}
 	}
 }

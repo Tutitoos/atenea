@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -51,12 +52,14 @@ func (r Rule) specificity() int {
 
 // Config is the selector's declarative half.
 type Config struct {
-	Rules []Rule
+	Rules            []Rule
+	HealthStaleAfter time.Duration
 }
 
 // Selector is stateless and safe for concurrent use.
 type Selector struct {
-	rules []Rule
+	rules            []Rule
+	healthStaleAfter time.Duration
 }
 
 // New validates the rules and returns a selector.
@@ -81,7 +84,7 @@ func New(cfg Config) (*Selector, error) {
 		seen[key] = struct{}{}
 		rules = append(rules, rule)
 	}
-	return &Selector{rules: rules}, nil
+	return &Selector{rules: rules, healthStaleAfter: cfg.HealthStaleAfter}, nil
 }
 
 // Rules returns the configured rules.
@@ -185,7 +188,7 @@ func (s *Selector) Select(req Request) (Decision, error) {
 			"no attached runner serves any implementation of %s", req.Capability)
 	}
 
-	usable, healthStage := filterHealth(within)
+	usable, healthStage := s.filterHealth(within, time.Now())
 	decision.Stages = append(decision.Stages, healthStage)
 	if len(usable) == 0 {
 		return decision, contract.Fail(contract.FailureUnavailable,
@@ -323,10 +326,15 @@ func asInt(value any) (int, bool) {
 	}
 }
 
-func filterHealth(candidates []contract.Implementation) ([]contract.Implementation, Stage) {
+func (s *Selector) filterHealth(candidates []contract.Implementation, now time.Time) ([]contract.Implementation, Stage) {
 	stage := Stage{Name: StageHealth, In: ids(candidates)}
 	kept := make([]contract.Implementation, 0, len(candidates))
 	for _, impl := range candidates {
+		if impl.Health.Stale(now, s.healthStaleAfter) {
+			impl.Health.State = contract.HealthUnknown
+			impl.Health.Reason = "health observation expired; next dispatch may re-probe it"
+			impl.Health.Raw = ""
+		}
 		if !impl.Health.Usable() {
 			reason := impl.Health.Reason
 			if reason == "" {

@@ -16,6 +16,20 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 No changes yet.
 
+## [1.0.4] - 2026-08-23
+
+### Added
+
+- Persist runtime provider health and repository indexing observations across
+  service restarts, with timestamps for stale-observation handling.
+- Add configurable selector health expiry through
+  `[selector].health_stale_after`, defaulting to `24h`.
+
+### Changed
+
+- Expired provider health observations return to `unknown` and are eligible for
+  a fresh probe instead of permanently suppressing a provider.
+
 ## [1.0.3] - 2026-08-23
 
 ### Fixed
