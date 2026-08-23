@@ -234,6 +234,10 @@ type Assignment struct {
 	Depth int
 	// Task is the work.
 	Task Task
+	// Route is the model/tool/provider decision stamped onto this run. It is
+	// optional for legacy direct agent calls, but present on decision-router
+	// workflows.
+	Route *Route
 	// Context lists the levels this agent may read. A level here is a
 	// permission, never a delivery: the agent asks and is served, and one it
 	// never asks for costs nothing.
@@ -492,6 +496,10 @@ func (a Assignment) Clone() Assignment {
 	a.Task = a.Task.Clone()
 	a.Context = slices.Clone(a.Context)
 	a.Effects = slices.Clone(a.Effects)
+	if a.Route != nil {
+		route := a.Route.Clone()
+		a.Route = &route
+	}
 	if a.Subject != nil {
 		subject := a.Subject.Clone()
 		a.Subject = &subject

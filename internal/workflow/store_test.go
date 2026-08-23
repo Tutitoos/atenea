@@ -39,6 +39,94 @@ func TestAStepWithNoChargeReadsBackUnmeasured(t *testing.T) {
 	}
 }
 
+func TestBudgetForecastAndRouteReadBackWithTheStep(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+	s := step("a", "worker", nil)
+	s.BudgetEstimateUSD = 0.40
+	s.BudgetMinimumUSD = 0.32
+	s.BudgetSource = "measured startup floor plus answer headroom"
+	s.Route = &contract.Route{Model: "claude-sonnet-5", Fallbacks: []string{"claude-haiku-4-5"}, Backend: "claude"}
+	run, _, err := h.engine.Create(t.Context(), graphOf(s))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	loaded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := stepOf(t, loaded, "a").Step
+	if got.BudgetEstimateUSD != 0.40 || got.BudgetMinimumUSD != 0.32 || got.BudgetSource == "" {
+		t.Fatalf("budget forecast = %.2f/%.2f/%q", got.BudgetEstimateUSD, got.BudgetMinimumUSD, got.BudgetSource)
+	}
+	if got.Route == nil || got.Route.Model != "claude-sonnet-5" || len(got.Route.Fallbacks) != 1 {
+		t.Fatalf("route = %+v", got.Route)
+	}
+}
+
+func TestCostByModelReadsSuccessfulRoutedSteps(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+	start := time.Now().Add(-2 * time.Second)
+	s := step("a", "worker", nil)
+	s.Route = &contract.Route{Model: "claude-sonnet-5"}
+	run, _, err := h.engine.Create(t.Context(), graphOf(s))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := h.state.Claim(t.Context(), run.ID, "a", "tr-1", 1, start, 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	usd := 0.42
+	if err := h.state.Finish(t.Context(), run.ID, "a", workflow.StatusOK,
+		contract.Report{Verdict: contract.VerdictOK, Spent: contract.Charge{USD: &usd, PricedBy: "anthropic"}},
+		time.Now()); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	table, err := h.state.CostByModel(t.Context(), "")
+	if err != nil {
+		t.Fatalf("CostByModel: %v", err)
+	}
+	seen, ok := table.Performance("worker", "claude-sonnet-5")
+	if !ok || seen.N != 1 || seen.MedianUSD != usd {
+		t.Fatalf("model performance = %+v, found=%v", seen, ok)
+	}
+}
+
+func TestCostByModelNormalizesReaderIntoExploreRole(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("reader", stub(t, dir, "reader", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+	s := step("a", "reader", nil)
+	s.Route = &contract.Route{Model: "claude-haiku-4-5"}
+	run, _, err := h.engine.Create(t.Context(), graphOf(s))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := h.state.Claim(t.Context(), run.ID, "a", "tr-1", 1, time.Now(), 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	usd := 0.11
+	if err := h.state.Finish(t.Context(), run.ID, "a", workflow.StatusOK,
+		contract.Report{Verdict: contract.VerdictOK, Spent: contract.Charge{USD: &usd, PricedBy: "anthropic"}},
+		time.Now()); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	table, err := h.state.CostByModel(t.Context(), "")
+	if err != nil {
+		t.Fatalf("CostByModel: %v", err)
+	}
+	if _, ok := table.Performance("reader", "claude-haiku-4-5"); ok {
+		t.Fatal("reader role should be normalized to explore")
+	}
+	seen, ok := table.Performance("explore", "claude-haiku-4-5")
+	if !ok || seen.N != 1 || seen.MedianUSD != usd {
+		t.Fatalf("normalized model performance = %+v, found=%v", seen, ok)
+	}
+}
+
 // A step that reported a real zero-dollar charge -- tokens all zero, but a
 // price behind it -- reads back measured. That is a different fact from
 // nothing having been reported, and the round trip must not collapse the two.

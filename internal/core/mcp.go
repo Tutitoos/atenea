@@ -49,6 +49,7 @@ const (
 // orchestrator's question. A caller at a terminal answers it with `--repo`. A
 // model has no equivalent unless the tool asks, so the tool asks.
 const repositoryArg = "repository"
+const routePreferArg = "_atenea_prefer"
 
 // toolListRepositories is Atenea's own discovery tool: no repository required,
 // no capability backing it, and no orchestrator in the path.
@@ -337,6 +338,10 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 		"type":        "string",
 		"description": description,
 	}
+	properties[routePreferArg] = map[string]any{
+		"type":        "string",
+		"description": "Optional implementation preference stamped by the decision router; it is honored only if it survives the selector.",
+	}
 	out["properties"] = properties
 
 	// Required only when the machine has a choice to make. With one
@@ -408,6 +413,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	// fail validation on a field this layer put there.
 	repository, _ := payload[repositoryArg].(string)
 	delete(payload, repositoryArg)
+	prefer, _ := payload[routePreferArg].(string)
+	delete(payload, routePreferArg)
 
 	repository = strings.TrimSpace(repository)
 	if repository == "" {
@@ -422,6 +429,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	result, runErr := v.session.Ask(ctx, orchestrator.Question{
 		Capability: capability.ID,
 		Repository: repository,
+		Prefer:     prefer,
 		Payload:    payload,
 	})
 	if runErr != nil {

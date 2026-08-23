@@ -407,6 +407,10 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     subject     TEXT    NOT NULL DEFAULT '',
     on_outcome  TEXT    NOT NULL DEFAULT 'answered',
     effects     TEXT    NOT NULL DEFAULT '[]',
+    route       TEXT    NOT NULL DEFAULT '',
+    budget_estimate_usd REAL NOT NULL DEFAULT 0,
+    budget_minimum_usd  REAL NOT NULL DEFAULT 0,
+    budget_source TEXT NOT NULL DEFAULT '',
     grant_usd   REAL    NOT NULL DEFAULT 0,
     status      TEXT    NOT NULL,
     trace_id    TEXT    NOT NULL DEFAULT '',
@@ -581,6 +585,10 @@ func addColumns(ctx context.Context, db *sql.DB) error {
 		{"workflow", "repository", "ALTER TABLE workflow ADD COLUMN repository TEXT NOT NULL DEFAULT ''"},
 		{"workflow_step", "completeness", "ALTER TABLE workflow_step ADD COLUMN completeness REAL"},
 		{"workflow_step", "stopped_at", "ALTER TABLE workflow_step ADD COLUMN stopped_at TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "route", "ALTER TABLE workflow_step ADD COLUMN route TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "budget_estimate_usd", "ALTER TABLE workflow_step ADD COLUMN budget_estimate_usd REAL NOT NULL DEFAULT 0"},
+		{"workflow_step", "budget_minimum_usd", "ALTER TABLE workflow_step ADD COLUMN budget_minimum_usd REAL NOT NULL DEFAULT 0"},
+		{"workflow_step", "budget_source", "ALTER TABLE workflow_step ADD COLUMN budget_source TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, add := range wanted {
 		rows, err := db.QueryContext(ctx, "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
@@ -642,12 +650,15 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, repository str
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO workflow_step
 			 (workflow_id, id, ordinal, type_name, pool, objective, files,
-			  criterion, needs, subject, on_outcome, effects, grant_usd, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  criterion, needs, subject, on_outcome, effects, route,
+			  budget_estimate_usd, budget_minimum_usd, budget_source, grant_usd, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, step.ID, i, step.TypeName, plan.Pools[step.ID].String(),
 			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion,
 			jsonList(step.Needs), step.Subject, step.On.String(),
 			jsonEffects(step.Permission.Effects),
+			jsonRoute(step.Route),
+			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource,
 			step.Permission.BudgetUSD, StatusPending.String()); err != nil {
 			return unavailable(err, "workflow: opening %s step %s", id, step.ID)
 		}
@@ -934,12 +945,13 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, type_name, pool, objective, files, criterion, needs, subject,
-		        on_outcome, effects, grant_usd, status, trace_id, attempt, writer_pid,
+				on_outcome, effects, route, budget_estimate_usd, budget_minimum_usd, budget_source,
+				grant_usd, status, trace_id, attempt, writer_pid,
 		        started_at, ended_at, verdict, reason_kind, reason_text, result,
 		        discovered, spent_usd, spent_input_tokens, spent_output_tokens,
 		        spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
 		        completeness, stopped_at
-		 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
+			 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
 	if err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
 	}
@@ -1111,23 +1123,26 @@ func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
 
 func scanStep(rows *sql.Rows) (StepRow, error) {
 	var (
-		out                         StepRow
-		pool, files, needs, effects string
-		onOutcome                   string
-		status, verdict             string
-		reasonKind, reasonText      string
-		result, discovered          string
-		started, ended              string
-		usd                         sql.NullFloat64
-		inputTok, outputTok         sql.NullInt64
-		cacheReadTok, cacheWriteTok sql.NullInt64
-		pricedBy                    string
-		completeness                sql.NullFloat64
-		stoppedAt                   string
+		out                                   StepRow
+		pool, files, needs, effects, routeRaw string
+		onOutcome                             string
+		status, verdict                       string
+		reasonKind, reasonText                string
+		result, discovered                    string
+		started, ended                        string
+		usd                                   sql.NullFloat64
+		budgetEstimate, budgetMinimum         float64
+		budgetSource                          string
+		inputTok, outputTok                   sql.NullInt64
+		cacheReadTok, cacheWriteTok           sql.NullInt64
+		pricedBy                              string
+		completeness                          sql.NullFloat64
+		stoppedAt                             string
 	)
 	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &pool,
 		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs,
-		&out.Step.Subject, &onOutcome, &effects,
+		&out.Step.Subject, &onOutcome, &effects, &routeRaw,
+		&budgetEstimate, &budgetMinimum, &budgetSource,
 		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.Attempt,
 		&out.WriterPID, &started, &ended, &verdict, &reasonKind, &reasonText,
 		&result, &discovered, &usd,
@@ -1135,6 +1150,9 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		&completeness, &stoppedAt); err != nil {
 		return StepRow{}, unavailable(err, "workflow: reading a step")
 	}
+	out.Step.BudgetEstimateUSD = budgetEstimate
+	out.Step.BudgetMinimumUSD = budgetMinimum
+	out.Step.BudgetSource = budgetSource
 	var err error
 	if out.Pool, err = config.ParsePool(pool); err != nil {
 		return StepRow{}, err
@@ -1150,6 +1168,9 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 	out.Step.Task.Files = readList(files)
 	out.Step.Needs = readList(needs)
 	if out.Step.Permission.Effects, err = readEffects(effects); err != nil {
+		return StepRow{}, err
+	}
+	if out.Step.Route, err = readRoute(routeRaw); err != nil {
 		return StepRow{}, err
 	}
 	out.Started = parseStamp(started)
@@ -1382,6 +1403,130 @@ type CostTable struct {
 	// never been measured here, which is a fact the caller must pass on in
 	// those words rather than substituting a default.
 	Types map[string]Observed
+}
+
+// ModelObserved is successful cost and latency history for one routed model.
+// It is separate from Observed because admission is keyed by agent type while
+// model choice compares explicit primary/fallback candidates.
+type ModelObserved struct {
+	Role           string
+	Model          string
+	MedianUSD      float64
+	MinUSD         float64
+	MaxUSD         float64
+	MedianDuration time.Duration
+	N              int
+}
+
+// ModelCostTable is the model history read by the decision router.
+type ModelCostTable struct {
+	Repository string
+	Models     map[string]ModelObserved
+}
+
+func modelKey(role, model string) string { return role + "\x00" + model }
+
+// Performance returns evidence for one routed role/model pair.
+func (t ModelCostTable) Performance(role, model string) (ModelObserved, bool) {
+	got, ok := t.Models[modelKey(role, model)]
+	return got, ok
+}
+
+// CostByModel reads successful workflow steps whose persisted route names a
+// model. It falls back to machine-wide history when a repository has no rows.
+func (s *Store) CostByModel(ctx context.Context, repository string) (ModelCostTable, error) {
+	out := ModelCostTable{Repository: repository, Models: map[string]ModelObserved{}}
+	rows, err := s.modelCostRows(ctx, repository)
+	if err != nil {
+		return ModelCostTable{}, err
+	}
+	if len(rows) == 0 && repository != "" {
+		out.Repository = ""
+		if rows, err = s.modelCostRows(ctx, ""); err != nil {
+			return ModelCostTable{}, err
+		}
+	}
+	spends := map[string][]float64{}
+	durations := map[string][]time.Duration{}
+	for _, row := range rows {
+		route, err := readRoute(row.route)
+		if err != nil || route == nil || strings.TrimSpace(route.Model) == "" || row.spent == nil {
+			continue
+		}
+		key := modelKey(modelRoleName(row.role), route.Model)
+		spends[key] = append(spends[key], *row.spent)
+		if !row.started.IsZero() && !row.ended.IsZero() && row.ended.After(row.started) {
+			durations[key] = append(durations[key], row.ended.Sub(row.started))
+		}
+	}
+	for key, values := range spends {
+		sort.Float64s(values)
+		role, model, _ := strings.Cut(key, "\x00")
+		seen := ModelObserved{Role: role, Model: model, N: len(values),
+			MedianUSD: median(values), MinUSD: values[0], MaxUSD: values[len(values)-1]}
+		if ds := durations[key]; len(ds) > 0 {
+			sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
+			seen.MedianDuration = durationMedian(ds)
+		}
+		out.Models[key] = seen
+	}
+	return out, nil
+}
+
+func modelRoleName(agent string) string {
+	if agent == "reader" {
+		return "explore"
+	}
+	return agent
+}
+
+type modelCostRow struct {
+	role    string
+	route   string
+	spent   *float64
+	started time.Time
+	ended   time.Time
+}
+
+func (s *Store) modelCostRows(ctx context.Context, repository string) ([]modelCostRow, error) {
+	query := `SELECT s.type_name, s.route, s.spent_usd, s.started_at, s.ended_at
+	          FROM workflow_step s JOIN workflow w ON w.id = s.workflow_id
+	          WHERE s.verdict = ?`
+	args := []any{contract.VerdictOK.String()}
+	if repository != "" {
+		query += " AND w.repository = ?"
+		args = append(args, repository)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reading model costs")
+	}
+	defer func() { _ = rows.Close() }()
+	var out []modelCostRow
+	for rows.Next() {
+		var row modelCostRow
+		var started, ended string
+		if err := rows.Scan(&row.role, &row.route, &row.spent, &started, &ended); err != nil {
+			return nil, unavailable(err, "workflow: reading model costs")
+		}
+		row.started, row.ended = parseStamp(started), parseStamp(ended)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, unavailable(err, "workflow: reading model costs")
+	}
+	return out, nil
+}
+
+func durationMedian(sorted []time.Duration) time.Duration {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
 }
 
 // CostByType reads back what each agent type has cost, scoped to repository

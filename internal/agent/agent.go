@@ -175,6 +175,9 @@ func (r *Runner) Declared() []string {
 type Dispatch struct {
 	TypeName string
 	Task     contract.Task
+	// Route carries the decision-router's selected execution surface. A child
+	// without an explicit route inherits its parent's route in Dispatch.
+	Route *contract.Route
 	// ID is the execution id to run as. Empty mints one, which is what
 	// every caller that does not have to know it in advance does; a caller
 	// that recorded the id before the spawn passes the one it wrote down.
@@ -236,6 +239,13 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	if d.CommissionUSD != nil {
 		commission := *d.CommissionUSD
 		assignment.CommissionUSD = &commission
+	}
+	if d.Route != nil {
+		route := d.Route.Clone()
+		assignment.Route = &route
+	} else if d.Parent != nil && d.Parent.Route != nil {
+		route := d.Parent.Route.Clone()
+		assignment.Route = &route
 	}
 	if d.Subject != nil {
 		subject := d.Subject.Clone()

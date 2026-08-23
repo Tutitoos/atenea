@@ -66,6 +66,7 @@ rewritten when they do.
 - [v1.0 policy]({{< relref "v1-policy" >}}) — garantías, límites y criterios de v1.1
 - [Day to day]({{< relref "day-to-day" >}}) — the five commands worth remembering
 - [Architecture]({{< relref "architecture" >}})
+- [Decision router]({{< relref "decision" >}}) — model, tool, MCP, provider and workflow choices
 - [Settings]({{< relref "settings" >}})
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
 - [When the instrument is the bug]({{< relref "measuring-the-wrong-process" >}}) — three defects that were not there

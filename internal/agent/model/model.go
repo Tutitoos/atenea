@@ -95,6 +95,12 @@ type Options struct {
 	Explore string
 	// Plan is the model Client calls for RolePlan turns.
 	Plan string
+	// ExploreFallbacks and PlanFallbacks are explicit model names to try when
+	// the primary model is unavailable or overloaded. Claude's plan role is
+	// pinned by the decision/config layers, so its lower-reasoning fallback
+	// list is intentionally ignored here as a final dispatch guard.
+	ExploreFallbacks []string
+	PlanFallbacks    []string
 }
 
 // Client calls a model for whichever caller holds it.
@@ -104,12 +110,14 @@ type Options struct {
 // per Turn. A caller working through both roles in the same run -- explore
 // then plan -- reuses the one Client instead of juggling two.
 type Client struct {
-	backend  string
-	binary   string
-	timeout  time.Duration
-	explore  string
-	plan     string
-	opencode *agentopencode.Runner
+	backend          string
+	binary           string
+	timeout          time.Duration
+	explore          string
+	plan             string
+	exploreFallbacks []string
+	planFallbacks    []string
+	opencode         *agentopencode.Runner
 	// version answers what the CLI calls itself, for Floor's CLIVersion --
 	// memoised for the life of this Client, the same tradeoff
 	// internal/toolversion's own doc explains: an upgrade on disk underneath
@@ -138,11 +146,13 @@ func New(opts Options) (*Client, error) {
 			"model client: unknown backend %q", opts.Backend)
 	}
 	client := &Client{
-		backend: backend,
-		binary:  strings.TrimSpace(opts.Binary),
-		timeout: opts.Timeout,
-		explore: strings.TrimSpace(opts.Explore),
-		plan:    strings.TrimSpace(opts.Plan),
+		backend:          backend,
+		binary:           strings.TrimSpace(opts.Binary),
+		timeout:          opts.Timeout,
+		explore:          strings.TrimSpace(opts.Explore),
+		plan:             strings.TrimSpace(opts.Plan),
+		exploreFallbacks: append([]string(nil), opts.ExploreFallbacks...),
+		planFallbacks:    append([]string(nil), opts.PlanFallbacks...),
 	}
 	if client.binary == "" {
 		if backend == BackendOpenCode {
@@ -498,6 +508,9 @@ type Answer struct {
 	// tokens: a Turn that failed before an envelope ever printed leaves this
 	// zero, because nothing was measured, not because the turn was free.
 	Spent contract.Charge
+	// Notices explain a successful fallback without pretending the provider
+	// error was part of the model's answer.
+	Notices []string
 	// Completeness is the fraction of the objective the model says its own
 	// answer actually covers, or nil when it claimed nothing -- a
 	// single-shot turn, or a schema the caller declared without the
@@ -565,6 +578,71 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if err := req.Validate(); err != nil {
 		return Answer{}, err
 	}
+	primary, err := c.modelFor(req.Role)
+	if err != nil {
+		return Answer{}, err
+	}
+	candidates := append([]string{primary}, c.fallbacksFor(req.Role)...)
+	if len(candidates) == 1 {
+		return c.turnOnce(ctx, req)
+	}
+	var total contract.Charge
+	var notices []string
+	for index, candidate := range candidates {
+		attempt := *c
+		if req.Role == RolePlan {
+			attempt.plan = candidate
+			attempt.planFallbacks = nil
+		} else {
+			attempt.explore = candidate
+			attempt.exploreFallbacks = nil
+		}
+		answer, turnErr := attempt.turnOnce(ctx, req)
+		total = total.Plus(answer.Spent)
+		answer.Spent = total
+		if turnErr == nil {
+			answer.Notices = append(answer.Notices, notices...)
+			return answer, nil
+		}
+		if index == len(candidates)-1 || !fallbackRetryable(turnErr) {
+			return answer, turnErr
+		}
+		spentUSD, source := retryCost(total)
+		if spentUSD <= 0 || req.BudgetUSD <= 0 {
+			return answer, contract.Fail(contract.KindOf(turnErr),
+				"primary model %s failed; fallback %s not attempted because no safe cost bound was available",
+				candidate, candidates[index+1])
+		}
+		remaining := req.BudgetUSD - spentUSD
+		if remaining <= 0 {
+			return answer, contract.Fail(contract.FailurePermissionDenied,
+				"primary model %s failed; fallback %s refused because no budget remains",
+				candidate, candidates[index+1])
+		}
+		notices = append(notices, fmt.Sprintf("fallback: %s failed with %s; retrying %s with $%.2f remaining (%s)",
+			candidate, contract.KindOf(turnErr), candidates[index+1], remaining, source))
+		req.BudgetUSD = remaining
+	}
+	return Answer{Spent: total}, contract.Fail(contract.FailureUnavailable, "all configured models failed")
+}
+
+func retryCost(c contract.Charge) (float64, string) {
+	if c.USD != nil {
+		return *c.USD, "provider-reported cost"
+	}
+	if c.Tokens() == 0 {
+		return 0, ""
+	}
+	return allowance.EstimatedUSD(c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheWriteTokens),
+		"conservative token estimate"
+}
+
+func fallbackRetryable(err error) bool {
+	kind := contract.KindOf(err)
+	return kind == contract.FailureUnavailable || kind == contract.FailureTimeout
+}
+
+func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 	dir, err := resolveDir(req.Dir)
 	if err != nil {
 		return Answer{}, err
@@ -1072,6 +1150,9 @@ func (c *Client) args(req Request) ([]string, error) {
 		return nil, err
 	}
 	argv = append(argv, "--model", modelName)
+	if fallbacks := c.fallbacksFor(req.Role); len(fallbacks) > 0 && c.backend == BackendClaude {
+		argv = append(argv, "--fallback-model", strings.Join(fallbacks, ","))
+	}
 	// The complete set this turn may call, always passed. Handing a turn
 	// Atenea's capabilities and leaving the CLI's built-ins beside them is
 	// what made the first three real explorations bypass Atenea entirely --
@@ -1093,6 +1174,29 @@ func (c *Client) args(req Request) ([]string, error) {
 		argv = append(argv, "--mcp-config", tools, "--strict-mcp-config")
 	}
 	return argv, nil
+}
+
+func (c *Client) fallbacksFor(role Role) []string {
+	if role == RolePlan && c.backend == BackendClaude {
+		return nil
+	}
+	if role == RolePlan {
+		out := make([]string, 0, len(c.planFallbacks))
+		for _, candidate := range c.planFallbacks {
+			if highReasoningPlanModel(candidate) {
+				out = append(out, candidate)
+			}
+		}
+		return out
+	}
+	return c.exploreFallbacks
+}
+
+func highReasoningPlanModel(model string) bool {
+	name := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(name, "opus") ||
+		strings.Contains(name, "gpt-5.6-sol") ||
+		strings.Contains(name, "gpt-5.6-luna")
 }
 
 // allowedTools is the complete set a turn may call: Atenea's whole server

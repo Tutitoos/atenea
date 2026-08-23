@@ -45,7 +45,12 @@ model selection, repository confinement, cancellation, observed usage and MCP
 configuration translation. Its local boundary also validates the structured
 answer's required fields, primitive types, numeric bounds and closed object
 properties, rejects trailing JSON values and records provider tool-use events;
-it does not pretend that OpenCode's JSON stream is Claude's final envelope.
+it does not pretend that OpenCode's JSON stream is Claude's final envelope. A
+tool-enabled turn is bounded at four intermediate tool steps; when that limit
+is reached, Atenea resumes the persisted OpenCode session with a finalization
+request so a provider outage or tool loop becomes an auditable partial answer
+rather than an unbounded timeout. It does not pass OpenCode `--pure`, because
+the authenticated server rejects that mode on the current provider path.
 
 `scripts/opencode-smoke.sh` runs an opt-in real-provider smoke test when
 `ATENEA_OPENCODE_SMOKE=1` and `ATENEA_OPENCODE_MODEL` are supplied. It is not

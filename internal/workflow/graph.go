@@ -56,6 +56,15 @@ type Step struct {
 	// effects it may cause and its share of the money. It is stamped by
 	// whoever drew the graph, never decided by the step.
 	Permission contract.Permission
+	// BudgetEstimateUSD is the forecast used before dispatch. It is separate
+	// from Permission.BudgetUSD, which is the approved share.
+	BudgetEstimateUSD float64
+	BudgetMinimumUSD  float64
+	BudgetSource      string
+	// Route is the resolved model/tool/provider surface for this step. It is
+	// persisted with the workflow so resume cannot silently return to the
+	// machine-wide defaults.
+	Route *contract.Route
 }
 
 // Requirement is how much of an upstream outcome a subject edge demands.
@@ -142,6 +151,10 @@ func (s Step) Clone() Step {
 	s.Task.Files = slices.Clone(s.Task.Files)
 	s.Needs = slices.Clone(s.Needs)
 	s.Permission = s.Permission.Clone()
+	if s.Route != nil {
+		route := s.Route.Clone()
+		s.Route = &route
+	}
 	return s
 }
 

@@ -1277,13 +1277,14 @@ func TestTheModelBlockIsReadPerRole(t *testing.T) {
 binary = "claude-custom"
 timeout = "45s"
 explore = "haiku"
-plan = "opus"
+	plan = "claude-opus-5"
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := config.Model{Backend: "claude", Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "opus"}
-	if cfg.Model != want {
+	want := config.Model{Backend: "claude", Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "claude-opus-5",
+		ExploreFallbacks: []string{}, PlanFallbacks: []string{}}
+	if !reflect.DeepEqual(cfg.Model, want) {
 		t.Errorf("Model = %+v, want %+v", cfg.Model, want)
 	}
 }
@@ -1301,6 +1302,48 @@ plan = "anthropic/opus"
 	}
 	if cfg.Model.Backend != "opencode" || cfg.Model.Binary != "/tmp/opencode-test" {
 		t.Fatalf("Model = %+v, want opencode backend and explicit binary", cfg.Model)
+	}
+}
+
+func TestTheModelBlockReadsExplicitFallbacks(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+`
+[model]
+explore = "claude-sonnet-5"
+plan = "claude-opus-5"
+explore_fallbacks = ["claude-haiku-4-5"]
+plan_fallbacks = []
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Equal(cfg.Model.ExploreFallbacks, []string{"claude-haiku-4-5"}) ||
+		len(cfg.Model.PlanFallbacks) != 0 {
+		t.Fatalf("fallbacks = explore %v plan %v", cfg.Model.ExploreFallbacks, cfg.Model.PlanFallbacks)
+	}
+}
+
+func TestTheModelBlockAcceptsAutoPerRole(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+`
+[model]
+explore = "auto"
+plan = "auto"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Model.Explore != "auto" || cfg.Model.Plan != "auto" {
+		t.Fatalf("auto models = explore %q, plan %q", cfg.Model.Explore, cfg.Model.Plan)
+	}
+}
+
+func TestTheModelBlockRejectsARepeatedPrimaryFallback(t *testing.T) {
+	_, err := config.Load(write(t, minimal+`
+[model]
+explore = "claude-sonnet-5"
+explore_fallbacks = ["claude-sonnet-5"]
+`))
+	if err == nil || !strings.Contains(err.Error(), "repeats the primary model") {
+		t.Fatalf("error = %v, want repeated primary fallback refusal", err)
 	}
 }
 

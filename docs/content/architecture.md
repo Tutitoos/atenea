@@ -272,11 +272,12 @@ are one contract and one wire -- two JSON objects on stdin and stdout -- which
 is why a script and a model-backed agent differ only in what they do between
 reading and writing.
 
-No orchestrator process exists yet, and the two kinds are a field rather than
-a fork so that adding one does not split the contract. What planning needed
-turned out not to need one: `explore` and `plan` are specialists whose answer
-is a graph, and the engine that runs the graph is the machinery that was
-already there.
+The decision router now provides the missing explainable front door as
+`atenea decide`: it classifies the request, chooses the agent/model role,
+surfaces native and raw MCP tools, asks the existing funnel for providers and
+compiles the resulting workflow. The existing `task` path remains compatible
+with multi-repository commissions while the new graph execution path is bound
+to one repository workspace per run.
 
 ### One capability, directly
 
