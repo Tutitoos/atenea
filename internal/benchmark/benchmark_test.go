@@ -138,6 +138,27 @@ func TestStatusManifestAndValidationBranches(t *testing.T) {
 	}
 }
 
+func TestPortableCommandAndStatusBranches(t *testing.T) {
+	if got := commandOutput(context.Background(), "true"); got != "" {
+		t.Fatalf("empty command output = %q", got)
+	}
+	if got := commandOutput(context.Background(), "sh", "-c", "printf portable"); got != "portable" {
+		t.Fatalf("command output = %q", got)
+	}
+	if got := commandOutput(context.Background(), "sh", "-c", "exit 1"); got != "" {
+		t.Fatalf("failed command output = %q", got)
+	}
+	if valueAfter("no matching label", "Missing:") != "" {
+		t.Fatal("missing label produced a value")
+	}
+	if got := OverallStatus(Summary{CoveragePercent: 50, CoverageFloor: 60, CoverageTarget: 80}); got != Red {
+		t.Fatalf("floor status = %s", got)
+	}
+	if got := OverallStatus(Summary{CoveragePercent: 70, CoverageFloor: 60, CoverageTarget: 80}); got != Orange {
+		t.Fatalf("target status = %s", got)
+	}
+}
+
 func TestValidateSummary(t *testing.T) {
 	summary := Summary{
 		Manifest: Manifest{SchemaVersion: SchemaVersion, RunID: "run", Profile: "quick", Environment: Environment{OS: "darwin", Arch: "arm64", Go: "go1.26.7"}},
