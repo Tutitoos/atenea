@@ -1388,6 +1388,7 @@ func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration
 	handoff := say(stdin, req.sentPrompt())
 
 	var conv conversation
+	var limitErr error
 	stop := handoff != nil
 	reader := bufio.NewReaderSize(stdout, eventBuffer)
 	for !stop {
@@ -1403,6 +1404,17 @@ func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration
 				stop = conv.spend(ev.Message.ID, ev.Message.Usage, stdin, req.ReadTokens)
 			case "result":
 				stop = conv.hear(ev.envelope, stdin, req.ReadTokens)
+			}
+			if limitErr == nil {
+				limitErr = conv.limitFailure(req)
+				if limitErr != nil {
+					// Tokens are observable on assistant events even before a
+					// result exists. Stop at that boundary instead of paying for
+					// another model/tool round. Cost keeps the CLI's existing
+					// terminal-event semantics because a completed pass may still
+					// be the best answer to return after the receipt arrives.
+					stop = true
+				}
 			}
 		}
 		if readErr != nil {
@@ -1455,7 +1467,13 @@ func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration
 			// whatever the process managed to print on its way out.
 			return answer, contract.Stopped(ctxErr, "claude code", timeout).WithRaw(said)
 		}
+		if limitErr != nil {
+			return answer, limitErr
+		}
 		return answer, conv.emptyDeath(req, said, cmp.Or(handoff, waitErr))
+	}
+	if limitErr != nil {
+		return answer, limitErr
 	}
 	// The guarantee, in code: everything that could have gone wrong with the
 	// process -- waitErr, a killed group, a context that expired -- is
@@ -1544,6 +1562,16 @@ func (conv *conversation) read() usage {
 // 81,699 and 87,004, and only the streamed one is short.
 func (conv *conversation) weighed() int {
 	return max(weigh(conv.read()), weigh(conv.receipt.Usage))
+}
+
+func (conv *conversation) limitFailure(req Request) error {
+	charge := conv.charge()
+	if req.MaxTokens > 0 && charge.Tokens() > req.MaxTokens {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"model reported %d tokens above the requested limit of %d", charge.Tokens(), req.MaxTokens).
+			WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", charge.Tokens(), req.MaxTokens))
+	}
+	return nil
 }
 
 // charge is what the turn cost: the CLI's own price, against whichever

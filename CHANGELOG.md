@@ -16,6 +16,23 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 No changes yet.
 
+## [1.0.3] - 2026-08-23
+
+### Fixed
+
+- Stop contained model processes as soon as an observed OpenCode token or cost
+  overrun crosses the local boundary, while preserving provider receipts.
+- Stop conversational Claude turns when their observable token usage crosses
+  the declared local limit.
+
+### Changed
+
+- Make the live MCP and OpenCode readiness jobs manually dispatchable, install
+  a pinned OpenCode client, and retry only transient missing-terminal-event
+  provider failures in the live matrix.
+- Document the distinction between local enforcement, provider-side hard caps
+  and model-backed semantic review.
+
 ## [1.0.2] - 2026-08-23
 
 ### Added

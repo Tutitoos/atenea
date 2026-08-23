@@ -24,7 +24,7 @@ proves, in a temporary directory:
 The same check can be run by hand:
 
 ```sh
-bash scripts/release-smoke.sh 1.0.2
+bash scripts/release-smoke.sh 1.0.3
 ```
 
 The check never passes `--service`, so it does not install a persistent agent.

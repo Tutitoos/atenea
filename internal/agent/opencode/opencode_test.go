@@ -242,6 +242,36 @@ JSON
 	}
 }
 
+func TestRunKillsTheProcessAfterAnObservedCostOverrun(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "after-limit")
+	binary := executable(t, fmt.Sprintf(`
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish","cost":0.26}}
+JSON
+sleep 30
+printf reached > %s
+`, shellQuote(marker)))
+	runner, err := New(Options{Binary: binary, Timeout: time.Minute})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	started := time.Now()
+	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25})
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("Run error = %v, want permission_denied", err)
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
+		t.Fatalf("spent = %+v, want observed cost 0.26", answer.Spent)
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("overrun stop took %s", elapsed)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("process continued after limit; marker stat error = %v", statErr)
+	}
+}
+
 func TestRunAcceptsAnObservedCostWithinTheBudget(t *testing.T) {
 	binary := executable(t, `
 cat <<'JSON'
@@ -620,15 +650,25 @@ func TestLiveOpenCodeMatrix(t *testing.T) {
 				prompt = "Use the atenea MCP server. Call atenea_catalog_repositories, then return exactly this JSON object and nothing else: {\"mcp_used\":true}."
 			}
 			started := time.Now()
-			answer, err := runner.Run(t.Context(), Request{
-				Model:  model,
-				Dir:    dir,
-				Prompt: prompt,
-				Tools:  tools,
-				Schema: matrixSchema(tools != ""),
-			})
+			var answer Answer
+			var runErr error
+			for attempt := 1; attempt <= 3; attempt++ {
+				answer, runErr = runner.Run(t.Context(), Request{
+					Model:  model,
+					Dir:    dir,
+					Prompt: prompt,
+					Tools:  tools,
+					Schema: matrixSchema(tools != ""),
+				})
+				if runErr == nil || contract.KindOf(runErr) != contract.FailureUnavailable ||
+					!strings.Contains(runErr.Error(), "without a step_finish event") || attempt == 3 {
+					break
+				}
+				t.Logf("retrying transient terminal-event failure (%d/3): %v", attempt, runErr)
+			}
+			err = runErr
 			if err != nil {
-				t.Fatalf("OpenCode matrix failed: %v", err)
+				t.Fatalf("OpenCode matrix failed: %v (provider output: %q)", err, contract.RawOf(err))
 			}
 			if tools != "" && !hasAteneaToolCall(answer.ToolCalls) {
 				t.Fatalf("MCP config did not produce an Atenea tool call: %v", answer.ToolCalls)
