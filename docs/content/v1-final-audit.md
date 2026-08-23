@@ -12,7 +12,7 @@ cobertura de código ni una promesa de compatibilidad universal.
 
 > Nota histórica: esta página conserva la evidencia de la publicación 1.0.0.
 > El estado vigente de la rama y las comprobaciones posteriores se mantienen en
-> [v1 readiness](v1-readiness.md), actualmente para 1.0.1.
+> [v1 readiness](v1-readiness.md), actualmente para 1.0.2.
 
 ## Matriz de cierre
 

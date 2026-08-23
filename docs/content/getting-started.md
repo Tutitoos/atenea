@@ -23,16 +23,16 @@ checksum-verified installer. Pin the version explicitly; the installer never
 silently chooses a moving `latest` binary:
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.1/atenea-install.sh \
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.2/atenea-install.sh \
   -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 1.0.1
+bash /tmp/atenea-install.sh --version 1.0.2
 ```
 
 It writes `~/.local/bin/atenea`. Add `--service` when the background service is
 wanted; starting it remains an explicit command:
 
 ```sh
-bash /tmp/atenea-install.sh --version 1.0.1 --service
+bash /tmp/atenea-install.sh --version 1.0.2 --service
 systemctl --user start atenea.service
 ```
 
@@ -50,10 +50,10 @@ A fresh install boots without any setup. When no settings file exists, Atenea
 falls back to the built-in defaults, which already carry the P0 capability and
 its three candidate providers.
 
-A release binary prints its published version (`1.0.1` for the current release).
+A release binary prints its published version (`1.0.2` for the current release).
 A binary built from a checkout stamps its revision onto the version, so
-`version` may print `1.0.1+<revision>` and
-`1.0.1+<revision>.modified` when the tree has uncommitted changes. That suffix
+`version` may print `1.0.2+<revision>` and
+`1.0.2+<revision>.modified` when the tree has uncommitted changes. That suffix
 is SemVer build metadata: it says which tree this came from and is ignored when
 versions are compared. A bare number means the build had nothing to stamp: a
 release artifact, or a build from a linked `git worktree`, which Go does not
@@ -405,7 +405,7 @@ reason:
 
 ```text
 $ atenea mcp --check
-atenea 1.0.1 is listening at ~/.local/state/atenea/run/core.sock
+atenea 1.0.2 is listening at ~/.local/state/atenea/run/core.sock
 13 capability(ies) would be offered as tools
 2 chat(s) open right now
 ```
@@ -458,7 +458,7 @@ LSPs will activate as files are read
 ~/Desktop/atenea
 
 • OpenCode 1.18.16
-⊙ Atenea 1.0.1+<revision>
+⊙ Atenea 1.0.2+<revision>
 ```
 
 **That column has to be on screen for any of them to appear.** It is 42 columns
@@ -539,7 +539,7 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ Atenea 1.0.1+<revision>  2 sin leer
+⊙ Atenea 1.0.2+<revision>  2 sin leer
 ```
 
 One line, written the way the client writes its own version line: a coloured
@@ -553,7 +553,7 @@ than under it: in this column an empty line of its own would cost a visible blan
 row, measured against the real sidebar before the shape was chosen.
 
 The version is printed exactly as the service reports it, build metadata and all.
-Trimming `1.0.1+<revision>.modified` down to `1.0.1` would hide the part that says
+Trimming `1.0.2+<revision>.modified` down to `1.0.2` would hide the part that says
 this binary is not the one that was tagged.
 
 ### Which model did the work
@@ -966,7 +966,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 1.0.1  contract 3.1.0  AMBER
+atenea 1.0.2  contract 3.1.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

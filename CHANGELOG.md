@@ -16,6 +16,29 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 No changes yet.
 
+## [1.0.2] - 2026-08-23
+
+### Added
+
+- Added `mcp_server.instance = "per_chat"` for raw HTTP and stdio MCP
+  backends, with isolated lazy sessions and cleanup on chat disconnect.
+- Added configuration, MCP integration and lifecycle coverage for shared and
+  per-chat backend ownership.
+
+### Fixed
+
+- Carried `limits.max_tokens` into model turns and rejected observed answers
+  that exceed the declared token limit, while retaining the provider work
+  already reported in the charge.
+- Documented the remaining provider-side limitation: work already in flight
+  cannot be cancelled at an exact token boundary when the CLI exposes no hard
+  cap.
+
+### Validation
+
+- Passed the full normal and race test suites, the v1 readiness gate, all
+  native CI build targets, the live MCP smoke and the six-case OpenCode matrix.
+
 ## [1.0.1] - 2026-08-22
 
 ### Fixed
