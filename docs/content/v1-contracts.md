@@ -42,8 +42,10 @@ OpenCode has an opt-in local-model backend through `[model].backend =
 "opencode"`. Its event parser is isolated from Claude Code and requires a
 completed `step_finish` event plus text before accepting an answer. It supports
 model selection, repository confinement, cancellation, observed usage and MCP
-configuration translation. Its local boundary also validates the structured
-answer's required fields, primitive types, numeric bounds and closed object
+configuration translation. Once a JSON event reports a token or cost overrun,
+the runner kills the contained process before reading later events; this is a
+local stop, not a provider-side hard cap. Its local boundary also validates
+the structured answer's required fields, primitive types, numeric bounds and closed object
 properties, rejects trailing JSON values and records provider tool-use events;
 it does not pretend that OpenCode's JSON stream is Claude's final envelope. A
 tool-enabled turn is bounded at four intermediate tool steps; when that limit

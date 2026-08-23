@@ -10,7 +10,7 @@ it serves. omp, Claude Code, Codex and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `1.0.2`, speaking contract `3.1.0` — stable core with optional external
+Version `1.0.3`, speaking contract `3.1.0` — stable core with optional external
 providers. The release is published with checksum-verified installers for
 Linux and macOS on `amd64` and `arm64`; the [final audit](docs/content/v1-final-audit.md)
 records the evidence and the remaining provider-dependent limits. What landed is in the
@@ -148,9 +148,9 @@ them; with nothing running it falls back to disk and says so.
 Published Linux and macOS releases can be installed with the checksum-verified installer:
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.2/atenea-install.sh \
+curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.0.3/atenea-install.sh \
   -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 1.0.2
+bash /tmp/atenea-install.sh --version 1.0.3
 ```
 
 The installer supports Linux and macOS on `amd64` and `arm64`, writes to
@@ -219,7 +219,7 @@ release workflow**, which re-runs the linter and the full suite at tag time and
 refuses to publish if either fails — it is the only check nobody can skip by
 forgetting a setup step. The historical `v0.6.0` tag has no release behind it
 for exactly that reason; the [changelog](CHANGELOG.md) says why. The current
-published release is `v1.0.2`.
+published release is `v1.0.3`.
 
 ## Credits
 

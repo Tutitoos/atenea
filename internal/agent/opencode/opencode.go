@@ -177,6 +177,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	}
 
 	var stream eventStream
+	var limitErr error
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -184,6 +185,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
 			return Answer{}, err
+		}
+		if limitErr = stream.limitFailure(req); limitErr != nil {
+			// The provider has no native budget or token flag. Once an event
+			// gives us an observed excess, stop the process immediately so no
+			// later event can add work after the local boundary. This still
+			// cannot undo provider work already in flight, but it is stronger
+			// than waiting for the terminal event to reject the answer.
+			stream.stopped = true
+			_ = procgroup.Kill(cmd)
+			break
 		}
 		if stream.reached(req.ReadTokens) || stream.needsFinalization() {
 			// OpenCode has no stdin finalize protocol. Stop only after a
@@ -202,6 +213,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	waitErr := cmd.Wait()
 	if ctxErr := turnCtx.Err(); ctxErr != nil {
 		return Answer{}, contract.Stopped(ctxErr, "opencode", r.timeout).WithRaw(strings.TrimSpace(stderr.String()))
+	}
+	if limitErr != nil {
+		return Answer{Spent: stream.charge()}, limitErr
 	}
 	if scanErr != nil {
 		return Answer{}, contract.Fail(contract.FailureUnavailable,
@@ -237,16 +251,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 			"opencode completed a step without text output").WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	answer := Answer{Text: text, Spent: charge, Passes: passes, ToolCalls: toolCalls}
-	if req.MaxTokens > 0 && charge.Tokens() > req.MaxTokens {
-		return answer, contract.Fail(contract.FailurePermissionDenied,
-			"opencode reported %d tokens above the requested limit of %d", charge.Tokens(), req.MaxTokens).
-			WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", charge.Tokens(), req.MaxTokens))
-	}
-	if req.BudgetUSD > 0 && charge.USD != nil && *charge.USD > req.BudgetUSD {
-		return answer, contract.Fail(contract.FailurePermissionDenied,
-			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", *charge.USD, req.BudgetUSD).
-			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", *charge.USD, req.BudgetUSD))
-	}
 	if len(req.Schema) > 0 {
 		structured, err := structuredObject(text, req.Schema)
 		if err != nil {
@@ -460,6 +464,21 @@ func (s eventStream) charge() contract.Charge {
 		out.PricedBy = "opencode step_finish cost"
 	}
 	return out
+}
+
+func (s eventStream) limitFailure(req Request) error {
+	charge := s.charge()
+	if req.MaxTokens > 0 && charge.Tokens() > req.MaxTokens {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"opencode reported %d tokens above the requested limit of %d", charge.Tokens(), req.MaxTokens).
+			WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", charge.Tokens(), req.MaxTokens))
+	}
+	if req.BudgetUSD > 0 && charge.USD != nil && *charge.USD > req.BudgetUSD {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", *charge.USD, req.BudgetUSD).
+			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", *charge.USD, req.BudgetUSD))
+	}
+	return nil
 }
 
 func promptWithSchema(prompt string, schema map[string]any) (string, error) {
