@@ -131,6 +131,12 @@ type MCPServer struct {
 	// of them is authorized to cause. Both are required of a raw block and
 	// neither is read on an off one -- see the refusals in build.
 	Expose Expose
+	// Instance controls the lifetime of a raw backend. Shared keeps one
+	// upstream MCP session for the service; per_chat creates one for each
+	// client connection and closes it when that connection ends. The field is
+	// intentionally meaningful only for raw exposure: pointer servers are
+	// owned by the client they are handed to.
+	Instance Instance
 	// Tools are the backend's own tool names this machine allows through,
 	// already trimmed and deduplicated. Empty on an off block; never empty
 	// on a raw one.
@@ -420,18 +426,20 @@ type CodexAdapter struct {
 // one per repository -- which is a policy typed out per repository in a place
 // Atenea could not see. Naming it here makes it a rule instead.
 //
-// The set is deliberately small and closed. `per_chat` is not here: it would
-// be a process per conversation, saving nothing, and nothing on this machine
-// has ever needed it. An unknown value is refused rather than read as the
-// default, for the reason every other refusal in this file exists -- a policy
-// an operator believes is in force and is not is worse than one they can see
-// is missing.
+// The set is deliberately small and closed. Unknown values are refused rather
+// than read as the default, for the reason every other refusal in this file
+// exists -- a policy an operator believes is in force and is not is worse than
+// one they can see is missing.
 type Instance string
 
 const (
 	// InstanceShared is one process for the whole machine, and the default:
 	// it is what every managed server did before this existed.
 	InstanceShared Instance = "shared"
+	// InstancePerChat is one upstream MCP session per client connection. It is
+	// useful for servers whose session state belongs to a single conversation,
+	// and is closed with that connection rather than retained by the service.
+	InstancePerChat Instance = "per_chat"
 	// InstancePerRepository is one process per declared repository, each
 	// pinned to that repository and started only when something asks for it.
 	InstancePerRepository Instance = "per_repository"
@@ -1043,6 +1051,7 @@ type fileMCPServer struct {
 	Dashboard string            `toml:"dashboard"`
 	Timeout   string            `toml:"timeout"`
 	Expose    string            `toml:"expose"`
+	Instance  string            `toml:"instance"`
 	Tools     []string          `toml:"tools"`
 	Effects   []string          `toml:"effects"`
 	Tool      []fileMCPTool     `toml:"tool"`
@@ -1128,6 +1137,17 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	default:
 		return fail("mcp_server %s: expose %q is not %s or %s", id, expose, ExposeOff, ExposeRaw)
 	}
+	instance := strings.TrimSpace(m.Instance)
+	if instance == "" {
+		out.Instance = InstanceShared
+	} else {
+		switch Instance(instance) {
+		case InstanceShared, InstancePerChat:
+			out.Instance = Instance(instance)
+		default:
+			return fail("mcp_server %s: instance %q is not %s or %s", id, instance, InstanceShared, InstancePerChat)
+		}
+	}
 	// Both transports reach a raw backend now. Which one a block means was
 	// already settled above -- a block carries a url or a command, never
 	// both -- so there is nothing left to refuse here: the same budget, the
@@ -1139,6 +1159,8 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	// worse than an absent one.
 	if out.Expose != ExposeRaw {
 		switch {
+		case out.Instance == InstancePerChat:
+			return fail("mcp_server %s: instance = %q needs expose = %q", id, InstancePerChat, ExposeRaw)
 		case len(m.Tools) > 0:
 			return fail("mcp_server %s: tools needs expose = %q; a pointer never sees a call to filter", id, ExposeRaw)
 		case len(m.Effects) > 0:

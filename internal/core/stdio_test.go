@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -176,6 +177,34 @@ func TestEveryChatSharesOneStdioProcess(t *testing.T) {
 	}
 	if n := spawnCount(t, ledger); n != 1 {
 		t.Errorf("%d processes for three chats, want 1", n)
+	}
+}
+
+func TestPerChatStdioBackendHasOneProcessPerConnection(t *testing.T) {
+	ledger := t.TempDir() + "/spawns"
+	settings := strings.Replace(stdioSettings(t, ledger),
+		"expose = \"raw\"\n", "expose = \"raw\"\ninstance = \"per_chat\"\n", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	var pids []string
+	for range 3 {
+		c := dial(t)
+		c.handshake("omp")
+		answer := result(t, c.call("tools/call", map[string]any{
+			"name": "raw.graph.search_code", "arguments": map[string]any{"query": "x"},
+		}), "tools/call")
+		text := answerText(answer)
+		_, pid, _ := strings.Cut(text, "pid=")
+		pid, _, _ = strings.Cut(pid, " ")
+		pids = append(pids, pid)
+		c.close()
+	}
+	if len(slices.Compact(slices.Clone(pids))) != 3 {
+		t.Errorf("pids = %v, want one distinct process per chat", pids)
+	}
+	if n := spawnCount(t, ledger); n != 3 {
+		t.Errorf("%d processes for three chats, want 3", n)
 	}
 }
 

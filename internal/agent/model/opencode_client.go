@@ -28,6 +28,7 @@ func (c *Client) turnOpenCode(ctx context.Context, dir string, timeout time.Dura
 		Prompt:     prompt,
 		Dir:        dir,
 		BudgetUSD:  req.BudgetUSD,
+		MaxTokens:  req.MaxTokens,
 		ReadTokens: req.ReadTokens,
 		Tools:      req.Tools,
 		Schema:     req.Schema,

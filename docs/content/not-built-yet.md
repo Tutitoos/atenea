@@ -394,7 +394,7 @@ the schema does not have -- and feeding those into a provider's health record
 would condemn a working server for a client's mistake. That is the same defect
 that shipped in `0.9.1`: a missing working directory blamed on the binary.
 
-### One shared instance, and the policies still missing from it
+### Raw instance lifecycles
 
 **Landed on 2026-08-08 for the only policy that existed anyway: `shared`.** A
 `command` block may now be declared `expose = "raw"`. Atenea spawns the process
@@ -416,6 +416,14 @@ implemented this by hand are what it replaces. They come out at install time
 rather than with the commit: the binary running on this machine today is the
 one that still reads them, through the per-repository endpoint key this change
 removes.
+
+The raw lifecycle hole is now closed for `per_chat`: a raw HTTP or stdio
+backend can declare `instance = "per_chat"`, is created lazily for each MCP
+connection, reused only by that chat, and closed when the connection ends.
+The default remains `shared`, and the integration test proves two concurrent
+chats receive distinct upstream MCP sessions. Raw `per_repository` remains
+deliberately unsupported because repository-scoped process ownership belongs
+to the managed server policies above, not to an opaque passthrough session.
 
 That left one hole, found by driving it rather than by reading it: health was
 keyed by implementation alone. A repository whose language server was missing

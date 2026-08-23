@@ -287,6 +287,10 @@ type Request struct {
 	// truly meant "spend nothing" has no reason to call Turn at all. See
 	// Validate for the one value this field does refuse.
 	BudgetUSD float64
+	// MaxTokens is the declared total token ceiling. Provider CLIs do not
+	// expose one uniform hard flag, so model clients enforce it at the local
+	// answer boundary and reject an over-limit result.
+	MaxTokens int
 	// ReadTokens is the soft allowance, in input-equivalent tokens, that
 	// this turn may spend before it is told to stop reading and answer with
 	// what it has. Zero means off, and a turn with it off is the single shot
@@ -432,6 +436,10 @@ func (r Request) Validate() error {
 		// terms.
 		return contract.Fail(contract.FailureInvalidInput,
 			"request: read_tokens must not be negative, got %d", r.ReadTokens)
+	}
+	if r.MaxTokens < 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"request: max_tokens must not be negative, got %d", r.MaxTokens)
 	}
 	if r.Timeout < 0 {
 		return contract.Fail(contract.FailureInvalidInput,
@@ -656,7 +664,8 @@ func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 	}
 
 	if req.reservesAnswer() {
-		return c.converse(ctx, dir, timeout, req)
+		answer, err := c.converse(ctx, dir, timeout, req)
+		return enforceMaxTokens(answer, req.MaxTokens, err)
 	}
 
 	env, err := c.invoke(ctx, dir, timeout, req)
@@ -669,7 +678,16 @@ func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 		return answer, err
 	}
 	answer.Text, answer.Structured, answer.Passes = text, structured, 1
-	return answer, nil
+	return enforceMaxTokens(answer, req.MaxTokens, nil)
+}
+
+func enforceMaxTokens(answer Answer, limit int, err error) (Answer, error) {
+	if err != nil || limit <= 0 || answer.Spent.Tokens() <= limit {
+		return answer, err
+	}
+	return answer, contract.Fail(contract.FailurePermissionDenied,
+		"model reported %d tokens above the requested limit of %d", answer.Spent.Tokens(), limit).
+		WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", answer.Spent.Tokens(), limit))
 }
 
 // floorPrompt is what a Floor probe asks the model to do: nothing. It is a

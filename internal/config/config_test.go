@@ -506,6 +506,7 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 		"negative timeout":       "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\ntimeout = \"-1s\"\n",
 		"dotted id":              "\n[[mcp_server]]\nid = \"a.b\"\nurl = \"http://127.0.0.1:1/mcp\"\n",
 		"unknown expose":         "\n[[mcp_server]]\nid = \"x\"\nurl = \"http://127.0.0.1:1/mcp\"\nexpose = \"true\"\n",
+		"unknown raw instance":   rawBlock("") + "instance = \"per_repository\"\ntools = [\"scan\"]\neffects = [\"read\"]\n",
 		// A stdio raw block still has to carry the same budget as any other
 		// one; what is no longer refused is the transport itself, which
 		// TestAStdioBackendIsDeclaredLikeAnyOther pins from the other side.
@@ -552,6 +553,16 @@ func TestBrokenMCPServerBlocksAreRefused(t *testing.T) {
 				t.Fatalf("kind = %v", contract.KindOf(err))
 			}
 		})
+	}
+	// A per-chat lifetime without the raw dispatch path would be a setting
+	// that looks active but has no owner to close it.
+	if _, err := config.Load(write(t, minimal+`
+[[mcp_server]]
+id = "x"
+url = "http://127.0.0.1:1/mcp"
+instance = "per_chat"
+`)); err == nil {
+		t.Fatal("per_chat pointer was accepted")
 	}
 }
 
@@ -613,6 +624,9 @@ func TestExposeDefaultsToPointerAndReadsBackRawWithItsBudget(t *testing.T) {
 	if raw.Expose != config.ExposeRaw {
 		t.Errorf("declared expose = %q, want %q", raw.Expose, config.ExposeRaw)
 	}
+	if raw.Instance != config.InstanceShared {
+		t.Errorf("absent instance = %q, want %q", raw.Instance, config.InstanceShared)
+	}
 	if want := []string{"semgrep_scan", "semgrep_fix"}; !slices.Equal(raw.Tools, want) {
 		t.Errorf("tools = %v, want %v", raw.Tools, want)
 	}
@@ -638,6 +652,19 @@ func TestExposeDefaultsToPointerAndReadsBackRawWithItsBudget(t *testing.T) {
 		if strings.HasPrefix(i.ID, contract.ReservedNamespace+".") {
 			t.Errorf("implementation %s came from a declaration", i.ID)
 		}
+	}
+}
+
+func TestARawMCPServerReadsBackPerChatInstance(t *testing.T) {
+	body := minimal + rawBlock("") +
+		"instance = \"per_chat\"\n" +
+		"tools = [\"scan\"]\neffects = [\"read\"]\n"
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.MCPServers[0].Instance; got != config.InstancePerChat {
+		t.Fatalf("instance = %q, want %q", got, config.InstancePerChat)
 	}
 }
 

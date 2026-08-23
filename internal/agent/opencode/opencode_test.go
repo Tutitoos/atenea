@@ -441,6 +441,26 @@ sleep 30
 	}
 }
 
+func TestRunRejectsAnAnswerAboveTheDeclaredTokenLimit(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":80,"output":30,"cache":{"read":0,"write":0}},"cost":0.01}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", MaxTokens: 100})
+	if err == nil || contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("Run error = %v, want permission_denied", err)
+	}
+	if answer.Spent.Tokens() != 110 {
+		t.Fatalf("spent tokens = %d, want 110", answer.Spent.Tokens())
+	}
+}
+
 func TestRunDoesNotStopAtAnIntermediateToolStep(t *testing.T) {
 	binary := executable(t, `
 cat <<'JSON'

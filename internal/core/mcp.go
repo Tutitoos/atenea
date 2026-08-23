@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
+	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -62,15 +64,49 @@ const toolListRepositories = "catalog.repositories"
 // looks like popularity. Holding it here rather than in a map on the core means
 // the lifetime is the connection's and nothing has to remember to clean up.
 type conversation struct {
-	core    *Core
-	session *Session
+	core      *Core
+	session   *Session
+	backendMu sync.Mutex
+	backends  map[string]passthrough.Backend
 }
 
 func (v *conversation) close() {
+	v.backendMu.Lock()
+	for id, backend := range v.backends {
+		backend.Close()
+		delete(v.backends, id)
+	}
+	v.backendMu.Unlock()
 	if v.session != nil {
 		v.session.Close()
 		v.session = nil
 	}
+}
+
+// rawBackend returns the backend authorized for this conversation. Shared
+// declarations reuse the process-wide session; per_chat declarations are lazy
+// and keep exactly one upstream session in this connection until close.
+func (v *conversation) rawBackend(id string) (rawBackend, bool) {
+	declared, ok := v.core.backends[id]
+	if !ok {
+		return rawBackend{}, false
+	}
+	if declared.instance != config.InstancePerChat {
+		return declared, true
+	}
+	v.backendMu.Lock()
+	defer v.backendMu.Unlock()
+	if v.backends == nil {
+		v.backends = make(map[string]passthrough.Backend)
+	}
+	if backend, ok := v.backends[id]; ok {
+		declared.Backend = backend
+		return declared, true
+	}
+	backend := passthrough.New(declared.spec)
+	v.backends[id] = backend
+	declared.Backend = backend
+	return declared, true
 }
 
 // dispatch answers one message, or returns nil for one that is owed no answer.
@@ -278,7 +314,10 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	// mentioning it, and `atenea wrap` already reports a server that is down
 	// where an operator will read it.
 	for _, id := range slices.Sorted(maps.Keys(v.core.backends)) {
-		backend := v.core.backends[id]
+		backend, ok := v.rawBackend(id)
+		if !ok || backend.Backend == nil {
+			continue
+		}
 		offered, err := backend.Tools(ctx)
 		// The client is still told nothing -- see the paragraph above, which
 		// has not changed. What changed is that the Core now remembers why,
@@ -463,7 +502,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 // this machine's behalf is exactly the kind of thing an operator later needs
 // to find, and "it was only a passthrough" is how a trail grows holes.
 func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (any, *rpcError) {
-	backend, ok := v.core.backends[server]
+	backend, ok := v.rawBackend(server)
 	if !ok {
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
