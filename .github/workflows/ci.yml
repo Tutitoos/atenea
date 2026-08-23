@@ -90,6 +90,9 @@ jobs:
       - name: DAG load smoke
         run: bash scripts/load-check.sh
 
+      - name: Validate benchmark summary artifact
+        run: bash scripts/validate-benchmark-summary.sh benchmarks/summary.json
+
       - name: Declared provider matrix
         run: bash scripts/provider-matrix-check.sh
 

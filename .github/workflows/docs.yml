@@ -5,6 +5,16 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "benchmarks/**"
+      - "cmd/atenea-benchmark/**"
+      - "internal/benchmark/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "benchmarks/**"
+      - "cmd/atenea-benchmark/**"
+      - "internal/benchmark/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -39,6 +49,9 @@ jobs:
           tar -xzf hugo.tar.gz hugo
           sudo install hugo /usr/local/bin/hugo
 
+      - name: Render benchmark documentation
+        run: go run ./cmd/atenea-benchmark --render-only --input benchmarks/runs/latest/summary.json
+
       # Pages has to exist before this can deploy to it, and GITHUB_TOKEN
       # cannot create it: `pages: write` deploys to a site, creating one is
       # repository administration and that escalation is closed on purpose.
@@ -48,11 +61,12 @@ jobs:
       #
       #   gh api -X POST /repos/Tutitoos/atenea/pages -f build_type=workflow
       - uses: actions/configure-pages@v6
+        if: github.event_name != 'pull_request'
         id: pages
 
       - name: Build
         working-directory: docs
-        run: hugo --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+        run: hugo --minify --baseURL "${{ steps.pages.outputs.base_url || 'https://tutitoos.github.io/atenea' }}/"
 
       - uses: actions/upload-pages-artifact@v5
         with:
@@ -60,6 +74,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="{{ site.Language.Lang | default "en" }}" data-theme="auto">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{{ with .Description }}{{ . }}{{ else with .Summary }}{{ . | plainify | truncate 160 }}{{ else }}{{ site.Params.description }}{{ end }}">
+    <meta name="theme-color" content="#10131a">
+    <meta name="color-scheme" content="light dark">
+    <link rel="canonical" href="{{ .Permalink }}">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="{{ .Title }} · {{ site.Title }}">
+    <meta property="og:description" content="{{ with .Description }}{{ . }}{{ else with .Summary }}{{ . | plainify | truncate 160 }}{{ else }}{{ site.Params.description }}{{ end }}">
+    <meta property="og:url" content="{{ .Permalink }}">
+    <meta property="og:site_name" content="{{ site.Title }}">
+    <title>{{ .Title }} · {{ site.Title }}</title>
+    {{ $css := resources.Get "css/atenea.css" | minify | fingerprint }}
+    <link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
+    <script id="atenea-search-data" type="application/json">[{{ range $index, $page := site.RegularPages }}{{ if $index }},{{ end }}{{ dict "title" $page.Title "url" $page.RelPermalink "section" $page.Section "text" (truncate 2200 $page.Plain) | jsonify | safeHTML }}{{ end }}]</script>
+  </head>
+  <body class="atenea-shell{{ if .IsHome }} is-home{{ end }}">
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <button class="menu-button" type="button" data-menu-toggle aria-expanded="false" aria-controls="documentation-nav" aria-label="Open navigation">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="Atenea home">
+          <span class="brand-mark">A</span>
+          <span>Atenea</span>
+          <small>orchestration core</small>
+        </a>
+        <div class="topbar-actions">
+          <button class="icon-button" type="button" data-search-open aria-label="Search documentation">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.2 4.2"/></svg><span>Search</span><kbd>⌘K</kbd>
+          </button>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="Change theme">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.5 8.5 0 1 0 20.5 15.2Z"/></svg><span data-theme-label>Auto</span>
+          </button>
+          <a class="github-link" href="{{ site.Params.github }}">GitHub <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </header>
+    <div class="site-grid">
+      <button class="drawer-overlay" type="button" data-menu-close aria-label="Close navigation"></button>
+      {{ partial "sidebar.html" . }}
+      <main id="content" class="content-column">
+        {{ block "main" . }}{{ end }}
+      </main>
+    </div>
+    <footer class="site-footer">
+      <span>Atenea {{ site.Params.version }}</span>
+      <span>Decide. Delegate. Measure.</span>
+    </footer>
+    {{ $js := resources.Get "js/atenea.js" | minify | fingerprint }}
+    <script src="{{ $js.RelPermalink }}" integrity="{{ $js.Data.Integrity }}" defer></script>
+  </body>
+</html>

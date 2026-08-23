@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,5 +25,21 @@ func BenchmarkRecord(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		s.Record(m)
+	}
+}
+
+func BenchmarkFlushMeasurement(b *testing.B) {
+	s, err := Open(b.TempDir()+"/metrics.duckdb", Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	measurement := Measurement{At: time.Unix(1, 0), RunID: "benchmark", StepID: "flush", Capability: "code.search", Implementation: "ripgrep", Provider: "local", Repository: "current", ToolVersion: "benchmark", OK: true}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.Record(measurement)
+		if err := s.Flush(context.Background()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Tutitoos/atenea/internal/orchestrator
+cpu: Apple M5
+BenchmarkRunPlanConcurrentMediumDAG-10    	       1	 317231709 ns/op	 3000776 B/op	    9655 allocs/op
+PASS
+ok  	github.com/Tutitoos/atenea/internal/orchestrator	1.449s

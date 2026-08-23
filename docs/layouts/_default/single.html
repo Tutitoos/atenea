@@ -1,0 +1,33 @@
+{{ define "main" }}
+  {{ if and (eq .Section "benchmarks") hugo.Data.benchmarks.latest }}
+    {{ partial "benchmark-dashboard.html" . }}
+  {{ else }}
+  <article class="doc-page">
+    {{ partial "breadcrumbs.html" . }}
+    <header class="page-heading">
+      <p class="eyebrow">{{ if eq .Section "benchmarks" }}Evidence / benchmarks{{ else }}Atenea documentation{{ end }}</p>
+      <h1>{{ .Title }}</h1>
+      {{ with .Description }}<p class="lede">{{ . }}</p>{{ end }}
+    </header>
+    {{ if .TableOfContents }}
+      <details class="mobile-toc">
+        <summary>On this page</summary>
+        <div>{{ .TableOfContents }}</div>
+      </details>
+    {{ end }}
+    <div class="reading-layout">
+      <div class="markdown">{{ .Content }}</div>
+      {{ if .TableOfContents }}
+        <aside class="toc" aria-label="On this page">
+          <div class="toc-label">On this page</div>
+          {{ .TableOfContents }}
+        </aside>
+      {{ end }}
+    </div>
+    <nav class="page-nav" aria-label="Page navigation">
+      {{ with .PrevInSection }}<a href="{{ .RelPermalink }}"><small>Previous</small><span>← {{ .Title }}</span></a>{{ end }}
+      {{ with .NextInSection }}<a class="next" href="{{ .RelPermalink }}"><small>Next</small><span>{{ .Title }} →</span></a>{{ end }}
+    </nav>
+  </article>
+  {{ end }}
+{{ end }}

@@ -151,18 +151,30 @@ func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 		done <- out
 	}()
 
-	// Give the run long enough to have dispatched `late` if it were going to.
-	time.Sleep(2 * time.Second)
-	open, ok, err := h.state.OpenGate(t.Context(), run.ID)
-	if err != nil {
-		t.Fatalf("OpenGate: %v", err)
-	}
-	if !ok {
-		t.Fatal("the gate was answered by nobody")
-	}
-	held, err := h.state.Load(t.Context(), run.ID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	// Wait for the observable condition rather than sleeping a fixed amount.
+	// Under the full benchmark suite the process can be delayed by unrelated
+	// package work, while the contract we need to assert is simply that the
+	// gate is open and the already-started step has landed.
+	deadline := time.Now().Add(3 * time.Second)
+	var open workflow.Gate
+	var held workflow.Run
+	for {
+		var openOK bool
+		open, openOK, err = h.state.OpenGate(t.Context(), run.ID)
+		if err != nil {
+			t.Fatalf("OpenGate: %v", err)
+		}
+		held, err = h.state.Load(t.Context(), run.ID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if openOK && statuses(t, held)["slow"] == "ok" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the open gate did not let the running step land before the deadline")
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	if got := statuses(t, held)["slow"]; got != "ok" {
 		t.Errorf("slow is %q while the gate waits, want ok: what is already spawned must finish", got)

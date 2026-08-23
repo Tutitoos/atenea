@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Tutitoos/atenea/internal/selector
+cpu: Apple M5
+BenchmarkSelectMediumCatalog-10    	    2738	     37662 ns/op	   74242 B/op	      15 allocs/op
+PASS
+ok  	github.com/Tutitoos/atenea/internal/selector	0.347s

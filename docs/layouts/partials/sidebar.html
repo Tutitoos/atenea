@@ -1,0 +1,19 @@
+<aside class="sidebar" id="documentation-nav" aria-label="Documentation navigation" aria-hidden="false">
+  <div class="sidebar-scroll">
+    <div class="sidebar-topline"><div class="sidebar-heading">Documentation</div><button class="sidebar-close" type="button" data-menu-close aria-label="Close navigation">×</button></div>
+    <nav>
+      {{ range site.Menus.main }}
+        <section class="nav-group">
+          <h2>{{ .Name }}</h2>
+          {{ with .Children }}
+            <ul>
+              {{ range . }}
+                <li><a href="{{ .URL | relURL }}"{{ if $.IsMenuCurrent "main" . }} aria-current="page"{{ end }}>{{ .Name }}</a></li>
+              {{ end }}
+            </ul>
+          {{ end }}
+        </section>
+      {{ end }}
+    </nav>
+  </div>
+</aside>
