@@ -51,6 +51,12 @@ func healthDown(reason, raw string) implOption {
 	}
 }
 
+func healthDownAt(at time.Time) implOption {
+	return func(i *contract.Implementation) {
+		i.Health = contract.Health{State: contract.HealthDown, ObservedAt: at}
+	}
+}
+
 func provider(name string) implOption {
 	return func(i *contract.Implementation) { i.Provider = name }
 }
@@ -103,6 +109,30 @@ func mustSelector(t *testing.T, rules ...selector.Rule) funnel {
 		t.Fatalf("selector.New: %v", err)
 	}
 	return funnel{s}
+}
+
+func TestExpiredHealthObservationReturnsToUnknown(t *testing.T) {
+	s, err := selector.New(selector.Config{HealthStaleAfter: time.Hour})
+	if err != nil {
+		t.Fatalf("selector.New: %v", err)
+	}
+	observed := time.Now().Add(-2 * time.Hour)
+	candidate := impl("stale", healthDownAt(observed))
+	decision, err := s.Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{candidate},
+		Reachable:  []string{"stale"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if decision.Chosen.ID != "stale" {
+		t.Fatalf("chosen = %q, want stale provider to be retried after expiry", decision.Chosen.ID)
+	}
+	if decision.Chosen.Health.State != contract.HealthUnknown {
+		t.Fatalf("chosen health = %v, want unknown after expiry", decision.Chosen.Health.State)
+	}
 }
 
 func stage(t *testing.T, decision selector.Decision, name string) selector.Stage {

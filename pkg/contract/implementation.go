@@ -304,16 +304,26 @@ type Health struct {
 	// funnel is refusing right now is exactly the one whose evidence a human
 	// most needs without having to go dispatch a fresh failing call to see it.
 	//
-	// Aging is not recorded here. A Health value cannot outlive its evidence:
-	// Fault.Health and Baseline.Health both take `now` and refuse to speak once
-	// FaultWindow or SuccessWindow has passed, so a Health that exists is a
-	// Health still inside its window. A timestamp beside it would be a second
-	// mechanism for a job the windows already do.
 	Raw string
+	// ObservedAt records when this runtime observation was made. A zero value
+	// means the health came from declarative settings rather than a probe.
+	ObservedAt time.Time
 }
 
 // Usable reports whether the funnel keeps this provider.
 func (h Health) Usable() bool { return h.State != HealthDown }
+
+// Stale reports whether a runtime observation has exceeded its configured age.
+// Declarative health has no timestamp and is therefore never aged here.
+func (h Health) Stale(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 || h.ObservedAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Before(h.ObservedAt) || now.Sub(h.ObservedAt) >= maxAge
+}
 
 // ScopeGuarantee says how strongly an implementation keeps a call inside the
 // scope it was asked to search. Two different mechanisms can both end up

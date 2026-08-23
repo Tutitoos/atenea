@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -190,7 +191,10 @@ func (r Role) String() string {
 // New builds a core from settings. The role decides whether this process
 // performs the upkeep that must happen exactly once; see Role.
 func New(cfg config.Config, role Role) (*Core, error) {
-	catalog := registry.New()
+	catalog, err := registry.NewWithState(filepath.Join(platform.StateDir(), "registry-state.json"))
+	if err != nil {
+		return nil, err
+	}
 	for _, capability := range cfg.Capabilities {
 		if err := catalog.AddCapability(capability); err != nil {
 			return nil, err

@@ -5,7 +5,7 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the published v1.0.3 release. It separates what is
+This page is the acceptance record for the published v1.0.4 release. It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
 [`v1.0 policy`](v1-policy.md).
@@ -154,12 +154,12 @@ can be truncated by the upstream server; Atenea detects that case and retries
 with the official `kinds` filter, then merges and deduplicates the bounded
 responses. A real large-file overview returned 45 symbols successfully.
 
-## Latest 1.0.3 verification
+## Latest 1.0.4 verification
 
 On 2026-08-23 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate
 could run. `bash scripts/v1-readiness.sh` passed all nine stages, including
-`go test -race -count=1 ./...`, policy anchors and the `1.0.3`/`3.1.0` build
+`go test -race -count=1 ./...`, policy anchors and the `1.0.4`/`3.1.0` build
 identity. The release was subsequently published by the release workflow.
 
 The end-to-end test
@@ -171,16 +171,16 @@ the reviewer trace points to the work run.
 The existing public release was also checked with:
 
 ```sh
-bash scripts/release-smoke.sh 1.0.3
+bash scripts/release-smoke.sh 1.0.4
 ```
 
 Checksum verification, install, same-version update, rollback and uninstall
-passed on macOS arm64. This validates the public `1.0.3` release lifecycle;
+passed on macOS arm64. This validates the public `1.0.4` release lifecycle;
 the smoke test itself does not publish a release.
 
 The current phase was rechecked on 2026-08-23. `TMPDIR=/tmp go test ./...`,
 `TMPDIR=/tmp go test -race -count=1 ./...`, `go vet ./...`, `go build ./...`,
-the policy gate and the `1.0.3` release smoke passed. The timing margins in
+the policy gate and the `1.0.4` release smoke passed. The timing margins in
 the Claude/OpenCode fixtures now tolerate loaded machines and the race
 detector while remaining below the child-process lifetime.
 

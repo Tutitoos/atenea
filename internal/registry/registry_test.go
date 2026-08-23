@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -270,6 +271,62 @@ func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 	}
 	if err := reg.SetHealth("web", "ripgrep", contract.Health{Score: 2}); err == nil {
 		t.Error("out-of-range score should fail")
+	}
+}
+
+func TestRuntimeHealthAndIndexObservationsSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry-state.json")
+	first, err := registry.NewWithState(path)
+	if err != nil {
+		t.Fatalf("NewWithState: %v", err)
+	}
+	if err := first.AddCapability(codeSearch()); err != nil {
+		t.Fatalf("AddCapability: %v", err)
+	}
+	if err := first.AddImplementation(impl("ripgrep", "ripgrep")); err != nil {
+		t.Fatalf("AddImplementation: %v", err)
+	}
+	if err := first.AddRepository(contract.NewRepository("api", "/srv/api", nil,
+		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		t.Fatalf("AddRepository: %v", err)
+	}
+	if err := first.SetHealth("api", "ripgrep", contract.Health{
+		State: contract.HealthDown, Reason: "probe failed",
+	}); err != nil {
+		t.Fatalf("SetHealth: %v", err)
+	}
+	if err := first.SetIndexed("api", "ripgrep", true); err != nil {
+		t.Fatalf("SetIndexed: %v", err)
+	}
+
+	second, err := registry.NewWithState(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := second.AddCapability(codeSearch()); err != nil {
+		t.Fatalf("reopen AddCapability: %v", err)
+	}
+	if err := second.AddImplementation(impl("ripgrep", "ripgrep")); err != nil {
+		t.Fatalf("reopen AddImplementation: %v", err)
+	}
+	if err := second.AddRepository(contract.NewRepository("api", "/srv/api", nil,
+		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		t.Fatalf("reopen AddRepository: %v", err)
+	}
+	impls, err := second.ImplementationsFor("code.search")
+	if err != nil {
+		t.Fatalf("ImplementationsFor: %v", err)
+	}
+	observed := second.Observed("api", impls)
+	if observed[0].Health.State != contract.HealthDown || observed[0].Health.ObservedAt.IsZero() {
+		t.Fatalf("health after reopen = %+v, want persisted down observation", observed[0].Health)
+	}
+	repo, err := second.Repository("api")
+	if err != nil {
+		t.Fatalf("Repository: %v", err)
+	}
+	if !repo.IndexedBy("ripgrep") {
+		t.Fatal("indexed_by observation was not restored")
 	}
 }
 
