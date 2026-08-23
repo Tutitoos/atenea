@@ -200,6 +200,170 @@ func TestTheModelFlagNamesTheRolesOwnModel(t *testing.T) {
 	}
 }
 
+func TestExplicitModelFallbacksReachClaudeCode(t *testing.T) {
+	client, err := New(Options{
+		Explore: "claude-sonnet-5", Plan: "claude-opus-5",
+		ExploreFallbacks: []string{"claude-haiku-4-5"},
+		PlanFallbacks:    []string{"claude-sonnet-5"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, tc := range []struct {
+		role Role
+		want string
+	}{
+		{RoleExplore, "claude-haiku-4-5"},
+		{RolePlan, "claude-sonnet-5"},
+	} {
+		args, err := client.args(Request{Role: tc.role, Prompt: "x"})
+		if err != nil {
+			t.Fatalf("args(%s): %v", tc.role, err)
+		}
+		got, ok := flagValue(args, "--fallback-model")
+		if tc.role == RolePlan {
+			if ok {
+				t.Errorf("role %s unexpectedly carries lower-reasoning fallback %q", tc.role, got)
+			}
+			continue
+		}
+		if !ok || got != tc.want {
+			t.Errorf("role %s fallback = %q, ok=%v, want %q", tc.role, got, ok, tc.want)
+		}
+	}
+}
+
+func TestOpenCodePlanFiltersLowerReasoningFallbacks(t *testing.T) {
+	client, err := New(Options{
+		Backend:       BackendOpenCode,
+		Explore:       "anthropic/claude-sonnet-5",
+		Plan:          "anthropic/claude-opus-5",
+		PlanFallbacks: []string{"anthropic/claude-sonnet-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-luna"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := client.fallbacksFor(RolePlan)
+	if len(got) != 2 || got[0] != "openai/gpt-5.6-sol" || got[1] != "openai/gpt-5.6-luna" {
+		t.Fatalf("plan fallbacks = %v, want only high-reasoning OpenCode models", got)
+	}
+}
+
+func TestOpenCodePlanFallsBackThroughGPTSolToGPTLuna(t *testing.T) {
+	binary := executableModelStub(t, `
+model=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--model" ]; then model="$arg"; fi
+  previous="$arg"
+done
+if [ "$model" = "anthropic/claude-opus-5" ]; then
+  printf '%s\n' '{"type":"step_finish","sessionID":"ses-fallback","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":2},"cost":0.01}}'
+  printf '%s\n' '{"type":"error","error":{"name":"RateLimit","data":{"message":"rate limit"}}}'
+  exit 1
+fi
+if [ "$model" = "openai/gpt-5.6-sol" ]; then
+  printf '%s\n' '{"type":"step_finish","sessionID":"ses-fallback","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":2},"cost":0.02}}'
+  printf '%s\n' '{"type":"error","error":{"name":"RateLimit","data":{"message":"rate limit"}}}'
+  exit 1
+fi
+printf '%s\n' '{"type":"text","sessionID":"ses-fallback","part":{"id":"text-1","type":"text","text":"{\"plan\":\"fallback plan via luna\"}","time":{"end":2}}}'
+printf '%s\n' '{"type":"step_finish","sessionID":"ses-fallback","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":4},"cost":0.03}}'
+`)
+	client, err := New(Options{
+		Backend:       BackendOpenCode,
+		Binary:        binary,
+		Plan:          "anthropic/claude-opus-5",
+		PlanFallbacks: []string{"openai/gpt-5.6-sol", "openai/gpt-5.6-luna"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := client.Turn(context.Background(), Request{
+		Role:      RolePlan,
+		Prompt:    "write the plan",
+		BudgetUSD: 0.25,
+		Schema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{"plan": map[string]any{"type": "string"}},
+			"required":             []any{"plan"},
+			"additionalProperties": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if string(answer.Structured) != `{"plan":"fallback plan via luna"}` {
+		t.Fatalf("structured = %s", answer.Structured)
+	}
+	if len(answer.Notices) != 2 || !strings.Contains(answer.Notices[0], "openai/gpt-5.6-sol") ||
+		!strings.Contains(answer.Notices[1], "openai/gpt-5.6-luna") {
+		t.Fatalf("notices = %v, want Sol then Luna fallbacks", answer.Notices)
+	}
+	if answer.Spent.USD == nil || *answer.Spent.USD != 0.06 {
+		t.Fatalf("spent = %+v, want both model charges", answer.Spent)
+	}
+}
+
+func TestRetryCostUsesReportedDollarsBeforeTokenEstimate(t *testing.T) {
+	usd := 0.12
+	got, source := retryCost(contract.Charge{USD: &usd, PricedBy: "provider", InputTokens: 999_999})
+	if got != usd || source != "provider-reported cost" {
+		t.Fatalf("retryCost reported = %.4f/%q, want %.4f/provider-reported cost", got, source, usd)
+	}
+	got, source = retryCost(contract.Charge{InputTokens: 166_000})
+	if got != 1 || source != "conservative token estimate" {
+		t.Fatalf("retryCost estimated = %.4f/%q, want 1.00/conservative token estimate", got, source)
+	}
+}
+
+func TestTimeoutWithUnpricedUsageRetriesWithinConservativeRemainingBudget(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+model=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--model" ]; then model="$arg"; fi
+  previous="$arg"
+done
+printf '%s\n' "$model $*" >> "` + dir + `/calls"
+if [ "$model" = "primary" ]; then
+  printf '%s\n' '{"is_error":true,"subtype":"timeout","result":"timed out","usage":{"input_tokens":16600}}'
+  exit 1
+fi
+printf '%s\n' '{"is_error":false,"subtype":"success","result":"fallback answer","usage":{"input_tokens":10,"output_tokens":2}}'
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fallback stub: %v", err)
+	}
+	client, err := New(Options{Binary: binary, Explore: "primary", ExploreFallbacks: []string{"fallback"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := client.Turn(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Text != "fallback answer" || len(answer.Notices) != 1 {
+		t.Fatalf("answer = %+v, notices = %v", answer, answer.Notices)
+	}
+	if !strings.Contains(answer.Notices[0], "conservative token estimate") {
+		t.Fatalf("fallback notice = %q, want conservative budget provenance", answer.Notices[0])
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatalf("reading calls: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "primary ") || !strings.HasPrefix(lines[1], "fallback ") {
+		t.Fatalf("calls = %q, want primary then fallback", string(calls))
+	}
+	if !strings.Contains(lines[1], "--max-budget-usd 0.15") {
+		t.Fatalf("fallback call = %q, want only the conservative remaining budget", lines[1])
+	}
+}
+
 // A role built with no model name for it is discovered here, not at New: a
 // Client missing one role's model is only a problem for whichever Turn asks
 // for that role.

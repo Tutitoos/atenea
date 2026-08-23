@@ -27,6 +27,15 @@ func TestWeighReproducesTheFirstEventThatStartedThisRule(t *testing.T) {
 	}
 }
 
+func TestEstimatedUSDIsForConservativeRetryGating(t *testing.T) {
+	if got := allowance.EstimatedUSD(166_000, 0, 0, 0); got != 1 {
+		t.Fatalf("EstimatedUSD = %.6f, want 1.00", got)
+	}
+	if got := allowance.EstimatedUSD(0, 0, 0, 0); got != 0 {
+		t.Fatalf("EstimatedUSD for empty usage = %.6f, want 0", got)
+	}
+}
+
 // The measurement that split the two readings apart, 2026-08-15: two probes
 // of the same step against a loopback-recorded and then a live run showed
 // the prefix is written to cache once and read by every turn after it, at a

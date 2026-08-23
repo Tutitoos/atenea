@@ -435,6 +435,9 @@ func (e *Engine) checkFunding(ctx context.Context, id string, plan Plan) error {
 		// nobody measured a turn for, and inventing a floor for it would be
 		// the written-down constant this whole thing exists to avoid.
 		model := e.modelFor(step.TypeName)
+		if step.Route != nil && step.Route.Model != "" {
+			model = step.Route.Model
+		}
 		if model == "" {
 			continue
 		}
@@ -1419,6 +1422,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					ID:       traceID,
 					TypeName: step.TypeName,
 					Task:     step.Task,
+					Route:    step.Route,
 					Attempt:  attempts[step.ID],
 					RetryOf:  redoOf(traces[step.ID], attempts[step.ID]),
 					// The share the plan cut for this step, which Compile

@@ -19,16 +19,20 @@ import (
 // after the one that wrote it.
 type gateWire struct {
 	Steps []struct {
-		ID        string   `json:"id"`
-		Agent     string   `json:"agent"`
-		Objective string   `json:"objective"`
-		Files     []string `json:"files,omitempty"`
-		Criterion string   `json:"criterion,omitempty"`
-		Needs     []string `json:"needs,omitempty"`
-		Subject   string   `json:"subject,omitempty"`
-		On        string   `json:"on,omitempty"`
-		Effects   []string `json:"effects,omitempty"`
-		BudgetUSD float64  `json:"budget_usd"`
+		ID                string     `json:"id"`
+		Agent             string     `json:"agent"`
+		Objective         string     `json:"objective"`
+		Files             []string   `json:"files,omitempty"`
+		Criterion         string     `json:"criterion,omitempty"`
+		Needs             []string   `json:"needs,omitempty"`
+		Subject           string     `json:"subject,omitempty"`
+		On                string     `json:"on,omitempty"`
+		Effects           []string   `json:"effects,omitempty"`
+		Route             *routeWire `json:"route,omitempty"`
+		BudgetEstimateUSD float64    `json:"budget_estimate_usd,omitempty"`
+		BudgetMinimumUSD  float64    `json:"budget_minimum_usd,omitempty"`
+		BudgetSource      string     `json:"budget_source,omitempty"`
+		BudgetUSD         float64    `json:"budget_usd"`
 	} `json:"steps"`
 	Replaces []string `json:"replaces,omitempty"`
 }
@@ -41,21 +45,27 @@ func encodeProposal(p Proposal) (string, error) {
 			effects = append(effects, effect.String())
 		}
 		wire.Steps = append(wire.Steps, struct {
-			ID        string   `json:"id"`
-			Agent     string   `json:"agent"`
-			Objective string   `json:"objective"`
-			Files     []string `json:"files,omitempty"`
-			Criterion string   `json:"criterion,omitempty"`
-			Needs     []string `json:"needs,omitempty"`
-			Subject   string   `json:"subject,omitempty"`
-			On        string   `json:"on,omitempty"`
-			Effects   []string `json:"effects,omitempty"`
-			BudgetUSD float64  `json:"budget_usd"`
+			ID                string     `json:"id"`
+			Agent             string     `json:"agent"`
+			Objective         string     `json:"objective"`
+			Files             []string   `json:"files,omitempty"`
+			Criterion         string     `json:"criterion,omitempty"`
+			Needs             []string   `json:"needs,omitempty"`
+			Subject           string     `json:"subject,omitempty"`
+			On                string     `json:"on,omitempty"`
+			Effects           []string   `json:"effects,omitempty"`
+			Route             *routeWire `json:"route,omitempty"`
+			BudgetEstimateUSD float64    `json:"budget_estimate_usd,omitempty"`
+			BudgetMinimumUSD  float64    `json:"budget_minimum_usd,omitempty"`
+			BudgetSource      string     `json:"budget_source,omitempty"`
+			BudgetUSD         float64    `json:"budget_usd"`
 		}{
 			ID: step.ID, Agent: step.TypeName, Objective: step.Task.Objective,
 			Files: step.Task.Files, Criterion: step.Task.Criterion,
 			Needs: step.Needs, Subject: step.Subject, On: step.On.String(),
-			Effects: effects, BudgetUSD: step.Permission.BudgetUSD,
+			Effects: effects, Route: routeForGate(step.Route),
+			BudgetEstimateUSD: step.BudgetEstimateUSD, BudgetMinimumUSD: step.BudgetMinimumUSD,
+			BudgetSource: step.BudgetSource, BudgetUSD: step.Permission.BudgetUSD,
 		})
 	}
 	wire.Replaces = p.Replaces
@@ -98,7 +108,10 @@ func decodeProposal(raw string) (Proposal, error) {
 			Task:    contract.Task{Objective: s.Objective, Files: s.Files, Criterion: s.Criterion},
 			Needs:   s.Needs,
 			Subject: s.Subject, On: on,
-			Permission: contract.Permission{Effects: effects, BudgetUSD: s.BudgetUSD},
+			Permission:        contract.Permission{Effects: effects, BudgetUSD: s.BudgetUSD},
+			BudgetEstimateUSD: s.BudgetEstimateUSD, BudgetMinimumUSD: s.BudgetMinimumUSD,
+			BudgetSource: s.BudgetSource,
+			Route:        routeFromGate(s.Route),
 		})
 	}
 	return out, nil
@@ -405,12 +418,15 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO workflow_step
 			 (workflow_id, id, ordinal, type_name, pool, objective, files,
-			  criterion, needs, subject, on_outcome, effects, grant_usd, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  criterion, needs, subject, on_outcome, effects, route,
+			  budget_estimate_usd, budget_minimum_usd, budget_source, grant_usd, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			runID, step.ID, ordinal+i, step.TypeName, plan.Pools[step.ID].String(),
 			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion,
 			jsonList(step.Needs), step.Subject, step.On.String(),
 			jsonEffects(step.Permission.Effects),
+			jsonRoute(step.Route),
+			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource,
 			step.Permission.BudgetUSD, StatusPending.String()); err != nil {
 			return unavailable(err, "workflow: adding %s to %s", step.ID, runID)
 		}

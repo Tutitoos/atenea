@@ -32,6 +32,11 @@ const (
 	DefaultBinary = "opencode"
 	// DefaultTimeout is the fallback ceiling for one OpenCode turn.
 	DefaultTimeout = 5 * time.Minute
+	// maxOpenCodeToolSteps prevents a provider from spending the whole turn
+	// retrying unavailable capabilities. Once this many intermediate tool
+	// steps have finished, the runner resumes the same session with a
+	// tool-free finalization request and accepts the partial answer honestly.
+	maxOpenCodeToolSteps = 4
 )
 
 // Options configures the OpenCode executable.
@@ -121,7 +126,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if err != nil {
 		return Answer{}, err
 	}
-	argv := []string{"run", "--format", "json", "--pure"}
+	// Do not pass --pure. The current OpenCode server rejects pure mode for
+	// authenticated provider sessions, even when no MCP config is injected.
+	// Tool access remains isolated by the explicit MCP config below, and plan
+	// turns receive no config at all.
+	argv := []string{"run", "--format", "json"}
 	if req.Dir != "" {
 		argv = append(argv, "--dir", req.Dir)
 	}
@@ -167,10 +176,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 			_ = cmd.Wait()
 			return Answer{}, err
 		}
-		if stream.reached(req.ReadTokens) {
+		if stream.reached(req.ReadTokens) || stream.needsFinalization() {
 			// OpenCode has no stdin finalize protocol. Stop only after a
-			// completed step, retaining the text already emitted. This is an
-			// observed boundary, never an exact provider cap.
+			// completed step, retaining the session id so a second, tool-free
+			// turn can ask for the structured answer. This is an observed
+			// boundary, never an exact provider cap.
 			stream.stopped = true
 			_ = procgroup.Kill(cmd)
 			break
@@ -194,20 +204,34 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if waitErr != nil && !stream.stopped {
 		return Answer{Spent: stream.charge()}, failureFor(strings.TrimSpace(stderr.String()), waitErr)
 	}
+	charge := stream.charge()
+	text := strings.TrimSpace(stream.text.String())
+	passes := 1
+	toolCalls := append([]string(nil), stream.toolCalls...)
+	if !stream.finished && stream.stopped && stream.sessionID != "" {
+		finalStream, finalErr := r.finalize(turnCtx, req, stream.sessionID)
+		charge = charge.Plus(finalStream.charge())
+		if finalErr != nil {
+			return Answer{Spent: charge}, finalErr
+		}
+		stream = finalStream
+		text = strings.TrimSpace(stream.text.String())
+		toolCalls = append(toolCalls, stream.toolCalls...)
+		passes++
+	}
 	if !stream.finished {
 		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
 			"opencode ended without a step_finish event").WithRaw(strings.TrimSpace(stderr.String()))
 	}
-	text := strings.TrimSpace(stream.text.String())
 	if text == "" {
-		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
+		return Answer{Spent: charge}, contract.Fail(contract.FailureUnavailable,
 			"opencode completed a step without text output").WithRaw(strings.TrimSpace(stderr.String()))
 	}
-	answer := Answer{Text: text, Spent: stream.charge(), Passes: 1, ToolCalls: append([]string(nil), stream.toolCalls...)}
-	if req.BudgetUSD > 0 && stream.costSeen && stream.cost > req.BudgetUSD {
+	answer := Answer{Text: text, Spent: charge, Passes: passes, ToolCalls: toolCalls}
+	if req.BudgetUSD > 0 && charge.USD != nil && *charge.USD > req.BudgetUSD {
 		return answer, contract.Fail(contract.FailurePermissionDenied,
-			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", stream.cost, req.BudgetUSD).
-			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", stream.cost, req.BudgetUSD))
+			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", *charge.USD, req.BudgetUSD).
+			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", *charge.USD, req.BudgetUSD))
 	}
 	if len(req.Schema) > 0 {
 		structured, err := structuredObject(text, req.Schema)
@@ -219,30 +243,105 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	return answer, nil
 }
 
+// finalize resumes a session that spent its read allowance on intermediate
+// tool turns. OpenCode persists the session, so the final answer can be
+// requested without repeating the repository context or the work already
+// paid for. The prompt deliberately has no permission to call another tool.
+func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (eventStream, error) {
+	var stream eventStream
+	prompt, err := finalizationPrompt(req.Schema)
+	if err != nil {
+		return stream, err
+	}
+	argv := []string{"run", "--format", "json", "--session", sessionID}
+	// Finalization is deliberately tool-free by prompt. Do not re-inject MCP
+	// config: the persisted session already has its context and the model must
+	// close from the evidence it collected.
+	if req.Dir != "" {
+		argv = append(argv, "--dir", req.Dir)
+	}
+	argv = append(argv, prompt)
+
+	binary, err := exec.LookPath(r.binary)
+	if err != nil {
+		return stream, contract.Fail(contract.FailureUnavailable,
+			"opencode is not installed: %q is not on PATH", r.binary)
+	}
+	cmd := exec.CommandContext(ctx, binary, argv...)
+	cmd.Dir = req.Dir
+	procgroup.Contain(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return stream, contract.Fail(contract.FailureUnavailable, "opencode stdout: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return stream, failureFor(strings.TrimSpace(stderr.String()), err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		if err := stream.accept(scanner.Bytes()); err != nil {
+			_ = procgroup.Kill(cmd)
+			_ = cmd.Wait()
+			return stream, err
+		}
+	}
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		_ = procgroup.Kill(cmd)
+	}
+	waitErr := cmd.Wait()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return stream, contract.Stopped(ctxErr, "opencode", r.timeout).WithRaw(strings.TrimSpace(stderr.String()))
+	}
+	if scanErr != nil {
+		return stream, contract.Fail(contract.FailureUnavailable,
+			"opencode event stream could not be read: %v", scanErr).WithRaw(strings.TrimSpace(stderr.String()))
+	}
+	if stream.errText != "" {
+		return stream, failureFor(stream.errText, waitErr)
+	}
+	if waitErr != nil {
+		return stream, failureFor(strings.TrimSpace(stderr.String()), waitErr)
+	}
+	if !stream.finished {
+		return stream, contract.Fail(contract.FailureUnavailable,
+			"opencode finalization ended without a step_finish event").WithRaw(strings.TrimSpace(stderr.String()))
+	}
+	return stream, nil
+}
+
 type eventStream struct {
-	text      strings.Builder
-	textIDs   map[string]struct{}
-	finished  bool
-	stopped   bool
-	errText   string
-	usage     contract.Charge
-	cost      float64
-	costSeen  bool
-	toolCalls []string
+	text         strings.Builder
+	textIDs      map[string]struct{}
+	finished     bool
+	stopped      bool
+	sessionID    string
+	stepFinishes int
+	errText      string
+	usage        contract.Charge
+	cost         float64
+	costSeen     bool
+	toolCalls    []string
 }
 
 type event struct {
 	Type       string          `json:"type"`
+	SessionID  string          `json:"sessionID"`
 	Part       json.RawMessage `json:"part"`
 	Error      json.RawMessage `json:"error"`
 	Properties json.RawMessage `json:"properties"`
 }
 
 type part struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Text string `json:"text"`
-	Time struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Text   string `json:"text"`
+	Reason string `json:"reason"`
+	Time   struct {
 		End *int64 `json:"end"`
 	} `json:"time"`
 	Tokens *struct {
@@ -262,6 +361,9 @@ func (s *eventStream) accept(raw []byte) error {
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return contract.Fail(contract.FailureUnavailable,
 			"opencode emitted invalid JSON event: %v", err).WithRaw(string(raw))
+	}
+	if ev.SessionID != "" {
+		s.sessionID = ev.SessionID
 	}
 	switch ev.Type {
 	case "text":
@@ -290,7 +392,14 @@ func (s *eventStream) accept(raw []byte) error {
 		if err != nil {
 			return err
 		}
-		s.finished = true
+		// OpenCode emits step_finish for tool-call turns as well as for the
+		// final answer. Only `stop` (or an older event without reason) closes
+		// the turn; treating an intermediate tool step as terminal can cut
+		// the model off before it emits the structured answer.
+		if p.Reason == "" || p.Reason == "stop" {
+			s.finished = true
+		}
+		s.stepFinishes++
 		if p.Tokens != nil {
 			s.usage.InputTokens += p.Tokens.Input
 			s.usage.OutputTokens += p.Tokens.Output
@@ -323,6 +432,13 @@ func (s eventStream) reached(limit int) bool {
 	) >= limit
 }
 
+func (s eventStream) needsFinalization() bool {
+	if s.finished || s.sessionID == "" || s.stepFinishes == 0 {
+		return false
+	}
+	return s.stepFinishes >= maxOpenCodeToolSteps
+}
+
 func (s eventStream) charge() contract.Charge {
 	out := s.usage
 	if s.costSeen {
@@ -344,6 +460,13 @@ func promptWithSchema(prompt string, schema map[string]any) (string, error) {
 	return prompt + "\n\nReturn only one JSON object matching this JSON Schema. Do not use Markdown fences or explanatory text.\nJSON Schema:\n" + string(raw), nil
 }
 
+func finalizationPrompt(schema map[string]any) (string, error) {
+	return promptWithSchema(
+		"Stop using tools now. Use only the evidence already collected. Return the best answer you can now; set completeness below 1 and explain stopped_at when the evidence is partial.",
+		schema,
+	)
+}
+
 func structuredObject(text string, schema map[string]any) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "```") {
@@ -357,6 +480,9 @@ func structuredObject(text string, schema map[string]any) (json.RawMessage, erro
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
+		if recovered, ok := recoverStructuredObject(trimmed, schema); ok {
+			return recovered, nil
+		}
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"opencode answered with invalid structured JSON: %v", err).WithRaw(text)
 	}
@@ -377,6 +503,29 @@ func structuredObject(text string, schema map[string]any) (json.RawMessage, erro
 			"opencode structured answer violates its schema: %v", err).WithRaw(text)
 	}
 	return json.RawMessage(trimmed), nil
+}
+
+func recoverStructuredObject(text string, schema map[string]any) (json.RawMessage, bool) {
+	for offset := strings.IndexByte(text, '{'); offset >= 0; {
+		candidate := text[offset:]
+		decoder := json.NewDecoder(strings.NewReader(candidate))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err == nil {
+			end := int(decoder.InputOffset())
+			if object, ok := value.(map[string]any); ok && strings.TrimSpace(candidate[end:]) == "" {
+				if validateSchemaValue(object, schema, "$") == nil {
+					return json.RawMessage(candidate[:end]), true
+				}
+			}
+		}
+		next := strings.IndexByte(candidate[1:], '{')
+		if next < 0 {
+			break
+		}
+		offset += next + 1
+	}
+	return nil, false
 }
 
 // validateSchemaValue covers the JSON Schema subset Atenea's planner emits:

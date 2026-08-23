@@ -40,7 +40,7 @@ max_parallel = 4
 # nothing stopping it is a runaway. A grant that reaches zero WHILE running is
 # a different thing and perfectly ordinary -- from there on the paid providers
 # refuse and whoever charges nothing keeps working.
-budget_usd = 0.25
+budget_usd = 0.90
 
 # Granted, standing, to every commission and question this core dispatches --
 # on top of the read that is always free. Shipped ON, not off: code.search's
@@ -326,17 +326,21 @@ runners = ["omp"]
 binary = "claude"
 # timeout caps one turn, the same measured ceiling as
 # orchestrator.claudecode.timeout: it is the same CLI, on the same machine.
-timeout = "90s"
+timeout = "180s"
 # explore and plan name the model for each role, and both are deliberately
 # left unset. A fresh install spending real money on its first dispatch
 # would be exactly the bad surprise orchestrator.claudecode ships off for;
 # a role with no model configured is refused at dispatch rather than
 # defaulted to whichever model looks cheapest today, because there is no
 # cost data yet to choose one by. Fill these in with a model name or alias
-# your CLI resolves ("sonnet", "opus", or a full name) to turn either agent
-# on.
+# your CLI resolves ("sonnet", "opus", a full name, or "auto") to turn either
+# agent on. Auto uses safe Claude candidates and pins plan to Opus 5.
 explore = ""
 plan = ""
+# Optional provider-side fallbacks. They are only used when explicitly
+# declared; Atenea never infers a more expensive replacement.
+explore_fallbacks = []
+plan_fallbacks = []
 
 [workflow]
 # How a graph of agent steps is scheduled. One ceiling per lane, and a lane is

@@ -325,14 +325,19 @@ type Model struct {
 	// nature; see ClaudeCodeAdapter.Timeout for the same reasoning.
 	Timeout time.Duration
 	// Explore is the model name for the agent that explores a repository:
-	// an alias the CLI resolves itself ("sonnet", "opus") or a full name.
+	// an alias the CLI resolves itself ("sonnet", "opus"), a full name, or
+	// "auto" to let the decision router choose from its safe candidates.
 	// Empty means the role has no model configured, so a dispatch to it is
 	// refused rather than silently spending against a hardcoded default --
 	// the same reason ClaudeCodeAdapter ships out of Runners.
 	Explore string
-	// Plan is the model name for the agent that turns a discovery graph
-	// into a plan.
+	// Plan is the model name for the agent that turns a discovery graph into a
+	// plan, or "auto" to select the pinned high-reasoning plan model.
 	Plan string
+	// ExploreFallbacks and PlanFallbacks are explicit provider-side fallbacks.
+	// They are never inferred and travel with the selected route.
+	ExploreFallbacks []string
+	PlanFallbacks    []string
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -803,11 +808,13 @@ type file struct {
 
 // fileModel is [model] as written.
 type fileModel struct {
-	Backend string `toml:"backend"`
-	Binary  string `toml:"binary"`
-	Timeout string `toml:"timeout"`
-	Explore string `toml:"explore"`
-	Plan    string `toml:"plan"`
+	Backend          string   `toml:"backend"`
+	Binary           string   `toml:"binary"`
+	Timeout          string   `toml:"timeout"`
+	Explore          string   `toml:"explore"`
+	Plan             string   `toml:"plan"`
+	ExploreFallbacks []string `toml:"explore_fallbacks"`
+	PlanFallbacks    []string `toml:"plan_fallbacks"`
 }
 
 type fileCore struct {
@@ -1444,7 +1451,7 @@ const (
 	// answers a flat text search, and a search that needs more than this has
 	// gone wrong. It used to be the ceiling on ONE invocation, which is why a
 	// four-step run could quietly draw four times it.
-	defaultBudgetUSD = 0.25
+	defaultBudgetUSD = 0.90
 )
 
 // defaultServedImplementations is what a runner answers for unless the
@@ -2215,7 +2222,7 @@ func (c fileCore) build(source string) (Core, error) {
 // imports internal/config) -- so the two constants are kept in sync by hand.
 const (
 	defaultModelBinary  = "claude"
-	defaultModelTimeout = 90 * time.Second
+	defaultModelTimeout = 180 * time.Second
 	defaultModelBackend = "claude"
 )
 
@@ -2248,6 +2255,38 @@ func (m fileModel) build(source string) (Model, error) {
 	// than defaulted here to some model that costs money by surprise.
 	out.Explore = strings.TrimSpace(m.Explore)
 	out.Plan = strings.TrimSpace(m.Plan)
+	exploreFallbacks, err := modelFallbacks(source, "explore", out.Explore, m.ExploreFallbacks)
+	if err != nil {
+		return Model{}, err
+	}
+	out.ExploreFallbacks = exploreFallbacks
+	out.PlanFallbacks, err = modelFallbacks(source, "plan", out.Plan, m.PlanFallbacks)
+	if err != nil {
+		return Model{}, err
+	}
+	return out, nil
+}
+
+func modelFallbacks(source, role, primary string, raw []string) ([]string, error) {
+	out := make([]string, 0, len(raw))
+	seen := map[string]bool{}
+	for _, value := range raw {
+		name := strings.TrimSpace(value)
+		if name == "" {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.%s_fallbacks contains an empty model", source, role)
+		}
+		if name == primary {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.%s_fallbacks repeats the primary model %q", source, role, name)
+		}
+		if seen[name] {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.%s_fallbacks repeats %q", source, role, name)
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
 	return out, nil
 }
 

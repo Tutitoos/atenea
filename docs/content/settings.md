@@ -131,7 +131,7 @@ instead, because no edit to the file can fix that one.
 ```toml
 [orchestrator]
 max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
-budget_usd = 0.25           # what ONE COMMISSION may spend, across every step
+budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
   runners = ["omp"]           # any of omp, claudecode, codex, serena, kivgraph, tokensave, local; [] dispatches nowhere
@@ -436,9 +436,11 @@ from one repository never refuses work on another.
 [model]
 backend = "claude"  # protocol: claude or opencode; omitted keeps claude
 binary = "claude"    # the CLI that answers a turn; a bare name is looked up on PATH
-timeout = "90s"      # per turn, the same ceiling orchestrator.claudecode uses
-explore = ""         # model for the agent that explores a repository
-plan = ""            # model for the agent that turns a discovery graph into a plan
+timeout = "180s"     # per turn; long enough for repository explore and plan turns
+explore = ""         # model, or "auto", for repository exploration
+plan = ""            # model, or "auto", for the high-reasoning plan role
+explore_fallbacks = [] # explicit Claude fallbacks, in declaration order
+plan_fallbacks = []    # ignored by Claude: plan is pinned to claude-opus-5
 ```
 
 This is the seam the two model-backed built-in agents, `explore` and `plan`,
@@ -447,7 +449,12 @@ in the catalog dispatches to it, and `[orchestrator]`'s adapters are a
 different kind of far side entirely — theirs answer a search, this one
 thinks.
 
-`explore` and `plan` name the model for each role, and both ship empty. A
+`explore` and `plan` name the model for each role, and both ship empty. They
+also accept `auto`: Claude exploration considers `claude-sonnet-5` and
+`claude-haiku-4-5`, while Claude planning is pinned to `claude-opus-5`.
+With OpenCode, plan auto uses `anthropic/claude-opus-5` first and permits the
+observed high-reasoning fallbacks `openai/gpt-5.6-sol` and
+`openai/gpt-5.6-luna`. A
 fresh install spending real money the first time either agent is dispatched
 would be exactly the surprise `orchestrator.claudecode` ships off the runner
 list to avoid, so a role with no model configured is refused at dispatch
@@ -455,7 +462,7 @@ rather than defaulted to whichever model looks cheapest today — there is no
 cost data yet to choose one by, and a knob nobody can tune correctly is
 worse than a fixed default that is visible in this file and changed by hand
 once it is wrong. Fill in a model name or an alias your CLI resolves on its
-own (`sonnet`, `opus`, or a full name) to turn either agent on.
+own (`sonnet`, `opus`, a full name, or `auto`) to turn either agent on.
 
 Both roles read from the same `backend`, `binary` and `timeout`: one protocol,
 one CLI and one ceiling, whichever role is asking. `timeout` matches
@@ -463,14 +470,30 @@ one CLI and one ceiling, whichever role is asking. `timeout` matches
 is the same client, on the same machine, so the same measured ceiling
 applies.
 
+Fallback lists are opt-in and are passed to the selected backend as its
+provider-side
+fallback chain. In `auto` mode, the safe candidates are explicit in the
+router; OpenCode requires declared candidates because Atenea cannot invent
+provider/model identifiers. Atenea never silently downgrades the `plan` role:
+Claude planning remains pinned to Opus 5. The adaptive ranker only compares
+names already in the candidate set, requires three successful workflow
+samples, and requires a 15% median-cost saving. The decision trace records the
+primary, the declared fallbacks and whether history changed the choice. Raw MCP tools remain
+explicit-only because they have no semantic capability contract to rank.
+Timeout/unavailable retries are budget-gated: reported dollars are preferred,
+and unpriced token usage is bounded conservatively without being presented as
+a provider invoice.
+
 The default backend is Claude Code. To opt into the isolated OpenCode event
 protocol, set `backend = "opencode"` and use a provider/model identifier such
-as `anthropic/claude-sonnet-4-5`. OpenCode receives an explicit `--format json`
+as `anthropic/claude-sonnet-5`. OpenCode receives an explicit `--format json`
 run, never `--auto`; Atenea requires a completed `step_finish` event and fails
-closed when OpenCode exits before producing one. OpenCode has no equivalent of
-Claude Code's `--json-schema` or `--max-budget-usd`: structured answers are
-requested in the prompt, and the reported cost is observational. The Claude
-cache floor probes do not apply to OpenCode.
+closed when OpenCode exits before producing one. Tool-enabled turns stop after
+four intermediate tool steps and resume the persisted session with a final,
+tool-free answer request. OpenCode has no equivalent of Claude Code's
+`--json-schema` or `--max-budget-usd`: structured answers are requested in the
+prompt, and the reported cost is observational. The Claude cache floor probes
+do not apply to OpenCode.
 
 The real-provider smoke test is deliberately opt-in because it can consume a
 provider allowance. From a clean checkout, set the exact provider/model and
@@ -482,10 +505,11 @@ ATENEA_OPENCODE_MODEL=provider/model-id \
 bash scripts/opencode-smoke.sh
 ```
 
-The smoke uses `--format json`, `--pure`, no Atenea MCP tools and no
-`--auto`; it checks a real completed event stream and the structured answer
-against the requested schema. Ordinary unit, race and CI suites use fake
-CLIs and never incur provider cost.
+The smoke uses `--format json`, no Atenea MCP tools and no `--auto`; it checks a
+real completed event stream and the structured answer against the requested
+schema. It intentionally does not use `--pure`, which the current authenticated
+OpenCode server rejects. Ordinary unit, race and CI suites use fake CLIs and
+never incur provider cost.
 
 `orchestrator.claudecode.source` and `terminal_binary` keep Claude Code as a
 headless runner while Claude.app remains an MCP client. Do not configure the

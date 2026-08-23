@@ -395,14 +395,19 @@ func printRun(out io.Writer, run workflow.Run) {
 	fmt.Fprintf(out, "%s\n", run.Budget())
 	fmt.Fprintln(out)
 
-	fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %s\n",
-		"STEP", "AGENT", "LANE", "STATE", "COST", "DETAIL")
+	fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %-12s %s\n",
+		"STEP", "AGENT", "LANE", "STATE", "FORECAST", "COST", "DETAIL")
 	for _, step := range run.Steps {
-		fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %s\n",
+		forecast := "-"
+		if step.Step.BudgetEstimateUSD > 0 {
+			forecast = fmt.Sprintf("~$%.2f", step.Step.BudgetEstimateUSD)
+		}
+		fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %-12s %s\n",
 			truncate(step.Step.ID, 16),
 			truncate(step.Step.TypeName, 14),
 			step.Pool,
 			run.State(step),
+			forecast,
 			stepCost(run, step),
 			stepDetail(run, step))
 	}

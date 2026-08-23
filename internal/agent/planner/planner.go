@@ -68,6 +68,7 @@ type assignment struct {
 	// $10.00, because $0.90 was the plan step's own share.
 	CommissionUSD *float64                   `json:"commission_usd"`
 	Context       map[string]json.RawMessage `json:"context"`
+	Route         *route                     `json:"route"`
 	// Subject is the exploration this plan is built from. Rejected is this
 	// planner's own last graph, refused by the compile reviewer: two cards,
 	// because a second attempt needs the finding AND the complaint.
@@ -79,6 +80,16 @@ type task struct {
 	Objective string   `json:"objective"`
 	Files     []string `json:"files"`
 	Criterion string   `json:"criterion"`
+}
+
+type route struct {
+	Model        string            `json:"model"`
+	Fallbacks    []string          `json:"fallbacks"`
+	Backend      string            `json:"backend"`
+	Binary       string            `json:"binary"`
+	Capabilities []string          `json:"capabilities"`
+	Providers    map[string]string `json:"providers"`
+	Tools        []string          `json:"tools"`
 }
 
 type subject struct {
@@ -232,6 +243,23 @@ func run(ctx context.Context, stdin io.Reader, stdout io.Writer, do turn) error 
 					"to an agent type that spends nothing.",
 			},
 		})
+	}
+	if in.Route != nil {
+		if in.Route.Backend != "" {
+			cfg.Model.Backend = in.Route.Backend
+		}
+		if in.Route.Binary != "" {
+			cfg.Model.Binary = in.Route.Binary
+		}
+		if in.Route.Model != "" {
+			if in.Type == "plan" {
+				cfg.Model.Plan = in.Route.Model
+				cfg.Model.PlanFallbacks = append([]string(nil), in.Route.Fallbacks...)
+			} else {
+				cfg.Model.Explore = in.Route.Model
+				cfg.Model.ExploreFallbacks = append([]string(nil), in.Route.Fallbacks...)
+			}
+		}
 	}
 	// The settings struct is config's own and carries the same fields in the
 	// same order on purpose: internal/config cannot import this package's
@@ -427,7 +455,8 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 			SummaryField:  out.Summary,
 			FindingsField: out.Findings,
 		},
-		Spent: spent(answer.Spent),
+		Spent:   spent(answer.Spent),
+		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
 	// What was learned outlives the commission. A note is a sentence, not a
@@ -488,6 +517,7 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		Verdict: "ok",
 		Result:  map[string]any{PlanField: out.Plan},
 		Spent:   spent(answer.Spent),
+		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
 	return got

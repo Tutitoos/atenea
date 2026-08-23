@@ -183,6 +183,28 @@ func TestRunEnforcesTheRequestedStructuredSchema(t *testing.T) {
 	}
 }
 
+func TestRunRecoversAValidJSONObjectAfterLeadingNarration(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"I inspected the repository. {\"summary\":\"done\"}","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish"}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{
+		Prompt: "answer", Schema: map[string]any{"type": "object", "required": []any{"summary"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if string(answer.Structured) != `{"summary":"done"}` {
+		t.Fatalf("structured = %s", answer.Structured)
+	}
+}
+
 func TestRunRefusesTrailingStructuredJSON(t *testing.T) {
 	binary := executable(t, `
 cat <<'JSON'
@@ -350,13 +372,44 @@ JSON
 		t.Fatalf("read args: %v", err)
 	}
 	got := string(args)
-	for _, want := range []string{"run\n", "--format\njson\n", "--pure\n", "--model\nprovider/model\n"} {
+	for _, want := range []string{"run\n", "--format\njson\n", "--model\nprovider/model\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("arguments %q missing %q", got, want)
 		}
 	}
+	if strings.Contains(got, "--pure\n") {
+		t.Fatalf("--pure must not be passed to authenticated OpenCode sessions: %q", got)
+	}
 	if strings.Contains(got, "--auto") {
 		t.Fatalf("unsafe auto-approval appeared in arguments: %q", got)
+	}
+}
+
+func TestRunOmitsPureWhenInjectingMCPConfig(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("ATENEA_OPENCODE_TEST_ARGS", argsFile)
+	binary := executable(t, `
+printf '%s\n' "$@" > "$ATENEA_OPENCODE_TEST_ARGS"
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish"}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(context.Background(), Request{
+		Model: "provider/model", Prompt: "answer", Tools: `{"mcpServers":{}}`,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args: %v", err)
+	}
+	if strings.Contains(string(args), "--pure\n") {
+		t.Fatalf("--pure must be omitted when MCP config is injected: %q", args)
 	}
 }
 
@@ -385,6 +438,69 @@ sleep 30
 	// proving the observed allowance stops the process well before that hold.
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
 		t.Fatalf("observed stop took %s", elapsed)
+	}
+}
+
+func TestRunDoesNotStopAtAnIntermediateToolStep(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"I am reading.","time":{"end":2}}}
+{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":100,"output":10}}}
+{"type":"text","part":{"id":"text-2","type":"text","text":"{\"summary\":\"done\"}","time":{"end":3}}}
+{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":5}}}
+JSON
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{
+		Prompt: "answer", ReadTokens: 1,
+		Schema: map[string]any{"type": "object", "required": []any{"summary"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if string(answer.Structured) != `{"summary":"done"}` {
+		t.Fatalf("structured = %s", answer.Structured)
+	}
+}
+
+func TestRunFinalizesAStuckToolSession(t *testing.T) {
+	binary := executable(t, `
+resume=0
+for arg in "$@"; do
+  if [ "$arg" = "--session" ]; then resume=1; fi
+done
+if [ "$resume" -eq 1 ]; then
+cat <<'JSON'
+{"type":"text","sessionID":"ses-finalize","part":{"id":"text-final","type":"text","text":"{\"summary\":\"partial evidence\"}","time":{"end":2}}}
+{"type":"step_finish","sessionID":"ses-finalize","part":{"type":"step-finish","reason":"stop","tokens":{"input":20,"output":8}}}
+JSON
+else
+cat <<'JSON'
+{"type":"step_finish","sessionID":"ses-finalize","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":20,"output":8}}}
+{"type":"step_finish","sessionID":"ses-finalize","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":20,"output":8}}}
+{"type":"step_finish","sessionID":"ses-finalize","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":20,"output":8}}}
+{"type":"step_finish","sessionID":"ses-finalize","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":20,"output":8}}}
+JSON
+fi
+`)
+	runner, err := New(Options{Binary: binary, Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{
+		Prompt: "answer", Schema: map[string]any{"type": "object", "required": []any{"summary"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if string(answer.Structured) != `{"summary":"partial evidence"}` {
+		t.Fatalf("structured = %s", answer.Structured)
+	}
+	if answer.Passes != 2 {
+		t.Fatalf("passes = %d, want initial plus finalization", answer.Passes)
 	}
 }
 

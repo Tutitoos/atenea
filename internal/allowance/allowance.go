@@ -101,6 +101,18 @@ func Weigh(input, output, cacheRead, cacheWrite int) int {
 	return input + cacheWrite*2 + cacheRead/10 + output*5
 }
 
+// EstimatedUSD converts a usage reading into a conservative budget estimate.
+// It is only for deciding whether a retry can fit after an unpriced failure;
+// it must never be written as a provider receipt. The rate is deliberately the
+// pessimistic measured rate used by Tokens and the admission rules.
+func EstimatedUSD(input, output, cacheRead, cacheWrite int) float64 {
+	weighted := Weigh(input, output, cacheRead, cacheWrite)
+	if weighted <= 0 {
+		return 0
+	}
+	return float64(weighted) / tokensPerUSD
+}
+
 // WarmDiscount converts a cold-equivalent price into the warm one: the same
 // tokens read out of the provider's cache instead of written into it, x0.1
 // against x2 by Weigh's own ratios, so a twentieth.

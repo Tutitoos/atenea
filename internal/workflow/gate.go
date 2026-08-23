@@ -154,9 +154,10 @@ func (p Proposal) Digest() string {
 	// tie the digest to Go's field order, and reordering a declaration is
 	// exactly the kind of edit nobody expects to invalidate an approval.
 	for _, step := range p.Steps {
-		fmt.Fprintf(&b, "step\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.6f\x00",
+		fmt.Fprintf(&b, "step\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.6f\x00%.6f\x00%.6f\x00%s\x00",
 			step.ID, step.TypeName, step.Task.Objective, step.Task.Criterion,
-			step.Subject, step.On, step.Permission.BudgetUSD)
+			step.Subject, step.On, step.Permission.BudgetUSD,
+			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource)
 		for _, file := range step.Task.Files {
 			fmt.Fprintf(&b, "file\x00%s\x00", file)
 		}
@@ -165,6 +166,9 @@ func (p Proposal) Digest() string {
 		}
 		for _, effect := range step.Permission.Effects {
 			fmt.Fprintf(&b, "effect\x00%s\x00", effect)
+		}
+		if step.Route != nil {
+			fmt.Fprintf(&b, "route\x00%s\x00", jsonRoute(step.Route))
 		}
 	}
 	// Sorted, because which order a caller listed the replaced steps in is

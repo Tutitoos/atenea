@@ -51,6 +51,7 @@ type assignmentWire struct {
 	// the agent can be told rather than having to know. A model agent needs
 	// it in the prompt; a scripted one can ignore it.
 	ResultSchema map[string]any `json:"result_schema"`
+	Route        *routeWire     `json:"route,omitempty"`
 	// Subject is the run this agent was asked to judge, absent on ordinary
 	// work. A reviewer reads its whole case from here: what was asked, what
 	// came back, and which attempt it was.
@@ -58,6 +59,16 @@ type assignmentWire struct {
 	// Rejected is this agent's own refused attempt, present only on a
 	// relaunch. Same shape as subject: a whole report somebody else read.
 	Rejected *subjectWire `json:"rejected,omitempty"`
+}
+
+type routeWire struct {
+	Model        string            `json:"model,omitempty"`
+	Fallbacks    []string          `json:"fallbacks,omitempty"`
+	Backend      string            `json:"backend,omitempty"`
+	Binary       string            `json:"binary,omitempty"`
+	Capabilities []string          `json:"capabilities,omitempty"`
+	Providers    map[string]string `json:"providers,omitempty"`
+	Tools        []string          `json:"tools,omitempty"`
 }
 
 type taskWire struct {
@@ -151,6 +162,11 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 		},
 		Context:      ctxPayload,
 		ResultSchema: schema,
+	}
+	if a.Route != nil {
+		route := a.Route.Clone()
+		out.Route = &routeWire{Model: route.Model, Fallbacks: route.Fallbacks, Backend: route.Backend, Binary: route.Binary,
+			Capabilities: route.Capabilities, Providers: route.Providers, Tools: route.Tools}
 	}
 	if a.BudgetUSD != nil {
 		budget := *a.BudgetUSD

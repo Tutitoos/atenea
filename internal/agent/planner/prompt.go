@@ -3,6 +3,7 @@ package planner
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Tutitoos/atenea/internal/config"
@@ -52,6 +53,27 @@ dispatch an explorer for that one question.
 The commission:
 `)
 	b.WriteString("  " + in.Task.Objective + "\n")
+	if in.Route != nil {
+		b.WriteString("\nThe execution route has already been decided by Atenea; do not substitute another model or tool surface.\n")
+		if in.Route.Model != "" {
+			b.WriteString("  model: " + in.Route.Model + " (" + in.Route.Backend + ")\n")
+		}
+		if len(in.Route.Capabilities) > 0 {
+			b.WriteString("  capabilities: " + strings.Join(in.Route.Capabilities, ", ") + "\n")
+		}
+		if len(in.Route.Providers) > 0 {
+			providers := make([]string, 0, len(in.Route.Providers))
+			for capability, provider := range in.Route.Providers {
+				providers = append(providers, capability+"="+provider)
+			}
+			sort.Strings(providers)
+			b.WriteString("  providers: " + strings.Join(providers, ", ") + "\n")
+			b.WriteString("  When calling a capability, pass its selected implementation in the optional `_atenea_prefer` argument. Do not use a different provider.\n")
+		}
+		if len(in.Route.Tools) > 0 {
+			b.WriteString("  tools: " + strings.Join(in.Route.Tools, ", ") + "\n")
+		}
+	}
 	if in.Task.Criterion != "" {
 		b.WriteString("  It will be judged on: " + in.Task.Criterion + "\n")
 	}
