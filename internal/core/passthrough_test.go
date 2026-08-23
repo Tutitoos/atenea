@@ -25,6 +25,61 @@ type fakeBackend struct {
 	extraTools []string
 }
 
+// perChatBackend keeps independent MCP sessions so the integration test can
+// observe whether two Atenea conversations were accidentally collapsed into
+// one upstream connection.
+type perChatBackend struct {
+	mu       sync.Mutex
+	next     int
+	sessions map[string]bool
+}
+
+func (b *perChatBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var msg struct {
+		ID     *int   `json:"id"`
+		Method string `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&msg)
+	if msg.ID == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if msg.Method == "initialize" {
+		b.mu.Lock()
+		b.next++
+		session := fmt.Sprintf("chat-%d", b.next)
+		if b.sessions == nil {
+			b.sessions = make(map[string]bool)
+		}
+		b.sessions[session] = true
+		b.mu.Unlock()
+		w.Header().Set("Mcp-Session-Id", session)
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{}}`, *msg.ID)
+		return
+	}
+	session := r.Header.Get("Mcp-Session-Id")
+	b.mu.Lock()
+	valid := b.sessions[session]
+	b.mu.Unlock()
+	if !valid {
+		http.Error(w, "unknown MCP session", http.StatusNotFound)
+		return
+	}
+	var result string
+	switch msg.Method {
+	case "tools/list":
+		result = `{"tools":[{"name":"inspect","description":"inspect","inputSchema":{"type":"object"}}]}`
+	case "tools/call":
+		result = fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"isError":false}`, session)
+	default:
+		result = `{}`
+	}
+	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, *msg.ID, result)
+}
+
 func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var msg struct {
 		ID     *int `json:"id"`
@@ -172,6 +227,59 @@ func TestABackendsToolsAreOfferedUnderTheReservedPrefix(t *testing.T) {
 	if _, ok := raw["outputSchema"]; ok {
 		t.Errorf("a raw tool was given an output schema it never declared: %v", raw)
 	}
+}
+
+func TestPerChatRawBackendHasOneIsolatedUpstreamSessionPerConnection(t *testing.T) {
+	fake := &perChatBackend{}
+	backend := httptest.NewServer(fake)
+	defer backend.Close()
+	settings := strings.Replace(rawSettings(t, backend.URL),
+		"expose = \"raw\"\n", "expose = \"raw\"\ninstance = \"per_chat\"\n", 1)
+	settings = strings.Replace(settings, "tools = [\"semgrep_scan\", \"semgrep_fix\"]", "tools = [\"inspect\"]", 1)
+	settings = strings.Replace(settings, "\n  [[mcp_server.tool]]\n  name = \"semgrep_fix\"\n  effects = [\"read\", \"write\"]\n", "\n", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	first := dial(t)
+	first.handshake("first")
+	second := dial(t)
+	second.handshake("second")
+	// Listing is the first operation that needs the upstream backend. Each
+	// connection must perform its own handshake, but repeated operations on
+	// the same connection must reuse it.
+	result(t, first.call("tools/list", nil), "first tools/list")
+	result(t, first.call("tools/list", nil), "first tools/list again")
+	result(t, second.call("tools/list", nil), "second tools/list")
+
+	firstCall := result(t, first.call("tools/call", map[string]any{
+		"name": "raw.semgrep.inspect", "arguments": map[string]any{},
+	}), "first raw call")
+	secondCall := result(t, second.call("tools/call", map[string]any{
+		"name": "raw.semgrep.inspect", "arguments": map[string]any{},
+	}), "second raw call")
+	if got, want := answerText(firstCall), "chat-1"; got != want {
+		t.Errorf("first session = %q, want %q", got, want)
+	}
+	if got, want := answerText(secondCall), "chat-2"; got != want {
+		t.Errorf("second session = %q, want %q", got, want)
+	}
+	fake.mu.Lock()
+	if got := fake.next; got != 2 {
+		t.Errorf("upstream sessions = %d, want 2", got)
+	}
+	fake.mu.Unlock()
+
+	// Closing the first connection drops its backend. A new conversation gets
+	// a fresh upstream session instead of inheriting the closed chat's state.
+	first.close()
+	third := dial(t)
+	third.handshake("third")
+	result(t, third.call("tools/list", nil), "third tools/list")
+	fake.mu.Lock()
+	if got := fake.next; got != 3 {
+		t.Errorf("upstream sessions after reconnect = %d, want 3", got)
+	}
+	fake.mu.Unlock()
 }
 
 // The allow list is the budget, and a tool outside it must not appear on any

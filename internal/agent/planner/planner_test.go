@@ -306,6 +306,9 @@ func TestDeclaredMaxTokensNarrowsTheObservedReadAllowance(t *testing.T) {
 	if c.seen.ReadTokens != 1234 {
 		t.Errorf("read tokens = %v, want declared max %v", c.seen.ReadTokens, 1234)
 	}
+	if c.seen.MaxTokens != 1234 {
+		t.Errorf("max tokens = %v, want declared max %v", c.seen.MaxTokens, 1234)
+	}
 }
 
 func TestDeclaredMaxTokensDoesNotWidenTheGrantAllowance(t *testing.T) {

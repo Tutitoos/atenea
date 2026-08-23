@@ -21,7 +21,7 @@ a new contract or an external provider decision. The normative policy is in
 | Measurements and wandering | `internal/metrics/summary.go`, `internal/metrics/compact.go`, migrations `0006` and `0007` | `out_of_scope` is persisted, rolled up and reported |
 | Completeness reporting | `internal/agent/model/model.go`, `internal/agent/planner/` | Missing or partial coverage is represented and tested |
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
-| MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/` | Shared lifecycle, raw allow-list and effects are validated |
+| MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/`, `internal/core/mcp.go` | Shared and per-chat lifecycle, raw allow-list and effects are validated |
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/`, `tokensave/` | Native adapters compile and are tested; Tokensave is active on the audit machine |
 | OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | Opt-in adapter, local structured-schema and observed-budget enforcement, protocol fixtures, safe real-provider smoke and free-provider/MCP matrix |
 | Citation traceability gate | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/agent/review_integration_test.go`, `internal/config/default.toml` | Every prose field requires evidence; paths, lines, fragments, abbreviated paths, directory renames and multiple sources are audited and retained in the report, including through the real Runner |
@@ -282,9 +282,10 @@ decisions or later contracts:
   hardened, maps common provider errors and checks reported cost against the
   requested budget, but OpenCode still lacks a native schema flag, a provider
   hard cost cap and a permanently reliable terminal event guarantee;
-- exact hard per-turn token enforcement: `budget_usd` is an authorization
-  forecast, and `limits.max_tokens` narrows the observed `ReadTokens` boundary,
-  but supported external providers do not expose one uniform hard cap;
+- exact provider-side hard per-turn token enforcement: Atenea now carries
+  `limits.max_tokens` into model turns and rejects an observed over-limit
+  result locally, but supported external providers still do not expose one
+  uniform mid-turn hard cap, so provider work already in flight can overshoot;
 - semantic verification of narrative claims: the citation gate proves the
   referenced locations and fragments, but does not infer whether the prose
   correctly explains code outside those locations; renamed paths with a

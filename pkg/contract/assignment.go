@@ -84,14 +84,15 @@ func (t Task) Clone() Task {
 // these two are guards the caller sets.
 //
 // MaxDuration is a ceiling something enforces: it reaches a model turn as
-// model.Request.Timeout. MaxTokens reaches the model client as an observed
-// read boundary when the assignment has a grant. Neither field promises to
-// stop an external process at an exact provider event boundary.
+// model.Request.Timeout. MaxTokens reaches the model client as both the
+// observed read boundary and a local answer-level acceptance check. Neither
+// field promises to stop an external process at an exact provider event
+// boundary.
 type Limits struct {
 	// MaxDuration is the wall clock the agent may take.
 	MaxDuration time.Duration
 	// MaxTokens is the token count the caller declared this run should be
-	// held to, input and output together. When a grant exists, the planner
+	// held to, input and output together. When a grant exists, the planner also
 	// uses it as the upper bound for the client's observed incremental read
 	// allowance; zero means the caller declared none.
 	//

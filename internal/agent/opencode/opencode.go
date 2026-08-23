@@ -47,10 +47,15 @@ type Options struct {
 
 // Request is one OpenCode model turn.
 type Request struct {
-	Model      string
-	Prompt     string
-	Dir        string
-	BudgetUSD  float64
+	Model     string
+	Prompt    string
+	Dir       string
+	BudgetUSD float64
+	// MaxTokens is the assignment's declared total token ceiling. OpenCode
+	// has no native flag for it, so the adapter refuses a completed answer
+	// whose reported usage crosses it. This cannot undo provider work already
+	// in flight, but it prevents an over-limit answer from being accepted.
+	MaxTokens  int
 	ReadTokens int
 	Tools      string
 	Schema     map[string]any
@@ -113,6 +118,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if req.ReadTokens < 0 {
 		return Answer{}, contract.Fail(contract.FailureInvalidInput,
 			"opencode request: read_tokens must not be negative, got %d", req.ReadTokens)
+	}
+	if req.MaxTokens < 0 {
+		return Answer{}, contract.Fail(contract.FailureInvalidInput,
+			"opencode request: max_tokens must not be negative, got %d", req.MaxTokens)
 	}
 	if req.Dir != "" {
 		abs, err := filepath.Abs(req.Dir)
@@ -228,6 +237,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 			"opencode completed a step without text output").WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	answer := Answer{Text: text, Spent: charge, Passes: passes, ToolCalls: toolCalls}
+	if req.MaxTokens > 0 && charge.Tokens() > req.MaxTokens {
+		return answer, contract.Fail(contract.FailurePermissionDenied,
+			"opencode reported %d tokens above the requested limit of %d", charge.Tokens(), req.MaxTokens).
+			WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", charge.Tokens(), req.MaxTokens))
+	}
 	if req.BudgetUSD > 0 && charge.USD != nil && *charge.USD > req.BudgetUSD {
 		return answer, contract.Fail(contract.FailurePermissionDenied,
 			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", *charge.USD, req.BudgetUSD).

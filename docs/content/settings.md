@@ -1381,6 +1381,7 @@ A `raw` block must declare both, and neither has a default:
 id = "semgrep"
 url = "http://127.0.0.1:40020/mcp"
 expose = "raw"
+instance = "shared"                                  # shared | per_chat
 tools = ["get_supported_languages", "semgrep_scan"]   # the allow list
 effects = ["read"]                                    # what they may cause
 
@@ -1432,6 +1433,14 @@ handed to the client so it can talk to the shared server directly; doing that
 for a raw one would point the client past the allow list and the effects
 check, so the budget would be bypassed by the very command meant to apply it.
 It is still probed and still reported, under `held`.
+
+`instance = "shared"` is the default and keeps one upstream MCP session for
+the whole Atenea service. Use `instance = "per_chat"` when the backend's
+session state belongs to one client conversation: Atenea creates that backend
+on the first `tools/list` or `tools/call` for the connection, reuses it for the
+rest of the chat, and closes it when the connection ends. The setting applies
+to both HTTP (`url`) and stdio (`command`) raw backends; it is refused on a
+pointer (`expose = "off"`) because Atenea does not own that lifecycle.
 
 `raw` is reserved as the first segment of any capability or implementation id,
 so nothing in the catalogue can ever collide with a passthrough name -- refused

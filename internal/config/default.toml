@@ -2299,11 +2299,14 @@ max_tokens = 200000
 #
 # `expose` says which of two things a block means. `off`, the default and all
 # of the above, points the client at the server and steps out of the path.
-# `raw` has Atenea hold one shared connection and re-offer that server's own
-# tools as `raw.<id>.<tool>`, with no funnel, no capability and no measurement
-# -- a receipt is still written, saying it had no funnel. Either transport may
-# be `raw`: a `url` block is one shared connection, a `command` block is one
-# shared process that Atenea starts on first use and stops when it stops.
+# `raw` has Atenea hold a connection and re-offer that server's own tools as
+# `raw.<id>.<tool>`, with no funnel, no capability and no measurement -- a
+# receipt is still written, saying it had no funnel. `instance = "shared"`
+# (the default) reuses one upstream session for all chats; `instance =
+# "per_chat"` creates one lazy session per client connection and closes it
+# when that chat disconnects. Either transport may be `raw`: a `url` block is
+# an HTTP session, a `command` block is a process that Atenea starts on first
+# use and stops with its owning lifecycle.
 #
 # A `raw` block must also declare `tools` and `effects`, and neither has a
 # default. `tools` is an allow list: only those names are offered, and only
@@ -2325,6 +2328,7 @@ max_tokens = 200000
 # id = "semgrep"
 # url = "http://127.0.0.1:40020/mcp"
 # expose = "raw"                       # Atenea holds the connection and re-offers
+# instance = "shared"                  # shared | per_chat
 # tools = ["semgrep_scan"]             # required: only these are offered or callable
 # effects = ["read"]                   # required: what those tools may cause
 #

@@ -424,6 +424,7 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		Schema:    exploreSchema(),
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
+		MaxTokens: in.Limits.MaxTokens,
 		// ReadTokens holds back readShare's complement for the answer -- see
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),
@@ -490,6 +491,7 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		Schema:    planSchema(),
 		Dir:       repositoryRoot(in),
 		BudgetUSD: budget(in),
+		MaxTokens: in.Limits.MaxTokens,
 		// ReadTokens holds back readShare's complement for the answer -- see
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),

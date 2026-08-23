@@ -49,6 +49,8 @@ import (
 type rawBackend struct {
 	passthrough.Backend
 	declared config.MCPServer
+	spec     passthrough.Spec
+	instance config.Instance
 }
 
 // Core is safe for concurrent use. Sessions are isolated per chat, but the
@@ -323,16 +325,27 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		if server.Expose != config.ExposeRaw {
 			continue
 		}
+		instance := server.Instance
+		if instance == "" {
+			instance = config.InstanceShared
+		}
+		spec := passthrough.Spec{
+			ID:      server.ID,
+			URL:     server.URL,
+			Command: server.Command,
+			Env:     server.Env,
+			Timeout: server.Timeout,
+			Allowed: server.Tools,
+		}
+		var backend passthrough.Backend
+		if instance != config.InstancePerChat {
+			backend = passthrough.New(spec)
+		}
 		backends[server.ID] = rawBackend{
-			Backend: passthrough.New(passthrough.Spec{
-				ID:      server.ID,
-				URL:     server.URL,
-				Command: server.Command,
-				Env:     server.Env,
-				Timeout: server.Timeout,
-				Allowed: server.Tools,
-			}),
+			Backend:  backend,
 			declared: server,
+			spec:     spec,
+			instance: instance,
 		}
 	}
 	built = true
@@ -1261,7 +1274,9 @@ func (c *Core) Shutdown() error {
 // in-flight work has been given its margin, so nothing is cut off mid-answer.
 func (c *Core) closeBackends() {
 	for _, backend := range c.backends {
-		backend.Close()
+		if backend.Backend != nil {
+			backend.Close()
+		}
 	}
 }
 
