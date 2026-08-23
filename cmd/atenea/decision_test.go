@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +15,43 @@ import (
 func TestCmdDecideValidatesCommissionBeforeLoadingSettings(t *testing.T) {
 	if err := cmdDecide("", nil, &bytes.Buffer{}); err == nil {
 		t.Fatal("cmdDecide accepted an empty commission")
+	}
+}
+
+func TestCmdDecideBuildsJSONDryRunFromSettings(t *testing.T) {
+	settingsPath := settingsFile(t)
+	body, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, []byte("\n[model]\nbackend = \"claude\"\nbinary = \"claude\"\nexplore = \"sonnet\"\nplan = \"claude-opus-5\"\n")...)
+	if err := os.WriteFile(settingsPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "workflow.db")
+	var out bytes.Buffer
+	err = cmdDecide(settingsPath, []string{
+		"find authentication", "--repo", "api", "--traces", tracePath, "--budget", "5", "--json",
+	}, &out)
+	if err != nil {
+		t.Fatalf("cmdDecide dry run: %v; output=%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), `"intent": "search"`) || !strings.Contains(out.String(), `"valid": true`) {
+		t.Fatalf("decision json = %q, want a valid search plan", out.String())
+	}
+}
+
+func TestCmdDecideRejectsMalformedFlagsAndTrailingArguments(t *testing.T) {
+	settingsPath := settingsFile(t)
+	for name, args := range map[string][]string{
+		"malformed flag":    {"find authentication", "--budget=not-money"},
+		"trailing argument": {"find authentication", "extra"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := cmdDecide(settingsPath, args, &bytes.Buffer{}); err == nil {
+				t.Fatalf("cmdDecide accepted %v", args)
+			}
+		})
 	}
 }
 
