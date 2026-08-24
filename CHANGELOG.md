@@ -14,7 +14,10 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+
+- Make tagged release publication idempotent: retries reuse an existing GitHub
+  release and replace its assets instead of failing on the duplicate tag.
 
 ## [1.0.5] - 2026-08-24
 
