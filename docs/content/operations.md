@@ -30,6 +30,12 @@ bash scripts/release-smoke.sh 1.0.5
 The check never passes `--service`, so it does not install a persistent agent.
 Service installation is a separate, host-specific operation.
 
+The tagged release publisher is safe to retry. If GitHub already has the
+release for the tag, the workflow replaces the generated assets in that release
+instead of failing at the duplicate-tag check. A historical failed workflow
+run therefore does not by itself mean that the public release is incomplete;
+inspect the release assets and rerun the workflow when needed.
+
 ## First response
 
 Start with the cheapest truthful screen:

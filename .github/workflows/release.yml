@@ -147,9 +147,15 @@ jobs:
           test -s /tmp/notes.md
           prerelease=""
           case "$version" in 0.*) prerelease="--prerelease" ;; esac
-          # shellcheck disable=SC2086
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Atenea ${version}" \
-            --notes-file /tmp/notes.md \
-            ${prerelease} \
-            dist/*
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # A retry must repair the existing release instead of failing on
+            # GitHub's duplicate-tag guard.
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            # shellcheck disable=SC2086
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Atenea ${version}" \
+              --notes-file /tmp/notes.md \
+              ${prerelease} \
+              dist/*
+          fi

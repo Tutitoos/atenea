@@ -20,6 +20,7 @@ proveedores soportados.
 | Tokens | `limits.max_tokens` se transporta, valida, hereda y estrecha el límite observado; los streams interrumpen el proceso cuando ya pueden observar un exceso | `pkg/contract/assignment.go`, `internal/agent/planner/`, `internal/agent/model/model.go`, `internal/agent/opencode/opencode.go` | Sigue sin ser un hard cap del proveedor: un evento en vuelo puede hacer que el uso observado se pase antes de que Atenea pueda detenerlo |
 | Lectura incremental | `ReadTokens` puede pedir al cliente que deje de leer y produzca una respuesta parcial | `internal/agent/model/model.go` | El uso observado puede llegar con el evento en vuelo; no equivale a impedir cada token posterior |
 | Citas | Cada campo de prosa debe aportar al menos una cita `path:line` o `Line N of path`; se comprueban línea, fragmento y ruta realmente abierta, y se conserva la evidencia | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/config/default.toml` | El significado narrativo más allá de las ubicaciones citadas no es verificable de forma determinista; un renombre con distinto basename queda sin resolver, nunca se adivina |
+| Revisión semántica | `semantic-reviewer` puede auditar de forma opt-in si una conclusión se sigue de la evidencia y devuelve `supported`, `unsupported` o `indeterminate` con confianza y alcance | `internal/agent/semanticreviewer/`, `cmd/atenea/agent.go`, `internal/config/default.toml` | Es una revisión model-backed, no una garantía determinista: consume el presupuesto de `explore`, puede ser indeterminada y nunca sustituye la revisión de citas |
 | OpenCode | Backend opt-in mediante `[model].backend = "opencode"`; exige `step_finish`, texto, JSON único, valida localmente el JSON estructurado y detiene el proceso tras observar un exceso de tokens/coste | `internal/agent/opencode/`, `internal/agent/model/`, `internal/config/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | No tiene `--json-schema` ni hard cap de coste común; el exceso de trabajo ya iniciado por el proveedor no puede deshacerse |
 | Búsqueda estructural | `symbol.search` devuelve declaraciones Serena filtradas y ordenadas de forma determinista | `internal/adapter/serena/serena.go`, `symbols.go` | Requiere índice Serena disponible; `code.search` sigue siendo búsqueda textual |
 | Cobertura de tests | CI exige al menos 75,0% de cobertura global | `.github/workflows/ci.yml`, `go tool cover` | El umbral es una barrera de regresión, no una prueba de cobertura semántica total |
@@ -42,10 +43,10 @@ Estas decisiones no son fallos silenciosos:
    reviewer rechaza campos sin ubicación, líneas inexistentes y fragmentos
    incorrectos; además conserva `cited_path`, `resolved_path`, línea y
    resultado por cita. Esto demuestra la trazabilidad de la evidencia, pero no
-   convierte la ubicación en una prueba del significado narrativo completo. Si
-   se necesita esa capa, el contrato permite encadenar un reviewer model-backed
-   con un modelo explícito; ese coste y esa decisión no se esconden dentro del
-   reviewer determinista.
+   convierte la ubicación en una prueba del significado narrativo completo.
+   Cuando se necesita esa capa, `--review semantic-reviewer` la añade de forma
+   explícita, con un modelo configurado, confianza y posibilidad de
+   `indeterminate`; nunca se oculta el coste dentro del reviewer determinista.
 5. `code.impact` y `repository.index` tienen provider Kivgraph. El primero
    compara un baseline Git con la copia actual y devuelve impacto acotado al
    repositorio; el segundo ejecuta el indexador oficial con permisos explícitos
@@ -62,8 +63,8 @@ aporta, junto con código y tests:
   interactivo explícito;
 - un contrato de coste y schema nativo de OpenCode que permita endurecer las
   garantías más allá del uso observado;
-- una política de selección y presupuesto para un reviewer model-backed que
-  pueda juzgar el significado de las afirmaciones, no solo su evidencia;
+- una política de selección y presupuesto para hacer `semantic-reviewer`
+  obligatorio en superficies concretas, en lugar de mantenerlo opt-in;
 - una política de citas basada en un contrato de rutas estable, incluyendo
   renombres y respuestas que mezclen varias fuentes.
 

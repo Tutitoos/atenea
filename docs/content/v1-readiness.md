@@ -26,6 +26,7 @@ a new contract or an external provider decision. The normative policy is in
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/`, `tokensave/` | Native adapters compile and are tested; Tokensave is active on the audit machine |
 | OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | Opt-in adapter, local structured-schema and observed-budget enforcement, protocol fixtures, safe real-provider smoke and free-provider/MCP matrix |
 | Citation traceability gate | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/agent/review_integration_test.go`, `internal/config/default.toml` | Every prose field requires evidence; paths, lines, fragments, abbreviated paths, directory renames and multiple sources are audited and retained in the report, including through the real Runner |
+| Semantic review | `internal/agent/semanticreviewer/`, `cmd/atenea/agent.go`, `internal/config/default.toml` | Opt-in model-backed judgement of whether conclusions follow from evidence; returns supported/unsupported/indeterminate with confidence, claims, gaps and scope; deterministic citation review remains mandatory |
 | Installation and operations | `scripts/install.sh`, `scripts/release-smoke.sh`, `docs/content/operations.md` | Install, update, rollback, uninstall and release smoke are verified |
 | Release gate | `.github/workflows/ci.yml`, `release.yml`, `postrelease.yml`, `v1-readiness.yml` | Linux/macOS amd64/arm64 validation is automated; CI enforces 80.0% globally and records one canonical history artifact |
 | v1.0 policy gate | `scripts/v1-policy-check.sh`, `docs/content/v1-policy.md` | The declared guarantees and deferred contracts have stable anchors |
@@ -54,6 +55,10 @@ The v1-readiness workflow exposes two opt-in jobs: ATENEA_LIVE_MCP starts an
 isolated service and performs the MCP bridge handshake, while
 ATENEA_OPENCODE_SMOKE runs the real provider/MCP matrix. Neither job runs on
 ordinary pull requests unless the repository variable is explicitly enabled.
+The same jobs can be launched manually with `live_mcp=true` and
+`live_opencode=true`; credentials and provider availability remain external
+inputs and a failed live job is recorded as an environment/provider result,
+not converted into a local readiness claim.
 
 CI applies a 77.0% regression floor and a hard 80.0% global target. The latest
 local observation is 80.1% under the race-enabled command used by CI. GitHub
@@ -288,11 +293,12 @@ decisions or later contracts:
   observed over-limit event arrives and rejects the result locally, but
   supported external providers still do not expose one uniform mid-turn hard
   cap, so provider work already in flight can overshoot;
-- semantic verification of narrative claims: the citation gate proves the
-  referenced locations and fragments, but does not infer whether the prose
-  correctly explains code outside those locations; renamed paths with a
-  different basename remain unresolved until the answer supplies the current
-  path.
+- default semantic verification of narrative claims: the opt-in
+  `semantic-reviewer` can judge whether a conclusion follows from its evidence,
+  but it is model-backed, costs the configured explore budget and may return
+  `indeterminate`; deterministic citation verification remains the acceptance
+  gate. Renamed paths with a different basename remain unresolved until the
+  answer supplies the current path.
 
 The historical design notes remain in
 [`What is not built yet`](not-built-yet.md). This page is the current acceptance
