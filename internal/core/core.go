@@ -135,9 +135,10 @@ type Core struct {
 // shutdown path reach for, so they are constants rather than strings typed
 // twice.
 const (
-	jobFlush   = "metrics.flush"
-	jobCompact = "metrics.compact"
-	jobBackup  = "backup"
+	jobFlush     = "metrics.flush"
+	jobCompact   = "metrics.compact"
+	jobBackup    = "backup"
+	jobMCPHealth = "mcp.health"
 )
 
 // meter is the orchestrator's end of the measurement seam.
@@ -277,7 +278,18 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	beats, err := buildLanes(cfg, store, copies, book)
+	readings, err := newBackendMemory(filepath.Join(platform.StateDir(), "mcp-health.json"))
+	if err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"mcp health state: %v", err)
+	}
+	var health func(context.Context) error
+	if role == Service && cfg.Core.HealthProbeEvery > 0 && len(cfg.MCPServers) > 0 {
+		health = func(ctx context.Context) error {
+			return probeDeclaredServers(ctx, cfg.MCPServers, readings)
+		}
+	}
+	beats, err := buildLanes(cfg, store, copies, book, health)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +368,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	return &Core{
 		settings:     cfg,
 		backends:     backends,
-		readings:     newBackendMemory(),
+		readings:     readings,
 		catalog:      catalog,
 		chooser:      chooser,
 		runners:      runners,
@@ -412,6 +424,9 @@ func (m *maintenance) wrap(op string, run func(context.Context) error) func(cont
 // notebook read a week later should be able to say when the losses happened,
 // not just that they did.
 func (m *maintenance) checkDrops() {
+	if m.store == nil {
+		return
+	}
 	dropped := int64(m.store.Dropped())
 	seen := m.reported.Swap(dropped)
 	if dropped <= seen {

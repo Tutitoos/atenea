@@ -202,6 +202,9 @@ const (
 type Core struct {
 	// ShutdownGrace is how long a clean stop waits for in-flight work.
 	ShutdownGrace time.Duration
+	// HealthProbeEvery is how often the service probes declared MCP servers.
+	// Zero disables the background probe; on-demand `detect` remains available.
+	HealthProbeEvery time.Duration
 }
 
 // Metrics holds the measurement store and the rhythms that maintain it.
@@ -826,7 +829,8 @@ type fileModel struct {
 }
 
 type fileCore struct {
-	ShutdownGrace string `toml:"shutdown_grace"`
+	ShutdownGrace    string `toml:"shutdown_grace"`
+	HealthProbeEvery string `toml:"health_probe_every"`
 }
 
 type fileMetrics struct {
@@ -2228,20 +2232,32 @@ func (l fileLocalAgents) build(source string) (LocalAgents, error) {
 }
 
 func (c fileCore) build(source string) (Core, error) {
-	out := Core{ShutdownGrace: defaultShutdownGrace}
-	if c.ShutdownGrace == "" {
+	out := Core{ShutdownGrace: defaultShutdownGrace, HealthProbeEvery: 15 * time.Minute}
+	if c.ShutdownGrace != "" {
+		grace, err := time.ParseDuration(c.ShutdownGrace)
+		if err != nil {
+			return Core{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: core.shutdown_grace %q: %v", source, c.ShutdownGrace, err)
+		}
+		if grace <= 0 {
+			return Core{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: core.shutdown_grace must be positive", source)
+		}
+		out.ShutdownGrace = grace
+	}
+	if c.HealthProbeEvery == "" {
 		return out, nil
 	}
-	grace, err := time.ParseDuration(c.ShutdownGrace)
+	healthEvery, err := time.ParseDuration(c.HealthProbeEvery)
 	if err != nil {
 		return Core{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: core.shutdown_grace %q: %v", source, c.ShutdownGrace, err)
+			"settings %s: core.health_probe_every %q: %v", source, c.HealthProbeEvery, err)
 	}
-	if grace <= 0 {
+	if healthEvery < 0 {
 		return Core{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: core.shutdown_grace must be positive", source)
+			"settings %s: core.health_probe_every must not be negative", source)
 	}
-	out.ShutdownGrace = grace
+	out.HealthProbeEvery = healthEvery
 	return out, nil
 }
 

@@ -5,7 +5,7 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the published v1.0.4 release. It separates what is
+This page is the acceptance record for the published v1.0.5 release. It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
 [`v1.0 policy`](v1-policy.md).
@@ -22,6 +22,7 @@ a new contract or an external provider decision. The normative policy is in
 | Completeness reporting | `internal/agent/model/model.go`, `internal/agent/planner/` | Missing or partial coverage is represented and tested |
 | Ranked structural search | `symbol.search`, `internal/adapter/serena/serena.go`, `internal/adapter/serena/symbols.go` | Serena declarations are filtered, ranked deterministically and returned with qualified name, kind and source range |
 | MCP lifecycle and passthrough | `internal/mcpstdio/`, `internal/passthrough/`, `internal/supervisor/`, `internal/core/mcp.go` | Shared and per-chat lifecycle, raw allow-list and effects are validated |
+| Continuous MCP health | `internal/core/backendstate.go`, `internal/core/startup.go`, `internal/config/default.toml` | Service probes declared servers every 15 minutes by default and persists the last handshake result; `0s` disables it |
 | Supported adapters | `internal/adapter/omp/`, `claudecode/`, `codex/`, `serena/`, `kivgraph/`, `tokensave/` | Native adapters compile and are tested; Tokensave is active on the audit machine |
 | OpenCode model backend | `internal/agent/opencode/`, `internal/agent/model/`, `scripts/opencode-smoke.sh`, `scripts/opencode-matrix.sh` | Opt-in adapter, local structured-schema and observed-budget enforcement, protocol fixtures, safe real-provider smoke and free-provider/MCP matrix |
 | Citation traceability gate | `internal/agent/reviewer/citations.go`, `internal/agent/reviewer/citations_test.go`, `internal/agent/review_integration_test.go`, `internal/config/default.toml` | Every prose field requires evidence; paths, lines, fragments, abbreviated paths, directory renames and multiple sources are audited and retained in the report, including through the real Runner |
@@ -154,12 +155,12 @@ can be truncated by the upstream server; Atenea detects that case and retries
 with the official `kinds` filter, then merges and deduplicates the bounded
 responses. A real large-file overview returned 45 symbols successfully.
 
-## Latest 1.0.4 verification
+## Latest 1.0.5 verification
 
 On 2026-08-23 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate
 could run. `bash scripts/v1-readiness.sh` passed all nine stages, including
-`go test -race -count=1 ./...`, policy anchors and the `1.0.4`/`3.1.0` build
+`go test -race -count=1 ./...`, policy anchors and the `1.0.5`/`3.1.0` build
 identity. The release was subsequently published by the release workflow.
 
 The end-to-end test
@@ -171,11 +172,11 @@ the reviewer trace points to the work run.
 The existing public release was also checked with:
 
 ```sh
-bash scripts/release-smoke.sh 1.0.4
+bash scripts/release-smoke.sh 1.0.5
 ```
 
 Checksum verification, install, same-version update, rollback and uninstall
-passed on macOS arm64. This validates the public `1.0.4` release lifecycle;
+passed on macOS arm64. This validates the public `1.0.5` release lifecycle;
 the smoke test itself does not publish a release.
 
 The current phase was rechecked on 2026-08-23. `TMPDIR=/tmp go test ./...`,

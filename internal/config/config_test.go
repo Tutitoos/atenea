@@ -32,6 +32,9 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	if cfg.Core.ShutdownGrace != 10*time.Second {
 		t.Errorf("ShutdownGrace = %v", cfg.Core.ShutdownGrace)
 	}
+	if cfg.Core.HealthProbeEvery != 15*time.Minute {
+		t.Errorf("HealthProbeEvery = %v, want 15m", cfg.Core.HealthProbeEvery)
+	}
 	if cfg.Selector.HealthStaleAfter != 24*time.Hour {
 		t.Errorf("Selector.HealthStaleAfter = %v, want 24h", cfg.Selector.HealthStaleAfter)
 	}
@@ -1293,6 +1296,20 @@ func TestAnUnusableModelTimeoutIsRefused(t *testing.T) {
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 			t.Errorf("timeout = %q -> %v, want invalid_input", timeout, got)
 		}
+	}
+}
+
+func TestHealthProbeEveryAcceptsDisableAndRejectsNegative(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+"\n[core]\nhealth_probe_every = \"0s\"\n"))
+	if err != nil {
+		t.Fatalf("Load disabled health probe: %v", err)
+	}
+	if cfg.Core.HealthProbeEvery != 0 {
+		t.Fatalf("HealthProbeEvery = %v, want disabled", cfg.Core.HealthProbeEvery)
+	}
+	_, err = config.Load(write(t, minimal+"\n[core]\nhealth_probe_every = \"-1m\"\n"))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("negative health probe -> %v, want invalid_input", got)
 	}
 }
 

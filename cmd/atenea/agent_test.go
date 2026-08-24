@@ -16,6 +16,18 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+func TestAgentConfirmationCoversWriteAndExternalEffects(t *testing.T) {
+	if !requiresAgentConfirmation([]contract.Effect{contract.EffectWrite}) {
+		t.Fatal("write effect did not require confirmation")
+	}
+	if !requiresAgentConfirmation([]contract.Effect{contract.EffectExternal}) {
+		t.Fatal("external effect did not require confirmation")
+	}
+	if requiresAgentConfirmation([]contract.Effect{contract.EffectRead, contract.EffectProcess}) {
+		t.Fatal("read/process effects unexpectedly required confirmation")
+	}
+}
+
 // A declared agent type nothing dispatches is a promise with no far side, and
 // the settings file cannot notice: `command` and `args` are strings there,
 // and the switch that reads them is in this package. The gap only shows up at

@@ -16,6 +16,22 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 No changes yet.
 
+## [1.0.5] - 2026-08-24
+
+### Added
+
+- Add continuous MCP reachability probes with durable, stale-aware readings;
+  set `core.health_probe_every = "0s"` to keep probes on demand.
+- Add explicit `--confirm` protection for direct agents with write or external
+  effects.
+- Add the opt-in `semantic-reviewer` agent for structured semantic judgement
+  separate from deterministic citation verification.
+
+### Changed
+
+- Persist MCP health observations atomically with restrictive permissions and
+  keep service-only background probing out of one-shot command execution.
+
 ## [1.0.4] - 2026-08-23
 
 ### Added

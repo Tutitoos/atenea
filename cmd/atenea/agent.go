@@ -17,6 +17,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/agent/plancheck"
 	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/agent/reviewer"
+	"github.com/Tutitoos/atenea/internal/agent/semanticreviewer"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/trace"
@@ -50,6 +51,7 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	repository := flags.String("repository", "", "repository id to serve at the repository level")
 	quiet := flags.Bool("quiet", false, "print the verdict line only")
 	review := flags.String("review", "", "agent type that audits the answer; a refusal relaunches the work once")
+	confirm := flags.Bool("confirm", false, "require an interactive TTY confirmation for write or external effects")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -106,6 +108,15 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	if task.Criterion == "" {
 		task.Criterion = "the answer matches the shape " + typeName + " declares"
 	}
+	if requiresAgentConfirmation(declared.Effects) && !*confirm {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"agent %s may cause write or external effects; pass --confirm before execution", typeName)
+	}
+	if *confirm {
+		if err := confirmTTY(out, "agent "+typeName, 0, declared.Effects); err != nil {
+			return err
+		}
+	}
 
 	if *review != "" {
 		audited, err := runner.RunReviewed(ctx, typeName, *review, task)
@@ -116,6 +127,15 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	report, assignment, runErr := runner.Run(ctx, typeName, task, nil)
 	printReport(out, assignment, report, *quiet)
 	return runErr
+}
+
+func requiresAgentConfirmation(effects []contract.Effect) bool {
+	for _, effect := range effects {
+		if effect == contract.EffectWrite || effect == contract.EffectExternal {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultObjective(declared config.AgentType, files []string) string {
@@ -256,6 +276,8 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		return filereader.Main(stdin, stdout)
 	case "reviewer":
 		return reviewer.Main(stdin, stdout)
+	case "semantic-reviewer":
+		return semanticreviewer.Main(stdin, stdout)
 	case "plan-check":
 		return plancheck.Main(stdin, stdout)
 	case "explore", "reader", "plan":
@@ -278,7 +300,7 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		}
 	default:
 		return contract.Fail(contract.FailureNotFound,
-			"no built-in agent %q: this binary ships filereader, reviewer, plan-check, explore, reader and plan", kind)
+			"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader and plan", kind)
 	}
 }
 

@@ -19,6 +19,9 @@ contract = "3.1.0"
 [core]
 # How long a shutdown waits for in-flight work before walking away.
 shutdown_grace = "10s"
+# How often the service probes declared MCP servers and persists their latest
+# reachability. Set to "0s" to keep health strictly on demand via `detect`.
+health_probe_every = "15m"
 
 [orchestrator]
 # The agent that receives a commission, explores the repositories in scope,
@@ -2199,6 +2202,61 @@ pool = "review"
   type = "string"
   required = true
   summary = "The run whose plan was compiled"
+
+[[agent]]
+name = "semantic-reviewer"
+kind = "specialized"
+summary = "Uses the configured explore model to judge whether an agent conclusion follows from its evidence"
+command = "$atenea"
+args = ["agent-exec", "semantic-reviewer"]
+context = ["repository"]
+effects = ["read"]
+max_duration = "5m"
+max_tokens = 100000
+pool = "review"
+
+  [[agent.result]]
+  name = "subject"
+  type = "string"
+  required = true
+  summary = "The run whose conclusion was judged"
+
+  [[agent.result]]
+  name = "semantic_verdict"
+  type = "string"
+  required = true
+  enum = ["supported", "unsupported", "indeterminate"]
+  summary = "Semantic judgement, distinct from deterministic citation checks"
+
+  [[agent.result]]
+  name = "confidence"
+  type = "int"
+  required = true
+  summary = "Model confidence from zero to one hundred"
+
+  [[agent.result]]
+  name = "claims"
+  type = "string_list"
+  required = true
+  summary = "Claims considered by the semantic review"
+
+  [[agent.result]]
+  name = "gaps"
+  type = "string_list"
+  required = true
+  summary = "Missing or contradictory support"
+
+  [[agent.result]]
+  name = "evidence"
+  type = "string_list"
+  required = true
+  summary = "Evidence used from the subject result"
+
+  [[agent.result]]
+  name = "scope"
+  type = "string"
+  required = true
+  summary = "Boundary of what was semantically judged"
 
 [[agent]]
 name = "explore"
