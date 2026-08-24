@@ -240,6 +240,15 @@ and the absence of `--auto`; no paid model was used. This is evidence for three
 free models across two providers on one CLI version, not provider-wide
 compatibility.
 
+On 2026-08-24, the manually dispatched readiness workflow passed the general
+gate, all four native builds and the live MCP bridge. Its first OpenCode run
+passed `opencode/mimo-v2.5-free`, while `opencode/hy3-free` and
+`opencode-go/ox-alpha-free` returned an external `Unexpected server error`.
+The targeted retry passed `hy3-free` and `mimo-v2.5-free` and reproduced the
+same error only for `ox-alpha-free`. This keeps the live job red as an honest
+provider-availability signal; it does not indicate a failure in Atenea's MCP
+bridge or local readiness gate.
+
 ## External target recheck — 2026-08-22
 
 The optional MCPs were rechecked against the TaxiPrime workspace and a public
