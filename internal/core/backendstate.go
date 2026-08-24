@@ -1,9 +1,16 @@
 package core
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -61,18 +68,82 @@ type backendReading struct {
 // a backend's health to the lifecycle lock, so a slow read of this map could
 // hold up a clean stop.
 type backendMemory struct {
-	mu       sync.RWMutex
-	readings map[string]backendReading
+	mu        sync.RWMutex
+	readings  map[string]backendReading
+	statePath string
 }
 
-func newBackendMemory() *backendMemory {
-	return &backendMemory{readings: make(map[string]backendReading)}
+type backendState struct {
+	Version  int                       `json:"version"`
+	Readings map[string]backendReading `json:"readings,omitempty"`
+}
+
+func newBackendMemory(statePath string) (*backendMemory, error) {
+	m := &backendMemory{readings: make(map[string]backendReading), statePath: statePath}
+	if statePath == "" {
+		return m, nil
+	}
+	raw, err := os.ReadFile(statePath)
+	if os.IsNotExist(err) {
+		return m, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var state backendState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	if state.Version != 0 && state.Version != 1 {
+		return nil, fmt.Errorf("unsupported backend state version %d", state.Version)
+	}
+	for id, reading := range state.Readings {
+		m.readings[id] = reading
+	}
+	return m, nil
 }
 
 func (m *backendMemory) record(id string, reading backendReading) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.readings[id] = reading
+	_ = m.persistLocked()
+}
+
+func (m *backendMemory) persistLocked() error {
+	if m.statePath == "" {
+		return nil
+	}
+	raw, err := json.MarshalIndent(backendState{Version: 1, Readings: m.readings}, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(m.statePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".mcp-health-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, m.statePath)
 }
 
 // reading answers with the last reading and whether there is one at all.
@@ -197,4 +268,28 @@ func (c *Core) recordBackendCall(id string, err error) {
 		contract.KindOf(err) == contract.FailureTimeout:
 		c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error()})
 	}
+}
+
+func probeDeclaredServers(ctx context.Context, servers []config.MCPServer, readings *backendMemory) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	probes := make([]mcpprobe.Server, len(servers))
+	for i, server := range servers {
+		probes[i] = server.Probe()
+	}
+	results := mcpprobe.ProbeAll(ctx, probes)
+	for _, result := range results {
+		reading := backendReading{At: time.Now()}
+		if result.OK {
+			reading.State = BackendOK
+		} else {
+			reading.State = BackendFailed
+			if result.Err != nil {
+				reading.Reason = result.Err.Error()
+			}
+		}
+		readings.record(result.ID, reading)
+	}
+	return nil
 }

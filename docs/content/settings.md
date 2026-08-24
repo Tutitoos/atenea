@@ -107,6 +107,7 @@ contract = "3.1.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
+health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
 ```
 
 The `contract` line is the one field with no default: a file must say which
@@ -861,11 +862,14 @@ a hard-coded path there survives exactly until the next reinstall. Any other
 harness -- differs only in what it does between reading stdin and writing
 stdout.
 
-Six agents ship declared. `filereader` reads one file, `reviewer` audits an
+Seven agents ship declared. `filereader` reads one file, `reviewer` audits an
 answer against the files it named, and `plan-check` compiles a plan and says
 whether the engine accepts it -- none of the three spends a token, and their
 `max_tokens = 1` is the honest ceiling of an agent that never calls a model.
-`explore`, `reader` and `plan` do call one, through `[model]` above, and they
+`semantic-reviewer` calls the configured `explore` model to assess whether a
+conclusion follows from its evidence. It returns a structured semantic
+verdict and is explicit about confidence (0-100) and scope. `explore`, `reader`,
+`plan` and `semantic-reviewer` call a model through `[model]` above, and they
 are off until you name a model for each role.
 
 `explore` and `reader` are one agent declared twice, and the only difference
@@ -966,6 +970,12 @@ timeout, a crash -- is not handed to a reviewer, because there is no answer to
 judge and re-running a crashed process is a retry policy, not an audit. And a
 reviewer that dies itself does not accept: the answer is returned unjudged with
 the reviewer's death as the error, never quietly passed off as reviewed.
+
+`reviewer` proves deterministic facts such as file contents, line counts and
+citation locations. It does not infer that a prose conclusion follows from
+those facts. Use `--review semantic-reviewer` when that second question is
+needed. `supported` is an explicit model judgement, `unsupported` is rejected,
+and `indeterminate` remains incomplete rather than being promoted to approval.
 
 `pool` is which parallel lane a type belongs to, `agent` or `review`, and it
 defaults to `agent`. Reviews are separated because one lane holding both would
@@ -1591,6 +1601,12 @@ health_stale_after = "24h"
 trusted. When it expires, Atenea treats the provider as `unknown` and lets the
 next dispatch re-probe it; the setting does not age declarative health written
 in the catalog.
+
+The service also probes declared MCP servers every `core.health_probe_every`
+and persists the last result under the private state directory. A successful
+probe is `ok`, a failed handshake is `failed`, and an unconfigured interval of
+`0s` keeps probing on demand through `atenea detect` only. The probe checks the
+MCP handshake; it does not execute tools or claim semantic availability.
 
 ```toml
 [[selector.rule]]

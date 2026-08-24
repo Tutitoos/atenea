@@ -349,6 +349,11 @@ func SurfaceOf(agentType string) (Surface, bool) {
 		return readerSurface(), true
 	case "plan":
 		return planSurface(), true
+	case "semantic-reviewer":
+		// The semantic reviewer receives its subject on the assignment and
+		// does not need Atenea's capability catalog. It still calls a model,
+		// so floor measurement must price it as a real turn.
+		return Surface{Role: model.RoleExplore}, true
 	}
 	return Surface{}, false
 }

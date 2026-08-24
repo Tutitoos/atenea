@@ -182,9 +182,9 @@ func openCopies(cfg config.Backup, source, configPath string) (*backup.Store, er
 // runs on a beat has nobody waiting on its return value -- that is the whole
 // point of a beat -- so without the wrapper a backup failing every six hours
 // for a week looks exactly like a backup succeeding every six hours for a week.
-func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, book *notebook.Notebook) (*clock.Clock, error) {
+func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, book *notebook.Notebook, health func(context.Context) error) (*clock.Clock, error) {
 	watch := &maintenance{book: book, store: store}
-	jobs := make([]clock.Job, 0, 3)
+	jobs := make([]clock.Job, 0, 4)
 	if store != nil {
 		jobs = append(jobs,
 			clock.Job{
@@ -218,6 +218,13 @@ func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, b
 				_, _, err := copies.SnapshotIfDue(ctx, time.Now(), cfg.Backup.Every)
 				return err
 			}),
+		})
+	}
+	if health != nil && cfg.Core.HealthProbeEvery > 0 {
+		jobs = append(jobs, clock.Job{
+			Name:  jobMCPHealth,
+			Every: cfg.Core.HealthProbeEvery,
+			Run:   watch.wrap(jobMCPHealth, health),
 		})
 	}
 	return clock.New(jobs...)

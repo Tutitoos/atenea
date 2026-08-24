@@ -70,7 +70,8 @@ Commands:
                          says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
   agent TYPE [FILE]      Run one declared agent type as a process, once;
-                         --objective and --criterion set the task
+                         --objective/--criterion set the task; --confirm
+                         approves write or external effects
   traces                 What agents ran and how they ended; filter with
                          --type, --verdict, --open, --since, --id, --limit
   metrics                What the base measured, per capability and provider;
