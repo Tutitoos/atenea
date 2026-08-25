@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -468,8 +469,7 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 	}
 	text, err := session.Call(ctx, tool, args)
 	if err != nil {
-		return "", contract.Fail(contract.FailureUnavailable,
-			"desktop: %s: %v", tool, err)
+		return "", helperFailure(tool, err)
 	}
 	if text == "" {
 		return "", contract.Fail(contract.FailureUnavailable,
@@ -624,9 +624,13 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 			// reduced from the display's real pixels; scale says by how
 			// much, so a reader can tell a small window from a heavily
 			// reduced one without needing it to interpret anything.
-			"width":       answer.Width,
-			"height":      answer.Height,
-			"scale":       answer.Scale,
+			"width":  answer.Width,
+			"height": answer.Height,
+			// A string because the contract has no float type, and inventing
+			// one for a diagnostic would be the tail wagging the dog. Nothing
+			// reads it to compute with: coordinates are already in the
+			// returned image's own space.
+			"scale":       strconv.FormatFloat(answer.Scale, 'g', -1, 64),
 			"bytes":       answer.Bytes,
 			"application": name,
 			"bundle_id":   bundleID,
@@ -637,6 +641,41 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 		SpentUSD:      0,
 		SpentUSDKnown: true,
 	}, nil
+}
+
+// helperFailure sorts what the helper said into the right bin, and the
+// distinction it draws is not cosmetic.
+//
+// Atenea's funnel marks an implementation DOWN when a call comes back
+// unavailable, and a provider marked down stops being chosen until its health
+// goes stale. So sorting a refusal as unavailable takes the capability out of
+// service for everybody: measured, asking to capture a window that was not
+// open disabled desktop.screenshot entirely, and the receipt said the provider
+// was down when the provider had answered correctly.
+//
+// A refusal the helper labeled is an answer about the request. Anything it did
+// not label is the provider's own problem, which is the safe reading for a
+// failure nobody classified.
+func helperFailure(tool string, err error) error {
+	var answer struct {
+		Error string `json:"error"`
+		Kind  string `json:"kind"`
+	}
+	// The text carries the helper's JSON when it refused; when the transport
+	// itself broke there is nothing to parse and the default stands.
+	if start := strings.Index(err.Error(), "{"); start >= 0 {
+		_ = json.Unmarshal([]byte(err.Error()[start:]), &answer)
+	}
+	switch answer.Kind {
+	case "denied":
+		// The request was understood and refused: no window open, a secure
+		// field, an application that will not answer. Nothing is wrong with
+		// the helper.
+		return contract.Fail(contract.FailureNotFound, "desktop: %s: %s", tool, answer.Error)
+	case "invalid":
+		return contract.Fail(contract.FailureInvalidInput, "desktop: %s: %s", tool, answer.Error)
+	}
+	return contract.Fail(contract.FailureUnavailable, "desktop: %s: %v", tool, err)
 }
 
 // credential matches text that should never be typed by an automated caller.

@@ -3,6 +3,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -152,5 +153,41 @@ func TestTheCredentialCheckFiresOnCredentialsAndNothingElse(t *testing.T) {
 		if !credential(secret) {
 			t.Errorf("let a credential through: %q", secret)
 		}
+	}
+}
+
+// The bug this closes cost a capability. Asking to capture a window that was
+// not open came back as `unavailable`, the funnel read that as "the provider is
+// down", and desktop.screenshot stopped being chosen for everybody -- while the
+// receipt said the provider had failed when it had answered correctly.
+//
+// A refusal the helper labeled is an answer about the request. Only an
+// unlabeled failure is the provider's own.
+func TestAHelpersRefusalDoesNotMarkTheProviderDown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want contract.FailureKind
+	}{
+		{"no window open",
+			`mcpstdio rpc: {"error":"that application has no window on screen right now","kind":"denied"}`,
+			contract.FailureNotFound},
+		{"secure field",
+			`{"error":"the focused field is a secure text field","kind":"denied"}`,
+			contract.FailureNotFound},
+		{"unknown key",
+			`{"error":"unknown key frobnicate","kind":"invalid"}`,
+			contract.FailureInvalidInput},
+		// Unlabeled: nobody classified it, so it is the provider's own and
+		// marking it down is right.
+		{"the transport broke", "write |1: broken pipe", contract.FailureUnavailable},
+		{"an answer with no kind", `{"error":"something went wrong"}`, contract.FailureUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := contract.KindOf(helperFailure("screenshot", errors.New(tc.text)))
+			if got != tc.want {
+				t.Errorf("failure = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
