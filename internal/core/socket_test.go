@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -416,6 +417,26 @@ func TestAConnectionThatNeverEndsDoesNotHangTheStop(t *testing.T) {
 	}
 	cancel()
 	<-ran
+
+	// Run returning has to mean the handlers are gone, not merely that
+	// Shutdown was called.
+	//
+	// This is the assertion the flake was. Run ends with Shutdown, and a
+	// Shutdown somebody else already started returns nil at once -- so after
+	// the timeout above, Run reported success with the parked handler still
+	// alive and still writing into the state root. t.TempDir's own cleanup
+	// then removed that root out from under it and failed with "directory not
+	// empty", on two CI runners and never here, as a cleanup error nobody
+	// could attribute to anything.
+	//
+	// Removing it here says what is being pinned, and says it in a message.
+	// The framework removes it again afterwards, which costs nothing: a
+	// RemoveAll of a directory that is already gone is nil.
+	if err := os.RemoveAll(platform.StateDir()); err != nil {
+		t.Errorf("the state root could not be removed after Run returned (%v): "+
+			"a handler is still writing into it, so Run's return does not mean "+
+			"the service is down", err)
+	}
 }
 
 // waitForDoor blocks until the service has opened its socket, failing with
