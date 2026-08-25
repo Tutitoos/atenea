@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,9 @@ func main() {
 	validateOnly := flag.Bool("validate-only", false, "validate an existing summary")
 	input := flag.String("input", "benchmarks/runs/latest/summary.json", "summary used with render-only")
 	flag.Parse()
+	if err := checkInvocation(*profile, flag.Args()); err != nil {
+		fatal(err)
+	}
 
 	if *renderOnly || *validateOnly {
 		data, err := os.ReadFile(*input)
@@ -138,8 +142,51 @@ func runTests(ctx context.Context, output string) testRun {
 	return runTestsForPackages(ctx, output, testPackages...)
 }
 
+// profiles is the closed set --profile accepts, in ascending order of what a
+// run of it costs.
+var profiles = []string{"quick", "standard", "qualification", "stress"}
+
+// checkInvocation refuses a run that would silently measure something other
+// than what was asked for.
+//
+// Only "qualification" and "stress" are ever compared against, to raise the
+// sample count to ten and turn the CPU and memory profiles on. Every other
+// value took the quick path in silence, so `--profile qualifcation` produced
+// three samples and no profiles under a summary whose manifest recorded the
+// misspelling as the profile it ran -- evidence that reads as a qualification
+// run and is not one. Positional arguments are refused for the same reason:
+// `atenea-benchmark qualification`, without the flag, ran quick.
+func checkInvocation(profile string, positional []string) error {
+	if !slices.Contains(profiles, profile) {
+		return fmt.Errorf("unknown --profile %q: one of %s", profile, strings.Join(profiles, ", "))
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("unexpected argument %q: this command takes flags only, e.g. --profile %s",
+			positional[0], profiles[0])
+	}
+	return nil
+}
+
+// artifactPath anchors an artifact where the process that reads it will look.
+//
+// `go test` runs with cmd.Dir set to the repository root, so a relative
+// -coverprofile lands there, while readCoverage opens the same string against
+// this process's working directory. The two agree only when the suite is
+// started from the root, which is how the script starts it and is why nobody
+// saw it: run from anywhere else, the profile is written, never found, and the
+// summary reports 0.0% coverage over a suite that passed. Making the path
+// absolute before it is handed to a child settles it in the one place the two
+// bases can still be reconciled.
+func artifactPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return absolute
+}
+
 func runTestsForPackages(ctx context.Context, output string, packages ...string) testRun {
-	profile := filepath.Join(output, "coverage.out")
+	profile := artifactPath(filepath.Join(output, "coverage.out"))
 	args := []string{"test", "-json", "-count=1", "-coverprofile", profile}
 	args = append(args, packages...)
 	cmd := exec.CommandContext(ctx, "go", args...)
@@ -286,8 +333,11 @@ func runBenchmarks(ctx context.Context, output string, runs int, profile string)
 		for sample := 1; sample <= runs; sample++ {
 			args := []string{"test", spec.Package, "-run", "^$", "-bench", "^" + spec.Function + "$", "-benchmem", "-benchtime=" + spec.Benchtime, "-count=1"}
 			if profile == "qualification" || profile == "stress" {
-				cpuProfile := filepath.Join(profileDir, fmt.Sprintf("%s-%02d.cpu.pprof", spec.Name, sample))
-				memProfile := filepath.Join(profileDir, fmt.Sprintf("%s-%02d.mem.pprof", spec.Name, sample))
+				// Absolute for the same reason the coverage profile is: the
+				// child resolves these against the repository root, and the
+				// summary that records them is read from here.
+				cpuProfile := artifactPath(filepath.Join(profileDir, fmt.Sprintf("%s-%02d.cpu.pprof", spec.Name, sample)))
+				memProfile := artifactPath(filepath.Join(profileDir, fmt.Sprintf("%s-%02d.mem.pprof", spec.Name, sample)))
 				args = append(args, "-cpuprofile", cpuProfile, "-memprofile", memProfile)
 				profilePaths = append(profilePaths, cpuProfile, memProfile)
 			}

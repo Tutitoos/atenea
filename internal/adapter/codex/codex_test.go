@@ -191,6 +191,76 @@ func TestCodexValidJSONLBecomesCodeSearch(t *testing.T) {
 	}
 }
 
+// Codex writes more than events to stdout -- a sandbox warning, a login
+// notice, whatever the CLI decides to say. Every one of those lines used to
+// kill the process and fail the turn, throwing away an answer already paid
+// for, and the kill only reached the group leader anyway.
+func TestCodexAnswersDespiteNonJSONLinesAndSaysHowManyItSkipped(t *testing.T) {
+	root := t.TempDir()
+	body := "warning: sandbox is read-only\n" +
+		eventJSON(t, `{"matches":[{"path":"src/main.ts","line":4,"column":7}]}`) +
+		"\nnote: run `codex login` to see usage"
+	runner := newRunner(t, fakeCodex(t, body, 0, 0, ""), 10*time.Second)
+
+	out, err := runner.Run(context.Background(), request(t, root, map[string]any{"query": "Firebase"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(out.Result["matches"].([]any)) != 1 {
+		t.Fatalf("matches = %v, want the answer the turn did produce", out.Result["matches"])
+	}
+	if !hasNotice(out, "2 line(s)") {
+		t.Fatalf("notices = %v, want one counting the lines that were skipped", out.Notices)
+	}
+}
+
+// A stream this adapter understands none of is a provider saying nothing,
+// which is unavailable -- the tolerance above is for a MIX, not for garbage.
+func TestCodexRefusesAStreamWithNoReadableEvent(t *testing.T) {
+	runner := newRunner(t, fakeCodex(t, "warning: sandbox is read-only", 0, 0, ""), 10*time.Second)
+	_, err := runner.Run(context.Background(), request(t, t.TempDir(), map[string]any{"query": "x"}))
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable", contract.KindOf(err))
+	}
+}
+
+// context_lines is a declared input of code.search that this provider cannot
+// act on, because it returns no snippets to put context around. It used to be
+// read, validated and stored in a field nothing ever looked at, so a caller
+// who asked for it was told nothing at all.
+func TestCodexSaysContextLinesWasIgnoredRatherThanPretending(t *testing.T) {
+	root := t.TempDir()
+	body := eventJSON(t, `{"matches":[{"path":"src/main.ts","line":4,"column":7}]}`)
+	runner := newRunner(t, fakeCodex(t, body, 0, 0, ""), 10*time.Second)
+
+	out, err := runner.Run(context.Background(), request(t, root,
+		map[string]any{"query": "Firebase", "context_lines": 6}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !hasNotice(out, "context_lines was ignored") {
+		t.Fatalf("notices = %v, want one saying context_lines had no effect", out.Notices)
+	}
+
+	// A caller who did not ask is not told about a field it never sent.
+	quiet, err := runner.Run(context.Background(), request(t, root, map[string]any{"query": "Firebase"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if hasNotice(quiet, "context_lines") {
+		t.Fatalf("notices = %v, want nothing about an input nobody sent", quiet.Notices)
+	}
+}
+
+func hasNotice(out contract.Outcome, substring string) bool {
+	for _, notice := range out.Notices {
+		if strings.Contains(notice, substring) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCodexStopsWhenAnIncrementalCostEventExceedsTheGrant(t *testing.T) {
 	root := t.TempDir()
 	body := "{\"type\":\"turn.completed\",\"total_cost_usd\":0.26}"

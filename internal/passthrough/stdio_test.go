@@ -2,6 +2,7 @@ package passthrough_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -60,6 +61,25 @@ func TestHelperProcess(t *testing.T) {
 		}
 		switch msg.Method {
 		case "initialize":
+			// A server that writes to stdout and never frames a line. Real
+			// ones do it by accident -- a panic trace, a progress bar, a
+			// library logging to the wrong descriptor -- and the reader on
+			// the other end has to have a roof or it grows a buffer until
+			// the kernel picks a process to kill.
+			if n, _ := strconv.Atoi(os.Getenv("HELPER_FLOODS")); n > 0 {
+				chunk := strings.Repeat("x", 64<<10)
+				for written := 0; written < n; written += len(chunk) {
+					if _, err := os.Stdout.WriteString(chunk); err != nil {
+						return
+					}
+				}
+			}
+			// A handshake that takes its time, so a test can cancel the
+			// context of the chat that happened to arrive first while the
+			// process every other chat will share is still initializing.
+			if d, err := time.ParseDuration(os.Getenv("HELPER_SLOW_INIT")); err == nil {
+				time.Sleep(d)
+			}
 			initialized = true
 			reply(msg.ID, map[string]any{"protocolVersion": "2025-06-18", "serverInfo": map[string]any{"name": "helper"}})
 			continue
@@ -118,6 +138,14 @@ func TestHelperProcess(t *testing.T) {
 				"text": fmt.Sprintf("pid=%d tool=%s echo=%v heard=%s", os.Getpid(), msg.Params.Name, msg.Params.Arguments["echo"], heard),
 			}}})
 		}
+	}
+	// A server that does not take EOF on stdin for a goodbye. Closing stdin
+	// is the polite request every stdio server is supposed to understand;
+	// this one ignores it, which is what forces stop() down its kill path and
+	// holds open the window between a Close that has already dropped the
+	// process and the reader of that process finally noticing it is dead.
+	if os.Getenv("HELPER_STUBBORN") == "1" {
+		time.Sleep(30 * time.Second)
 	}
 }
 
@@ -506,4 +534,143 @@ func names(tools []passthrough.Tool) []string {
 		out = append(out, t.Name)
 	}
 	return out
+}
+
+// A process that fell over on its own has to be reaped, not merely forgotten.
+//
+// ensure noticed the death and set b.proc to nil, which is enough to stop
+// handing out a corpse and is not enough to bury one: nothing called Wait, so
+// the child stayed in the process table as a zombie for as long as Atenea ran,
+// with the three os.File ends of its pipes still open. A backend that crashes
+// and respawns leaks one of each per crash, and the state a `kill -0` cannot
+// tell apart from a healthy process is exactly the state this leaves behind --
+// which is why the check is the same one Close's test uses.
+func TestARespawnBuriesTheProcessItReplaces(t *testing.T) {
+	dir := t.TempDir()
+	ledger := dir + "/spawns"
+	b := helper(t, []string{"search_code"}, map[string]string{
+		"HELPER_LEDGER": ledger, "HELPER_DIE_ONCE": dir + "/died",
+	})
+	if _, err := b.Call(t.Context(), "search_code", nil); err == nil {
+		t.Fatal("the helper was asked to fall over and answered instead")
+	}
+	dead := readPID(t, ledger)
+	// The next caller is what makes ensure notice the death and start again.
+	if _, err := b.Tools(t.Context()); err != nil {
+		t.Fatalf("after the death: %v", err)
+	}
+	if n := lines(t, ledger); n != 2 {
+		t.Fatalf("%d processes, want 2: one that died and one that replaced it", n)
+	}
+	if err := waitGone(dead); err != nil {
+		t.Errorf("%v: it exited but was never waited on, so it is a zombie", err)
+	}
+}
+
+// The process outlives the chat that happened to need it first, and so must
+// its handshake.
+//
+// spawn refuses exec.CommandContext for exactly this reason -- a child bound
+// to one call's context is a shared server that quietly becomes a per-chat one
+// -- and then handed that same context to the initialize that runs one line
+// later. A first caller that pressed ctrl-c during the handshake took down the
+// process every other chat was about to share: ensure saw the cancellation as
+// a failed handshake and killed a child that was perfectly healthy. The
+// caller's own call still fails, because its context really is gone; what must
+// not fail is everybody else's.
+func TestCancellingTheFirstChatDoesNotKillTheSharedProcess(t *testing.T) {
+	ledger := t.TempDir() + "/spawns"
+	b := helper(t, []string{"search_code"}, map[string]string{
+		"HELPER_LEDGER": ledger, "HELPER_SLOW_INIT": "400ms",
+	})
+	impatient, giveUp := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		giveUp()
+	}()
+	if _, err := b.Call(impatient, "search_code", map[string]any{"echo": "one"}); err == nil {
+		t.Fatal("a call on a canceled context answered")
+	}
+	// The chat that arrives next finds the handshake done and the process up.
+	raw, err := b.Call(t.Context(), "search_code", map[string]any{"echo": "two"})
+	if err != nil {
+		t.Fatalf("the second chat found no backend: %v", err)
+	}
+	if got := field(t, raw, "echo="); got != "two" {
+		t.Errorf("echo = %q, want the second chat's own argument", got)
+	}
+	if n := lines(t, ledger); n != 1 {
+		t.Errorf("%d processes were started, want 1: the first chat's cancellation killed the shared one", n)
+	}
+}
+
+// A backend that writes to stdout without ever framing a line must be cut off
+// at a ceiling, not read until the machine runs out of memory.
+//
+// bufio.Reader.ReadString, which this used, grows a slice until it finds the
+// delimiter: the reader's buffer size sets how much is read per syscall and
+// nothing sets a roof on one message. The HTTP half of this package has capped
+// an answer at maxBody since it was written; the stdio half, which is the one
+// Atenea spawns itself and shares between every chat, had no cap at all. The
+// symptom is the giveaway: without the ceiling the flood is swallowed whole
+// and the answer that follows it is read as part of the same line, so the
+// handshake dies on its timeout with no idea why.
+func TestAServerThatNeverFramesALineIsCutOff(t *testing.T) {
+	b := helper(t, []string{"search_code"}, map[string]string{
+		"HELPER_FLOODS": strconv.Itoa(16 << 20),
+	})
+	start := time.Now()
+	_, err := b.Tools(t.Context())
+	if err == nil {
+		t.Fatal("a backend that never framed a line was reported as listing tools")
+	}
+	if !strings.Contains(err.Error(), "not framing JSON-RPC") {
+		t.Errorf("error = %v, want it to name the framing as the fault", err)
+	}
+	// The reader gives up at the ceiling rather than at the caller's deadline,
+	// and the difference between the two is the whole repair.
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the flood took %v to report: that is the call's timeout, not a ceiling", took)
+	}
+}
+
+// The routing table belongs to the pipe, not to the backend.
+//
+// Close drops b.proc and only then calls stop(), so from the moment it
+// releases the lock a new chat may spawn a replacement and register calls
+// against it. The reader of the process being stopped reaches its own defer
+// long afterwards -- with a server that ignores the polite close of stdin, a
+// whole procgroup.Grace afterwards -- and a clear() of a table shared by the
+// backend abandons the successor's callers at that point: their answers arrive
+// to a routing table that no longer has them in it, and the calls die on their
+// timeouts with a healthy process on the other end.
+func TestStoppingOneProcessDoesNotAbandonTheNextOnesCallers(t *testing.T) {
+	b := helper(t, []string{"search_code"}, map[string]string{"HELPER_STUBBORN": "1"})
+	if _, err := b.Tools(t.Context()); err != nil {
+		t.Fatalf("warming the first process: %v", err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		b.Close()
+	}()
+	// Long enough for Close to have dropped the process and be sitting inside
+	// stop(), and far shorter than the grace it will spend there.
+	time.Sleep(200 * time.Millisecond)
+
+	// This call spawns the successor. Its answer is deliberately slower than
+	// the grace the first process's stop is burning, so the doomed reader
+	// reaches its defer while this caller is still waiting.
+	start := time.Now()
+	raw, err := b.Call(t.Context(), "search_code", map[string]any{"echo": "next", "sleep": "3s"})
+	if err != nil {
+		t.Fatalf("a call on the successor process failed while it was alive and answering: %v", err)
+	}
+	if got := field(t, raw, "echo="); got != "next" {
+		t.Errorf("echo = %q, want this caller's own argument", got)
+	}
+	if took := time.Since(start); took > 6*time.Second {
+		t.Errorf("the answer took %v: it was dropped and re-found rather than routed", took)
+	}
+	<-stopped
 }

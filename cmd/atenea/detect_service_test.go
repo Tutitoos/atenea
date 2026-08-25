@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -103,7 +105,18 @@ func serviceWithPATH(t *testing.T, settingsPath, dir string) (pid int, stop func
 		"XDG_STATE_HOME=" + os.Getenv("XDG_STATE_HOME"),
 		"XDG_CONFIG_HOME=" + os.Getenv("XDG_CONFIG_HOME"),
 	}
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	// Held, not forwarded to os.Stderr.
+	//
+	// The child is this same test binary, so when it ends the testing
+	// framework prints its own "PASS" and its own "coverage: 0.0% of
+	// statements" line. Sent to the parent's stderr, both land in the stream
+	// `go test` is parsing for the parent package, and the second one wins:
+	// `go test -cover ./cmd/atenea` reported 0.0% for a package covered 72.9%,
+	// which is a number a coverage gate acts on. Kept in a buffer instead, and
+	// printed through t.Logf only when the test that started it failed, which
+	// is the only time anybody wants to read it.
+	var childOutput lockedBuffer
+	cmd.Stdout, cmd.Stderr = &childOutput, &childOutput
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting the service child: %v", err)
 	}
@@ -116,7 +129,12 @@ func serviceWithPATH(t *testing.T, settingsPath, dir string) (pid int, stop func
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_, _ = cmd.Process.Wait()
 	}
-	t.Cleanup(stop)
+	t.Cleanup(func() {
+		stop()
+		if t.Failed() {
+			t.Logf("service child output:\n%s", childOutput.String())
+		}
+	})
 
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
@@ -128,6 +146,26 @@ func serviceWithPATH(t *testing.T, settingsPath, dir string) (pid int, stop func
 	stop()
 	t.Fatal("the service child never answered on its socket")
 	return 0, stop
+}
+
+// lockedBuffer collects the child's output without racing the test that reads
+// it: exec's copying goroutines write here while the parent test is still
+// running, and the parent reads the whole thing from a cleanup.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // detectSettings declares the fake server by BARE NAME and pins no PATH, which

@@ -450,6 +450,58 @@ func TestAScopeThatLeavesTheRepositoryIsRefused(t *testing.T) {
 	}
 }
 
+// The lexical check cannot see a symlink: "vendor" climbs out of nothing at
+// all, and if it points at the directory above then omp is pointed outside the
+// repository and every hit it finds there is reported as if it were inside.
+// kivgraph has always decided this same question by resolving the link.
+func TestAScopeReachingOutOfTheRepositoryThroughASymlinkIsRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	if err := os.MkdirAll(filepath.Join(root, "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(parent, filepath.Join(root, "vendor")); err != nil {
+		t.Skipf("this filesystem cannot make the symlink the check exists for: %v", err)
+	}
+
+	if _, err := targets(root, []string{"vendor"}, "current"); contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Errorf("scope through the link -> %v, want permission_denied", contract.KindOf(err))
+	}
+	// The ordinary directory beside it is unaffected: this refuses an escape,
+	// not a scope.
+	if _, err := targets(root, []string{"internal"}, "current"); err != nil {
+		t.Errorf("targets(internal) = %v, want the scope accepted", err)
+	}
+}
+
+// The same check on the way back: a hit omp reports through a link out of the
+// repository must not be handed to the caller as a repository-relative path.
+func TestAHitReachedThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "secret.go"), []byte("package secret\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink(parent, filepath.Join(root, "vendor")); err != nil {
+		t.Skipf("this filesystem cannot make the symlink the check exists for: %v", err)
+	}
+
+	if got, ok := relativeTo(root, root, "vendor/secret.go"); ok {
+		t.Errorf("relativeTo accepted a hit outside the repository as %q", got)
+	}
+	// A file genuinely inside it still comes back, or this would refuse
+	// everything and pass for the wrong reason.
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got, ok := relativeTo(root, root, "main.go"); !ok || got != "main.go" {
+		t.Errorf("relativeTo(main.go) = %q, %v; want the path through", got, ok)
+	}
+}
+
 func TestSensitiveMatchesNeverLeaveTheAdapter(t *testing.T) {
 	runner := newTestRunner(t)
 	cases := map[string]bool{

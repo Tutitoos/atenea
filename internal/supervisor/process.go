@@ -51,6 +51,15 @@ type process struct {
 	// out from under a goroutine that is, by construction, always gone by
 	// the time a new one could replace it.
 	stopCh chan struct{}
+	// stopping latches this process closed for good. Supervisor.Stop sets it
+	// before it waits on anything, so a call that arrives late -- a WarmUp
+	// goroutine still on its way in, an EnsureReady from a caller that has
+	// not noticed the shutdown -- is refused instead of finding StateStopped
+	// and reading it as a cold server to start. A child spawned then would
+	// have nobody left to stop it, and procgroup.Isolate gives it a process
+	// group of its own, so it outlives this process rather than dying with
+	// it.
+	stopping bool
 	// session is the live mcpstdio session for a stdio activation's child,
 	// replaced on every restart under mu so no caller can be handed one
 	// whose process has already exited. Always nil for an http spec.
@@ -74,6 +83,10 @@ func newProcess(spec Spec) *process {
 // one attempt: the second caller in just polls the state the first caused.
 func (p *process) ensureReady(ctx context.Context) (string, error) {
 	p.mu.Lock()
+	if p.stopping {
+		p.mu.Unlock()
+		return "", fmt.Errorf("%s cannot be started: the supervisor is shutting down", p.spec.ID)
+	}
 	if p.state == StateStopped {
 		p.beginLocked()
 	}
@@ -90,6 +103,15 @@ func (p *process) ensureReady(ctx context.Context) (string, error) {
 			return endpoint, nil
 		case StateDown:
 			return "", fmt.Errorf("%s is down: %s", p.spec.ID, reason)
+		case StateStopped:
+			// The activation this call was waiting on ended deliberately:
+			// the idle reaper, or the supervisor shutting down. Waiting
+			// longer cannot fix either, because nothing moves a process out
+			// of Stopped except a new call coming in -- so a caller parked
+			// here used to spin on the tick until its own context expired
+			// and then report a timeout that said nothing about what
+			// actually happened.
+			return "", fmt.Errorf("%s was stopped while it was starting up", p.spec.ID)
 		}
 		select {
 		case <-ticker.C:
@@ -154,27 +176,69 @@ func (p *process) requestStop() {
 	}
 }
 
+// shutdown latches this process closed and asks the current activation to
+// stop, without waiting for it. Supervisor.Stop calls it on every process
+// before it waits on any of them, so that nothing can start a new child while
+// the shutdown is walking the list.
+func (p *process) shutdown() {
+	p.mu.Lock()
+	p.stopping = true
+	p.mu.Unlock()
+	p.requestStop()
+}
+
 // waitStopped blocks until the process reaches Stopped or Down -- the two
-// states nothing is running in. It polls because those are reached from two
-// different places in run, and a channel closes exactly once: it cannot mark
-// both without reinventing what state already means.
-func (p *process) waitStopped() {
+// states nothing is running in -- and reports whether it got there before
+// bound elapsed. It polls because those are reached from two different places
+// in run, and a channel closes exactly once: it cannot mark both without
+// reinventing what state already means.
+func (p *process) waitStopped(bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
 	for {
 		p.mu.Lock()
 		state := p.state
 		p.mu.Unlock()
 		if state == StateStopped || state == StateDown {
-			return
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
 		}
 		time.Sleep(probeEvery)
 	}
 }
 
+// stopBound is the longest one process may hold up a shutdown.
+//
+// A stop that goes to plan is SIGTERM, StopGrace for the child to leave
+// politely, SIGKILL, and then however long os/exec needs to stop waiting on
+// the output pipes -- which procgroup.Isolate now bounds with its own Grace,
+// because a grandchild that escaped the process group keeps the write end
+// open and nothing can make it let go. Twice the grace covers a busy machine
+// scheduling those steps late; it is not a second attempt at anything.
+func (p *process) stopBound() time.Duration {
+	return 2*p.spec.StopGrace + procgroup.Grace
+}
+
 // stop is the deliberate, synchronous stop Supervisor.Stop uses: ask, then
-// wait for the answer.
+// wait for the answer -- but never longer than stopBound.
+//
+// A child that has still not gone by then is marked down rather than waited
+// on. That is the honest state for it: nothing here will try to reach it
+// again, and the alternative is what this code used to do, which was to poll
+// a state that could not change while the whole shutdown -- and the service
+// exit behind it -- waited on a process that had already escaped.
 func (p *process) stop() {
 	p.requestStop()
-	p.waitStopped()
+	if p.waitStopped(p.stopBound()) {
+		return
+	}
+	p.mu.Lock()
+	if p.state != StateStopped && p.state != StateDown {
+		p.state = StateDown
+		p.lastReason = fmt.Sprintf("did not stop within %s", p.stopBound())
+	}
+	p.mu.Unlock()
 }
 
 func (p *process) status() Status {
@@ -369,10 +433,10 @@ const (
 
 // waitForReady blocks until the server confirms readiness, the process
 // exits on its own, ready_timeout elapses, or stop fires. What "confirms
-// readiness" means depends on session: nil means an http spec, and this
-// probes the endpoint exactly as before stdio existed; non-nil means a
-// stdio spec, and this drives the MCP handshake on it instead, since a
-// stdio child owns no address for a probe to point at.
+// readiness" means depends on session: nil means an http spec, and the loop
+// below polls the endpoint exactly as it did before stdio existed; non-nil
+// means a stdio spec, which owns no address for a probe to point at and is
+// handed to waitForHandshake instead.
 //
 // Every outcome except readyReached leaves exited already drained: on the
 // two paths that end without the server ever answering, this function is the
@@ -381,6 +445,9 @@ const (
 // where this function deliberately left it alone.
 func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan struct{}, session *mcpstdio.Session) (readyOutcome, error) {
 	deadline := time.Now().Add(p.spec.ReadyTimeout)
+	if session != nil {
+		return p.waitForHandshake(cmd, exited, stopCh, session, deadline)
+	}
 	ticker := time.NewTicker(probeEvery)
 	defer ticker.Stop()
 	for {
@@ -390,14 +457,12 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 		case <-stopCh:
 			// Never reached ready: there is nothing negotiated yet worth
 			// ending politely, so this goes straight to the hard stop
-			// rather than through gracefulStop's SIGTERM-then-wait. A
-			// stdio session dies on its own once its child is killed: its
-			// stdout closes, which is what the read loop is waiting on.
+			// rather than through gracefulStop's SIGTERM-then-wait.
 			_ = procgroup.Kill(cmd)
 			<-exited
 			return readyStopRequested, nil
 		case <-ticker.C:
-			if p.readyNow(session) {
+			if p.readyNow() {
 				return readyReached, nil
 			}
 			if time.Now().After(deadline) {
@@ -409,29 +474,83 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 	}
 }
 
-// readyNow asks, once, whether this attempt is ready. A nil session is an
-// http spec and this is byte-for-byte the probe waitForReady always made;
-// a non-nil session is a stdio spec, and initialize succeeding is the only
-// thing "ready" can mean when there is no address to ask instead. Bounded
-// to one tick rather than the whole ready_timeout so a child that accepts
-// the handshake but never answers it does not itself starve waitForReady's
-// own ability to notice stopCh or ready_timeout in the meantime.
-func (p *process) readyNow(session *mcpstdio.Session) bool {
-	// One tick, on every branch. The stdio branch was bounded and the two
-	// HTTP ones were not: they passed context.Background() to a client whose
-	// default has no Timeout either, so a child that accepted the TCP
-	// connection and then went quiet blocked this call forever. That is
-	// inside waitForReady's `case <-ticker.C`, so ready_timeout and stopCh
-	// stopped being evaluated at all -- and with run() parked there,
-	// waitStopped polled a state that could never change, Supervisor.Stop
-	// never returned, and Core.Shutdown hung behind it. A connection that is
-	// merely refused fails instantly and is unaffected, which is why the
-	// ordinary case never showed this.
+// waitForHandshake is waitForReady for a stdio child: one initialize, sent
+// once, with the whole ready_timeout to answer in.
+//
+// A stdio child owns no address to poll, so readiness is the MCP handshake
+// itself -- and a handshake is not a probe that can be repeated. Driving it
+// from the same tick as an http probe bounded every attempt to probeEvery, so
+// a child that took longer than 150ms to answer got its answer thrown away as
+// a timeout and a fresh initialize, under a new id, on the next tick. The
+// abandoned answers were then discarded as replies to ids nobody was waiting
+// for, and the child was sent an initialize it had already been sent -- a
+// protocol error to a server that checks, and an unbounded stream of them to
+// one that does not -- until ready_timeout ran out and the whole spawn was
+// called a failure. The rhythm of the polling and the ceiling on the
+// handshake are separate things, so they are written separately.
+func (p *process) waitForHandshake(cmd *exec.Cmd, exited chan error, stopCh chan struct{}, session *mcpstdio.Session, deadline time.Time) (readyOutcome, error) {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- session.Initialize(ctx) }()
+
+	timeout := time.NewTimer(time.Until(deadline))
+	defer timeout.Stop()
+	select {
+	case err := <-exited:
+		return readyNeverCame, fmt.Errorf("exited before answering ready: %w", err)
+	case <-stopCh:
+		// Nothing is negotiated yet, so there is nothing worth ending
+		// politely: this goes straight to the hard stop, exactly as the http
+		// branch does. Killing the child closes its stdout, which is what the
+		// session's read loop is waiting on, so the goroutine above returns
+		// on its own.
+		_ = procgroup.Kill(cmd)
+		<-exited
+		return readyStopRequested, nil
+	case err := <-done:
+		if err == nil {
+			return readyReached, nil
+		}
+		// A handshake that fails almost always fails because the child died
+		// mid-sentence: its stdout closes, the session's read loop ends, and
+		// this returns "the session is closed" a hair before cmd.Wait lands
+		// the exit status next door. The exit is the better explanation of
+		// the two -- "exited before answering ready: exit status 9" names a
+		// cause an operator can act on -- so it is given the moment it needs
+		// to arrive before the handshake's own wording is used.
+		select {
+		case exitErr := <-exited:
+			return readyNeverCame, fmt.Errorf("exited before answering ready: %w", exitErr)
+		case <-time.After(probeEvery):
+		}
+		_ = procgroup.Kill(cmd)
+		<-exited
+		return readyNeverCame, fmt.Errorf("did not complete the MCP handshake: %w", err)
+	case <-timeout.C:
+		_ = procgroup.Kill(cmd)
+		<-exited
+		return readyNeverCame, fmt.Errorf("did not answer ready within %s", p.spec.ReadyTimeout)
+	}
+}
+
+// readyNow asks, once, whether this http attempt is ready. Bounded to one
+// tick rather than the whole ready_timeout so a child that accepts the
+// connection but never answers does not itself starve waitForReady's own
+// ability to notice stopCh or ready_timeout in the meantime. The stdio
+// counterpart is waitForHandshake, which cannot work this way: see there.
+func (p *process) readyNow() bool {
+	// One tick, on both branches. Neither was bounded: they passed
+	// context.Background() to a client whose default has no Timeout either,
+	// so a child that accepted the TCP connection and then went quiet blocked
+	// this call forever. That is inside waitForReady's `case <-ticker.C`, so
+	// ready_timeout and stopCh stopped being evaluated at all -- and with
+	// run() parked there, waitStopped polled a state that could never change,
+	// Supervisor.Stop never returned, and Core.Shutdown hung behind it. A
+	// connection that is merely refused fails instantly and is unaffected,
+	// which is why the ordinary case never showed this.
 	ctx, cancel := context.WithTimeout(context.Background(), probeEvery)
 	defer cancel()
-	if session != nil {
-		return session.Initialize(ctx) == nil
-	}
 	if p.spec.Readiness == ReadinessHTTP {
 		return probeHTTP(ctx, p.spec.HTTP, p.endpoint) == nil
 	}

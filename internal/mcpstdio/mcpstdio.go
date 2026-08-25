@@ -46,6 +46,17 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// maxFrame caps one JSON-RPC message read off the child's stdout.
+//
+// The same number internal/passthrough's maxBody caps an HTTP answer at, and
+// deliberately so: both are one MCP message arriving from a server, and two
+// ceilings would mean the same oversized result was refused on one transport
+// and accepted on the other. It is repeated rather than imported because that
+// constant is unexported and this package sits below the one that owns it;
+// the number is small enough to state twice, and the reason it exists is the
+// same in both places.
+const maxFrame = 8 << 20
+
 // Options configures the handshake Initialize performs. Every field
 // defaults when left zero, so Options{} is a legitimate call.
 type Options struct {
@@ -235,22 +246,34 @@ func (s *Session) markDead(why error) {
 
 // read routes every line the child prints on stdout back to whoever asked
 // for it, until the child stops printing.
+//
+// The ceiling is not decoration. bufio.Reader.ReadString, which this used
+// until it was written, grows a slice until it finds the delimiter, so a
+// NewReaderSize only sets how much is read per syscall and puts no roof on a
+// single message: a child that writes to stdout and never emits a newline
+// grows that slice until the kernel kills Atenea for it. The children behind
+// this package are the ones internal/supervisor launches -- kivgraph and
+// tokensave, indexers whose stdout is a protocol and whose stderr the
+// supervisor already caps with a ring for the same reason -- so the one pipe
+// that was unbounded was the one carrying the most data.
 func (s *Session) read(stdout io.Reader) {
-	reader := bufio.NewReaderSize(stdout, 1<<20)
-	for {
-		line, err := reader.ReadString('\n')
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
+	lines := bufio.NewScanner(stdout)
+	lines.Buffer(make([]byte, 0, 64<<10), maxFrame)
+	for lines.Scan() {
+		if trimmed := strings.TrimSpace(lines.Text()); trimmed != "" {
 			s.route(trimmed)
 		}
-		if err != nil {
-			var readErr error
-			if !errors.Is(err, io.EOF) {
-				readErr = err
-			}
-			s.markDead(readErr)
-			return
-		}
 	}
+	// A clean EOF leaves Err nil, and a session that ended because the child
+	// exited is dead for no reason worth quoting. A frame over the ceiling is
+	// the opposite: the child is not framing JSON-RPC at all, and every byte
+	// after it on that pipe is unparseable by construction, so the caller is
+	// owed that sentence rather than a bare "the session is closed".
+	err := lines.Err()
+	if errors.Is(err, bufio.ErrTooLong) {
+		err = fmt.Errorf("printed more than %d bytes without a newline: it is not framing JSON-RPC", maxFrame)
+	}
+	s.markDead(err)
 }
 
 // route decides what one line from the child is, and there are three

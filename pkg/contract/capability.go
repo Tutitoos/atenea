@@ -63,7 +63,7 @@ func ParseEffect(s string) (Effect, error) {
 	if e, ok := effectByName[s]; ok {
 		return e, nil
 	}
-	return 0, fmt.Errorf("unknown effect %q: want read, write, external or process", s)
+	return 0, Fail(FailureInvalidInput, "unknown effect %q: want read, write, external or process", s)
 }
 
 // MarshalJSON writes an effect as its name.
@@ -152,7 +152,7 @@ func ParseFieldType(s string) (FieldType, error) {
 	if t, ok := typeByName[s]; ok {
 		return t, nil
 	}
-	return 0, fmt.Errorf("unknown field type %q", s)
+	return 0, Fail(FailureInvalidInput, "unknown field type %q", s)
 }
 
 // Field is one entry of a capability's input or output shape.

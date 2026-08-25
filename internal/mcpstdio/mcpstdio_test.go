@@ -374,3 +374,51 @@ func TestSessionCallFailsCanceledWhenContextIsCanceled(t *testing.T) {
 		t.Errorf("kind = %v, want %v", got, contract.FailureCanceled)
 	}
 }
+
+// A child that writes to stdout and never frames a line has to be cut off at
+// a ceiling, and the session it was talking on has to say so.
+//
+// bufio.Reader.ReadString, which read() used, grows a slice until it finds
+// the delimiter, so the reader's size only sets how much is read per syscall
+// and nothing puts a roof on one message. The children behind this package
+// are the ones internal/supervisor launches -- kivgraph and tokensave -- and
+// the supervisor already caps their stderr with a ring for exactly this
+// reason, which left the pipe carrying the protocol as the only unbounded
+// one. Without the ceiling the flood is simply swallowed and the caller waits
+// on its own deadline instead; with it, the session dies naming the fault.
+func TestAChildThatNeverFramesALineKillsTheSession(t *testing.T) {
+	f, sess := newFake(t)
+	go f.run(func(msg inbound) {
+		if msg.Method != "tools/call" {
+			return
+		}
+		// Written straight onto the pipe rather than through send(), because
+		// the whole point is that no newline ever follows it.
+		f.wmu.Lock()
+		defer f.wmu.Unlock()
+		chunk := strings.Repeat("x", 64<<10)
+		for written := 0; written < 9<<20; written += len(chunk) {
+			if _, err := f.fromW.Write([]byte(chunk)); err != nil {
+				return
+			}
+		}
+	})
+	if err := sess.Initialize(t.Context()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_, err := sess.Call(ctx, "get_symbol", nil)
+	if err == nil {
+		t.Fatal("a child that never framed a line answered a call")
+	}
+	if !strings.Contains(err.Error(), "not framing JSON-RPC") {
+		t.Errorf("error = %v, want it to name the framing as the fault", err)
+	}
+	// And the session is dead rather than merely confused: every later caller
+	// is told immediately instead of waiting out its own deadline.
+	if sess.Err() == nil {
+		t.Error("the session stayed live after its child stopped framing JSON-RPC")
+	}
+}

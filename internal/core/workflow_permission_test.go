@@ -218,3 +218,119 @@ func TestTheWorkflowToolsDeclareTheRepositoryArgument(t *testing.T) {
 		t.Fatalf("workflow tools on the list = %d, want 2", seen)
 	}
 }
+
+// readingPlanFixture is the writing fixture's harmless twin: one step, one
+// agent, `read` and nothing else. It exists so a launch can be run to the end
+// under an ordinary grant, which the writing fixture deliberately cannot do.
+// The agent command is /bin/true, so a step is really dispatched and really
+// comes back with nothing -- the run finishes, incomplete, which is a real
+// outcome and costs nothing to produce.
+func readingPlanFixture(t *testing.T) (settings, plan string) {
+	t.Helper()
+	repo := t.TempDir()
+	plan = filepath.Join(repo, "plan.toml")
+	body := "task = \"a plan that only reads\"\nbudget_usd = 1.00\n\n" +
+		"[[step]]\nid = \"look\"\nagent = \"reader\"\n" +
+		"objective = \"read the file\"\ncriterion = \"it was read\"\n" +
+		"effects = [\"read\"]\nbudget_usd = 0.25\n"
+	if err := os.WriteFile(plan, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	settings = strings.Replace(socketSettings, `path = "/tmp"`, fmt.Sprintf("path = %q", repo), 1)
+	settings += "\n[[agent]]\nname = \"reader\"\nkind = \"specialized\"\n" +
+		"summary = \"Reads, and reports nothing\"\ncommand = \"/bin/true\"\n" +
+		"context = [\"repository\"]\neffects = [\"read\"]\n" +
+		"max_duration = \"5s\"\nmax_tokens = 100\n\n" +
+		"  [[agent.result]]\n  name = \"ok\"\n  type = \"bool\"\n  required = true\n  summary = \"it read\"\n"
+	return settings, plan
+}
+
+// workflow.launch is the tool that commits the grant and spends the money, and
+// it was the one with no test of its own: create was exercised from several
+// angles while launch was reached only by the refusal above, which returns
+// before the engine is ever asked to run anything. So the answer's shape --
+// the id, the state, the summary and the per-state counts a caller reads to
+// know what happened -- was never checked against the code that builds it.
+func TestALaunchAnswersWithTheRunItFinished(t *testing.T) {
+	settings, plan := readingPlanFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+	created := result(t, c.call("tools/call", map[string]any{
+		"name":      "workflow.create",
+		"arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	drawn, _ := created["structuredContent"].(map[string]any)
+	id, _ := drawn["id"].(string)
+	if id == "" {
+		t.Fatalf("create returned no id: %v", created)
+	}
+
+	launched := result(t, c.call("tools/call", map[string]any{
+		"name":      "workflow.launch",
+		"arguments": map[string]any{"id": id},
+	}), "workflow.launch")
+	if launched["isError"] == true {
+		t.Fatalf("launching a read-only graph from a chat that holds read failed: %v", answerText(launched))
+	}
+	out, _ := launched["structuredContent"].(map[string]any)
+	if out["id"] != id {
+		t.Errorf("id = %v, want the run that was launched (%s)", out["id"], id)
+	}
+	// The agent is /bin/true and reports none of the results it declares, so
+	// the run really finishes and really has nothing to show for it. Both
+	// halves matter: "finished" is the engine saying it ran the graph out, and
+	// the counts are how a caller learns that finishing is not succeeding.
+	if out["state"] != "finished" {
+		t.Errorf("state = %v, want finished: the graph was run to the end", out["state"])
+	}
+	if summary, _ := out["summary"].(string); summary == "" {
+		t.Error("the answer carries no summary, so a caller has nothing to read back")
+	}
+	counts, _ := out["steps"].(map[string]any)
+	if len(counts) == 0 {
+		t.Errorf("steps = %v, want a count per state for the one step in the graph", out["steps"])
+	}
+}
+
+// The two refusals launch owes a caller, and neither is a tool result: a
+// launch with nothing to launch is a malformed request, not a graph that went
+// badly, so it comes back as a JSON-RPC error against the call.
+func TestALaunchWithNoUsableIDIsRefusedByName(t *testing.T) {
+	settings, _ := readingPlanFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("omp")
+
+	// Whitespace, not the empty string: a trimmed id is the shape a caller
+	// actually sends when a template filled in nothing.
+	blank := c.call("tools/call", map[string]any{
+		"name":      "workflow.launch",
+		"arguments": map[string]any{"id": "   "},
+	})
+	refusal, _ := blank["error"].(map[string]any)
+	if refusal == nil {
+		t.Fatalf("a launch with a blank id was answered rather than refused: %v", blank)
+	}
+	if message, _ := refusal["message"].(string); !strings.Contains(message, "id is required") {
+		t.Errorf("message = %q, want it to name what was missing", message)
+	}
+
+	// An id that no run answers to is the other half: the caller named
+	// something, and the honest answer is that it is not here.
+	missing := c.call("tools/call", map[string]any{
+		"name":      "workflow.launch",
+		"arguments": map[string]any{"id": "wf-no-such-run"},
+	})
+	gone, _ := missing["error"].(map[string]any)
+	if gone == nil {
+		t.Fatalf("a launch of an unknown id was answered rather than refused: %v", missing)
+	}
+	if message, _ := gone["message"].(string); !strings.Contains(message, "wf-no-such-run") {
+		t.Errorf("message = %q, want it to name the id that was not found", message)
+	}
+}

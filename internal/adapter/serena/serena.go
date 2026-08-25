@@ -131,6 +131,12 @@ type conn struct {
 	// project at a time means one caller at a time per URL, so two
 	// commissions never interleave activation or the session lifecycle.
 	mu sync.Mutex
+	// handshakeMu serializes the initialize exchange itself. wireMu cannot:
+	// the handshake is a check, a round trip, and then a write, and holding a
+	// field lock across a network call would block every concurrent sibling
+	// from so much as reading nextID. Held only on the path that has no
+	// session yet, so an established connection never touches it.
+	handshakeMu sync.Mutex
 	// wireMu additionally guards session, active, nextID, and version below.
 	// A commission holds mu for its whole exchange, but symbol.overview's
 	// locateAll dispatches many find_symbol calls concurrently inside that
@@ -1213,6 +1219,22 @@ func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol)
 	found, err := parseReferences(raw)
 	if err != nil {
 		return nil, err
+	}
+	// include_snippet and snippet_lines are declared inputs of
+	// symbol.references and this path honoured neither. parseReferences always
+	// fills Snippet -- from the line Serena marks, or from the whole rendered
+	// context when there is no marker -- and shape emits the key whenever it
+	// is non-empty, so a caller who asked for locations alone was handed
+	// source it never requested, and one who asked for a window of N lines got
+	// whatever Serena chose to render. The other two paths into this shape,
+	// locationsFrom and symbolAt, have always read both fields; this is that
+	// same policy, applied where it was missing.
+	for i := range found {
+		if !a.snippet {
+			found[i].Snippet = ""
+			continue
+		}
+		found[i].Snippet = trimToLines(found[i].Snippet, a.lines)
 	}
 	return withinScope(found, a.scope), nil
 }

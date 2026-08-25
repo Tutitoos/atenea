@@ -35,17 +35,28 @@ func Contain(cmd *exec.Cmd) {
 	contain(cmd)
 }
 
-// Isolate puts cmd in a process group of its own without wiring cmd.Cancel
-// or cmd.WaitDelay. Call it after exec.Command -- not CommandContext -- and
-// before the process is started, for a caller that manages a child's whole
-// lifecycle itself on its own timers and calls Terminate or Kill directly
-// rather than through a context.
+// Isolate puts cmd in a process group of its own without wiring cmd.Cancel.
+// Call it after exec.Command -- not CommandContext -- and before the process
+// is started, for a caller that manages a child's whole lifecycle itself on
+// its own timers and calls Terminate or Kill directly rather than through a
+// context.
 //
 // Contain and Isolate do not mix: Cancel only works on a Cmd that was built
 // with CommandContext, and Start refuses one that carries a Cancel func
 // otherwise. A caller driven by ctx cancellation wants Contain; a caller
 // like internal/supervisor, driven by its own state machine, wants this.
+//
+// WaitDelay is set here too, for the half of the problem this package's own
+// doc comment describes that has nothing to do with cancellation: Wait does
+// not return until the output pipes reach EOF, and a grandchild that called
+// setsid escaped the group Terminate and Kill can reach while still holding
+// the write end it inherited. Killing the group then leaves Wait blocked for
+// as long as that survivor lives -- which is how a Supervisor.Stop that only
+// ever waited on cmd.Wait could hang the whole shutdown behind a leaked
+// helper. Setting it costs a caller whose child exits cleanly nothing at all:
+// the delay only starts once the process is already gone.
 func Isolate(cmd *exec.Cmd) {
+	cmd.WaitDelay = Grace
 	isolate(cmd)
 }
 

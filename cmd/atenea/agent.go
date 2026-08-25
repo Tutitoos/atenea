@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -43,15 +44,9 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	}
 	typeName, args := strings.TrimSpace(args[0]), args[1:]
 
-	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	objective := flags.String("objective", "", "what the agent is being asked to do")
-	criterion := flags.String("criterion", "", "what done looks like")
-	tracePath := flags.String("traces", "", "trace database (default "+trace.DefaultPath()+")")
-	repository := flags.String("repository", "", "repository id to serve at the repository level")
-	quiet := flags.Bool("quiet", false, "print the verdict line only")
-	review := flags.String("review", "", "agent type that audits the answer; a refusal relaunches the work once")
-	confirm := flags.Bool("confirm", false, "require an interactive TTY confirmation for write or external effects")
+	flags, opts := agentFlags()
+	objective, criterion, tracePath := opts.objective, opts.criterion, opts.tracePath
+	repository, quiet, review, confirm := opts.repository, opts.quiet, opts.review, opts.confirm
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -78,6 +73,14 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 
+	// Resolved before the trace store is opened, because opening it sweeps
+	// orphans and prints about it: a typo in --repository must not leave that
+	// behind on its way to being refused.
+	workspace, err := workspaceFor(cfg, *repository)
+	if err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 	store, err := openTraces(ctx, *tracePath, out, *quiet)
 	if err != nil {
@@ -88,7 +91,7 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	runner, err := agent.New(agent.Options{
 		Types:     cfg.Agents,
 		Store:     store,
-		Workspace: workspaceFor(cfg, *repository),
+		Workspace: workspace,
 		History: func(ctx context.Context, name string, limit int) ([]trace.Row, error) {
 			return store.List(ctx, trace.Filter{TypeName: name, Limit: limit})
 		},
@@ -129,6 +132,38 @@ func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	return runErr
 }
 
+// agentOptions is where `atenea agent` parks what its flags carry.
+type agentOptions struct {
+	objective  *string
+	criterion  *string
+	tracePath  *string
+	repository *string
+	review     *string
+	quiet      *bool
+	confirm    *bool
+}
+
+// agentFlags registers the command's flags on a set of its own.
+//
+// Separated from cmdAgent so the set can be walked without running anything:
+// a flag this command accepts and its help page never mentions is a flag
+// nobody finds, and --confirm reached the point of being mandatory for write
+// and external types while going undocumented. The test that walks it is what
+// keeps the two in step.
+func agentFlags() (*flag.FlagSet, agentOptions) {
+	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	return flags, agentOptions{
+		objective:  flags.String("objective", "", "what the agent is being asked to do"),
+		criterion:  flags.String("criterion", "", "what done looks like"),
+		tracePath:  flags.String("traces", "", "trace database (default "+trace.DefaultPath()+")"),
+		repository: flags.String("repository", "", "repository id to serve at the repository level"),
+		quiet:      flags.Bool("quiet", false, "print the verdict line only"),
+		review:     flags.String("review", "", "agent type that audits the answer; a refusal relaunches the work once"),
+		confirm:    flags.Bool("confirm", false, "require an interactive TTY confirmation for write or external effects"),
+	}
+}
+
 func requiresAgentConfirmation(effects []contract.Effect) bool {
 	for _, effect := range effects {
 		if effect == contract.EffectWrite || effect == contract.EffectExternal {
@@ -148,10 +183,19 @@ func defaultObjective(declared config.AgentType, files []string) string {
 	return "run " + declared.Spec.Name
 }
 
-// workspaceFor picks what the repository level describes. A named repository
-// must exist; an unnamed one takes the working directory, because a command
-// run inside a tree is asking about that tree.
-func workspaceFor(cfg config.Config, id string) agent.Workspace {
+// workspaceFor picks what the repository level describes.
+//
+// A named repository must exist, and a name nothing matches is refused rather
+// than resolved: the fallback below would otherwise hand the agent the working
+// directory under the id "current", so a typo in --repository reads as a
+// successful run against a tree nobody named. Every other command that takes a
+// repository refuses an unknown one; this one used to be the exception.
+//
+// An unnamed repository takes the first one the settings file declares, and
+// only falls back to the working directory when the file declares none at all.
+// That is not "the tree the command was run in": a machine with a catalog gets
+// its first entry whatever directory the operator is standing in.
+func workspaceFor(cfg config.Config, id string) (agent.Workspace, error) {
 	ws := agent.Workspace{AteneaVersion: buildinfo.Version}
 	for _, repo := range cfg.Repositories {
 		ws.Repositories = append(ws.Repositories, repo.ID)
@@ -160,12 +204,17 @@ func workspaceFor(cfg config.Config, id string) agent.Workspace {
 		}
 	}
 	sort.Strings(ws.Repositories)
+	if id != "" && ws.RepositoryID != id {
+		return agent.Workspace{}, contract.Fail(contract.FailureNotFound,
+			"no repository %q is declared; the settings file declares: %s",
+			id, orNone(ws.Repositories))
+	}
 	if ws.RepositoryRoot == "" {
 		if cwd, err := os.Getwd(); err == nil {
 			ws.RepositoryID, ws.RepositoryRoot = "current", cwd
 		}
 	}
-	return ws
+	return ws, nil
 }
 
 // openTraces opens the store and closes whatever the last Atenea left open.
@@ -259,7 +308,11 @@ func resultLine(value any) string {
 	}
 	const wide = 120
 	if len(text) > wide {
-		return text[:wide] + "…"
+		// The same guard truncate documents: wide is a byte budget, so the
+		// cut can land inside a multi-byte rune and the ellipsis would then
+		// be glued to half a character -- which a terminal draws as U+FFFD
+		// in the middle of a result the operator is trying to read.
+		return strings.ToValidUTF8(text[:wide], "") + "…"
 	}
 	return text
 }
@@ -270,6 +323,14 @@ func resultLine(value any) string {
 // second thing to install, find on PATH and keep in step -- and the settings
 // file can name this one by the path it was already started from.
 func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
+	// Validated before anything is written. recordAssignment interpolates the
+	// name into a file name, and filepath.Join collapses whatever "../" the
+	// name carries into a path outside the log directory -- so a name this
+	// binary does not ship must be refused here, while it is still only a
+	// string, rather than after a file bearing it has been created.
+	if !builtinAgent(kind) {
+		return unknownBuiltinAgent(kind)
+	}
 	stdin = recordAssignment(kind, stdin)
 	switch kind {
 	case "filereader":
@@ -299,9 +360,24 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 			return planner.Plan(ctx, stdin, stdout)
 		}
 	default:
-		return contract.Fail(contract.FailureNotFound,
-			"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader and plan", kind)
+		// Unreachable: builtinAgent above admits exactly the names this
+		// switch handles. It stays as the compiler's proof that a name added
+		// to one list and not the other cannot fall through to nothing.
+		return unknownBuiltinAgent(kind)
 	}
+}
+
+// builtinAgents is the closed list of agents this binary ships, and the only
+// names cmdAgentRun will act on or write to disk.
+var builtinAgents = []string{
+	"filereader", "reviewer", "semantic-reviewer", "plan-check", "explore", "reader", "plan",
+}
+
+func builtinAgent(kind string) bool { return slices.Contains(builtinAgents, kind) }
+
+func unknownBuiltinAgent(kind string) error {
+	return contract.Fail(contract.FailureNotFound,
+		"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader and plan", kind)
 }
 
 // AssignmentLogEnv names a directory where the assignment each built-in agent
@@ -330,9 +406,14 @@ func recordAssignment(kind string, stdin io.Reader) io.Reader {
 		// malformed one.
 		return io.MultiReader(bytes.NewReader(raw), errReader{err})
 	}
-	if mkErr := os.MkdirAll(dir, 0o755); mkErr == nil {
+	// 0700 and 0600, the modes the notebook and the checkpoint store already
+	// use for the same reason: an assignment is a verbatim copy of what a run
+	// was told, objectives and file paths included, and it lands wherever the
+	// environment variable points -- often a shared temporary directory where
+	// the default umask would leave it world-readable.
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr == nil {
 		name := fmt.Sprintf("%d-%s-%d.json", time.Now().UnixNano(), kind, os.Getpid())
-		_ = os.WriteFile(filepath.Join(dir, name), raw, 0o644)
+		_ = os.WriteFile(filepath.Join(dir, name), raw, 0o600)
 	}
 	return bytes.NewReader(raw)
 }

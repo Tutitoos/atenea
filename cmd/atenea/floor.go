@@ -205,12 +205,15 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	repoFlag := flags.String("repo", "", "repository id or path to measure (required)")
 	agentFlag := flags.String("agent", "", "which declared agent type's tool surface to measure (required)")
+	dryRun := flags.Bool("dry-run", false, "print what the probe would cost and spend nothing")
+	confirm := flags.Bool("confirm", false, "ask at the terminal before spending the turn")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 	if flags.NArg() != 0 {
 		return contract.Fail(contract.FailureInvalidInput,
-			"floor measure takes no positional arguments, only --repo and --agent: got %q", flags.Arg(0))
+			"floor measure takes no positional arguments, only --repo, --agent, --dry-run and --confirm: got %q",
+			flags.Arg(0))
 	}
 	if strings.TrimSpace(*repoFlag) == "" {
 		return contract.Fail(contract.FailureInvalidInput, "floor measure: --repo is required")
@@ -329,6 +332,37 @@ func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "about to spend real money: one turn on %s as %s with %s -- no previous "+
 			"measurement, the amount is unknown\n", repo.ID, agent, modelName)
+	}
+
+	// The two ways out, and they come after the line above rather than before
+	// it: the estimate is what an operator needs in order to answer, and it is
+	// only known once the stored row has been read.
+	//
+	// --dry-run is the whole command except the turn -- it resolves the
+	// repository, the agent type and the model, and refuses everything this
+	// command refuses -- so what it prints is what the real run would price,
+	// not a guess written beside it.
+	//
+	// --confirm is the same boundary `task`, `ask`, `decide --run` and `agent`
+	// already offer, on the one command that spends by definition. It stays
+	// opt-in for the same reason it is opt-in there: a prompt nobody asked for
+	// blocks a script forever, and confirmTTY refuses outright when stdin is
+	// not a terminal.
+	if *dryRun {
+		fmt.Fprintf(out, "--dry-run: nothing was spent and no row was stored. "+
+			"Re-run without it, or with --confirm, to pay for the measurement.\n")
+		return nil
+	}
+	if *confirm {
+		estimate := 0.0
+		if hadPrevious {
+			estimate = previous.ColdStartUSD()
+		}
+		action := fmt.Sprintf("floor measure --repo %s --agent %s: one paid turn on %s",
+			repo.ID, agent, modelName)
+		if err := confirmTTY(out, action, estimate, []contract.Effect{contract.EffectExternal}); err != nil {
+			return err
+		}
 	}
 
 	client, err := model.New(model.Options(cfg.Model))

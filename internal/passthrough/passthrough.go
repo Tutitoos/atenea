@@ -349,7 +349,21 @@ func (b *httpBackend) attempt(ctx context.Context, method string, params any) (j
 	b.mu.Lock()
 	session := b.session
 	b.mu.Unlock()
-	return b.send(ctx, method, params, session)
+	raw, opened, err := b.send(ctx, method, params, session)
+	// send does not write b.session, and this is why. It runs on both sides of
+	// the lock -- ensure calls it holding mu, this path calls it without --
+	// so a Lock inside it would deadlock the first chat to touch a cold
+	// backend and leaving it unlocked was a write racing every other chat's
+	// read two lines above. Adopting the observed id here keeps the field's
+	// only writers in the two places that can take the lock honestly.
+	if session == "" && opened != "" {
+		b.mu.Lock()
+		if b.session == "" {
+			b.session = opened
+		}
+		b.mu.Unlock()
+	}
+	return raw, err
 }
 
 // ensure performs the handshake once, under the lock, for whoever gets there
@@ -363,13 +377,17 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 	// The handshake's own answer is not kept: what it says about the server
 	// is already on `atenea wrap`'s report, and a tool list taken here would
 	// be the snapshot Tools deliberately refuses to cache.
-	if _, err := b.send(ctx, "initialize", map[string]any{
+	_, opened, err := b.send(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea", "version": "1"},
-	}, ""); err != nil {
+	}, "")
+	if err != nil {
 		return err
 	}
+	// Written under the lock this function already holds, which is what makes
+	// the field safe to read anywhere else that takes it.
+	b.session = opened
 	// The notification carries the session id the initialize answer set, and
 	// a server that never issued one is talking sessionless -- which is
 	// allowed, and which the empty string already expresses.
@@ -380,8 +398,15 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 	return nil
 }
 
-// send performs one JSON-RPC round trip and returns the result member.
-func (b *httpBackend) send(ctx context.Context, method string, params any, session string) (json.RawMessage, error) {
+// send performs one JSON-RPC round trip and returns the result member, plus
+// the session id the server issued for a call that carried none.
+//
+// The session travels back rather than being stored here because this method
+// has two callers with two different relationships to the lock -- ensure holds
+// mu, attempt does not -- and there is no way to write the field from inside
+// that is correct for both. Handing the observation up leaves each caller to
+// record it the way its own lock allows.
+func (b *httpBackend) send(ctx context.Context, method string, params any, session string) (json.RawMessage, string, error) {
 	// Atomic rather than guarded by mu: send is called from ensure, which
 	// already holds mu, and taking it again there would deadlock the first
 	// chat to touch a cold backend. The counter needs atomicity, not the
@@ -392,29 +417,32 @@ func (b *httpBackend) send(ctx context.Context, method string, params any, sessi
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
 	})
 	if err != nil {
-		return nil, b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
+		return nil, "", b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
 	}
 	answered, err := b.post(ctx, body, session)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if answered.code == http.StatusNotFound && session != "" {
-		return nil, errStaleSession
+		return nil, "", errStaleSession
 	}
 	if answered.code >= 400 {
-		return nil, b.fail(contract.FailureUnavailable, "%s: answered %s: %s",
+		return nil, "", b.fail(contract.FailureUnavailable, "%s: answered %s: %s",
 			method, answered.status, clip(answered.text))
 	}
-	// The id is taken from the response headers on the handshake only: a
-	// server that rotates it mid-session would be inventing a protocol.
-	if session == "" && answered.session != "" {
-		b.session = answered.session
+	// The id is reported from the response headers on the handshake only: a
+	// server that rotates it mid-session would be inventing a protocol, and a
+	// call that already carried one is not being told anything new.
+	opened := ""
+	if session == "" {
+		opened = answered.session
 	}
 	payload, err := decode(answered.text)
 	if err != nil {
-		return nil, b.fail(contract.FailureUnavailable, "%s: %v", method, err)
+		return nil, opened, b.fail(contract.FailureUnavailable, "%s: %v", method, err)
 	}
-	return resultOf(payload, method, b.fail)
+	raw, err := resultOf(payload, method, b.fail)
+	return raw, opened, err
 }
 
 // notify sends a message that is owed no answer.

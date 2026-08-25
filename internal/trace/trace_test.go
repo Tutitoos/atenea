@@ -239,3 +239,42 @@ func TestCompleteWithNoDiscoveriesReadsBackEmpty(t *testing.T) {
 		t.Fatalf("discovered = %+v, want none", rows[0].Discovered)
 	}
 }
+
+// The sweep's ceiling exists so that a machine which somehow accumulated more
+// open rows than one start should handle closes the oldest batch now and the
+// rest next time. It could not: a listing is newest-first for every reader
+// that is a person, the sweep asked for the same listing, and the ceiling
+// therefore trimmed the oldest rows away -- leaving precisely the orphans
+// whose writer has been gone the longest open start after start, while each
+// start re-examined runs that had barely finished.
+func TestAListingAskedForTheOldestFirstTrimsTheNewestAway(t *testing.T) {
+	s := store(t)
+	at := time.Now().Truncate(time.Second)
+	for i, id := range []string{"first", "second", "third"} {
+		if err := s.Begin(t.Context(), row(id, at.Add(time.Duration(i)*time.Minute))); err != nil {
+			t.Fatalf("Begin %s: %v", id, err)
+		}
+	}
+
+	rows, err := s.List(t.Context(), trace.Filter{Oldest: true, Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("%d rows, want the 2 the limit allows", len(rows))
+	}
+	if rows[0].ID != "first" || rows[1].ID != "second" {
+		t.Errorf("got %s then %s, want the two oldest in order: the limit cut the wrong end",
+			rows[0].ID, rows[1].ID)
+	}
+
+	// The default is unchanged, because every other caller is a person reading
+	// a screen and wants the newest run at the top.
+	newest, err := s.List(t.Context(), trace.Filter{Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if newest[0].ID != "third" || newest[1].ID != "second" {
+		t.Errorf("got %s then %s, want the two newest", newest[0].ID, newest[1].ID)
+	}
+}

@@ -99,7 +99,13 @@ type jsonDrop struct {
 // printResultJSON is the machine-readable twin of printResult and
 // printAnswer. It ignores --trace: there is no eye to spare here, so the
 // answer, the plan and every step are always on the wire.
-func printResultJSON(out io.Writer, result *orchestrator.Result) {
+//
+// It returns the encoder's error rather than dropping it, as printIntentJSON
+// and printDecisionJSON already do. --json exists to be consumed by a program:
+// a closed pipe or a full disk means that program received nothing, and
+// exiting 0 over an empty stream tells it the run went fine and produced no
+// steps -- a lie it has no way to check.
+func printResultJSON(out io.Writer, result *orchestrator.Result) error {
 	js := jsonResult{
 		Run:        result.RunID,
 		Task:       result.Task,
@@ -142,9 +148,7 @@ func printResultJSON(out io.Writer, result *orchestrator.Result) {
 	for _, step := range result.Steps {
 		js.Steps = append(js.Steps, jsonStepOf(step))
 	}
-	enc := json.NewEncoder(out)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(js)
+	return encodeJSON(out, js)
 }
 
 func jsonStepOf(step orchestrator.StepResult) jsonStep {
@@ -242,7 +246,7 @@ type jsonAnsweredBy struct {
 }
 
 // printDetectionJSON is the machine-readable twin of the two prose sections.
-func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) {
+func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) error {
 	servers, reports := detection.Servers, detection.Indexes
 	js := jsonDetection{
 		AnsweredBy: jsonAnsweredBy{
@@ -280,7 +284,19 @@ func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) 
 			Err:        report.Err,
 		}
 	}
+	return encodeJSON(out, js)
+}
+
+// encodeJSON writes one indented document and says whether it arrived.
+//
+// The single place the --json renderers hand their payload to stdout, so the
+// failure they used to discard is now reported once, in the same words,
+// wherever it happens.
+func encodeJSON(out io.Writer, payload any) error {
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(js)
+	if err := enc.Encode(payload); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "writing the json report: %v", err)
+	}
+	return nil
 }

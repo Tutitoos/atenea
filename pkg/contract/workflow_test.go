@@ -349,3 +349,31 @@ func names(wave []contract.Step) string {
 	}
 	return strings.Join(out, ", ")
 }
+
+// The comment on this check names "the one shape that would silently turn a
+// ceiling into a license" and the condition then read `< 0 || IsNaN`, which
+// lets +Inf past: it is not below zero, and no ceiling downstream can be
+// smaller than it, so the far side is held to nothing. NaN loses every
+// comparison it is put through and reaches the same place by the other road.
+func TestAPermissionCannotCarryABudgetThatIsNotARealNumber(t *testing.T) {
+	unreal := map[string]float64{
+		"positive infinity": math.Inf(1),
+		"negative infinity": math.Inf(-1),
+		"NaN":               math.NaN(),
+	}
+	for name, amount := range unreal {
+		t.Run(name, func(t *testing.T) {
+			p := contract.Permission{Task: "index the repository", BudgetUSD: amount}
+			if err := p.Validate(); err == nil {
+				t.Fatalf("a budget of %v was accepted as an authorization", amount)
+			}
+		})
+	}
+
+	// Zero stays valid: a grant that is spent is the normal end of a grant,
+	// not a typo, which is why the refusal cannot simply be "not positive".
+	spent := contract.Permission{Task: "index the repository"}
+	if err := spent.Validate(); err != nil {
+		t.Fatalf("a spent grant was refused: %v", err)
+	}
+}

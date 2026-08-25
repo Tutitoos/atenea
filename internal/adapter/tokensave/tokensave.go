@@ -399,6 +399,14 @@ func toRoot(prefix, file, repositoryID string) (string, error) {
 // has no field to travel back in.
 func toRepository(prefix, file string) (string, bool) {
 	clean := filepath.ToSlash(path.Clean(file))
+	// An umbrella root has no prefix, and until this check existed that case
+	// waved every path through: "../../etc/passwd" came back from the far side
+	// as a legitimate repository-relative path, and runCalls joined it onto
+	// the root and read it. Every other prefix rejects an escape by not
+	// matching; the empty one has to reject it by saying so.
+	if clean == ".." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return "", false
+	}
 	if prefix == "" {
 		return clean, true
 	}
@@ -593,8 +601,14 @@ func (r *Runner) runOverview(ctx context.Context, sess *mcpstdio.Session, prefix
 	// The column is recovered from the file, once, because no provider behind
 	// this capability reports one and the declaration says so out loud. A
 	// file that cannot be read still answers: the line is right either way,
-	// and column 1 is the honest fallback.
-	lines := readLines(filepath.Join(r.root, target))
+	// and column 1 is the honest fallback. A file that leaves the root is a
+	// different thing and refuses the answer -- reading it is outside the
+	// commission whether or not a column comes back.
+	resolved, err := within(r.root, target)
+	if err != nil {
+		return nil, nil, err
+	}
+	lines := readLines(resolved)
 
 	tops := topLevel(found)
 	symbols := make([]any, 0, len(found))
@@ -730,7 +744,10 @@ func (r *Runner) runCalls(ctx context.Context, sess *mcpstdio.Session, prefix st
 		return nil, nil, err
 	}
 
-	scope := scopePrefixes(req.Payload, prefix, req.Repository.ID)
+	scope, err := scopePrefixes(req.Payload, prefix, req.Repository.ID)
+	if err != nil {
+		return nil, nil, err
+	}
 	var (
 		rows    []any
 		outside int
@@ -770,8 +787,15 @@ func (r *Runner) runCalls(ctx context.Context, sess *mcpstdio.Session, prefix st
 				"depth":     hop.Depth,
 			}
 			if wantSnippet {
-				if text := snippetAt(filepath.Join(r.root, hop.File), hop.Line, snippetLines); text != "" {
-					record["snippet"] = text
+				// A hop whose file leaves the root loses its snippet and
+				// keeps its row: the row was built from the graph and is
+				// still true, while the snippet is the only part that would
+				// have needed the read. snippetAt already answers "" for a
+				// file it cannot open, so an escape lands in the same place.
+				if resolved, err := within(r.root, hop.File); err == nil {
+					if text := snippetAt(resolved, hop.Line, snippetLines); text != "" {
+						record["snippet"] = text
+					}
 				}
 			}
 			rows = append(rows, record)
@@ -905,12 +929,18 @@ func readDirection(payload map[string]any) (string, error) {
 
 // scopePrefixes turns the declared scope into repository-relative prefixes.
 // An empty scope means the whole repository, which is every path.
-func scopePrefixes(payload map[string]any, prefix, repositoryID string) []string {
-	_ = prefix
-	_ = repositoryID
+//
+// The entries stay repository-relative, unlike code.context's, which cross the
+// wire and are rooted first: inScope matches them against paths this package
+// has already translated back. They go through toRoot anyway and only its
+// verdict is kept, because the two parameters were being discarded and an
+// entry like "../other" was accepted as a filter that can never match. That
+// answers "this symbol has no calls" to a question that was never askable,
+// which is precisely what runContext refuses by the same rule.
+func scopePrefixes(payload map[string]any, prefix, repositoryID string) ([]string, error) {
 	raw, ok := payload["scope"].([]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	out := make([]string, 0, len(raw))
 	for _, item := range raw {
@@ -918,9 +948,12 @@ func scopePrefixes(payload map[string]any, prefix, repositoryID string) []string
 		if !isText || strings.TrimSpace(text) == "" {
 			continue
 		}
-		out = append(out, filepath.ToSlash(path.Clean(text)))
+		if _, err := toRoot(prefix, text, repositoryID); err != nil {
+			return nil, err
+		}
+		out = append(out, filepath.ToSlash(path.Clean(strings.TrimSpace(text))))
 	}
-	return out
+	return out, nil
 }
 
 // inScope reports whether one repository-relative path is under any declared
@@ -935,6 +968,56 @@ func inScope(relative string, scope []string) bool {
 		}
 	}
 	return false
+}
+
+// within turns a root-relative path into the absolute file to open, and is
+// the last gate before this package touches the disk.
+//
+// Both reads here are of paths the FAR SIDE chose: runOverview reads the file
+// tokensave says it indexed, and runCalls reads the file a call-graph hop
+// points at. The lexical checks in toRoot and toRepository run before that,
+// but they cannot see a symlink: `services/api/vendor` pointing at /etc is a
+// path that never climbs out of the root and still reads outside it. So the
+// containment is checked twice, once lexically and once on the resolved path,
+// exactly as the kivgraph adapter does for the same reason. A path that does
+// not exist resolves to no error: the caller's own read reports that case, and
+// a missing file is not an escape.
+func within(root, relative string) (string, error) {
+	name := filepath.FromSlash(relative)
+	if name == "" || filepath.IsAbs(name) {
+		return "", contract.Fail(contract.FailureInvalidInput, "%q must be relative to the served root", relative)
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", contract.Fail(contract.FailureUnavailable, "cannot resolve tokensave's root: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootAbs = resolved
+	}
+	joined := filepath.Join(rootAbs, name)
+	if err := contained(rootAbs, joined, relative); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return joined, nil
+		}
+		return "", contract.Fail(contract.FailureUnavailable, "cannot resolve %q: %v", relative, err)
+	}
+	if err := contained(rootAbs, resolved, relative); err != nil {
+		return "", err
+	}
+	return joined, nil
+}
+
+// contained reports whether target sits inside root, once both are absolute.
+func contained(root, target, name string) error {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return contract.Fail(contract.FailurePermissionDenied, "%q leaves tokensave's root", name)
+	}
+	return nil
 }
 
 // readLines reads a file for column and snippet recovery. A file that cannot

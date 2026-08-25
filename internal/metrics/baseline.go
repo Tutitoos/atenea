@@ -221,6 +221,15 @@ func since(now, then time.Time) time.Duration {
 // machine actually has installed -- version strings are vendor prose and
 // cannot be ordered, but timestamps can.
 //
+// That instant has to be the attempt's own, on both sides of the union. The
+// folded side used to report max(bucket), which is the hour the attempt landed
+// in: two versions used inside the same hour folded into two rows with the
+// same last_seen, the tie fell through to `tool_version DESC`, and the version
+// that won was whichever string sorted higher -- 9.9.0 over 10.0.0, the
+// comparison the paragraph above says cannot be made. Migration 0008 gave
+// rollup a real last_seen so the tiebreak is only ever reached by two attempts
+// recorded at the identical microsecond.
+//
 // The consequence is deliberate: an upgrade puts that implementation back into
 // break-in, and it earns its numbers again.
 const costs = `WITH parts AS (
@@ -239,7 +248,7 @@ const costs = `WITH parts AS (
 	SELECT implementation, tool_version,
 	       sum(attempts), sum(failures), sum(ok_attempts),
 	       sum(ok_duration_us_sum), sum(ok_tokens_sum),
-	       max(peak_rss_max), max(bucket)
+	       max(peak_rss_max), max(last_seen)
 	FROM rollup
 	WHERE capability = ? AND repository = ?
 	GROUP BY 1, 2
@@ -272,8 +281,22 @@ QUALIFY row_number() OVER (
 // Unlike costs this reads folded rows too. Folding is a summary of what things
 // cost, and it throws the ordering away; the attempt rows outlive it for the
 // whole fine window precisely so questions like this one can still be asked.
-// Nothing here crosses tool versions either way: a streak is about the binary
-// installed right now, and an upgrade should be given the chance to be better.
+//
+// Nothing here crosses tool versions: a streak is about the binary installed
+// right now, and an upgrade should be given the chance to be better. The
+// `current` CTE is what enforces that. Before it the sentence was a promise
+// nobody had written down anywhere in the query -- tool_version appeared in no
+// WHERE, no PARTITION BY and no GROUP BY -- so three failures from the binary
+// that was replaced this morning still condemned the one installed to fix
+// them, and the funnel refused to call the fixed provider until FaultWindow
+// had run out.
+//
+// Which version counts is settled the same way costs settles it: the version
+// of the newest attempt, chosen on the timestamp because version strings
+// cannot be ordered. It is read after the four bins below are dropped, so a
+// run of `not_found` from a version nothing else was recorded under cannot
+// silently redefine what "installed right now" means.
+//
 // The partition is (capability, repository, implementation) whichever way it
 // is asked, because health is a per-repository fact: the same provider can be
 // warm on one repository and dead on another, and merging them would report a
@@ -296,15 +319,23 @@ QUALIFY row_number() OVER (
 // evidence in either direction: a refusal must not condemn a provider and must
 // not exonerate one either. A run of them is invisible here, which leaves the
 // streak exactly as the last real attempt left it.
-const recencyTemplate = `WITH recent AS (
-	SELECT capability, repository, implementation, ok, failure_kind, failure, raw, happened_at,
-	       row_number() OVER (
+const recencyTemplate = `WITH current AS (
+	SELECT capability, repository, implementation, tool_version, ok,
+	       failure_kind, failure, raw, happened_at,
+	       first_value(tool_version) OVER (
 	           PARTITION BY capability, repository, implementation ORDER BY happened_at DESC
-	       ) AS rn
+	       ) AS running_version
 	FROM measurement
 	WHERE (ok OR coalesce(failure_kind, '') NOT IN
 	           ('not_found', 'permission_denied', 'invalid_input', 'canceled'))
 	%s
+), recent AS (
+	SELECT capability, repository, implementation, ok, failure_kind, failure, raw, happened_at,
+	       row_number() OVER (
+	           PARTITION BY capability, repository, implementation ORDER BY happened_at DESC
+	       ) AS rn
+	FROM current
+	WHERE tool_version = running_version
 ), ends AS (
 	SELECT capability, repository, implementation,
 	       coalesce(min(rn) FILTER (WHERE ok), 999999999) AS first_ok,

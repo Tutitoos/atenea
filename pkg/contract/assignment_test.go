@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -162,15 +163,20 @@ func TestAParentThatDeclaredNoTokenCountConstrainsNone(t *testing.T) {
 
 // Rule: depth is capped at three levels. The third may not hand out work, and
 // a card claiming depth four is refused even if somebody builds it by hand.
+//
+// The chain is orchestrators all the way down on purpose: a specialist is
+// refused at level two for holding no authority to split work at all, which
+// would make this test pass without ever reaching the depth cap it is here to
+// measure. Only an orchestrator can get deep enough to be stopped by it.
 func TestDepthIsCappedAtThreeLevels(t *testing.T) {
 	one := testRoot(t)
 	read := []contract.Effect{contract.EffectRead}
 
-	two, err := one.Child("two", "explorer", contract.AgentSpecialized, testTask(), read, testLimits())
+	two, err := one.Child("two", "planner", contract.AgentOrchestrator, testTask(), read, testLimits())
 	if err != nil {
 		t.Fatalf("level 2: %v", err)
 	}
-	three, err := two.Child("three", "explorer", contract.AgentSpecialized, testTask(), read, testLimits())
+	three, err := two.Child("three", "planner", contract.AgentOrchestrator, testTask(), read, testLimits())
 	if err != nil {
 		t.Fatalf("level 3: %v", err)
 	}
@@ -386,6 +392,20 @@ func TestCompletenessRules(t *testing.T) {
 			},
 			errSubstr: "out of range",
 		},
+		{
+			// Both infinities already fall outside (0, 1]. NaN is the one
+			// value the range test cannot see, because every comparison
+			// against it is false -- and what gets past reads as a partial
+			// answer whose fraction can be neither ranked nor added up.
+			name: "completeness of NaN",
+			r: contract.Report{
+				Result:       map[string]any{"summary": "x"},
+				Verdict:      contract.VerdictOK,
+				Completeness: ptrOf(math.NaN()),
+				StoppedAt:    "somewhere",
+			},
+			errSubstr: "out of range",
+		},
 	}
 
 	for _, tc := range cases {
@@ -572,15 +592,213 @@ func TestBothKindsUseTheSameCard(t *testing.T) {
 
 // Clone is a deep copy: a card handed to a child must not share backing arrays
 // with the parent that stamped it.
+//
+// The two money pointers and Rejected are covered here for the reason
+// Report.Clone gives for copying Spent.USD: on both fields nil is a fact of
+// its own -- "no money was granted here", "there is no run above you" -- so
+// two cards sharing one address can have one card's figure edited into the
+// other's, and a relaunch is exactly when a second card of the same run
+// exists to do it.
 func TestAssignmentCloneDoesNotShareState(t *testing.T) {
 	root := testRoot(t)
+	root.BudgetUSD = ptrOf(0.09)
+	root.CommissionUSD = ptrOf(5.22)
+	root.Rejected = &contract.Subject{
+		RunID:     "earlier-run",
+		TypeName:  "explorer",
+		Task:      testTask(),
+		Attempt:   1,
+		Result:    map[string]any{"summary": "the answer that was refused"},
+		Verdict:   contract.VerdictFailed,
+		Reason:    contract.Reason{Kind: contract.FailureTimeout, Text: "ran out of time"},
+		ReviewID:  "review-1",
+		Rejection: contract.Reason{Kind: contract.FailureInvalidInput, Text: "no file was named"},
+	}
+
 	copied := root.Clone()
 	copied.Effects[0] = contract.EffectExternal
 	copied.Task.Files[0] = "elsewhere.go"
+	*copied.BudgetUSD = 99
+	*copied.CommissionUSD = 99
+	copied.Rejected.Result["summary"] = "rewritten"
+
 	if root.Effects[0] == contract.EffectExternal {
 		t.Fatal("clone shares the effects array")
 	}
 	if root.Task.Files[0] == "elsewhere.go" {
 		t.Fatal("clone shares the files array")
+	}
+	if *root.BudgetUSD != 0.09 {
+		t.Fatalf("budget = %v: clone shares the share pointer", *root.BudgetUSD)
+	}
+	if *root.CommissionUSD != 5.22 {
+		t.Fatalf("commission = %v: clone shares the grant pointer", *root.CommissionUSD)
+	}
+	if root.Rejected == copied.Rejected {
+		t.Fatal("clone shares the rejected subject itself")
+	}
+	if root.Rejected.Result["summary"] != "the answer that was refused" {
+		t.Fatalf("rejected result = %q: clone shares the refused answer's map",
+			root.Rejected.Result["summary"])
+	}
+}
+
+// Splitting work is the one authority an orchestrator holds and a specialist
+// does not, and Child is the only place that authority is ever exercised. A
+// specialist reaching it holds every other grant its parent held -- the same
+// effects, the same levels, the same ceilings -- so no other check in Child
+// stands between it and a card of its own.
+func TestOnlyAnOrchestratorMayHandOutWork(t *testing.T) {
+	root := testRoot(t)
+	read := []contract.Effect{contract.EffectRead}
+
+	specialist, err := root.Child("kid", "explorer", contract.AgentSpecialized,
+		testTask(), read, testLimits())
+	if err != nil {
+		t.Fatalf("Child: %v", err)
+	}
+	if specialist.Depth >= contract.MaxAgentDepth {
+		t.Fatalf("depth = %d: the depth cap would refuse this card on its own, "+
+			"which is not the rule under test", specialist.Depth)
+	}
+
+	_, err = specialist.Child("grandkid", "explorer", contract.AgentSpecialized,
+		testTask(), read, testLimits())
+	if err == nil {
+		t.Fatal("a specialized agent handed out work")
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied: refusing this is about "+
+			"authority, not about a malformed card", got)
+	}
+	if !strings.Contains(err.Error(), "specialized") {
+		t.Fatalf("error %q does not say which kind was refused", err)
+	}
+}
+
+// CommissionUSD is the grant of the whole run, not a share of it, so it
+// travels down whole. Nil on this field means "there is no run above you",
+// which is a different claim from "you were granted nothing" -- so a child
+// born nil inside a funded workflow is told the opposite of the truth, and an
+// agent dividing a graph divides its own share under the commission's name.
+func TestChildInheritsTheWholeCommission(t *testing.T) {
+	root := testRoot(t)
+	root.CommissionUSD = ptrOf(5.22)
+	root.BudgetUSD = ptrOf(0.09)
+
+	child, err := root.Child("kid", "explorer", contract.AgentSpecialized,
+		testTask(), []contract.Effect{contract.EffectRead}, testLimits())
+	if err != nil {
+		t.Fatalf("Child: %v", err)
+	}
+	if child.CommissionUSD == nil {
+		t.Fatal("the child was told there is no run above it")
+	}
+	if *child.CommissionUSD != 5.22 {
+		t.Fatalf("commission = %v, want the parent's 5.22", *child.CommissionUSD)
+	}
+	if child.CommissionUSD == root.CommissionUSD {
+		t.Fatal("parent and child share one commission pointer")
+	}
+	// BudgetUSD is the share and is deliberately NOT inherited: the caller
+	// divides it, and a child that helped itself to the parent's share would
+	// be the double-spend Permission.BudgetUSD is documented to prevent.
+	if child.BudgetUSD != nil {
+		t.Fatalf("budget = %v, want nil: a share is granted, never inherited", *child.BudgetUSD)
+	}
+}
+
+// Every comparison against NaN is false, so a validator written as
+// `amount < 0` refuses negatives and waves NaN straight through. +Inf gets
+// past the same test for the opposite reason. Neither can come from a person:
+// both are arithmetic upstream that overflowed or divided by zero, and both
+// then compare false against every ceiling downstream, so a grant carrying one
+// is a grant nothing can enforce.
+func TestMoneyThatIsNotARealNumberIsRefused(t *testing.T) {
+	unreal := map[string]float64{
+		"NaN":               math.NaN(),
+		"positive infinity": math.Inf(1),
+		"negative infinity": math.Inf(-1),
+	}
+	for name, amount := range unreal {
+		t.Run("assignment budget of "+name, func(t *testing.T) {
+			card := testRoot(t)
+			card.BudgetUSD = ptrOf(amount)
+			if err := card.Validate(); err == nil {
+				t.Fatal("a budget that is not a real number was accepted")
+			}
+		})
+		t.Run("charge of "+name, func(t *testing.T) {
+			charge := contract.Charge{InputTokens: 10, USD: ptrOf(amount), PricedBy: "a price list"}
+			if err := charge.Validate(); err == nil {
+				t.Fatal("a receipt figure that is not a real number was accepted")
+			}
+		})
+	}
+
+	// Completeness is a fraction, so both infinities already fall outside
+	// (0, 1]. NaN is the one value the range test cannot see.
+	partial := contract.Report{
+		Result:       map[string]any{"summary": "some of it"},
+		Verdict:      contract.VerdictOK,
+		Completeness: ptrOf(math.NaN()),
+		StoppedAt:    "somewhere",
+	}
+	if err := partial.Validate(testSpec()); err == nil {
+		t.Fatal("a completeness of NaN was accepted as a fraction of the work")
+	}
+}
+
+// Plus is folded over a run's charges one at a time, which is what makes both
+// of these matter. The pointer must not be the operand's own, or the running
+// total is an alias of whichever report was measured; and the provenance must
+// name each source once, or fifteen turns priced by the same list read back as
+// that list fifteen times.
+func TestChargePlusNeitherAliasesNorRepeatsItsSources(t *testing.T) {
+	priced := contract.Charge{InputTokens: 10, USD: ptrOf(0.25), PricedBy: "anthropic"}
+	// The zero Charge is what an agent that spent nothing hands back, and it
+	// is the operand that sends Plus down the two shortcuts. It is the start
+	// of every fold, so the shortcut runs on the first addition of every run.
+	unmeasured := contract.Charge{}
+
+	total := unmeasured.Plus(priced)
+	if total.USD == priced.USD {
+		t.Fatal("the running total shares the measured charge's dollar figure")
+	}
+	total = priced.Plus(unmeasured)
+	if total.USD == priced.USD {
+		t.Fatal("the running total shares its own operand's dollar figure")
+	}
+	if total.USD == nil || *total.USD != 0.25 {
+		t.Fatalf("USD = %v, want the one measured figure", total.USD)
+	}
+
+	// Three turns, two of them priced by the same list. The fold must say
+	// each source once.
+	second := contract.Charge{InputTokens: 4, USD: ptrOf(0.10), PricedBy: "anthropic"}
+	third := contract.Charge{InputTokens: 6, USD: ptrOf(0.05), PricedBy: "openrouter"}
+	folded := priced.Plus(second).Plus(third).Plus(second)
+	if got := strings.Count(folded.PricedBy, "anthropic"); got != 1 {
+		t.Fatalf("priced_by = %q names anthropic %d times, want once", folded.PricedBy, got)
+	}
+	if folded.PricedBy != "anthropic and openrouter" {
+		t.Fatalf("priced_by = %q", folded.PricedBy)
+	}
+}
+
+// Subject.Clone exists so a reviewer and the parent do not hold one map, and
+// Report.Subject is the constructor that builds every subject there is. A
+// subject handed out with the report's own map means the answer being judged
+// and the answer about to be consumed are one mutable object.
+func TestSubjectDoesNotShareTheReportsResultMap(t *testing.T) {
+	report := contract.Report{
+		Result:  map[string]any{"summary": "what the run found"},
+		Verdict: contract.VerdictOK,
+	}
+	subject := report.Subject("run-1", "explorer", 1, testTask())
+	subject.Result["summary"] = "what the reviewer wrote instead"
+	if report.Result["summary"] != "what the run found" {
+		t.Fatalf("the reviewer edited the report underneath the parent: %q",
+			report.Result["summary"])
 	}
 }

@@ -37,6 +37,17 @@
 // over at once do not interleave; the reader is built to survive it anyway,
 // because a notebook that refuses to open after one bad line would fail at the
 // only job it has.
+//
+// # Bounded, because nobody is watching
+//
+// The file is rotated at MaxBytes and exactly one previous notebook is kept.
+// Nothing above this package suppresses a repeat -- a maintenance beat that
+// fails every time it runs records an incident every time it runs -- so a
+// fault left unattended over a weekend is otherwise a file with no ceiling.
+// The cost lands on Read, which parses the whole notebook into memory on every
+// status screen, and rotation is what keeps that a small cost rather than a
+// growing one. Read looks at the live file alone: the rotated one is there for
+// whoever arrives after a long outage and wants to see how far back it goes.
 package notebook
 
 import (
@@ -112,6 +123,25 @@ const (
 	MarkName = "incidents.mark"
 )
 
+// RotatedSuffix names the one previous notebook that is kept, and MaxBytes is
+// the size the live one is allowed to reach before it becomes that.
+//
+// Something had to bound this. Nothing in the package ever removed a line, and
+// nothing above it suppresses a repeat: a maintenance beat that fails every
+// time it runs writes one incident per beat for as long as the fault lasts, so
+// a provider left broken over a weekend is a file that grows without limit. It
+// is Read that pays -- the status screen parses the whole notebook into memory
+// on every call, so an unattended fault turns `atenea status` into a
+// megabyte-per-invocation JSON parse -- and Record pays too, because every
+// entry is synced to a file the filesystem keeps having to extend.
+//
+// Four megabytes is roughly ten thousand entries with a stack on each. That is
+// far more than anybody reads and far less than anybody notices.
+const (
+	RotatedSuffix = ".1"
+	MaxBytes      = 4 << 20
+)
+
 // DefaultPath is where the notebook lives when nobody says otherwise: beside
 // the run receipts and the measurement base, under the same state root. All
 // three are the same kind of thing -- what Atenea remembers about work it has
@@ -128,7 +158,16 @@ func New(path string) (*Notebook, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"notebook: path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// 0700, not 0755. The directory this creates is normally platform.StateDir
+	// itself, and core.New builds the notebook before the measurement base and
+	// before the receipt folder -- deliberately, so a crash during the rest of
+	// the assembly still has somewhere to be written down. That order made
+	// this MkdirAll the one that fixes the mode of the whole state root on a
+	// fresh machine, and 0755 left every incident, receipt and measurement
+	// under it readable by every account on the box. The stores that follow
+	// ask for 0700 and 0750; the first one through the door has to ask for at
+	// least as little.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"notebook: %s: %v", filepath.Dir(path), err)
 	}
@@ -173,6 +212,9 @@ func (n *Notebook) Record(in Incident) error {
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "notebook: %v", err)
 	}
+	if err := n.rotateIfFull(); err != nil {
+		return err
+	}
 	// Read-write rather than write-only: the file is still append-only, but
 	// the tail has to be looked at before adding to it. See below.
 	f, err := os.OpenFile(n.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
@@ -203,6 +245,35 @@ func (n *Notebook) Record(in Incident) error {
 		return contract.Fail(contract.FailureUnavailable, "notebook: %s: %v", n.path, err)
 	}
 	return f.Close()
+}
+
+// rotateIfFull moves a notebook that has reached MaxBytes aside and starts a
+// fresh one, so the live file stays the size the status screen can afford to
+// parse on every invocation.
+//
+// Exactly one previous notebook is kept, under RotatedSuffix. A second one
+// would be a retention ladder, and a crash notebook is not a history: the
+// entries worth acting on are the recent ones, and the older file is there so
+// that whoever arrives after a long outage can still see how far back it goes.
+//
+// The watermark goes back to zero with the file. It counts entries from the
+// start of the notebook, so leaving it where it was would have it point into
+// the middle of the new one and mark the first entries after a rotation as
+// already read -- which is the one mistake this file must not make.
+//
+// A rotation that cannot happen is not worth losing an incident over: the
+// error is dropped and the entry is appended to the oversized file, because a
+// notebook that is too big is a nuisance and a notebook missing the entry
+// somebody needed is the failure the package exists to prevent.
+func (n *Notebook) rotateIfFull() error {
+	info, err := os.Stat(n.path)
+	if err != nil || info.Size() < MaxBytes {
+		return nil //nolint:nilerr // a notebook that is not there yet is not full
+	}
+	if err := os.Rename(n.path, n.path+RotatedSuffix); err != nil {
+		return nil //nolint:nilerr // see above: the entry matters more than the size
+	}
+	return n.writeMark(0)
 }
 
 // Catch writes down a panic and then lets it carry on killing the process.

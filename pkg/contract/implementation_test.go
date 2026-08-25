@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -36,6 +37,12 @@ func TestImplementationValidateRejectsBadDefinitions(t *testing.T) {
 			i.Constraints.MaxScale = contract.ScaleSmall
 		},
 		"health score above one": func(i *contract.Implementation) { i.Health.Score = 1.5 },
+		// NaN is listed beside the range cases because a range test cannot
+		// catch it: every comparison against NaN is false, so `< 0 || > 1`
+		// reads as a bound and admits the one value outside every bound. A
+		// NaN score loses every tie-break it enters, so the provider carrying
+		// it is ranked last for ever and the funnel never explains why.
+		"health score of NaN": func(i *contract.Implementation) { i.Health.Score = math.NaN() },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

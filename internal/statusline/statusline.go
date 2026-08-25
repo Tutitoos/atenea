@@ -364,13 +364,57 @@ func (l Line) writeConfig(entries []string, keys map[string]json.RawMessage) err
 	}
 	body = append(body, '\n')
 
-	if err := os.MkdirAll(filepath.Dir(l.TUIConfig), 0o755); err != nil {
+	dir := filepath.Dir(l.TUIConfig)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return contract.Fail(contract.FailureUnavailable,
-			"cannot create %s: %v", filepath.Dir(l.TUIConfig), err)
+			"cannot create %s: %v", dir, err)
 	}
-	if err := os.WriteFile(l.TUIConfig, body, 0o644); err != nil {
-		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", l.TUIConfig, err)
+	return replaceFile(l.TUIConfig, body)
+}
+
+// replaceFile puts body at path in one step, the way internal/platform writes
+// a unit file: a temporary file beside it, then a rename.
+//
+// This file belongs to the client, and everything in it that is not the plugin
+// list belongs to whoever put it there. os.WriteFile truncates in place, so an
+// interruption between the truncate and the last byte -- a full disk, a killed
+// process, a machine losing power -- leaves the client's configuration short or
+// empty, and the keys this package went out of its way to carry through are
+// gone anyway. A rename cannot half-happen: a reader sees the old file or the
+// new one.
+func replaceFile(path string, body []byte) error {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", path, err)
 	}
+	tmp := temp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := temp.Write(body); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", path, err)
+	}
+	// CreateTemp makes the file 0600. The client's own config is an ordinary
+	// readable file, and a rename carries the temporary file's mode with it, so
+	// this is set before the rename rather than after -- a config that arrives
+	// unreadable to the tools that share this directory is a different failure
+	// from the one this function exists to prevent.
+	if err := temp.Chmod(0o644); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", path, err)
+	}
+	if err := temp.Close(); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "cannot write %s: %v", path, err)
+	}
+	keep = true
 	return nil
 }
 

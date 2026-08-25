@@ -75,3 +75,38 @@ func TestRawOfWithNoRawTextIsEmpty(t *testing.T) {
 		t.Fatalf("RawOf = %q, want empty", got)
 	}
 }
+
+// Every refusal this package raises has to land in a declared bin.
+//
+// FailureUnspecified is defined as the signal that some adapter failed to do
+// its one job, so it is never a category a constructor here may choose. Four
+// of the ten Parse functions already returned *Failure and six returned a
+// plain fmt.Errorf, which KindOf could only sort as unspecified -- so a
+// settings file with one misspelled enum was reported as an internal fault
+// rather than as the input mistake it is, and the caller that switches on the
+// bin to decide whether to blame the user could not tell them apart.
+func TestEveryParseRefusalIsBinnedAsInvalidInput(t *testing.T) {
+	refusals := map[string]func() error{
+		"effect":          func() error { _, err := contract.ParseEffect("delete"); return err },
+		"field type":      func() error { _, err := contract.ParseFieldType("decimal"); return err },
+		"scale":           func() error { _, err := contract.ParseScale("huge"); return err },
+		"vcs":             func() error { _, err := contract.ParseVCS("maybe"); return err },
+		"health state":    func() error { _, err := contract.ParseHealthState("sick"); return err },
+		"scope guarantee": func() error { _, err := contract.ParseScopeGuarantee("loose"); return err },
+		"failure kind":    func() error { _, err := contract.ParseFailureKind("exploded"); return err },
+		"verdict":         func() error { _, err := contract.ParseVerdict("maybe"); return err },
+		"agent type":      func() error { _, err := contract.ParseAgentType("wizard"); return err },
+		"context level":   func() error { _, err := contract.ParseContextLevel("everything"); return err },
+	}
+	for name, refuse := range refusals {
+		t.Run(name, func(t *testing.T) {
+			err := refuse()
+			if err == nil {
+				t.Fatal("an unknown name was accepted")
+			}
+			if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+				t.Fatalf("KindOf = %v, want invalid_input: %v", got, err)
+			}
+		})
+	}
+}

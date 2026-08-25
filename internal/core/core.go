@@ -1223,8 +1223,15 @@ func (c *Core) Run(ctx context.Context) error {
 	c.beats.Start(ctx)
 	go c.accept(ctx, listener)
 	if c.processes != nil {
-		// WarmUp only touches Persistent servers and does not wait for any
-		// of them, so a slow one never holds up the rest of Run starting.
+		// WarmUp only touches Persistent servers, and it waits for some of
+		// them. The ordinary ones are started in parallel and not waited on,
+		// so a slow one never holds up the rest of Run. The serena@* family
+		// is the exception WarmUp documents: those are warmed in declaration
+		// order, one at a time, with each ensureReady waited out, because
+		// each child claims the first free dashboard port and a parallel
+		// start would hand the ports out in whatever order the goroutines
+		// happened to run. That makes Run's start time include the readiness
+		// of every declared serena instance.
 		// Start begins the idle reaper for OnDemand servers. Neither call
 		// cares which kind, if either, the settings file actually declared
 		// -- both methods already treat "nothing of that kind is registered"
@@ -1249,13 +1256,22 @@ func (c *Core) Shutdown() error {
 	c.stopping = true
 	c.mu.Unlock()
 
-	// The door shuts first. New work is already refused by the flag above, but
-	// a caller mid-question is owed its answer, so this stops new connections
-	// and then waits for the ones already inside.
+	// The door shuts first: the flag above already refuses new work, and this
+	// stops new callers from getting as far as being refused.
 	c.closeSocket()
 
+	// Connection handlers and in-flight work wait together, under the one
+	// margin. They were two waits before this, and only the second of them
+	// was bounded: closeSocket ended in c.conns.Wait() with no limit at all,
+	// so a handler that did not return hung the stop before the grace timer
+	// was even started -- the exact "waiting forever is not an option" this
+	// function's own doc comment rules out. Closing the listener and closing
+	// a client's socket do not interrupt a dispatch that is already inside
+	// talk.dispatch, so that handler is real work that can overrun, and it
+	// belongs under the same budget as everything else that can.
 	done := make(chan struct{})
 	go func() {
+		c.conns.Wait()
 		c.inflight.Wait()
 		close(done)
 	}()
@@ -1322,7 +1338,54 @@ func (c *Core) settle() error {
 	if c.measurements == nil {
 		return nil
 	}
-	return c.measurements.Close()
+	return c.flushLast()
+}
+
+// settleAttempts and settleBackoff bound the last stand the batch gets.
+//
+// Three tries rather than one, and spaced rather than immediate, because the
+// failure this is for is a transient one: another process holding the DuckDB
+// file for its own flush, or a filesystem that has not come back yet. Bounded
+// rather than persistent because the process is on its way out and something
+// is waiting for it -- the whole budget here is under a second, which is
+// nothing against a stop and enough for a lock to clear.
+const (
+	settleAttempts = 3
+	settleBackoff  = 150 * time.Millisecond
+)
+
+// flushLast writes the batch, and says how many measurements died with the
+// process when it cannot.
+//
+// Store.Close is a single Flush, and a Flush that fails puts its rows back in
+// the in-memory buffer -- which is exactly the right thing for a running
+// service, whose next beat will carry them, and exactly the wrong thing here,
+// because there is no next beat: the buffer is about to be freed along with
+// the process. One failed write was silently the end of that batch, with
+// nothing anywhere to say it had happened.
+//
+// The incident quotes Pending() rather than a guess, because the number is the
+// point. A baseline short by rows nobody counted is a baseline nobody can
+// trust; a baseline short by seventeen rows, on a named date, is one an
+// operator can reason about.
+func (c *Core) flushLast() error {
+	var err error
+	for attempt := range settleAttempts {
+		if attempt > 0 {
+			time.Sleep(settleBackoff)
+		}
+		if err = c.measurements.Flush(context.Background()); err == nil {
+			return nil
+		}
+	}
+	_ = c.notebook.Record(notebook.Incident{
+		Op: "metrics.settle",
+		Detail: fmt.Sprintf(
+			"the final flush failed %d times and %d measurements are gone with the process: %v",
+			settleAttempts, c.measurements.Pending(), err),
+		Version: buildinfo.Full(),
+	})
+	return err
 }
 
 // Stopping reports whether a shutdown has begun.

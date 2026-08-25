@@ -206,6 +206,40 @@ func TestPerChatStdioBackendHasOneProcessPerConnection(t *testing.T) {
 	if n := spawnCount(t, ledger); n != 3 {
 		t.Errorf("%d processes for three chats, want 3", n)
 	}
+	// And each one goes when its chat does. Counting distinct pids only shows
+	// that a private copy was made; what makes per_chat worth having rather
+	// than a leak with a policy name is that the copy dies with the connection
+	// that asked for it. The only code that stops these is
+	// conversation.close(), reached from Core.answer's defer when the client
+	// hangs up -- the shared case has TestShutdownStopsTheStdioProcess for its
+	// half of this and this case had nothing.
+	for i, pid := range pids {
+		n, err := strconv.Atoi(pid)
+		if err != nil {
+			t.Fatalf("chat %d reported pid %q: %v", i, pid, err)
+		}
+		if err := waitForExit(n); err != nil {
+			t.Errorf("chat %d: %v", i, err)
+		}
+	}
+}
+
+// waitForExit waits for a pid to leave, asking the operating system rather
+// than trusting the call that was supposed to stop it -- the whole failure
+// being measured is a process that is still there. `kill -0` delivers no
+// signal and succeeds only while the process exists, so its refusal is the
+// answer being waited for.
+func waitForExit(pid int) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := exec.Command("kill", "-0", strconv.Itoa(pid)).Run(); err != nil {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	// Killed rather than leaked into the rest of the suite.
+	_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+	return fmt.Errorf("pid %d outlived the chat that spawned it", pid)
 }
 
 // Shutting Atenea down takes the process with it.

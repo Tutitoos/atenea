@@ -2,9 +2,12 @@ package metrics
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,7 +59,7 @@ func TestMigrationsAreRecordedOnceInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	rows, err := db.Query("SELECT version, name FROM schema_migration ORDER BY version")
 	if err != nil {
@@ -142,7 +145,7 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var kind, reason, raw string
 	var ok bool
 	row := db.QueryRow("SELECT ok, failure_kind, failure, raw FROM measurement")
@@ -179,7 +182,7 @@ func TestPersistedRawMeasurementIsRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var raw string
 	if err := db.QueryRow("SELECT raw FROM measurement").Scan(&raw); err != nil {
 		t.Fatalf("read back: %v", err)
@@ -209,7 +212,7 @@ func TestOutOfScopeHitsAreRecordedAsANumber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var stored int64
 	if err := db.QueryRow("SELECT out_of_scope FROM measurement").Scan(&stored); err != nil {
 		t.Fatalf("read back: %v", err)
@@ -267,7 +270,7 @@ func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var nulls int
 	if err := db.QueryRow(
 		"SELECT count(*) FROM measurement WHERE peak_rss_bytes IS NULL").Scan(&nulls); err != nil {
@@ -343,7 +346,7 @@ func TestAFullBufferDropsTheOldestAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var first string
 	if err := db.QueryRow("SELECT min(step_id) FROM measurement").Scan(&first); err != nil {
 		t.Fatalf("read back: %v", err)
@@ -461,5 +464,160 @@ func TestTwoFastProvidersStayDistinguishable(t *testing.T) {
 	}
 	if means["ripgrep"] >= means["serena.search"] {
 		t.Fatalf("ripgrep %v is not below serena %v", means["ripgrep"], means["serena.search"])
+	}
+}
+
+// Clear used to empty the buffer as its very first act and only then try to
+// open the base. A connect that failed therefore answered with an error having
+// destroyed every buffered measurement and deleted nothing at all -- the one
+// outcome worse than either half on its own.
+func TestAClearThatCannotOpenTheBaseKeepsTheBuffer(t *testing.T) {
+	// A directory is a path DuckDB cannot open, and it fails for a reason
+	// isLocked does not recognize, so connect gives up at once instead of
+	// spending LockWait on it.
+	s := &Store{path: t.TempDir(), limit: DefaultBufferLimit, lockWait: 50 * time.Millisecond}
+	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
+	s.Record(attempt(time.Now(), "code.search", "serena.search"))
+
+	if _, err := s.Clear(context.Background(), Filter{}); err == nil {
+		t.Fatal("clearing a base that cannot be opened reported success")
+	}
+	if pending := s.Pending(); pending != 2 {
+		t.Errorf("pending = %d, want 2: the buffer was thrown away for a clear that removed nothing", pending)
+	}
+}
+
+// A clear narrowed to one implementation used to take the whole buffer with
+// it: the rows on disk were filtered and the rows still in memory were not, so
+// clearing one poisoned provider silently erased the last half-minute of every
+// other provider's measurements too.
+func TestANarrowedClearLeavesTheOtherImplementationsBuffered(t *testing.T) {
+	s := store(t, Options{})
+	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
+	s.Record(attempt(time.Now(), "code.search", "serena.search"))
+
+	cleared, err := s.Clear(context.Background(), Filter{Implementation: "ripgrep"})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if cleared.Attempts != 1 {
+		t.Errorf("cleared %d attempts, want the 1 buffered row the filter names", cleared.Attempts)
+	}
+	if pending := s.Pending(); pending != 1 {
+		t.Fatalf("pending = %d, want 1: serena's measurement was not what the caller asked to be rid of", pending)
+	}
+
+	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Implementation != "serena.search" {
+		t.Fatalf("summary = %+v, want serena's attempt alone", rows)
+	}
+}
+
+// Every caller here flushes in order to read back what it just recorded --
+// Baselines, Health, Summary, Compact and Close all do. A flush that found the
+// buffer already drained by another goroutine used to return nil immediately,
+// which told its caller the rows were durable while they were still in the
+// other goroutine's batch on its way to the disk.
+func TestAFlushWaitsForTheOneAlreadyWriting(t *testing.T) {
+	s := store(t, Options{})
+	const rows = 3000
+	now := time.Now()
+	for i := range rows {
+		s.Record(attempt(now.Add(time.Duration(i)*time.Millisecond), "code.search", "ripgrep"))
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- s.Flush(context.Background()) }()
+	// Wait for the other goroutine to take the batch, so the flush below is
+	// certainly the second one and certainly finds nothing buffered.
+	for s.Pending() != 0 {
+		runtime.Gosched()
+	}
+
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("second flush: %v", err)
+	}
+	if written := s.Written(); written != rows {
+		t.Errorf("Flush returned with %d of %d measurements written: its caller is about to query a base missing exactly the rows it flushed for", written, rows)
+	}
+	if err := <-first; err != nil {
+		t.Fatalf("first flush: %v", err)
+	}
+}
+
+// Record is on the hot path of real work, and past the buffer ceiling it used
+// to discard the oldest entry by copying every surviving one down a slot:
+// measured at 74us per call with the default limit of 10000, against roughly
+// 40ns before the buffer filled. The cost was proportional to the ceiling,
+// which is the shape this asserts is gone -- a ring moves an index instead of
+// the rows, so a store with a hundred times the ceiling pays the same.
+func TestRecordCostsTheSameWhateverTheCeiling(t *testing.T) {
+	const (
+		small  = 200
+		large  = 20000
+		sample = 5000
+	)
+	cost := func(limit int) time.Duration {
+		s := &Store{limit: limit}
+		m := attempt(time.Now(), "code.search", "ripgrep")
+		for range limit {
+			s.Record(m)
+		}
+		// The fastest of several rounds, because the machine running this is
+		// also running everything else and only the floor is about the code.
+		best := time.Duration(math.MaxInt64)
+		for range 5 {
+			start := time.Now()
+			for range sample {
+				s.Record(m)
+			}
+			if spent := time.Since(start); spent < best {
+				best = spent
+			}
+		}
+		return best / sample
+	}
+
+	cheap, dear := cost(small), cost(large)
+	// A hundredfold ceiling against a fivefold budget: generous enough to
+	// survive a noisy machine, and nowhere near the hundredfold difference a
+	// per-call copy of the whole buffer produces.
+	if dear > 5*cheap {
+		t.Errorf("a Record costs %v at a ceiling of %d and %v at %d: the discard is copying the buffer, not moving an index",
+			cheap, small, dear, large)
+	}
+}
+
+// Several goroutines of one runWave ask for a baseline at the same moment.
+//
+// The exclusive lock DuckDB takes belongs to the process, not to the handle:
+// connections opened from one Atenea share its instance and all answer, which
+// is why nothing here serializes connect and why the funnel does not have to
+// take turns with itself. That is a property of the driver rather than of this
+// package, so it is asserted rather than assumed -- the day it stops holding,
+// every parallel wave starts failing on a message match in isLocked.
+func TestConcurrentReadersQueueForTheFile(t *testing.T) {
+	s := store(t, Options{LockWait: 100 * time.Millisecond})
+	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
+
+	const readers = 8
+	var start sync.WaitGroup
+	start.Add(1)
+	errs := make(chan error, readers)
+	for range readers {
+		go func() {
+			start.Wait()
+			_, err := s.Baselines(context.Background(), "code.search", "current")
+			errs <- err
+		}()
+	}
+	start.Done()
+	for range readers {
+		if err := <-errs; err != nil {
+			t.Errorf("a concurrent reader was turned away by its own process: %v", err)
+		}
 	}
 }

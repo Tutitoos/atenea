@@ -45,7 +45,7 @@ func runGit(t *testing.T, root string, args ...string) []byte {
 
 func TestGitDiffMapsCurrentHunksAndScope(t *testing.T) {
 	root, baseline := gitTestRepo(t)
-	changed, ranges, err := gitDiff(context.Background(), root, baseline, []string{"main.go"})
+	changed, ranges, _, err := gitDiff(context.Background(), root, baseline, []string{"main.go"})
 	if err != nil {
 		t.Fatalf("gitDiff: %v", err)
 	}
@@ -58,12 +58,44 @@ func TestGitDiffMapsCurrentHunksAndScope(t *testing.T) {
 	}
 }
 
+// The hunk parser reads "+++ b/<path>", and "b/" is only Git's default: both
+// of these settings are ordinary entries in a developer's configuration and
+// each one changes it. With either in force and the prefixes not pinned on the
+// command line, no header matched, every file lost its hunks, and code.impact
+// answered by covering whole files -- blaming every declaration in main.go for
+// a one-line change, in an answer indistinguishable from a correct one.
+func TestGitDiffReadsHunksWhateverThePrefixConfigurationSays(t *testing.T) {
+	for _, setting := range []string{"diff.noprefix", "diff.mnemonicPrefix"} {
+		t.Run(setting, func(t *testing.T) {
+			root, baseline := gitTestRepo(t)
+			runGit(t, root, "config", setting, "true")
+
+			changed, ranges, unrecognized, err := gitDiff(context.Background(), root, baseline, nil)
+			if err != nil {
+				t.Fatalf("gitDiff: %v", err)
+			}
+			if len(changed) != 1 || changed[0] != "main.go" {
+				t.Fatalf("changed = %v, want [main.go]", changed)
+			}
+			// Line 2 alone, not the whole file: the fallback covers 1..2 and
+			// would pass a test that only asked for "some range".
+			got := ranges["main.go"]
+			if len(got) != 1 || got[0].start != 2 || got[0].end != 2 {
+				t.Fatalf("ranges = %#v, want only the changed line 2", got)
+			}
+			if unrecognized != 0 {
+				t.Fatalf("unrecognized = %d, want none: every header was read", unrecognized)
+			}
+		})
+	}
+}
+
 func TestGitDiffIncludesUntrackedCurrentFiles(t *testing.T) {
 	root, baseline := gitTestRepo(t)
 	if err := os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\nfunc New() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changed, ranges, err := gitDiff(context.Background(), root, baseline, nil)
+	changed, ranges, _, err := gitDiff(context.Background(), root, baseline, nil)
 	if err != nil {
 		t.Fatalf("gitDiff: %v", err)
 	}
@@ -83,7 +115,7 @@ func TestGitDiffKeepsDeletedFilesWithoutInventingCurrentRanges(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "main.go")); err != nil {
 		t.Fatal(err)
 	}
-	changed, ranges, err := gitDiff(context.Background(), root, baseline, nil)
+	changed, ranges, _, err := gitDiff(context.Background(), root, baseline, nil)
 	if err != nil {
 		t.Fatalf("gitDiff: %v", err)
 	}
@@ -226,5 +258,73 @@ func TestRunImpactOmitsForeignBlastRadiusAndExplainsBoundary(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(notes, "\n"), "other repositories") {
 		t.Fatalf("notes = %v, want foreign-repository boundary", notes)
+	}
+}
+
+// A diff of any size touches many declarations, and code.impact used to refuse
+// the whole analysis the first time kivgraph could not turn one of them into a
+// stable key -- throwing away every consumer of every other root over the one
+// symbol the graph has not indexed. That is the same gap the unindexed-file
+// branch already reports as a note rather than a failure.
+func TestRunImpactNotesADeclarationItCannotAddressAndKeepsGoing(t *testing.T) {
+	root, baseline := gitTestRepo(t)
+	repo := contract.NewRepository("current", root, nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", root), false)
+	// Two declarations over the one changed line. The first carries its own
+	// stable key; the second has none, so it costs a get_symbol lookup -- and
+	// that is the lookup the graph cannot answer.
+	fake.on(toolOutline, `{"results":{"repository":"current","path":"main.go","symbols":[
+		{"name":"Changed","qualified_name":"Changed","kind":"function","stable_key":"changed","start_line":1,"end_line":3},
+		{"name":"Helper","qualified_name":"Helper","kind":"function","start_line":2,"end_line":2}]}}`, false)
+	fake.on(toolGet, "SYMBOL_NOT_FOUND: no symbol named Helper", true)
+	fake.on(toolBlast, `{"results":{"traversal_truncated":false,"symbols":[{"name":"Caller","qualified_name":"Caller","kind":"function","depth":1,"repository":"current","file_path":"main.go","start_line":6,"stable_key":"caller"}]}}`, false)
+
+	req := request(t, repo, CapabilityImpact, map[string]any{"baseline": baseline, "depth": 1})
+	req.Capability = impactCapability()
+	out, err := newTestRunner(t, sess).Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows, ok := out.Result["affected_symbols"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("affected_symbols = %#v, want the addressable root and its caller", out.Result["affected_symbols"])
+	}
+	if !hasNote(out, "Helper at main.go:2") {
+		t.Fatalf("discoveries = %#v, want one naming the declaration that could not be addressed", out.Discoveries)
+	}
+	// The "no current declaration over the changed lines" note would be a
+	// second, untrue explanation of the same file: one WAS found.
+	if hasNote(out, "no current declaration") {
+		t.Fatalf("discoveries = %#v, want no claim that nothing overlapped", out.Discoveries)
+	}
+}
+
+// The failures stableKeyOf does still raise name the capability that asked.
+// All three of its messages said "symbol.consumers" literally, and runImpact
+// calls it once per declaration the diff touched, so a code.impact failure
+// sent whoever read it looking at the wrong capability.
+func TestStableKeyFailuresNameTheCapabilityThatAsked(t *testing.T) {
+	root, baseline := gitTestRepo(t)
+	repo := contract.NewRepository("current", root, nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", root), false)
+	fake.on(toolOutline, `{"results":{"repository":"current","path":"main.go","symbols":[
+		{"name":"Helper","qualified_name":"Helper","kind":"function","start_line":2,"end_line":2}]}}`, false)
+	// Not "nothing by that name": an answer nobody can read is a provider in
+	// trouble, and it still stops the call.
+	fake.on(toolGet, "this is not JSON", false)
+
+	req := request(t, repo, CapabilityImpact, map[string]any{"baseline": baseline, "depth": 1})
+	req.Capability = impactCapability()
+	_, err := newTestRunner(t, sess).Run(context.Background(), req)
+	if err == nil {
+		t.Fatal("Run succeeded on an unreadable get_symbol answer")
+	}
+	if !strings.Contains(err.Error(), CapabilityImpact) {
+		t.Fatalf("err = %v, want it to name %s", err, CapabilityImpact)
+	}
+	if strings.Contains(err.Error(), CapabilityConsumers) {
+		t.Fatalf("err = %v, want it not to name %s", err, CapabilityConsumers)
 	}
 }

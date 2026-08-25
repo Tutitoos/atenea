@@ -17,6 +17,37 @@
 // Nothing here shells out. The machine this has to protect is a bare Debian
 // with no rsync, no borg and possibly no cron, so Atenea backs itself up with
 // what the standard library gives it, wherever it happens to be running.
+//
+// # Live databases are copied, not quiesced
+//
+// The tree this walks is the state root, and two of the files in it are open
+// databases: metrics.duckdb, which DuckDB holds under an exclusive lock while
+// any Atenea is flushing, and traces.db, which the workflow service keeps open
+// in WAL mode. Both are read here the same way every other file is -- opened
+// and streamed with io.Copy, one file at a time, in whatever order WalkDir
+// hands them over.
+//
+// So a snapshot is a crash-consistent copy of those two, not a consistent one.
+// Nothing coordinates with the DuckDB lock, nothing calls SQLite's backup API,
+// and the write-ahead log is a separate file that may be copied before or
+// after the database it belongs to. What that costs is bounded and worth
+// stating plainly: restoring such a snapshot gives back the two databases in
+// the state a power cut would have left them in, which each engine is built to
+// recover from, and may lose the last transactions. It is the rest of the
+// state root -- settings, receipts, the crash notebook -- that a restore
+// returns exactly.
+//
+// The in-process clock serializes a flush against a backup, which is why this
+// is not worse than it sounds on a single Atenea. It says nothing about the
+// second Atenea on the machine, which is an ordinary situation here: this is a
+// CLI at least as often as it is a service.
+//
+// Closing the gap needs a quiesce this package cannot reach for on its own --
+// a short connect-and-checkpoint against DuckDB and a
+// `PRAGMA wal_checkpoint(TRUNCATE)` against traces.db, both of which mean
+// knowing which files are databases and holding their drivers. Whoever
+// commissions a snapshot has that knowledge; a tree copier deliberately does
+// not.
 package backup
 
 import (
@@ -32,6 +63,13 @@ import (
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+// syncDir is the directory fsync, reached through a variable so a test can see
+// which directories a snapshot actually made durable. An fsync has no other
+// observable effect: a backup that quietly stopped calling it looks exactly
+// like one that never stopped, right up until the power cut that the call was
+// there for.
+var syncDir = syncDirectory
 
 // nameLayout is what a snapshot is called: the instant it was taken, in UTC,
 // in a form that sorts lexicographically by time. The name is the only record
@@ -600,7 +638,7 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot publish %s: %v", final, err)
 	}
-	if err := syncDirectory(s.dir); err != nil {
+	if err := syncDir(s.dir); err != nil {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot durable-publish %s: %v", final, err)
 	}
@@ -634,7 +672,7 @@ func (s *Store) rotate() error {
 				"backup: cannot remove %s: %v", old.Path, err)
 		}
 	}
-	return syncDirectory(s.dir)
+	return syncDir(s.dir)
 }
 
 // sweepPartials removes the trees of runs that never finished.
@@ -752,12 +790,26 @@ func (s *Store) copyTree(ctx context.Context, root, target, base string) (Snapsh
 			"backup: copying %s: %v", root, err)
 	}
 	// The real permissions go on deepest first, once nothing more has to be
-	// written inside any of them. WalkDir hands out parents before children,
-	// so that is this list backwards.
+	// written inside any of them, and each directory is synced immediately
+	// after its own chmod. WalkDir hands out parents before children, so that
+	// is this list backwards.
+	//
+	// Every directory, not just the one the rename publishes. copyFile syncs
+	// the bytes of each file it writes, but a file's bytes being durable says
+	// nothing about the directory entry that names it, and a hardlinked file
+	// is a directory entry and nothing else -- so a snapshot of a tree that
+	// shared most of its files with the previous one had almost none of itself
+	// on the disk. Only s.dir was synced, after the rename, which made the
+	// snapshot's own name durable while its contents were still a promise the
+	// page cache was making.
 	for i := len(modes) - 1; i >= 0; i-- {
 		if err := os.Chmod(modes[i].path, modes[i].mode); err != nil {
 			return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 				"backup: cannot set permissions on %s: %v", modes[i].path, err)
+		}
+		if err := syncDir(modes[i].path); err != nil {
+			return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot durable-write %s: %v", modes[i].path, err)
 		}
 	}
 	snapshot.Files = snapshot.Linked + snapshot.Copied
@@ -790,7 +842,14 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot create parent directory for %s: %v", destination, err)
 	}
+	// Extras land after copyTree has already made the tree durable, so each
+	// one syncs its own way back up to the snapshot root: a hardlinked extra
+	// writes nothing but a directory entry, and a directory created for it
+	// here needs its own name in its parent on the disk as well.
 	if base != "" && link(filepath.Join(base, extra.Dest), destination, info) {
+		if err := syncUpTo(filepath.Dir(destination), target); err != nil {
+			return Snapshot{}, err
+		}
 		return Snapshot{Files: 1, Linked: 1}, nil
 	}
 	written, err := copyFile(extra.Source, destination, info)
@@ -798,7 +857,30 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot copy %s: %v", extra.Source, err)
 	}
+	if err := syncUpTo(filepath.Dir(destination), target); err != nil {
+		return Snapshot{}, err
+	}
 	return Snapshot{Files: 1, Copied: 1, Bytes: written}, nil
+}
+
+// syncUpTo makes dir durable and then every directory above it as far as
+// target, deepest first.
+//
+// The chain matters as much as the leaf. A directory whose entries are on the
+// disk while the entry naming it in its own parent is not is a directory that
+// does not exist after a power cut, however durable its contents were.
+func syncUpTo(dir, target string) error {
+	for {
+		if err := syncDir(dir); err != nil {
+			return contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot durable-write %s: %v", dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if dir == target || parent == dir || !under(parent, target) {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 // copyLink copies a symlink by making the same symlink, and reports the bytes

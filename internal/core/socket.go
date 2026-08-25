@@ -8,7 +8,9 @@ import (
 	"net"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -133,15 +135,72 @@ func (c *Core) accept(ctx context.Context, listener *ipc.Listener) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			// The listener is closed, which is how a clean stop reaches here.
-			return
+			// A closed listener is the clean stop and the only error this
+			// loop may treat as the end. Everything else is the door failing
+			// while the service is still meant to be behind it: Go retries
+			// EINTR and ECONNABORTED itself, but descriptor exhaustion --
+			// EMFILE, ENFILE -- comes back here, and returning on it
+			// abandoned the socket permanently and silently. A machine that
+			// briefly ran out of descriptors would leave a running Atenea
+			// that nothing could ever connect to again, with the socket file
+			// still on disk claiming otherwise.
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			_ = c.notebook.Record(notebook.Incident{
+				Op:      "socket.accept",
+				Detail:  err.Error(),
+				Version: buildinfo.Full(),
+			})
+			// A short pause, because the errors that reach here are the
+			// resource kind: retrying at full speed would spin a core while
+			// the condition that caused it is exactly the one that needs the
+			// machine's attention elsewhere. Interruptible, so a stop during
+			// the pause is still prompt.
+			select {
+			case <-time.After(acceptBackoff):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
-		c.conns.Add(1)
+		// Registered under the same lock that flips the stopping flag, and
+		// refused once it is set. A WaitGroup requires that an Add taking the
+		// counter off zero happens before Wait, and this Add came after the
+		// Accept that produced the connection: a shutdown that closed the
+		// listener a moment later could see the counter at zero, return from
+		// Wait, and only then race this Add -- the misuse sync.WaitGroup
+		// documents. Taking c.mu makes the two orderings agree, and a
+		// connection that arrives after the flag is set is hung up on rather
+		// than served, which is what shutting down means.
+		if !c.register() {
+			_ = conn.Close()
+			continue
+		}
 		go func() {
 			defer c.conns.Done()
 			c.answer(ctx, conn)
 		}()
 	}
+}
+
+// acceptBackoff is how long the accept loop pauses after an error it intends
+// to retry. Long enough that a descriptor shortage is not made worse by a
+// tight loop, short enough that a caller arriving after the shortage clears
+// is answered rather than kept waiting.
+const acceptBackoff = 50 * time.Millisecond
+
+// register admits one accepted connection, or refuses it because a stop has
+// begun. The counter and the flag are read and written under the same lock
+// for the reason accept's own comment gives.
+func (c *Core) register() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopping {
+		return false
+	}
+	c.conns.Add(1)
+	return true
 }
 
 // answer serves one connection: a line in, a line out, until it hangs up.
@@ -160,7 +219,7 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	lines := bufio.NewScanner(conn)
-	lines.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	lines.Buffer(make([]byte, 0, 64*1024), maxRequestLine)
 	writer := json.NewEncoder(conn)
 	// One conversation per connection, and it dies with it: the chat a client
 	// opens is closed by hanging up, which is the only signal a client that
@@ -178,9 +237,51 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 			_ = writer.Encode(answer)
 		}
 	}
+	// Scan returning false is two different facts and only one of them is a
+	// client hanging up. The other is a request over the scanner's one-mebibyte
+	// token limit, and until this was written the two were indistinguishable
+	// from the client's side: the connection closed, the conversation closed,
+	// and no JSON-RPC answer was ever written -- so a caller that sent a large
+	// tools/call saw a dropped socket and had nothing to tell it that the size
+	// was the reason. Saying so costs one line and turns an unexplained
+	// disconnect into a fixable message.
+	if err := lines.Err(); err != nil {
+		message := "the request was not readable: " + err.Error()
+		if errors.Is(err, bufio.ErrTooLong) {
+			message = "the request is over the " + limitWords + " limit for one line"
+		}
+		_ = writer.Encode(rpcResponse{JSONRPC: rpcVersion,
+			Error: &rpcError{Code: codeInvalid, Message: message}})
+		_ = c.notebook.Record(notebook.Incident{
+			Op: "socket.request", Detail: message, Version: buildinfo.Full()})
+	}
 }
 
-// closeSocket shuts the door and waits for whoever is still inside.
+// maxRequestLine is the largest single request this door accepts, and
+// limitWords is the same number in the sentence a refused caller is given. A
+// literal in the message would be a second place to change it and the two
+// would eventually disagree about what the limit is.
+const (
+	maxRequestLine = 1 << 20
+	limitWords     = "1 MiB"
+)
+
+// closeSocket shuts the door. It does not wait for whoever is still inside:
+// that wait belongs to Shutdown, under the same bounded margin as the rest of
+// the in-flight work, because c.conns.Wait() has no bound of its own and a
+// handler that never returns would hang the stop before the grace timer was
+// even started.
+//
+// It is worth being exact about what closing the listener does and does not
+// reach, because the sentence this comment used to carry -- that a caller
+// mid-question is owed its answer -- was not true of the code. accept and
+// answer are given Run's context, which is the signal's, so the watchdog
+// goroutine in answer closes every open connection the moment SIGTERM
+// arrives, before Shutdown runs at all. Closing the listener stops new
+// callers; the ones already inside were already cut off. The margin that
+// follows is therefore for work that outlives its connection -- a dispatch
+// still running, a batch still to be written -- and not for a client waiting
+// on a reply that is no longer coming.
 //
 // The field is left pointing at the closed listener rather than nilled. A
 // closed one is inert -- Close is idempotent and Accept only reports that it
@@ -193,7 +294,6 @@ func (c *Core) closeSocket() {
 		return
 	}
 	_ = listener.Close()
-	c.conns.Wait()
 }
 
 // Asked is a client's side of the same conversation: dial the running service

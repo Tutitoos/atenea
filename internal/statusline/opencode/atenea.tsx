@@ -67,9 +67,21 @@ function parse(payload: string): Reading {
 }
 
 async function ask(): Promise<Reading> {
+	// Closing the socket is the job of whoever settles the reading, not of the
+	// one handler that happens to read an answer. The expiry path used to
+	// resolve and leave the connection open: one socket every POLL_MS, for the
+	// life of the client, against a service that had gone quiet -- which is
+	// exactly when the expiry path is the one that runs.
+	let connected: { end(): void } | undefined;
+	let settled = false;
 	let settle: (reading: Reading) => void = () => {};
 	const answered = new Promise<Reading>((resolve) => {
-		settle = resolve;
+		settle = (reading: Reading) => {
+			if (settled) return;
+			settled = true;
+			connected?.end();
+			resolve(reading);
+		};
 	});
 	const expire = setTimeout(() => settle({ kind: "unreadable" }), TIMEOUT_MS);
 
@@ -81,8 +93,8 @@ async function ask(): Promise<Reading> {
 				data(sock, chunk: Buffer) {
 					buffered += chunk.toString();
 					if (!buffered.includes("\n")) return;
+					connected ??= sock;
 					settle(parse(buffered));
-					sock.end();
 				},
 				// A socket that exists, accepts, and then breaks or closes early is a
 				// failure to read, not an absence: the distinction is what tells the
@@ -91,7 +103,15 @@ async function ask(): Promise<Reading> {
 				close: () => settle({ kind: "unreadable" }),
 			},
 		});
-		socket.write(REQUEST);
+		if (settled) {
+			// The expiry beat the connect. Nobody is waiting for this socket
+			// any more and nothing will read from it, so it is closed here
+			// rather than handed to a settle that has already run.
+			socket.end();
+		} else {
+			connected = socket;
+			socket.write(REQUEST);
+		}
 	} catch {
 		// Bun reports ENOENT for every failed unix connect -- a missing path, a socket
 		// left behind by a crash, and one we are not allowed to open all arrive as

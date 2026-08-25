@@ -85,6 +85,18 @@ func TestStatusOverallLightFollowsAWarmedUpProcessGoingDown(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
+		// Run's own failure is checked on every turn, not only at the end.
+		// It was read once, after the loop, and that ordering hid the error
+		// that actually happens: Run refusing to start -- a socket path over
+		// the sun_path limit, an upkeep claim already held -- spent the full
+		// three seconds polling a service that was never there and then
+		// failed with a sentence about process lights, while the real reason
+		// sat unread in a channel until the deferred cancel threw it away.
+		select {
+		case err := <-done:
+			t.Fatalf("the service stopped instead of warming up: %v", err)
+		default:
+		}
 		if procs := atenea.Status().Processes; len(procs) == 1 && procs[0].State == "down" {
 			break
 		}

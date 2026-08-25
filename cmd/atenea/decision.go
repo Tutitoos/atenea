@@ -25,7 +25,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	}
 	text, args := strings.TrimSpace(args[0]), args[1:]
 	var repository string
-	var files stringList
+	files := newStringList("file")
 	var allow effectList
 	var prefer string
 	var tool string
@@ -77,7 +77,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	}
 	planner := decision.Planner{Config: cfg, Selector: atenea, Estimator: estimator, Ranker: ranker}
 	plan, err := planner.Build(decision.Request{
-		Text: text, Repository: repository, Files: files, BudgetUSD: budget,
+		Text: text, Repository: repository, Files: files.values, BudgetUSD: budget,
 		Effects: effects, StandingEffects: cfg.Orchestrator.StandingEffects, Prefer: prefer, Tool: tool,
 	})
 	if err != nil {

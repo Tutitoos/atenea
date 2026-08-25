@@ -261,3 +261,62 @@ func TestALiveStdioServerIsNotLeftRunning(t *testing.T) {
 		t.Errorf("pid %d is still alive: the probe left a server running", pid)
 	}
 }
+
+// The protocol runs in both directions, so an id is not proof of an answer.
+//
+// A server may send a *request* of its own -- id and method, no result --
+// before it will answer anything, which is what semgrep does with roots/list
+// and what internal/passthrough/stdio.go's route() was rewritten on
+// 2026-08-09 to classify into three shapes rather than two. This decoder kept
+// the two-shape reading: any object with an id was taken for the handshake's
+// reply, so the server's own question was reported as its answer and the
+// probe published a verdict built out of it -- OK, with no name and no
+// version, from a server that had not said hello yet. The id has to match the
+// one initialize was asked with, too: an answer to somebody else's question
+// is no more this probe's reply than a question is.
+func TestAServerThatAsksBeforeItAnswersIsStillProbedCorrectly(t *testing.T) {
+	asks := `{"jsonrpc":"2.0","id":7,"method":"roots/list","params":{}}`
+	stale := `{"jsonrpc":"2.0","id":99,"result":{"serverInfo":{"name":"somebody-else","version":"0.0.1"}}}`
+	got := mcpprobe.Probe(t.Context(), mcpprobe.Server{
+		ID: "asker",
+		Command: []string{"sh", "-c",
+			"read -r line; printf '%s\\n' '" + asks + "'; printf '%s\\n' '" + stale +
+				"'; printf '%s\\n' '" + okResult + "'"},
+	})
+	if !got.OK {
+		t.Fatalf("a server that asks first was probed as dead: %v", got.Err)
+	}
+	if got.Name != "fake" || got.Version != "9.9.9" {
+		t.Errorf("name/version = %q/%q, want fake/9.9.9: the probe answered from a line "+
+			"that was not the reply to its own initialize", got.Name, got.Version)
+	}
+}
+
+// The same three-shape reading over HTTP, where the body is the whole answer.
+//
+// A server that replies to the initialize POST with a request of its own has
+// not answered it, and taking its params for a result would let the probe
+// report a server as reachable on the strength of a question.
+func TestAnHTTPServerThatAnswersWithAQuestionIsNotAlive(t *testing.T) {
+	url := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"method":"roots/list","params":{}}`)
+	})
+	got := mcpprobe.Probe(t.Context(), mcpprobe.Server{ID: "asker", URL: url})
+	if got.OK {
+		t.Fatal("a server that answered initialize with a request of its own was reported alive")
+	}
+	if !strings.Contains(got.Err.Error(), "roots/list") {
+		t.Errorf("err = %v, want it to name the request that came back instead of a reply", got.Err)
+	}
+}
+
+// An answer to an id this probe never sent is not this probe's answer.
+func TestAnHTTPAnswerToAnotherIDIsRefused(t *testing.T) {
+	url := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":42,"result":{"serverInfo":{"name":"somebody-else"}}}`)
+	})
+	got := mcpprobe.Probe(t.Context(), mcpprobe.Server{ID: "confused", URL: url})
+	if got.OK {
+		t.Fatalf("an answer carrying id 42 was accepted as the reply to id 1: name = %q", got.Name)
+	}
+}

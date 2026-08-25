@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build !linux && !darwin
 
 package platform
 
@@ -15,6 +15,12 @@ func unitPath(name string) string {
 
 // Atenea knows how to install itself as a background service on Linux and
 // macOS. Other systems say so rather than guessing.
+//
+// Windows is one of them, and it reaches this file rather than a file of its
+// own: the constraint above used to exclude windows as well, which left the
+// package with no unitPath, Install, Uninstall, Query or LingerCommand there
+// at all, so GOOS=windows failed to compile the package instead of building
+// the honest refusal this file already writes.
 func unsupported(verb string) error {
 	return contract.Fail(contract.FailureUnavailable,
 		"atenea cannot %s a background service on %s; supported managers are Linux systemd --user and macOS launchd",

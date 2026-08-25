@@ -82,15 +82,17 @@ func (c Cleared) Total() int64 { return c.Attempts + c.Rollups }
 // than not clearing at all: the numbers would come back an hour later with no
 // explanation.
 //
-// The buffer is dropped rather than flushed. Rows still in memory belong to
-// the same history the caller just asked to be rid of, and writing them on the
-// way out would put back a slice of exactly what was cleared.
+// The matching buffer rows are dropped rather than flushed. Rows still in
+// memory belong to the same history the caller just asked to be rid of, and
+// writing them on the way out would put back a slice of exactly what was
+// cleared.
+//
+// The buffer goes last, and only the rows the filter names go. Emptying it
+// first cost twice: a connect that failed returned an error having already
+// destroyed every buffered measurement and deleted nothing from the disk, and
+// a clear narrowed to one implementation still threw away the measurements of
+// every other implementation that happened to be waiting beside it.
 func (s *Store) Clear(ctx context.Context, filter Filter) (Cleared, error) {
-	s.mu.Lock()
-	buffered := len(s.buf)
-	s.buf = s.buf[:0]
-	s.mu.Unlock()
-
 	db, err := s.connect(ctx)
 	if err != nil {
 		return Cleared{}, err
@@ -116,6 +118,38 @@ func (s *Store) Clear(ctx context.Context, filter Filter) (Cleared, error) {
 	}
 	// Buffered rows never reached the disk, so they are not in either count
 	// above, but they were just as surely thrown away.
-	out.Attempts += int64(buffered)
+	out.Attempts += int64(s.clearBuffer(filter))
 	return out, nil
+}
+
+// matches reports whether one buffered measurement falls inside the filter.
+//
+// It compares the same three fields the SQL predicate compares, the same way,
+// so a narrowed clear takes the same rows out of memory as it takes off the
+// disk. A filter that narrows nothing matches everything, exactly as the
+// predicate's TRUE does.
+func (f Filter) matches(m Measurement) bool {
+	return (f.Capability == "" || f.Capability == m.Capability) &&
+		(f.Implementation == "" || f.Implementation == m.Implementation) &&
+		(f.Repository == "" || f.Repository == m.Repository)
+}
+
+// clearBuffer removes the buffered measurements the filter names, keeps the
+// rest in the order they arrived, and reports how many went.
+func (s *Store) clearBuffer(f Filter) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	buffered := s.drain()
+	kept := buffered[:0]
+	for _, m := range buffered {
+		if f.matches(m) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	s.buf = kept
+	s.head = 0
+	s.count = len(kept)
+	return len(buffered) - len(kept)
 }

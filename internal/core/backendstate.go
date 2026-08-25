@@ -103,10 +103,34 @@ func newBackendMemory(statePath string) (*backendMemory, error) {
 	return m, nil
 }
 
+// record remembers what just happened to one backend, and touches the disk
+// only when that changed the answer.
+//
+// The write is not cheap and it is not rare. persistLocked marshals the whole
+// map, creates a temporary file, writes it, fsyncs it and renames it, all
+// inside the write lock -- and record is called once per backend on every
+// tools/list of every open chat, and again on every raw tools/call. A machine
+// with eleven declared servers and half a dozen chats was doing that on every
+// listing, to write the same bytes back. What the file is for is surviving a
+// restart with the last verdict intact, and a verdict that has not changed
+// needs no second copy of itself.
+//
+// State and Reason are the comparison, deliberately excluding At. The
+// timestamp changes on every call by construction, so including it would mean
+// nothing was ever equal and the check would save nothing. The cost is that
+// the At in the file is when the state was first seen rather than when it was
+// last confirmed, which is the more useful of the two readings anyway: a
+// screen after a restart wants to say when this backend went bad, not when
+// somebody last looked at it. In memory the fresh timestamp is kept, so the
+// running service still reports the last check.
 func (m *backendMemory) record(id string, reading backendReading) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous, known := m.readings[id]
 	m.readings[id] = reading
+	if known && previous.State == reading.State && previous.Reason == reading.Reason {
+		return
+	}
 	_ = m.persistLocked()
 }
 

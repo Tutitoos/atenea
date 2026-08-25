@@ -22,7 +22,7 @@ const (
 const rollupColumns = `grain, bucket, capability, implementation, provider,
 	repository, tool_version, attempts, failures, duration_us_sum,
 	duration_us_max, tokens_sum, peak_rss_max, rss_samples,
-	ok_attempts, ok_duration_us_sum, ok_tokens_sum, out_of_scope`
+	ok_attempts, ok_duration_us_sum, ok_tokens_sum, out_of_scope, last_seen`
 
 // mergeRollup is what happens when a fold lands on a bucket that already
 // exists. Counts add and maxima take the larger, which is why only mergeable
@@ -49,7 +49,12 @@ DO UPDATE SET
 	ok_attempts        = rollup.ok_attempts + excluded.ok_attempts,
 	ok_duration_us_sum = rollup.ok_duration_us_sum + excluded.ok_duration_us_sum,
 	ok_tokens_sum      = rollup.ok_tokens_sum + excluded.ok_tokens_sum,
-	out_of_scope       = rollup.out_of_scope + excluded.out_of_scope`
+	out_of_scope       = rollup.out_of_scope + excluded.out_of_scope,
+	-- The later instant wins, which is what makes this column survive the
+	-- whole ladder: an hour merged into a day still knows when the newest
+	-- attempt under it happened, and that is what decides which tool version
+	-- is the one running now.
+	last_seen          = greatest(rollup.last_seen, excluded.last_seen)`
 
 // foldAttempts counts closed attempts into their hour.
 //
@@ -70,7 +75,8 @@ SELECT '` + grainHour + `', date_trunc('hour', happened_at), capability, impleme
        count(*) FILTER (WHERE ok),
        coalesce(sum(duration_us) FILTER (WHERE ok), 0),
        coalesce(sum(tokens) FILTER (WHERE ok), 0),
-       coalesce(sum(out_of_scope), 0)
+       coalesce(sum(out_of_scope), 0),
+       max(happened_at)
 FROM measurement
 WHERE NOT folded AND happened_at < ?
 GROUP BY 2, 3, 4, 6, 7
@@ -83,7 +89,7 @@ SELECT ?, date_trunc(?, bucket), capability, implementation,
        sum(attempts), sum(failures), sum(duration_us_sum), max(duration_us_max),
        sum(tokens_sum), max(peak_rss_max), sum(rss_samples),
        sum(ok_attempts), sum(ok_duration_us_sum), sum(ok_tokens_sum),
-       sum(out_of_scope)
+       sum(out_of_scope), max(last_seen)
 FROM rollup
 WHERE grain = ? AND bucket < ?
 GROUP BY 2, 3, 4, 6, 7

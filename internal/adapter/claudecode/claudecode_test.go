@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -382,7 +383,7 @@ func TestAPlainTextFailureIsStillSorted(t *testing.T) {
 func TestAnEmptyAnswerIsNotZeroMatches(t *testing.T) {
 	runner := newTestRunner(t)
 	req := request(t, map[string]any{"query": "x"})
-	_, _, err := runner.readAnswer(envelope{Result: "I could not do that"}, req, newSearch(t, req.Payload))
+	_, _, err := runner.readAnswer(envelope{Result: "I could not do that"}, req.Repository.Path, newSearch(t, req.Payload))
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
 		t.Fatalf("kind = %v, want unavailable: a turn with no structure did not search", got)
 	}
@@ -395,7 +396,7 @@ func TestARefusedActionIsAPermissionFailure(t *testing.T) {
 		StructuredOutput:  json.RawMessage(`{"matches":[]}`),
 		PermissionDenials: []json.RawMessage{json.RawMessage(`{"tool":"Write"}`)},
 	}
-	_, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	_, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
 		t.Fatalf("kind = %v, want permission_denied", got)
 	}
@@ -415,7 +416,7 @@ func TestTheAnswerIsCheckedAgainstWhatWasForbidden(t *testing.T) {
 		{"path":"/etc/shadow","line":1,"column":1,"snippet":"secret"}
 	]}`)}
 
-	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -438,7 +439,7 @@ func TestAMatchWithoutAColumnKeepsItsLine(t *testing.T) {
 	out := envelope{StructuredOutput: json.RawMessage(
 		`{"matches":[{"path":"a.go","line":7,"snippet":"x"}]}`)}
 
-	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -466,7 +467,7 @@ func TestANonsenseCoordinateIsDropped(t *testing.T) {
 		{"path":"d.go","line":9,"column":2}
 	]}`)}
 
-	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -487,7 +488,7 @@ func TestAnAnswerOutsideTheRequestedTypesIsDropped(t *testing.T) {
 		{"path":"README.md","line":1,"column":1}
 	]}`)}
 
-	result, _, err := runner.readAnswer(out, req, newSearch(t, payload))
+	result, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -533,7 +534,7 @@ func TestAMatchOutsideTheRequestedScopeIsDroppedWithANotice(t *testing.T) {
 		{"path":"cmd/atenea/main.go","line":1,"column":1}
 	]}`)}
 
-	result, outOfScope, err := runner.readAnswer(out, req, newSearch(t, payload))
+	result, counts, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -545,8 +546,8 @@ func TestAMatchOutsideTheRequestedScopeIsDroppedWithANotice(t *testing.T) {
 	if first["path"] != "internal/adapter/claudecode.go" {
 		t.Errorf("the surviving match is %v", first["path"])
 	}
-	if outOfScope != 2 {
-		t.Errorf("out of scope = %d, want 2: the count is what gets recorded, the sentence is built from it", outOfScope)
+	if counts.outOfScope != 2 {
+		t.Errorf("out of scope = %d, want 2: the count is what gets recorded, the sentence is built from it", counts.outOfScope)
 	}
 }
 
@@ -558,7 +559,7 @@ func TestNoScopeMeansNoNoticeAndNothingDropped(t *testing.T) {
 		{"path":"deep/nested/b.go","line":1,"column":1}
 	]}`)}
 
-	result, outOfScope, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, counts, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -566,8 +567,8 @@ func TestNoScopeMeansNoNoticeAndNothingDropped(t *testing.T) {
 	if len(matches) != 2 {
 		t.Fatalf("matches = %d, want both: an empty scope means the whole repository", len(matches))
 	}
-	if outOfScope != 0 {
-		t.Errorf("out of scope = %d, want 0", outOfScope)
+	if counts.outOfScope != 0 {
+		t.Errorf("out of scope = %d, want 0", counts.outOfScope)
 	}
 }
 
@@ -576,7 +577,7 @@ func TestNoMatchesIsAnAnswerNotAFailure(t *testing.T) {
 	req := request(t, map[string]any{"query": "x"})
 	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[]}`)}
 
-	result, _, err := runner.readAnswer(out, req, newSearch(t, req.Payload))
+	result, _, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
 	if err != nil {
 		t.Fatalf("readAnswer: %v", err)
 	}
@@ -749,5 +750,149 @@ func requireClaude(t *testing.T) {
 	t.Helper()
 	if _, err := osexec.LookPath(DefaultBinary); err != nil {
 		t.Skipf("claude is not installed on this machine: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The paths that come back
+// ---------------------------------------------------------------------------
+
+// The far side is asked for repository-relative paths and answers with
+// absolute ones often enough to matter. Every one of those used to be dropped
+// without a word -- not counted out of scope, not reported -- so a turn that
+// found five matches answered VerdictOK with an empty list and the caller had
+// no way to tell that from "nothing here".
+func TestAnAbsoluteMatchInsideTheRepositoryIsResolvedNotDiscarded(t *testing.T) {
+	runner := newTestRunner(t)
+	req := request(t, map[string]any{"query": "x"})
+	root := req.Repository.Path
+	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[
+		{"path":` + quoted(filepath.Join(root, "cmd", "main.go")) + `,"line":3,"column":1}
+	]}`)}
+
+	result, counts, err := runner.readAnswer(out, root, newSearch(t, req.Payload))
+	if err != nil {
+		t.Fatalf("readAnswer: %v", err)
+	}
+	matches, _ := result["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches = %v, want the absolute hit resolved against the root", matches)
+	}
+	if got := matches[0].(map[string]any)["path"]; got != "cmd/main.go" {
+		t.Fatalf("path = %v, want it made relative to the repository", got)
+	}
+	if counts.malformed != 0 {
+		t.Fatalf("malformed = %d, want none", counts.malformed)
+	}
+}
+
+// An absolute path that lands outside the repository is still refused -- and
+// now it is counted, so the caller is told matches went missing instead of
+// reading an empty list as an answer.
+func TestAMatchThisAdapterCannotPlaceIsCountedAndReported(t *testing.T) {
+	runner := newTestRunner(t)
+	req := request(t, map[string]any{"query": "x"})
+	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[
+		{"path":"/etc/passwd","line":1,"column":1},
+		{"path":"../sibling/other.go","line":1,"column":1},
+		{"path":"a.go","line":0,"column":1}
+	]}`)}
+
+	result, counts, err := runner.readAnswer(out, req.Repository.Path, newSearch(t, req.Payload))
+	if err != nil {
+		t.Fatalf("readAnswer: %v", err)
+	}
+	if matches, _ := result["matches"].([]any); len(matches) != 0 {
+		t.Fatalf("matches = %v, want none", matches)
+	}
+	if counts.malformed != 3 {
+		t.Fatalf("malformed = %d, want 3: an outside path and a nonsense line both count", counts.malformed)
+	}
+	if counts.outOfScope != 0 {
+		t.Fatalf("outOfScope = %d, want 0: none of these fell outside a scope the caller set", counts.outOfScope)
+	}
+}
+
+// Lexical containment cannot see a symlink. A directory inside the repository
+// that points outside it produces a path that never climbs out of anything and
+// still names a file the repository does not contain.
+func TestAMatchReachedThroughASymlinkOutOfTheRepositoryIsRefused(t *testing.T) {
+	runner := newTestRunner(t)
+	req := request(t, map[string]any{"query": "x"})
+	root := req.Repository.Path
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.go"), []byte("package secret\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "vendor")); err != nil {
+		t.Skipf("this filesystem cannot make the symlink the check exists for: %v", err)
+	}
+	out := envelope{StructuredOutput: json.RawMessage(`{"matches":[
+		{"path":"vendor/secret.go","line":1,"column":1}
+	]}`)}
+
+	result, counts, err := runner.readAnswer(out, root, newSearch(t, req.Payload))
+	if err != nil {
+		t.Fatalf("readAnswer: %v", err)
+	}
+	if matches, _ := result["matches"].([]any); len(matches) != 0 {
+		t.Fatalf("matches = %v, want none: the path leaves the repository once the link is resolved", matches)
+	}
+	if counts.malformed != 1 {
+		t.Fatalf("malformed = %d, want 1", counts.malformed)
+	}
+}
+
+// quoted renders a path as a JSON string, which is the only safe way to put a
+// Windows-or-Unix filesystem path inside a fixture.
+func quoted(t string) string {
+	encoded, err := json.Marshal(t)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+// A single line over the buffer limit used to throw the whole turn away --
+// including a `result` event already read, already paid for -- and report the
+// provider as unreachable. What arrived is kept; what did not is said out loud.
+func TestALineTooLongKeepsTheAnswerThatAlreadyArrived(t *testing.T) {
+	previous := maxStreamLine
+	maxStreamLine = 8192
+	t.Cleanup(func() { maxStreamLine = previous })
+
+	final := `{"type":"result","is_error":false,"subtype":"success",` +
+		`"structured_output":{"matches":[{"path":"cmd/main.go","line":3,"column":1}]},` +
+		`"usage":{"input_tokens":10,"output_tokens":2},"total_cost_usd":0.01,"num_turns":2}`
+	path := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' '" + final + "'\n" +
+		// The oversized line arrives after the answer, which is the case that
+		// matters: everything the caller asked for is already in hand.
+		"awk 'BEGIN{s=\"\";while(length(s)<20000)s=s \"x\";print s}'\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the stub: %v", err)
+	}
+	runner, err := New(Options{Binary: path, Implementations: []string{"claude.search"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	out, err := runner.Run(context.Background(), request(t, map[string]any{"query": "TODO"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	matches, _ := out.Result["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("matches = %v, want the answer that arrived before the stream broke", out.Result["matches"])
+	}
+	var said bool
+	for _, notice := range out.Notices {
+		if strings.Contains(notice, "cut short") {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatalf("notices = %v, want one saying the stream was cut short", out.Notices)
 	}
 }

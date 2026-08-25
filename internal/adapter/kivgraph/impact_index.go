@@ -156,17 +156,22 @@ func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *
 	if err != nil {
 		return nil, nil, err
 	}
-	changed, ranges, err := gitDiff(ctx, root, baseline, scope)
+	changed, ranges, unrecognized, err := gitDiff(ctx, root, baseline, scope)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	var notes []string
+	if unrecognized > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"%d file header(s) in the baseline diff could not be read, so those files are covered whole rather than by the lines that changed",
+			unrecognized))
+	}
 	roots := make([]impactSymbol, 0)
 	for _, relative := range changed {
 		fileRanges := ranges[relative]
 		if len(fileRanges) == 0 {
-			notes = append(notes, fmt.Sprintf("%s cambió, pero no tiene líneas actuales que puedan mapearse (archivo borrado, binario o vacío)", relative))
+			notes = append(notes, fmt.Sprintf("%s changed but has no current lines to map (deleted, binary or empty)", relative))
 			continue
 		}
 		if r.isSensitive(relative) {
@@ -176,7 +181,7 @@ func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
 			// Deleted or binary files remain in changed_files, but have no
 			// current declaration that can be walked in the live graph.
-			notes = append(notes, fmt.Sprintf("%s cambió, pero ya no existe en el árbol de trabajo actual", relative))
+			notes = append(notes, fmt.Sprintf("%s changed but no longer exists in the current working tree", relative))
 			continue
 		}
 		text, err := sess.Call(ctx, toolOutline, map[string]any{"repository": kivgraphRepo, "path": relative})
@@ -185,7 +190,7 @@ func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *
 			// That is an incomplete graph answer, not a dead provider: retain the
 			// file in changed_files and make the missing coverage explicit.
 			if strings.Contains(err.Error(), "SYMBOL_NOT_FOUND") || strings.Contains(err.Error(), "has no indexed file") {
-				notes = append(notes, fmt.Sprintf("%s cambió, pero Kivgraph no tiene ese archivo en el snapshot publicado", relative))
+				notes = append(notes, fmt.Sprintf("%s changed but Kivgraph does not have that file in the published snapshot", relative))
 				continue
 			}
 			return nil, nil, contract.Fail(contract.FailureUnavailable,
@@ -197,12 +202,31 @@ func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *
 				"kivgraph code.impact: unreadable outline for %s: %v", relative, err)
 		}
 		found := 0
+		unaddressed := 0
 		for _, decl := range outline.declarations() {
 			if !declarationOverlaps(decl, fileRanges) {
 				continue
 			}
-			key, err := r.stableKeyOf(ctx, sess, kivgraphRepo, relative, decl)
+			key, err := r.stableKeyOf(ctx, sess, CapabilityImpact, kivgraphRepo, relative, decl)
 			if err != nil {
+				// One declaration the graph cannot address is one root missing
+				// from the blast radius. A diff of any size touches many, and
+				// refusing the whole analysis over the one Kivgraph has not
+				// indexed throws away every consumer of the others -- the same
+				// judgement the unindexed-file branch above already makes.
+				// Anything that is not "nothing by that name" still stops the
+				// call: that is a provider in trouble, not a gap.
+				if contract.KindOf(err) == contract.FailureNotFound {
+					unaddressed++
+					named := decl.QualifiedName
+					if named == "" {
+						named = decl.Name
+					}
+					notes = append(notes, fmt.Sprintf(
+						"%s at %s:%d changed, but Kivgraph could not address it, so whatever depends on it is missing from this answer",
+						named, relative, decl.StartLine))
+					continue
+				}
 				return nil, nil, err
 			}
 			roots = append(roots, impactSymbol{
@@ -211,8 +235,11 @@ func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *
 			})
 			found++
 		}
-		if found == 0 {
-			notes = append(notes, fmt.Sprintf("%s cambió, pero Kivgraph no encontró una declaración actual sobre las líneas modificadas", relative))
+		// Only when nothing overlapped at all: a declaration that overlapped
+		// and could not be addressed has already said so, and saying "found
+		// none" on top of it would be a second, untrue explanation.
+		if found == 0 && unaddressed == 0 {
+			notes = append(notes, fmt.Sprintf("%s changed but Kivgraph found no current declaration over the changed lines", relative))
 		}
 	}
 
@@ -375,14 +402,28 @@ func impactScope(root string, scope []string) ([]string, error) {
 	return normalized, nil
 }
 
-func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]string, map[string][]diffRange, error) {
+// gitDiff reports which files changed against the baseline and which of their
+// CURRENT lines the change touches.
+//
+// The fourth return counts file headers in the hunk diff that this parser
+// could not attribute to a path. It should always be zero, and the reason it
+// is reported rather than assumed is the third invocation below: the parser
+// reads "+++ b/<path>", and "b/" is only the default. diff.noprefix removes it
+// and diff.mnemonicPrefix replaces it (w/ for the working tree), both of them
+// ordinary entries in a developer's ~/.gitconfig. With either set, every
+// header stopped matching, no file got a hunk, and code.impact silently fell
+// back to covering whole files -- an answer that looks exactly like a correct
+// one and blames far more symbols than the change touched. The prefixes are
+// forced on the command line now; the count is what would say so if the
+// assumption ever breaks again.
+func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]string, map[string][]diffRange, int, error) {
 	args := []string{"diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", baseline, "--"}
 	args = append(args, scope...)
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = root
 	var names bytes.Buffer
 	if output, err := command.Output(); err != nil {
-		return nil, nil, fmt.Errorf("git diff changed files against %q: %w", baseline, err)
+		return nil, nil, 0, fmt.Errorf("git diff changed files against %q: %w", baseline, err)
 	} else {
 		names.Write(output)
 	}
@@ -402,7 +443,7 @@ func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]stri
 	command.Dir = root
 	output, err := command.Output()
 	if err != nil {
-		return nil, nil, fmt.Errorf("git list untracked files: %w", err)
+		return nil, nil, 0, fmt.Errorf("git list untracked files: %w", err)
 	}
 	for _, value := range strings.Split(string(output), "\x00") {
 		if relative, ok := graphRelativePath(value); ok && inScope(relative, scope) {
@@ -411,19 +452,45 @@ func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]stri
 	}
 	sort.Strings(changed)
 
-	args = []string{"diff", "--unified=0", "--no-ext-diff", "--no-renames", baseline, "--"}
+	// --src-prefix/--dst-prefix override whatever diff.noprefix and
+	// diff.mnemonicPrefix say in the user's configuration, so the headers this
+	// loop reads are the ones it expects on every machine.
+	args = []string{"diff", "--unified=0", "--no-ext-diff", "--no-renames",
+		"--src-prefix=a/", "--dst-prefix=b/", baseline, "--"}
 	args = append(args, scope...)
 	command = exec.CommandContext(ctx, "git", args...)
 	command.Dir = root
 	output, err = command.Output()
 	if err != nil {
-		return nil, nil, fmt.Errorf("git diff hunks against %q: %w", baseline, err)
+		return nil, nil, 0, fmt.Errorf("git diff hunks against %q: %w", baseline, err)
 	}
 	ranges := make(map[string][]diffRange)
 	current := ""
+	unrecognized := 0
+	// "diff --git " at column 0 is the one unambiguous anchor in a diff body:
+	// added lines are prefixed with "+", removed ones with "-", context with a
+	// space, so no content line can produce it. Reading the target header only
+	// straight after it keeps a line of added source that happens to start with
+	// "++ " from being mistaken for a file header.
+	expectTarget := false
 	for _, line := range strings.Split(string(output), "\n") {
-		if strings.HasPrefix(line, "+++ b/") {
-			current, _ = graphRelativePath(strings.TrimPrefix(line, "+++ b/"))
+		if strings.HasPrefix(line, "diff --git ") {
+			current, expectTarget = "", true
+			continue
+		}
+		if target, found := strings.CutPrefix(line, "+++ "); found && expectTarget {
+			expectTarget = false
+			// A deletion names /dev/null as its target and has no current
+			// lines: not a header this parser failed to read.
+			if target == "/dev/null" {
+				continue
+			}
+			name, prefixed := strings.CutPrefix(target, "b/")
+			if !prefixed {
+				unrecognized++
+				continue
+			}
+			current, _ = graphRelativePath(name)
 			continue
 		}
 		matches := diffHunkPattern.FindStringSubmatch(line)
@@ -449,7 +516,7 @@ func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]stri
 			ranges[relative] = []diffRange{{start: 1, end: len(lines)}}
 		}
 	}
-	return changed, ranges, nil
+	return changed, ranges, unrecognized, nil
 }
 
 func appendChangedPath(changed *[]string, seen map[string]struct{}, relative string) {

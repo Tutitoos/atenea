@@ -3,6 +3,7 @@ package contract
 import (
 	"fmt"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -51,7 +52,7 @@ func ParseScale(s string) (Scale, error) {
 	if v, ok := scaleByName[s]; ok {
 		return v, nil
 	}
-	return 0, fmt.Errorf("unknown scale %q: want small, medium or large", s)
+	return 0, Fail(FailureInvalidInput, "unknown scale %q: want small, medium or large", s)
 }
 
 // VCS says whether a repository sits under version control, as far as anyone
@@ -95,7 +96,7 @@ func ParseVCS(s string) (VCS, error) {
 	if v, ok := vcsByName[s]; ok {
 		return v, nil
 	}
-	return 0, fmt.Errorf("unknown vcs %q: want present or absent", s)
+	return 0, Fail(FailureInvalidInput, "unknown vcs %q: want present or absent", s)
 }
 
 // Constraints is block 2 of an Implementation: what has to be true before this
@@ -270,7 +271,7 @@ func ParseHealthState(s string) (HealthState, error) {
 	if v, ok := healthByName[s]; ok {
 		return v, nil
 	}
-	return 0, fmt.Errorf("unknown health state %q: want alive, degraded, down or unknown", s)
+	return 0, Fail(FailureInvalidInput, "unknown health state %q: want alive, degraded, down or unknown", s)
 }
 
 // Rank orders health states for the funnel: lower is better.
@@ -377,7 +378,7 @@ func ParseScopeGuarantee(s string) (ScopeGuarantee, error) {
 	if v, ok := scopeGuaranteeByName[s]; ok {
 		return v, nil
 	}
-	return 0, fmt.Errorf("unknown scope guarantee %q: want filtered or confined", s)
+	return 0, Fail(FailureInvalidInput, "unknown scope guarantee %q: want filtered or confined", s)
 }
 
 // Implementation is the "who and how" behind a capability: ripgrep, Serena, a
@@ -451,7 +452,13 @@ func (i Implementation) Validate() error {
 	if i.Cost.Samples < 0 {
 		return Fail(FailureInvalidInput, "implementation %s: negative sample count", i.ID)
 	}
-	if i.Health.Score < 0 || i.Health.Score > 1 {
+	// NaN is named separately because a range test cannot catch it: every
+	// comparison against NaN is false, so `< 0 || > 1` reads as a bound and
+	// admits the one value that is outside every bound. Score exists to break
+	// ties between two providers in the same state, and a NaN score loses
+	// every comparison it is put through, so the provider carrying it is
+	// ranked last for ever and the funnel never explains why.
+	if math.IsNaN(i.Health.Score) || i.Health.Score < 0 || i.Health.Score > 1 {
 		return Fail(FailureInvalidInput,
 			"implementation %s: health score %v is outside 0..1", i.ID, i.Health.Score)
 	}
