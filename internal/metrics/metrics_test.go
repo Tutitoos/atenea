@@ -621,3 +621,51 @@ func TestConcurrentReadersQueueForTheFile(t *testing.T) {
 		}
 	}
 }
+
+// A measurement recorded after the final flush used to sit in a buffer nothing
+// would ever drain.
+//
+// That is the shutdown that overran: work is still running while the store is
+// being settled, and it goes on calling Record. Those rows went with the
+// process, and Dropped -- the number that exists to say how much was lost --
+// reported zero, so nothing anywhere said they had ever existed.
+func TestASealedStoreCountsWhatItCanNoLongerKeep(t *testing.T) {
+	store := store(t, Options{})
+
+	store.Record(Measurement{Capability: "code.search", Implementation: "ripgrep"})
+	if got := store.Pending(); got != 1 {
+		t.Fatalf("pending = %d, want the one measurement recorded", got)
+	}
+
+	store.Seal()
+	before := store.Dropped()
+	store.Record(Measurement{Capability: "code.search", Implementation: "ripgrep"})
+	store.Record(Measurement{Capability: "code.search", Implementation: "ripgrep"})
+
+	if got := store.Pending(); got != 1 {
+		t.Errorf("pending = %d after sealing, want the one that was already there: "+
+			"a sealed store must not queue work nothing will write", got)
+	}
+	if got := store.Dropped() - before; got != 2 {
+		t.Errorf("dropped = %d, want the 2 recorded after the seal", got)
+	}
+}
+
+// Sealing is idempotent and does not itself write: the caller decides how hard
+// to try, which is why the core seals before its retry loop rather than after.
+func TestSealingTwiceIsTheSameAsSealingOnce(t *testing.T) {
+	store := store(t, Options{})
+	store.Record(Measurement{Capability: "code.search", Implementation: "ripgrep"})
+
+	store.Seal()
+	store.Seal()
+	if got := store.Pending(); got != 1 {
+		t.Errorf("pending = %d, want the measurement still waiting: Seal does not flush", got)
+	}
+	if err := store.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush after Seal: %v", err)
+	}
+	if got := store.Written(); got != 1 {
+		t.Errorf("written = %d, want the sealed store's backlog to still reach disk", got)
+	}
+}

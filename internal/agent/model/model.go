@@ -1999,10 +1999,21 @@ func recordPrompt(req Request, argv []string) {
 	if dir == "" {
 		return
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0700 and 0600 below, not 0755 and 0644.
+	//
+	// What lands here is the prompt as sent, which carries the repository's
+	// own text -- source, file names, whatever the task quoted. This is the
+	// same posture the state root, the settings file and the socket already
+	// take, and it was the one directory in this project that did not.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	name := fmt.Sprintf("%d-%s-%d.txt", time.Now().UnixNano(), req.Role, os.Getpid())
+	// Role is a declared value on the Request rather than something a caller
+	// types, but it reaches a filename here, and a filename is the one place
+	// where "it is always one of four words" stops being an argument: the
+	// cost of being wrong is a write outside the directory the operator named.
+	name := fmt.Sprintf("%d-%s-%d.txt",
+		time.Now().UnixNano(), filenameSafe(string(req.Role)), os.Getpid())
 	var b strings.Builder
 	fmt.Fprintf(&b, "role: %s\nbudget_usd: %v\nread_tokens: %d\ntools: %v\n",
 		req.Role, req.BudgetUSD, req.ReadTokens, req.Builtins)
@@ -2011,7 +2022,26 @@ func recordPrompt(req Request, argv []string) {
 	// string nobody was ever asked. On a single-shot turn the two are the
 	// same value.
 	fmt.Fprintf(&b, "argv: %q\n\n----- prompt -----\n%s\n", argv, req.sentPrompt())
-	_ = os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o600)
+}
+
+// filenameSafe reduces a value to the characters a filename may carry here.
+// Anything else becomes a dash, so a value that is not one of the declared
+// roles cannot reach outside the directory or collide with a path separator.
+func filenameSafe(value string) string {
+	safe := make([]rune, 0, len(value))
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			safe = append(safe, r)
+		default:
+			safe = append(safe, '-')
+		}
+	}
+	if len(safe) == 0 {
+		return "unnamed"
+	}
+	return string(safe)
 }
 
 // envelope is the JSON one headless turn prints -- the same shape claudecode

@@ -173,6 +173,8 @@ type Store struct {
 	head    int
 	count   int
 	dropped int
+	// sealed stops the buffer accepting work after the final flush. See Seal.
+	sealed  bool
 	written int
 }
 
@@ -231,7 +233,33 @@ func (s *Store) Record(m Measurement) {
 	m.Raw = contract.RedactRaw(m.Raw)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sealed {
+		// The last flush has already happened. Buffering here would put the
+		// measurement in a queue nothing will ever drain, and it would leave
+		// no trace of having done so -- the one shape this package refuses,
+		// because a measurement that vanishes silently is worse than one
+		// counted as lost.
+		s.dropped++
+		return
+	}
 	s.push(m)
+}
+
+// Seal closes the store to new measurements, counting anything that arrives
+// afterwards as dropped.
+//
+// It exists for the shutdown that overran. Work still in flight goes on calling
+// Record after the final flush, and without this those rows sat in a buffer
+// nobody would ever write: gone with the process and absent from Dropped, so
+// the count that exists to say how much was lost said zero. Sealing before the
+// last flush rather than after is deliberate -- a measurement arriving during
+// the last stand is one the last stand was never going to carry.
+//
+// Idempotent, and it does not flush: the caller decides how hard to try.
+func (s *Store) Seal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sealed = true
 }
 
 // push adds one measurement to the ring, dropping the oldest when the ring is

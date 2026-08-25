@@ -6,8 +6,8 @@ type: docs
 # Atenea
 
 An orchestration core for agents and MCP tooling that lives **outside** the CLIs
-it serves. Every client — omp, Claude Code, OpenCode — connects to the same
-core.
+it serves. Every client — omp, Claude Code, Codex — connects to the same core.
+OpenCode is an opt-in model backend rather than a client adapter.
 
 The one sentence that explains the rest: **Atenea decides and delegates, it does
 not execute.** The flow is always `goal -> capability -> implementation`.
