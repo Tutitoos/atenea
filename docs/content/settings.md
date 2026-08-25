@@ -746,6 +746,39 @@ Neither list is a permission on its own. The capabilities behind them cause the
 outright unless Atenea is the process macOS attributes the permission to — see
 the effect's own section above.
 
+## Reaching the desktop from a client
+
+Three things have to line up, and they are separate on purpose.
+
+**Atenea has to be the service.** macOS attributes a device permission to the
+process responsible for itself, which is the one launchd started. Run from a
+shell, Atenea borrows the terminal's screen and input access instead, and the
+adapter refuses rather than spending a permission nobody granted it and which
+Atenea's own settings could not switch off. `atenea service install`, then grant
+Accessibility — and Screen Recording, for captures — to `atenea` itself in
+System Settings.
+
+Sign the binary first if you build your own. An unsigned binary's TCC grant is
+pinned to a hash that changes on every build, so it dies the next time you
+compile; signed with any certificate, the grant follows the identifier instead.
+An entry can look enabled in System Settings while pointing at an identity that
+no longer exists — remove it and add it again if a permission you granted stops
+being seen.
+
+**The floor has to allow it.** `device` is on neither floor as shipped. A client
+that only reads wants it on `client_effects`; the acting capabilities also cause
+`write` and `external`, and granting those reaches every client, not only the
+one you had in mind.
+
+**The application has to be on the list.** See `[desktop]` above. Empty denies
+everything.
+
+`atenea desktop ACTION` adds a confirmation to all of this: it shows what is
+about to happen, waits for a yes, and then dispatches through the service, which
+is the only process that can perform it. Note that it dispatches over the same
+socket a client uses, so it is governed by `client_effects` too — the
+confirmation is a control on top of the floor, never instead of it.
+
 ## Security
 
 ```toml
