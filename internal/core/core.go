@@ -1246,7 +1246,45 @@ func (c *Core) Run(ctx context.Context) error {
 		c.processes.Start(ctx)
 	}
 	<-ctx.Done()
-	return c.Shutdown()
+	stopped := c.Shutdown()
+	// And then wait for the handlers, which Shutdown may not have.
+	//
+	// Run ends with Shutdown, and a Shutdown that somebody else already
+	// started returns nil at once -- correctly, since it must not run the
+	// teardown twice. But that made Run return while a connection handler was
+	// still alive: the operator's own Shutdown had timed out on a parked
+	// handler, said so, and left it running, and Run's call then reported
+	// success without waiting for anything at all.
+	//
+	// What that costs is a caller who takes Run's return as "the service is
+	// down" and then removes the state root -- a test with a temporary
+	// directory, a container about to unmount. The handler is still writing
+	// into it, and the removal fails on a directory that will not stay empty.
+	//
+	// The context is done by now, so every handler's watcher has closed its
+	// client socket and they are all on their way out; this is a wait for the
+	// last few microseconds of that, not a second stop. Bounded by the same
+	// grace, because a handler that will not leave is precisely the case
+	// Shutdown already refuses to wait forever for.
+	c.drainConnections(c.settings.Core.ShutdownGrace)
+	return stopped
+}
+
+// drainConnections waits for the accepted connections to finish, or gives up.
+//
+// Bounded on purpose and silent on purpose: whoever is calling has already
+// been told what the stop achieved. This only decides whether Run's return
+// means the handlers are gone as well.
+func (c *Core) drainConnections(grace time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		c.conns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(grace):
+	}
 }
 
 // Shutdown refuses new work and gives whatever is running a bounded margin to

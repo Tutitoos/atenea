@@ -81,7 +81,12 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - Give the shared backend's handshake its own context, so a client that hangs up
   cannot kill a cold server out from under every other chat waiting on it.
 - Bound the wait for in-flight connections by the shutdown grace that exists for
-  it.
+  it, and make `Run` wait for the handlers before it returns. `Run` ends with
+  `Shutdown`, and a `Shutdown` somebody else already started returns nil at
+  once -- correctly, since the teardown must not run twice, but it meant `Run`
+  reported the service down while a handler was still writing into the state
+  root. A caller that removes that root on Run's return -- a container about to
+  unmount, a test with a temporary directory -- was racing a live writer.
 - Read the MCP probe's answer rather than the first JSON object carrying an id:
   a server that asks a question before answering was read as having answered.
 - Make the metrics buffer a real ring, so a full buffer no longer costs a
