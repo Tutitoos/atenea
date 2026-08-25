@@ -787,6 +787,25 @@ func groundedDefaults() ([]byte, error) {
 	if absolute == "" {
 		return defaultSettings, nil
 	}
+	// The home directory is not a repository, and writing it down as one is
+	// worse than leaving the path relative.
+	//
+	// This is the same failure the service's WorkingDirectory exists to
+	// prevent -- a `code.search` from any chat raking Documents, mail, .ssh
+	// and .aws -- except recorded on disk, where it survives every restart and
+	// looks like a deliberate choice. It is also the likeliest way to reach it:
+	// a shell after ssh starts in $HOME, and `config init` is the command the
+	// documentation sends an operator to. So it is refused by name, with the
+	// one thing that fixes it.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if resolved, err := filepath.Abs(home); err == nil && resolved == absolute {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"`config init` writes down the directory it is run in, and this is %s -- "+
+					"a home directory is not a repository, and declaring it as one lets any "+
+					"chat search the whole of it; run this from the repository you mean",
+				absolute)
+		}
+	}
 	// Anchored on the whole line, so this cannot reach a `path = "."` that
 	// belongs to some other block a later edit adds.
 	grounded := relativeRepositoryPath.ReplaceAll(defaultSettings,

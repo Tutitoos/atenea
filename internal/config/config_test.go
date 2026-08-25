@@ -2585,3 +2585,44 @@ func TestTheEmbeddedSettingsKeepTheRelativePath(t *testing.T) {
 	t.Error("the shipped settings no longer declare a repository at \".\": a fresh " +
 		"install with no settings file has nothing to work against")
 }
+
+// TestConfigInitRefusesToDeclareTheHomeDirectory closes the way that
+// convenience turns into a privacy failure.
+//
+// `config init` writes down the directory it is run in, and the documented
+// route to it -- ssh in, run the command the getting-started page names --
+// starts in $HOME. Writing that down declares the home directory as a
+// repository, which lets any chat's code.search rake Documents, mail, .ssh and
+// .aws: the exact failure the service's WorkingDirectory exists to prevent,
+// except recorded on disk where it survives every restart.
+func TestConfigInitRefusesToDeclareTheHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	path := filepath.Join(t.TempDir(), "atenea.toml")
+
+	err := config.WriteDefault(path, false)
+	if err == nil {
+		t.Fatal("`config init` run from the home directory declared it as a repository")
+	}
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Errorf("kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "home directory") {
+		t.Errorf("refusal = %q, want it to name what is wrong", err)
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Error("the settings file was written anyway")
+	}
+
+	// And a real repository under that home is still fine: the rule is about
+	// the home directory itself, not about living inside one.
+	repo := filepath.Join(home, "work")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Chdir(repo)
+	if err := config.WriteDefault(path, false); err != nil {
+		t.Errorf("a repository inside the home directory was refused: %v", err)
+	}
+}

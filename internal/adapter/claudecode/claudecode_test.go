@@ -896,3 +896,35 @@ func TestALineTooLongKeepsTheAnswerThatAlreadyArrived(t *testing.T) {
 		t.Fatalf("notices = %v, want one saying the stream was cut short", out.Notices)
 	}
 }
+
+// TestAPriceSurvivesTheClosingResultLine pins the fold that reads the stream.
+//
+// The turn is already paid for by the time the closing line arrives, so an
+// envelope that forgets the price does not make the money come back -- it just
+// stops the core from being able to say what was spent.
+func TestAPriceSurvivesTheClosingResultLine(t *testing.T) {
+	assistant := envelope{TotalCostUSD: 0.30, costSeen: true}
+	closing := envelope{Result: "done"}
+
+	got := carryCost(assistant, closing)
+	if got.TotalCostUSD != 0.30 || !got.costSeen {
+		t.Errorf("a result line with no price erased a $0.30 charge: got %v, seen %v",
+			got.TotalCostUSD, got.costSeen)
+	}
+	if got.Result != "done" {
+		t.Errorf("the closing envelope lost its own content: %q", got.Result)
+	}
+
+	// A later price wins, including a measured zero -- the last word about a
+	// turn is the one to keep.
+	repriced := carryCost(assistant, envelope{TotalCostUSD: 0, costSeen: true})
+	if repriced.TotalCostUSD != 0 || !repriced.costSeen {
+		t.Errorf("a later measured zero did not supersede the earlier price: %v, seen %v",
+			repriced.TotalCostUSD, repriced.costSeen)
+	}
+
+	// And an unpriced stream stays unpriced rather than inventing a zero.
+	if got := carryCost(envelope{}, envelope{Result: "done"}); got.costSeen {
+		t.Error("a stream that never mentioned money claims to have measured it")
+	}
+}

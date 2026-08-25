@@ -53,8 +53,15 @@ in detail rather than in rows.
 `Outcome` travels on the Runner seam, which cannot be extended without breaking
 every implementer: an adapter built against 3.2.0 goes on compiling and leaves
 it false, which reads as "nobody said" -- the honest answer for an adapter that
-never had a way to say otherwise. The core refuses a charge reported without
-it, because a figure with no measurement behind it is a number and not a price.
+never had a way to say otherwise. The core reads it rather than
+enforcing it: a charge reported without the flag is spent against the grant,
+because the conservative reading of an unexplained figure is that it was real,
+but it is never called a price and the adapter is named in the notebook.
+Refusing the call was the first shape of the rule and it was wrong twice -- the
+provider has already charged by the time the core sees the outcome, so a
+refusal discards paid work without recovering the money, and an adapter built
+against 3.2.0 has no field to set, so a minor bump would have broken every
+paying one.
 The receipt and the `--json` output carry the distinction too; `charged_usd` is
 a pointer there, so present-even-as-zero means measured and absent means
 nobody said. Contract 3.3.0.

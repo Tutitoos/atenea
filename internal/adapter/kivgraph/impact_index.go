@@ -631,6 +631,17 @@ func finishIndexReport(report *indexDocument) (IndexReport, error) {
 		}
 		return IndexReport{}, fmt.Errorf("kivgraph index --full did not pass")
 	}
+	// A count below zero is not a small index, it is a broken sender. These
+	// two numbers are the declared output of repository.index -- what a chat
+	// reads to decide whether the graph is worth querying -- and nothing
+	// downstream treats them as anything but sizes. Refusing here says which
+	// field was wrong, where letting it through hands a negative size to a
+	// caller with no way to trace it back.
+	if report.Counts.Symbols < 0 || report.Counts.Edges < 0 {
+		return IndexReport{}, fmt.Errorf(
+			"kivgraph index --full reported %d symbols and %d edges, and a count cannot be negative",
+			report.Counts.Symbols, report.Counts.Edges)
+	}
 	return IndexReport{Generation: report.GenerationID, Nodes: report.Counts.Symbols, Edges: report.Counts.Edges}, nil
 }
 
