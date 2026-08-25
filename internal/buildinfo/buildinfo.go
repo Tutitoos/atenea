@@ -18,7 +18,7 @@ import (
 // build that forgets does not fail -- it ships claiming to be whatever the
 // source said, which is the one error nobody notices. Here the source is the
 // only answer, and the release workflow refuses a tag that disagrees with it.
-const Version = "1.0.5"
+const Version = "1.1.0"
 
 // Full is Version plus what this particular build knows about where it came
 // from, as SemVer build metadata.
@@ -30,11 +30,11 @@ const Version = "1.0.5"
 // the number claims.
 //
 // Build metadata is ignored when SemVer versions are compared, which is the
-// right meaning: this IS 1.0.5, built from that tree.
+// right meaning: this IS 1.1.0, built from that tree.
 var Full = sync.OnceValue(func() string { return stamp(vcs()) })
 
 // vcs reads where this build came from. It answers empty for the normal shape
-// of a release artifact: `go install atenea@v1.0.5` and a build from an
+// of a release artifact: `go install atenea@v1.1.0` and a build from an
 // unpacked source archive both land here, and neither has anything truthful to
 // add to the number.
 func vcs() (revision string, modified bool) {

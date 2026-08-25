@@ -11,7 +11,7 @@ enableGitInfo = false
 
 [params]
   description = "Atenea decides and delegates: a local orchestration core for agents and MCP tooling."
-  version = "1.0.5"
+  version = "1.1.0"
   github = "https://github.com/Tutitoos/atenea"
   BookTheme = "auto"
   BookSearch = true
