@@ -1028,6 +1028,66 @@ func TestOutlineDeclarationsAcceptsCompactGroupedRanges(t *testing.T) {
 	}
 }
 
+// The flat half of the same encoding. kivgraph 0.7.0 marshals the grouped
+// and flat candidates and ships the smaller, so a file whose kinds repeat
+// arrives grouped -- the case above -- and one of mixed declarations arrives
+// like this, under "files" with the kind hoisted onto the page. Both are
+// ordinary output of the same server, which is why reading only the grouped
+// one made this look intermittent: it worked on the files whose kinds
+// happened to repeat.
+func TestOutlineDeclarationsAcceptsTheFlatCompactShape(t *testing.T) {
+	var answer outlineAnswer
+	input := `{"results":{"kind":"func","files":[{"file":"main.go","at":["main@17-66"]}]}}`
+	if err := json.Unmarshal([]byte(input), &answer); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	declarations := answer.declarations()
+	if len(declarations) != 1 {
+		t.Fatalf("declarations = %#v, want the one flat row", declarations)
+	}
+	if got := declarations[0]; got.Name != "main" || got.Kind != "func" || got.StartLine != 17 || got.EndLine != 66 {
+		t.Fatalf("declaration = %#v", got)
+	}
+}
+
+// A page that can hoist nothing spends a tuple per row instead. Measured
+// against kivgraph 0.7.0 answering for a Dart file, where kinds and
+// visibility both varied: the qualified name stays in the encoding and the
+// simple name rides beside it, and both are needed downstream -- the column
+// is found by scanning the source line for the simple name, and the parent
+// by trimming it off the qualified one.
+func TestOutlineDeclarationsAcceptsCompactTuples(t *testing.T) {
+	var answer outlineAnswer
+	input := `{"results":{"files":[{"file":"lib/main.dart","at":[` +
+		`["_TaxiPrimeAppState._showNotificationToast@206-216","_showNotificationToast","method","unexported"],` +
+		`["_bootstrap@95-156","_bootstrap","function","unexported"]]}]}}`
+	if err := json.Unmarshal([]byte(input), &answer); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	declarations := answer.declarations()
+	if len(declarations) != 2 {
+		t.Fatalf("declarations = %#v, want two tuple rows", declarations)
+	}
+	got := declarations[0]
+	if got.Name != "_showNotificationToast" || got.Kind != "method" || got.StartLine != 206 || got.EndLine != 216 {
+		t.Fatalf("first declaration = %#v", got)
+	}
+	// The qualified name has to survive, or the enclosing declaration cannot
+	// be named and the row reports no parent at all.
+	if got.QualifiedName != "_TaxiPrimeAppState._showNotificationToast" {
+		t.Fatalf("qualified name = %q, want the enclosing declaration kept", got.QualifiedName)
+	}
+	if parent, ok := parentOf(got); !ok || parent != "_TaxiPrimeAppState" {
+		t.Fatalf("parentOf = %q, %v", parent, ok)
+	}
+	if got.StableKey != "_TaxiPrimeAppState._showNotificationToast@206-216" {
+		t.Fatalf("stable key = %q", got.StableKey)
+	}
+	if second := declarations[1]; second.Name != "_bootstrap" || second.Kind != "function" || second.StartLine != 95 {
+		t.Fatalf("second declaration = %#v", second)
+	}
+}
+
 func TestRunDefinitionAnswersFromTheDeclarationContainingThePosition(t *testing.T) {
 	repo := testRepo(t)
 	fake, sess := newFakeKivgraph(t)
