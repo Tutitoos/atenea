@@ -28,15 +28,12 @@ these were questions anybody had asked -- they are listed because the pages
 that describe how the funnel and the workflow behave now describe something
 different.
 
-**Narrowed, not closed.** The service now starts in Atenea's own state root
-rather than in `$HOME`, so the shipped `path = "."` no longer names a home
-directory as a repository to search. That makes the failure empty instead of
-private; it does not make a relative repository path mean anything useful to a
-daemon. The remaining decision is whether the shipped catalog should declare a
-repository at all, or whether a fresh install should start with none and say
-so. It cannot be settled by making `path` absolute alone: the `"."` is the
-mechanism by which a fresh CLI install works against the tree you are standing
-in, and ten end-to-end tests exist because that behaviour is wanted.
+**Narrowed on 2026-08-25 and closed on 2026-08-26.** The service was pointed at
+Atenea's own state root rather than `$HOME`, which made the failure empty
+instead of private without making a relative repository path mean anything to a
+daemon. The entry below records how that was finished; this paragraph is kept
+because the intermediate state shipped nowhere but was the reasoning that led
+to the split.
 
 **Answered on 2026-08-25, and built.** Four decisions were taken rather than
 recorded, so they leave this page by being answered:
