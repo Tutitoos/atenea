@@ -12,7 +12,7 @@ import (
 )
 
 // This package used to be part of the Serena adapter, written and tested
-// against one far side. These tests are the wire behaviour that adapter
+// against one far side. These tests are the wire behavior that adapter
 // measured, kept here because the wire format is what moved: framing, the
 // handshake, session handling. What is not here any more is Serena's own
 // meaning -- which tool means what, how its answer becomes a location --
