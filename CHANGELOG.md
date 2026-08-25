@@ -7,12 +7,80 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.3.0`. It is a commitment from the first release: an adapter is code
+  at `3.4.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
+
+### Added
+
+Atenea can drive this machine's desktop: read an application's accessibility
+tree, capture one of its windows, and click, type, press keys, scroll and drag
+inside it. Nine capabilities behind an allow-list, answered by a helper written
+in Swift that Atenea supervises the way it supervises Serena.
+
+`device` joins the contract as a fifth effect at **3.4.0**, composing with the
+other four rather than replacing any: where the effect lands, not what it
+changes. It is on no floor as shipped.
+
+`atenea desktop ACTION` performs one act after showing it and waiting for a
+person to agree. It always asks and there is no flag to skip that.
+
+### The measurements that shaped it
+
+macOS attributes a device permission to the **responsible ancestor**, not to the
+binary asking. A signed helper reported full access launched from a terminal
+that held it, and none launched from anywhere else; a binary whose identifier
+was never authorized reported the same. A `.app` bundle does not change this and
+launchd does. So the adapter refuses the effect unless Atenea is that ancestor,
+because succeeding otherwise means spending a permission Atenea cannot revoke
+and whose kill switch would not reach it.
+
+An ad-hoc signature's designated requirement is pinned to a `cdhash` that
+changes on **every** build, measured even for a rebuild of identical source.
+Signing is therefore a prerequisite rather than packaging polish, and an
+unsigned binary's grant dies the next time you compile.
+
+A browser's accessibility tree is about 1,500 nodes and 91KB, not the tens of
+thousands assumed. What costs is latency — 609ms, one IPC message per node — so
+the ceiling that binds is a **time budget**, with node, byte and depth limits as
+a second net under it.
+
+The helper ships in no release and is built where it runs. `spctl` rejects an
+Apple Development signature on another machine exactly as it rejects an unsigned
+one, so the weaker option buys nothing for distribution; locally compiled code
+carries no quarantine attribute and needs no certificate from anybody.
+
+### The refusals, and why each exists
+
+A chat that has been handed what is on the screen may no longer act on it.
+Marking a result untrusted says where it came from and stops nobody: reading a
+coordinate off a window and clicking it is one call after another, which is the
+whole of a prompt injection reaching the pointer. The rule is about order within
+one chat, so nothing has to judge whether a sentence was an instruction.
+
+Typing is refused twice over and neither check subsumes the other: text that
+reads as a credential never leaves the process, and the helper refuses fields
+macOS itself marks secure, checked at the moment of typing because focus moves.
+
+An application not on the `[desktop]` allow-list is refused before anything
+runs. `applications` empty denies everything, inverting how an empty list
+usually reads, and `denied` always wins and ships seeded.
+
+### Fixed
+
+A supervised provider that would not start said only "did not come up". The
+reason lived in `Raw`, which does not survive the funnel's re-summary, so the
+commonest cause of all — a binary nobody installed — reached the operator as
+nothing. All four supervised adapters gained the reason in the message.
+
+`guard()` was swallowing the optional `SurfaceReporter`: it embeds
+`contract.Runner`, an interface, so only that method set is promoted. The status
+screen printed `surfaces -` for a provider that had one. Solved with `Unwrap()`
+rather than a fourth wrapper type, because a surface needs no bracketing and two
+optional interfaces would already be four types to keep in step.
 
 ## [1.1.0] - 2026-08-25
 
