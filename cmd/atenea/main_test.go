@@ -4,18 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/backup"
+	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/testroot"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -470,10 +476,19 @@ func TestANonsenseBudgetOnTheCommandLineIsRefused(t *testing.T) {
 
 // The flag has to reach the run, not just parse. A commission the operator
 // funded by hand is the one case where the settings file is not the answer.
+//
+// The receipt is what proves it, and it is read rather than the exit status:
+// this test asserted only that the command returned nil for its whole life,
+// so a --budget that parsed cleanly and was then dropped on the way to the
+// orchestrator would have kept it green -- an operator funding a run by hand
+// and getting the settings file's grant instead, with nothing to notice it by.
 func TestTheCommandLineBudgetReachesTheRun(t *testing.T) {
-	freshInstall(t)
+	_, runs := freshInstall(t)
 	if _, err := cli(t, "task", "TODO", "--budget", "5"); err != nil {
 		t.Fatalf("a funded commission was refused: %v", err)
+	}
+	if got := latestReceipt(t, runs).BudgetUSD; got != 5 {
+		t.Errorf("the receipt records a grant of $%.2f, want the $5 the command line funded", got)
 	}
 }
 
@@ -491,13 +506,70 @@ func TestAnUnknownAllowValueOnTheCommandLineIsRefused(t *testing.T) {
 	}
 }
 
-// The flag has to reach the run, not just parse: a name this build
-// recognizes must not be refused for a reason unrelated to permission.
+// The flag has to reach the run, not just parse: a name this build recognizes
+// must not be refused for a reason unrelated to permission, and the effect has
+// to arrive at the steps -- an --allow that parsed and was then dropped leaves
+// every step running on read alone, which fails later as an unexplained
+// refusal deep inside a provider rather than here.
 func TestTheCommandLineAllowFlagReachesTheRun(t *testing.T) {
-	freshInstall(t)
+	_, runs := freshInstall(t)
 	if _, err := cli(t, "task", "TODO", "--allow", "write"); err != nil {
 		t.Fatalf("a commission granted write was refused: %v", err)
 	}
+	receipt := latestReceipt(t, runs)
+	if !slices.Contains(receipt.Effects, "write") {
+		t.Errorf("the receipt records effects %v, want write among them", receipt.Effects)
+	}
+	if len(receipt.Plan.Steps) == 0 {
+		t.Fatal("the commission produced no step, so nothing here proves what a step was permitted")
+	}
+	for _, step := range receipt.Plan.Steps {
+		if !slices.Contains(step.Permission.Effects, "write") {
+			t.Errorf("step %s was permitted %v, want the granted write among them",
+				step.ID, step.Permission.Effects)
+		}
+	}
+}
+
+// runReceipt is the part of a run's paper copy these tests read back: what the
+// commission was granted, and what each step was actually permitted. A subset
+// on purpose -- the fields under test, named as the file names them.
+type runReceipt struct {
+	BudgetUSD float64  `json:"budget_usd"`
+	Effects   []string `json:"effects"`
+	Plan      struct {
+		Steps []struct {
+			ID         string
+			Permission struct {
+				Effects   []string
+				BudgetUSD float64
+			}
+		}
+	} `json:"plan"`
+}
+
+// latestReceipt reads the one receipt a single commission leaves behind.
+//
+// It insists on exactly one: a test that silently read the newest of several
+// would be asserting about whichever run happened to sort last.
+func latestReceipt(t *testing.T, runs string) runReceipt {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(runs, "*.json"))
+	if err != nil {
+		t.Fatalf("looking for the receipt: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("the commission left %v behind, want exactly one receipt", files)
+	}
+	body, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("reading the receipt: %v", err)
+	}
+	var found runReceipt
+	if err := json.Unmarshal(body, &found); err != nil {
+		t.Fatalf("parsing the receipt: %v", err)
+	}
+	return found
 }
 
 // The trace is the deliverable, not a debug extra: a decision nobody can
@@ -1139,5 +1211,132 @@ func TestDecisionAndAnswerRenderersShowTheirCompleteFacts(t *testing.T) {
 	printAnswer(&out, &orchestrator.Result{Steps: []orchestrator.StepResult{{Review: orchestrator.Review{Parent: contract.VerdictFailed}}}}, false)
 	if out.Len() != 0 {
 		t.Fatalf("failed answer output = %q", out.String())
+	}
+}
+
+// brokenPipe is a stdout that has gone away: a `| head -1` that exited, a full
+// disk, a terminal closed while the run was still going.
+type brokenPipe struct{}
+
+func (brokenPipe) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+// --json exists to be read by a program. A write that never landed used to be
+// discarded, so the command carried on to its verdict and exited 0 over an
+// empty stream -- which tells the caller the run went fine and produced
+// nothing, a claim it has no way to check.
+func TestAFailedJSONWriteIsReportedInsteadOfExitingZero(t *testing.T) {
+	err := run([]string{"--config", settingsFile(t), "detect", "--json"}, brokenPipe{})
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable", got)
+	}
+	if got := exitCode(err); got != 4 {
+		t.Errorf("exit code = %d, want 4", got)
+	}
+}
+
+// The same guarantee at the renderer both commissions and resumes go through.
+func TestTheCommissionJSONRendererReportsAFailedWrite(t *testing.T) {
+	if err := printResultJSON(brokenPipe{}, &orchestrator.Result{RunID: "r-1"}); err == nil {
+		t.Fatal("a report nobody received was reported as written")
+	}
+}
+
+// Everything on these screens is text somebody else wrote: stdout and stderr
+// of external CLIs, and tool descriptions relayed by third-party MCP servers.
+// strings.Fields does not touch escapes -- it splits on Unicode space, and ESC
+// is not one -- so a provider whose error message carried "\x1b[2J" cleared
+// the operator's screen and decided for itself what its own incident looked
+// like.
+func TestProviderTextCannotRedrawTheTerminal(t *testing.T) {
+	got := oneLine("failed \x1b[2J\x1b[1;1Hall is well\rand \x07fine")
+	if strings.ContainsAny(got, "\x1b\r\x07") {
+		t.Errorf("oneLine passed a control character through: %q", got)
+	}
+	// A space rather than a deletion: words glued together read as a different
+	// message, not as a censored one.
+	if !strings.Contains(got, "failed") || !strings.Contains(got, "fine") {
+		t.Errorf("oneLine = %q, want the words themselves intact", got)
+	}
+	if strings.ContainsAny(clip("\x1b[31m"+strings.Repeat("x", 200)), "\x1b") {
+		t.Error("clip passed an escape sequence through")
+	}
+}
+
+// clip cuts to a byte budget, so the cut can land inside a multi-byte rune.
+func TestClipCutsBetweenRunesAndNotThroughOne(t *testing.T) {
+	// Two ASCII bytes before 60 three-byte runes puts the 160-byte cut two
+	// bytes into a rune rather than on a boundary.
+	got := clip("xy" + strings.Repeat("あ", 60))
+	if !utf8.ValidString(got) {
+		t.Errorf("clip cut through a rune: %q", got)
+	}
+}
+
+// clientconfig drops the command, arguments, environment and URL of every
+// declaration it reads, because a repository is untrusted input. The server
+// NAME gets no such treatment: it is the raw key of the mcpServers object,
+// and this report printed it with %s. A clone could therefore forge rows in
+// the report about itself, or clear the screen above them.
+func TestAServerNameFromAClonedRepositoryCannotForgeRowsInTheReport(t *testing.T) {
+	report := clientconfig.Report{
+		Reading: clientconfig.Reading{Root: "/repo", Files: []string{".mcp.json"}},
+		Matches: []clientconfig.Match{{
+			Request: clientconfig.Request{
+				Kind:      clientconfig.KindServer,
+				Name:      "evil\x1b[2J\n  funnel     forged (stdio)",
+				Transport: "stdio",
+				Enabled:   true,
+			},
+			Answer:  "unmatched",
+			Sources: []string{".mcp.json"},
+		}},
+	}
+	var out bytes.Buffer
+	printIntent(&out, report)
+	text := out.String()
+	if strings.ContainsAny(text, "\x1b") {
+		t.Errorf("an escape sequence from the repository reached the terminal:\n%q", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "forged") && !strings.Contains(line, "evil") {
+			t.Errorf("the server name forged a row of its own: %q", line)
+		}
+	}
+}
+
+// core.claimUpkeep guarantees that one process at a time sweeps receipts,
+// ticks the clock and drives the flush, the roll-up and the backup. It guards
+// a service against a second service and said nothing about a command that
+// renames the whole state root out from under the one holding it: the running
+// service went on writing into a directory that had been moved aside, into the
+// copy kept for rollback, where the next start does not look.
+func TestAStateSwapIsRefusedWhileSomebodyHoldsTheUpkeep(t *testing.T) {
+	configPath, state, snapshot := backupCLISetup(t)
+	release, err := pidlock.Claim(filepath.Join(state, "upkeep.lock"))
+	if err != nil {
+		t.Fatalf("taking the upkeep for the test: %v", err)
+	}
+	defer release()
+
+	for _, args := range [][]string{
+		{"backup", "restore", snapshot.Name, state, "--replace"},
+		{"backup", "promote", state},
+	} {
+		_, err := cli(t, append([]string{"--config", configPath}, args...)...)
+		if contract.KindOf(err) != contract.FailureUnavailable {
+			t.Fatalf("%v was filed as %v, want unavailable", args, contract.KindOf(err))
+		}
+		// Naming the holder is the whole point: the operator's only move is to
+		// stop that process, and they cannot stop what they cannot identify.
+		if !strings.Contains(err.Error(), strconv.Itoa(os.Getpid())) {
+			t.Errorf("err = %v, want the pid holding the upkeep named", err)
+		}
+	}
+
+	// A destination that is not the state root is nobody's to maintain, so it
+	// is restored while the claim is held, as before.
+	elsewhere := filepath.Join(t.TempDir(), "restored")
+	if _, err := cli(t, "--config", configPath, "backup", "restore", snapshot.Name, elsewhere); err != nil {
+		t.Errorf("restoring outside the state root was refused: %v", err)
 	}
 }

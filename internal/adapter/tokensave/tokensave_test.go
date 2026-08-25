@@ -594,6 +594,131 @@ func TestToRootRefusesAPathLeavingTheRepository(t *testing.T) {
 	}
 }
 
+// The umbrella root is the case with no prefix to check anything against, and
+// it is the one this repository actually runs: a repository declared AT the
+// served root translates every far-side path through toRepository with
+// prefix == "". Every other prefix rejects an escape by failing to match; this
+// one has to reject it by saying so, or "../../etc/passwd" is a legitimate
+// repository-relative path.
+func TestToRepositoryRefusesAnEscapeWhenTheRepositoryIsTheRoot(t *testing.T) {
+	for _, name := range []string{"../secret.go", "..", "../../etc/passwd", "/etc/passwd"} {
+		if got, ok := toRepository("", name); ok {
+			t.Fatalf("toRepository(%q) accepted it as %q", name, got)
+		}
+	}
+	if got, ok := toRepository("", "internal/client.go"); !ok || got != "internal/client.go" {
+		t.Fatalf("toRepository = %q, %v; want the path through untouched", got, ok)
+	}
+}
+
+// The consequence of that check, at the only place the path reaches the disk:
+// a call-graph hop that climbs out of the served root neither becomes a row
+// nor has its contents read into a snippet.
+func TestRunCallsNeitherReportsNorReadsAHopOutsideTheServedRoot(t *testing.T) {
+	parent := t.TempDir()
+	writeFile(t, filepath.Join(parent, "secret.go"), "package secret\n\nconst Token = \"hunter2\"\n")
+	root := filepath.Join(parent, "served")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// The repository IS the served root, so the prefix is empty.
+	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	writeFile(t, filepath.Join(root, "client.go"), "package redis\n\nfunc NewClient() {}\n")
+
+	fake, sess := newFakeTokensave(t)
+	fake.on(toolStatus, readyStatus, false)
+	fake.on(toolEntities, `{"symbols":[{"kind":"function","name":"NewClient","line":3,"end_line":3}]}`, false)
+	fake.on(toolExact, `{"matches":[{"id":"function:mine","name":"NewClient","kind":"function","file":"client.go","line":3}]}`, false)
+	fake.on(toolCallers, `[
+		{"node_id":"function:x","name":"Token","kind":"const","file":"../secret.go","line":3,"depth":1}]`, false)
+
+	out, err := newTestRunner(t, root, sess).Run(context.Background(),
+		request(t, repo, CapabilityCalls, map[string]any{
+			"file": "client.go", "line": 3, "column": 6, "direction": "incoming",
+			"include_snippet": true,
+		}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := rows(t, out, "calls"); len(got) != 0 {
+		t.Fatalf("calls = %#v, want nothing: the only hop is outside the served root", got)
+	}
+	for _, discovery := range out.Discoveries {
+		if strings.Contains(discovery.Note, "hunter2") {
+			t.Fatalf("a note carries the contents of a file outside the root: %q", discovery.Note)
+		}
+	}
+}
+
+// The lexical check above cannot see a symlink: "vendor/secret.go" never
+// climbs out of anything, and if vendor is a link to the directory above then
+// reading it reads outside the served root all the same. The row is built from
+// the graph and stays; only the snippet, which is the only part that needed
+// the disk, is missing.
+func TestRunCallsReadsNoSnippetThroughASymlinkLeavingTheRoot(t *testing.T) {
+	parent := t.TempDir()
+	writeFile(t, filepath.Join(parent, "secret.go"), "package secret\n\nconst Token = \"hunter2\"\n")
+	root := filepath.Join(parent, "served")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(parent, filepath.Join(root, "vendor")); err != nil {
+		t.Skipf("this filesystem cannot make the symlink the check exists for: %v", err)
+	}
+	repo := contract.NewRepository("api", root, []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, nil)
+	writeFile(t, filepath.Join(root, "client.go"), "package redis\n\nfunc NewClient() {}\n")
+
+	fake, sess := newFakeTokensave(t)
+	fake.on(toolStatus, readyStatus, false)
+	fake.on(toolEntities, `{"symbols":[{"kind":"function","name":"NewClient","line":3,"end_line":3}]}`, false)
+	fake.on(toolExact, `{"matches":[{"id":"function:mine","name":"NewClient","kind":"function","file":"client.go","line":3}]}`, false)
+	fake.on(toolCallers, `[
+		{"node_id":"function:x","name":"Token","kind":"const","file":"vendor/secret.go","line":3,"depth":1}]`, false)
+
+	out, err := newTestRunner(t, root, sess).Run(context.Background(),
+		request(t, repo, CapabilityCalls, map[string]any{
+			"file": "client.go", "line": 3, "column": 6, "direction": "incoming",
+			"include_snippet": true,
+		}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := rows(t, out, "calls")
+	if len(got) != 1 || got[0]["path"] != "vendor/secret.go" {
+		t.Fatalf("calls = %#v, want the one hop the graph reported", got)
+	}
+	if snippet, ok := got[0]["snippet"]; ok {
+		t.Fatalf("snippet = %v, want none: reading it left the served root", snippet)
+	}
+}
+
+// scope narrows an answer, so an entry that climbs out of the repository can
+// only narrow it to nothing. Answering "no calls" to a question that was never
+// askable is the failure runContext already refuses for the same entries on
+// the way out; this is the same refusal on the way back.
+func TestRunCallsRefusesAScopeEntryLeavingTheRepository(t *testing.T) {
+	root, repo := workspace(t)
+	writeFile(t, filepath.Join(repo.Path, "internal", "client.go"),
+		"package redis\n\nfunc NewClient() {}\n")
+	fake, sess := newFakeTokensave(t)
+	fake.on(toolStatus, readyStatus, false)
+	fake.on(toolEntities, `{"symbols":[{"kind":"function","name":"NewClient","line":3,"end_line":3}]}`, false)
+	fake.on(toolExact, `{"matches":[{"id":"function:mine","name":"NewClient","kind":"function","file":"services/api/internal/client.go","line":3}]}`, false)
+
+	_, err := newTestRunner(t, root, sess).Run(context.Background(),
+		request(t, repo, CapabilityCalls, map[string]any{
+			"file": "internal/client.go", "line": 3, "column": 6, "direction": "incoming",
+			"scope": []any{"../other"},
+		}))
+	var failure *contract.Failure
+	if err == nil || !asFailure(err, &failure) || failure.Kind != contract.FailurePermissionDenied {
+		t.Fatalf("Run failed with %v, want permission_denied", err)
+	}
+	if calls := fake.callsTo(toolCallers); len(calls) != 0 {
+		t.Fatalf("the graph was walked %#v for a scope that cannot be honoured", calls)
+	}
+}
+
 func hasNote(out contract.Outcome, substring string) bool {
 	for _, discovery := range out.Discoveries {
 		if strings.Contains(discovery.Note, substring) {

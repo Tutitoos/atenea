@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -78,6 +79,10 @@ func runFakeServer() int {
 				fmt.Fprintln(os.Stderr, "fake-server: got SIGTERM, ignoring")
 			}
 		}()
+	}
+
+	if boolEnv("FAKE_LEAK_GRANDCHILD") {
+		leakAGrandchild()
 	}
 
 	if d := envMillis("FAKE_DELAY_MS"); d > 0 {
@@ -152,6 +157,12 @@ func runFakeStdioServer() int {
 		var answer map[string]any
 		switch msg.Method {
 		case "initialize":
+			// Every initialize this server is sent is recorded before it is
+			// answered, abandoned ones included: how many arrive is the whole
+			// point of the slow-handshake test, and only the receiving end
+			// can count them.
+			noteInitialize()
+			time.Sleep(envMillis("FAKE_INITIALIZE_DELAY_MS"))
 			answer = map[string]any{
 				"jsonrpc": "2.0", "id": msg.ID,
 				"result": map[string]any{"protocolVersion": protocolVersion},
@@ -180,6 +191,38 @@ func runFakeStdioServer() int {
 		_, _ = os.Stdout.Write(append(body, '\n'))
 	}
 	return 0
+}
+
+// leakAGrandchild starts a process that escapes this one: its own session, so
+// no signal aimed at this process's group reaches it, and this process's
+// stderr, so the pipe the supervisor reads output through stays open after
+// this process is gone. That is the shape of a real MCP server's leftovers --
+// a language server, an indexer, a hook that called setsid -- and it is what
+// left cmd.Wait, and the shutdown waiting behind it, blocked for as long as
+// the survivor lived.
+func leakAGrandchild() {
+	leak := exec.Command("sleep", "10")
+	leak.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	leak.Stderr = os.Stderr
+	if err := leak.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "fake-server: cannot leak a grandchild:", err)
+	}
+}
+
+// noteInitialize appends one line to the file FAKE_INITIALIZE_LOG names, for
+// a test that needs to know how many handshakes were attempted rather than
+// only whether one succeeded.
+func noteInitialize() {
+	path := os.Getenv("FAKE_INITIALIZE_LOG")
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString("initialize\n")
+	_ = f.Close()
 }
 
 // exitAfterMillis decides how long this invocation should live before its

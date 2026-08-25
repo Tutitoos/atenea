@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -37,7 +38,23 @@ var (
 	ErrAliasConflict = errors.New("dashboard alias conflicts with an unmanaged hosts entry")
 	// ErrInvalidHosts means the managed hosts block cannot be parsed safely.
 	ErrInvalidHosts = errors.New("invalid managed hosts block")
+	// ErrInvalidAlias means a dashboard alias is not a name a hosts file can
+	// carry on a line of its own.
+	ErrInvalidAlias = errors.New("dashboard alias is not a usable hostname")
 )
+
+// aliasPattern is the vocabulary an alias may use, and it is the same one
+// pkg/contract already demands of agent and capability ids.
+//
+// It is checked here because of what PlanHosts does with the value: it
+// composes the managed line as "127.0.0.1 " + alias, and the alias is
+// literally the id out of the settings file. The upstream validation rejects
+// only the empty id and the one containing a dot, so nothing stopped an id
+// carrying a space, a tab or a newline -- and a newline in it appends whole
+// lines of its author's choosing to /etc/hosts, which is the first thing every
+// name lookup on the machine consults. An alias that cannot be a hostname is
+// refused before the line exists rather than after it is written.
+var aliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // Entry is the stable public mapping used by the CLI and status renderers.
 type Entry struct {
@@ -227,6 +244,9 @@ func PlanHosts(existing string, entries []Entry, removeObsolete bool) (HostsPlan
 	}
 	aliases := make(map[string]bool, len(entries))
 	for _, entry := range entries {
+		if !aliasPattern.MatchString(entry.Alias) {
+			return HostsPlan{}, fmt.Errorf("%w: %q", ErrInvalidAlias, entry.Alias)
+		}
 		if aliases[entry.Alias] {
 			return HostsPlan{}, fmt.Errorf("%w: %s", ErrAliasConflict, entry.Alias)
 		}
@@ -324,12 +344,58 @@ func hostLineClaimsAlias(lines []string, alias string) bool {
 func ReadHosts(path string) (string, error) { return stringReadFile(path) }
 
 // WriteHosts writes only after the caller explicitly chose the hosts command.
+//
+// Temporary file, fsync, rename, fsync of the directory -- the pattern
+// checkpoint.Save, notebook.Clear, benchmark.atomicWrite and backup.Snapshot
+// all follow. This one wrote straight over the destination with os.WriteFile,
+// which truncates the file before it writes a byte of the replacement, and the
+// destination is /etc/hosts: an interrupted write there does not lose a
+// document, it leaves the machine resolving names against half a file until
+// somebody notices. A rename is atomic, so every reader sees either the whole
+// old hosts file or the whole new one.
 func WriteHosts(path, content string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), info.Mode().Perm())
+	dir := filepath.Dir(path)
+	// In the destination's own directory, because rename is atomic only within
+	// one filesystem and /etc is not always the filesystem TMPDIR points at.
+	tmp, err := os.CreateTemp(dir, ".atenea-hosts-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	// Removed on every path that does not reach the rename. After a successful
+	// rename the name is already gone and this fails harmlessly.
+	defer func() { _ = os.Remove(name) }()
+
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// CreateTemp opens at 0600. The replacement has to carry the permissions
+	// the destination already had, or a hosts file readable by every account
+	// on the machine comes back owner-only and every lookup by an unprivileged
+	// process stops seeing the managed names.
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// The contents reach the disk before the name does. Renaming first would
+	// publish an entry that a power cut could leave pointing at empty blocks,
+	// which is the same truncated hosts file by another route.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
 }
 
 func stringReadFile(path string) (string, error) {

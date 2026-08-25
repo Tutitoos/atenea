@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,13 +139,17 @@ func TestAgentOutputAndWorkspaceHelpers(t *testing.T) {
 		contract.NewRepository("zeta", "/zeta", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
 		contract.NewRepository("alpha", "/alpha", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
 	}}
-	ws := workspaceFor(cfg, "alpha")
-	if ws.RepositoryID != "alpha" || ws.RepositoryRoot != "/alpha" || strings.Join(ws.Repositories, ",") != "alpha,zeta" {
-		t.Fatalf("workspaceFor(named) = %#v", ws)
+	ws, err := workspaceFor(cfg, "alpha")
+	if err != nil || ws.RepositoryID != "alpha" || ws.RepositoryRoot != "/alpha" ||
+		strings.Join(ws.Repositories, ",") != "alpha,zeta" {
+		t.Fatalf("workspaceFor(named) = %#v, %v", ws, err)
 	}
-	ws = workspaceFor(cfg, "missing")
-	if ws.RepositoryID != "current" || ws.RepositoryRoot == "" {
-		t.Fatalf("workspaceFor(missing) = %#v", ws)
+	// An unnamed repository takes the first one declared, which is what the
+	// function's own doc now says: sorted for the listing, first-in-file for
+	// the choice.
+	ws, err = workspaceFor(cfg, "")
+	if err != nil || ws.RepositoryID != "zeta" {
+		t.Fatalf("workspaceFor(unnamed) = %#v, %v", ws, err)
 	}
 
 	if got := sortedKeys(map[string]any{"z": 1, "a": 2}); strings.Join(got, ",") != "a,z" {
@@ -252,5 +258,118 @@ func TestAgentAndTraceCommandValidation(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "no traces in "+path) {
 		t.Fatalf("cmdTraces(empty) = %q", out.String())
+	}
+}
+
+// A repository id nothing declares is a typo, and the workspace used to
+// resolve it to the working directory under the id "current": the agent then
+// served a tree nobody named, the run ended ok, and the trace row recorded
+// the wrong repository. Every other command that takes a repository refuses
+// an unknown one, and now this one does too.
+func TestAnUndeclaredRepositoryIsRefusedRatherThanReplacedByTheWorkingDirectory(t *testing.T) {
+	cfg := config.Config{Repositories: []contract.Repository{
+		contract.NewRepository("alpha", "/alpha", nil, contract.ScaleSmall, contract.VCSUnspecified, nil),
+	}}
+	ws, err := workspaceFor(cfg, "alfa")
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("workspaceFor(typo) = %#v, %v; want not_found", ws, err)
+	}
+	// The refusal has to carry what would have worked: the reader is one
+	// keystroke away and should not be sent to the settings file to find out.
+	if !strings.Contains(err.Error(), "alpha") {
+		t.Errorf("err = %v, want the declared repositories named", err)
+	}
+	if ws.RepositoryRoot != "" {
+		t.Errorf("a refused lookup still handed back %q as a root", ws.RepositoryRoot)
+	}
+}
+
+// Every flag the command accepts is a flag its help page names. --confirm was
+// mandatory for types declaring write or external effects and appeared in no
+// help text, so the only way to discover it was to be refused by it.
+func TestTheAgentHelpNamesEveryFlagTheCommandAccepts(t *testing.T) {
+	help, ok := commandHelp["agent"]
+	if !ok {
+		t.Fatal("agent has no help entry")
+	}
+	flags, _ := agentFlags()
+	var seen int
+	flags.VisitAll(func(f *flag.Flag) {
+		seen++
+		if !strings.Contains(help, "--"+f.Name) {
+			t.Errorf("atenea agent accepts --%s and its help never mentions it", f.Name)
+		}
+	})
+	if seen == 0 {
+		t.Fatal("the agent flag set registered nothing; this test would pass for a command with no flags")
+	}
+}
+
+// The name is interpolated into a file name and joined with the log
+// directory, and filepath.Join collapses the "../" a name brings with it. The
+// recorder therefore has to run behind the check that the name is one this
+// binary ships, not in front of it: a rejected name must leave nothing on
+// disk at all.
+func TestAnUnknownAgentNameWritesNothingBeforeItIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	t.Setenv("ATENEA_ASSIGNMENT_LOG", log)
+
+	err := cmdAgentRun("../escaped", strings.NewReader(`{"id":"a"}`), io.Discard)
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", contract.KindOf(err))
+	}
+	entries, globErr := filepath.Glob(filepath.Join(dir, "*"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a refused agent name left %v behind", entries)
+	}
+}
+
+// The record is a verbatim copy of what a run was told -- objectives, file
+// paths, whatever the assignment carried -- and it lands wherever the
+// environment variable points, often a shared temporary directory. 0700 and
+// 0600 are what the notebook and the checkpoint store already use for the
+// same reason.
+func TestTheAssignmentRecordIsNotReadableByOtherUsers(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "log")
+	t.Setenv("ATENEA_ASSIGNMENT_LOG", dir)
+	if _, err := io.ReadAll(recordAssignment("plan", strings.NewReader(`{"id":"a"}`))); err != nil {
+		t.Fatalf("reading through the recorder: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("assignment log directory is %04o, want 0700", perm)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("recorded %v (%v), want one card", files, err)
+	}
+	recorded, err := os.Stat(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := recorded.Mode().Perm(); perm != 0o600 {
+		t.Errorf("recorded assignment is %04o, want 0600", perm)
+	}
+}
+
+// A result is cut to a byte budget, and a cut that lands inside a multi-byte
+// rune leaves the terminal drawing U+FFFD in the middle of the answer. The
+// ellipsis says the text continues; a broken rune says the tool is broken.
+func TestALongResultIsCutBetweenRunesAndNotThroughOne(t *testing.T) {
+	// One ASCII byte and 40 three-byte runes is 121 bytes, so the 120-byte cut
+	// falls two bytes into the last rune rather than on a boundary.
+	got := resultLine("x" + strings.Repeat("あ", 40))
+	if !utf8.ValidString(got) {
+		t.Errorf("resultLine cut through a rune: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("resultLine = %q, want it marked as cut", got)
 	}
 }

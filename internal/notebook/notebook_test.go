@@ -311,3 +311,91 @@ func TestTheListLineShowsOnlyWhatWasKnown(t *testing.T) {
 		t.Error("the list line carries a stack; one blow would bury the list")
 	}
 }
+
+// core.New builds the notebook before the measurement base and before the
+// receipt folder, deliberately, so that a crash during the rest of the
+// assembly still has somewhere to be written down. The consequence is that on
+// a machine with no state root yet, this MkdirAll is the call that fixes the
+// mode of the root every other artifact then lands in -- and it asked for
+// 0755, so every incident, run receipt and measurement underneath was readable
+// by every account on the box.
+func TestTheStateRootIsNotCreatedReadableByOtherAccounts(t *testing.T) {
+	// A directory that does not exist yet: t.TempDir is already 0700, so
+	// creating the notebook straight into it would prove nothing.
+	root := filepath.Join(t.TempDir(), "state")
+	if _, err := notebook.New(filepath.Join(root, notebook.FileName)); err != nil {
+		t.Fatalf("notebook.New: %v", err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatalf("the state root was not created at all: %v", err)
+	}
+	// Group and other, rather than an exact mode, because the umask can only
+	// take permissions away and the property being asserted is that none were
+	// offered in the first place.
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		t.Errorf("state root mode = %04o, want nothing outside the owner: "+
+			"the notebook creates this directory before anything else does", mode)
+	}
+}
+
+// Nothing in this package ever removed a line, and nothing above it suppresses
+// a repeat: one incident per failed maintenance beat, for as long as the fault
+// lasts. A provider left broken over a weekend therefore grew a file with no
+// ceiling, and it is Read that paid for it -- the status screen parses the
+// whole notebook into memory every time somebody asks how the machine is.
+func TestAFullNotebookIsRotatedInsteadOfGrowing(t *testing.T) {
+	n, path := open(t)
+	detail := strings.Repeat("x", 64<<10)
+	beat := func() {
+		note(t, n, notebook.Incident{Op: "maintenance.beat", Detail: detail})
+	}
+
+	// Five entries the operator has seen, so the watermark is somewhere real
+	// before the rotation moves the file out from under it.
+	for range 5 {
+		beat()
+	}
+	if _, err := n.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	rotated := path + notebook.RotatedSuffix
+	for i := 0; ; i++ {
+		if i > 4*(notebook.MaxBytes/len(detail)) {
+			t.Fatal("the notebook grew past four times its ceiling without rotating")
+		}
+		beat()
+		if _, err := os.Stat(rotated); err == nil {
+			break
+		}
+	}
+	// Ten more after the rotation, so the live notebook holds more entries
+	// than the stale watermark counted. Fewer and the reader's own guard
+	// against a mark that overruns the file would hide whether the mark was
+	// reset at all.
+	for range 10 {
+		beat()
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the live notebook is gone: %v", err)
+	}
+	if info.Size() >= notebook.MaxBytes {
+		t.Errorf("the live notebook is %d bytes, want it back under the %d ceiling",
+			info.Size(), notebook.MaxBytes)
+	}
+	if _, err := os.Stat(rotated); err != nil {
+		t.Errorf("the previous notebook was not kept beside the new one: %v", err)
+	}
+
+	read, err := n.Read()
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read.Unread != len(read.Incidents) {
+		t.Errorf("%d of %d entries read as already seen: the watermark counts from the "+
+			"start of the notebook and the notebook is a new one", len(read.Incidents)-read.Unread, len(read.Incidents))
+	}
+}

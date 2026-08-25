@@ -307,3 +307,75 @@ func TestTheAllowListBoundsBothListingAndCalling(t *testing.T) {
 		t.Errorf("Allows disagrees with the declaration: %v", narrow.Allowed())
 	}
 }
+
+// lateSession is a server that starts sessionless and issues an id on the
+// first call rather than at the handshake.
+//
+// Unusual, and allowed: the specification lets a server begin assigning
+// session ids at any point, and the reason to model it here is that it is the
+// only shape that puts two chats in send() at once with an empty session in
+// hand. A server that issues the id at the handshake never does, because the
+// handshake runs alone under the lock.
+type lateSession struct {
+	mu       sync.Mutex
+	issued   int
+	assigned string
+}
+
+func (l *lateSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var msg struct {
+		ID     *int   `json:"id"`
+		Method string `json:"method"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&msg)
+	if msg.Method != "initialize" && msg.Method != "notifications/initialized" {
+		l.mu.Lock()
+		if l.assigned == "" {
+			l.assigned = "late-1"
+		}
+		l.issued++
+		session := l.assigned
+		l.mu.Unlock()
+		w.Header().Set("Mcp-Session-Id", session)
+	}
+	if msg.ID == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"ok"}]}}`, *msg.ID)
+}
+
+// The session id has one owner, and every write to it is under the lock that
+// every read of it takes.
+//
+// send runs on both sides of that lock -- ensure calls it holding mu, attempt
+// calls it without -- and it used to write b.session itself, unguarded, on any
+// answer that carried a header for a call that carried no session. Two chats
+// arriving at a backend that assigns its id late are then writing that string
+// while a third is reading it under the lock, which is a data race on a field
+// whose whole job is to be the same for everybody. Run under -race this fails
+// on the write; run without it, it is the concurrency that has to be here for
+// the detector to have anything to see.
+func TestTheSessionIDIsOnlyWrittenUnderTheLock(t *testing.T) {
+	server := httptest.NewServer(&lateSession{})
+	t.Cleanup(server.Close)
+	b := passthrough.New(passthrough.Spec{
+		ID: "late", URL: server.URL, Timeout: 5 * time.Second,
+		Allowed: []string{"semgrep_scan"},
+	})
+	t.Cleanup(b.Close)
+
+	const chats = 12
+	var wg sync.WaitGroup
+	for i := range chats {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := b.Call(t.Context(), "semgrep_scan", map[string]any{"n": i}); err != nil {
+				t.Errorf("chat %d: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+}

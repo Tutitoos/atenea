@@ -30,9 +30,10 @@
 //
 // The crash notebook the design also asks for is a different artifact with the
 // opposite trade-off -- written the instant something goes wrong, because the
-// one entry you lose is the one you needed. It is deliberately not this store
-// and it is not built yet; putting it here would either make every measurement
-// pay for a disk write or make the notebook lossy, and both defeat the point.
+// one entry you lose is the one you needed. It lives in internal/notebook and
+// is deliberately not this store; putting it here would either make every
+// measurement pay for a disk write or make the notebook lossy, and both defeat
+// the point.
 package metrics
 
 import (
@@ -152,8 +153,25 @@ type Store struct {
 	lockWait  time.Duration
 	retention Retention
 
+	// flushMu serializes whole flushes, buffer drain and disk write together.
+	// Without it a Flush that arrived while another was mid-write found the
+	// buffer already drained and returned nil, telling its caller the rows
+	// were durable while they were still in the other goroutine's batch. It is
+	// taken before mu, never after it.
+	flushMu sync.Mutex
 	mu      sync.Mutex
+	// buf is a ring once it reaches limit, which is what keeps Record O(1)
+	// there. Discarding the oldest by re-slicing copied the whole buffer on
+	// every call past the ceiling: measured at 74us per Record with the
+	// default limit of 10000, against roughly 40ns before the buffer filled.
+	// A ring moves head instead of the rows.
+	//
+	// head is the oldest live entry and count how many are live. head only
+	// ever leaves zero once len(buf) has reached limit, so the growth path
+	// below can keep using append.
 	buf     []Measurement
+	head    int
+	count   int
 	dropped int
 	written int
 }
@@ -213,20 +231,82 @@ func (s *Store) Record(m Measurement) {
 	m.Raw = contract.RedactRaw(m.Raw)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.buf = append(s.buf, m)
-	if over := len(s.buf) - s.limit; over > 0 {
-		// The oldest go first: recent measurements are the ones the selector
-		// is about to ask about.
-		s.buf = append(s.buf[:0], s.buf[over:]...)
+	s.push(m)
+}
+
+// push adds one measurement to the ring, dropping the oldest when the ring is
+// already at its ceiling. Every branch is constant time; that is the whole
+// point of the shape.
+//
+// The caller holds mu.
+func (s *Store) push(m Measurement) {
+	if s.count < len(s.buf) {
+		s.buf[(s.head+s.count)%len(s.buf)] = m
+		s.count++
+		return
+	}
+	if len(s.buf) < s.limit {
+		// The ring has not reached its ceiling yet, so it grows rather than
+		// dropping anything. append can only put the new entry at the end,
+		// which is where the newest one belongs precisely because head is
+		// still zero: it moves only on the branch below, and that branch is
+		// reachable only once len(buf) is limit.
+		s.buf = append(s.buf, m)
+		s.count++
+		return
+	}
+	// The oldest goes first: recent measurements are the ones the selector is
+	// about to ask about.
+	s.buf[s.head] = m
+	s.head = (s.head + 1) % len(s.buf)
+	s.dropped++
+}
+
+// drain copies the live entries out in order and empties the ring.
+//
+// It copies rather than handing the backing array over, because the ring keeps
+// its array and would otherwise write new measurements over rows a flush still
+// has in flight. The copy costs one pass over a batch that is about to be
+// written to disk, which is not where the time goes.
+//
+// The caller holds mu.
+func (s *Store) drain() []Measurement {
+	if s.count == 0 {
+		return nil
+	}
+	batch := make([]Measurement, s.count)
+	for i := range batch {
+		batch[i] = s.buf[(s.head+i)%len(s.buf)]
+	}
+	// Length back to zero, capacity kept: the next fill reuses the same array
+	// through the growth branch of push, with head at zero again.
+	s.buf = s.buf[:0]
+	s.head = 0
+	s.count = 0
+	return batch
+}
+
+// restore puts a failed batch back in front of whatever arrived while it was
+// being written, so the next flush carries the rows in the order they
+// happened. That is the difference between a slow store and a lossy one.
+//
+// The caller holds mu.
+func (s *Store) restore(batch []Measurement) {
+	all := append(batch, s.drain()...)
+	if over := len(all) - s.limit; over > 0 {
+		all = all[over:]
 		s.dropped += over
 	}
+	s.buf = all
+	s.head = 0
+	s.count = len(all)
 }
 
 // Pending is how many measurements are waiting to be written.
 func (s *Store) Pending() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.buf)
+	return s.count
 }
 
 // Dropped is how many measurements were lost to a full buffer, ever.
@@ -255,25 +335,28 @@ const insertMeasurement = `INSERT INTO measurement
 // If the write fails the rows go back where they were, in order, so the next
 // attempt carries them. That is the difference between a slow store and a lossy
 // one.
+//
+// A flush that finds another one already running waits for it instead of
+// returning. Returning was the bug: every caller here flushes in order to read
+// what it just recorded -- Baselines, Health, Compact, Close all do -- and a
+// nil that meant "somebody else took my rows and has not written them yet"
+// sent them on to query a database missing exactly those rows.
 func (s *Store) Flush(ctx context.Context) error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+
 	s.mu.Lock()
-	if len(s.buf) == 0 {
-		s.mu.Unlock()
+	batch := s.drain()
+	s.mu.Unlock()
+	if len(batch) == 0 {
 		return nil
 	}
-	batch := s.buf
-	s.buf = nil
-	s.mu.Unlock()
 
 	err := s.write(ctx, batch)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
-		s.buf = append(batch, s.buf...)
-		if over := len(s.buf) - s.limit; over > 0 {
-			s.buf = append(s.buf[:0], s.buf[over:]...)
-			s.dropped += over
-		}
+		s.restore(batch)
 		return err
 	}
 	s.written += len(batch)
@@ -326,6 +409,13 @@ func (s *Store) Close() error { return s.Flush(context.Background()) }
 // connect opens the file, waiting out another process's flush if one is in
 // progress. DuckDB allows a single writer, which is the shape the design wanted
 // anyway; the wait is what turns that from a crash into a queue.
+//
+// Nothing serializes this inside the process, on purpose. The exclusive lock
+// DuckDB takes is held by the process, not by the handle: two connections to
+// the same file from one Atenea share its instance and both answer, which is
+// what lets several goroutines of a runWave read baselines at once. The retry
+// loop below is for the other Atenea on the machine, and a mutex here could
+// not have helped with that one.
 func (s *Store) connect(ctx context.Context) (*sql.DB, error) {
 	deadline := time.Now().Add(s.lockWait)
 	backoff := 5 * time.Millisecond

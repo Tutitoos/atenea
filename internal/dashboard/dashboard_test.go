@@ -209,3 +209,69 @@ func TestPlanHostsKeepsUnremovedManagedEntriesAndHostsRoundTrip(t *testing.T) {
 		t.Fatalf("hosts round trip = %q, want %q", got, plan.Content)
 	}
 }
+
+// The managed line is composed as "127.0.0.1 " + alias, and the alias is
+// literally the id out of the settings file: the validation it passed on the
+// way in rejects only the empty id and the one with a dot in it. Everything
+// below therefore reached /etc/hosts unexamined, and the newline case does not
+// write a bad line, it writes extra ones -- an id can append any mapping its
+// author likes to the file every name lookup on the machine reads first.
+func TestPlanHostsRejectsAnAliasThatIsNotAHostname(t *testing.T) {
+	for _, alias := range []string{
+		"",
+		"two words",
+		"headroom\n127.0.0.1 login.example.com",
+		"tab\there",
+		"UPPER",
+		"-leading",
+		"has.dot",
+	} {
+		if _, err := PlanHosts("", []Entry{{Alias: alias}}, false); !errors.Is(err, ErrInvalidAlias) {
+			t.Errorf("alias %q was accepted, error = %v", alias, err)
+		}
+	}
+}
+
+// os.WriteFile truncates the destination before it writes a byte of the
+// replacement, and the destination here is /etc/hosts: an interrupted write
+// leaves the machine resolving names against half a file. The replacement
+// arrives by rename, so the file that was there is never opened for writing at
+// all -- which is what this checks, because the crash that proves it cannot be
+// staged.
+func TestWriteHostsPublishesByRenameRatherThanTruncating(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts")
+	if err := os.WriteFile(path, []byte("127.0.0.1 localhost\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const updated = "127.0.0.1 localhost\n127.0.0.1 headroom\n"
+	if err := WriteHosts(path, updated); err != nil {
+		t.Fatalf("WriteHosts: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Error("the hosts file was rewritten in place: every reader between the truncate and the last byte sees an incomplete file")
+	}
+	if got, err := ReadHosts(path); err != nil || got != updated {
+		t.Fatalf("content = %q, err = %v", got, err)
+	}
+	if mode := after.Mode().Perm(); mode != before.Mode().Perm() {
+		t.Errorf("mode = %04o, want the %04o the file already had", mode, before.Mode().Perm())
+	}
+	// A temporary left behind in /etc is a file nobody will ever explain.
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 {
+		t.Errorf("the directory holds %d entries, want only the hosts file", len(names))
+	}
+}

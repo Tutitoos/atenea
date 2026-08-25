@@ -236,12 +236,23 @@ func TestWorkflowRenderingAndFlagValueHelpers(t *testing.T) {
 		t.Fatalf("firstKey(empty) = %q", got)
 	}
 
-	var redo stringList
+	redo := newStringList("redo")
 	if err := redo.Set(" step-a "); err != nil || redo.String() != "step-a" {
 		t.Fatalf("stringList.Set = %v, %q", err, redo.String())
 	}
-	if err := redo.Set(" "); err == nil {
-		t.Fatal("empty stringList value unexpectedly accepted")
+	// The refusal has to name the flag that was typed. One type serves --redo
+	// here, --replaces in propose and --file in decide, and the message was
+	// hard-coded to --redo for all three: `atenea decide --file ""` was told
+	// about a flag its command line never carried.
+	for _, flag := range []string{"redo", "replaces", "file"} {
+		list := newStringList(flag)
+		err := list.Set(" ")
+		if err == nil {
+			t.Fatalf("an empty --%s was accepted", flag)
+		}
+		if !strings.Contains(err.Error(), "--"+flag) {
+			t.Errorf("an empty --%s was refused with %v", flag, err)
+		}
 	}
 	var raises raiseList
 	for _, value := range []string{"step-a=$1.25", "step-b=0.50"} {

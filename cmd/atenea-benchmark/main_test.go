@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/benchmark"
@@ -132,5 +133,82 @@ func TestReportsDocsAndBaseline(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(output, path)); err != nil {
 			t.Fatalf("missing report %s: %v", path, err)
 		}
+	}
+}
+
+// --profile is compared against "qualification" and "stress" and nothing else,
+// so every other value -- a typo included -- took the quick path in silence:
+// three samples, no CPU or memory profiles, under a manifest that recorded the
+// misspelling as the profile that ran. Evidence that reads as a qualification
+// run and is not one is worse than no evidence.
+func TestAMisspelledProfileIsRefusedInsteadOfRunningTheQuickOne(t *testing.T) {
+	err := checkInvocation("qualificaton", nil)
+	if err == nil {
+		t.Fatal("a profile this command does not implement was accepted")
+	}
+	// The refusal carries the whole set, because the reader is one keystroke
+	// away from the value they wanted.
+	for _, name := range profiles {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("err = %v, want %q named as a valid profile", err, name)
+		}
+	}
+	for _, name := range profiles {
+		if err := checkInvocation(name, nil); err != nil {
+			t.Errorf("checkInvocation(%q) = %v, want it accepted", name, err)
+		}
+	}
+}
+
+// `atenea-benchmark qualification`, without the flag, parsed cleanly and ran
+// quick: flag.NArg() was never read.
+func TestAPositionalArgumentIsRefusedRatherThanIgnored(t *testing.T) {
+	err := checkInvocation("quick", []string{"qualification"})
+	if err == nil {
+		t.Fatal("a positional argument was accepted and would have been ignored")
+	}
+	if !strings.Contains(err.Error(), "qualification") {
+		t.Errorf("err = %v, want the ignored argument quoted back", err)
+	}
+}
+
+// The child `go test` runs with cmd.Dir at the repository root and readCoverage
+// opens the profile against this process's working directory, so a relative
+// path names two different files whenever the suite is started from anywhere
+// but the root. The profile was written, never found, and the summary reported
+// 0.0% coverage over a suite that had passed.
+//
+// This test reproduces that split without moving anywhere: the package
+// directory is already not the repository root, so an output directory named
+// relative to it resolves elsewhere for the child.
+func TestTheCoverageProfileIsReadFromWhereTheChildWroteIt(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cwd == repositoryRoot() {
+		t.Fatal("this test runs from the repository root, where the bug it covers cannot happen")
+	}
+	// The artifact directory is made HERE, beside this file, and named
+	// relatively -- a temporary directory would sit under /var, where the
+	// "../" of a relative path climbs past the filesystem root and saturates,
+	// so the child would land in the same place after all and the split would
+	// never appear.
+	absolute, err := os.MkdirTemp(cwd, "coverage-anchor-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(absolute) })
+	output := filepath.Base(absolute)
+	if err := os.MkdirAll(filepath.Join(output, "raw"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := runTestsForPackages(context.Background(), output, "./internal/benchmark")
+	if run.Err != nil {
+		t.Fatalf("test run under a relative output directory: %v", run.Err)
+	}
+	if run.Coverage <= 0 {
+		t.Errorf("coverage = %.1f%% over %d passing tests: the profile was written where nobody read it",
+			run.Coverage, run.Totals.Passed)
 	}
 }

@@ -107,11 +107,30 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+// rpcResponse is one JSON-RPC message read back off a server.
+//
+// Method is here even though a response never carries one, and that is the
+// point: the protocol runs in both directions, so a server is free to send a
+// *request* -- an id and a method, no result -- before it answers anything.
+// internal/passthrough/stdio.go was reading exactly that shape as if it were
+// an answer until 2026-08-09, and route() there now classifies a line into
+// three shapes rather than two for the reason its comment records. This
+// decoder had the same hole: an id was the whole test, so a server asking
+// `roots/list` during the handshake was reported as the handshake's own
+// reply, and the probe's verdict on that server was whatever its question
+// happened to look like.
 type rpcResponse struct {
 	ID     *int            `json:"id"`
+	Method string          `json:"method"`
 	Result json.RawMessage `json:"result"`
 	Error  *rpcError       `json:"error"`
 }
+
+// handshakeID is the id the probe asks initialize with, and the only id an
+// answer to it may carry. Named rather than written as a literal in the two
+// places that need it, because the whole guarantee is that the number sent
+// and the number checked are the same one.
+const handshakeID = 1
 
 type rpcError struct {
 	Code    int    `json:"code"`
@@ -201,7 +220,7 @@ func ProbeAll(ctx context.Context, servers []Server) []Result {
 func initializeBody() ([]byte, error) {
 	return json.Marshal(rpcRequest{
 		Version: "2.0",
-		ID:      1,
+		ID:      handshakeID,
 		Method:  "initialize",
 		Params: map[string]any{
 			"protocolVersion": protocolVersion,
@@ -347,6 +366,21 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 		if out.ID == nil {
 			continue // a notification racing our answer
 		}
+		if out.Method != "" {
+			// A request, not a reply: the server is asking the probe
+			// something before it will answer. Nothing here serves roots,
+			// sampling or elicitation -- the handshake declared no
+			// capabilities -- so it is skipped rather than refused, and the
+			// server has maxNoise lines to get to the answer or be reported
+			// as never having framed one. Refusing properly, the way
+			// internal/passthrough/stdio.go does, belongs to a session that
+			// outlives one message; this process is killed on the way out of
+			// this function.
+			continue
+		}
+		if *out.ID != handshakeID {
+			continue // an answer to a question this probe never asked
+		}
 		if out.Error != nil {
 			return nil, out.Error
 		}
@@ -391,15 +425,40 @@ func childIsGone(err error) bool {
 // A plain bytes.Buffer read at that point is a data race, and the reason it
 // has to be read at that point is the whole feature: a stdio server's stderr
 // is usually the only place the actual cause exists.
+//
+// The ceiling is the other half, and it was missing until this was written.
+// clip() bounds the error message, not the buffer, so a server that spews to
+// stderr for the whole probe timeout was held entirely in memory and then
+// thrown away two hundred bytes later -- and the probe runs every declared
+// server at once, so eleven of them share that cost. What is kept is the
+// *first* saidBytes rather than the last, which is the right end for a
+// process that lives for seconds: a probe fails during startup, and startup
+// is where a stdio server prints the reason it cannot run. That asymmetry is
+// exactly what internal/passthrough/stdio.go's tail describes and inverts for
+// a child that lives for days.
 type said struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
+const saidBytes = 8 << 10
+
+// Write keeps the beginning and drops the rest, and never reports short: an
+// io.Copy told it wrote fewer bytes than it handed over stops with
+// io.ErrShortWrite, which would end the copy and close the pipe under a child
+// that is still running.
 func (s *said) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.buf.Write(p)
+	if room := saidBytes - s.buf.Len(); room > 0 {
+		if room > len(p) {
+			room = len(p)
+		}
+		if _, err := s.buf.Write(p[:room]); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
 }
 
 func (s *said) String() string {
@@ -443,6 +502,16 @@ func decode(text string) (json.RawMessage, error) {
 	var out rpcResponse
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
 		return nil, fmt.Errorf("sent unreadable JSON: %s", clip(text))
+	}
+	// The same three-shape classification the stdio side does, for the same
+	// reason: a server that answers the initialize POST with a request of its
+	// own has not answered it. Taking its params for a result would let the
+	// probe report a server as reachable on the strength of a question.
+	if out.Method != "" {
+		return nil, fmt.Errorf("answered initialize with a %s request of its own, not a reply", out.Method)
+	}
+	if out.ID != nil && *out.ID != handshakeID {
+		return nil, fmt.Errorf("answered id %d, but initialize was asked with id %d", *out.ID, handshakeID)
 	}
 	if out.Error != nil {
 		return nil, out.Error

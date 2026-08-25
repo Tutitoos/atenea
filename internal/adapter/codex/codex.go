@@ -5,6 +5,18 @@
 // confines the answer before it crosses the runner boundary. The adapter has
 // its own command and event parser because Codex's JSONL event stream is not
 // Claude Code's JSON envelope.
+//
+// # This provider answers code.search without snippets
+//
+// The prompt tells Codex to leave snippet empty and cleanHit never writes the
+// key, because the file content would be reproduced by a language model rather
+// than read off the disk: a snippet nobody can distinguish from the real line
+// is worse than no snippet, and code.search declares snippet optional exactly
+// so a provider may decline it. context_lines therefore has nothing to act on
+// here. It is still validated -- a negative count is nonsense whoever serves
+// the call -- and a caller who sent one is told in a notice that this provider
+// ignored it, because the alternative was what this code used to do: read the
+// value, store it in a field, and never look at it again.
 package codex
 
 import (
@@ -13,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -43,8 +56,6 @@ const DefaultAppBinary = "/Applications/ChatGPT.app/Contents/Resources/codex"
 // DefaultTimeout is the maximum duration of one Codex search turn. It leaves
 // measured startup/provider variance margin without changing the money grant.
 const DefaultTimeout = 120 * time.Second
-
-const defaultContextLines = 2
 
 // Options configures the Codex executable and the implementations it serves.
 type Options struct {
@@ -232,17 +243,31 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		outcome.Notices = append(outcome.Notices,
 			"Codex CLI did not report monetary usage; the Atenea budget gated dispatch but could not be metered")
 	}
+	if ask.contextAsked {
+		outcome.Notices = append(outcome.Notices,
+			"context_lines was ignored: this provider returns no snippets, so there is no content to put context around")
+	}
+	if answer.Unreadable > 0 {
+		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
+			"%d line(s) of the Codex event stream were not JSON and were skipped", answer.Unreadable))
+	}
 	return outcome, nil
 }
 
 type search struct {
-	query        string
-	scope        []string
-	fileTypes    []string
-	matchCase    bool
-	regex        bool
-	wholeWord    bool
-	contextLines int
+	query     string
+	scope     []string
+	fileTypes []string
+	matchCase bool
+	regex     bool
+	wholeWord bool
+	// contextAsked records that the caller sent context_lines, which this
+	// provider cannot honour: it returns no snippets at all, so there is
+	// nothing to put context around. The field is the count of what was asked
+	// rather than the width to render, because the only use for it is the
+	// notice that says it was ignored. It replaced a contextLines field that
+	// was read, validated, stored, and then looked at by nothing.
+	contextAsked bool
 }
 
 func readSearch(payload map[string]any) (search, error) {
@@ -251,20 +276,22 @@ func readSearch(payload map[string]any) (search, error) {
 		return search{}, contract.Fail(contract.FailureInvalidInput, "query is empty")
 	}
 	out := search{
-		query:        query,
-		scope:        stringsAt(payload, "scope"),
-		fileTypes:    stringsAt(payload, "file_types"),
-		matchCase:    boolAt(payload, "match_case"),
-		regex:        boolAt(payload, "regex"),
-		wholeWord:    boolAt(payload, "whole_word"),
-		contextLines: defaultContextLines,
+		query:     query,
+		scope:     stringsAt(payload, "scope"),
+		fileTypes: stringsAt(payload, "file_types"),
+		matchCase: boolAt(payload, "match_case"),
+		regex:     boolAt(payload, "regex"),
+		wholeWord: boolAt(payload, "whole_word"),
 	}
+	// Still refused when negative. The count means nothing here, but a
+	// negative one means nothing anywhere, and accepting it would let the same
+	// payload be rejected by one provider and taken by another.
 	if lines, ok := intAt(payload, "context_lines"); ok {
 		if lines < 0 {
 			return search{}, contract.Fail(contract.FailureInvalidInput,
 				"context_lines must not be negative, got %d", lines)
 		}
-		out.contextLines = lines
+		out.contextAsked = true
 	}
 	return out, nil
 }
@@ -324,28 +351,20 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return response{}, 0, classifyFailure("", err)
 	}
 	var parsed eventStream
-	budgetStopped := false
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 4096), 4<<20)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if err := parseEventLine(line, &parsed); err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return response{}, peak, err
-		}
-		if parsed.CostSeen && !contract.ReportCost(ctx, contract.CostUpdate{
+	// The budget is the only reason this scan ever stops early, and stopping
+	// it means cancelling the turn: procgroup.Contain put the child in its own
+	// group, so cancel() is what reaches the whole tree. The previous code
+	// called cmd.Process.Kill() here, which signals the group leader alone and
+	// leaves every tool subprocess Codex started running.
+	unreadable, budgetStopped, scanErr := scanEvents(stdout, &parsed, func() bool {
+		if !parsed.CostSeen || contract.ReportCost(ctx, contract.CostUpdate{
 			SpentUSD: parsed.CostUSD, Known: true,
 		}) {
-			budgetStopped = true
-			cancel()
-			break
+			return true
 		}
-	}
-	scanErr := scanner.Err()
+		cancel()
+		return false
+	})
 	runErr := cmd.Wait()
 	peak = procstat.PeakRSS(cmd.ProcessState)
 	if scanErr != nil {
@@ -375,6 +394,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	out.Usage = parsed.Usage
 	out.CostUSD = parsed.CostUSD
 	out.CostSeen = parsed.CostSeen
+	out.Unreadable = unreadable
 	return out, peak, nil
 }
 
@@ -383,6 +403,9 @@ type response struct {
 	Usage      usage
 	CostUSD    float64
 	CostSeen   bool
+	// Unreadable counts the stdout lines that were not JSON. They are skipped
+	// rather than fatal, so the count is what makes the skipping visible.
+	Unreadable int
 }
 
 type usage struct {
@@ -405,24 +428,62 @@ type eventStream struct {
 	CostSeen  bool
 }
 
-func parseEvents(stdout string) (eventStream, error) {
-	var out eventStream
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
+// scanEvents reads Codex's JSONL into out, and is the only traversal of that
+// stream in this package. invoke used to carry a copy of this loop and
+// parseEvents another, which meant every test of the parsing exercised the
+// copy that never runs in production and the two were free to drift apart.
+//
+// A line that is not JSON is counted and skipped instead of ending the turn.
+// Codex writes to the same stream Atenea scans -- a sandbox warning, a login
+// notice, anything the CLI decides to say -- and the previous code killed the
+// process on the first such line and returned an error, discarding an answer
+// that had already been paid for. The claudecode adapter's scanner has always
+// skipped what it cannot read; this is that policy, with a count so the
+// skipping is reported rather than silent.
+//
+// after runs once per readable event and returns false to stop the scan, which
+// is how invoke enforces the budget mid-stream without a second copy of this.
+// The second return says whether it stopped that way.
+func scanEvents(stream io.Reader, out *eventStream, after func() bool) (unreadable int, stopped bool, err error) {
+	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 4096), 4<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		if err := parseEventLine(line, &out); err != nil {
-			return out, err
+		if err := parseEventLine(line, out); err != nil {
+			unreadable++
+			continue
+		}
+		if after != nil && !after() {
+			return unreadable, true, nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return out, contract.Fail(contract.FailureUnavailable,
+		return unreadable, false, contract.Fail(contract.FailureUnavailable,
 			"codex output could not be read")
 	}
-	if strings.TrimSpace(stdout) == "" {
+	return unreadable, false, nil
+}
+
+// parseEvents is scanEvents over a string somebody already holds, so what the
+// tests read is what the turn runs.
+//
+// It keeps one judgement of its own: a stream that yielded no readable event
+// at all is a provider that said nothing this adapter understands, which is
+// unavailable. A stream that yielded some is answered from those, however many
+// lines had to be skipped to get there.
+func parseEvents(stdout string) (eventStream, error) {
+	var out eventStream
+	readable := 0
+	if _, _, err := scanEvents(strings.NewReader(stdout), &out, func() bool {
+		readable++
+		return true
+	}); err != nil {
+		return out, err
+	}
+	if readable == 0 {
 		return out, contract.Fail(contract.FailureUnavailable,
 			"codex printed no JSONL events")
 	}

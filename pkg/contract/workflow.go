@@ -2,7 +2,6 @@ package contract
 
 import (
 	"maps"
-	"math"
 	"slices"
 	"strings"
 )
@@ -91,12 +90,15 @@ func (p Permission) Validate() error {
 			return Fail(FailureInvalidInput, "permission for %q: unknown effect", p.Task)
 		}
 	}
-	if p.BudgetUSD < 0 || math.IsNaN(p.BudgetUSD) {
+	if !realMoney(p.BudgetUSD) {
 		// Zero is a grant that is spent, which is ordinary. Below zero is an
-		// arithmetic mistake upstream, and the one shape that would silently
-		// turn a ceiling into a license if it were ever handed to a far side.
+		// arithmetic mistake upstream. NaN and +Inf are the same mistake
+		// wearing the shape that gets through: this test used to read
+		// `< 0 || IsNaN`, which named the ceiling-into-a-license failure and
+		// then let the one value that IS a license past it, because +Inf is
+		// not below zero and no ceiling downstream can be smaller than it.
 		return Fail(FailureInvalidInput,
-			"permission for %q: budget must not be negative, got %v", p.Task, p.BudgetUSD)
+			"permission for %q: budget must be a real, non-negative amount, got %v", p.Task, p.BudgetUSD)
 	}
 	return nil
 }

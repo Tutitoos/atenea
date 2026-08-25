@@ -1034,6 +1034,16 @@ func (r *Runner) runOverview(ctx context.Context, sess *mcpstdio.Session, status
 	if err != nil {
 		return nil, nil, err
 	}
+	// Checked before the provider is asked anything, because a path that
+	// leaves the repository is not a question worth paying a round trip for.
+	// This is the read the rest of the package routes through snippetAt; this
+	// one joined the path onto the root itself and skipped the check
+	// entirely -- path.Clean does not strip a leading "..", and an absolute
+	// path was not refused either.
+	resolved, err := within(root, relative)
+	if err != nil {
+		return nil, nil, err
+	}
 	args := map[string]any{"repository": kivgraphRepo, "path": relative}
 	if depth > 0 {
 		args["include_members"] = true
@@ -1048,7 +1058,7 @@ func (r *Runner) runOverview(ctx context.Context, sess *mcpstdio.Session, status
 	}
 
 	// Read once for every row's column, not once per row.
-	lines := readLines(filepath.Join(root, filepath.FromSlash(relative)))
+	lines := readLines(resolved)
 	symbols := []any{}
 	for _, decl := range answer.declarations() {
 		if decl.Name == "" || decl.StartLine <= 0 {
@@ -1336,7 +1346,7 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 	if err != nil {
 		return "", nil, err
 	}
-	key, err := r.stableKeyOf(ctx, sess, repository, file, decl)
+	key, err := r.stableKeyOf(ctx, sess, CapabilityConsumers, repository, file, decl)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1359,8 +1369,13 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 // api-db-go resolves that way). One extra call per resolution on that
 // server, never a wrong answer, and nothing at all on a server that fills
 // the field.
+// capabilityID is threaded through for the error messages alone. They used to
+// name symbol.consumers unconditionally, and runImpact calls this once per
+// declaration the diff touched, so a code.impact failure explained itself as a
+// symbol.consumers one and sent whoever read it looking at the wrong
+// capability.
 func (r *Runner) stableKeyOf(ctx context.Context, sess *mcpstdio.Session,
-	repository, file string, decl outlineDeclaration) (string, error) {
+	capabilityID, repository, file string, decl outlineDeclaration) (string, error) {
 
 	if decl.StableKey != "" {
 		return decl.StableKey, nil
@@ -1371,8 +1386,8 @@ func (r *Runner) stableKeyOf(ctx context.Context, sess *mcpstdio.Session,
 	}
 	if qualified == "" {
 		return "", contract.Fail(contract.FailureNotFound,
-			"kivgraph symbol.consumers: the declaration at %s:%d has neither a stable key nor a name to look one up with",
-			file, decl.StartLine)
+			"kivgraph %s: the declaration at %s:%d has neither a stable key nor a name to look one up with",
+			capabilityID, file, decl.StartLine)
 	}
 	text, err := sess.Call(ctx, toolGet, map[string]any{
 		"repository":     repository,
@@ -1391,18 +1406,18 @@ func (r *Runner) stableKeyOf(ctx context.Context, sess *mcpstdio.Session,
 			return "", failure
 		}
 		return "", contract.Fail(contract.FailureNotFound,
-			"kivgraph symbol.consumers: %s carries no stable key in %s's outline and %s could not supply one: %s",
-			qualified, repository, toolGet, failure.Message)
+			"kivgraph %s: %s carries no stable key in %s's outline and %s could not supply one: %s",
+			capabilityID, qualified, repository, toolGet, failure.Message)
 	}
 	var answer getSymbolAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return "", contract.Fail(contract.FailureUnavailable,
-			"kivgraph symbol.consumers: unreadable %s answer while resolving %s: %v", toolGet, qualified, err)
+			"kivgraph %s: unreadable %s answer while resolving %s: %v", capabilityID, toolGet, qualified, err)
 	}
 	if answer.Results == nil || answer.Results.StableKey == "" {
 		return "", contract.Fail(contract.FailureNotFound,
-			"kivgraph symbol.consumers: neither %s nor %s gives a stable key for %s at %s:%d",
-			toolOutline, toolGet, qualified, file, decl.StartLine)
+			"kivgraph %s: neither %s nor %s gives a stable key for %s at %s:%d",
+			capabilityID, toolOutline, toolGet, qualified, file, decl.StartLine)
 	}
 	return answer.Results.StableKey, nil
 }

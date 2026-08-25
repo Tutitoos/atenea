@@ -117,21 +117,29 @@ func (n *Notebook) Clear() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	total := len(current.Incidents)
-	// Written whole and then renamed, the same way a run receipt is: a mark
-	// interrupted halfway would be a number nobody can read, and the notebook
-	// would go back to looking entirely new.
+	if err := n.writeMark(len(current.Incidents)); err != nil {
+		return 0, err
+	}
+	return current.Unread, nil
+}
+
+// writeMark records how many entries have been seen.
+//
+// Written whole and then renamed, the same way a run receipt is: a mark
+// interrupted halfway would be a number nobody can read, and the notebook
+// would go back to looking entirely new.
+func (n *Notebook) writeMark(entries int) error {
 	tmp := n.mark + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.Itoa(total)+"\n"), 0o600); err != nil {
-		return 0, contract.Fail(contract.FailureUnavailable,
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(entries)+"\n"), 0o600); err != nil {
+		return contract.Fail(contract.FailureUnavailable,
 			"notebook: %s: %v", n.mark, err)
 	}
 	if err := os.Rename(tmp, n.mark); err != nil {
 		_ = os.Remove(tmp)
-		return 0, contract.Fail(contract.FailureUnavailable,
+		return contract.Fail(contract.FailureUnavailable,
 			"notebook: %s: %v", n.mark, err)
 	}
-	return current.Unread, nil
+	return nil
 }
 
 // readMark is how many entries have been looked at. A mark that is missing,

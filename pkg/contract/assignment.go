@@ -2,6 +2,7 @@ package contract
 
 import (
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -364,6 +365,15 @@ func (a Assignment) Validate() error {
 	if err := a.Limits.Validate(); err != nil {
 		return err
 	}
+	if a.Route != nil {
+		// Route shipped with a Clone and no Validate, so the one field on
+		// this card that exists to stop a silent fallback was the one field
+		// nothing checked. A route is only worth carrying if the card it
+		// arrives on is refused when the route is unusable.
+		if err := a.Route.Validate(); err != nil {
+			return Fail(FailureInvalidInput, "assignment %s: %s", a.ID, err.Error())
+		}
+	}
 	if a.Subject != nil {
 		if a.Subject.RunID == a.ID {
 			return Fail(FailureInvalidInput,
@@ -423,11 +433,26 @@ func (a Assignment) validateGrants() error {
 			return Fail(FailureInvalidInput, "assignment %s: unknown effect", a.ID)
 		}
 	}
-	if a.BudgetUSD != nil && *a.BudgetUSD < 0 {
+	if a.BudgetUSD != nil && !realMoney(*a.BudgetUSD) {
 		return Fail(FailureInvalidInput,
-			"assignment %s: budget is negative ($%.2f)", a.ID, *a.BudgetUSD)
+			"assignment %s: budget is not a real, non-negative amount (%v)", a.ID, *a.BudgetUSD)
 	}
 	return nil
+}
+
+// realMoney reports whether a dollar figure is one a person could have
+// authorized: finite and not below zero.
+//
+// It exists because every comparison against NaN is false, so a validator
+// written as `amount < 0` refuses negatives and waves NaN straight through --
+// and a NaN budget compares false against every ceiling downstream too, which
+// is a grant that is refused by nothing. Infinity fails the same way in the
+// other direction: `< 0` is false for +Inf, and what arrives is a figure that
+// no ceiling can be smaller than. Neither can come from a person; both come
+// from arithmetic upstream that divided by zero or overflowed, and the place
+// to stop them is the boundary that admits the number.
+func realMoney(amount float64) bool {
+	return amount >= 0 && !math.IsInf(amount, 0)
 }
 
 // Causes reports whether this agent is allowed to cause an effect.
@@ -439,10 +464,14 @@ func (a Assignment) Sees(level ContextLevel) bool { return slices.Contains(a.Con
 // Child stamps a card for work this agent is handing down.
 //
 // This is the only way to build a non-root Assignment, and that is the point:
-// the two rules that cannot be left to good behavior are enforced here, at the
-// moment of creation, so a card that breaks them never exists to be passed
+// the three rules that cannot be left to good behavior are enforced here, at
+// the moment of creation, so a card that breaks them never exists to be passed
 // around.
 //
+//   - Only an orchestrator hands out work. AgentType documents authority --
+//     who may split work -- as the one thing the two kinds do not share, and
+//     this is the only place that authority is ever exercised, so it is the
+//     only place the check means anything.
 //   - A child never declares an effect its parent does not hold. Authority
 //     runs downwards. An agent that can widen its own reach by describing
 //     itself generously is not an authority chain, it is a suggestion.
@@ -455,6 +484,18 @@ func (a Assignment) Child(id, typeName string, kind AgentType, task Task, want [
 	if err := a.Validate(); err != nil {
 		return Assignment{}, Fail(FailureInvalidInput,
 			"assignment %s cannot hand out work: %s", a.ID, err.Error())
+	}
+	if a.Kind != AgentOrchestrator {
+		// Validate has already established that the kind is one of the two
+		// declared values, so this refuses a coherent card rather than a
+		// malformed one: a specialist that reached here is one asking for an
+		// authority its type says it was never given. The depth cap below
+		// would let it through -- a specialist at depth 1 is under no cap --
+		// and every other check compares the child against the parent's own
+		// grants, which a specialist holds in full.
+		return Assignment{}, Fail(FailurePermissionDenied,
+			"assignment %s is %s and cannot hand out work: only an orchestrator may split a task",
+			a.ID, a.Kind)
 	}
 	if a.Depth >= MaxAgentDepth {
 		return Assignment{}, Fail(FailurePermissionDenied,
@@ -486,6 +527,19 @@ func (a Assignment) Child(id, typeName string, kind AgentType, task Task, want [
 		Limits:   limits,
 		Effects:  slices.Clone(want),
 	}
+	if a.CommissionUSD != nil {
+		// The commission is the grant of the run, not a share of it, so it
+		// travels down whole where BudgetUSD is deliberately left for the
+		// caller to divide. Dropping it here would hand every child of a
+		// workflow agent a nil, and nil on this field does not mean "you were
+		// granted nothing" -- it means "there is no run above you", which is
+		// exactly the fact a child of a workflow step must not be told. An
+		// agent dividing a graph would then divide its own share under the
+		// commission's name, which is the mistake CommissionUSD was added to
+		// stop.
+		grant := *a.CommissionUSD
+		child.CommissionUSD = &grant
+	}
 	if err := child.Validate(); err != nil {
 		return Assignment{}, err
 	}
@@ -504,6 +558,27 @@ func (a Assignment) Clone() Assignment {
 	if a.Subject != nil {
 		subject := a.Subject.Clone()
 		a.Subject = &subject
+	}
+	if a.Rejected != nil {
+		// A rejected attempt is a Subject like any other and carries the same
+		// Result map. It was left shallow while Subject above was not, so a
+		// relaunch card cloned for a second attempt shared the rejected
+		// answer's map with the first.
+		rejected := a.Rejected.Clone()
+		a.Rejected = &rejected
+	}
+	if a.BudgetUSD != nil {
+		// Both money pointers are copied for the reason Report.Clone gives
+		// for Spent.USD: the pointer is what makes "no money was granted
+		// here" and "you were granted this much" different facts, so two
+		// cards sharing one address can have one of them edited into the
+		// other's figure.
+		share := *a.BudgetUSD
+		a.BudgetUSD = &share
+	}
+	if a.CommissionUSD != nil {
+		grant := *a.CommissionUSD
+		a.CommissionUSD = &grant
 	}
 	return a
 }
@@ -673,11 +748,17 @@ func (c Charge) Tokens() int {
 // half-measured workflow refuses to tell. Tokens always add: they are counted
 // by whoever served the request and never guessed.
 func (c Charge) Plus(o Charge) Charge {
+	// The two shortcuts return a copy rather than the operand itself, because
+	// USD is a pointer and a fold is the usual caller: summing N charges of
+	// which one is measured hands the running total that one charge's own
+	// address, so writing to the total afterwards edits the report it came
+	// from. Copying costs one float per unmeasured operand and removes the
+	// only way this function can reach back into its input.
 	if !o.Measured() {
-		return c
+		return c.copyAmount()
 	}
 	if !c.Measured() {
-		return o
+		return o.copyAmount()
 	}
 	out := Charge{
 		InputTokens:      c.InputTokens + o.InputTokens,
@@ -690,15 +771,53 @@ func (c Charge) Plus(o Charge) Charge {
 	}
 	total := *c.USD + *o.USD
 	out.USD = &total
-	out.PricedBy = c.PricedBy
-	if o.PricedBy != c.PricedBy {
-		// Two sources priced the two halves, and the sum belongs to both.
-		// Naming one would attribute a figure to a source that never said
-		// it.
-		out.PricedBy = c.PricedBy + " and " + o.PricedBy
-	}
+	out.PricedBy = mergePricedBy(c.PricedBy, o.PricedBy)
 	return out
 }
+
+// copyAmount returns the charge with its own dollar figure, so the caller
+// cannot write through to whatever report supplied it.
+func (c Charge) copyAmount() Charge {
+	if c.USD != nil {
+		amount := *c.USD
+		c.USD = &amount
+	}
+	return c
+}
+
+// mergePricedBy names every source that priced a sum, once each.
+//
+// Two sources priced the two halves and the sum belongs to both: naming one
+// would attribute a figure to a source that never said it. Deduplicating is
+// what makes that survive a fold. Plus is associative in the caller's mind,
+// so a total over N charges is built by adding one at a time, and plain
+// concatenation grows the provenance by one name per addition -- fifteen turns
+// priced by the same list read back as that list fifteen times, which says
+// nothing the first mention did not and buries a genuine second source in the
+// repetition.
+func mergePricedBy(a, b string) string {
+	if a == b {
+		return a
+	}
+	// Both sides are split, not just the incoming one: a fold that has
+	// already merged twice carries a joined string on the left AND may be
+	// handed another on the right, and treating either as a single opaque
+	// name reintroduces the duplicate this exists to remove.
+	names := make([]string, 0, 4)
+	for _, side := range [2]string{a, b} {
+		for _, name := range strings.Split(side, pricedBySeparator) {
+			if name != "" && !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
+	slices.Sort(names)
+	return strings.Join(names, pricedBySeparator)
+}
+
+// pricedBySeparator joins the sources of a summed charge. It reads as a
+// sentence because PricedBy is shown to a person, not parsed by a machine.
+const pricedBySeparator = " and "
 
 // Validate refuses the two shapes that would put an unsupported number on a
 // receipt: a negative count, and a price nobody will stand behind.
@@ -723,8 +842,9 @@ func (c Charge) Validate() error {
 		}
 		return nil
 	}
-	if *c.USD < 0 {
-		return Fail(FailureInvalidInput, "charge: amount is negative ($%.4f)", *c.USD)
+	if !realMoney(*c.USD) {
+		return Fail(FailureInvalidInput,
+			"charge: amount is not a real, non-negative figure (%v)", *c.USD)
 	}
 	if strings.TrimSpace(c.PricedBy) == "" {
 		return Fail(FailureInvalidInput,
@@ -855,7 +975,12 @@ func (r Report) validateCompleteness() error {
 			"report: completeness is set on a %s report; only an ok verdict can be partial", r.Verdict)
 	}
 	c := *r.Completeness
-	if c <= 0 || c > 1 {
+	// NaN is named before the range test rather than left to it, because
+	// every comparison against NaN is false: `c <= 0 || c > 1` is the shape
+	// that looks like it bounds a number and lets this one through. What gets
+	// past reads as a partial answer whose fraction cannot be compared to
+	// anything, so nothing downstream can rank it or add it up.
+	if math.IsNaN(c) || c <= 0 || c > 1 {
 		return Fail(FailureInvalidInput,
 			"report: completeness %v is out of range, want (0, 1]", c)
 	}
@@ -966,9 +1091,16 @@ func (r Report) Subject(runID, typeName string, attempt int, work Task) Subject 
 		TypeName: typeName,
 		Task:     work,
 		Attempt:  attempt,
-		Result:   r.Result,
-		Verdict:  r.Verdict,
-		Reason:   r.Reason,
+		// The map is copied for the reason Subject.Clone copies it: the
+		// parent still holds this report and is about to consume it, while
+		// the subject travels to a reviewer that may be running at the same
+		// time. Handing over the same map makes the answer being judged and
+		// the answer being consumed one mutable object, so a reviewer that
+		// writes into what it was given edits the evidence underneath the
+		// parent.
+		Result:  maps.Clone(r.Result),
+		Verdict: r.Verdict,
+		Reason:  r.Reason,
 	}
 }
 

@@ -23,7 +23,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=/opt/atenea/bin/atenea run
+ExecStart="/opt/atenea/bin/atenea" run
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
@@ -65,12 +65,14 @@ func TestTheUnitFileIsRenderedExactlyAsItWillBeInstalled(t *testing.T) {
 
 // The manager starts a binary, not a shell: whatever is written here is what
 // runs, and `run` is the only verb that is a lifecycle rather than a report.
+// The path is quoted because systemd splits the value on whitespace and
+// expands `%` specifiers in it -- see systemdExec.
 func TestTheUnitStartsTheGivenBinaryInRunMode(t *testing.T) {
 	const binary = "/usr/local/lib/atenea/atenea"
 	got := unitValue(t, service(t, binary, 10*time.Second).UnitText(), "ExecStart")
 
-	if got != binary+" run" {
-		t.Errorf("ExecStart = %q, want %q", got, binary+" run")
+	if want := `"` + binary + `" run`; got != want {
+		t.Errorf("ExecStart = %q, want %q", got, want)
 	}
 }
 

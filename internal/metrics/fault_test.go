@@ -379,3 +379,34 @@ func TestTheRecordNeverPromotesAProviderSomebodyProbedDown(t *testing.T) {
 		t.Errorf("reason = %q, want the prober's", candidates[0].Health.Reason)
 	}
 }
+
+// A streak is about the binary installed right now. The query's own comment
+// has always said so, and until the `current` CTE existed nothing enforced it:
+// tool_version appeared in no WHERE, no PARTITION BY and no GROUP BY, so three
+// failures from the binary replaced this morning still condemned the one
+// installed to fix them, and the funnel refused to call the fixed provider
+// until FaultWindow had run out.
+func TestAnUpgradeStartsTheStreakOver(t *testing.T) {
+	s := store(t, Options{})
+	now := time.Now().UTC()
+	for i := range 3 {
+		down := broke(now.Add(time.Duration(i)*time.Second), "claude.search",
+			"unavailable", "claude code is not logged in on this machine")
+		down.ToolVersion = "1.0.0"
+		s.Record(down)
+	}
+	// The upgrade, and one failure under it: one fault is ordinary and must
+	// not inherit the condemned binary's record.
+	upgraded := broke(now.Add(4*time.Second), "claude.search",
+		"unavailable", "claude code is not logged in on this machine")
+	upgraded.ToolVersion = "2.0.0"
+	s.Record(upgraded)
+
+	fault := faultOf(t, s, "claude.search")
+	if fault.Streak != 1 {
+		t.Errorf("streak = %d, want 1: the three failures belong to the version that was replaced", fault.Streak)
+	}
+	if _, hurt := fault.Health(now.Add(5 * time.Second)); hurt {
+		t.Error("the newly installed version was condemned by the old one's record")
+	}
+}

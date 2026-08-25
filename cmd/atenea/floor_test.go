@@ -567,3 +567,71 @@ func TestFloorMeasurePricesTheFirstToolCallAndDerivesTheRateFromBoth(t *testing.
 		t.Errorf("WarmUSD = %v, want ~$0.0247 -- the whole start read from cache", w)
 	}
 }
+
+// This command spends by definition: it prices a turn by paying for one. It
+// printed "about to spend real money" and then spent it in the same breath,
+// with no --confirm, no prompt and no way to see the estimate without
+// authorizing the bill -- while `task`, `ask`, `decide --run` and `agent`, all
+// of which spend less predictably, have offered --confirm all along.
+//
+// The fake CLI here answers a full cold reading, so a --dry-run that leaked
+// through would leave a stored row behind and this test would see it.
+func TestFloorMeasureDryRunPricesTheProbeWithoutPayingForIt(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	settingsPath := measureSettings(t, floorFakeCLI(t, floorColdReading))
+
+	out, err := cli(t, "--config", settingsPath, "floor", "measure",
+		"--repo", "api", "--agent", "plan", "--dry-run")
+	if err != nil {
+		t.Fatalf("floor measure --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "about to spend real money") {
+		t.Errorf("out = %q, want the estimate a reader is deciding on", out)
+	}
+	if !strings.Contains(out, "nothing was spent") {
+		t.Errorf("out = %q, want it said plainly that no money left", out)
+	}
+
+	table, err := cli(t, "--config", settingsPath, "floor")
+	if err != nil {
+		t.Fatalf("floor: %v", err)
+	}
+	if !strings.Contains(table, "no floor has been measured yet") {
+		t.Errorf("a --dry-run stored a row:\n%s", table)
+	}
+}
+
+// --confirm is refused outright where nobody can answer it, rather than read
+// as a yes. Stdin is replaced with a pipe here so the assertion is about the
+// non-interactive path and not about whatever the suite was started with: a
+// test that let confirmTTY reach a real terminal would sit waiting for a
+// keystroke instead of failing.
+func TestFloorMeasureConfirmRefusesWhereNobodyCanAnswer(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	settingsPath := measureSettings(t, floorFakeCLI(t, floorColdReading))
+
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin := os.Stdin
+	os.Stdin = read
+	t.Cleanup(func() {
+		os.Stdin = stdin
+		_ = read.Close()
+		_ = write.Close()
+	})
+
+	_, err = cli(t, "--config", settingsPath, "floor", "measure",
+		"--repo", "api", "--agent", "plan", "--confirm")
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied", got)
+	}
+	table, err := cli(t, "--config", settingsPath, "floor")
+	if err != nil {
+		t.Fatalf("floor: %v", err)
+	}
+	if !strings.Contains(table, "no floor has been measured yet") {
+		t.Errorf("an unconfirmed measurement was paid for anyway:\n%s", table)
+	}
+}

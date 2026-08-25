@@ -2,6 +2,7 @@ package statusline_test
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -166,6 +167,75 @@ func TestInstallKeepsWhatSomebodyElsePutInTheConfig(t *testing.T) {
 // A file this code cannot parse belongs to somebody else. Rewriting it from a
 // partial parse would destroy comments to save one line of typing, so the
 // command refuses and says which line to add.
+// The client's tui.json is somebody else's file, and this package rewrites it
+// whole to add one entry to one key. os.WriteFile truncates in place, so an
+// interruption anywhere in that write leaves the client with a short file or an
+// empty one -- and every key this package carefully carried through is gone
+// with it. A rename cannot half-happen, and this is what that guarantees:
+// anyone already holding the old file keeps reading the whole old file.
+func TestDeclaringThePluginReplacesTheClientConfigInsteadOfTruncatingIt(t *testing.T) {
+	line := at(t)
+	if err := os.MkdirAll(filepath.Dir(line.TUIConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := []byte(`{"theme":"tokyonight","keybinds":{"leader":"ctrl+x"}}` + "\n")
+	if err := os.WriteFile(line.TUIConfig, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A reader that opened the config before the install and gets to it after.
+	held, err := os.Open(line.TUIConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	if _, err := line.Install(); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	kept, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatalf("reading the file that was open across the install: %v", err)
+	}
+	if string(kept) != string(before) {
+		t.Errorf("a reader holding the config across the install saw %q, want the whole file it opened, %q", kept, before)
+	}
+
+	// And the new file is on disk, whole, with both the old keys and ours.
+	var config map[string]json.RawMessage
+	current, err := os.ReadFile(line.TUIConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(current, &config); err != nil {
+		t.Fatalf("the config left on disk is not valid JSON: %v\n%s", err, current)
+	}
+	for _, key := range []string{"theme", "keybinds", "plugin"} {
+		if _, ok := config[key]; !ok {
+			t.Errorf("the rewritten config lost %q:\n%s", key, current)
+		}
+	}
+	info, err := os.Stat(line.TUIConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("the client's config was left with mode %o, want 644: a temporary file's own mode is 600", perm)
+	}
+
+	// Nothing left behind in the directory the temporary file was made in.
+	entries, err := os.ReadDir(filepath.Dir(line.TUIConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Errorf("the install left a temporary file behind: %s", entry.Name())
+		}
+	}
+}
+
 func TestInstallRefusesAConfigItCannotParse(t *testing.T) {
 	line := at(t)
 	writeConfig(t, line, "{\n  // a comment this parser does not accept\n  \"plugin\": []\n}")

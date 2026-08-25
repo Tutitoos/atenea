@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -286,7 +287,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 			answer.TotalCostUSD, req.Permission.BudgetUSD)
 	}
 
-	result, outOfScope, err := r.readAnswer(answer, req, ask)
+	result, counts, err := r.readAnswer(answer, root, ask)
 	if err != nil {
 		return weighed, err
 	}
@@ -317,10 +318,14 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	// The count travels as a number and the sentence is built from it, so the
 	// caller who reads the receipt and the funnel that ranks the provider are
 	// looking at the same fact rather than at prose and a guess.
-	outcome.OutOfScope = outOfScope
-	if outOfScope > 0 {
+	outcome.OutOfScope = counts.outOfScope
+	if counts.outOfScope > 0 {
 		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
-			"%d match(es) fell outside the requested scope and were dropped", outOfScope))
+			"%d match(es) fell outside the requested scope and were dropped", counts.outOfScope))
+	}
+	if counts.malformed > 0 {
+		outcome.Notices = append(outcome.Notices, fmt.Sprintf(
+			"%d match(es) came back without a usable path or line and are not in this answer", counts.malformed))
 	}
 	return outcome, nil
 }
@@ -349,6 +354,13 @@ func completenessDoubt(answer envelope, budgetUSD float64) []string {
 		// already believed, not from a search that ran.
 		out = append(out, "answered in a single turn, with no tool result read back -- "+
 			"the prompt requires a grep before an answer, so this one may not have run")
+	}
+	if answer.streamTruncated {
+		// Not a doubt about the model's thoroughness like the other two -- a
+		// plain statement that this adapter stopped reading before the far
+		// side stopped talking, so anything it said afterwards is not here.
+		out = append(out, "the event stream carried a line too long to read and was cut short; "+
+			"this is the answer that had already arrived, and later events are missing")
 	}
 	if budgetUSD > 0 && answer.TotalCostUSD/budgetUSD >= nearCeilingFraction {
 		// Measured: the runs that died outright spent past their ceiling
@@ -501,7 +513,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	budgetStopped := false
 	var legacyOutput strings.Builder
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 4096), 4<<20)
+	scanner.Buffer(make([]byte, 4096), maxStreamLine)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -532,11 +544,26 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		}
 	}
 	scanErr := scanner.Err()
+	if scanErr != nil {
+		// Drained before Wait, always: the scan stopped and Wait waits for the
+		// child, so a child still writing into a pipe nobody empties would
+		// deadlock right here.
+		_, _ = io.Copy(io.Discard, stdout)
+	}
 	runErr := cmd.Wait()
 	peak := procstat.PeakRSS(cmd.ProcessState)
 	if scanErr != nil {
-		return out, peak, contract.Fail(contract.FailureUnavailable,
-			"claude code output could not be read")
+		// A stream this adapter could not finish reading is only fatal when
+		// nothing usable arrived before it broke. One line over the buffer
+		// limit used to discard the whole turn -- including a `result` event
+		// already sitting in `out`, already paid for -- and report the
+		// provider as unreachable. What arrived is kept, and the fact that
+		// the rest did not is a notice on the answer rather than a silence.
+		if !hasOutput {
+			return out, peak, contract.Fail(contract.FailureUnavailable,
+				"claude code output could not be read")
+		}
+		out.streamTruncated = true
 	}
 	if budgetStopped {
 		return out, peak, contract.Fail(contract.FailurePermissionDenied,
@@ -630,7 +657,23 @@ type envelope struct {
 	// PermissionDenials lists what the turn was refused. A non-empty list is
 	// the permission bin regardless of how the turn ended.
 	PermissionDenials []json.RawMessage `json:"permission_denials"`
+	// streamTruncated records that the event stream stopped being readable
+	// after this envelope arrived. It is set by the scan, never decoded: the
+	// far side has no field for it and could not know.
+	streamTruncated bool
 }
+
+// maxStreamLine bounds one line of --output-format stream-json. A single event
+// carrying a large tool result can be long, and the old 4 MiB was small enough
+// that hitting it was a real failure mode rather than a theoretical one. Past
+// this the stream stops being read, the answer that already arrived stands,
+// and the truncation is reported.
+//
+// It is a var rather than a const for one reason: the test that exercises the
+// truncation path lowers it. Producing a 32 MiB line from a shell stub would
+// add seconds to every run of the suite to prove something the code does at
+// any size at all.
+var maxStreamLine = 32 << 20
 
 // reason is the best sentence the far side gave for a failure.
 //
@@ -878,46 +921,74 @@ func oneLine(value string) string { return strings.Join(strings.Fields(value), "
 // it was told not to open, or a path outside the repository it was pointed at.
 // Trusting the instruction alone would make the security design advisory, so
 // what comes back is checked again here, where the answer can still be refused.
-func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (map[string]any, int, error) {
+func (r *Runner) readAnswer(out envelope, root string, ask search) (map[string]any, hitCounts, error) {
 	if len(out.PermissionDenials) > 0 {
-		return nil, 0, contract.Fail(contract.FailurePermissionDenied,
+		return nil, hitCounts{}, contract.Fail(contract.FailurePermissionDenied,
 			"claude code was refused %d action(s) it needed", len(out.PermissionDenials)).
 			WithRaw(out.Result)
 	}
 	if len(out.StructuredOutput) == 0 {
 		// The turn ended without the shape it was asked for. That is not a
 		// search with no matches -- it is a search that did not happen.
-		return nil, 0, contract.Fail(contract.FailureUnavailable,
+		return nil, hitCounts{}, contract.Fail(contract.FailureUnavailable,
 			"claude code answered without the structure it was asked for").
 			WithRaw(out.Result)
 	}
 	var answer map[string]any
 	if err := json.Unmarshal(out.StructuredOutput, &answer); err != nil {
-		return nil, 0, contract.Fail(contract.FailureUnavailable,
+		return nil, hitCounts{}, contract.Fail(contract.FailureUnavailable,
 			"claude code's structured answer is not an object").
 			WithRaw(string(out.StructuredOutput))
 	}
 
 	raw, _ := answer["matches"].([]any)
 	matches := make([]any, 0, len(raw))
-	droppedOutOfScope := 0
+	counts := hitCounts{}
 	for _, item := range raw {
 		record, ok := item.(map[string]any)
 		if !ok {
+			counts.malformed++
 			continue
 		}
-		hit, keep, outOfScope := r.cleanHit(record, req.Repository.ID, ask)
-		if outOfScope {
-			droppedOutOfScope++
-			continue
+		hit, verdict := r.cleanHit(record, root, ask)
+		switch verdict {
+		case hitKept:
+			matches = append(matches, hit)
+		case hitOutOfScope:
+			counts.outOfScope++
+		case hitMalformed:
+			counts.malformed++
 		}
-		if !keep {
-			continue
-		}
-		matches = append(matches, hit)
 	}
-	return map[string]any{"matches": matches}, droppedOutOfScope, nil
+	return map[string]any{"matches": matches}, counts, nil
 }
+
+// hitCounts is what happened to the matches that did not make it into the
+// answer, split by whether the caller ought to hear about it.
+//
+// outOfScope is a request-shaping constraint the caller set and can relax.
+// malformed is the far side handing back something with no usable path or no
+// usable line -- which used to vanish without trace, so a turn that reported
+// twenty matches in a shape this adapter could not read answered VerdictOK
+// with an empty list and said nothing at all. Sensitive files and unwanted
+// extensions are in neither: those drop silently on purpose, because naming
+// them would leak the thing the list exists to hide.
+type hitCounts struct {
+	outOfScope int
+	malformed  int
+}
+
+// hitVerdict is what cleanHit decided about one reported match.
+type hitVerdict int
+
+const (
+	hitKept hitVerdict = iota
+	hitOutOfScope
+	// hitDropped is the deliberate silence: a secret, or a file type the
+	// caller filtered out.
+	hitDropped
+	hitMalformed
+)
 
 // cleanHit checks one reported match and normalises it, or drops it.
 //
@@ -929,28 +1000,28 @@ func (r *Runner) readAnswer(out envelope, req contract.RunRequest, ask search) (
 // secret, so a match that fell outside it is worth telling the caller about
 // rather than hiding. The caller finds out through the outOfScope return and
 // an aggregate Notice on the Outcome, never a Notice per hit.
-func (r *Runner) cleanHit(record map[string]any, repositoryID string, ask search) (hit map[string]any, keep bool, outOfScope bool) {
+func (r *Runner) cleanHit(record map[string]any, root string, ask search) (map[string]any, hitVerdict) {
 	name, _ := record["path"].(string)
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, false, false
+		return nil, hitMalformed
 	}
-	relative, inside := insideRepository(name)
+	relative, inside := insideRepository(root, name)
 	if !inside {
-		return nil, false, false
+		return nil, hitMalformed
 	}
 	if !inScope(relative, ask.scope) {
-		return nil, false, true
+		return nil, hitOutOfScope
 	}
 	if r.isSensitive(relative) {
-		return nil, false, false
+		return nil, hitDropped
 	}
 	if len(ask.fileTypes) > 0 && !wantedType(relative, ask.fileTypes) {
-		return nil, false, false
+		return nil, hitDropped
 	}
 	line, ok := positive(record["line"])
 	if !ok {
-		return nil, false, false
+		return nil, hitMalformed
 	}
 	column, ok := positive(record["column"])
 	if !ok {
@@ -964,24 +1035,76 @@ func (r *Runner) cleanHit(record map[string]any, repositoryID string, ask search
 	if snippet, ok := record["snippet"].(string); ok {
 		out["snippet"] = snippet
 	}
-	return out, true, false
+	return out, hitKept
 }
 
 // insideRepository reports the repository-relative path of a reported hit, or
-// false when it does not sit under the working directory the turn was given.
-func insideRepository(name string) (string, bool) {
-	clean := filepath.ToSlash(filepath.Clean(name))
-	if filepath.IsAbs(name) {
-		// The far side was run with the repository as its working directory,
-		// so an absolute path is only usable if it still points inside it.
-		// There is nothing to resolve it against here, so it is refused: a
-		// path the caller cannot open is not an answer.
+// false when it does not sit under the root the turn was run in.
+//
+// An absolute path is resolved against that root rather than refused. The old
+// comment said "there is nothing to resolve it against here", and that was
+// true of the function and false of the adapter: the root IS known -- it is
+// what cmd.Dir was set to -- and a model asked for relative paths answers with
+// absolute ones often enough that refusing them threw away real matches and
+// reported VerdictOK with an empty list.
+//
+// Containment is checked twice, lexically and again after resolving symlinks,
+// the way the kivgraph adapter does it: a symlinked directory inside the
+// repository can point outside it, and a path this adapter hands back as
+// "repository-relative" would then name a file that is not in the repository
+// at all. A path that does not exist is not an escape -- the far side may be
+// reporting a file it just wrote -- so it keeps the lexical verdict.
+func insideRepository(root, name string) (string, bool) {
+	local := filepath.FromSlash(name)
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
 		return "", false
 	}
-	if clean == ".." || strings.HasPrefix(clean, "../") {
+	rootReal := rootAbs
+	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
+		rootReal = resolved
+	}
+	var relative string
+	if filepath.IsAbs(local) {
+		// Tried against the root as given and against the root with its own
+		// symlinks resolved, because both name the same directory and the far
+		// side may report either. On macOS every temporary directory is
+		// reached through /var, which is a link to /private/var, so checking
+		// only one form rejects paths that are plainly inside the repository.
+		rel, ok := containedIn(rootAbs, local)
+		if !ok {
+			if rel, ok = containedIn(rootReal, local); !ok {
+				return "", false
+			}
+		}
+		relative = rel
+	} else {
+		clean := filepath.ToSlash(filepath.Clean(local))
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return "", false
+		}
+		relative = clean
+	}
+	if resolved, err := filepath.EvalSymlinks(filepath.Join(rootReal, filepath.FromSlash(relative))); err == nil {
+		if _, still := containedIn(rootReal, resolved); !still {
+			return "", false
+		}
+	}
+	return relative, true
+}
+
+// containedIn returns target's path relative to root, and false when target
+// sits outside it. Both must already be absolute.
+func containedIn(root, target string) (string, bool) {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", false
 	}
-	return strings.TrimPrefix(clean, "./"), true
+	if relative == "." {
+		// The root itself is a directory, never a match's file.
+		return "", false
+	}
+	return filepath.ToSlash(relative), true
 }
 
 // isSensitive matches the patterns against both the bare file name and the

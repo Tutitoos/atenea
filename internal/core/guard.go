@@ -10,10 +10,12 @@ import (
 )
 
 // guardedRunner wraps a Runner whose far side Atenea launches and watches
-// itself. Every call ensures the process is up before reaching it and
-// brackets the call with Acquire/Release, so the idle reaper can never stop
-// the server out from under work that is actually using it -- exactly the
-// contract those two methods exist for.
+// itself. Every call brackets the whole of ensuring-and-reaching with
+// Acquire/Release, so the idle reaper can never stop the server out from
+// under work that is actually using it -- exactly the contract those two
+// methods exist for. The bracket has to open before EnsureReady rather than
+// after it: EnsureReady holds nothing when it returns, so an Acquire on the
+// next line is a gap the reaper can fit a stop into.
 //
 // Everything but Run is the wrapped Runner's own: an adapter still decides
 // what it Serves and what it answers for, the same as an unmanaged one. Only
@@ -30,11 +32,22 @@ type guardedRunner struct {
 
 func (g guardedRunner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	id := g.instanceID(req.Repository)
+	// Acquired before the server is ensured, not after, and the order is the
+	// whole guarantee. EnsureReady returns without holding anything: between
+	// its return and an Acquire placed after it, the idle reaper's stopIfIdle
+	// sees state==StateReady, inflight==0 and a lastUsed old enough, and asks
+	// the very server this call is about to use to stop -- so the call lands
+	// on a process shutting down and the caller is told the provider is
+	// unavailable, on a machine where nothing was wrong. Claiming the count
+	// first closes the window: inflight is non-zero for the whole of
+	// EnsureReady, so no tick of the reaper in between can find it idle.
+	// Acquire on an id the supervisor does not know is a no-op, so doing it
+	// before the id has been validated costs nothing.
+	g.procs.Acquire(id)
+	defer g.procs.Release(id)
 	if _, err := g.procs.EnsureReady(ctx, id); err != nil {
 		return contract.Outcome{}, guardFailure(err, ctx, id)
 	}
-	g.procs.Acquire(id)
-	defer g.procs.Release(id)
 	return g.Runner.Run(ctx, req)
 }
 
@@ -69,11 +82,14 @@ func (g guardedProber) ProbeIndex(ctx context.Context, root string) (bool, strin
 	// the id, and would get an unknown-instance failure from EnsureReady
 	// rather than a wrong answer.
 	id := g.instanceID(contract.Repository{Path: root})
+	// Acquired first, for the reason guardedRunner.Run's own comment gives:
+	// the pair has to bracket EnsureReady, not follow it, or the reaper can
+	// stop the server in the gap between the two.
+	g.procs.Acquire(id)
+	defer g.procs.Release(id)
 	if _, err := g.procs.EnsureReady(ctx, id); err != nil {
 		return false, "", guardFailure(err, ctx, id)
 	}
-	g.procs.Acquire(id)
-	defer g.procs.Release(id)
 	return g.prober.ProbeIndex(ctx, root)
 }
 

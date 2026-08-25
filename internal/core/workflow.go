@@ -164,7 +164,17 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 
 	run, runErr := engine.Launch(ctx, id)
 	if run.ID == "" {
-		return nil, &rpcError{Code: codeInvalidParams, Message: runErr.Error()}
+		// A run with no id is a launch that never started, and the reason is
+		// runErr. The nil check is not defensive noise: the two returns are
+		// independent, so an engine that ever answers "nothing to run" without
+		// an error would crash the whole service on the .Error() rather than
+		// refuse one call -- a panic in a dispatch that is holding a chat's
+		// connection, from the one tool that commits money.
+		message := toolWorkflowLaunch + ": " + id + " did not start and gave no reason"
+		if runErr != nil {
+			message = runErr.Error()
+		}
+		return nil, &rpcError{Code: codeInvalidParams, Message: message}
 	}
 	counts := run.Counts()
 	out := map[string]any{

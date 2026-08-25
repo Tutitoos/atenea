@@ -58,16 +58,42 @@ func (s Service) Install() error {
 }
 
 func (s Service) Uninstall() error {
-	if _, err := launchctl("bootout", launchdTarget()); err != nil {
+	if out, err := launchctl("bootout", launchdTarget()); err != nil {
 		// A missing job is the safe, idempotent uninstall case.
 		if _, statErr := os.Stat(s.Unit); statErr != nil && errors.Is(statErr, fs.ErrNotExist) {
 			return nil
+		}
+		if !bootoutFoundNothing(out) {
+			// The plist is still there and launchctl refused for some reason
+			// other than the job not being loaded, so the agent is very
+			// probably still running. Deleting the file now would leave a
+			// live job with no plist behind it -- surviving until the next
+			// logout, invisible to Query, and impossible to boot out again by
+			// path -- while Uninstall reported success. The operator needs
+			// launchctl's own words, which is what this returns.
+			return err
 		}
 	}
 	if err := os.Remove(s.Unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return contract.Fail(contract.FailureUnavailable, "plist file %s: %v", s.Unit, err)
 	}
 	return nil
+}
+
+// bootoutFoundNothing reports whether launchctl refused because there was no
+// such job loaded, which is the one refusal an uninstall may ignore: nothing
+// is running, so removing the plist finishes the job.
+//
+// It matches on launchctl's text because that is all launchctl offers. Its
+// exit status is the same 3 for "no such process" as for several failures
+// that do leave the job running, and it has spelled this case both ways --
+// "Could not find specified service" on Big Sur and later, "No such process"
+// before it -- so both are listed rather than the newest one only.
+func bootoutFoundNothing(out string) bool {
+	lowered := strings.ToLower(out)
+	return strings.Contains(lowered, "could not find") ||
+		strings.Contains(lowered, "no such process") ||
+		strings.Contains(lowered, "not find service")
 }
 
 func Query(name string) (ServiceState, error) {

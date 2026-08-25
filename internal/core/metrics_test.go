@@ -10,6 +10,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/metrics"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -280,5 +281,52 @@ func TestAStaleOutageStopsCountingSoTheProviderIsTriedAgain(t *testing.T) {
 	if decision.Chosen.ID != "serena.search" {
 		t.Errorf("chosen = %s, want serena.search: an hour-old outage still had it banned",
 			decision.Chosen.ID)
+	}
+}
+
+// The last flush gets more than one chance, and its failure gets written down.
+//
+// Store.Close is a single Flush, and a Flush that fails returns its rows to the
+// in-memory buffer -- correct for a running service, whose next beat carries
+// them, and useless at a stop, where there is no next beat and the buffer dies
+// with the process. One transient failure -- another process holding the file,
+// a filesystem not back yet -- was silently the end of that batch, with nothing
+// in the notebook to say a baseline had gone short. The measurements really are
+// lost when the retries run out; what must not be lost as well is the fact.
+func TestTheLastFlushIsRetriedAndItsLossIsWrittenDown(t *testing.T) {
+	atenea, base := measured(t, "")
+	// A file that DuckDB cannot open is what a broken store looks like from
+	// here: the driver refuses it, every flush fails, and the rows go back
+	// into a buffer that is about to be freed. Broken before the work rather
+	// than after it, so the measurements the commission produces are still in
+	// that buffer when the stop begins.
+	if err := os.WriteFile(base, []byte("this is not a database"), 0o600); err != nil {
+		t.Fatalf("breaking the base: %v", err)
+	}
+	if _, err := atenea.Do(context.Background(), orchestrator.Task{Text: "TODO"}); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	start := time.Now()
+	err := atenea.Shutdown()
+	if err == nil {
+		t.Fatal("a stop over a base that cannot be written reported success")
+	}
+	// Three attempts spaced by the backoff, so the elapsed time is the proof
+	// that more than one was made: a single Flush returns in microseconds.
+	if took := time.Since(start); took < 2*150*time.Millisecond {
+		t.Errorf("the stop took %v: that is one attempt, not a retry inside a budget", took)
+	}
+
+	entries, readErr := os.ReadFile(notebook.DefaultPath())
+	if readErr != nil {
+		t.Fatalf("the notebook was never written: %v", readErr)
+	}
+	body := string(entries)
+	if !strings.Contains(body, "metrics.settle") {
+		t.Errorf("notebook = %s, want an incident for the batch that died with the process", body)
+	}
+	if !strings.Contains(body, "measurements are gone") {
+		t.Errorf("notebook = %s, want the incident to count what was lost", body)
 	}
 }

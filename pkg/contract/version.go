@@ -128,11 +128,11 @@ type Version struct {
 // 2.0.0 removed `Health.ObservedAt`, and it is the first bump here that is
 // not additive. (It came back in 3.2.0, for a job the windows below turned out
 // not to do; the entry there says why. Read on its own this paragraph sends a
-// reader looking for a field that exists.) Every entry above adds; this one takes away, so it is major
-// by the rule at the top rather than by how much code it moved. An adapter
-// built against 1.x that named the field in a composite literal stops
-// compiling, and `Supports` refuses the whole 1.x line rather than letting a
-// peer discover the gap one field at a time.
+// reader looking for a field that exists.) Every entry above adds; this one
+// takes away, so it is major by the rule at the top rather than by how much
+// code it moved. An adapter built against 1.x that named the field in a
+// composite literal stops compiling, and `Supports` refuses the whole 1.x
+// line rather than letting a peer discover the gap one field at a time.
 //
 // What it removed was a field nothing wrote and nothing read. A Health value
 // cannot outlive its evidence: `Fault.Health` and `Baseline.Health` both take
@@ -219,6 +219,7 @@ type Version struct {
 // that it could not before, and it is deliberately not a shade of `failed`:
 // failed says discard this, incomplete says keep it and continue, and an
 // adapter built against 3.0.0 never sends either.
+//
 // 3.2.0 is one entry for four additions, and it is one entry because none of
 // them was ever announced.
 //

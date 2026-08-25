@@ -214,6 +214,18 @@ func getCapability() contract.Capability {
 		Inputs: []contract.Field{
 			{Name: "stable_key", Type: contract.TypeString, Required: true},
 		},
+		// The shipped output shape, for the reason consumersCapability gives:
+		// a double that declares none makes ValidateOutput vacuous, so a
+		// runner emitting the wrong keys would pass every assertion in here.
+		Outputs: []contract.Field{{
+			Name: "symbol", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "path", Type: contract.TypeString, Required: true},
+				{Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "kind", Type: contract.TypeString, Required: true},
+			},
+		}},
 	}
 }
 
@@ -228,6 +240,17 @@ func unresolvedCapability() contract.Capability {
 			{Name: "requested_package", Type: contract.TypeString, Required: false},
 			{Name: "limit", Type: contract.TypeInt, Required: false},
 		},
+		Outputs: []contract.Field{{
+			Name: "unresolved", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "path", Type: contract.TypeString, Required: true},
+				// offset, not line: kivgraph records a byte offset here and
+				// the capability declares what it has.
+				{Name: "offset", Type: contract.TypeInt, Required: true},
+				{Name: "reason", Type: contract.TypeString, Required: true},
+				{Name: "requested_package", Type: contract.TypeString, Required: false},
+			},
+		}},
 	}
 }
 
@@ -323,6 +346,21 @@ func statusCapability() contract.Capability {
 		Version: contract.Version{Major: 1},
 		Summary: "test double for graph.status",
 		Effects: []contract.Effect{contract.EffectRead},
+		// No inputs, deliberately: the provider's graph_status tool takes
+		// none, so the shipped capability declares none either.
+		Outputs: []contract.Field{{
+			Name: "snapshot", Type: contract.TypeRecordList, Required: true,
+			Fields: []contract.Field{
+				{Name: "status", Type: contract.TypeString, Required: true},
+				{Name: "snapshot_id", Type: contract.TypeInt, Required: true},
+				{Name: "snapshot_built_at", Type: contract.TypeString, Required: true},
+				{Name: "symbols", Type: contract.TypeInt, Required: true},
+				{Name: "edges", Type: contract.TypeInt, Required: true},
+				{Name: "files", Type: contract.TypeInt, Required: true},
+				{Name: "repositories", Type: contract.TypeInt, Required: true},
+				{Name: "unresolved", Type: contract.TypeInt, Required: true},
+			},
+		}},
 	}
 }
 
@@ -1426,4 +1464,166 @@ func TestWithinRefusesAPathThatEscapesTheRepository(t *testing.T) {
 			t.Errorf("within(%q) kind = %v, want %v", name, contract.KindOf(err), contract.FailureInvalidInput)
 		}
 	}
+}
+
+// --- the three capabilities nothing exercised ------------------------------
+//
+// Runner.Capabilities() declares nine. symbol.get, symbol.unresolved and
+// graph.status had no test at all: nobody checked the mapping between what
+// kivgraph sends and what the capability declares, and each of the three
+// renames or reshapes something on the way through.
+
+// stable_key is symbol.get's only input and its whole point: the capability
+// has no file and no line to fall back on, so an empty key is a question with
+// no subject and must not reach the wire.
+func TestRunGetRefusesAnEmptyStableKeyBeforeAskingTheProvider(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+
+	_, err := newTestRunner(t, sess).Run(context.Background(),
+		request(t, repo, CapabilityGet, map[string]any{"stable_key": ""}))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input (err=%v)", got, err)
+	}
+	if calls := fake.callsTo(toolGet); len(calls) != 0 {
+		t.Fatalf("%s was called %#v for a key that names nothing", toolGet, calls)
+	}
+}
+
+// get_symbol answers with a single object under "results" -- not the list
+// every neighbouring tool uses -- and names its fields file_path and
+// start_line where the capability says path and line. symbol.get is declared
+// as a record LIST all the same, so the one row travels as a single-row list
+// and an unknown key travels as an empty one.
+func TestRunGetRenamesTheOneRowAndAnswersAnUnknownKeyWithNoRows(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolGet, `{"results":{"stable_key":"KEY1","file_path":"src/index.ts",`+
+		`"name":"createLogger","kind":"function","start_line":41,"end_line":45}}`, false)
+	runner := newTestRunner(t, sess)
+
+	out, err := runner.Run(context.Background(),
+		request(t, repo, CapabilityGet, map[string]any{"stable_key": "KEY1"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if asked := fake.callsTo(toolGet); len(asked) != 1 || asked[0]["stable_key"] != "KEY1" {
+		t.Fatalf("%s was asked %#v, want the key alone", toolGet, asked)
+	}
+	rows, ok := out.Result["symbol"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("symbol = %#v, want the one row as a single-element list", out.Result["symbol"])
+	}
+	row := rows[0].(map[string]any)
+	if row["path"] != "src/index.ts" || row["line"] != 41 ||
+		row["name"] != "createLogger" || row["kind"] != "function" {
+		t.Fatalf("row = %#v, want file_path/start_line renamed to path/line", row)
+	}
+
+	// The tool's own schema allows a null "results", and an empty list is the
+	// honest shape for it: symbol.get declares the row list required, so
+	// answering with no rows is different from failing to answer.
+	empty, sessEmpty := newFakeKivgraph(t)
+	empty.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	empty.on(toolGet, `{"results":null}`, false)
+	out, err = newTestRunner(t, sessEmpty).Run(context.Background(),
+		request(t, repo, CapabilityGet, map[string]any{"stable_key": "GONE"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rows, ok := out.Result["symbol"].([]any); !ok || len(rows) != 0 {
+		t.Fatalf("symbol = %#v, want an empty list for a key the graph does not hold", out.Result["symbol"])
+	}
+}
+
+// symbol.unresolved declares offset and not line, because kivgraph records a
+// byte offset and synthesizing a line from it would invent a position the
+// provider never reported. requested_package is written only when the row
+// carries one, and a truncated answer says so rather than reading as complete.
+func TestRunUnresolvedKeepsTheByteOffsetAndReportsTruncation(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+	fake.on(toolUnresolved, `{"results":[
+		{"file_path":"src/a.ts","start_offset":1487,"reason":"PACKAGE_PROVIDER_NOT_FOUND","requested_package":"@kena/logger"},
+		{"file_path":"src/b.ts","start_offset":92,"reason":"AMBIGUOUS"}
+	],"truncated":true,"next_cursor":"c-42"}`, false)
+	runner := newTestRunner(t, sess)
+
+	out, err := runner.Run(context.Background(), request(t, repo, CapabilityUnresolved,
+		map[string]any{"reason": "PACKAGE_PROVIDER_NOT_FOUND", "limit": 2}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	asked := fake.callsTo(toolUnresolved)
+	if len(asked) != 1 || asked[0]["reason"] != "PACKAGE_PROVIDER_NOT_FOUND" || asked[0]["limit"] != float64(2) {
+		t.Fatalf("%s was asked %#v, want the declared filters forwarded", toolUnresolved, asked)
+	}
+	if _, forwarded := asked[0]["requested_package"]; forwarded {
+		t.Fatalf("%s was asked %#v, want no key for a filter nobody sent", toolUnresolved, asked)
+	}
+	rows, ok := out.Result["unresolved"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("unresolved = %#v, want both rows", out.Result["unresolved"])
+	}
+	first := rows[0].(map[string]any)
+	if first["offset"] != 1487 || first["requested_package"] != "@kena/logger" {
+		t.Fatalf("first row = %#v, want start_offset carried through as offset", first)
+	}
+	if _, hasLine := first["line"]; hasLine {
+		t.Fatalf("first row = %#v, want no line: kivgraph reports none here", first)
+	}
+	second := rows[1].(map[string]any)
+	if _, has := second["requested_package"]; has {
+		t.Fatalf("second row = %#v, want no requested_package for a reason that names none", second)
+	}
+	if !hasNote(out, "past cursor \"c-42\"") {
+		t.Fatalf("discoveries = %#v, want one saying the answer was truncated", out.Discoveries)
+	}
+}
+
+// graph.status answers from the graph_status call Run already paid for to pass
+// the empty-graph guard, wraps it in the declared "snapshot" list, and asks
+// the tool nothing a second time.
+func TestRunGraphStatusWrapsTheGuardsOwnAnswerWithoutAskingAgain(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
+
+	out, err := newTestRunner(t, sess).Run(context.Background(),
+		request(t, repo, CapabilityGraphStatus, map[string]any{}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calls := fake.callsTo(toolStatus); len(calls) != 1 {
+		t.Fatalf("%s was called %d time(s), want the guard's one", toolStatus, len(calls))
+	}
+	rows, ok := out.Result["snapshot"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("snapshot = %#v, want the one record as a single-element list", out.Result["snapshot"])
+	}
+	row := rows[0].(map[string]any)
+	if row["status"] != "ready" || row["symbols"] != 3074 || row["edges"] != 11460 ||
+		row["files"] != 103 || row["repositories"] != 1 || row["unresolved"] != 208 {
+		t.Fatalf("snapshot row = %#v, want the counts the guard already read", row)
+	}
+	// repository_freshness is real and load-bearing for ProbeIndex, and it is
+	// not part of this answer: the capability declares eight fields and
+	// projecting a ninth would be a shape nobody agreed to.
+	if _, leaked := row["repository_freshness"]; leaked {
+		t.Fatalf("snapshot row = %#v, want no repository_freshness", row)
+	}
+}
+
+// hasNote keeps the discovery loop out of every assertion that only wants to
+// know whether something was reported at all.
+func hasNote(out contract.Outcome, substring string) bool {
+	for _, discovery := range out.Discoveries {
+		if strings.Contains(discovery.Note, substring) {
+			return true
+		}
+	}
+	return false
 }

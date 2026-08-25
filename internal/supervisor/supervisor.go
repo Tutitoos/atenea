@@ -324,9 +324,15 @@ type Status struct {
 // Supervisor owns every server Atenea was told to launch. It is safe for
 // concurrent use.
 type Supervisor struct {
-	procs    map[string]*process
-	order    []string // registration order, so Status is stable to read
-	reaper   sync.Once
+	procs  map[string]*process
+	order  []string // registration order, so Status is stable to read
+	reaper sync.Once
+	// warming counts the goroutines WarmUp left running. Stop waits on them
+	// before it declares everything stopped: a warm-up that is still in
+	// flight is the one caller that can still be inside ensureReady when the
+	// shutdown starts, and Stop promising that nothing is running has to
+	// cover it too.
+	warming  sync.WaitGroup
 	stopOnce sync.Once
 	stopped  chan struct{}
 }
@@ -439,7 +445,11 @@ func (s *Supervisor) WarmUp(ctx context.Context) {
 		if p.spec.Lifecycle != Persistent || strings.HasPrefix(id, "serena@") {
 			continue
 		}
-		go func(p *process) { _, _ = p.ensureReady(ctx) }(p)
+		s.warming.Add(1)
+		go func(p *process) {
+			defer s.warming.Done()
+			_, _ = p.ensureReady(ctx)
+		}(p)
 	}
 	for _, id := range s.order {
 		p := s.procs[id]
@@ -486,12 +496,27 @@ func (s *Supervisor) reap(ctx context.Context) {
 	}
 }
 
-// Stop asks every server to stop, waiting for each -- up to its own
-// StopGrace plus a margin for the kill to land -- and returns once all of
-// them have. Calling it more than once is safe; the second call finds
-// everything already stopped or down and returns at once.
+// Stop closes this supervisor for good: nothing it owns is running when it
+// returns, and nothing can be started through it afterwards. EnsureReady --
+// including the one a WarmUp goroutine is still on its way into -- fails from
+// here on rather than spawning a child with nobody left to stop it.
+//
+// Every process is waited for, but none of them indefinitely: each gets its
+// own StopGrace twice over plus the margin os/exec needs to stop waiting on a
+// grandchild that escaped the process group, and one that is still standing
+// after that is marked down rather than waited on. Calling Stop more than
+// once is safe; the second call finds everything already stopped or down and
+// returns at once.
 func (s *Supervisor) Stop() {
 	s.stopOnce.Do(func() { close(s.stopped) })
+	// Latch first, on every process, before waiting on anything. A shutdown
+	// that stopped each server as it walked the list left the ones it had not
+	// reached yet startable, and a warm-up goroutine landing in that window
+	// spawned a child after Stop had already passed it by.
+	for _, id := range s.order {
+		s.procs[id].shutdown()
+	}
+	s.warming.Wait()
 	var wg sync.WaitGroup
 	for _, id := range s.order {
 		p := s.procs[id]

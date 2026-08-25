@@ -319,7 +319,7 @@ func (s *Store) Complete(ctx context.Context, id string, at time.Time,
 // and it errs toward leaving a row open: an open row is visible and can be
 // swept later, while a wrongly closed one is a lie already written down.
 func (s *Store) SweepOrphans(ctx context.Context, at time.Time) (int, error) {
-	rows, err := s.List(ctx, Filter{OpenOnly: true, Limit: sweepCeiling})
+	rows, err := s.List(ctx, Filter{OpenOnly: true, Oldest: true, Limit: sweepCeiling})
 	if err != nil {
 		return 0, err
 	}
@@ -350,6 +350,13 @@ func (s *Store) SweepOrphans(ctx context.Context, at time.Time) (int, error) {
 // sweepCeiling bounds one sweep. A machine that somehow accumulated more open
 // rows than this closes the oldest batch now and the rest on the next start,
 // which is better than one start doing unbounded work before it answers.
+//
+// Which end the ceiling cuts is the whole point, and the sweep asks for the
+// oldest first to get it. A listing is newest-first for every reader that is a
+// person, so the sweep inherited that order and the ceiling took the newest
+// rows -- meaning the oldest orphans, the ones whose writer has most certainly
+// been gone the longest, were the ones left open, start after start, while
+// each start re-examined rows from runs that had barely finished.
 const sweepCeiling = 10_000
 
 // Filter narrows a listing. Every field is optional and they compose.
@@ -368,6 +375,10 @@ type Filter struct {
 	Reviews string
 	// Limit caps the result, newest first. Zero means DefaultLimit.
 	Limit int
+	// Oldest reverses the order, so a Limit that has to cut something cuts
+	// the newest rows instead of the oldest. Only the sweep asks for this:
+	// every reader wants the newest first.
+	Oldest bool
 }
 
 // DefaultLimit is how many rows a listing returns when nobody says.
@@ -415,7 +426,11 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Row, error) {
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY started_at DESC, id DESC LIMIT ?"
+	if f.Oldest {
+		query += " ORDER BY started_at ASC, id ASC LIMIT ?"
+	} else {
+		query += " ORDER BY started_at DESC, id DESC LIMIT ?"
+	}
 	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)

@@ -303,3 +303,137 @@ path = "/tmp"
 languages = ["go"]
 scale = "small"
 `
+
+// A request the scanner cannot fit is refused in words, not by hanging up.
+//
+// The loop reads with a bufio.Scanner capped at one mebibyte per line, and it
+// used to leave the loop on Scan returning false without ever asking why. A
+// client that sent a larger request then saw exactly what a clean hang-up looks
+// like -- the connection closed, nothing written back -- so the one fact that
+// would let it fix the call, that the request was too big, was the fact it
+// never got. The size is the client's to control; being told is the service's
+// job.
+func TestARequestOverTheLineLimitIsRefusedInWords(t *testing.T) {
+	atenea := buildService(t, socketSettings)
+	stop := serve(t, atenea)
+	defer stop()
+
+	// Valid JSON all the way through, so nothing but the size can be the
+	// reason it is refused.
+	huge := `{"jsonrpc":"2.0","id":9,"method":"atenea/status","params":{"pad":"` +
+		strings.Repeat("p", 2<<20) + `"}}`
+	answer := askLong(t, huge)
+	if answer == "" {
+		t.Fatal("an oversized request was answered with silence: a dropped socket is not a reason")
+	}
+	if !strings.Contains(answer, "-32600") {
+		t.Errorf("answer = %s, want an invalid-request code", answer)
+	}
+	if !strings.Contains(answer, "1 MiB") {
+		t.Errorf("answer = %s, want it to name the limit the request went over", answer)
+	}
+}
+
+// askLong is ask for a request the service may refuse before it has finished
+// arriving. The read runs alongside the write on purpose: the service stops
+// reading at the ceiling and closes the connection right after answering, so a
+// client that wrote the whole request before looking would lose the answer to
+// its own broken pipe.
+func askLong(t *testing.T, line string) string {
+	t.Helper()
+	conn, err := net.Dial("unix", core.SocketPath())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatalf("deadline: %v", err)
+	}
+	answered := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 8192)
+		n, _ := conn.Read(buf)
+		answered <- strings.TrimSpace(string(buf[:n]))
+	}()
+	// The write is allowed to fail: the service hanging up mid-request is one
+	// of the shapes this is measuring, and the answer is what the test wants.
+	_, _ = conn.Write([]byte(line + "\n"))
+	select {
+	case got := <-answered:
+		return got
+	case <-time.After(10 * time.Second):
+		t.Fatal("nothing came back")
+		return ""
+	}
+}
+
+// The shutdown margin has to cover the connection handlers too.
+//
+// Shutdown promises a bounded margin and explicitly refuses to wait forever,
+// but the wait for connection handlers used to sit inside closeSocket, ahead of
+// the grace timer and with no limit of its own. A client that connects and then
+// says nothing leaves its handler parked in Scan, which is neither a bug nor
+// rare -- an editor holding a session open does exactly this -- and the whole
+// stop hung on it, before the timer that was supposed to bound it had started.
+// What is being pinned here is not that the stop is fast; it is that it ends.
+func TestAConnectionThatNeverEndsDoesNotHangTheStop(t *testing.T) {
+	atenea := buildService(t, socketSettings)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ran := make(chan error, 1)
+	go func() { ran <- atenea.Run(ctx) }()
+	waitForDoor(t, ran)
+
+	conn, err := net.Dial("unix", core.SocketPath())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	// One round trip, so the handler is certainly registered and certainly
+	// back in Scan by the time the stop begins.
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("deadline: %v", err)
+	}
+	if _, err := conn.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"atenea/status"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := conn.Read(make([]byte, 8192)); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// And now it says nothing more, holding the connection open.
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- atenea.Shutdown() }()
+	select {
+	case err := <-stopped:
+		// The grace is two seconds in these settings and the handler is still
+		// parked, so the honest answer is that the margin ran out.
+		if contract.KindOf(err) != contract.FailureTimeout {
+			t.Errorf("Shutdown = %v (%v), want a timeout naming the margin", err, contract.KindOf(err))
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Shutdown never returned: the wait for connection handlers is outside the margin")
+	}
+	cancel()
+	<-ran
+}
+
+// waitForDoor blocks until the service has opened its socket, failing with
+// Run's own error if it stopped before it got there -- which is the failure
+// the polling loop would otherwise hide behind a timeout about something else.
+func waitForDoor(t *testing.T, ran <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-ran:
+			t.Fatalf("the service stopped before it opened its door: %v", err)
+		default:
+		}
+		if _, err := os.Lstat(core.SocketPath()); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the service never opened its door")
+}

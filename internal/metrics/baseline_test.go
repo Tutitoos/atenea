@@ -276,3 +276,32 @@ func TestRefusalsNeverAddUpToAMeasurement(t *testing.T) {
 		t.Errorf("refusals counted as measurements: %v", got)
 	}
 }
+
+// The same rule, after the hour it happened in has been folded away.
+//
+// A fold keys the bucket by the hour, so two versions used inside one hour
+// became two rollup rows with the same instant in them -- the cost query read
+// last_seen out of `bucket` -- and the tie fell through to `tool_version
+// DESC`. That is a string comparison, the one thing the version column is
+// documented as unable to support: it ranked 9.9.0 above 10.0.0 and answered
+// with the replaced binary's numbers for as long as the rollup lived.
+func TestTheRunningVersionSurvivesTheFold(t *testing.T) {
+	s := store(t, Options{})
+	// Two hours back, so the hour is closed and Compact folds it whole.
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	s.Record(call(hour.Add(10*time.Minute), "serena.search", "9.9.0",
+		2*time.Second, 900, true))
+	s.Record(call(hour.Add(20*time.Minute), "serena.search", "10.0.0",
+		50*time.Millisecond, 10, true))
+	if err := s.Compact(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	serena := costsOf(t, s, "code.search", "current")["serena.search"]
+	if serena.ToolVersion != "10.0.0" {
+		t.Errorf("version = %q, want 10.0.0: the newest attempt decides, not the higher string", serena.ToolVersion)
+	}
+	if serena.Spent.Duration != 50*time.Millisecond {
+		t.Errorf("mean = %v, want 50ms: the replaced binary's numbers came back out of the rollup", serena.Spent.Duration)
+	}
+}

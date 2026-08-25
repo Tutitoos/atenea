@@ -137,8 +137,39 @@ func TestDarwinInstallAndUninstallSurfaceLaunchctlFailures(t *testing.T) {
 	if err := os.WriteFile(service.Unit, []byte("plist"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// This used to assert the opposite -- that Uninstall removed the plist and
+	// returned nil however bootout had failed -- which is the defect, not the
+	// contract: a bootout that fails for any reason other than "no such job"
+	// leaves the agent running, and deleting its plist then reports a stop
+	// that did not happen and takes away the only handle left to stop it by.
+	if err := service.Uninstall(); contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("Uninstall error = %v, want the launchctl failure it hit", err)
+	}
+	if _, err := os.Stat(service.Unit); err != nil {
+		t.Fatalf("the plist of a job that is still loaded was removed anyway: %v", err)
+	}
+}
+
+// The one bootout refusal an uninstall may ignore: there was no such job
+// loaded, so removing the plist is all that was left to do. Without this the
+// ordinary second `atenea service uninstall` -- or the first one after a
+// logout -- would fail on a machine where nothing is wrong.
+func TestDarwinUninstallStillFinishesWhenNoJobWasLoaded(t *testing.T) {
+	launcher := filepath.Join(t.TempDir(), "launchctl")
+	script := "#!/bin/sh\necho 'Could not find specified service' >&2\nexit 3\n"
+	if err := os.WriteFile(launcher, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(launcher))
+	service := Service{Name: "atenea-test", Unit: filepath.Join(t.TempDir(), "atenea.plist"), Exec: "/tmp/atenea"}
+	if err := os.WriteFile(service.Unit, []byte("plist"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.Uninstall(); err != nil {
-		t.Fatalf("Uninstall should remove an installed plist after launchctl failure: %v", err)
+		t.Fatalf("Uninstall of an installed but unloaded agent: %v", err)
+	}
+	if _, err := os.Stat(service.Unit); !os.IsNotExist(err) {
+		t.Fatalf("the plist of an unloaded agent survived uninstall: %v", err)
 	}
 }
 

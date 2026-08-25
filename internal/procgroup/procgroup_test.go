@@ -3,9 +3,11 @@
 package procgroup
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func TestContainStopsAContextChildAndSetsAWaitDeadline(t *testing.T) {
@@ -25,6 +27,32 @@ func TestContainStopsAContextChildAndSetsAWaitDeadline(t *testing.T) {
 	cancel()
 	if err := cmd.Wait(); err == nil {
 		t.Fatal("canceled child exited successfully")
+	}
+}
+
+// Isolate's caller drives the whole lifecycle itself, so nothing cancels this
+// Cmd -- but Wait still hangs on the output pipes, and a child that leaves a
+// helper behind keeps the write end open after it is gone. Here the shell
+// exits immediately and the sleep it started inherits stderr, which is a
+// bytes.Buffer rather than a file, so os/exec copies it through a pipe and
+// Wait cannot see EOF for as long as the helper lives. Without WaitDelay that
+// is five seconds for this test and the lifetime of a leaked language server
+// in internal/supervisor, where it blocked the whole shutdown.
+func TestIsolateStopsWaitingOnPipesAHelperLeftOpen(t *testing.T) {
+	var output bytes.Buffer
+	cmd := exec.Command("sh", "-c", "sleep 5 & exit 0")
+	cmd.Stderr = &output
+	Isolate(cmd)
+	if cmd.WaitDelay != Grace {
+		t.Fatalf("WaitDelay = %s, want %s", cmd.WaitDelay, Grace)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_ = cmd.Wait()
+	if took := time.Since(start); took > Grace+2*time.Second {
+		t.Fatalf("Wait took %s: it is still waiting on a pipe the helper holds", took)
 	}
 }
 

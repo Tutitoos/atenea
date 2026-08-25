@@ -33,6 +33,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
+	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/statusline"
@@ -98,9 +99,11 @@ Commands:
   config show            Print the settings that apply here, and from where
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
                          moment ago; dead ones are named and left out
-  statusline install     Put Atenea's status line on opencode's screen;
+  statusline install [WIDGET]
+                         Put Atenea's status line on opencode's screen;
                          'uninstall' takes it off, 'status' says whether the
-                         installed copy is the one this binary ships
+                         installed copy is the one this binary ships, and
+                         'widgets' lists the ones this binary carries
   version                Print the product and contract versions
 
 Global flags:
@@ -250,14 +253,25 @@ without going through a client at all.
 Install atenea as a background service that starts with the system;
 'uninstall' undoes it, 'status' says where it stands.
 `,
-	"statusline": `Usage: atenea statusline install
-       atenea statusline uninstall
-       atenea statusline status
+	"statusline": `Usage: atenea statusline install|uninstall|status [WIDGET]
+       atenea statusline widgets
 
 Put Atenea's status line on opencode's screen: one always-visible line
 reporting the traffic light, the version actually running, and unread
 incidents. It reads the service's own socket, so it needs no key and no
 network, and it says "apagado" rather than warning when nothing is running.
+
+More than one widget ships, and each verb takes the name of one:
+
+  atenea             the traffic light, the running version and incidents
+  session-share      which model did what share of this session's tokens
+  limits             how much of each provider's rate-limit window is used
+
+'widgets' lists them with their summaries. A verb with no name means the
+default widget for install and uninstall -- 'atenea' -- and every installed
+widget for status, because the question status answers is what is on the
+screen, and answering it for one of three would be a partial truth printed
+as a whole one.
 
 The plugin source travels inside this binary. 'status' compares what is
 installed against what this binary carries, because a line reporting a
@@ -311,6 +325,9 @@ Flags:
   --traces PATH         trace database (default: the one atenea traces reads)
   --quiet               print the verdict line only
   --review TYPE         audit the answer with this agent type
+  --confirm             approve write or external effects; required, and
+                        asked again on the terminal, for a type that
+                        declares either -- without it the run is refused
 
 An agent that exits zero without writing a report has not answered: it is
 recorded as incomplete, not as success.
@@ -440,7 +457,7 @@ rolls that state back and retains the current target as TARGET.atenea-current.
 Discard is destructive and requires --confirm.
 `,
 	"floor": `Usage: atenea floor
-       atenea floor measure --repo ID --agent TYPE
+       atenea floor measure --repo ID --agent TYPE [--dry-run] [--confirm]
 
 What starting a single turn already costs on a repository, before any file
 is read: the tokens the CLI spends writing its system prompt and tool
@@ -514,6 +531,10 @@ Flags (measure):
   --repo ID     repository id or path to measure (required)
   --agent TYPE  which declared agent type's tool surface to measure
                 (required -- it spends a turn, so there is no default)
+  --dry-run     resolve the repository, the agent type and the model, print
+                what the turn would be billed, and spend nothing
+  --confirm     ask at the terminal before spending it, quoting the estimate;
+                refused outright when stdin is not a terminal
 `,
 	"config": `Usage: atenea config init [--force]
        atenea config path
@@ -575,18 +596,54 @@ still checking and reporting Atenea's declared servers.
 `,
 }
 
+// passesArgumentsThrough names the commands whose trailing arguments belong to
+// another program. Their arguments are not Atenea's to read, and the help
+// interceptor below has to stop before it reaches them.
+var passesArgumentsThrough = map[string]bool{"wrap": true}
+
 // helpRequested reports whether -h or --help appears anywhere in args. Most
 // subcommands read a positional argument before their own flags, so relying
 // on flag.FlagSet's own -h/--help handling would only catch part of
 // "atenea <command> --help"; scanning the whole slice catches all of it,
 // regardless of where the flag landed.
-func helpRequested(args []string) bool {
+//
+// The scan stops at the first positional argument of a pass-through command,
+// because everything after it is handed to the client verbatim: `atenea wrap
+// claude --help` is a request for claude's help, and answering it with
+// Atenea's left no way to ask a wrapped client anything at all -- the one
+// thing wrap promises is that the client sees its own arguments. Help about
+// the wrapper is still `atenea wrap --help`, with the flag ahead of the
+// client name, which is where the argument list is still Atenea's.
+func helpRequested(command string, args []string) bool {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
 			return true
 		}
+		if passesArgumentsThrough[command] && !strings.HasPrefix(arg, "-") {
+			return false
+		}
 	}
 	return false
+}
+
+// noArguments refuses what a command was never going to read.
+//
+// Four commands take nothing at all, and dropping their extra words in silence
+// costs more here than elsewhere because of --config: it is a global flag,
+// parsed only ahead of the command name, so `atenea status --config other.toml`
+// reads the default settings file and reports confidently on a machine the
+// operator did not ask about. Every other command already refuses its leftovers
+// through flags.NArg().
+func noArguments(command string, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if name := strings.TrimLeft(args[0], "-"); name == "config" || strings.HasPrefix(name, "config=") {
+		return contract.Fail(contract.FailureInvalidInput,
+			"--config is a global flag and belongs before the command: atenea --config PATH %s", command)
+	}
+	return contract.Fail(contract.FailureInvalidInput,
+		"%s takes no arguments: %q", command, args[0])
 }
 
 func main() {
@@ -663,16 +720,25 @@ func run(args []string, out io.Writer) error {
 	}
 
 	command, commandArgs := rest[0], rest[1:]
-	if help, ok := commandHelp[command]; ok && helpRequested(commandArgs) {
+	if help, ok := commandHelp[command]; ok && helpRequested(command, commandArgs) {
 		fmt.Fprint(out, help)
 		return nil
 	}
 	switch command {
 	case "version":
+		if err := noArguments("version", commandArgs); err != nil {
+			return err
+		}
 		return cmdVersion(out)
 	case "status":
+		if err := noArguments("status", commandArgs); err != nil {
+			return err
+		}
 		return cmdStatus(settingsPath, out)
 	case "catalog":
+		if err := noArguments("catalog", commandArgs); err != nil {
+			return err
+		}
 		return cmdCatalog(settingsPath, out)
 	case "dashboard":
 		return cmdDashboard(settingsPath, commandArgs, out)
@@ -691,6 +757,9 @@ func run(args []string, out io.Writer) error {
 	case "resume":
 		return cmdResume(settingsPath, commandArgs, out)
 	case "run":
+		if err := noArguments("run", commandArgs); err != nil {
+			return err
+		}
 		return cmdRun(settingsPath, out)
 	case "mcp":
 		if len(commandArgs) == 1 && commandArgs[0] == "--check" {
@@ -1319,6 +1388,52 @@ func cmdMetrics(settingsPath string, args []string, out io.Writer) error {
 	return printMetrics(atenea, filter, out)
 }
 
+// claimStateUnderneath takes the upkeep claim when an operation is about to
+// swap the directory a running Atenea is maintaining.
+//
+// core.claimUpkeep exists so that exactly one process sweeps receipts, ticks
+// the clock and drives the flush, the roll-up and the backup. It guards a
+// service against a second service; it does nothing about a command that
+// renames the whole state root out from under the one holding it. That is what
+// `backup restore --replace` and `backup promote` do, and the running service
+// would go on writing receipts into a directory that has been moved aside --
+// into the copy retained for rollback, where the next start does not look.
+//
+// So the same claim is taken here, on the same file, and a held one is a
+// refusal naming the pid: the operator's answer is to stop the service, which
+// they can only do if they are told who it is.
+//
+// Only when the destination is the state root, or a directory containing it.
+// Restoring a snapshot into a scratch directory to look inside it touches
+// nothing the service owns, and taking a lock for that would refuse a
+// harmless read on behalf of a process it cannot disturb.
+func claimStateUnderneath(target string) (func(), error) {
+	state := platform.StateDir()
+	absolute, err := filepath.Abs(target)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"backup: cannot resolve %s: %v", target, err)
+	}
+	if absoluteState, err := filepath.Abs(state); err == nil {
+		state = absoluteState
+	}
+	if state != absolute && !strings.HasPrefix(state, absolute+string(filepath.Separator)) {
+		return func() {}, nil
+	}
+	path := filepath.Join(state, "upkeep.lock")
+	release, err := pidlock.Claim(path)
+	switch {
+	case errors.Is(err, pidlock.ErrHeld):
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"another atenea has the upkeep of %s (pid %d, %s): stop it before swapping the state it is writing into",
+			state, pidlock.Holder(path), path)
+	case err != nil:
+		return nil, contract.Fail(contract.FailurePermissionDenied,
+			"claiming the upkeep at %s: %v", path, err)
+	}
+	return release, nil
+}
+
 // cmdBackup lists or restores state without starting the service or any
 // provider. In-place replacement is explicitly opt-in and retains the old
 // directory beside the new one for rollback.
@@ -1367,6 +1482,11 @@ func cmdBackup(settingsPath string, args []string, out io.Writer) error {
 				"backup restore accepts only --replace after TARGET")
 		}
 		if replace {
+			release, err := claimStateUnderneath(args[2])
+			if err != nil {
+				return err
+			}
+			defer release()
 			previous, err := store.RestoreInPlace(context.Background(), args[1], args[2])
 			if err != nil {
 				return err
@@ -1384,6 +1504,11 @@ func cmdBackup(settingsPath string, args []string, out io.Writer) error {
 			return contract.Fail(contract.FailureInvalidInput,
 				"backup promote needs TARGET")
 		}
+		release, err := claimStateUnderneath(args[1])
+		if err != nil {
+			return err
+		}
+		defer release()
 		current, err := store.PromotePrevious(context.Background(), args[1])
 		if err != nil {
 			return err
@@ -1595,8 +1720,7 @@ func cmdDetect(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 	if jsonOut {
-		printDetectionJSON(out, detection, by)
-		return nil
+		return printDetectionJSON(out, detection, by)
 	}
 	printServerProbes(out, detection.Servers, by)
 	printIndexReports(out, detection.Indexes)
@@ -1845,7 +1969,7 @@ func printIntent(out io.Writer, report clientconfig.Report) {
 			state = ", off in the project's settings"
 		}
 		fmt.Fprintf(out, "  %-10s %s (%s%s)\n",
-			match.Answer, match.Request.Name, match.Request.Transport, state)
+			match.Answer, fromRepository(match.Request.Name), match.Request.Transport, state)
 		if len(match.Sources) > 1 {
 			// Two clients asking for one backend. Said out loud, because the
 			// row above collapsed them, and a count that quietly differs from
@@ -1875,7 +1999,7 @@ func printIntent(out io.Writer, report clientconfig.Report) {
 			if len(match.Sources) > 1 {
 				suffix = fmt.Sprintf(" (in %s)", strings.Join(match.Sources, " and "))
 			}
-			fmt.Fprintf(out, "  %s%s\n", match.Request.Name, suffix)
+			fmt.Fprintf(out, "  %s%s\n", fromRepository(match.Request.Name), suffix)
 		}
 	}
 
@@ -1890,8 +2014,22 @@ func printIntent(out io.Writer, report clientconfig.Report) {
 	}
 	fmt.Fprintf(out, "\n%d unmatched: this project asks for them and nothing here provides them\n", len(unmatched))
 	for _, match := range unmatched {
-		fmt.Fprintf(out, "  %s (%s)\n", match.Request.Name, strings.Join(match.Sources, ", "))
+		fmt.Fprintf(out, "  %s (%s)\n", fromRepository(match.Request.Name), strings.Join(match.Sources, ", "))
 	}
+}
+
+// fromRepository prepares a string that arrived with a git clone for a
+// terminal.
+//
+// clientconfig's own package doc says a repository is untrusted input, and it
+// acts on that by dropping the command, arguments, environment and URL of
+// every declaration it reads. A Request.Name does not get the same treatment:
+// it is the raw key of the mcpServers object, whatever the file put there,
+// including escapes that redraw the screen and newlines that forge extra rows
+// in this very report. This is the print edge, so this is where it stops
+// being a terminal instruction and becomes one bounded line of text.
+func fromRepository(value string) string {
+	return clip(oneLine(value))
 }
 
 func printIntentJSON(out io.Writer, report clientconfig.Report) error {
@@ -2087,7 +2225,12 @@ func cmdTask(settingsPath string, args []string, out io.Writer) error {
 	})
 	if result != nil {
 		if jsonOut {
-			printResultJSON(out, result)
+			// The write failure wins over the verdict. A caller reading this
+			// stream got nothing, so reporting the run's own outcome to it
+			// would be answering a question it never heard asked.
+			if err := printResultJSON(out, result); err != nil {
+				return err
+			}
 		} else {
 			printResult(out, result, trace)
 		}
@@ -2218,7 +2361,9 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	})
 	if result != nil {
 		if jsonOut {
-			printResultJSON(out, result)
+			if err := printResultJSON(out, result); err != nil {
+				return err
+			}
 		} else {
 			printResult(out, result, trace)
 			printAnswer(out, result, trace)
@@ -2288,7 +2433,9 @@ func cmdResume(settingsPath string, args []string, out io.Writer) error {
 	result, runErr := atenea.Resume(ctx, runID, orchestrator.ResumeOptions{BudgetUSD: budget, Effects: effects})
 	if result != nil {
 		if jsonOut {
-			printResultJSON(out, result)
+			if err := printResultJSON(out, result); err != nil {
+				return err
+			}
 		} else {
 			printResult(out, result, trace)
 		}
@@ -2924,14 +3071,16 @@ func runningBinaryService(stopGrace time.Duration) (platform.Service, error) {
 // those is true -- the same three verbs as `service`, because it is the same kind
 // of job: writing something outside Atenea that reports on something.
 //
-// Two widgets ship. `atenea` is the default because it is the one this repository
-// is about; `session-share` reads only the client's own store and is asked for by
-// name, since installing it as a side effect of wanting the traffic light would
-// put a reading on the screen nobody requested.
+// Three widgets ship -- statusline.Widgets() is the list, and `atenea statusline
+// widgets` prints it. `atenea` is the default because it is the one this
+// repository is about; `session-share` and `limits` read only what the client or
+// the provider already holds and are asked for by name, since installing them as
+// a side effect of wanting the traffic light would put readings on the screen
+// nobody requested.
 func cmdStatusLine(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return contract.Fail(contract.FailureInvalidInput,
-			"statusline needs a subcommand: install, uninstall or status")
+			"statusline needs a subcommand: install, uninstall, status or widgets")
 	}
 
 	verb, rest := args[0], args[1:]
@@ -2943,8 +3092,8 @@ func cmdStatusLine(args []string, out io.Writer) error {
 	}
 
 	// `status` with no name reports every widget: the question it answers is what
-	// is on the screen, and answering it for one of two would be a partial truth
-	// printed as a whole one.
+	// is on the screen, and answering it for one of three would be a partial
+	// truth printed as a whole one.
 	if verb == "status" && len(rest) == 0 {
 		for i, line := range statusline.All() {
 			if i > 0 {
@@ -3422,16 +3571,44 @@ func yesNo(value bool) string {
 }
 
 func oneLine(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+	return printable(strings.Join(strings.Fields(value), " "))
+}
+
+// printable replaces every C0 control character and DEL with a space.
+//
+// The text that reaches this screen is stdout and stderr from external CLIs
+// (Failure.Raw, Health.Raw, FunnelDrop.Raw) and tool descriptions relayed by
+// third-party MCP servers -- none of it written by Atenea, all of it printed
+// to a terminal that executes what it is sent. strings.Fields does not catch
+// it: it splits on Unicode space, and ESC (0x1b) is not one, so "\x1b[2J"
+// survives Fields intact and clears the operator's screen. A provider whose
+// error message can erase the report about it is a provider that decides what
+// its own incident looks like.
+//
+// A space, not a drop: a run of escapes collapsing to nothing would leave the
+// remaining words glued together, which reads as a different message rather
+// than as a censored one. Tab and newline are already gone by the time this
+// runs, because Fields split on them.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // clip keeps a status line readable when the provider text behind it runs
 // long. The full text is never lost -- it is on the receipt, and --trace
 // prints it whole -- this only keeps the short screen short.
 func clip(s string) string {
+	s = printable(s)
 	const limit = 160
 	if len(s) > limit {
-		return s[:limit] + "..."
+		// limit is a byte budget, so the cut can fall inside a multi-byte
+		// rune; ToValidUTF8 drops exactly the incomplete tail it produces,
+		// the same guard truncate carries for the same reason.
+		return strings.ToValidUTF8(s[:limit], "") + "..."
 	}
 	return s
 }

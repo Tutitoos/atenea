@@ -371,14 +371,57 @@ func targets(root string, scope []string, repositoryID string) ([]string, error)
 		if filepath.IsAbs(entry) {
 			joined = filepath.Clean(entry)
 		}
-		relative, err := filepath.Rel(root, joined)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		if _, ok := contained(root, joined); !ok {
 			return nil, contract.Fail(contract.FailurePermissionDenied,
 				"scope %q leaves repository %s", entry, repositoryID)
 		}
 		out = append(out, joined)
 	}
 	return out, nil
+}
+
+// contained reports target's repository-relative path, and false when target
+// does not sit inside root.
+//
+// The containment is decided twice, lexically and then again on the path with
+// its symlinks resolved. Lexical alone was what this adapter used, and it
+// cannot see the case it exists to stop: "vendor/secret.go" climbs out of
+// nothing at all, and if vendor is a link to the directory above then omp was
+// pointed outside the repository and its hits were reported as if they were
+// inside it. The kivgraph adapter has always decided the same question this
+// way, with the same reasoning.
+//
+// A path that does not exist keeps the lexical verdict: a scope naming a
+// directory that is not there is omp's answer to give, not this function's,
+// and a hit omp just found may sit in a file being rewritten underneath us.
+func contained(root, target string) (string, bool) {
+	rootReal := root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		rootReal = resolved
+	}
+	relative, ok := lexicallyInside(root, target)
+	if !ok {
+		// The root as given and the root with its links resolved name the same
+		// directory, and a caller may hold either: on macOS every temporary
+		// directory is reached through /var, a link to /private/var.
+		if relative, ok = lexicallyInside(rootReal, target); !ok {
+			return "", false
+		}
+	}
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		if _, still := lexicallyInside(rootReal, resolved); !still {
+			return "", false
+		}
+	}
+	return relative, true
+}
+
+func lexicallyInside(root, target string) (string, bool) {
+	relative, err := filepath.Rel(root, filepath.Clean(target))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(relative), true
 }
 
 // searchOne runs omp once and turns what came back into records shaped like
@@ -554,10 +597,22 @@ type report struct {
 }
 
 // bodyLine reads one rendered line. omp prints "path:12: text" for a match and
-// "path-12- text" for context, which turns ambiguous the moment a path holds a
-// colon or a dash followed by digits. The leftmost separator pair that agrees
-// with itself and is followed by a space wins, so a path would have to contain
-// a literal ":12: " to fool it.
+// "path-12- text" for context, and the two are told apart by which separator
+// pair the line carries.
+//
+// Both are ambiguous, equally: the rule is the LEFTMOST pair that agrees with
+// itself and is followed by a space, so a path containing "-7- " fools it
+// exactly as readily as one containing ":7: ". An earlier version of this
+// comment named only the colon, which read as a guarantee about dashes that
+// nothing here provides.
+//
+// It is left ambiguous on purpose. Requiring the path not to contain the
+// separator would reject every ordinary dashed filename on a context line, and
+// preferring the colon pair when both match would misread a context line whose
+// TEXT quotes a location -- "a.go-12- see b.go:9: here" is a real shape in a
+// repository that talks about code. The leftmost pair is wrong less often than
+// either, and readLine's own checks (the two separators agree, the path is not
+// empty, the number is positive) are what stand behind it.
 var bodyLine = regexp.MustCompile(`^(.*?)([-:])(\d+)([-:]) (.*)$`)
 
 const (
@@ -644,11 +699,7 @@ func relativeTo(root, target, name string) (string, bool) {
 	if !filepath.IsAbs(name) {
 		name = filepath.Join(target, name)
 	}
-	relative, err := filepath.Rel(root, filepath.Clean(name))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return filepath.ToSlash(relative), true
+	return contained(root, name)
 }
 
 // isSensitive matches the patterns against both the bare file name and the

@@ -46,6 +46,20 @@ type stub struct {
 	dynamic map[string]func(args map[string]any) (text string, isError bool)
 	// noSession drops the session header, which is how a broken proxy looks.
 	noSession bool
+	// initializes counts the handshakes. One connection may only ever open
+	// one session, and it takes concurrency to find out whether that holds.
+	initializes int
+	// slowHandshake delays the initialize reply, which is what gives a
+	// fan-out of concurrent calls the chance to each start one of their own.
+	slowHandshake time.Duration
+	// extraEvent, when set, is written as its own SSE event before the reply
+	// to the handshake -- a progress notification, which a streamable HTTP
+	// server may legitimately interleave into the same response body.
+	extraEvent string
+	// failTools names tools whose call fails at the TRANSPORT, which is a
+	// different thing from a tool that ran and refused: only this one takes
+	// the session down with it.
+	failTools map[string]bool
 }
 
 type stubCall struct {
@@ -73,12 +87,22 @@ func (s *stub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Method {
 	case "initialize":
+		s.mu.Lock()
+		s.initializes++
+		delay, extra := s.slowHandshake, s.extraEvent
+		s.mu.Unlock()
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		if !s.noSession {
 			w.Header().Set("Mcp-Session-Id", "test-session")
 		}
 		// SSE framing, because that is what the live server sends and the
 		// adapter has to survive it.
 		w.Header().Set("Content-Type", "text/event-stream")
+		if extra != "" {
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", extra)
+		}
 		fmt.Fprintf(w, "event: message\ndata: %s\n\n",
 			fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2024-11-05"}}`, req.ID))
 	case "notifications/initialized":
@@ -91,6 +115,11 @@ func (s *stub) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(req.Params, &params)
 		s.mu.Lock()
 		s.calls = append(s.calls, stubCall{Tool: params.Name, Args: params.Args})
+		if s.failTools[params.Name] {
+			s.mu.Unlock()
+			http.Error(w, "the transport broke", http.StatusInternalServerError)
+			return
+		}
 		var text string
 		var isError bool
 		if fn, ok := s.dynamic[params.Name]; ok {
@@ -191,7 +220,14 @@ func listCapability(id string) contract.Capability {
 			{Name: "column", Type: contract.TypeInt, Required: true},
 			{Name: "name", Type: contract.TypeString},
 			{Name: "scope", Type: contract.TypeStringList},
-			{Name: "snippet", Type: contract.TypeBool},
+			// include_snippet and snippet_lines, spelled as the shipped
+			// catalogue spells them. The double used to declare a single
+			// "snippet" bool, a name no capability has ever had, so every
+			// payload exercising the real two was rejected before reaching the
+			// adapter -- which is how the reference path came to ignore both
+			// without a test noticing.
+			{Name: "include_snippet", Type: contract.TypeBool},
+			{Name: "snippet_lines", Type: contract.TypeInt},
 		},
 		Outputs: []contract.Field{{
 			Name: "locations", Type: contract.TypeRecordList, Required: true,
@@ -556,7 +592,7 @@ func TestAReferenceIsTheReferringLineNotItsFunction(t *testing.T) {
 
 	outcome, err := run(t, runner, CapabilityReferences, repo(t, map[string]string{
 		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
-	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6})
+	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6, "include_snippet": true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -572,6 +608,58 @@ func TestAReferenceIsTheReferringLineNotItsFunction(t *testing.T) {
 	}
 	if !strings.Contains(got["snippet"].(string), "area() * 2") {
 		t.Errorf("snippet = %v, want the referring line", got["snippet"])
+	}
+}
+
+// symbol.references declares include_snippet and snippet_lines, and the
+// reference path read neither: parseReferences always fills the snippet and
+// shape emits the key whenever it is non-empty, so every caller got source
+// back at whatever length Serena had chosen to render.
+func TestReferencesReturnCodeOnlyWhenAskedAndOnlyAsMuchAsAsked(t *testing.T) {
+	// No ">" marker in the rendered context, so parseReferences falls back to
+	// the whole block. That is the shape with more than one line in it, which
+	// is what makes a bound on the number of lines observable at all.
+	const unmarked = `{"main.go":{"Function":[{"name_path":"twice","body_location":{"start_line":6},` +
+		`"content_around_reference":"func twice() int {\n\treturn area() * 2\n}"}]}}`
+	source := map[string]string{"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n"}
+
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    string
+	}{
+		{
+			name:    "no include_snippet means no code at all",
+			payload: map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6},
+			want:    "",
+		},
+		{
+			name: "snippet_lines bounds how much code comes back",
+			payload: map[string]any{
+				"file": "pkg/shapes.go", "line": 3, "column": 6,
+				"include_snippet": true, "snippet_lines": 2,
+			},
+			want: "func twice() int {\n\treturn area() * 2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, endpoint := newStub(t)
+			s.answers["find_declaration"] = declarationAnswer
+			s.answers["find_referencing_symbols"] = unmarked
+
+			outcome, err := run(t, newRunner(t, endpoint), CapabilityReferences, repo(t, source), tc.payload)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			locations, _ := outcome.Result["locations"].([]any)
+			if len(locations) != 1 {
+				t.Fatalf("locations = %#v, want one", outcome.Result["locations"])
+			}
+			got, _ := locations[0].(map[string]any)["snippet"].(string)
+			if got != tc.want {
+				t.Errorf("snippet = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1571,5 +1659,167 @@ func TestColumnOfEmptyNameNeverMatches(t *testing.T) {
 func TestColumnOfNoMatchReturnsFalse(t *testing.T) {
 	if _, ok := columnOf("package pkg", "Width"); ok {
 		t.Fatal("columnOf matched a name absent from the line, want false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The wire
+// ---------------------------------------------------------------------------
+
+// One connection opens one session, however many callers arrive at once.
+//
+// symbol.overview dispatches up to sixteen find_symbol calls concurrently
+// inside a single hold of c.mu, and every one of them begins by asking whether
+// a session exists. Written as "read the field, release the lock, then
+// initialize", that check decides nothing: several callers each conclude there
+// is no session and each run their own initialize, every one but the last
+// stamping a session the server then abandons. c.mu does not exclude them from
+// each other -- that is what it means for them to be siblings.
+//
+// Driven at handshake directly rather than through a commission, because Run
+// happens to activate the project first today and that one sequential call
+// warms the session before the fan-out starts. The invariant is not "the
+// current call order hides this"; it is that concurrent callers open one
+// session, which is what a session-clearing error mid-fan-out relies on.
+func TestOneConnectionOpensExactlyOneSessionUnderConcurrentCallers(t *testing.T) {
+	s, endpoint := newStub(t)
+	// Slow enough that a second goroutine reaching the check while the first
+	// is still in flight is the ordinary outcome rather than a lucky one.
+	s.slowHandshake = 40 * time.Millisecond
+	runner := newRunner(t, endpoint)
+	c, err := runner.connFor(repo(t, map[string]string{"pkg/shapes.go": "package pkg\n"}))
+	if err != nil {
+		t.Fatalf("connFor: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, maxConcurrentSymbolLookups)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = runner.handshake(t.Context(), c)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("handshake %d: %v", i, err)
+		}
+	}
+
+	s.mu.Lock()
+	got := s.initializes
+	s.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("initialize ran %d time(s), want 1: the handshake is not serialized", got)
+	}
+}
+
+// An SSE body is a stream of events, not one payload: a server may interleave
+// a progress notification, or a reply to another request, into the same
+// response. Concatenating the data of every event produces valid JSON only
+// when exactly one event ever arrives.
+func TestAnSSEBodyIsReadEventByEventAndTheRightReplyIsTaken(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.extraEvent = `{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}`
+	s.answers["find_declaration"] = declarationAnswer
+	s.answers["find_referencing_symbols"] = referenceAnswer
+	runner := newRunner(t, endpoint)
+
+	// The handshake is the exchange the stub frames as SSE, so a body with a
+	// notification in front of the reply has to survive it or nothing else in
+	// this commission ever runs.
+	if _, err := run(t, runner, CapabilityReferences, repo(t, map[string]string{
+		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
+	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+// decode's own rules, stated once rather than inferred from a commission.
+func TestDecodePicksTheEventAnsweringTheRequestItWasGiven(t *testing.T) {
+	const wanted = `{"jsonrpc":"2.0","id":7,"result":{"answer":"mine"}}`
+	body := "event: message\ndata: " + `{"jsonrpc":"2.0","method":"notifications/progress"}` + "\n\n" +
+		"event: message\ndata: " + `{"jsonrpc":"2.0","id":6,"result":{"answer":"someone else's"}}` + "\n\n" +
+		"event: message\ndata: " + wanted + "\n\n"
+
+	result, err := decode(answer{contentType: "text/event-stream", body: body}, 7)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(string(result), "mine") {
+		t.Fatalf("result = %s, want the reply to request 7", result)
+	}
+
+	// A stream that answers a different request is not this request's answer,
+	// and reading it as one would hand the caller somebody else's result.
+	if _, err := decode(answer{contentType: "text/event-stream", body: body}, 9); err == nil {
+		t.Fatal("decode accepted a stream carrying no reply to the request it was given")
+	}
+}
+
+// The framing is decided by the header that exists to declare it. Sniffing the
+// first bytes of the body missed every SSE stream that opens with anything but
+// "event:" or "data:" -- an id: line and a comment are both ordinary -- and
+// sent it into the JSON decoder, where it came back as "unreadable JSON".
+func TestDecodeTrustsTheContentTypeOverTheShapeOfTheFirstLine(t *testing.T) {
+	body := ": keep-alive\nid: 42\nevent: message\ndata: " +
+		`{"jsonrpc":"2.0","id":3,"result":{"answer":"here"}}` + "\n\n"
+
+	result, err := decode(answer{contentType: "text/event-stream; charset=utf-8", body: body}, 3)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(string(result), "here") {
+		t.Fatalf("result = %s, want the reply the stream carried", result)
+	}
+
+	// And a plain JSON document is still a plain JSON document.
+	plain, err := decode(answer{
+		contentType: "application/json",
+		body:        `{"jsonrpc":"2.0","id":3,"result":{"answer":"plain"}}`,
+	}, 3)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(string(plain), "plain") {
+		t.Fatalf("result = %s, want the JSON body read as JSON", plain)
+	}
+}
+
+// Which project this Serena is pointed at belongs to whoever holds c.mu.
+//
+// rpc used to clear it on any POST error, and rpc runs on all sixteen of
+// locateAll's concurrent siblings: one of them losing its connection said
+// nothing about the project the other fifteen were still asking about, and the
+// next commission re-activated for no reason -- which on a monorepo is the
+// project walk that hangs. The session IS dropped, because a dead session
+// really must not be reused; the two facts have different owners.
+func TestAFailedCallDropsTheSessionAndLeavesTheActiveProjectAlone(t *testing.T) {
+	s, endpoint := newStub(t)
+	s.failTools = map[string]bool{"find_symbol": true}
+	runner := newRunner(t, endpoint)
+	r := repo(t, map[string]string{"pkg/shapes.go": "package pkg\n"})
+	c, err := runner.connFor(r)
+	if err != nil {
+		t.Fatalf("connFor: %v", err)
+	}
+	if _, _, err := runner.activate(t.Context(), c, r.Path); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	if _, err := runner.call(t.Context(), c, "find_symbol", map[string]any{"name_path_pattern": "a"}); err == nil {
+		t.Fatal("call succeeded against a transport that refused it")
+	}
+
+	c.wireMu.Lock()
+	active, session := c.active, c.session
+	c.wireMu.Unlock()
+	if active != r.Path {
+		t.Errorf("active = %q, want the project activate put there: a sibling's broken POST does not re-point Serena", active)
+	}
+	if session != "" {
+		t.Errorf("session = %q, want it dropped: a dead session must not be reused", session)
 	}
 }

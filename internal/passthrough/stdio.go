@@ -60,14 +60,21 @@ type stdioBackend struct {
 	timeout time.Duration
 	allowed []string
 
-	// mu guards the spawn and everything the spawn produces. It is never held
-	// across a round trip: the reader goroutine has to be able to deliver the
-	// handshake's own answer while the spawn is still in progress, so ensure
-	// releases it before waiting.
-	mu      sync.Mutex
-	proc    *process
-	seq     atomic.Int64
-	pending pending
+	// mu guards the spawn and everything the spawn produces, and it is held
+	// for the whole of it -- the fork, the handshake's round trip and the
+	// publication of the result -- on purpose: two chats arriving at a cold
+	// backend together must produce one process, and a lock released before
+	// the handshake would let the second one spawn a private copy while the
+	// first was still initializing. The cost is stated rather than hidden: a
+	// second arrival waits up to b.timeout, the handshake's own bound.
+	//
+	// What makes that safe is that the reader goroutine never takes mu. It
+	// delivers the handshake's own answer through pending, which carries its
+	// own lock, so the round trip inside the critical section can complete
+	// without the deliverer ever needing the lock its waiter is holding.
+	mu   sync.Mutex
+	proc *process
+	seq  atomic.Int64
 }
 
 // process is one live child. It is replaced wholesale on a respawn rather than
@@ -90,6 +97,16 @@ type process struct {
 	gone chan struct{}
 	// why is the reason it went, read only after gone is closed.
 	why error
+	// pending belongs to the process and not to the backend, because the
+	// routing table is a property of the pipe: an id means something only to
+	// the process that was asked with it. It lived on the backend until this
+	// was written, and the bug that shape allows is a reader clearing the
+	// successor's waiters. Close breaks the ordering that hid it -- it drops
+	// b.proc and only then calls stop(), so the next chat can spawn a
+	// replacement and register calls on it while the previous reader is still
+	// on its way to its own defer -- and that clear() would abandon callers
+	// waiting on a process that is perfectly alive.
+	pending pending
 }
 
 // pending is the routing table from request id to the caller waiting for it.
@@ -207,6 +224,21 @@ func (p *process) stop() {
 	case <-time.After(procgroup.Grace):
 	}
 	_ = procgroup.Kill(p.cmd)
+	// The stderr copier has to be joined before Wait, not after. os/exec
+	// documents that Wait closes the pipes it created, so calling it with
+	// io.Copy still reading StderrPipe hands that copy an ErrFileClosing
+	// mid-read and drops whatever the child said on its way down -- which is
+	// exactly the text gone() reports as the reason a backend died. The probe
+	// already joins its own copier before Wait for this reason; this path did
+	// not, and it is the path Close takes, so a stop during shutdown was the
+	// one that lost the last words. The bound is a backstop rather than a
+	// timeout: a grandchild that inherited the write end can hold the pipe
+	// open after the child itself is gone, and the caller is owed a return
+	// more than it is owed the final line.
+	select {
+	case <-p.stderrDone:
+	case <-time.After(procgroup.Grace):
+	}
 	_ = p.cmd.Wait()
 }
 
@@ -252,8 +284,20 @@ func (b *stdioBackend) ensure(ctx context.Context) (*process, error) {
 		select {
 		case <-b.proc.gone:
 			// It died while nobody was looking. Drop it and start again
-			// rather than hand back a corpse.
+			// rather than hand back a corpse -- but bury it first. Nothing
+			// else ever will: stop() runs from Close and from a failed
+			// handshake, and neither of those is this path, so a server that
+			// falls over on its own used to leave a process nobody had
+			// waited on. Without Wait the child stays a zombie in the
+			// process table for as long as Atenea runs, and the three
+			// os.File ends of its pipes stay open with it, so a backend that
+			// crashes and respawns in a loop leaks a descriptor triple and a
+			// slot per crash. stop() is bounded and its waits are already
+			// satisfied here -- gone is closed, so it takes the kill and the
+			// reap and returns.
+			dead := b.proc
 			b.proc = nil
+			dead.stop()
 		default:
 			return b.proc, nil
 		}
@@ -264,7 +308,18 @@ func (b *stdioBackend) ensure(ctx context.Context) (*process, error) {
 	}
 	// The handshake is the process's, not the chat's: it happens once per
 	// spawn, and every chat that arrives afterwards finds it already done.
-	if err := b.handshake(ctx, proc); err != nil {
+	// Its context is the process's too. spawn() deliberately refuses
+	// exec.CommandContext so the child does not die with the call that
+	// happened to need it first, and handing the caller's context to the
+	// handshake would undo that one line later: the first chat pressing
+	// ctrl-c during initialize would take down the process every other chat
+	// is about to share. WithoutCancel keeps the caller's values -- tracing,
+	// deadlines that other code reads off the context -- while cutting the
+	// cancellation, and b.timeout supplies the bound that the caller's
+	// deadline was providing.
+	handshakeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), b.timeout)
+	defer done()
+	if err := b.handshake(handshakeCtx, proc); err != nil {
 		proc.stop()
 		return nil, err
 	}
@@ -324,25 +379,41 @@ func (b *stdioBackend) spawn() (*process, error) {
 // this machine, by the probe, before this existed -- so a line that is not
 // JSON-RPC is skipped rather than treated as a protocol violation.
 func (b *stdioBackend) read(proc *process, stdout io.Reader) {
-	reader := bufio.NewReaderSize(stdout, 1<<20)
+	// A Scanner with a ceiling rather than ReadString, and the difference is
+	// the whole point. bufio.Reader.ReadString keeps appending into a slice it
+	// grows until it finds the delimiter, so NewReaderSize only sets how much
+	// is read at a time and puts no roof on one message: a server that writes
+	// to stdout and never emits a newline -- a hung binary dumping a core, a
+	// tool result with a runaway loop behind it -- grows that slice until
+	// Atenea is killed for it. The HTTP half of this package has capped its
+	// reads at maxBody since it was written, for exactly the reason spelled
+	// out at that constant, and it is the more defensible of the two: that
+	// backend is somebody else's server, while this one is a child Atenea
+	// started itself and shares between every chat, so its runaway takes all
+	// of them down at once. The two now share the one ceiling.
+	lines := bufio.NewScanner(stdout)
+	lines.Buffer(make([]byte, 0, 64<<10), maxBody)
 	defer func() {
 		// Whoever is still waiting is waiting for a process that has stopped
 		// talking. Telling them now turns one dead server into one error per
 		// caller instead of one timeout per caller.
-		b.pending.clear()
+		proc.pending.clear()
 		close(proc.gone)
 	}()
-	for {
-		line, err := reader.ReadString('\n')
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
+	for lines.Scan() {
+		if trimmed := strings.TrimSpace(lines.Text()); trimmed != "" {
 			b.route(proc, trimmed)
 		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				proc.why = err
-			}
-			return
+	}
+	// A frame over the ceiling is not a read error to shrug at: the server is
+	// not framing JSON-RPC at all, and every further byte on that pipe is
+	// unparseable by construction. Saying so names the fault in the caller's
+	// error instead of leaving it as a bare "the server stopped".
+	if err := lines.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			err = fmt.Errorf("printed more than %d bytes without a newline: it is not framing JSON-RPC", maxBody)
 		}
+		proc.why = err
 	}
 }
 
@@ -396,7 +467,7 @@ func (b *stdioBackend) route(proc *process, line string) {
 	if err != nil {
 		return
 	}
-	b.pending.deliver(id, body)
+	proc.pending.deliver(id, body)
 }
 
 // refuse answers a request Atenea does not serve, so the backend stops waiting.
@@ -444,8 +515,8 @@ func (b *stdioBackend) send(ctx context.Context, proc *process, method string, p
 	// Registered before the write, never after: a fast server can answer
 	// before the writing goroutine is scheduled again, and an answer with
 	// nobody waiting for it is dropped.
-	ch := b.pending.add(id)
-	defer b.pending.drop(id)
+	ch := proc.pending.add(id)
+	defer proc.pending.drop(id)
 
 	if err := proc.write(body); err != nil {
 		return nil, err

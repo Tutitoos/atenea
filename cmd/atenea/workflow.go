@@ -126,7 +126,7 @@ func workflowPropose(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("workflow propose", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
-	var replaces stringList
+	replaces := newStringList("replaces")
 	flags.Var(&replaces, "replaces", "step this proposal removes; repeatable, and only steps that have not started")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
@@ -148,7 +148,7 @@ func workflowPropose(args []string, out io.Writer) error {
 
 	id := flags.Arg(0)
 	gate, err := store.Ask(ctx, id, workflow.KindApprove,
-		workflow.Proposal{Steps: graph.Steps, Replaces: replaces}, time.Now())
+		workflow.Proposal{Steps: graph.Steps, Replaces: replaces.values}, time.Now())
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ func workflowResume(settingsPath string, args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
 	repository := flags.String("repository", "", "repository id to serve at the repository level")
-	var redo stringList
+	redo := newStringList("redo")
 	flags.Var(&redo, "redo", "step to dispatch again although nobody judged it; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
@@ -272,7 +272,7 @@ func workflowResume(settingsPath string, args []string, out io.Writer) error {
 	}
 	defer closers()
 
-	run, runErr := engine.Resume(ctx, flags.Arg(0), redo)
+	run, runErr := engine.Resume(ctx, flags.Arg(0), redo.values)
 	if run.ID != "" {
 		printRun(out, run)
 	}
@@ -578,16 +578,29 @@ func traceLike(step workflow.StepRow) trace.Row {
 }
 
 // stringList collects a repeatable flag.
-type stringList []string
+//
+// The flag's own name travels with the list because one type serves three
+// flags in three commands -- --redo here, --replaces in propose, --file in
+// decide -- and a refusal hard-coded to --redo sent the reader of `atenea
+// decide --file ""` looking for a flag their command line never carried.
+type stringList struct {
+	flag   string
+	values []string
+}
 
-func (s *stringList) String() string { return strings.Join(*s, ",") }
+// newStringList names the flag the refusals will quote. Registering the list
+// with flags.Var under a different name than this one is the one way to make
+// the message wrong again, so the two are written on adjacent lines.
+func newStringList(flag string) stringList { return stringList{flag: flag} }
+
+func (s *stringList) String() string { return strings.Join(s.values, ",") }
 
 func (s *stringList) Set(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return contract.Fail(contract.FailureInvalidInput, "--redo needs a step id")
+		return contract.Fail(contract.FailureInvalidInput, "--%s needs a value", s.flag)
 	}
-	*s = append(*s, value)
+	s.values = append(s.values, value)
 	return nil
 }
 
