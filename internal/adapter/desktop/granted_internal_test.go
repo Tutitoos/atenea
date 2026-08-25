@@ -125,3 +125,32 @@ func TestAMissingPermissionNamesWhichOneAndWhereItLives(t *testing.T) {
 		})
 	}
 }
+
+// A refusal that fires on nothing is worse than no refusal: it is the one
+// people learn to work around. This caught a real false positive -- the check
+// compared RedactRaw's output against its input, and RedactRaw also trims, so
+// a leading space read as a credential.
+func TestTheCredentialCheckFiresOnCredentialsAndNothingElse(t *testing.T) {
+	for _, harmless := range []string{
+		" a sentence with a leading space",
+		"a sentence with a trailing space ",
+		"Hello, world.",
+		"see config.yaml for details",
+		"ratio = 3:1",
+		"",
+	} {
+		if credential(harmless) {
+			t.Errorf("refused harmless text: %q", harmless)
+		}
+	}
+	for _, secret := range []string{
+		"password: hunter2seventeen",
+		"api_key=sk-abcdefghijklmnop",
+		"Authorization: Bearer abc.def.ghi",
+		"access_token = 12345abcdef",
+	} {
+		if !credential(secret) {
+			t.Errorf("let a credential through: %q", secret)
+		}
+	}
+}

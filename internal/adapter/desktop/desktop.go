@@ -633,7 +633,13 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 // field macOS itself marks as secure, which catches the case this cannot --
 // a password that looks like an ordinary word.
 func credential(text string) bool {
-	return contract.RedactRaw(text) != text
+	// The marker, not inequality. RedactRaw also trims and bounds its input,
+	// so comparing before and after reports a leading space as a credential --
+	// measured, on " Y la ruta confirmada sigue viva.", which refused an
+	// obviously harmless sentence and would have taught somebody to work
+	// around this check rather than trust it. A refusal that fires on nothing
+	// is worse than no refusal, because it is the one people learn to bypass.
+	return strings.Contains(contract.RedactRaw(text), "[REDACTED")
 }
 
 // mutate performs one act on the desktop.
