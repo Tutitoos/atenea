@@ -108,6 +108,28 @@ screen printed `surfaces -` for a provider that had one. Solved with `Unwrap()`
 rather than a fourth wrapper type, because a surface needs no bracketing and two
 optional interfaces would already be four types to keep in step.
 
+`symbol.overview` reported files full of declarations as declaring nothing, and
+`symbol.definition` reported every position in them as naming none.
+`get_file_outline` has two compact encodings, not one: kivgraph 0.7.0 marshals
+the grouped candidate and the flat one and ships whichever is smaller, so
+grouping wins only where a `(kind, visibility)` pair repeats enough to pay for
+its own header. The decoder read the grouped shape alone, so every page that
+arrived flat decoded into nothing.
+
+Empty is the answer that hurts here, because a file that truly declares nothing
+looks identical — a wrong answer wearing a resolved one's clothes. It also hid
+the size of the bug: this looked like a Dart problem, and it never was. Files
+whose kinds repeated arrived grouped and worked; files of mixed declarations did
+not, in any language. Measured against 0.7.0, a Go file holding one function was
+as blank as the 19-declaration Dart file that made it noticeable.
+
+Both flat forms are now read: the bare `Name@start-end` string, whose kind the
+page hoists out of the rows, and the tuple spent when the page can hoist
+nothing. Tuple rows keep the qualified name beside the simple one, because the
+column is found by scanning the source line for the simple name and the parent
+by trimming it off the qualified one — so these rows now carry `parent`, which
+the grouped path never could.
+
 ## [1.1.0] - 2026-08-25
 
 The repository audit and its remediation. Seventeen commits closing 209
