@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -899,5 +901,50 @@ func TestTheMachineCeilingHoldsOverATypeWithNoLimitOfItsOwn(t *testing.T) {
 	if got.Limits.MaxTokens != 20000 {
 		t.Errorf("max_tokens = %d, want the machine's 20000: saying nothing must not hold more than saying something",
 			got.Limits.MaxTokens)
+	}
+}
+
+// TestTomlStringEscapesTheWayTomlReadsItBack is the unit the awkward-directory
+// test cannot reach.
+//
+// A directory named with a bell or a vertical tab is legal on Linux and awkward
+// to create in a test on every filesystem, and one named with invalid UTF-8 is
+// legal too. Those are precisely the three cases where Go's quoting and TOML's
+// grammar disagree, so they are checked here against the parser itself rather
+// than through the filesystem.
+func TestTomlStringEscapesTheWayTomlReadsItBack(t *testing.T) {
+	for _, path := range []string{
+		"/tmp/bell\aend",      // Go writes \a; TOML does not define it
+		"/tmp/vertical\vend",  // Go writes \v; TOML does not define it
+		"/tmp/plain",          //
+		"/tmp/with\"quote",    //
+		`/tmp/with\backslash`, //
+		"/tmp/ñ-日本語",          //
+		"/tmp/null\x00ish",    // not reachable as a real path, but not our job to assume
+	} {
+		quoted, err := tomlString(path)
+		if err != nil {
+			t.Errorf("tomlString(%q) refused a valid UTF-8 path: %v", path, err)
+			continue
+		}
+		// Round-trip through the real parser: what TOML reads back has to be
+		// the string that went in, which is the property strconv.Quote broke.
+		var got struct {
+			Path string `toml:"path"`
+		}
+		if _, err := toml.Decode("path = "+quoted, &got); err != nil {
+			t.Errorf("tomlString(%q) produced %s, which TOML will not parse: %v", path, quoted, err)
+			continue
+		}
+		if got.Path != path {
+			t.Errorf("tomlString(%q) round-tripped to %q: the settings file would name a "+
+				"different directory than the one it was made in", path, got.Path)
+		}
+	}
+
+	// Invalid UTF-8 is refused rather than mangled. Go would write \xNN, which
+	// TOML accepts and reads as U+00NN -- a silently different path.
+	if _, err := tomlString("/tmp/\xff\xfe"); err == nil {
+		t.Error("a path that is not valid UTF-8 was written into a settings file anyway")
 	}
 }
