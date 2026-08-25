@@ -328,9 +328,14 @@ func TestSurfaceSaysWhosePermissionsTheseWouldBe(t *testing.T) {
 		{true, "service:own-permissions"},
 		{false, "shell:borrowed-permissions"},
 	} {
+		// The signature is pinned rather than read, so this test is about
+		// responsibility alone. Left to the real check it would read this
+		// test binary's own signature -- which is ad-hoc, because `go test`
+		// builds it that way -- and fail on a machine rather than on a bug.
 		runner, err := desktop.New(desktop.Options{
-			Session:     fakeHelper(t, nil),
-			Responsible: func() bool { return tc.responsible },
+			Session:         fakeHelper(t, nil),
+			Responsible:     func() bool { return tc.responsible },
+			SignatureStable: func() (bool, string) { return true, "" },
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -643,6 +648,40 @@ func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
 		case string, int, float64, bool:
 		default:
 			t.Errorf("%s carries %T across the seam; only plain values may", key, value)
+		}
+	}
+}
+
+// The warning that turns a silent failure into a visible one.
+//
+// An ad-hoc binary's TCC grant is pinned to its exact contents, so it dies on
+// the next build -- while System Settings goes on showing the permission as
+// granted, because the entry is still there. Somebody hits it as "this worked
+// yesterday" with nothing anywhere to explain why. It is surfaced on the status
+// screen because that is where they will already be looking.
+func TestAnAdHocBinarySaysItsGrantWillNotSurvive(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stable bool
+		want   string
+	}{
+		{"signed", true, "service:own-permissions"},
+		{"ad-hoc", false, "service:own-permissions (ad-hoc: grant dies on next build)"},
+	} {
+		runner, err := desktop.New(desktop.Options{
+			Session:         fakeHelper(t, nil),
+			Responsible:     func() bool { return true },
+			SignatureStable: func() (bool, string) { return tc.stable, "" },
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		reporter, ok := any(runner).(interface{ Surface() string })
+		if !ok {
+			t.Fatal("the runner no longer reports a surface")
+		}
+		if got := reporter.Surface(); got != tc.want {
+			t.Errorf("%s: surface = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

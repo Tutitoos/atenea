@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -151,6 +152,10 @@ type Options struct {
 	// state by omission, and omission is what happens when somebody adds an
 	// entry in a hurry.
 	Denied []string
+	// SignatureStable reports whether this binary's signature will keep a
+	// permission across a rebuild. Injected for the same reason Responsible
+	// is: so the warning can be tested on a machine that is not a Mac.
+	SignatureStable func() (bool, string)
 	// Responsible reports whether Atenea is the process macOS will attribute
 	// a device permission to. Injected so the refusal below can be tested on
 	// a machine that is not a Mac -- and so a caller that knows better than
@@ -164,6 +169,7 @@ type Runner struct {
 	timeout         time.Duration
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
 	responsible     func() bool
+	signature       func() (bool, string)
 	allowed, denied []string
 }
 
@@ -193,11 +199,16 @@ func New(opts Options) (*Runner, error) {
 	if responsible == nil {
 		responsible = UnderLaunchd
 	}
+	signature := opts.SignatureStable
+	if signature == nil {
+		signature = platform.SelfSignedStably
+	}
 	return &Runner{
 		implementations: implementations,
 		timeout:         timeout,
 		session:         opts.Session,
 		responsible:     responsible,
+		signature:       signature,
 		allowed:         slices.Clone(opts.Allowed),
 		denied:          slices.Clone(opts.Denied),
 	}, nil
@@ -216,10 +227,17 @@ func (r *Runner) ID() string { return "desktop" }
 // sentence is the one somebody needs before deciding anything, and it is
 // answerable here without asking the helper or the operating system.
 func (r *Runner) Surface() string {
+	surface := "shell:borrowed-permissions"
 	if r.responsible() {
-		return "service:own-permissions"
+		surface = "service:own-permissions"
 	}
-	return "shell:borrowed-permissions"
+	// The second half is here rather than on a startup line because this is
+	// where somebody already looks, and because the failure it warns about is
+	// one you only notice when something stops working for no visible reason.
+	if stable, _ := r.signature(); !stable {
+		surface += " (ad-hoc: grant dies on next build)"
+	}
+	return surface
 }
 
 // Serves reports whether this runner answers that implementation.

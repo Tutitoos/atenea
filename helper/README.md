@@ -24,10 +24,15 @@ enforces. Out here it is not in the Go profile at all.
 
 ## Building
 
-    swift build -c release --package-path helper
+    bash scripts/install-dev.sh
 
-Then point `orchestrator.desktop.process.command` at
-`helper/.build/release/atenea-desktop-helper`.
+Builds Atenea and this helper, signs both, installs them and restarts the
+service. Use it rather than `go build` by hand: signing is not optional here
+(see below), and forgetting it breaks Accessibility silently.
+
+To build only the helper:
+
+    swift build -c release --package-path helper
 
 ## Why it is built here and shipped nowhere
 

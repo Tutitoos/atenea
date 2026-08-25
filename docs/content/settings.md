@@ -758,6 +758,11 @@ Atenea's own settings could not switch off. `atenea service install`, then grant
 Accessibility — and Screen Recording, for captures — to `atenea` itself in
 System Settings.
 
+Use `scripts/install-dev.sh` if you build your own: it builds, signs and
+installs both binaries and restarts the service, which is the whole of what has
+to happen in the right order. `atenea status` says `(ad-hoc: grant dies on next
+build)` beside the desktop surface when it did not.
+
 Sign the binary first if you build your own. An unsigned binary's TCC grant is
 pinned to a hash that changes on every build, so it dies the next time you
 compile; signed with any certificate, the grant follows the identifier instead.
