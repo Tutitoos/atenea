@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -2336,5 +2337,67 @@ func TestVersionToken(t *testing.T) {
 		if got := VersionToken(tc.banner); got != tc.want {
 			t.Errorf("%s: VersionToken(%q) = %q, want %q", tc.name, tc.banner, got, tc.want)
 		}
+	}
+}
+
+// The prompt log holds the repository's own text -- source, file names,
+// whatever the task quoted -- and was the one directory in this project written
+// world-readable, at 0755 and 0644.
+func TestThePromptLogIsAsPrivateAsEverythingElseAteneaWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	dir := filepath.Join(t.TempDir(), "prompts")
+	t.Setenv(PromptLogEnv, dir)
+
+	recordPrompt(Request{Role: RoleExplore, Prompt: "a secret from the tree"}, []string{"claude"})
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat the log directory: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o700 {
+		t.Errorf("the prompt log directory is %04o, want 0700", mode)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries = %v, err = %v; want the one prompt recorded", entries, err)
+	}
+	written, err := entries[0].Info()
+	if err != nil {
+		t.Fatalf("stat the prompt: %v", err)
+	}
+	if mode := written.Mode().Perm(); mode != 0o600 {
+		t.Errorf("the recorded prompt is %04o, want 0600", mode)
+	}
+}
+
+// Role reaches a filename, and a filename is the one place where "it is always
+// one of four declared words" stops being an argument: what it costs to be
+// wrong is a write outside the directory the operator named.
+func TestARoleThatIsNotAWordCannotEscapeTheLogDirectory(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "prompts")
+	t.Setenv(PromptLogEnv, dir)
+
+	recordPrompt(Request{Role: Role("../../escaped"), Prompt: "x"}, []string{"claude"})
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the log directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want the record to have landed inside the directory", len(entries))
+	}
+	if name := entries[0].Name(); strings.Contains(name, "/") || strings.Contains(name, "..") {
+		t.Errorf("recorded as %q, which still carries a path", name)
+	}
+	// And nothing landed beside the directory instead of inside it.
+	outer, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read the parent: %v", err)
+	}
+	if len(outer) != 1 {
+		t.Errorf("the parent holds %d entries, want only the log directory", len(outer))
 	}
 }

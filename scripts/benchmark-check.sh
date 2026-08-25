@@ -39,5 +39,9 @@ run_benchmark() {
 }
 
 run_benchmark ./internal/selector BenchmarkSelectMediumCatalog 5000000 200000
-run_benchmark ./internal/metrics BenchmarkRecord 5000000 200000
+# 50,000 ns against a measured 66-77 ns. Generous by two orders of magnitude and
+# still a barrier, which is more than the previous 5,000,000 was: at that
+# ceiling the buffer could go quadratic -- and did, at 74,000 ns per
+# measurement with the store's mutex held -- without the gate noticing.
+run_benchmark ./internal/metrics BenchmarkRecord 50000 200000
 run_benchmark ./pkg/contract BenchmarkPlanLayersMediumDAG 5000000 500000

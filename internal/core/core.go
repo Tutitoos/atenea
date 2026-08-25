@@ -1369,6 +1369,15 @@ const (
 // trust; a baseline short by seventeen rows, on a named date, is one an
 // operator can reason about.
 func (c *Core) flushLast() error {
+	// Sealed before the first attempt, not after the last.
+	//
+	// On the shutdown that overran, work is still running while this executes,
+	// and it goes on calling Record. Those rows used to land in a buffer
+	// nothing would ever drain: gone with the process, and absent from
+	// Dropped, so the number that exists to say how much was lost said zero.
+	// Sealing first means a measurement arriving during the last stand is
+	// counted as lost, which is what it is.
+	c.measurements.Seal()
 	var err error
 	for attempt := range settleAttempts {
 		if attempt > 0 {
@@ -1381,8 +1390,9 @@ func (c *Core) flushLast() error {
 	_ = c.notebook.Record(notebook.Incident{
 		Op: "metrics.settle",
 		Detail: fmt.Sprintf(
-			"the final flush failed %d times and %d measurements are gone with the process: %v",
-			settleAttempts, c.measurements.Pending(), err),
+			"the final flush failed %d times and %d measurements are gone with the process "+
+				"(%d more were dropped after the buffer was sealed): %v",
+			settleAttempts, c.measurements.Pending(), c.measurements.Dropped(), err),
 		Version: buildinfo.Full(),
 	})
 	return err

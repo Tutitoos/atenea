@@ -58,6 +58,26 @@ so the number is a decision about what this machine is allowed to forget, and
 writing the verbs before that decision would leave two exported methods nobody
 calls -- the shape this project criticises in writing.
 
+*How `Outcome.SpentUSD` says "unmeasured".* It is a plain `float64`, so zero
+means both "this cost nothing" and "nobody measured it" -- the exact collapse
+`Charge.USD` is a pointer to avoid, three types away in the same package. The
+two shapes that would fix it are a `*float64` or a `SpentUSDKnown bool` beside
+it, and both are a contract change with an entry in `version.go`. It is
+recorded here rather than done because `Outcome` is on the Runner seam, which
+is the one part of this package that cannot be extended additively, and a
+change there wants to travel with whatever else that seam is ever going to
+need.
+
+*Early warning on omp's private store.* The limits widget reads another
+product's `agent.db` by hand, with no contract behind it, and a renamed field
+there breaks it. Two halves: the widget now says `sin lectura` when it cannot
+read what it found, so the failure is visible rather than silent, and a test
+shouts on a machine that has the store. The half that does not exist is CI:
+there is no omp there, so there is no store, and a committed fixture would
+check this repository's idea of the format -- which is the error the widget was
+built on. Accepted as a limitation, not deferred as work: the early warning is
+the maintainer's machine or nothing.
+
 *Quiescing the databases before a backup.* `metrics.duckdb` and `traces.db` are
 copied hot, so a snapshot is crash-consistent and not consistent. The document
 for `internal/backup` now says so plainly, with what is lost on restore. Doing
