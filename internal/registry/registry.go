@@ -83,8 +83,23 @@ func NewWithState(path string) (*Registry, error) {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"registry state: unsupported version %d", state.Version)
 	}
-	if state.Health != nil {
-		r.observed = state.Health
+	// Cloned repository by repository rather than assigned whole, for the
+	// same reason IndexedBy below is: a decoded map is only as well-formed as
+	// the file it came from. `{"health":{"api":null}}` decodes to a key that
+	// exists whose value is a nil map, so SetHealth's `_, ok := r.observed[id]`
+	// answered true and the write that followed went to a nil map and panicked
+	// -- taking down the core on the first probe after a truncated or
+	// hand-edited state file, which is exactly the file most likely to be one.
+	for repo, byImpl := range state.Health {
+		if byImpl == nil {
+			// A repository whose observations decoded to null has no
+			// observations, and the bare key is not evidence of one. Dropped
+			// rather than replaced by an empty map so the invariant every
+			// reader here relies on -- a key in r.observed carries a usable
+			// map -- holds by construction.
+			continue
+		}
+		r.observed[repo] = maps.Clone(byImpl)
 	}
 	for repo, providers := range state.IndexedBy {
 		r.indexOverrides[repo] = maps.Clone(providers)

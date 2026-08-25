@@ -1,13 +1,17 @@
 package floor_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/floor"
+	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -342,10 +346,14 @@ func containsPath(err error, path string) bool {
 }
 
 // Put on a fresh target directory -- one that does not exist until write
-// creates it -- must leave nothing behind but the final file: no partial
-// *.tmp is an artifact of the temp-then-rename path being exercised for the
-// first time in that directory, and a leftover would mean the rename step
-// was skipped rather than completed.
+// creates it -- must leave no partial *.tmp behind: one would mean the rename
+// step was skipped rather than completed, the first time that directory
+// exercised the temp-then-rename path.
+//
+// floors.json.lock is expected company. Put claims it for the whole
+// read-modify-write and leaves it truncated rather than removed, which is
+// pidlock's own contract: deleting a lock file is a race, where an empty one
+// is simply a lock nobody holds.
 func TestWriteIsAtomicNoPartialFileInAFreshDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state", "atenea")
 	path := filepath.Join(dir, "floors.json")
@@ -365,12 +373,17 @@ func TestWriteIsAtomicNoPartialFileInAFreshDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "floors.json" {
-		names := make([]string, len(entries))
-		for i, e := range entries {
-			names[i] = e.Name()
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	if !slices.Contains(names, "floors.json") {
+		t.Fatalf("directory holds %v, want the measurement file itself", names)
+	}
+	for _, name := range names {
+		if name != "floors.json" && name != "floors.json.lock" {
+			t.Errorf("directory holds %v, want only floors.json and its lock", names)
 		}
-		t.Errorf("directory holds %v, want exactly [floors.json]", names)
 	}
 }
 
@@ -739,5 +752,79 @@ func TestWarmUSDIsUnknownRatherThanFreeWhenThereIsNothingToDeriveFrom(t *testing
 	mechanical := floor.Measurement{USD: 0, PrefixTokens: 0}
 	if got := mechanical.WarmUSD(); got != 0 {
 		t.Errorf("WarmUSD = %v, want 0 for a row with no dollar figure to scale", got)
+	}
+}
+
+// Put is a read-modify-write over the whole file, and until it was serialized
+// it was a lost update waiting to happen: two measurements finishing at once
+// each read the file as it was before either of them, each added its own row,
+// and each wrote the whole list back. The second rename won, the first row
+// was gone, and nothing anywhere reported it -- a turn somebody paid real
+// money for, measured and then silently dropped.
+//
+// Eight writers of eight distinct triples: every one of them has to be on
+// disk when they are done.
+func TestConcurrentPutsKeepEveryRowTheyWrote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "floors.json")
+	store, err := floor.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, writers)
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = store.Put(measurement("atenea", "explore", fmt.Sprintf("model-%d", i)))
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Put %d: %v", i, err)
+		}
+	}
+
+	rows, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != writers {
+		t.Fatalf("List returned %d rows, want %d -- writes were lost, not merged: %+v",
+			len(rows), writers, rows)
+	}
+}
+
+// The other half of the same rule, across processes rather than goroutines:
+// the file lock is what a second `atenea` on the same machine runs into. It
+// refuses rather than queues, because a measurement is a command somebody
+// typed and being told another one is running beats waiting in silence.
+//
+// The holder here is this test, which works because pidlock's advisory lock
+// conflicts between two descriptors even inside one process -- see its own
+// doc for why that is deliberate.
+func TestPutRefusesWhileSomebodyElseHoldsTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "floors.json")
+	store, err := floor.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	release, err := pidlock.Claim(path + ".lock")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	defer release()
+
+	err = store.Put(measurement("atenea", "explore", "claude-opus-5"))
+
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("Put = %v (%v), want unavailable while the file is held",
+			err, contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error = %q, want it to name the file that is held", err)
 	}
 }

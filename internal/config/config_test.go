@@ -758,6 +758,29 @@ func TestMissingFileFallsBackOnlyWhenImplicit(t *testing.T) {
 	}
 }
 
+// $ATENEA_CONFIG is somebody asking for a file just as much as the flag is, so
+// a typo in it must fail loudly instead of booting the daemon on the built-in
+// catalog: a service that quietly runs a different set of implementations than
+// the operator wrote only shows up as wrong answers, hours later.
+func TestMissingFileNamedByEnvIsAnError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	missing := filepath.Join(t.TempDir(), "typo.toml")
+	t.Setenv("ATENEA_CONFIG", missing)
+
+	cfg, err := config.Load("")
+	if err == nil {
+		t.Fatalf("load succeeded with Source = %q, want an error naming %s", cfg.Source, missing)
+	}
+	if contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("kind = %v, want not_found", contract.KindOf(err))
+	}
+	// The message has to name the variable: the path alone leaves the reader
+	// hunting for which of flag, environment or default produced it.
+	if !strings.Contains(err.Error(), "ATENEA_CONFIG") || !strings.Contains(err.Error(), missing) {
+		t.Errorf("error = %q, want it to name ATENEA_CONFIG and %s", err, missing)
+	}
+}
+
 func TestResolvePathPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
@@ -799,6 +822,119 @@ func TestWriteDefaultRoundTrips(t *testing.T) {
 	if len(written.Implementations) != len(shipped.Implementations) {
 		t.Fatalf("implementations = %d, want the %d that ship",
 			len(written.Implementations), len(shipped.Implementations))
+	}
+}
+
+// The settings file is where `[[mcp_server]].env` and every process block's
+// `env` live, and those are KEY=VALUE maps -- the natural home for an API
+// token. Every other piece of state in this repository that can hold one is
+// 0700/0600 already; this file used to be the single 0755/0644 exception, so
+// on a shared machine any account could read the tokens out of it.
+func TestWriteDefaultKeepsTheSettingsFileToItsOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	path := filepath.Join(dir, "atenea.toml")
+	if err := config.WriteDefault(path, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	file, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if mode := file.Mode().Perm(); mode != 0o600 {
+		t.Errorf("settings file mode = %04o, want 0600", mode)
+	}
+	made, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if mode := made.Mode().Perm(); mode != 0o700 {
+		t.Errorf("settings directory mode = %04o, want 0700", mode)
+	}
+}
+
+// `config init --force` must not truncate the file it is replacing. The proof
+// is a hard link taken before the overwrite: a rename swaps the directory
+// entry and leaves the old inode -- and therefore the link -- holding what was
+// there, while an in-place O_TRUNC write would have rewritten it through the
+// link. That difference is the whole point: an interrupted overwrite that took
+// the O_TRUNC path leaves a truncated atenea.toml and no copy of the catalog
+// the operator had.
+func TestWriteDefaultForceReplacesRatherThanTruncates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "atenea.toml")
+	previous := "contract = \"1.0.0\"\n# what the operator had\n"
+	if err := os.WriteFile(path, []byte(previous), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	link := filepath.Join(dir, "previous.toml")
+	if err := os.Link(path, link); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	if err := config.WriteDefault(path, true); err != nil {
+		t.Fatalf("WriteDefault --force: %v", err)
+	}
+
+	kept, err := os.ReadFile(link)
+	if err != nil {
+		t.Fatalf("read the link: %v", err)
+	}
+	if string(kept) != previous {
+		t.Errorf("the old inode was written through, so the overwrite was in place:\n%s", kept)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("the new file does not load: %v", err)
+	}
+
+	// And the temporary file it went through is gone, rather than left beside
+	// the real one for a later reader to mistake for settings.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Errorf("%s was left behind", entry.Name())
+		}
+	}
+}
+
+// default.toml is not only the file a fresh install boots on, it is the file
+// `config init` hands the operator to read: what its comments say is what a
+// person believes they may write. The comment above `runners` had listed five
+// of the seven the loader accepts since kivgraph and tokensave were added, so
+// the two graph providers were undiscoverable from the one document meant to
+// document them.
+//
+// The list is checked against the constants rather than against a copy, so the
+// eighth runner cannot ship with the comment still naming seven.
+func TestTheRunnersCommentNamesEveryRunnerTheLoaderAccepts(t *testing.T) {
+	raw, err := os.ReadFile("default.toml")
+	if err != nil {
+		t.Fatalf("read default.toml: %v", err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	at := slices.IndexFunc(lines, func(line string) bool {
+		return strings.HasPrefix(line, "runners = ")
+	})
+	if at < 0 {
+		t.Fatal("default.toml declares no runners key")
+	}
+	// The comment block is everything commented directly above the key, which
+	// is what a reader scrolling up to it actually sees.
+	first := at
+	for first > 0 && strings.HasPrefix(lines[first-1], "#") {
+		first--
+	}
+	comment := strings.Join(lines[first:at], "\n")
+
+	for _, runner := range []string{
+		config.RunnerOMP, config.RunnerClaudeCode, config.RunnerCodex, config.RunnerSerena,
+		config.RunnerKivgraph, config.RunnerTokensave, config.RunnerLocal,
+	} {
+		if !strings.Contains(comment, `"`+runner+`"`) {
+			t.Errorf("the runners comment never names %q, so nobody reading this file learns they may write it", runner)
+		}
 	}
 }
 
@@ -1011,6 +1147,63 @@ func TestOnlyCheckpointsFalseTurnsRunsOff(t *testing.T) {
 				t.Errorf("checkpoint_dir = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Every path a settings file writes obeys one rule, the one
+// orchestrator.tokensave.root already had: it must be absolute. A relative one
+// has no honest resolution, because the process that loads this file is not
+// always the one that uses the path -- run as a service it is the daemon, with
+// whatever working directory the unit gave it -- so `path = "base.duckdb"`
+// means one file from a shell and another from systemd. A leading `~` fails the
+// same way rather than becoming a directory literally named `~`: nothing in
+// this package expands it, and os.UserHomeDir is called only from
+// internal/platform.
+func TestEveryDeclaredPathMustBeAbsolute(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		key  string
+	}{
+		{"metrics.path", "\n[metrics]\npath = \"base.duckdb\"\n", "metrics.path"},
+		{"metrics.path under ~", "\n[metrics]\npath = \"~/base.duckdb\"\n", "metrics.path"},
+		{"backup.dir", "\n[backup]\ndir = \"copies\"\n", "backup.dir"},
+		{"backup.dir under ~", "\n[backup]\ndir = \"~/copies\"\n", "backup.dir"},
+		{"checkpoint_dir", "\n[orchestrator]\ncheckpoint_dir = \"runs\"\n", "orchestrator.checkpoint_dir"},
+		{"checkpoint_dir under ~", "\n[orchestrator]\ncheckpoint_dir = \"~/runs\"\n", "orchestrator.checkpoint_dir"},
+		{"tokensave.root", "\n[orchestrator.tokensave]\nroot = \"src\"\n", "orchestrator.tokensave.root"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, minimal+tc.body))
+			if contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Fatalf("kind = %v, want invalid_input", contract.KindOf(err))
+			}
+			// Naming the key is the whole value of the message: a settings file
+			// declares four paths and "must be absolute" alone says nothing
+			// about which of them the operator has to go and edit.
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("err = %v, want it to name %s", err, tc.key)
+			}
+		})
+	}
+
+	// And the absolute forms still load, cleaned rather than repeated verbatim.
+	dir := t.TempDir()
+	cfg, err := config.Load(write(t, minimal+
+		"\n[metrics]\npath = \""+filepath.Join(dir, "sub", "..", "base.duckdb")+"\"\n"+
+		"\n[backup]\ndir = \""+filepath.Join(dir, "copies")+"\"\n"+
+		"\n[orchestrator]\ncheckpoint_dir = \""+filepath.Join(dir, "runs")+"\"\n"))
+	if err != nil {
+		t.Fatalf("absolute paths were refused: %v", err)
+	}
+	if want := filepath.Join(dir, "base.duckdb"); cfg.Metrics.Path != want {
+		t.Errorf("metrics.path = %q, want %q", cfg.Metrics.Path, want)
+	}
+	if want := filepath.Join(dir, "copies"); cfg.Backup.Dir != want {
+		t.Errorf("backup.dir = %q, want %q", cfg.Backup.Dir, want)
+	}
+	if want := filepath.Join(dir, "runs"); cfg.Orchestrator.CheckpointDir != want {
+		t.Errorf("checkpoint_dir = %q, want %q", cfg.Orchestrator.CheckpointDir, want)
 	}
 }
 
@@ -2027,6 +2220,53 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// Both ceilings are required, which is what default.toml's own header and
+// docs/content/settings.md have always claimed and what nothing checked until
+// now. The consequence of not checking is not a cosmetic one: contract.Limits
+// reads a zero max_tokens as "no boundary was declared", so an [[agent]] that
+// forgot the key used to load happily with its token ceiling switched off.
+//
+// Zero written on purpose still loads, because that is an operator deciding
+// there is no boundary rather than an operator forgetting to decide.
+func TestAnAgentMustDeclareBothCeilings(t *testing.T) {
+	agent := func(extra string) string {
+		return minimal + `
+[[agent]]
+name = "reader"
+kind = "specialized"
+summary = "Reads a file"
+command = "/bin/true"
+context = ["repository"]
+effects = ["read"]
+max_duration = "30s"
+` + extra + `
+  [[agent.result]]
+  name = "ok"
+  type = "bool"
+  required = true
+  summary = "it read"
+`
+	}
+
+	_, err := config.Load(write(t, agent("")))
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("an agent with no max_tokens loaded: kind = %v, want invalid_input", contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "max_tokens") {
+		t.Errorf("error = %q, want it to name the missing key", err)
+	}
+
+	cfg, err := config.Load(write(t, agent("max_tokens = 0\n")))
+	if err != nil {
+		t.Fatalf("an explicit zero must load: %v", err)
+	}
+	for _, a := range cfg.Agents {
+		if a.Spec.Name == "reader" && a.Limits.MaxTokens != 0 {
+			t.Errorf("max_tokens = %d, want the zero the file wrote", a.Limits.MaxTokens)
 		}
 	}
 }

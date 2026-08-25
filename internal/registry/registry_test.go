@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -416,4 +417,47 @@ func TestConcurrentReadsAndHealthWrites(t *testing.T) {
 		reg.Observations("ripgrep")
 	}
 	<-done
+}
+
+// A state file is not a settings file: nobody writes it by hand, which is
+// exactly why it is the one most likely to arrive truncated, half-merged or
+// edited by somebody debugging. `{"health":{"api":null}}` is the shape that
+// used to be fatal -- the repository key existed, so SetHealth's lookup
+// reported a map and the write went into a nil one, panicking on the first
+// probe after the load. The core died on start-up over a file whose whole
+// purpose is to be safely deletable.
+func TestAStateFileWithNoObservationsForARepositoryStillTakesAProbe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry-state.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"health":{"api":null}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	reg, err := registry.NewWithState(path)
+	if err != nil {
+		t.Fatalf("NewWithState: %v", err)
+	}
+	if err := reg.AddCapability(codeSearch()); err != nil {
+		t.Fatalf("AddCapability: %v", err)
+	}
+	if err := reg.AddImplementation(impl("ripgrep", "ripgrep")); err != nil {
+		t.Fatalf("AddImplementation: %v", err)
+	}
+	if err := reg.AddRepository(contract.NewRepository("api", "/srv/api", nil,
+		contract.ScaleSmall, contract.VCSUnspecified, nil)); err != nil {
+		t.Fatalf("AddRepository: %v", err)
+	}
+
+	if err := reg.SetHealth("api", "ripgrep", contract.Health{
+		State: contract.HealthDown, Reason: "probe failed",
+	}); err != nil {
+		t.Fatalf("SetHealth: %v", err)
+	}
+
+	impls, err := reg.ImplementationsFor("code.search")
+	if err != nil {
+		t.Fatalf("ImplementationsFor: %v", err)
+	}
+	if got := reg.Observed("api", impls)[0].Health.State; got != contract.HealthDown {
+		t.Errorf("health = %v, want the observation that was just written", got)
+	}
 }

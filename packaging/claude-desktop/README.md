@@ -31,6 +31,14 @@ correcta hasta que alguien abre un bug contra el código equivocado.
 
 ## Instalación
 
+Cada release publica un `.mcpb` por plataforma —
+`atenea-<versión>-<so>-<arquitectura>.mcpb`— junto a los binarios, empaquetado
+en el mismo runner nativo y alrededor del mismo binario que se sube a esa
+release. Son varios y no uno porque el manifiesto apunta a un binario nativo en
+`server/atenea`: un `.mcpb` construido en Linux se instala sin protestar en un
+Mac y falla la primera vez que alguien abre una conversación. Construirlo aquí
+sólo hace falta para probar un cambio antes de etiquetarlo.
+
 En Claude Desktop: `Settings → Extensions → Advanced settings → Install
 Extension…`. Después, verificarla desde `+ → Connectors`.
 

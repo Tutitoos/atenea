@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -344,10 +345,16 @@ type Request struct {
 	// arithmetic and conversation.spend for where it fires.
 	//
 	// The unit is input-equivalent tokens: every kind of token weighed by its
-	// price relative to an input token, which puts 333,333 of them to the
-	// dollar on the model measured. That is the number to convert a reserved
-	// dollar share with, and see weigh for how the ratios were checked
-	// against a real receipt.
+	// price relative to an input token. Do not convert a dollar share by hand
+	// here: the rate is allowance.tokensPerUSD, and it is deliberately not
+	// the 333,333 the weighting implies by construction. Reconciled
+	// 2026-08-14 against two real receipts, a short turn came out at 332,700
+	// per dollar and a reading-heavy explore turn at 166,200 -- half as many
+	// -- so allowance took the pessimistic end. This paragraph carried the
+	// derogated figure, and a caller converting with it reserves twice the
+	// tokens the money buys, which puts the nudge past the ceiling that kills
+	// the turn. Call allowance.Tokens and see weigh for how the ratios were
+	// checked against a real receipt.
 	//
 	// The figure is in tens of thousands, and a caller guessing in thousands
 	// has written an allowance that fires on the first event of every turn.
@@ -420,13 +427,19 @@ func (r Request) Validate() error {
 		return contract.Fail(contract.FailureInvalidInput,
 			"request: role %q is not explore or plan", r.Role)
 	}
-	if r.BudgetUSD < 0 {
-		// Only negative is refused. Zero is deliberately not: see
-		// BudgetUSD's own doc for why it means "no ceiling", not "no
-		// spending" -- no accounting a caller could have done on its way
-		// here produces a negative figure on purpose.
+	if r.BudgetUSD < 0 || math.IsNaN(r.BudgetUSD) || math.IsInf(r.BudgetUSD, 0) {
+		// Zero is deliberately allowed: see BudgetUSD's own doc for why it
+		// means "no ceiling", not "no spending" -- no accounting a caller
+		// could have done on its way here produces a negative figure on
+		// purpose. NaN and Inf are refused because `NaN < 0` is false, so a
+		// budget arrived at by dividing by a zero share used to pass this
+		// check and reach the CLI as the literal argv `--max-budget-usd NaN`.
+		// opencode.Run refuses the same three values in the same words; the
+		// two backends have to agree on which requests are attemptable at
+		// all, or which one is configured decides whether a broken figure is
+		// caught here or by a provider halfway through spending money.
 		return contract.Fail(contract.FailureInvalidInput,
-			"request: budget_usd must not be negative, got %v", r.BudgetUSD)
+			"request: budget_usd must be finite and non-negative, got %v", r.BudgetUSD)
 	}
 	if r.ReadTokens < 0 {
 		// The two figures are in different units and no comparison between
@@ -615,20 +628,45 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		if index == len(candidates)-1 || !fallbackRetryable(turnErr) {
 			return answer, turnErr
 		}
+		// What the failed attempt cost decides how much of the ceiling the
+		// next candidate may still have, and the two ways it can come back
+		// unmeasurable are the two the chain exists for. A request with
+		// BudgetUSD zero was granted no ceiling at all -- see the field's own
+		// doc -- so there is nothing to subtract from and nothing to refuse
+		// on. And the failures fallback is for print no envelope whatsoever:
+		// a missing binary, an unauthenticated session, a provider that is
+		// down. Those charge nothing, so the whole ceiling is still intact
+		// and handing it to the next candidate cannot double-charge anyone.
+		// Refusing the chain on either of those, as this did, meant fallback
+		// only ever ran after a failure that had already paid for itself --
+		// which is the rarest of them.
 		spentUSD, source := retryCost(total)
-		if spentUSD <= 0 || req.BudgetUSD <= 0 {
-			return answer, contract.Fail(contract.KindOf(turnErr),
-				"primary model %s failed; fallback %s not attempted because no safe cost bound was available",
-				candidate, candidates[index+1])
+		remaining, provenance := req.BudgetUSD, source
+		switch {
+		case req.BudgetUSD <= 0:
+			provenance = "no ceiling was granted"
+		case spentUSD <= 0:
+			provenance = "the failed attempt reported no spend"
+		default:
+			remaining = req.BudgetUSD - spentUSD
+			if remaining <= 0 {
+				// The original failure's raw provider text survives the
+				// rewording: this sentence explains why the chain stopped,
+				// and the thing a human has to search for verbatim is still
+				// whatever the model printed on its way out.
+				return answer, contract.Fail(contract.FailurePermissionDenied,
+					"primary model %s failed (%s); fallback %s refused because no budget remains",
+					candidate, contract.MessageOf(turnErr), candidates[index+1]).
+					WithRaw(contract.RawOf(turnErr))
+			}
 		}
-		remaining := req.BudgetUSD - spentUSD
-		if remaining <= 0 {
-			return answer, contract.Fail(contract.FailurePermissionDenied,
-				"primary model %s failed; fallback %s refused because no budget remains",
-				candidate, candidates[index+1])
+		if req.BudgetUSD <= 0 {
+			notices = append(notices, fmt.Sprintf("fallback: %s failed with %s; retrying %s with no ceiling (%s)",
+				candidate, contract.KindOf(turnErr), candidates[index+1], provenance))
+		} else {
+			notices = append(notices, fmt.Sprintf("fallback: %s failed with %s; retrying %s with $%.2f remaining (%s)",
+				candidate, contract.KindOf(turnErr), candidates[index+1], remaining, provenance))
 		}
-		notices = append(notices, fmt.Sprintf("fallback: %s failed with %s; retrying %s with $%.2f remaining (%s)",
-			candidate, contract.KindOf(turnErr), candidates[index+1], remaining, source))
 		req.BudgetUSD = remaining
 	}
 	return Answer{Spent: total}, contract.Fail(contract.FailureUnavailable, "all configured models failed")

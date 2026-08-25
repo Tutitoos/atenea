@@ -82,7 +82,8 @@ checkpoints = true
 checkpoint_dir = ""
 
 # Who actually executes a step: any of "omp", "claudecode", "codex",
-# "serena" and "local".
+# "serena", "kivgraph", "tokensave" and "local" -- the same seven the loader
+# accepts, in the order it lists them when it refuses a name it does not know.
 #
 # Atenea decides and delegates, so execution always happens on the far side of
 # this line, and that far side is an adapter: a dumb translator with no logic
@@ -94,7 +95,12 @@ checkpoint_dir = ""
 # "codex" drives the native Codex CLI; both are off by default because they
 # cost money per call. "serena" is not a CLI at all: it is an MCP server,
 # attached the same way because a capability does not care whether its provider
-# is a command or a server. "local" is a stand-in
+# is a command or a server. "kivgraph" and "tokensave" are graph-backed
+# providers, and both speak MCP over stdio rather than HTTP: there is no
+# endpoint to fall back on, so each is launched from its own
+# [orchestrator.<name>.process] table and naming one without that table is
+# refused at startup rather than discovered as a dead provider mid-run.
+# "local" is a stand-in
 # that searches the disk directly, for a machine with no client installed. It
 # and omp both serve ripgrep, so attaching both is refused at load: the choice
 # is exclusive. The stand-in spawns nothing and is far faster for it -- 28-65x

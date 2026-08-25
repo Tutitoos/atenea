@@ -1081,8 +1081,13 @@ A workflow is a DAG of agent steps handed to Atenea whole:
 atenea workflow run plan.toml
 atenea workflow list
 atenea workflow show <id>
-atenea workflow resume <id> [--redo STEP]
+atenea workflow resume [--redo STEP] <id>
 ```
+
+Every flag goes **before** the id. Go's flag parser stops at the first word
+that is not a flag, so `resume <id> --redo STEP` hands the subcommand three
+arguments where it expects one and exits with `workflow resume takes one
+workflow id` before it has read anything.
 
 ```toml
 task = "count what the docs say"          # the commission every step is a slice of
@@ -1270,9 +1275,9 @@ The graph may grow mid-run, three times at most. Nothing proposes an
 expansion yet: it comes from a file, the same as the first graph did.
 
 ```
-atenea workflow propose <id> next.toml --replaces old-step
+atenea workflow propose --replaces old-step <id> next.toml
 atenea workflow approve <id>
-atenea workflow reject <id> --reason "reads two files it should not"
+atenea workflow reject --reason "reads two files it should not" <id>
 ```
 
 **Launch** and **approve** are the same mechanism and different words.

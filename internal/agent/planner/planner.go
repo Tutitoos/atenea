@@ -108,7 +108,7 @@ type report struct {
 	Verdict    string         `json:"verdict"`
 	Reason     *reason        `json:"reason,omitempty"`
 	Discovered []discovery    `json:"discovered,omitempty"`
-	Spent      *charge        `json:"spent,omitempty"`
+	Spent      *Charge        `json:"spent,omitempty"`
 	// Completeness and StoppedAt carry a pass's own claim about its coverage.
 	// coverage is the only place that fills them in, and it refuses before
 	// either is set on an answer that states no coverage at all, or claims
@@ -147,7 +147,16 @@ type discovery struct {
 	Note  string `json:"note"`
 }
 
-type charge struct {
+// Charge is one agent's own cost, in the shape internal/agent reads back off
+// the wire as chargeWire.
+//
+// Exported, unlike everything else about this agent's report, because it is
+// not this agent's alone: every shipped agent that calls a model has to write
+// the same object, and semanticreviewer left the field off entirely while
+// spending real money -- which on the wire says "an agent that costs
+// nothing", the opposite of what it does. One shape and one converter, so the
+// next model-calling agent has nothing left to get subtly wrong.
+type Charge struct {
 	InputTokens      int      `json:"input_tokens"`
 	OutputTokens     int      `json:"output_tokens"`
 	CacheReadTokens  int      `json:"cache_read_tokens"`
@@ -275,26 +284,61 @@ func answer(stdout io.Writer, out report) error {
 	return json.NewEncoder(stdout).Encode(out)
 }
 
-// readTokens is the observed read boundary passed to model.Request. It starts
-// from allowance.Tokens of the step's own dollar budget and is narrowed by a
-// declared max_tokens when one is smaller. This is deliberately an observed
-// boundary, not a provider hard cap: model clients may receive an in-flight
-// event before they can stop reading. budget(in) is zero for an ungranted run,
-// which keeps ReadTokens at zero too. readShare and tokensPerUSD lived here
-// until 2026-08-15 -- see internal/allowance for the arithmetic and the
-// measurements it is built on, now enforced at workflow create rather than
-// merely reserved from a grant.
+// firstEventFloor is the smallest allowance worth arming on this CLI, in the
+// input-equivalent tokens allowance.Weigh counts.
+//
+// Measured 2026-08-14, one live turn surveying this repository: the very
+// first assistant event already weighed 65,625 input-equivalent tokens --
+// about $0.20 -- because the CLI's system prompt and tool definitions are
+// cached on it, 32,799 cache-creation tokens against `input_tokens: 2`. So an
+// allowance at or under that figure is spent by the arrival of the prompt:
+// the nudge fires on the first event of every turn and the model is told to
+// answer with what it has, which is nothing. See model.Request.ReadTokens,
+// which documents the same measurement as "an allowance under ~70,000 buys no
+// reading at all on this CLI".
+//
+// The +1 in the floor below is allowance.MinShareUSD's own strictness, for
+// the same reason: an allowance that buys exactly the prompt and no more
+// still nudges the model before it has read anything of its own.
+const firstEventFloor = 65_625
+
+// readTokens is the observed read boundary passed to model.Request. It is
+// allowance.Tokens of the step's own dollar budget, never less than the
+// smallest allowance that buys any reading at all. This is deliberately an
+// observed boundary, not a provider hard cap: model clients may receive an
+// in-flight event before they can stop reading. budget(in) is zero for an
+// ungranted run, which keeps ReadTokens at zero too -- off, which is a turn
+// with no allowance rather than a turn with an impossible one. readShare and
+// tokensPerUSD lived here until 2026-08-15 -- see internal/allowance for the
+// arithmetic and the measurements it is built on, now enforced at workflow
+// create rather than merely reserved from a grant.
+//
+// Limits.MaxTokens is deliberately not consulted. The two numbers are in
+// different units and always were: this one is input-equivalent tokens, every
+// kind weighed by its price (cache write x2, output x5), while max_tokens is
+// a raw count an agent type declares in the settings file. Substituting one
+// for the other -- which is what narrowing did -- reads a raw ceiling as a
+// weighted allowance, and since a declared max_tokens is typically in the
+// thousands it armed a nudge that fires on the first event of every turn. It
+// is not a lost check either: model.Request.MaxTokens still carries the
+// declared ceiling and the client refuses an answer above it, which is the
+// boundary that number is for. model.Request.Validate refuses to compare the
+// two for this exact reason.
+//
+// Raising a short share to the floor does not authorize spending past it. The
+// ceiling is Request.BudgetUSD, which is passed separately and unchanged; all
+// this decides is when the turn is nudged to stop reading, and a nudge that
+// fires before any reading is possible costs the whole answer -- the twelve
+// of twelve empty deaths measured 2026-08-14 are what it was built to
+// prevent. It also keeps the turn on the reserved-answer path, which can
+// still come back with a partial rather than dying at the ceiling with
+// nothing written.
 func readTokens(in assignment) int {
 	grant := budget(in)
 	if grant <= 0 {
 		return 0
 	}
-
-	tokens := allowance.Tokens(grant)
-	if in.Limits.MaxTokens > 0 && in.Limits.MaxTokens < tokens {
-		return in.Limits.MaxTokens
-	}
-	return tokens
+	return max(allowance.Tokens(grant), firstEventFloor+1)
 }
 
 // Surface is the shape of the turn one built-in agent type gets: which of
@@ -461,7 +505,7 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 			SummaryField:  out.Summary,
 			FindingsField: out.Findings,
 		},
-		Spent:   spent(answer.Spent),
+		Spent:   Spent(answer.Spent),
 		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
@@ -523,7 +567,7 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 	got := report{
 		Verdict: "ok",
 		Result:  map[string]any{PlanField: out.Plan},
-		Spent:   spent(answer.Spent),
+		Spent:   Spent(answer.Spent),
 		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
@@ -540,7 +584,7 @@ func fromModelError(err error, c contract.Charge) report {
 	if contract.KindOf(err) == contract.FailureInvalidInput {
 		out = refused(contract.MessageOf(err), c)
 	}
-	out.Spent = spent(c)
+	out.Spent = Spent(c)
 	return out
 }
 
@@ -551,7 +595,7 @@ func refused(text string, c contract.Charge) report {
 		Result:  map[string]any{},
 		Verdict: "failed",
 		Reason:  &reason{Kind: "invalid_input", Text: text},
-		Spent:   spent(c),
+		Spent:   Spent(c),
 	}
 }
 
@@ -620,14 +664,14 @@ func partialNotice(completeness float64, stoppedAt string) string {
 	return fmt.Sprintf("this answer is partial: %.0f%% complete, stopped at %s", completeness*100, stoppedAt)
 }
 
-// spent converts a charge for the wire, and returns nil when there is nothing
+// Spent converts a charge for the wire, and returns nil when there is nothing
 // to report. Nil is what unmeasured looks like: a zeroed charge written out in
 // full would read as a run that cost nothing.
-func spent(c contract.Charge) *charge {
+func Spent(c contract.Charge) *Charge {
 	if !c.Measured() {
 		return nil
 	}
-	out := &charge{
+	out := &Charge{
 		InputTokens:      c.InputTokens,
 		OutputTokens:     c.OutputTokens,
 		CacheReadTokens:  c.CacheReadTokens,

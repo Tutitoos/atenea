@@ -16,10 +16,17 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 mcpb_path=${MCPB_BIN:-mcpb}
 manifest_path="$repo_dir/packaging/claude-desktop/manifest.json"
+# Two directories, because the archive is exactly what is staged. Building the
+# binary into the staging root and then installing it under server/ left a
+# second copy of it at the top of the extension: the .mcpb measured 54.1 MB
+# where 27.1 MB was needed, and mcpb listed three files for a two-file
+# extension. work_dir is where a binary built here lands; stage_dir holds only
+# what ships.
 stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/atenea-mcpb.XXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/atenea-mcpb-build.XXXXXX")
 
 cleanup() {
-	rm -rf "$stage_dir"
+	rm -rf "$stage_dir" "$work_dir"
 }
 trap cleanup EXIT
 
@@ -48,7 +55,7 @@ if [ -n "${ATENEA_BINARY:-}" ]; then
 		exit 1
 	}
 else
-	binary_path="$stage_dir/atenea"
+	binary_path="$work_dir/atenea"
 	(cd "$repo_dir" && go build -trimpath -buildvcs=false -o "$binary_path" ./cmd/atenea)
 fi
 

@@ -132,3 +132,27 @@ func TestTheChangelogHasAnEntryForThisVersion(t *testing.T) {
 		t.Fatalf("CHANGELOG.md has no %q section", heading)
 	}
 }
+
+// The comments in this package illustrate with a version number, and an
+// illustration nobody re-reads rots. They said 0.1.0 -- "this IS 0.1.0, built
+// from that tree" and `go install atenea@v0.1.0` -- through every release from
+// 1.0.0 to 1.0.5, telling the next reader the package belongs to a 0.x product
+// while the constant a few lines above them said otherwise. Every three-number
+// version written into this file is meant to be the one being shipped, so the
+// bump that forgets an example fails here.
+func TestThePackageCommentsIllustrateWithThisVersion(t *testing.T) {
+	body, err := os.ReadFile("buildinfo.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	written := regexp.MustCompile(`\d+\.\d+\.\d+`).FindAllString(string(body), -1)
+	if len(written) == 0 {
+		t.Fatal("buildinfo.go names no version at all; this test would pass for an empty file")
+	}
+	for _, version := range written {
+		if version != buildinfo.Version {
+			t.Errorf("buildinfo.go illustrates with %s, this build is %s",
+				version, buildinfo.Version)
+		}
+	}
+}

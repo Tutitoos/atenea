@@ -23,12 +23,24 @@ cobertura de código ni una promesa de compatibilidad universal.
 | Catálogo y adaptadores nativos | 14 capacidades, 20 implementaciones y 6 familias de provider en `internal/adapter/` y `default.toml` | Tests de paquetes, Kivgraph generation renovada, Tokensave 7.10.0 y matriz real; impacto e indexado probados con Kivgraph | 100% | La cobertura de impacto depende de que el snapshot incluya el archivo cambiado |
 | MCP y passthrough | Lifecycle, allow-list, efectos y bridge implementados; el default del repositorio no declara servidores activos | Wrappers `opencode`, `claude` y `codex`: 8/8 handshakes; matriz raw externa de lectura/diagnóstico; `atenea detect`: 8/8 MCP alcanzables; dashboards con apertura automática desactivada, incluido Kivgraph | 99% | Algunas herramientas requieren objetivos externos y el health sigue siendo bajo demanda |
 | Wrappers de modelos | OMP, Claude Code, Codex y OpenCode tienen adapters o backend; OpenCode es opt-in | OpenCode pasó matriz gratuita 6/6; Claude Code alcanzó el techo de 0,25 USD y ahora rechaza cualquier sobrecoste observado; Codex completó una búsqueda aislada en 81,8 s con timeout diagnóstico de 180 s | 96% | No existe un hard cap común de facturación/tokens en los providers externos |
-| Seguridad y permisos | Efectos, `--allow`, rutas sensibles, socket local y procesos contenidos | Tests de contratos, core, supervisor y workflow | 90% | No hay confirmación interactiva; los eventos externos en vuelo pueden superar límites observados |
+| Seguridad y permisos | Efectos, `--allow`, rutas sensibles, socket local y procesos contenidos | Tests de contratos, core, supervisor y workflow | 90% | No hay prompt interactivo implícito, por decisión; los eventos externos en vuelo pueden superar límites observados |
 | Estado, trazas y almacenamiento | DuckDB, checkpoints, métricas, notebook, backups y trace store implementados | Suite de `trace`, `metrics`, `checkpoint`, `backup`, `notebook` y gate | 95% | Sin bloqueo técnico identificado |
 | Tests y CI | CI multi-arquitectura, lint, race, coverage y readiness workflows declarados | Suite funcional completa, `vet`, build, policy, Hugo, matriz de capabilities, OpenCode 6/6 y `-race` completo; readiness 9/9 en copia limpia | 99% | La cobertura y compatibilidad universal de proveedores siguen siendo límites deliberados |
 | Instalación y release | Installer checksum, update, rollback, uninstall y workflows de release | `bash scripts/release-smoke.sh 1.0.0` pasó en macOS arm64; el release público `1.0.0` y sus cuatro artefactos pasan el gate de publicación | 100% | Los artefactos del viewer Kivgraph se distribuyen aparte |
 | Documentación | Arquitectura, settings, operaciones, contratos, política y readiness presentes | Anclas de política, Hugo `0.165.0` local y build del sitio correcto; referencias operativas actualizadas tras `1.0.0` | 100% | El módulo docs no pasa `go mod tidy` sin eliminar la dependencia indirecta de Hugo |
 | **Repositorio Atenea** | El núcleo funcional y sus contratos están implementados | Suite funcional, `vet`, build, policy, Hugo, race completo, matriz ampliada, OpenCode 6/6 y publicación `1.0.0` | **99%** | Quedan límites de cobertura del grafo y compatibilidad universal de proveedores externos |
+
+Sobre la confirmación interactiva conviene separar dos cosas que se confunden
+con facilidad. Lo que 1.0.0 no tenía, y sigue sin tener a propósito, es un
+prompt *implícito*: ningún adaptador ni ruta del demonio se detiene a
+preguntar, porque un servicio bajo systemd o launchd no tiene terminal donde
+contestar y esa pregunta colgaría la ejecución o no la respondería nadie.
+La confirmación *explícita*, la que pide quien llama, llegó después de esta
+auditoría: `--confirm` está en `task`, `ask` y `decide --run` desde 1.0.2 --
+imprime el presupuesto y los efectos que va a conceder y se niega a seguir sin
+TTY en vez de continuar --, y desde 1.0.5 `agent` la exige para todo tipo que
+declare efectos `write` o `external`. `backup discard` no acepta otra palabra
+desde 1.0.2.
 
 ## Revisión de mantenimiento posterior
 

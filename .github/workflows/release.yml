@@ -152,6 +152,30 @@ jobs:
             file "dist/$artifact"
           fi
 
+      # The Claude Desktop extension is packed here, in the matrix, rather than
+      # once on the Linux runner: manifest.json points at a native binary in
+      # server/atenea, so a single .mcpb built on ubuntu installs without
+      # complaint on a Mac and fails the first time the user opens a
+      # conversation. One artifact per platform, named like the binaries.
+      #
+      # The packer is pinned. It runs against the tag being published, and a
+      # release path that installs a floating version is a release whose output
+      # nobody can reproduce.
+      - name: Pack the Claude Desktop extension
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          artifact="atenea-${version}-${GOOS}-${GOARCH}"
+          npm i --silent --no-audit --no-fund \
+            --prefix "$RUNNER_TEMP/mcpb" @anthropic-ai/mcpb@2.1.2
+          MCPB_BIN="$RUNNER_TEMP/mcpb/node_modules/.bin/mcpb" \
+          ATENEA_BINARY="$PWD/dist/$artifact" \
+          MCPB_OUTPUT="$PWD/dist/${artifact}.mcpb" \
+            bash scripts/build-claude-mcpb.sh
+
       - uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.goos }}-${{ matrix.goarch }}

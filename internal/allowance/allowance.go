@@ -70,11 +70,14 @@ const tokensPerUSD = 166000
 // single allowance in.
 //
 // The weights are price ratios normalised to input tokens at $3/M: input x1,
-// cache creation x2 ($6/M), cache read x0.1 ($0.30/M), output x5 ($15/M). So
-// tokensPerUSD is 333,333 by construction, which is the number a caller
-// converts a dollar share with -- see Tokens. Kept as integer arithmetic,
-// which truncates, because the figure is an ESTIMATE and rounding it
-// precisely would dress it up as something it is not.
+// cache creation x2 ($6/M), cache read x0.1 ($0.30/M), output x5 ($15/M). By
+// that construction alone a dollar buys 333,333 input-equivalent tokens --
+// but that is the theory, not the constant. What a caller actually converts a
+// dollar share with is tokensPerUSD, deliberately fixed lower at the
+// pessimistic end of what two real turns were charged; its own doc has the
+// receipts and the reason. Kept as integer arithmetic, which truncates,
+// because the figure is an ESTIMATE and rounding it precisely would dress it
+// up as something it is not.
 //
 // The cache creation weight is x2 and not the x1.25 of a 5-minute write,
 // because this CLI writes 1-hour cache entries. Measured 2026-08-14 against

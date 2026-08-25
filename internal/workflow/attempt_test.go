@@ -345,3 +345,66 @@ func TestAStepCutAtItsCeilingCannotBeRedone(t *testing.T) {
 		t.Errorf("second refusal = %q, want it to name the step's status", err.Error())
 	}
 }
+
+// The archive of a run that was corrected more than once reads as a sequence
+// of events, so its order has to be the order the events happened in. It was
+// the alphabet: `ORDER BY step_id, attempt` is chronological only inside one
+// step, and a graph whose step `z` was sent back an hour before its step `a`
+// listed a's correction first -- under a doc comment on [workflow.Run] that
+// promises oldest first.
+func TestTheArchiveIsOrderedByWhenEachAttemptWasReplaced(t *testing.T) {
+	store := attemptStore(t)
+
+	early, late := step("z", "reader", nil), step("a", "reader", nil)
+	early.Permission.BudgetUSD = 0.20
+	late.Permission.BudgetUSD = 0.20
+	graph := graphOf(early, late)
+	graph.GrantUSD = 0.40
+	plan, err := workflow.Compile(graph,
+		[]config.AgentType{declared("reader", "/bin/true", config.PoolAgent)})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := store.Create(t.Context(), "wf-order", plan, "taxiprime-backend", time.Now(), 1); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// `z` is replaced an hour before `a`. That disagreement between the clock
+	// and the alphabet is the only arrangement in which the two orders are
+	// distinguishable, so it is the one the fixture builds.
+	cut := contract.Report{
+		Verdict: contract.VerdictIncomplete,
+		Reason: contract.Reason{
+			Kind: contract.FailureUnavailable,
+			Text: "claude code stopped at its spending ceiling before it could answer",
+		},
+		Spent: contract.Charge{USD: usd(0.20), PricedBy: "a test"},
+	}
+	at := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	for hour, id := range []string{"z", "a"} {
+		if err := store.Claim(t.Context(), "wf-order", id, "tr-"+id, 1, at, 1); err != nil {
+			t.Fatalf("Claim %s: %v", id, err)
+		}
+		if err := store.Finish(t.Context(), "wf-order", id,
+			workflow.StatusIncomplete, cut, at); err != nil {
+			t.Fatalf("Finish %s: %v", id, err)
+		}
+		if err := store.Reset(t.Context(), "wf-order", id,
+			at.Add(time.Duration(hour)*time.Hour)); err != nil {
+			t.Fatalf("Reset %s: %v", id, err)
+		}
+	}
+
+	run, err := store.Load(t.Context(), "wf-order")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	var order []string
+	for _, attempt := range run.Superseded {
+		order = append(order, attempt.StepID)
+	}
+	if len(order) != 2 || order[0] != "z" || order[1] != "a" {
+		t.Errorf("Superseded names %v, want [z a]: z was replaced at 12:00 and a at 13:00, "+
+			"and the field documents oldest first", order)
+	}
+}

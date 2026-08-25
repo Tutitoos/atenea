@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/Tutitoos/atenea/internal/config"
@@ -80,12 +81,13 @@ func Main(stdin io.Reader, stdout io.Writer) error {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return fmt.Errorf("the assignment is not readable: %w", err)
 	}
-	return json.NewEncoder(stdout).Encode(judge(in, config.Load))
+	return json.NewEncoder(stdout).Encode(judge(in, config.LoadEffectiveIn))
 }
 
-// loader is config.Load, named so a test can hand this agent a settings file
-// without putting one on disk at the location the process would find.
-type loader func(explicit string) (config.Config, error)
+// loader is config.LoadEffectiveIn, named so a test can hand this agent a
+// settings file without putting one on disk at the location the process would
+// find.
+type loader func(explicit, dir string) (config.Config, error)
 
 func judge(in assignment, load loader) report {
 	if in.Subject == nil {
@@ -119,7 +121,24 @@ func judge(in assignment, load loader) report {
 	// this reviewer needs is the declared agent types, and those are not one
 	// of the four context levels. The process inherits the environment Atenea
 	// was started with, so it resolves the same settings file Atenea did.
-	cfg, err := load("")
+	//
+	// It has to be the EFFECTIVE settings, read at the repository the plan is
+	// for, because that is what both of the other two sides read. The planner
+	// writes its menu of types from config.LoadEffectiveIn on the same root,
+	// and `atenea workflow create` compiles the accepted graph with
+	// config.LoadEffective. Reading only the global file here put this
+	// reviewer alone in the dark about `.atenea/config.toml`: a plan naming a
+	// type the repository declares -- which the planner had just offered it
+	// -- was refused as unknown, the run relaunched, and the second attempt
+	// was refused the same way, while the engine would have compiled it.
+	// The root comes from the assignment for the reason planner's does: an
+	// agent's working directory was chosen by whoever spawned it and need not
+	// be the tree the work is about.
+	where := repositoryRoot(in)
+	if where == "" {
+		where = "."
+	}
+	cfg, err := load("", where)
 	if err != nil {
 		// Could not check. Not the planner's fault and not an approval: an
 		// unchecked graph passed off as compiled is the exact failure this
@@ -171,6 +190,34 @@ func incomplete(text string) report {
 		Verdict: "incomplete",
 		Reason:  &reason{Kind: "unavailable", Text: text},
 	}
+}
+
+// repositoryRoot reads the tree this plan is for out of the assignment.
+//
+// It is the planner's own helper, spelled again here rather than shared: the
+// two agents are separate programs that happen to be compiled into one
+// binary, and a package that reached into the other's internals for a
+// nineteen-line struct read would tie the pair together for nothing. A root
+// that does not exist on this machine is treated as absent, because a stale
+// path from another host would send the overlay lookup somewhere arbitrary.
+func repositoryRoot(in assignment) string {
+	raw, ok := in.Context["repository"]
+	if !ok {
+		return ""
+	}
+	var level struct {
+		Root string `json:"root"`
+	}
+	if err := json.Unmarshal(raw, &level); err != nil {
+		return ""
+	}
+	if level.Root == "" {
+		return ""
+	}
+	if _, err := os.Stat(level.Root); err != nil {
+		return ""
+	}
+	return level.Root
 }
 
 func reasonText(s *subject) string {

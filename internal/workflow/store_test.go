@@ -206,6 +206,69 @@ func TestARedoneStepDoesNotKeepItsPreviousAttemptsCharge(t *testing.T) {
 	}
 }
 
+// Reset is the other write that ends an attempt, and it has to leave the row
+// as empty as Claim does.
+//
+// Claim clearing them hid this for as long as it did: in the ordinary path a
+// reset step is claimed moments later, so nobody saw the gap. A reset that is
+// never followed by a claim -- a redo the funding check refuses, a run
+// somebody walks away from -- kept the whole lie: `verdict = ok` and a dollar
+// figure sitting on a step whose status says pending, and that same dollar
+// figure counted a second time in workflow_attempt, which Reset had just
+// filed it into. Run.Budget() adds both.
+func TestAResetStepKeepsNeitherItsChargeNorItsVerdict(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+
+	run, _, err := h.engine.Create(t.Context(), graphOf(step("a", "worker", nil)))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := h.state.Claim(t.Context(), run.ID, "a", "tr-1", 1, time.Now(), 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	usd := 0.5
+	answered := contract.Report{
+		Result:  map[string]any{"ok": true},
+		Verdict: contract.VerdictOK,
+		Spent:   contract.Charge{InputTokens: 100, USD: &usd, PricedBy: "anthropic"},
+	}
+	if err := h.state.Finish(t.Context(), run.ID, "a", workflow.StatusOK, answered, time.Now()); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if err := h.state.Reset(t.Context(), run.ID, "a", time.Now()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	// Read back rather than claimed again: the point is what a step that is
+	// never re-dispatched looks like.
+	loaded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	row := stepOf(t, loaded, "a")
+	if row.Status != workflow.StatusPending {
+		t.Fatalf("status = %s after Reset, want pending", row.Status)
+	}
+	if row.Spent.Measured() {
+		t.Errorf("Spent = %+v on a pending step, want cleared: the archive already holds it, "+
+			"and a charge in both places is a charge the balance counts twice", row.Spent)
+	}
+	if row.Verdict != contract.VerdictUnspecified {
+		t.Errorf("verdict = %s on a pending step, want none: a row that says ok about work "+
+			"nobody has started reads as a finished step", row.Verdict)
+	}
+	if len(row.Result) != 0 {
+		t.Errorf("result = %v on a pending step, want none", row.Result)
+	}
+	// And the money is still on the record, once, where Reset filed it.
+	if got := loaded.Spend().SupersededUSD; got < 0.499 || got > 0.501 {
+		t.Errorf("the archive holds $%.4f, want the $0.50 Reset filed: clearing the live row "+
+			"must move the charge, not lose it", got)
+	}
+}
+
 // A partial report's completeness and stopped_at survive a write and a read
 // back intact -- the pair the reserved-answer split exists to record, and
 // the two are read together: a coverage figure with no stopped_at column

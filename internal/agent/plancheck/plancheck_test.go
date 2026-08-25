@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func loaderFor(t *testing.T) loader {
 	if err := os.WriteFile(path, []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
-	return func(string) (config.Config, error) { return config.Load(path) }
+	return func(string, string) (config.Config, error) { return config.Load(path) }
 }
 
 // planned wraps a plan the way the review machinery hands it over: the
@@ -251,7 +252,7 @@ func TestAPlannerThatFailedItselfKeepsItsOwnSentence(t *testing.T) {
 // that did nothing wrong; calling it `ok` would approve a graph nobody
 // compiled.
 func TestUnreadableSettingsAreIncompleteRatherThanARefusal(t *testing.T) {
-	broken := func(string) (config.Config, error) {
+	broken := func(string, string) (config.Config, error) {
 		return config.Load(filepath.Join(t.TempDir(), "nothing", "atenea.toml"))
 	}
 	got := judge(planned(goodPlan), broken)
@@ -292,6 +293,55 @@ func TestTheProcessAnswersOnStdout(t *testing.T) {
 	}
 	if got.Verdict != "ok" {
 		t.Errorf("verdict = %q (%+v), want ok", got.Verdict, got.Reason)
+	}
+}
+
+// The planner offers the model every type that applies where the work is,
+// which includes the ones the repository declares in its own
+// `.atenea/config.toml`, and `atenea workflow create` compiles the accepted
+// graph the same way. A reviewer reading only the global file sat between
+// those two agreeing sides and refused a plan the engine would have run,
+// naming a type the planner had just offered as unknown.
+func TestATypeTheRepositoryDeclaresCompilesHereToo(t *testing.T) {
+	root := t.TempDir()
+	// The overlay is only read at a repository root, and .git is what marks
+	// one -- see config.RepoRoot.
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("marking the repository root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, config.LocalDir), 0o755); err != nil {
+		t.Fatalf("creating the overlay directory: %v", err)
+	}
+	overlay := "[[agent]]\nname = \"migrations-reader\"\nruns = \"reader\"\n" +
+		"summary = \"reads this repository's migrations\"\n"
+	if err := os.WriteFile(filepath.Join(root, config.LocalDir, config.LocalFile), []byte(overlay), 0o600); err != nil {
+		t.Fatalf("writing the overlay: %v", err)
+	}
+	global := filepath.Join(t.TempDir(), "atenea.toml")
+	if err := os.WriteFile(global, []byte(settings), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	t.Setenv("ATENEA_CONFIG", global)
+
+	in := planned(strings.Replace(soloPlan, `agent = "reader"`, `agent = "migrations-reader"`, 1))
+	in.Context = map[string]json.RawMessage{
+		"repository": json.RawMessage(`{"root":` + strconv.Quote(root) + `}`),
+	}
+	payload, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := Main(bytes.NewReader(payload), &out); err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	var got report
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the answer is not readable: %v", err)
+	}
+	if got.Verdict != "ok" {
+		t.Fatalf("verdict = %q (%s), want the repository's own type compiled", got.Verdict, reasonOf(got))
 	}
 }
 

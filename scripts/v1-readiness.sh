@@ -81,7 +81,12 @@ echo "[7/9] race suite"
 go test -race -count=1 ./...
 
 echo "[8/9] policy, load and provider entry points"
-bash -n scripts/build-claude-mcpb.sh scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/mcp-live-check.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh scripts/benchmark-check.sh scripts/load-check.sh scripts/benchmark-suite.sh scripts/render-benchmark-docs.sh scripts/validate-benchmark-summary.sh scripts/provider-matrix-check.sh scripts/coverage-check.sh scripts/coverage-history-check.sh
+# The glob, not a list. The list was maintained by hand, so every script added
+# after it was written started life outside the only gate that parses it:
+# build-claude-mcpb.sh shipped a release before anything ran `bash -n` over it.
+# A syntax error that reaches nobody until an operator runs the script in anger
+# is exactly what this step exists to prevent.
+bash -n scripts/*.sh
 scripts/v1-policy-check.sh
 scripts/benchmark-check.sh
 scripts/load-check.sh

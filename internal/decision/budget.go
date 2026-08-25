@@ -72,10 +72,17 @@ func (e MeasuredBudgetEstimator) Estimate(repository, agent, model string) Budge
 	if startup <= 0 {
 		return baseline
 	}
+	// Source is the trace, and it has to describe the figure that was
+	// actually returned. Stamped outside this branch it claimed a
+	// measurement for every answer, including the ones where the measured
+	// floor came in under the conservative baseline and the number handed
+	// back was DefaultBudgetEstimator's -- so a reader chasing an estimate
+	// went looking for a measurement that had no part in it.
 	if startup*1.25 > baseline.EstimatedUSD {
 		baseline.EstimatedUSD = startup * 1.25
 		baseline.MinimumUSD = baseline.EstimatedUSD * 0.80
+		baseline.Source = fmt.Sprintf("measured %s/%s/%s startup floor plus answer headroom",
+			repository, agent, model)
 	}
-	baseline.Source = fmt.Sprintf("measured %s/%s/%s startup floor plus answer headroom", repository, agent, model)
 	return baseline
 }

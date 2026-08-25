@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1070,8 +1071,9 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	return out, nil
 }
 
-// Attempts reads the superseded dispatches of one step, oldest first. An
-// empty stepID reads every step of the run.
+// Attempts reads the superseded dispatches of one step, oldest first by the
+// moment each was replaced. An empty stepID reads every step of the run, in
+// that same one chronological order rather than grouped by step.
 //
 // The live attempt is NOT here -- it is the workflow_step row, and a caller
 // wanting the whole history reads both. Keeping the current one out of this
@@ -1108,6 +1110,25 @@ func (s *Store) Attempts(ctx context.Context, id, stepID string) ([]AttemptRow, 
 	if err := rows.Err(); err != nil {
 		return nil, unavailable(err, "workflow: reading %s attempts", id)
 	}
+	// Chronological, which is what this function and [Run.Superseded] both
+	// promise and what neither delivered. `ORDER BY step_id, attempt` is
+	// chronological only within one step: over a whole run it put step z's
+	// Monday attempts after step a's Friday ones, so a reader walking the
+	// archive of a graph that was corrected twice saw the two corrections in
+	// alphabetical order and read them as one sequence of events.
+	//
+	// Sorted here rather than in the query because replaced_at is stored as
+	// RFC3339Nano, and that layout drops trailing zeros from the fraction:
+	// "12:00:00.5Z" sorts AFTER "12:00:00.50000001Z" as text, and a whole
+	// second written with no fraction at all sorts after both. ORDER BY
+	// replaced_at would put those three in exactly the wrong order while
+	// looking like it had fixed this.
+	//
+	// Stable, so the SQL order above remains the tiebreak: attempts filed at
+	// the same instant stay grouped by step and ordered by attempt number.
+	slices.SortStableFunc(out, func(a, b AttemptRow) int {
+		return a.Replaced.Compare(b.Replaced)
+	})
 	return out, nil
 }
 

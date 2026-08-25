@@ -177,16 +177,21 @@ func (c Config) AgentTypeByName(name string) (AgentType, error) {
 
 // fileAgent is the TOML shape of AgentType.
 type fileAgent struct {
-	Name         string      `toml:"name"`
-	Kind         string      `toml:"kind"`
-	Summary      string      `toml:"summary"`
-	Command      string      `toml:"command"`
-	Args         []string    `toml:"args"`
-	Env          []string    `toml:"env"`
-	Context      []string    `toml:"context"`
-	Effects      []string    `toml:"effects"`
-	MaxDuration  string      `toml:"max_duration"`
-	MaxTokens    int         `toml:"max_tokens"`
+	Name        string   `toml:"name"`
+	Kind        string   `toml:"kind"`
+	Summary     string   `toml:"summary"`
+	Command     string   `toml:"command"`
+	Args        []string `toml:"args"`
+	Env         []string `toml:"env"`
+	Context     []string `toml:"context"`
+	Effects     []string `toml:"effects"`
+	MaxDuration string   `toml:"max_duration"`
+	// MaxTokens is a pointer so an absent key is distinguishable from a
+	// written zero. contract.Limits reads zero as "the caller declared no
+	// boundary", so a plain int would hand every [[agent]] that forgot the key
+	// an agent with its token ceiling switched off -- the exact opposite of
+	// what this file's own header and docs/content/settings.md promise.
+	MaxTokens    *int        `toml:"max_tokens"`
 	Pool         string      `toml:"pool"`
 	ReadsSubject bool        `toml:"reads_subject"`
 	Result       []fileField `toml:"result"`
@@ -207,7 +212,6 @@ func (a fileAgent) build(source string) (AgentType, error) {
 		Command: strings.TrimSpace(a.Command),
 		Args:    a.Args,
 		Env:     a.Env,
-		Limits:  contract.Limits{MaxTokens: a.MaxTokens},
 		// Declared, not derived: ReadsASubject adds the review implication
 		// where it is read, so a round-trip through this file preserves what
 		// the settings actually said.
@@ -239,6 +243,16 @@ func (a fileAgent) build(source string) (AgentType, error) {
 	if out.Limits.MaxDuration, err = time.ParseDuration(a.MaxDuration); err != nil {
 		return fail("max_duration %q: %v", a.MaxDuration, err)
 	}
+	// Both ceilings have to be written down. An omitted max_tokens would reach
+	// contract.Limits as zero, which Limits.Fits reads as a parent that
+	// constrains nothing, so the agent would run with no token ceiling at all
+	// and nobody would have chosen that. Writing zero on purpose is still
+	// allowed -- that is an operator deciding there is no boundary, which is a
+	// different act from forgetting the key.
+	if a.MaxTokens == nil {
+		return fail("max_tokens is required; write 0 to declare no token ceiling")
+	}
+	out.Limits.MaxTokens = *a.MaxTokens
 	if err := out.Validate(source); err != nil {
 		return AgentType{}, err
 	}

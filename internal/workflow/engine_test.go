@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -658,4 +659,120 @@ func countLines(t *testing.T, path string) int {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return len(strings.Fields(string(raw)))
+}
+
+// dispatching counts the goroutines execute has out running steps, by looking
+// for its dispatch closure in a dump of every stack.
+//
+// A plain runtime.NumGoroutine() cannot answer this. The test below closes a
+// sql.DB, and database/sql retires its own opener and resetter goroutines when
+// it does -- two of them, which is exactly the number a stranded pair would
+// add. The count came out even and a leak read as clean.
+//
+// The frame name is compiler-generated, so the test asserts a positive count
+// while three steps really are in flight before it asserts a zero. A rename
+// that broke this helper would otherwise turn it into one that always answers
+// zero and always passes.
+func dispatching() int {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "workflow.(*Engine).execute.func")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// A write that fails while other steps are still in flight must not strand
+// them.
+//
+// `results` is unbuffered, so a step finishing after the loop has returned
+// blocks forever in `results <- done{...}` with nobody left to receive: the
+// goroutine, and the agent process it is holding open, stay for the life of
+// the Atenea. Three of execute's five returns used to leave that way -- only
+// the OpenGate and Claim pair cancelled and drained -- which is why the
+// unwinding is now one deferred call that every return goes through rather
+// than a pair repeated at some of them.
+//
+// The store is closed under a running graph to produce the failure, because
+// that is the shape of the real one: the disk goes away, or the file is taken
+// from underneath, and the next write in the loop returns an error while two
+// agents are still working.
+func TestAFailedWriteDoesNotStrandTheStepsStillRunning(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, noCeiling(),
+		declared("quick", stub(t, dir, "quick", "sleep 1\n"+
+			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
+		declared("lasting", stub(t, dir, "lasting", "sleep 3\n"+
+			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+
+	run, gate, err := h.engine.Create(t.Context(), graphOf(
+		step("quick", "quick", nil),
+		step("first", "lasting", nil),
+		step("second", "lasting", nil)))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	approve(t, h, run.ID)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.engine.Run(t.Context(), gate.RunID)
+		done <- err
+	}()
+
+	// Close only once all three are spawned. Closing earlier would fail a
+	// write with nothing in flight, which is the case that never leaked.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		held, err := h.state.Load(t.Context(), run.ID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		running := 0
+		for _, row := range held.Steps {
+			if row.Status == workflow.StatusRunning {
+				running++
+			}
+		}
+		if running == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of 3 steps started before the deadline", running)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if got := dispatching(); got != 3 {
+		t.Fatalf("the stack dump shows %d dispatch goroutines while three steps are "+
+			"running: the detector below cannot see what it is meant to count", got)
+	}
+	// `quick` answers a second from now and its Finish is the write that
+	// fails. `first` and `second` are two seconds further off, so they are
+	// certainly still in flight when it does.
+	if err := h.state.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := <-done; err == nil {
+		t.Fatal("Run returned nil after its store was closed under it")
+	}
+
+	// A settle loop rather than one reading: the goroutines exit a moment
+	// after Run returns, and an immediate count would be racing them. The
+	// deadline is ten times the three seconds the two agents sleep, so a
+	// failure here means blocked rather than merely slow.
+	waited := time.Now().Add(30 * time.Second)
+	for {
+		left := dispatching()
+		if left == 0 {
+			break
+		}
+		if time.Now().After(waited) {
+			t.Fatalf("%d dispatch goroutines are still alive: the steps in flight when the "+
+				"write failed are blocked sending to a channel nobody reads", left)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

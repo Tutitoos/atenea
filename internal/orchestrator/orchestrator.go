@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"math"
 	"path"
 	"slices"
 	"strings"
@@ -236,9 +235,12 @@ func New(cfg Config) (*Agent, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"orchestrator: max_parallel must not be negative")
 	}
-	if cfg.BudgetUSD < 0 {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"orchestrator: budget_usd must not be negative")
+	// The standing grant is the ceiling every commission that names no figure
+	// of its own inherits, so an unusable number here is worse than an
+	// unusable one on a single commission: it is wrong for every commission
+	// until somebody edits the settings file.
+	if err := validGrant("orchestrator", cfg.BudgetUSD); err != nil {
+		return nil, err
 	}
 	store := cfg.Checkpoints
 	if store == nil {
@@ -361,6 +363,14 @@ type StepResult struct {
 	// raised itself with nothing to quote.
 	Raw   string
 	Spent contract.Sample
+	// Dispatched says the chosen implementation was actually called. It is
+	// not the same question as "was somebody chosen": the funnel picks a
+	// winner before the request is validated, so a payload missing a required
+	// field closes the step with Decision.Chosen filled in and nobody ever
+	// asked. Reading the decision as proof of a call filed that caller's typo
+	// as the provider's failure, and a run of them would mark down an
+	// implementation that was never given the chance to answer.
+	Dispatched bool
 	// ClosedAt is when this step finished, stamped by the step itself. It has
 	// to be: the recorder runs after the whole wave returns, so a clock read
 	// there gives every step in the wave the same instant and moves the fast
@@ -391,12 +401,8 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	if strings.TrimSpace(task.Text) == "" {
 		return nil, contract.Fail(contract.FailureInvalidInput, "task: text is required")
 	}
-	// A negative grant is not "spend nothing", it is a typo. Clamping it would
-	// silently switch off every paid provider for the run, and the operator
-	// would read the refusals as an outage rather than as their own mistake.
-	if task.BudgetUSD < 0 || math.IsNaN(task.BudgetUSD) {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"task: budget must not be negative, got %v", task.BudgetUSD)
+	if err := validGrant("task", task.BudgetUSD); err != nil {
+		return nil, err
 	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
@@ -509,9 +515,8 @@ func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float
 	if err := plan.Validate(); err != nil {
 		return nil, err
 	}
-	if budgetUSD < 0 || math.IsNaN(budgetUSD) || math.IsInf(budgetUSD, 0) {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"plan: budget must be finite and not negative, got %v", budgetUSD)
+	if err := validGrant("plan", budgetUSD); err != nil {
+		return nil, err
 	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
@@ -609,11 +614,10 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"ask: repository is required; a position belongs to exactly one")
 	}
-	// One capability is a commission of one step, so the same typo is refused
-	// here for the same reason.
-	if q.BudgetUSD < 0 || math.IsNaN(q.BudgetUSD) {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"ask: budget must not be negative, got %v", q.BudgetUSD)
+	// One capability is a commission of one step, so the same ceiling is
+	// refused here by the same rule.
+	if err := validGrant("ask", q.BudgetUSD); err != nil {
+		return nil, err
 	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
@@ -705,9 +709,8 @@ type ResumeOptions struct {
 // splitting already ran, the plan on the receipt already carries every
 // step's payload, and none of it is recomputed here.
 func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (result *Result, err error) {
-	if opts.BudgetUSD < 0 || math.IsNaN(opts.BudgetUSD) {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"resume: budget must not be negative, got %v", opts.BudgetUSD)
+	if err := validGrant("resume", opts.BudgetUSD); err != nil {
+		return nil, err
 	}
 	if a.runner == nil {
 		return nil, contract.Fail(contract.FailureUnavailable,
@@ -736,15 +739,22 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 		return nil, err
 	}
 
-	// A step already on the plan keeps its own stamped permission, but the
-	// standing grant and --allow apply the same way a fresh commission
-	// would use them: added on top of what the step already carried, never
-	// dropped. Harmless when splitting never ran too -- that branch below
-	// discards record.Plan.Steps and rebuilds its own permission from
-	// record.Effects instead.
+	// A step already on the plan keeps exactly the permission it was stamped
+	// with, plus whatever --allow adds now. The operator's standing grant is
+	// deliberately NOT re-applied: the floor a commission actually ran on is
+	// not on the receipt, and a commission opened by a connected client ran
+	// on that client's floor, not on the operator's line. Composing from
+	// a.standingEffects here handed such a run every effect the operator ever
+	// granted themselves, which is a widening the person who resumed it never
+	// asked for and could not see. Until the floor is persisted beside
+	// Effects, the only honest reconstruction is the one already on file.
+	//
+	// A resumed commission can therefore be narrower than the first attempt
+	// where the floor did the granting, and that is the safe direction: the
+	// step refuses and says which effect it lacked, where the other mistake
+	// runs it.
 	for i := range record.Plan.Steps {
-		record.Plan.Steps[i].Permission = record.Plan.Steps[i].Permission.
-			Grant(a.standingEffects).Grant(opts.Effects)
+		record.Plan.Steps[i].Permission = record.Plan.Steps[i].Permission.Grant(opts.Effects)
 	}
 
 	budgetUSD := record.BudgetUSD - chargedSoFar(record.Steps)
@@ -807,12 +817,14 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 		// record.Effects never included the implicit read -- Run and Ask
 		// both start every permission from it and never store it back, so
 		// rebuilding from record.Effects alone would silently drop it here.
-		// Same layering as a fresh commission otherwise: standing grant,
-		// then whatever the original commission held, then --allow.
+		// The floor the commission ran on is the one layer the receipt does
+		// not carry, and the standing grant is not a stand-in for it: see the
+		// stamped-permission loop above for why re-applying it would widen a
+		// client's chat to the operator's own line.
 		permission := contract.Permission{
 			Task:    record.Task,
 			Effects: []contract.Effect{contract.EffectRead},
-		}.Grant(a.standingEffects).Grant(record.Effects).Grant(opts.Effects)
+		}.Grant(record.Effects).Grant(opts.Effects)
 
 		explorePlan := contract.Plan{Task: record.Task}
 		for _, repo := range repositories {
@@ -1011,6 +1023,17 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 	// with "context canceled", filed an incident saying so, and dropped every
 	// measurement the run had already earned.
 	defer a.meter.Settle(context.WithoutCancel(ctx))
+	// The phase lands however this call ends, for the same reason the batch
+	// does. Appended at the end of the loop instead, the two early exits --
+	// the caller going away, and a checkpoint that could not be written --
+	// took the whole phase off the report, so the commission worth reading
+	// back was exactly the one whose accounting was missing: steps ran, money
+	// was charged, and result.Phases said the phase never happened.
+	defer func() {
+		result.Phases = append(result.Phases, Phase{
+			Name: phase, Steps: len(closed), Spent: phaseSpent, Elapsed: time.Since(phaseStarted),
+		})
+	}()
 	for _, wave := range waves {
 		if err := ctx.Err(); err != nil {
 			// Not a timeout unless it really was one. A run the user stopped
@@ -1048,10 +1071,15 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 			closed = append(closed, step)
 			result.Steps = append(result.Steps, step)
-			// Only an attempt that reached a provider is a measurement. A
-			// blocked step never ran: nobody was chosen, no time was spent,
-			// and filing it would put a row under an empty implementation
-			// that the selector would later read as a real average.
+			// Only an attempt that reached a provider is a measurement, and
+			// the step itself says whether it did. A blocked step never ran:
+			// nobody was chosen, no time was spent, and filing it would put a
+			// row under an empty implementation that the selector would later
+			// read as a real average. A step refused by the core -- an
+			// unreachable capability, a payload missing a required field --
+			// did have somebody chosen, and reading that as proof of a call
+			// is what used to file the caller's own mistake against the
+			// implementation the funnel had just picked.
 			//
 			// A canceled step is the other kind of non-measurement, and the
 			// more dangerous one because it does have numbers attached. They
@@ -1059,7 +1087,7 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			// changing their mind, and a failure nobody's provider committed.
 			// Filed, they would price a tool by the patience of whoever ran
 			// it and mark it down for being interrupted.
-			if step.Decision.Chosen.ID != "" && step.FailureKind != contract.FailureCanceled {
+			if step.Dispatched && step.FailureKind != contract.FailureCanceled {
 				a.meter.Record(measure(result.RunID, step))
 			}
 			record.Steps = append(record.Steps, snapshot(step))
@@ -1071,9 +1099,6 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			}
 		}
 	}
-	result.Phases = append(result.Phases, Phase{
-		Name: phase, Steps: len(closed), Spent: phaseSpent, Elapsed: time.Since(phaseStarted),
-	})
 	// A phase closing is one of the two moments measurements are pushed to
 	// disk, the other being the process going down. Between them the batch
 	// lives in memory, which is the whole point of batching; these two are
@@ -1201,6 +1226,10 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if err := request.Validate(); err != nil {
 		return a.close(out, err)
 	}
+	// Stamped on the way in, not after the call returns: a runner that panics
+	// or a context that dies mid-flight still spent the provider's time, and
+	// a measurement of that is a real measurement.
+	out.Dispatched = true
 	started := time.Now()
 	outcome, runErr := a.runner.Run(ctx, request)
 	out.Outcome = outcome

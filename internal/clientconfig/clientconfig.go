@@ -210,8 +210,20 @@ type claudeSettings struct {
 
 // claudeToggles reads which of .mcp.json's servers the project switched on.
 //
-// Both files are read, the local one last, because that is the order the
-// client applies them.
+// Both files are read and their lists are joined, not layered. The order they
+// are read in is therefore irrelevant, and the comment that used to sit here
+// claimed the opposite: readClaudeServers can only ever turn a server OFF from
+// what this returns -- a name in either file's `disabled` is off, and once
+// either file names anything in `enabled` a name in neither is off as well --
+// so nothing settings.local.json says can switch a server back on.
+//
+// Where that differs from the client is a server disabled in settings.json and
+// re-enabled in settings.local.json: Claude Code runs it, this reads it as off.
+// It is reported as off rather than hidden, which is what makes the difference
+// something an operator can see on the row and correct, and Enabled is folded
+// as a union across clients afterwards anyway. Real precedence would mean
+// keeping the state per name and letting the later file win; this does not,
+// and now says so.
 func claudeToggles(root string, out *Reading) (enabled, disabled []string) {
 	for _, name := range []string{"settings.json", "settings.local.json"} {
 		rel := filepath.Join(".claude", name)
@@ -342,9 +354,17 @@ func readOpenCodeServers(root string, out *Reading) {
 	}
 }
 
-// stripComments removes // line comments so a .jsonc file parses. It respects
-// string literals, because a URL contains "//" and eating it would turn a
-// readable file into a parse error blamed on the project.
+// stripComments removes the // and /* */ comments so a .jsonc file parses.
+// It respects string literals, because a URL contains "//" and eating it would
+// turn a readable file into a parse error blamed on the project.
+//
+// Both forms are handled because both are JSONC and opencode.jsonc is a file
+// this reader opens by name: a legitimate /* */ block used to reach
+// json.Unmarshal intact and fail the whole file, which the report then blamed
+// on the operator as an unreadable opencode.jsonc.
+//
+// Whatever is dropped leaves its newlines behind, so the line a parse error
+// names is still the line the operator is looking at.
 func stripComments(raw []byte) []byte {
 	out := make([]byte, 0, len(raw))
 	inString, escaped := false, false
@@ -363,6 +383,20 @@ func stripComments(raw []byte) []byte {
 			}
 			if i < len(raw) {
 				out = append(out, '\n')
+			}
+			continue
+		case !inString && c == '/' && i+1 < len(raw) && raw[i+1] == '*':
+			// An unterminated block runs to the end of the file, which is what
+			// every JSONC reader does with one and what leaves the operator
+			// with a parse error rather than a silent half-file.
+			for i += 2; i+1 < len(raw); i++ {
+				if raw[i] == '*' && raw[i+1] == '/' {
+					i++
+					break
+				}
+				if raw[i] == '\n' {
+					out = append(out, '\n')
+				}
 			}
 			continue
 		}

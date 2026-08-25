@@ -59,6 +59,18 @@ type Request struct {
 	ReadTokens int
 	Tools      string
 	Schema     map[string]any
+	// Timeout is the ceiling on this one turn, finalization pass included.
+	// Zero takes the runner's own, which is the one the client was built
+	// with.
+	//
+	// It is a field on the request because the caller's deadline is not
+	// always the runner's. model.Request.Timeout may be longer than the
+	// client's -- a plan turn given room a search turn does not need -- and
+	// before this existed the runner re-wrapped the caller's already-bounded
+	// context with its own smaller ceiling, so the larger deadline was
+	// silently cut and the timeout message named a limit that had not
+	// expired.
+	Timeout time.Duration
 }
 
 // Answer is the provider-neutral result needed by the model client.
@@ -102,6 +114,20 @@ func New(opts Options) (*Runner, error) {
 	}, nil
 }
 
+// limitFor is the ceiling this turn actually runs under: the request's own
+// when it names one, and the runner's otherwise.
+//
+// A caller with a longer deadline than the runner's default used to lose it
+// here, and the failure it got back named the runner's figure rather than the
+// one that expired -- which sends whoever reads the report looking for a
+// timeout that never fired.
+func (r *Runner) limitFor(req Request) time.Duration {
+	if req.Timeout > 0 {
+		return req.Timeout
+	}
+	return r.timeout
+}
+
 // Version returns the CLI's first version token, or empty when it cannot be
 // queried.
 func (r *Runner) Version(ctx context.Context) string { return firstToken(r.version.Version(ctx)) }
@@ -122,6 +148,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if req.MaxTokens < 0 {
 		return Answer{}, contract.Fail(contract.FailureInvalidInput,
 			"opencode request: max_tokens must not be negative, got %d", req.MaxTokens)
+	}
+	if req.Timeout < 0 {
+		return Answer{}, contract.Fail(contract.FailureInvalidInput,
+			"opencode request: timeout must not be negative, got %s", req.Timeout)
 	}
 	if req.Dir != "" {
 		abs, err := filepath.Abs(req.Dir)
@@ -153,7 +183,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 		return Answer{}, contract.Fail(contract.FailureUnavailable,
 			"opencode is not installed: %q is not on PATH", r.binary)
 	}
-	turnCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	limit := r.limitFor(req)
+	turnCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(turnCtx, binary, argv...)
 	cmd.Dir = req.Dir
@@ -182,9 +213,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
 		if err := stream.accept(scanner.Bytes()); err != nil {
+			// The charge, on this path too. An event this adapter cannot read
+			// says nothing about the steps that arrived before it, and those
+			// steps carried real tokens and a real cost: every other failing
+			// return below reports them, and dropping them here is how a
+			// baseline learns that a turn killed by one malformed line was
+			// free.
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
-			return Answer{}, err
+			return Answer{Spent: stream.charge()}, err
 		}
 		if limitErr = stream.limitFailure(req); limitErr != nil {
 			// The provider has no native budget or token flag. Once an event
@@ -212,13 +249,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	}
 	waitErr := cmd.Wait()
 	if ctxErr := turnCtx.Err(); ctxErr != nil {
-		return Answer{}, contract.Stopped(ctxErr, "opencode", r.timeout).WithRaw(strings.TrimSpace(stderr.String()))
+		return Answer{}, contract.Stopped(ctxErr, "opencode", limit).WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if limitErr != nil {
 		return Answer{Spent: stream.charge()}, limitErr
 	}
 	if scanErr != nil {
-		return Answer{}, contract.Fail(contract.FailureUnavailable,
+		// Same reason as the malformed-event path above: a stream that broke
+		// mid-turn still billed for the steps it did deliver.
+		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
 			"opencode event stream could not be read: %v", scanErr).WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if stream.errText != "" {
@@ -313,7 +352,7 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 	}
 	waitErr := cmd.Wait()
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return stream, contract.Stopped(ctxErr, "opencode", r.timeout).WithRaw(strings.TrimSpace(stderr.String()))
+		return stream, contract.Stopped(ctxErr, "opencode", r.limitFor(req)).WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if scanErr != nil {
 		return stream, contract.Fail(contract.FailureUnavailable,
@@ -443,8 +482,27 @@ func (s *eventStream) accept(raw []byte) error {
 	return nil
 }
 
+// reached reports that the turn has weighed more than the read allowance it
+// was given.
+//
+// It deliberately does not require s.finished. Finished means a step_finish
+// arrived with reason "" or "stop", which is this CLI saying the model has
+// already delivered its final answer -- at that point there is no reading
+// left to cut short, and the allowance can only ever confirm a turn that
+// finished on its own. Requiring it made Request.ReadTokens inoperative on
+// this backend for the exact turn it exists to protect: the one calling tools,
+// where each intermediate step_finish adds weight and nothing sets finished
+// until the money is gone. Crossing it now stops the process at a step
+// boundary and hands the session to finalize, which is what the allowance was
+// always for.
+//
+// A step boundary, because that is where this CLI reports usage at all: every
+// step_finish carries the tokens of the step it closes, and no other event
+// carries any. So one step_finish has to have arrived before the weight means
+// anything -- zero steps weigh zero, and an allowance that fired on that would
+// kill every turn before its first tool call.
 func (s eventStream) reached(limit int) bool {
-	return limit > 0 && s.finished && allowance.Weigh(
+	return limit > 0 && s.stepFinishes > 0 && allowance.Weigh(
 		s.usage.InputTokens, s.usage.OutputTokens,
 		s.usage.CacheReadTokens, s.usage.CacheWriteTokens,
 	) >= limit
@@ -466,6 +524,21 @@ func (s eventStream) charge() contract.Charge {
 	return out
 }
 
+// limitFailure is the local boundary this adapter enforces in place of the
+// native flags OpenCode does not have.
+//
+// The two ceilings land in different bins, and deliberately. A declared
+// max_tokens is the agent type's contract with this machine, so crossing it
+// is a refusal -- the same bin model.enforceMaxTokens uses for the same
+// number. Request.BudgetUSD is this one call's own ceiling with no larger
+// pool behind it, so a turn that hits it was not refused by policy; it simply
+// could not answer inside what it was given, which reads the same as a
+// provider that did not deliver. That is FailureUnavailable, and it is what
+// the Claude backend has always returned for the identical fact -- see
+// failureFor in internal/agent/model. Until 2026-08-25 this returned
+// permission_denied instead, so which backend was configured decided which
+// bin the same budget exhaustion landed in, and callers that sort by bin gave
+// the same run two different verdicts.
 func (s eventStream) limitFailure(req Request) error {
 	charge := s.charge()
 	if req.MaxTokens > 0 && charge.Tokens() > req.MaxTokens {
@@ -474,7 +547,7 @@ func (s eventStream) limitFailure(req Request) error {
 			WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", charge.Tokens(), req.MaxTokens))
 	}
 	if req.BudgetUSD > 0 && charge.USD != nil && *charge.USD > req.BudgetUSD {
-		return contract.Fail(contract.FailurePermissionDenied,
+		return contract.Fail(contract.FailureUnavailable,
 			"opencode reported a cost above the requested budget ($%.4f > $%.4f)", *charge.USD, req.BudgetUSD).
 			WithRaw(fmt.Sprintf("observed_cost_usd=%.8f budget_usd=%.8f", *charge.USD, req.BudgetUSD))
 	}

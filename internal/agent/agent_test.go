@@ -177,6 +177,48 @@ func TestFailedExitKeepsStderr(t *testing.T) {
 	}
 }
 
+// The trace base is a durable store, and what a child prints on its way out
+// reaches it through the reason. internal/metrics and internal/checkpoint
+// both redact provider text at that boundary; this one did not, so a
+// credential a failing tool echoed into stderr was written verbatim into the
+// agent_trace reason_text column and stayed there.
+func TestStderrReachesTheTraceRowRedactedAndBounded(t *testing.T) {
+	// One line, no newline in it, carrying a secret past the clip: the
+	// redaction has to happen before the bound, or a clip could leave the
+	// credential's prefix in the record.
+	body := "cat >/dev/null\n" +
+		`printf 'refused: api_key=sk-live-topsecret-0123456789 %s' "$(head -c 4000 /dev/zero | tr '\0' 'x')" >&2` +
+		"\nexit 3"
+	r, store := runner(t, declared(stub(t, body)))
+	report, assignment, err := r.Run(t.Context(), "reader", task(), nil)
+	if err == nil {
+		t.Fatal("Run: want an error for a failed exit")
+	}
+	rows, listErr := store.List(t.Context(), trace.Filter{ID: assignment.ID})
+	if listErr != nil || len(rows) != 1 {
+		t.Fatalf("trace rows = %+v, err = %v, want the one row this run wrote", rows, listErr)
+	}
+	for _, probe := range []struct {
+		where string
+		text  string
+	}{
+		{where: "the report's reason", text: report.Reason.Text},
+		{where: "the trace row", text: rows[0].Reason.Text},
+	} {
+		if strings.Contains(probe.text, "sk-live-topsecret") {
+			t.Errorf("%s carries the credential verbatim: %q", probe.where, probe.text)
+		}
+		if !strings.Contains(probe.text, "[REDACTED]") {
+			t.Errorf("%s does not say the value was removed: %q", probe.where, probe.text)
+		}
+		// The stderr line alone is over 4,000 bytes. A reason that carries
+		// all of it is a log entry wearing a column.
+		if len(probe.text) > 1000 {
+			t.Errorf("%s is %d bytes; one unbounded stderr line reached it whole", probe.where, len(probe.text))
+		}
+	}
+}
+
 // An agent past its ceiling is a timeout, not a failure: nobody judged the
 // work, the clock ran out.
 func TestPastItsCeilingIsATimeout(t *testing.T) {
