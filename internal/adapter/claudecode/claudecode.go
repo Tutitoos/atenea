@@ -532,7 +532,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 			continue
 		}
 		if event.Type == "result" || event.Type == "" {
-			out = event.Envelope
+			out = carryCost(out, event.Envelope)
 			hasOutput = true
 		}
 		if event.costSeen {
@@ -721,6 +721,29 @@ func (u usage) total() int {
 }
 
 // parse reads the envelope out of stdout.
+// carryCost replaces the envelope with the newer one, keeping the price the
+// older one had if the newer does not carry its own.
+//
+// The stream's closing result line is the envelope that wins, and assigning it
+// wholesale is what a reader expects -- but it dropped a price an earlier
+// assistant event had already reported. A stream that says total_cost_usd on
+// an assistant line and then closes with a result line that omits it left
+// TotalCostUSD at zero and costSeen false, so a turn already charged $0.30 --
+// and already reported through ReportCost, so already spent against the
+// grant -- came back as "nobody priced this", and the core's own rule then
+// treated the charge as unmeasured. The comment on the envelope's cost field
+// says assistant events are where earlier cost facts show up, so this is the
+// documented shape of the stream and not an odd one.
+//
+// A newer envelope that does carry a price wins outright, including a
+// measured zero: a later fact about the same turn supersedes an earlier one.
+func carryCost(older, newer envelope) envelope {
+	if older.costSeen && !newer.costSeen {
+		newer.TotalCostUSD, newer.costSeen = older.TotalCostUSD, true
+	}
+	return newer
+}
+
 func parse(stdout []byte) (envelope, error) {
 	trimmed := strings.TrimSpace(string(stdout))
 	if trimmed == "" {

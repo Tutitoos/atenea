@@ -1516,22 +1516,31 @@ func totalSpent(steps []StepResult) contract.Sample {
 // totalUSD adds what the steps were charged, and says whether the sum is a
 // measurement.
 //
-// The rule is Charge.Plus's, applied to a slice: a total is known only when
-// every part of it is. One step whose provider said nothing makes the sum a
-// lower bound, and a lower bound printed as a price is the same lie the
-// per-step zero used to tell -- worse here, because a commission's total is
-// the number a person reads to decide whether to run another one.
+// The rule is Charge.Plus's, applied to a slice: what was measured is added
+// up, and a part nobody priced adds nothing rather than erasing the sum. That
+// is what Plus does with an unmeasured operand -- it keeps the measured
+// amount -- and the first version of this function did the opposite, returning
+// a flat (0, false) the moment one step came back unpriced.
 //
-// A commission with no steps is unknown rather than a measured zero: nothing
-// ran, so nothing was measured.
+// What that cost is the case an operator most wants to read. A commission of
+// four steps where three were charged $1.20 by a metered provider and the
+// fourth never ran, blocked by a failed prerequisite, has a real bill of
+// $1.20; totalUSD called it unknown, so `charged_usd` left the JSON entirely
+// and the CLI printed no money line at all. The invoice arrived anyway.
+//
+// The total is therefore a lower bound whenever some part went unpriced, and
+// it is reported as measured because it is: every dollar in it was. A
+// commission where nobody priced anything -- and one with no steps at all --
+// is unknown, which is the distinction this pair of return values exists for.
 func totalUSD(steps []StepResult) (usd float64, known bool) {
 	for _, step := range steps {
 		if !step.Outcome.SpentUSDKnown {
-			return 0, false
+			continue
 		}
 		usd += step.Outcome.SpentUSD
+		known = true
 	}
-	return usd, len(steps) > 0
+	return usd, known
 }
 
 // overallVerdict is the parent's word for the whole commission: one failed

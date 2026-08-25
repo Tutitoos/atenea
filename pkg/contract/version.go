@@ -275,9 +275,17 @@ type Version struct {
 // "nobody said" -- the honest answer for an adapter that never had a way to
 // say otherwise.
 //
-// The core enforces it: a charge reported without it is refused rather than
-// spent, because a figure with no measurement behind it is a number and not a
-// price.
+// The core reads it rather than enforcing it, and that distinction is what
+// keeps this a minor bump. A charge reported without the flag is still spent
+// against the grant -- the conservative reading of an unexplained charge is
+// that it was real -- but it is never reported as a price, and the adapter
+// that could not account for it is named in the notebook. Refusing the call
+// instead was the first shape of this rule and it was wrong twice: the
+// provider has already charged by the time the core sees the outcome, so a
+// refusal discards paid work without recovering the money, and an adapter
+// built against 3.2.0 has no line of code that could set the flag, so every
+// paid call it made would have started failing. A minor bump does not get to
+// do that.
 var Current = Version{Major: 3, Minor: 3, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.

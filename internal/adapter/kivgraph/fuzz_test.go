@@ -22,6 +22,9 @@ func FuzzParseIndexReportNeverPanics(f *testing.F) {
 	f.Add("")
 	f.Add("\n\n\n")
 	f.Add(`{"event":"result","result":null}`)
+	// The count this target actually caught: accepted, and handed straight to
+	// repository.index's declared output as a negative size.
+	f.Add(`{"event":"result","result":{"passed":true,"counts":{"symbols":-1,"edges":0}}}`)
 	f.Add(strings.Repeat(`{"event":"progress"}`+"\n", 64))
 
 	f.Fuzz(func(t *testing.T, stream string) {
@@ -35,7 +38,11 @@ func FuzzParseIndexReportNeverPanics(f *testing.F) {
 		// (The first run of this target found that encoding/json matches field
 		// names without regard to case, so `{"pAssed":true}` is read as
 		// `passed`. Left alone: the sender is kivgraph, and refusing it would
-		// reject nothing that exists.)
+		// reject nothing that exists. A negative count was the opposite call --
+		// the parser accepted one and handed it straight to the declared
+		// output, so the parser now refuses it and this assertion is a
+		// property the code holds rather than one it merely had not been
+		// asked about.)
 		report, err := parseIndexReport(stream)
 		if err != nil {
 			return

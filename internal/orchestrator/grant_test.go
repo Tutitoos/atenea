@@ -126,3 +126,43 @@ func TestAFreeStepNeedsToSayNothing(t *testing.T) {
 	purse.spend(-1)
 	near(t, purse.remaining(), 1.0, "remaining after free steps")
 }
+
+// TestAMixedCommissionStillReportsTheDollarsItMeasured is the case that made
+// this function worth a test of its own.
+//
+// A commission whose steps did not all report a price is the ordinary shape,
+// not the exotic one: a step served by ripgrep costs nothing and says nothing,
+// and a step blocked by a failed prerequisite never reaches a provider at all.
+// The first version of totalUSD returned (0, false) as soon as it met one of
+// those, which threw away the dollars the metered steps had genuinely been
+// charged -- so a $1.20 invoice was reported as no money at all, in the
+// partially-failed commission an operator is most likely to be auditing.
+func TestAMixedCommissionStillReportsTheDollarsItMeasured(t *testing.T) {
+	priced := func(usd float64) StepResult {
+		return StepResult{Outcome: contract.Outcome{SpentUSD: usd, SpentUSDKnown: true}}
+	}
+	silent := StepResult{Outcome: contract.Outcome{}}
+
+	usd, known := totalUSD([]StepResult{priced(0.40), priced(0.40), priced(0.40), silent})
+	if !known {
+		t.Error("three measured charges and one silent step reported no measurement at all")
+	}
+	if usd < 1.1999 || usd > 1.2001 {
+		t.Errorf("measured total is %v, want the $1.20 the three metered steps were charged", usd)
+	}
+
+	// A commission nobody priced is still unknown rather than a measured zero,
+	// which is the whole reason the second return value exists.
+	if _, known := totalUSD([]StepResult{silent, silent}); known {
+		t.Error("a commission where no step reported a price claims to have measured one")
+	}
+	if _, known := totalUSD(nil); known {
+		t.Error("a commission with no steps claims to have measured a total")
+	}
+
+	// And a measured zero stays measured: a provider that charged nothing and
+	// said so is a different fact from a provider that said nothing.
+	if usd, known := totalUSD([]StepResult{priced(0)}); !known || usd != 0 {
+		t.Errorf("a measured zero came back as (%v, %v), want (0, true)", usd, known)
+	}
+}

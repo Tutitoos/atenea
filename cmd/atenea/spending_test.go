@@ -54,6 +54,24 @@ func TestNoFlagOnASpendingCommandDefaultsToSpending(t *testing.T) {
 		}
 		for _, flag := range found {
 			kind, name, value := flag[1], flag[2], strings.TrimSpace(flag[3])
+			// A numeric zero is conservative by type and not by meaning, and
+			// in this CLI it usually means the opposite: `--budget 0` reads as
+			// "take the settings file's figure" (main.go) and a ceiling of
+			// zero reads as no ceiling at all. So a number on a spending
+			// command is not blessed by looking like a zero -- it has to be
+			// named here, with the reason, by whoever adds it.
+			if numeric[kind] {
+				if reason, named := numericDefaults[command+" --"+name]; named {
+					_ = reason
+					continue
+				}
+				t.Errorf("`atenea %s --%s` is a %s flag defaulting to %s. A numeric zero "+
+					"is conservative by type and not by meaning -- elsewhere in this CLI "+
+					"it reads as \"use the settings file\" or \"no ceiling\" -- so this "+
+					"flag has to be named in numericDefaults with why its default spends "+
+					"nothing, or made required.", command, name, kind, value)
+				continue
+			}
 			if value == conservative[kind] {
 				continue
 			}
@@ -66,11 +84,23 @@ func TestNoFlagOnASpendingCommandDefaultsToSpending(t *testing.T) {
 	}
 }
 
-// conservative is the default that spends nothing, per flag type.
+// conservative is the default that spends nothing, per flag type. It only
+// decides the types where the zero value means what it looks like: an empty
+// string is nothing chosen and a false bool is nothing enabled.
 var conservative = map[string]string{
-	"String": `""`, "Bool": "false", "Int": "0", "Int64": "0",
-	"Float64": "0", "Duration": "0",
+	"String": `""`, "Bool": "false",
 }
+
+// numeric names the types where the zero value does not settle the question,
+// because a number's meaning lives in the flag and not in the type.
+var numeric = map[string]bool{
+	"Int": true, "Int64": true, "Float64": true, "Duration": true,
+}
+
+// numericDefaults is where a number on a spending command is argued for by
+// name. The value is the reason, kept so that the argument is written down
+// next to the thing it defends rather than in a commit message.
+var numericDefaults = map[string]string{}
 
 // And the list cannot go stale quietly: a command whose own help says it
 // spends real money is a command this rule is about.

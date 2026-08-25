@@ -1,6 +1,8 @@
 package core_test
 
 import (
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,14 +24,20 @@ func TestAServiceRefusesARepositoryDeclaredByARelativePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Defaults: %v", err)
 	}
-	relative := false
+	// Any relative path, not the literal ".", and a failure rather than a
+	// skip. Matching only "." meant an edit changing the shipped value to
+	// "./" or "src" turned this test off silently -- while leaving the
+	// refusal just as necessary, since those are relative too.
+	relative := ""
 	for _, repo := range cfg.Repositories {
-		if repo.Path == "." {
-			relative = true
+		if !filepath.IsAbs(repo.Path) {
+			relative = repo.Path
 		}
 	}
-	if !relative {
-		t.Skip("the shipped settings no longer declare a repository at \".\"")
+	if relative == "" {
+		t.Fatal("the shipped settings declare no relative repository path, so this test " +
+			"is no longer exercising the refusal: either the defaults changed on purpose " +
+			"and this test should go, or they changed by accident")
 	}
 
 	_, err = core.New(cfg, core.Service)
@@ -39,7 +47,7 @@ func TestAServiceRefusesARepositoryDeclaredByARelativePath(t *testing.T) {
 	if contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Errorf("kind = %v, want invalid_input", contract.KindOf(err))
 	}
-	for _, want := range []string{"current", `"."`, "relative"} {
+	for _, want := range []string{"current", strconv.Quote(relative), "relative"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal = %q, want it to mention %q", err, want)
 		}

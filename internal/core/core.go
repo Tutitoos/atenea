@@ -128,6 +128,12 @@ type Core struct {
 	// screen, so there is no contention for anything cleverer to relieve.
 	sessions map[string]*Session
 	stopping bool
+	// stopped is closed by whoever ran the teardown, and stopErr is what that
+	// teardown returned. They exist so a second Shutdown can wait for the
+	// first one and report the same answer, instead of returning nil while
+	// the tree is still being written -- see Shutdown.
+	stopped  chan struct{}
+	stopErr  error
 	inflight sync.WaitGroup
 }
 
@@ -319,7 +325,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	agent, err := orchestrator.New(orchestrator.Config{
 		Catalog:     catalog,
 		Chooser:     chooser,
-		Runner:      attach(runners),
+		Runner:      attach(runners, book),
 		Checkpoints: checkpoints,
 		Meter:       collector,
 		// The same store on both seams, which is the point: what a step cost
@@ -767,7 +773,7 @@ func (f fanOut) Run(ctx context.Context, req contract.RunRequest) (contract.Outc
 // behind the two gates. Nothing dispatched by this core reaches an adapter
 // without crossing commissioned.Run and then grounded.Run: what the
 // commission allows, and whether the repository it names is even here.
-func attach(runners []contract.Runner) contract.Runner {
+func attach(runners []contract.Runner, notes *notebook.Notebook) contract.Runner {
 	switch len(runners) {
 	case 0:
 		return nil
@@ -775,9 +781,9 @@ func attach(runners []contract.Runner) contract.Runner {
 		// One client needs no routing, and the status screen reads better
 		// naming it directly than naming a wrapper around it -- which is why
 		// the gates delegate ID rather than answering for themselves.
-		return commissioned{grounded{runners[0]}}
+		return commissioned{grounded{runners[0]}, notes}
 	default:
-		return commissioned{grounded{fanOut(runners)}}
+		return commissioned{grounded{fanOut(runners)}, notes}
 	}
 }
 
@@ -1246,45 +1252,20 @@ func (c *Core) Run(ctx context.Context) error {
 		c.processes.Start(ctx)
 	}
 	<-ctx.Done()
-	stopped := c.Shutdown()
-	// And then wait for the handlers, which Shutdown may not have.
+	// Shutdown is the whole wait. It returns when the teardown is done --
+	// including a teardown somebody else started, which is the case that made
+	// Run return too early before: a Shutdown finding one already in progress
+	// used to return nil at once, so Run reported the service down while a
+	// handler was still writing into the state root and the caller who then
+	// removed that root failed on a directory that would not stay empty.
 	//
-	// Run ends with Shutdown, and a Shutdown that somebody else already
-	// started returns nil at once -- correctly, since it must not run the
-	// teardown twice. But that made Run return while a connection handler was
-	// still alive: the operator's own Shutdown had timed out on a parked
-	// handler, said so, and left it running, and Run's call then reported
-	// success without waiting for anything at all.
-	//
-	// What that costs is a caller who takes Run's return as "the service is
-	// down" and then removes the state root -- a test with a temporary
-	// directory, a container about to unmount. The handler is still writing
-	// into it, and the removal fails on a directory that will not stay empty.
-	//
-	// The context is done by now, so every handler's watcher has closed its
-	// client socket and they are all on their way out; this is a wait for the
-	// last few microseconds of that, not a second stop. Bounded by the same
-	// grace, because a handler that will not leave is precisely the case
-	// Shutdown already refuses to wait forever for.
-	c.drainConnections(c.settings.Core.ShutdownGrace)
-	return stopped
-}
-
-// drainConnections waits for the accepted connections to finish, or gives up.
-//
-// Bounded on purpose and silent on purpose: whoever is calling has already
-// been told what the stop achieved. This only decides whether Run's return
-// means the handlers are gone as well.
-func (c *Core) drainConnections(grace time.Duration) {
-	done := make(chan struct{})
-	go func() {
-		c.conns.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(grace):
-	}
+	// Waiting for the other teardown rather than draining the connections
+	// separately is what keeps the stop inside its budget. A separate drain
+	// bounded by its own copy of the grace made a parked handler cost two
+	// full graces -- one in Shutdown, one after it -- and the unit files ask
+	// the managers to wait grace+5s, so the stop was being SIGKILLed at the
+	// margin instead of finishing. One wait, one budget.
+	return c.Shutdown()
 }
 
 // Shutdown refuses new work and gives whatever is running a bounded margin to
@@ -1293,11 +1274,45 @@ func (c *Core) drainConnections(grace time.Duration) {
 func (c *Core) Shutdown() error {
 	c.mu.Lock()
 	if c.stopping {
+		// Somebody else is already tearing down. Wait for them and report
+		// what they got, rather than returning nil: this call's caller is
+		// entitled to the same answer, and more importantly to the same
+		// guarantee -- that when it returns, the writing has stopped. Bounded
+		// by the grace like everything else here, because a teardown that
+		// overran is exactly the case this function refuses to wait forever
+		// for, and because two callers must not cost two graces.
+		waiting := c.stopped
+		grace := c.settings.Core.ShutdownGrace
 		c.mu.Unlock()
-		return nil
+		if waiting == nil {
+			return nil
+		}
+		select {
+		case <-waiting:
+			c.mu.Lock()
+			err := c.stopErr
+			c.mu.Unlock()
+			return err
+		case <-time.After(grace):
+			return contract.Fail(contract.FailureTimeout,
+				"the shutdown already running did not finish within %s", grace)
+		}
 	}
 	c.stopping = true
+	c.stopped = make(chan struct{})
+	finished := c.stopped
 	c.mu.Unlock()
+
+	// Whatever this teardown concludes is published for the callers waiting
+	// above before the channel closes, so a waiter that wakes cannot read a
+	// stopErr the teardown had not written yet.
+	var stopErr error
+	defer func() {
+		c.mu.Lock()
+		c.stopErr = stopErr
+		c.mu.Unlock()
+		close(finished)
+	}()
 
 	// The door shuts first: the flag above already refuses new work, and this
 	// stops new callers from getting as far as being refused.
@@ -1328,7 +1343,8 @@ func (c *Core) Shutdown() error {
 		c.mu.Unlock()
 		c.stopProcesses()
 		c.closeBackends()
-		return c.settle()
+		stopErr = c.settle()
+		return stopErr
 	case <-time.After(c.settings.Core.ShutdownGrace):
 		// The table is left alone on purpose: work is still running, so the
 		// chats behind it are still real and saying otherwise would hide it.
@@ -1337,8 +1353,9 @@ func (c *Core) Shutdown() error {
 		c.stopProcesses()
 		c.closeBackends()
 		_ = c.settle()
-		return contract.Fail(contract.FailureTimeout,
+		stopErr = contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)
+		return stopErr
 	}
 }
 
@@ -1412,30 +1429,45 @@ const (
 // trust; a baseline short by seventeen rows, on a named date, is one an
 // operator can reason about.
 func (c *Core) flushLast() error {
-	// Sealed before the first attempt, not after the last.
-	//
-	// On the shutdown that overran, work is still running while this executes,
-	// and it goes on calling Record. Those rows used to land in a buffer
-	// nothing would ever drain: gone with the process, and absent from
-	// Dropped, so the number that exists to say how much was lost said zero.
-	// Sealing first means a measurement arriving during the last stand is
-	// counted as lost, which is what it is.
-	c.measurements.Seal()
+	// Dropped is a lifetime counter, so the settle's own losses are a
+	// difference and not a reading. A service that lost five hundred rows to
+	// a full buffer at midday would otherwise report those five hundred as
+	// having died in the last second of its life.
+	before := c.measurements.Dropped()
+
 	var err error
 	for attempt := range settleAttempts {
 		if attempt > 0 {
 			time.Sleep(settleBackoff)
 		}
 		if err = c.measurements.Flush(context.Background()); err == nil {
-			return nil
+			break
 		}
 	}
+
+	// Sealed after the last attempt, not before the first.
+	//
+	// On the shutdown that overran, work is still running while this executes
+	// and goes on calling Record. Sealing first counted those rows as lost --
+	// but this is three flushes separated by 300ms, and Flush drains the whole
+	// buffer, so a row arriving during the backoff is one attempt two or three
+	// would have written to disk. Sealing first turned recoverable
+	// measurements into losses in the very path meant to save them. Sealing
+	// here means the retries carry whatever arrives, and only what arrives
+	// after the last one is counted as gone -- which it is, because the buffer
+	// is about to be freed along with the process.
+	c.measurements.Seal()
+	if err == nil {
+		return nil
+	}
+
+	lost := c.measurements.Dropped() - before
 	_ = c.notebook.Record(notebook.Incident{
 		Op: "metrics.settle",
 		Detail: fmt.Sprintf(
 			"the final flush failed %d times and %d measurements are gone with the process "+
-				"(%d more were dropped after the buffer was sealed): %v",
-			settleAttempts, c.measurements.Pending(), c.measurements.Dropped(), err),
+				"(%d more were refused by a full buffer during the stop): %v",
+			settleAttempts, c.measurements.Pending(), lost, err),
 		Version: buildinfo.Full(),
 	})
 	return err

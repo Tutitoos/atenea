@@ -3,12 +3,15 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"math"
 	"os"
 	"strings"
 	"sync/atomic"
 
+	"github.com/Tutitoos/atenea/internal/buildinfo"
+	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -29,7 +32,13 @@ import (
 // Everything but Run is the wrapped Runner's own, the same as guardedRunner:
 // an adapter still decides what it serves and what it answers for. Only the
 // question of whether it is allowed to answer at all moved.
-type commissioned struct{ contract.Runner }
+type commissioned struct {
+	contract.Runner
+	// notes is where an adapter's own defects are filed. Optional: a core
+	// built without a notebook still gates, because gating is the point and
+	// reporting is not.
+	notes *notebook.Notebook
+}
 
 func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	if missing, ok := req.Allowed(); !ok {
@@ -65,15 +74,35 @@ func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contrac
 		return outcome, contract.Fail(contract.FailurePermissionDenied,
 			"%s reported an invalid monetary charge", req.Capability.ID)
 	}
-	// A figure with no measurement behind it is not a charge, it is a number.
-	// SpentUSDKnown is what an adapter sets when the provider actually said a
-	// price; an adapter that reports one without it has either forgotten the
-	// flag or invented the amount, and the core cannot tell which -- so it
-	// refuses both rather than spending a purse down by a guess.
+	// A figure with no measurement behind it is not a price, it is a number.
+	// SpentUSDKnown is what an adapter sets when the provider actually said an
+	// amount; an adapter that reports one without it has either forgotten the
+	// flag or invented the figure, and the core cannot tell which.
+	//
+	// It is not refused, for two reasons. By the time this runs the provider
+	// has already been asked and has already charged, so refusing throws away
+	// work the operator has paid for and gets none of the money back. And a
+	// refusal here would make contract 3.3.0 a breaking change wearing a minor
+	// number: an adapter compiled against 3.2.0 has no line of code that could
+	// set this flag, so every paid call it made would start failing -- exactly
+	// what "minor bumps add fields without breaking them" promises will not
+	// happen.
+	//
+	// What the core does instead is refuse to call it a price. The figure is
+	// still spent against the purse, because the conservative reading of an
+	// unexplained charge is that it was real; the outcome still travels with
+	// Known false, so the receipt and the JSON say nobody measured it; and the
+	// notebook gets the adapter's name, because an adapter reporting money it
+	// cannot account for is a defect somebody has to be able to find.
 	if !outcome.SpentUSDKnown && outcome.SpentUSD != 0 {
-		return outcome, contract.Fail(contract.FailurePermissionDenied,
-			"%s reported a charge of $%.4f without saying it was measured",
-			req.Capability.ID, outcome.SpentUSD)
+		_ = c.notes.Record(notebook.Incident{
+			Op: "commission.charge",
+			Detail: fmt.Sprintf(
+				"%s reported a charge of $%.4f without saying it was measured; "+
+					"it is spent against the grant but not reported as a price",
+				req.Capability.ID, outcome.SpentUSD),
+			Version: buildinfo.Full(),
+		})
 	}
 	if outcome.SpentUSD > req.Permission.BudgetUSD+1e-9 {
 		return outcome, contract.Fail(contract.FailurePermissionDenied,

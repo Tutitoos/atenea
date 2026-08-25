@@ -20,6 +20,53 @@ The repository audit and its remediation. Seventeen commits closing 209
 confirmed findings, six decisions taken that the audit could not take, and three
 defects that the audit did not find and CI did.
 
+### Fixed after adversarial verification
+
+The seven commits at the tail of this release had not been through the
+adversarial pass the earlier findings had, so five reviewers were sent to break
+them before it shipped. They broke thirty-five claims and found seventeen
+things nobody had asked about. What that pass changed:
+
+- **A stop cost two full graces instead of one.** `Run` called `Shutdown` and
+  then drained the connections under a second copy of the same budget, so a
+  parked handler pushed a ten-second stop to twenty -- past the `grace + 5s`
+  the unit files ask systemd and launchd to wait, so the stop was being
+  SIGKILLed at the margin. A second `Shutdown` now waits for the first and
+  reports its answer, which is one wait, one budget, and also means `Run`
+  returning covers the whole teardown rather than only the connections.
+- **Every clean stop archived one false incident per connected client.** The
+  watcher closes each connection when the context is done, which makes the
+  scanner return `net.ErrClosed`; that was filed as `socket.request` with
+  "the request was not readable", describing a client failure that had not
+  happened. It was also a write into the state root racing the stop that
+  produced it.
+- **A partly-failed commission reported no money at all.** A total was called
+  unknown as soon as one step came back unpriced, which threw away the dollars
+  the metered steps had genuinely been charged: three steps at $0.40 and a
+  fourth blocked by a failed prerequisite reported a $1.20 invoice as nothing.
+- **A price could not survive the closing line of a Claude Code stream.** A
+  turn priced on an assistant event and closed by a result event without
+  `total_cost_usd` came back as "nobody priced this", after the money had been
+  spent and reported.
+- **The last flush dropped measurements it could have written.** The buffer was
+  sealed before three flush attempts spaced 150ms apart, so a measurement
+  arriving during the backoff was counted as lost rather than carried by the
+  next attempt. The incident it wrote also quoted a lifetime counter as if it
+  were the stop's own losses.
+- **`config init` would write the home directory down as a repository.** It
+  records the directory it is run in, and the documented route to it -- ssh in,
+  run the command -- starts in `$HOME`. That is the failure the service's
+  `WorkingDirectory` exists to prevent, made permanent on disk. It is now
+  refused by name.
+- **A negative index count reached `repository.index`'s declared output.** The
+  fuzz target added in this release asserted a property the parser did not
+  hold; the parser holds it now, and the input is a seed.
+- Three tests that could not fail for the reason they claimed: one that skipped
+  itself if the shipped repository path changed spelling, one that could slice
+  a function to nothing and then report it broken, and a rule that blessed any
+  numeric flag default because a zero looks conservative -- when a zero in this
+  CLI usually means "no ceiling".
+
 ### Breaking
 
 Two changes here can stop an existing installation from starting. Both are the
@@ -137,8 +184,13 @@ the remedy in the message.
   a commission somebody may still resume and an open trace is the evidence that
   a run died. `keep = "0s"` keeps everything.
 - `Outcome.SpentUSDKnown`, which says whether a charge of zero is a price or an
-  absence. The core refuses a charge reported without it, and `--json` carries
-  the distinction as a pointer: present even as zero means measured.
+  absence. A charge reported without it is still spent against the grant -- the
+  conservative reading of an unexplained figure is that it was real -- but it is
+  never reported as a price, and the adapter that could not account for it is
+  named in the notebook. `--json` carries the distinction as a pointer: present
+  even as zero means measured, absent means nobody said. A commission's total
+  adds the dollars that were measured and leaves out the parts nobody priced,
+  so a partly-failed commission still shows the bill its metered steps ran up.
 
 ### Changed
 

@@ -68,7 +68,16 @@ func TestUnwindCancelsAndDrainsBeforeItWaits(t *testing.T) {
 	if start < 0 {
 		t.Fatal("engine.go has no unwind: this test is reading the wrong thing")
 	}
-	end := strings.Index(string(body)[start+1:], "\nfunc ")
+	// The tail of the file is a legitimate place for unwind to end up, and
+	// Index returning -1 there would silently slice the function down to
+	// nothing -- which fails below with three messages saying unwind does not
+	// cancel, does not wait and does not drain, about code that does all
+	// three.
+	rest := string(body)[start+1:]
+	end := strings.Index(rest, "\nfunc ")
+	if end < 0 {
+		end = len(rest)
+	}
 	unwind := string(body)[start : start+1+end]
 
 	for _, want := range []string{"cancel()", "wg.Wait()", "case <-results:"} {

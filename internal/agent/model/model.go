@@ -2008,6 +2008,14 @@ func recordPrompt(req Request, argv []string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
+	// MkdirAll leaves an existing directory's mode alone, so the upgrade case
+	// -- the common one -- would keep whatever the previous version created,
+	// which was 0755. Narrowing it here is what makes the posture above true
+	// on a machine that has already recorded a prompt, rather than only on a
+	// fresh one. A failure is not worth abandoning the record for: the
+	// operator asked for these prompts, and a directory that cannot be
+	// narrowed is one they can still see and fix.
+	_ = os.Chmod(dir, 0o700)
 	// Role is a declared value on the Request rather than something a caller
 	// types, but it reaches a filename here, and a filename is the one place
 	// where "it is always one of four words" stops being an argument: the

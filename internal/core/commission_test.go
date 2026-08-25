@@ -84,7 +84,7 @@ func writingStep(allowed ...contract.Effect) contract.RunRequest {
 // adapter written elsewhere enforced nothing whatsoever.
 func TestAnAdapterThatEnforcesNothingIsStillRefused(t *testing.T) {
 	adapter := &outsider{}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 
 	_, err := seam.Run(context.Background(), writingStep(contract.EffectRead))
 	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
@@ -107,7 +107,7 @@ func TestAnAdapterThatEnforcesNothingIsStillRefused(t *testing.T) {
 
 func TestTheCoreRejectsAnOverBudgetAdapterEvenWhenItReportsSuccess(t *testing.T) {
 	adapter := &chargingOutsider{cost: 0.26}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	req := writingStep(contract.EffectRead, contract.EffectWrite)
 	req.Permission.BudgetUSD = 0.25
 
@@ -123,7 +123,7 @@ func TestTheCoreRejectsAnOverBudgetAdapterEvenWhenItReportsSuccess(t *testing.T)
 func TestTheCoreRejectsInvalidProviderCharges(t *testing.T) {
 	for _, cost := range []float64{-1, math.Inf(1)} {
 		adapter := &chargingOutsider{cost: cost}
-		seam := attach([]contract.Runner{adapter})
+		seam := attach([]contract.Runner{adapter}, nil)
 		req := writingStep(contract.EffectRead, contract.EffectWrite)
 		req.Permission.BudgetUSD = 1
 		if _, err := seam.Run(context.Background(), req); contract.KindOf(err) != contract.FailurePermissionDenied {
@@ -134,7 +134,7 @@ func TestTheCoreRejectsInvalidProviderCharges(t *testing.T) {
 
 func TestTheCoreCancelsWhenAProviderReportsAnIncrementalOverrun(t *testing.T) {
 	adapter := &streamingOutsider{}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	req := writingStep(contract.EffectRead, contract.EffectWrite)
 	req.Implementation.ID = "streaming.search"
 	req.Permission.BudgetUSD = 0.25
@@ -152,7 +152,7 @@ func TestTheCoreCancelsWhenAProviderReportsAnIncrementalOverrun(t *testing.T) {
 // attached client takes a different branch of attach than several.
 func TestTheGateHoldsWithSeveralClientsAttached(t *testing.T) {
 	first, second := &outsider{}, &outsider{}
-	seam := attach([]contract.Runner{first, second})
+	seam := attach([]contract.Runner{first, second}, nil)
 
 	_, err := seam.Run(context.Background(), writingStep(contract.EffectRead))
 	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
@@ -166,7 +166,7 @@ func TestTheGateHoldsWithSeveralClientsAttached(t *testing.T) {
 // The status screen names who is actually behind the catalog. A gate that
 // answered for itself would put "commissioned" on that line.
 func TestTheGateDoesNotRenameTheClientBehindIt(t *testing.T) {
-	seam := attach([]contract.Runner{&outsider{}})
+	seam := attach([]contract.Runner{&outsider{}}, nil)
 	if seam.ID() != "outsider" {
 		t.Errorf("ID = %q, want the adapter's own name", seam.ID())
 	}
@@ -188,7 +188,7 @@ func stepIn(path string) contract.RunRequest {
 // It sent the operator to reinstall a tool that already existed.
 func TestARepositoryThatIsNotThereNamesTheDirectory(t *testing.T) {
 	adapter := &outsider{}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 
 	_, err := seam.Run(context.Background(), stepIn("/tmp/atenea-no-such-repository"))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
@@ -210,7 +210,7 @@ func TestARepositoryThatIsNotThereNamesTheDirectory(t *testing.T) {
 // health record entirely, which is the honest reading -- nothing is wrong with
 // the provider.
 func TestABadPathDoesNotCondemnTheProvider(t *testing.T) {
-	seam := attach([]contract.Runner{&outsider{}})
+	seam := attach([]contract.Runner{&outsider{}}, nil)
 	_, err := seam.Run(context.Background(), stepIn("/tmp/atenea-no-such-repository"))
 	if got := contract.KindOf(err); got == contract.FailureUnavailable {
 		t.Error("a missing repository path is reported as the provider being down")
@@ -221,7 +221,7 @@ func TestABadPathDoesNotCondemnTheProvider(t *testing.T) {
 // repository at all is not this check's business.
 func TestARepositoryThatIsThereStillPasses(t *testing.T) {
 	adapter := &outsider{}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	if _, err := seam.Run(context.Background(), stepIn(t.TempDir())); err != nil {
 		t.Fatalf("a repository that exists was refused: %v", err)
 	}
@@ -235,25 +235,37 @@ func TestARepositoryThatIsThereStillPasses(t *testing.T) {
 }
 
 // The core owns the money boundary, so a charge with nothing behind it is
-// refused there rather than trusted.
+// spent but never called a price.
 //
 // SpentUSDKnown is what an adapter sets when the provider actually reported a
 // price. One that returns an amount without it has either forgotten the flag
 // or invented the number, and from here those are the same thing: a figure
-// that would spend the commission's purse down with no measurement behind it.
-func TestAChargeWithNoMeasurementBehindItIsRefused(t *testing.T) {
+// with no measurement behind it.
+//
+// It is not refused. By the time this gate sees the outcome the provider has
+// already run and already charged, so refusing throws away work the operator
+// paid for and recovers none of the money; and refusing would make an adapter
+// compiled against contract 3.2.0 -- which has no field to set -- fail on
+// every paid call, which is not what a minor bump is allowed to do. So the
+// amount is spent against the purse, on the conservative reading that an
+// unexplained charge was real, and it travels on with Known still false so
+// that nothing downstream reports it as a measurement.
+func TestAnUnmeasuredChargeIsSpentButNotCalledAPrice(t *testing.T) {
 	adapter := &silentCharger{cost: 0.42}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	req := writingStep(contract.EffectRead, contract.EffectWrite)
 	req.Permission.BudgetUSD = 1.00
 
-	_, err := seam.Run(context.Background(), req)
-	if contract.KindOf(err) != contract.FailurePermissionDenied {
-		t.Fatalf("kind = %v, want permission_denied: $0.42 was accepted with no measurement behind it",
-			contract.KindOf(err))
+	outcome, err := seam.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("work the provider had already charged for was thrown away: %v", err)
 	}
-	if !strings.Contains(err.Error(), "measured") {
-		t.Errorf("refusal = %q, want it to name what was missing", err)
+	if outcome.SpentUSD != 0.42 {
+		t.Errorf("spent = %v, want the $0.42 the adapter reported: the purse has to "+
+			"assume an unexplained charge was real", outcome.SpentUSD)
+	}
+	if outcome.SpentUSDKnown {
+		t.Error("a figure with no measurement behind it came back claiming to be one")
 	}
 }
 
@@ -261,7 +273,7 @@ func TestAChargeWithNoMeasurementBehindItIsRefused(t *testing.T) {
 // provenance, not about the number.
 func TestTheSameChargeGoesThroughWhenItSaysItWasMeasured(t *testing.T) {
 	adapter := &chargingOutsider{cost: 0.42}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	req := writingStep(contract.EffectRead, contract.EffectWrite)
 	req.Permission.BudgetUSD = 1.00
 
@@ -274,7 +286,7 @@ func TestTheSameChargeGoesThroughWhenItSaysItWasMeasured(t *testing.T) {
 // is on a figure with no measurement, and zero with a measurement is a fact.
 func TestAMeasuredZeroIsNotAnUnmeasuredCharge(t *testing.T) {
 	adapter := &chargingOutsider{cost: 0}
-	seam := attach([]contract.Runner{adapter})
+	seam := attach([]contract.Runner{adapter}, nil)
 	req := writingStep(contract.EffectRead, contract.EffectWrite)
 	req.Permission.BudgetUSD = 1.00
 

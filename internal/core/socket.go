@@ -246,6 +246,19 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	// was the reason. Saying so costs one line and turns an unexplained
 	// disconnect into a fixable message.
 	if err := lines.Err(); err != nil {
+		// Unless we are the ones who closed it. The watcher above closes this
+		// connection when the context is done, which makes Scan return
+		// net.ErrClosed -- a stop, not a client that sent something
+		// unreadable. Archiving that as an incident put one false
+		// "socket.request" in the notebook per connected client on every
+		// clean stop, and described a failure that had not happened; the
+		// Encode alongside it wrote to a socket already closed. It is also
+		// the write that outlived Run: the notebook file lands in the state
+		// root, so a caller removing that root after the stop raced a report
+		// about the stop itself.
+		if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			return
+		}
 		message := "the request was not readable: " + err.Error()
 		if errors.Is(err, bufio.ErrTooLong) {
 			message = "the request is over the " + limitWords + " limit for one line"
