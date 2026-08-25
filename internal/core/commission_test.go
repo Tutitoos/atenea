@@ -32,6 +32,23 @@ type chargingOutsider struct {
 
 func (o *chargingOutsider) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
 	o.ran++
+	// Known, because an adapter reporting an amount is an adapter whose
+	// provider said one. The one that reports a figure without saying so has
+	// its own type below, so the tests about over-budget charges keep failing
+	// for being over budget rather than for being unmeasured.
+	return contract.Outcome{SpentUSD: o.cost, SpentUSDKnown: true, Verdict: contract.VerdictOK}, nil
+}
+
+// silentCharger reports an amount and never says it measured one. It stands in
+// for the adapter that forgot the flag and for the adapter that invented the
+// number, which from the core's side are the same thing.
+type silentCharger struct {
+	outsider
+	cost float64
+}
+
+func (o *silentCharger) Run(context.Context, contract.RunRequest) (contract.Outcome, error) {
+	o.ran++
 	return contract.Outcome{SpentUSD: o.cost, Verdict: contract.VerdictOK}, nil
 }
 
@@ -214,5 +231,58 @@ func TestARepositoryThatIsThereStillPasses(t *testing.T) {
 	}
 	if adapter.ran != 2 {
 		t.Errorf("the adapter ran %d time(s), want 2", adapter.ran)
+	}
+}
+
+// The core owns the money boundary, so a charge with nothing behind it is
+// refused there rather than trusted.
+//
+// SpentUSDKnown is what an adapter sets when the provider actually reported a
+// price. One that returns an amount without it has either forgotten the flag
+// or invented the number, and from here those are the same thing: a figure
+// that would spend the commission's purse down with no measurement behind it.
+func TestAChargeWithNoMeasurementBehindItIsRefused(t *testing.T) {
+	adapter := &silentCharger{cost: 0.42}
+	seam := attach([]contract.Runner{adapter})
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Permission.BudgetUSD = 1.00
+
+	_, err := seam.Run(context.Background(), req)
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %v, want permission_denied: $0.42 was accepted with no measurement behind it",
+			contract.KindOf(err))
+	}
+	if !strings.Contains(err.Error(), "measured") {
+		t.Errorf("refusal = %q, want it to name what was missing", err)
+	}
+}
+
+// The same amount, reported as measured, goes through: the check is about
+// provenance, not about the number.
+func TestTheSameChargeGoesThroughWhenItSaysItWasMeasured(t *testing.T) {
+	adapter := &chargingOutsider{cost: 0.42}
+	seam := attach([]contract.Runner{adapter})
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Permission.BudgetUSD = 1.00
+
+	if _, err := seam.Run(context.Background(), req); err != nil {
+		t.Fatalf("a measured charge inside its permission was refused: %v", err)
+	}
+}
+
+// And a provider that reports a real zero is not caught by the rule: the check
+// is on a figure with no measurement, and zero with a measurement is a fact.
+func TestAMeasuredZeroIsNotAnUnmeasuredCharge(t *testing.T) {
+	adapter := &chargingOutsider{cost: 0}
+	seam := attach([]contract.Runner{adapter})
+	req := writingStep(contract.EffectRead, contract.EffectWrite)
+	req.Permission.BudgetUSD = 1.00
+
+	outcome, err := seam.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("a provider that charged nothing was refused: %v", err)
+	}
+	if !outcome.SpentUSDKnown {
+		t.Error("the measured zero lost its provenance crossing the boundary")
 	}
 }

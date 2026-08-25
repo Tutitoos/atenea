@@ -12,7 +12,7 @@ import (
 func stepResult(budgetUSD, spentUSD float64) orchestrator.StepResult {
 	return orchestrator.StepResult{
 		Step:    contract.Step{Permission: contract.Permission{BudgetUSD: budgetUSD}},
-		Outcome: contract.Outcome{SpentUSD: spentUSD},
+		Outcome: contract.Outcome{SpentUSD: spentUSD, SpentUSDKnown: true},
 	}
 }
 

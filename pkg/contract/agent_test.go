@@ -151,3 +151,31 @@ func TestVerdictRoundTrip(t *testing.T) {
 		t.Fatal("an unknown verdict has to be refused")
 	}
 }
+
+// The two zeros. A provider that charges nothing and a provider that says
+// nothing produced the same Outcome, and there was no field that could tell
+// them apart -- which is the collapse Charge.USD carries a pointer to avoid
+// and CostUpdate carries this exact bool to avoid.
+func TestAnOutcomeSaysWhetherItsZeroIsAPrice(t *testing.T) {
+	silent := contract.Outcome{Verdict: contract.VerdictOK}
+	free := contract.Outcome{Verdict: contract.VerdictOK, SpentUSDKnown: true}
+
+	if silent.SpentUSD != free.SpentUSD {
+		t.Fatalf("the fixture is wrong: both are zero by construction")
+	}
+	if silent.SpentUSDKnown == free.SpentUSDKnown {
+		t.Error("a provider that charged nothing and one that said nothing are " +
+			"still indistinguishable")
+	}
+}
+
+// An adapter written before 3.3.0 leaves the field false, and false has to be
+// the honest reading for it: "nobody said", which is exactly what an adapter
+// with no way to say otherwise means.
+func TestTheZeroValueOfAnOutcomeClaimsNoMeasurement(t *testing.T) {
+	var built contract.Outcome
+	if built.SpentUSDKnown {
+		t.Error("a zero Outcome claims its charge was measured, so every adapter " +
+			"that never sets the field asserts a price it never had")
+	}
+}

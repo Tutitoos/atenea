@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "3.2.0"
+contract = "3.3.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "3.2.0"          # required: the contract version this file targets
+contract = "3.3.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -113,13 +113,13 @@ health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is supported, so
-a file targeting `3.0.0` remains readable by the current `3.2.0` core because
+a file targeting `3.0.0` remains readable by the current `3.3.0` core because
 every 3.x addition since has been backward-compatible. A file from a newer contract
 is refused and must be reviewed before use:
 
 ```text
 settings ~/.config/atenea/atenea.toml: contract 4.0.0 is not supported by
-this core (3.2.0): change the contract line to "3.2.0"; no other key moves
+this core (3.3.0): change the contract line to "3.3.0"; no other key moves
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the

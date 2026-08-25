@@ -330,8 +330,15 @@ type Result struct {
 	// SpentUSD is what the commission was charged, over every step. Reported,
 	// never ranked: see contract.Outcome.SpentUSD for why money is not one of
 	// the measured axes.
+	//
+	// Read it beside SpentUSDKnown. A total is a measurement only when every
+	// step behind it was measured; one step whose provider said nothing makes
+	// this a lower bound, and nothing about the number itself shows that.
 	SpentUSD float64
-	Matches  int
+	// SpentUSDKnown says whether SpentUSD is the whole bill or only the part
+	// somebody reported. See totalUSD.
+	SpentUSDKnown bool
+	Matches       int
 }
 
 // Phase is one measured stretch of the run.
@@ -443,7 +450,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		// ran its steps in waves costs more time than it takes, and the report
 		// is the only place an operator can see that it did.
 		result.Elapsed = time.Since(started)
-		result.SpentUSD = totalUSD(result.Steps)
+		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		// What the far side said for itself travels too. The summary the
@@ -546,7 +553,7 @@ func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
 		result.Elapsed = time.Since(started)
-		result.SpentUSD = totalUSD(result.Steps)
+		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
@@ -643,7 +650,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
 		result.Elapsed = time.Since(started)
-		result.SpentUSD = totalUSD(result.Steps)
+		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
 		result.Verdict = overallVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
@@ -782,7 +789,7 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	defer func() {
 		result.Spent = totalSpent(result.Steps)
 		result.Elapsed = time.Since(started)
-		result.SpentUSD = totalUSD(result.Steps)
+		result.SpentUSD, result.SpentUSDKnown = totalUSD(result.Steps)
 		result.Verdict = resumeVerdict(result.Steps, ctx.Err())
 		result.Matches = countMatches(result.Steps)
 		result.Discoveries = append(result.Discoveries, reported(result.Steps)...)
@@ -1506,12 +1513,25 @@ func totalSpent(steps []StepResult) contract.Sample {
 // cost money. It is kept apart from totalSpent because money is not one of
 // the measured axes: it never reaches the baseline and it never ranks. It is
 // here so a human reading the receipt can see what an answer cost them.
-func totalUSD(steps []StepResult) float64 {
-	var usd float64
+// totalUSD adds what the steps were charged, and says whether the sum is a
+// measurement.
+//
+// The rule is Charge.Plus's, applied to a slice: a total is known only when
+// every part of it is. One step whose provider said nothing makes the sum a
+// lower bound, and a lower bound printed as a price is the same lie the
+// per-step zero used to tell -- worse here, because a commission's total is
+// the number a person reads to decide whether to run another one.
+//
+// A commission with no steps is unknown rather than a measured zero: nothing
+// ran, so nothing was measured.
+func totalUSD(steps []StepResult) (usd float64, known bool) {
 	for _, step := range steps {
+		if !step.Outcome.SpentUSDKnown {
+			return 0, false
+		}
 		usd += step.Outcome.SpentUSD
 	}
-	return usd
+	return usd, len(steps) > 0
 }
 
 // overallVerdict is the parent's word for the whole commission: one failed
@@ -1601,6 +1621,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
+		SpentUSDKnown:  step.Outcome.SpentUSDKnown,
 		OverspendUSD:   Overspend(step),
 		ClosedAt:       closed,
 		Funnel:         trace(step.Decision),

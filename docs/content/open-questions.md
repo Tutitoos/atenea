@@ -38,6 +38,58 @@ so. It cannot be settled by making `path` absolute alone: the `"."` is the
 mechanism by which a fresh CLI install works against the tree you are standing
 in, and ten end-to-end tests exist because that behaviour is wanted.
 
+**Answered on 2026-08-25, and built.** Four decisions were taken rather than
+recorded, so they leave this page by being answered:
+
+*Retention is ninety days.* Run receipts and agent traces are pruned by a
+`[retention]` block, `keep = "2160h"` and `every = "24h"`, on a lane of its own
+guarded by a mark in the trace database. Only CLOSED records go, and by when
+they ended: an open receipt is a commission somebody may still resume and an
+open trace is the evidence that a run died, which is the one kind worth keeping
+past its age. `keep = "0s"` keeps everything, which is the right answer for a
+state root managed elsewhere and is now sayable rather than implied. The
+measurement base is untouched -- it has a retention ladder of its own and grows
+in detail rather than in rows.
+
+*`Outcome.SpentUSDKnown` says whether the zero is a price.* A bool matching
+`CostUpdate.Known` rather than a pointer matching `Charge.USD`, because
+`Outcome` travels on the Runner seam, which cannot be extended without breaking
+every implementer: an adapter built against 3.2.0 goes on compiling and leaves
+it false, which reads as "nobody said" -- the honest answer for an adapter that
+never had a way to say otherwise. The core refuses a charge reported without
+it, because a figure with no measurement behind it is a number and not a price.
+The receipt and the `--json` output carry the distinction too; `charged_usd` is
+a pointer there, so present-even-as-zero means measured and absent means
+nobody said. Contract 3.3.0.
+
+*The backup settles the tree before it copies it.* `SnapshotIfDue` takes a
+function the caller supplies, run immediately before the copy and only when a
+copy is actually due, whose failure stops the copy. The core passes one that
+flushes the measurement batch, issues a DuckDB `CHECKPOINT` and runs
+`PRAGMA wal_checkpoint(TRUNCATE)` against the trace store. It stays a parameter
+because the copier walks a directory and deliberately does not know which files
+in it are databases.
+
+*Early warning on omp's private store: accepted as a limitation.* The widget
+reads another product's `agent.db` by hand, with no contract behind it. The
+silent half is already closed -- it says `sin lectura` when it cannot read what
+it found -- and a test shouts on a machine that has the store. CI cannot give
+the early warning: there is no omp there, and a committed fixture would check
+this repository's idea of the format, which is the error the widget was built
+on. Not deferred as work; the early warning is the maintainer's machine or
+nothing.
+
+**Narrowed rather than closed, and still open.** The service now starts in
+Atenea's own state root rather than in `$HOME`, so the shipped `path = "."` no
+longer names a home directory as a repository to search. That makes the failure
+empty instead of private; it does not make a relative repository path mean
+anything useful to a daemon. The remaining decision is whether the shipped
+catalog should declare a repository at all, or whether a fresh install should
+start with none and say so. It cannot be settled by making `path` absolute
+alone: the `"."` is the mechanism by which a fresh CLI install works against
+the tree you are standing in, and ten end-to-end tests exist because that
+behaviour is wanted.
+
 **Still open, and still a decision rather than a defect.**
 
 *A rule about when refusing is required.* `atenea floor measure` needs
@@ -48,43 +100,6 @@ spends by quietly picking a value nobody asked for -- is stopped only by
 whoever writes it remembering to check. Making that a rule means deciding what
 the rule is: every command that may spend requires a TTY confirmation, or every
 command that may spend must name what it spends on, or something narrower.
-
-*Retention.* Run receipts and the trace database grow without bound, and the
-shape of the fix is known: a `Prune(before)` on `internal/checkpoint`, a
-`DELETE FROM agent_trace WHERE ended_at < ?` on `internal/trace`, a due-marker
-like `metrics.CompactIfDue`, and a window in the settings file. What is not
-known is the window. A receipt is the only record that a commission happened,
-so the number is a decision about what this machine is allowed to forget, and
-writing the verbs before that decision would leave two exported methods nobody
-calls -- the shape this project criticises in writing.
-
-*How `Outcome.SpentUSD` says "unmeasured".* It is a plain `float64`, so zero
-means both "this cost nothing" and "nobody measured it" -- the exact collapse
-`Charge.USD` is a pointer to avoid, three types away in the same package. The
-two shapes that would fix it are a `*float64` or a `SpentUSDKnown bool` beside
-it, and both are a contract change with an entry in `version.go`. It is
-recorded here rather than done because `Outcome` is on the Runner seam, which
-is the one part of this package that cannot be extended additively, and a
-change there wants to travel with whatever else that seam is ever going to
-need.
-
-*Early warning on omp's private store.* The limits widget reads another
-product's `agent.db` by hand, with no contract behind it, and a renamed field
-there breaks it. Two halves: the widget now says `sin lectura` when it cannot
-read what it found, so the failure is visible rather than silent, and a test
-shouts on a machine that has the store. The half that does not exist is CI:
-there is no omp there, so there is no store, and a committed fixture would
-check this repository's idea of the format -- which is the error the widget was
-built on. Accepted as a limitation, not deferred as work: the early warning is
-the maintainer's machine or nothing.
-
-*Quiescing the databases before a backup.* `metrics.duckdb` and `traces.db` are
-copied hot, so a snapshot is crash-consistent and not consistent. The document
-for `internal/backup` now says so plainly, with what is lost on restore. Doing
-better means the tree copier has to know which files are databases and load
-their drivers, which belongs to whoever commissions the snapshot rather than to
-the copier. The decision is whether a backup that can lose the last flush is
-acceptable for these two files, given that both are derived data.
 
 ## Channels that leave no trace on disk
 

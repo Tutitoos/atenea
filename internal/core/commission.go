@@ -65,6 +65,16 @@ func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contrac
 		return outcome, contract.Fail(contract.FailurePermissionDenied,
 			"%s reported an invalid monetary charge", req.Capability.ID)
 	}
+	// A figure with no measurement behind it is not a charge, it is a number.
+	// SpentUSDKnown is what an adapter sets when the provider actually said a
+	// price; an adapter that reports one without it has either forgotten the
+	// flag or invented the amount, and the core cannot tell which -- so it
+	// refuses both rather than spending a purse down by a guess.
+	if !outcome.SpentUSDKnown && outcome.SpentUSD != 0 {
+		return outcome, contract.Fail(contract.FailurePermissionDenied,
+			"%s reported a charge of $%.4f without saying it was measured",
+			req.Capability.ID, outcome.SpentUSD)
+	}
 	if outcome.SpentUSD > req.Permission.BudgetUSD+1e-9 {
 		return outcome, contract.Fail(contract.FailurePermissionDenied,
 			"%s reported a charge above its %.2f USD permission", req.Capability.ID,

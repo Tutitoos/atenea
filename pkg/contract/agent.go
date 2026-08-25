@@ -273,7 +273,27 @@ type Outcome struct {
 	// human can see what a commission cost. What money does govern is
 	// permission -- a ceiling on what one call may spend -- and that lives
 	// with the grant, not here.
+	//
+	// Read it beside SpentUSDKnown, always. On its own a zero here is two
+	// different facts wearing the same face.
 	SpentUSD float64
+	// SpentUSDKnown says whether SpentUSD is a measurement.
+	//
+	// Without it, zero means both "this call cost nothing" and "nobody said",
+	// and those are not the same news: the first is a fact about a free
+	// provider, the second is the absence of one. Charge.USD keeps them apart
+	// with a pointer and CostUpdate keeps them apart with exactly this field;
+	// Outcome did neither, so a receipt for a run through ripgrep and a
+	// receipt for a run whose provider reported nothing read identically.
+	//
+	// A bool rather than a *float64, matching CostUpdate.Known rather than
+	// Charge.USD, and the reason is the seam. Outcome travels on the Runner
+	// interface, which this package cannot extend without breaking every
+	// implementer, so the shape that costs least is the one that leaves the
+	// existing field alone: an adapter built before this goes on compiling
+	// and leaves it false, which reads as "nobody said" -- the honest answer
+	// for an adapter that never had a way to say otherwise.
+	SpentUSDKnown bool
 	// Notices are caveats about this Outcome that do not rise to a failure --
 	// reasons the Result may still be right but should not be taken as the
 	// last word (an adapter saying "the index may be stale", say). They

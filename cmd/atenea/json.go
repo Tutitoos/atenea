@@ -34,8 +34,14 @@ type jsonResult struct {
 	SpentMS int64  `json:"spent_ms"`
 	// ElapsedMS is the wall beside the sum. A reader with only the sum cannot
 	// tell a wave from a queue, and the sum is the bigger number of the two.
-	ElapsedMS   int64           `json:"elapsed_ms"`
-	ChargedUSD  float64         `json:"charged_usd,omitempty"`
+	ElapsedMS int64 `json:"elapsed_ms"`
+	// ChargedUSD is a pointer so that "nobody said" and "$0.00" are different
+	// documents, which they were not: `omitempty` on a float omits a measured
+	// zero exactly as it omits an absence, and a machine reading this output
+	// had no way to tell a free provider from a silent one. Present -- even
+	// as 0 -- means measured; absent means nobody reported a price. The same
+	// shape contract.Charge.USD uses, for the same reason.
+	ChargedUSD  *float64        `json:"charged_usd,omitempty"`
 	Phases      []jsonPhase     `json:"phases,omitempty"`
 	Discoveries []jsonDiscovery `json:"discoveries,omitempty"`
 	Waves       [][]string      `json:"waves,omitempty"`
@@ -66,8 +72,10 @@ type jsonStep struct {
 	// steps of one wave overlapped. Stamped by the step itself, so a quick step
 	// beside a slow one reports the moment it finished rather than the moment
 	// the wave it belonged to did.
-	ClosedAt     time.Time      `json:"closed_at"`
-	ChargedUSD   float64        `json:"charged_usd,omitempty"`
+	ClosedAt time.Time `json:"closed_at"`
+	// ChargedUSD is a pointer for the reason jsonResult.ChargedUSD gives:
+	// present, even as 0, means measured.
+	ChargedUSD   *float64       `json:"charged_usd,omitempty"`
 	OverspentUSD float64        `json:"overspent_usd,omitempty"`
 	Review       *jsonReview    `json:"review,omitempty"`
 	Failure      string         `json:"failure,omitempty"`
@@ -112,7 +120,7 @@ func printResultJSON(out io.Writer, result *orchestrator.Result) error {
 		Verdict:    result.Verdict.String(),
 		SpentMS:    result.Spent.Duration.Milliseconds(),
 		ElapsedMS:  result.Elapsed.Milliseconds(),
-		ChargedUSD: result.SpentUSD,
+		ChargedUSD: measuredUSD(result.SpentUSD, result.SpentUSDKnown),
 		Steps:      make([]jsonStep, 0, len(result.Steps)),
 	}
 	// Matches are counted out of the split-up commission; see printResult for
@@ -160,7 +168,7 @@ func jsonStepOf(step orchestrator.StepResult) jsonStep {
 		Implementation: step.Decision.Chosen.ID,
 		SpentMS:        step.Spent.Duration.Milliseconds(),
 		ClosedAt:       step.ClosedAt,
-		ChargedUSD:     step.Outcome.SpentUSD,
+		ChargedUSD:     measuredUSD(step.Outcome.SpentUSD, step.Outcome.SpentUSDKnown),
 		OverspentUSD:   orchestrator.Overspend(step),
 		Failure:        step.Failure,
 		Raw:            step.Raw,
@@ -299,4 +307,17 @@ func encodeJSON(out io.Writer, payload any) error {
 		return contract.Fail(contract.FailureUnavailable, "writing the json report: %v", err)
 	}
 	return nil
+}
+
+// measuredUSD renders a charge for a document, keeping the difference between
+// a price and the absence of one.
+//
+// Nil rather than zero when nothing was measured, so `omitempty` drops the
+// field entirely; a measured zero keeps its own address and is written out as
+// `"charged_usd": 0`, which is the fact a free provider produced.
+func measuredUSD(usd float64, known bool) *float64 {
+	if !known {
+		return nil
+	}
+	return &usd
 }

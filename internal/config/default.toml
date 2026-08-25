@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "3.2.0"
+contract = "3.3.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -402,6 +402,33 @@ compact = "1h"
 # and counted, because the only thing worse than losing a measurement is not
 # knowing that you did. Empty means 10000.
 # buffer_limit = 10000
+
+[retention]
+# How long the record of what Atenea did is kept: the run receipts on disk and
+# the agent traces beside them. The measurement base is NOT covered here -- it
+# has a retention ladder of its own, folding attempts into hours and hours into
+# days, so it grows in detail rather than in rows.
+#
+# A receipt is the only record that a commission happened, and it carries the
+# sentence somebody typed and what the run found. So this is a decision about
+# what this machine is allowed to forget, and ninety days is a choice rather
+# than the absence of one: long enough to answer "what did I ask last quarter",
+# short enough that the five rotating backup copies stop compounding it.
+# Measured on the machine this was written on: 182 receipts in five days, at
+# about 4 KiB each.
+#
+# Spelled in hours because a Go duration has no day. "0s" keeps everything
+# forever, which is the right answer for a state root managed elsewhere.
+keep = "2160h"
+# How often the pass runs. Guarded by a mark in the trace database rather than
+# by the beat: most Atenea processes are a command that lives for a second, and
+# two starting together must not both decide they are the one to do it.
+every = "24h"
+
+# Only closed records are removed, and by when they ENDED. An open receipt is a
+# commission somebody may still resume and an open trace is a run nobody saw
+# finish -- the one kind worth keeping past its age, because it is the evidence
+# that something died.
 
 [backup]
 # What protects the history. The measurement base, the run receipts and the

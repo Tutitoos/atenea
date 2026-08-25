@@ -257,7 +257,28 @@ type Version struct {
 // relaxation and therefore additive: every file that validated before still
 // validates, and zero now reads as "no bound declared" consistently with
 // `Limits.Fits`, which had always read it that way.
-var Current = Version{Major: 3, Minor: 2, Patch: 0}
+// 3.3.0 added `Outcome.SpentUSDKnown`, which says whether `Outcome.SpentUSD`
+// is a measurement.
+//
+// Without it a zero there was two facts wearing one face: a provider that
+// charges nothing, and a provider that said nothing. This package already kept
+// them apart twice -- `Charge.USD` with a pointer, `CostUpdate.Known` with a
+// bool -- and `Outcome`, the one on the Runner seam, did neither. The receipt
+// on disk inherited the collapse: `spent_usd,omitempty` writes nothing for
+// both.
+//
+// A bool rather than a pointer, matching CostUpdate rather than Charge, and
+// the seam is the reason. Outcome travels on the Runner interface, which
+// cannot be extended without breaking every implementer, so the shape that
+// costs least is the one that leaves the existing field alone. An adapter
+// built against 3.2.0 goes on compiling and leaves it false, which reads as
+// "nobody said" -- the honest answer for an adapter that never had a way to
+// say otherwise.
+//
+// The core enforces it: a charge reported without it is refused rather than
+// spent, because a figure with no measurement behind it is a number and not a
+// price.
+var Current = Version{Major: 3, Minor: 3, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

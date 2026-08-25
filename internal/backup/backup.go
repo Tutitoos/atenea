@@ -18,36 +18,35 @@
 // with no rsync, no borg and possibly no cron, so Atenea backs itself up with
 // what the standard library gives it, wherever it happens to be running.
 //
-// # Live databases are copied, not quiesced
+// # Live databases are settled by the caller, not by the copier
 //
 // The tree this walks is the state root, and two of the files in it are open
 // databases: metrics.duckdb, which DuckDB holds under an exclusive lock while
 // any Atenea is flushing, and traces.db, which the workflow service keeps open
 // in WAL mode. Both are read here the same way every other file is -- opened
 // and streamed with io.Copy, one file at a time, in whatever order WalkDir
-// hands them over.
+// hands them over. A write-ahead log is a separate file, so the two halves of
+// one database are reached at two different instants.
 //
-// So a snapshot is a crash-consistent copy of those two, not a consistent one.
-// Nothing coordinates with the DuckDB lock, nothing calls SQLite's backup API,
-// and the write-ahead log is a separate file that may be copied before or
-// after the database it belongs to. What that costs is bounded and worth
-// stating plainly: restoring such a snapshot gives back the two databases in
-// the state a power cut would have left them in, which each engine is built to
-// recover from, and may lose the last transactions. It is the rest of the
-// state root -- settings, receipts, the crash notebook -- that a restore
-// returns exactly.
+// Left alone that produces a crash-consistent copy and not a consistent one:
+// it opens, each engine recovers it the way it recovers from a power cut, and
+// it is missing whatever had not been folded in. Restoring it loses
+// transactions nobody knows are missing, which is worse than losing them
+// loudly.
 //
-// The in-process clock serializes a flush against a backup, which is why this
-// is not worse than it sounds on a single Atenea. It says nothing about the
-// second Atenea on the machine, which is an ordinary situation here: this is a
-// CLI at least as often as it is a service.
+// So SnapshotIfDue takes a settle: a function the caller supplies that puts
+// the tree in order immediately before the copy, and whose failure stops the
+// copy. internal/core passes one that flushes the measurement batch, issues a
+// DuckDB CHECKPOINT and runs `PRAGMA wal_checkpoint(TRUNCATE)` against the
+// trace store. It is a parameter rather than something this package does
+// because this package copies a directory and deliberately has no idea which
+// files in it are databases; whoever commissions a snapshot holds the handles.
 //
-// Closing the gap needs a quiesce this package cannot reach for on its own --
-// a short connect-and-checkpoint against DuckDB and a
-// `PRAGMA wal_checkpoint(TRUNCATE)` against traces.db, both of which mean
-// knowing which files are databases and holding their drivers. Whoever
-// commissions a snapshot has that knowledge; a tree copier deliberately does
-// not.
+// It runs after the dueness check, not before: a checkpoint on every beat of a
+// rhythm that copies once every six hours is five wasted checkpoints out of
+// six. And Snapshot itself, called directly, settles nothing -- a caller
+// asking for a copy right now is a caller who has decided what state it wants
+// copied.
 package backup
 
 import (
@@ -524,7 +523,17 @@ func (s *Store) restoreSource(name string) (string, error) {
 // happens once, silently, forever. The metrics compaction reached for the same
 // answer for the same reason (see metrics.CompactIfDue): the mark lives where
 // the work lands, so restarting cannot lose it.
-func (s *Store) SnapshotIfDue(ctx context.Context, now time.Time, every time.Duration) (Snapshot, bool, error) {
+// settle is what the caller does to the state root before it is copied. It runs
+// only when a copy is actually about to be taken, and a failure there stops the
+// copy: a snapshot of a tree somebody could not put in order is exactly the
+// snapshot this argument exists to avoid.
+//
+// It is a parameter rather than something this package does, because this
+// package copies a directory and has no idea which files in it are databases.
+// Whoever commissions the snapshot holds the handles.
+type settle func(context.Context) error
+
+func (s *Store) SnapshotIfDue(ctx context.Context, now time.Time, every time.Duration, ready settle) (Snapshot, bool, error) {
 	if every <= 0 {
 		return Snapshot{}, false, contract.Fail(contract.FailureInvalidInput,
 			"backup: interval must be above 0, got %s", every)
@@ -535,6 +544,14 @@ func (s *Store) SnapshotIfDue(ctx context.Context, now time.Time, every time.Dur
 	}
 	if len(existing) > 0 && now.UTC().Sub(existing[0].At) < every {
 		return Snapshot{}, false, nil
+	}
+	// Here, and not before the dueness check: quiescing a database costs a
+	// checkpoint, and paying it on every beat of a rhythm that copies once
+	// every six hours would be five wasted checkpoints out of six.
+	if ready != nil {
+		if err := ready(ctx); err != nil {
+			return Snapshot{}, false, err
+		}
 	}
 	snapshot, err := s.Snapshot(ctx, now)
 	if err != nil {

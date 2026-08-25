@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,13 +208,13 @@ func TestTheRhythmIsReadFromDiskSoARestartCannotSkipABackup(t *testing.T) {
 		return store
 	}
 
-	if _, taken, err := restart().SnapshotIfDue(context.Background(), base, every); err != nil || !taken {
+	if _, taken, err := restart().SnapshotIfDue(context.Background(), base, every, nil); err != nil || !taken {
 		t.Fatalf("nothing on disk yet: taken = %v, err = %v, want a backup", taken, err)
 	}
-	if _, taken, err := restart().SnapshotIfDue(context.Background(), base.Add(4*time.Hour), every); err != nil || taken {
+	if _, taken, err := restart().SnapshotIfDue(context.Background(), base.Add(4*time.Hour), every, nil); err != nil || taken {
 		t.Fatalf("four hours in: taken = %v, err = %v, want the fresh snapshot to be enough", taken, err)
 	}
-	if _, taken, err := restart().SnapshotIfDue(context.Background(), base.Add(7*time.Hour), every); err != nil || !taken {
+	if _, taken, err := restart().SnapshotIfDue(context.Background(), base.Add(7*time.Hour), every, nil); err != nil || !taken {
 		t.Fatalf("seven hours in: taken = %v, err = %v, want a backup", taken, err)
 	}
 
@@ -253,7 +254,7 @@ func TestAnInterruptedRunIsNotASnapshotAndIsSweptAway(t *testing.T) {
 	// Six hours after the real snapshot and one after the half-written one. A
 	// partial counted as the newest would postpone this indefinitely, one
 	// killed run at a time.
-	_, taken, err := store.SnapshotIfDue(context.Background(), base.Add(6*time.Hour), 6*time.Hour)
+	_, taken, err := store.SnapshotIfDue(context.Background(), base.Add(6*time.Hour), 6*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("snapshot if due: %v", err)
 	}
@@ -339,7 +340,7 @@ func TestAnExtraDestinationCannotEscapeTheSnapshot(t *testing.T) {
 func TestAnIntervalThatIsNotAnIntervalIsRefused(t *testing.T) {
 	store, _ := newStore(t, 5)
 	for _, every := range []time.Duration{0, -time.Hour} {
-		_, taken, err := store.SnapshotIfDue(context.Background(), base, every)
+		_, taken, err := store.SnapshotIfDue(context.Background(), base, every, nil)
 		if err == nil {
 			t.Errorf("an interval of %s was accepted, taken = %v", every, taken)
 			continue
@@ -518,7 +519,7 @@ func TestAMissingSourceTakesNoSnapshotRatherThanAnEmptyOne(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 
-	snapshot, taken, err := store.SnapshotIfDue(context.Background(), base, 6*time.Hour)
+	snapshot, taken, err := store.SnapshotIfDue(context.Background(), base, 6*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("a machine with nothing to protect is not a failure: %v", err)
 	}
@@ -823,4 +824,71 @@ func countEntries(t *testing.T, root string) int {
 		t.Fatalf("walk %s: %v", root, err)
 	}
 	return count
+}
+
+// The copier walks a directory of files and has no idea which of them are
+// databases, so whoever commissions the snapshot settles them first.
+//
+// Two things have to hold and neither used to. The settle runs before the copy
+// -- a checkpoint after the bytes are already read is a checkpoint of nothing
+// -- and a settle that fails stops the copy, because a snapshot of a tree
+// nobody could put in order is exactly the snapshot this argument exists to
+// avoid.
+func TestTheTreeIsSettledBeforeItIsCopied(t *testing.T) {
+	store, _ := newStore(t, 5)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	settled := false
+	_, taken, err := store.SnapshotIfDue(context.Background(), base, 6*time.Hour,
+		func(context.Context) error { settled = true; return nil })
+	if err != nil || !taken {
+		t.Fatalf("SnapshotIfDue: taken = %v, err = %v", taken, err)
+	}
+	if !settled {
+		t.Error("the copy was taken without the tree being settled first")
+	}
+}
+
+// And it is not paid on a beat that takes no copy: a checkpoint on every
+// rhythm of a copy taken once every six hours is five wasted checkpoints
+// out of six.
+func TestNothingIsSettledWhenNoCopyIsDue(t *testing.T) {
+	store, _ := newStore(t, 5)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	if _, taken, err := store.SnapshotIfDue(context.Background(), base, 6*time.Hour, nil); err != nil || !taken {
+		t.Fatalf("the first copy: taken = %v, err = %v", taken, err)
+	}
+	settled := false
+	_, taken, err := store.SnapshotIfDue(context.Background(), base.Add(time.Hour), 6*time.Hour,
+		func(context.Context) error { settled = true; return nil })
+	if err != nil {
+		t.Fatalf("SnapshotIfDue: %v", err)
+	}
+	if taken {
+		t.Fatal("a copy was taken an hour into a six-hour rhythm")
+	}
+	if settled {
+		t.Error("the tree was settled for a copy that was never going to be taken")
+	}
+}
+
+// A settle that cannot finish stops the copy rather than being noted and
+// ignored: taking it anyway would put the failure where nobody reads it while
+// the snapshot claims to be fine.
+func TestASettleThatFailsStopsTheCopy(t *testing.T) {
+	store, _ := newStore(t, 5)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	_, taken, err := store.SnapshotIfDue(context.Background(), base, 6*time.Hour,
+		func(context.Context) error { return errors.New("the log would not fold") })
+	if err == nil {
+		t.Fatal("a copy was taken after the tree could not be settled")
+	}
+	if taken {
+		t.Error("SnapshotIfDue reports a copy it did not take")
+	}
+	if !strings.Contains(err.Error(), "would not fold") {
+		t.Errorf("error = %q, want the settle's own reason", err)
+	}
 }

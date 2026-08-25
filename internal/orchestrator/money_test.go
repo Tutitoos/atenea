@@ -19,7 +19,12 @@ import (
 func charging(usd float64) func(contract.RunRequest) (contract.Outcome, error) {
 	return func(contract.RunRequest) (contract.Outcome, error) {
 		out := hits("cmd/main.go")
-		out.SpentUSD = usd
+		// Measured, because a stub standing in for a provider that reports a
+		// price is standing in for one that measured it. Without the flag the
+		// core refuses the charge and the total reads as unknown, which is
+		// the right answer for a provider that said nothing and the wrong one
+		// for this fixture.
+		out.SpentUSD, out.SpentUSDKnown = usd, true
 		return out, nil
 	}
 }
@@ -259,7 +264,7 @@ func spendsItsCeiling() func(contract.RunRequest) (contract.Outcome, error) {
 				"the commission has nothing left to spend")
 		}
 		out := hits("cmd/main.go")
-		out.SpentUSD = req.Permission.BudgetUSD
+		out.SpentUSD, out.SpentUSDKnown = req.Permission.BudgetUSD, true
 		return out, nil
 	}
 }
@@ -323,7 +328,7 @@ func TestTheNextWaveDividesWhatTheLastOneLeft(t *testing.T) {
 	const grant = 1.0
 	runner := &fakeRunner{answer: func(contract.RunRequest) (contract.Outcome, error) {
 		out := hits("cmd/main.go")
-		out.SpentUSD = 0.01
+		out.SpentUSD, out.SpentUSDKnown = 0.01, true
 		return out, nil
 	}}
 	agent := budgeted(t, runner, grant)

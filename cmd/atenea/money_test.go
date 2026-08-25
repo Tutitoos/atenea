@@ -13,20 +13,38 @@ import (
 // receipt is one closed commission, priced or free, with nothing else in it.
 func receipt(usd float64) *orchestrator.Result {
 	step := orchestrator.StepResult{
-		Step:    contract.Step{ID: "search-current", Capability: "code.search", Repository: "current", Permission: contract.Permission{BudgetUSD: usd}},
-		Phase:   orchestrator.PhaseWork,
-		Spent:   contract.Sample{Duration: 2 * time.Second, Tokens: 160},
-		Outcome: contract.Outcome{Verdict: contract.VerdictOK, SpentUSD: usd},
+		Step:  contract.Step{ID: "search-current", Capability: "code.search", Repository: "current", Permission: contract.Permission{BudgetUSD: usd}},
+		Phase: orchestrator.PhaseWork,
+		Spent: contract.Sample{Duration: 2 * time.Second, Tokens: 160},
+		// Known follows the amount, which is what a real run looks like:
+		// ripgrep reports nothing and charges nothing, and the two providers
+		// that do report a price report a real one. The measured-zero case --
+		// a provider that answered "$0.00" -- has its own helper below,
+		// because it is the case these two used to be indistinguishable from.
+		Outcome: contract.Outcome{Verdict: contract.VerdictOK, SpentUSD: usd, SpentUSDKnown: usd != 0},
 		Review:  orchestrator.Review{Child: contract.VerdictOK, Parent: contract.VerdictOK},
 	}
 	return &orchestrator.Result{
-		RunID:    "run-1",
-		Task:     "find TODO",
-		Verdict:  contract.VerdictOK,
-		Steps:    []orchestrator.StepResult{step},
-		Spent:    step.Spent,
-		SpentUSD: usd,
+		RunID:         "run-1",
+		Task:          "find TODO",
+		Verdict:       contract.VerdictOK,
+		Steps:         []orchestrator.StepResult{step},
+		Spent:         step.Spent,
+		SpentUSD:      usd,
+		SpentUSDKnown: usd != 0,
 	}
+}
+
+// pricedAtZero is a run whose provider answered, and answered zero.
+//
+// It is the case that used to be invisible: on the wire and on the receipt it
+// looked exactly like a run nobody priced, so a free provider and a silent one
+// produced the same document.
+func pricedAtZero() *orchestrator.Result {
+	out := receipt(0)
+	out.SpentUSDKnown = true
+	out.Steps[0].Outcome.SpentUSDKnown = true
+	return out
 }
 
 // A commission that cost money says so on the receipt. The figure is on each

@@ -7,7 +7,7 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.2.0`. It is a commitment from the first release: an adapter is code
+  at `3.3.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
@@ -84,9 +84,26 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - Make tagged release publication idempotent: retries reuse an existing GitHub
   release and replace its assets instead of failing on the duplicate tag.
 
+### Added
+
+- Retention. Run receipts and agent traces are pruned by a `[retention]` block
+  -- ninety days by default, on a daily lane guarded by a mark in the trace
+  database. Only closed records go, and by when they ended: an open receipt is
+  a commission somebody may still resume and an open trace is the evidence that
+  a run died. `keep = "0s"` keeps everything.
+- `Outcome.SpentUSDKnown`, which says whether a charge of zero is a price or an
+  absence. The core refuses a charge reported without it, and `--json` carries
+  the distinction as a pointer: present even as zero means measured.
+
 ### Changed
 
-- The contract is `3.2.0`. Four additive changes had landed on the public types
+- The backup settles the tree before copying it. Both databases in the state
+  root keep a write-ahead log beside them, so a directory copier reached the
+  two halves at two different instants and produced a snapshot that opens and
+  is missing whatever had not been folded in. `SnapshotIfDue` now takes a
+  settle the caller supplies, run only when a copy is due and whose failure
+  stops the copy.
+- The contract is `3.3.0`. Four additive changes had landed on the public types
   while `contract.Current` stayed at `3.1.0`, so that number named two different
   shapes of the package.
 - The suite pins its own temporary root. It could not bind a socket on macOS

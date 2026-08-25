@@ -42,12 +42,12 @@ func TestCopyingIsOneOfTheBackgroundLanes(t *testing.T) {
 	atenea := build(t, healthy)
 	defer func() { _ = atenea.Shutdown() }()
 
-	lanes := make([]string, 0, 3)
+	lanes := make([]string, 0, 4)
 	for _, lane := range atenea.Status().Maintenance {
 		lanes = append(lanes, lane.Name)
 	}
 	slices.Sort(lanes)
-	want := []string{"backup", "metrics.compact", "metrics.flush"}
+	want := []string{"backup", "metrics.compact", "metrics.flush", "retention"}
 	if !slices.Equal(lanes, want) {
 		t.Errorf("lanes = %v, want %v", lanes, want)
 	}
@@ -61,12 +61,12 @@ func TestTurningCopyingOffLeavesTheOtherLanes(t *testing.T) {
 	defer func() { _ = atenea.Shutdown() }()
 
 	status := atenea.Status()
-	lanes := make([]string, 0, 2)
+	lanes := make([]string, 0, 3)
 	for _, lane := range status.Maintenance {
 		lanes = append(lanes, lane.Name)
 	}
 	slices.Sort(lanes)
-	if want := []string{"metrics.compact", "metrics.flush"}; !slices.Equal(lanes, want) {
+	if want := []string{"metrics.compact", "metrics.flush", "retention"}; !slices.Equal(lanes, want) {
 		t.Errorf("lanes = %v, want %v", lanes, want)
 	}
 	if status.Backups.Enabled {
@@ -380,5 +380,19 @@ func TestReadingTheIncidentsClearsTheLight(t *testing.T) {
 	}
 	if got := reader.Status().Light; got != core.LightGreen {
 		t.Errorf("light = %v after the incidents were read, want green", got)
+	}
+}
+
+// Keeping everything is a policy, so it is said by not scheduling the lane at
+// all rather than by scheduling one that skips. A rhythm on the screen that
+// never does anything is a rhythm nobody can tell apart from a broken one.
+func TestTurningRetentionOffRemovesItsLane(t *testing.T) {
+	atenea := build(t, healthy+"\n[retention]\nkeep = \"0s\"\n")
+	defer func() { _ = atenea.Shutdown() }()
+
+	for _, lane := range atenea.Status().Maintenance {
+		if lane.Name == "retention" {
+			t.Fatal("the retention lane is on the screen with retention switched off")
+		}
 	}
 }

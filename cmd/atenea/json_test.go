@@ -58,22 +58,42 @@ func TestJSONReportsWhatWasCharged(t *testing.T) {
 	if !strings.Contains(body, `"charged_usd": 0.0234`) {
 		t.Errorf("the json does not say what it cost:\n%s", body)
 	}
-	if decoded.ChargedUSD != 0.0234 {
+	if decoded.ChargedUSD == nil || *decoded.ChargedUSD != 0.0234 {
 		t.Errorf("charged_usd = %v, want 0.0234", decoded.ChargedUSD)
 	}
 }
 
-// A free commission carries no charged_usd key at all -- not a zero, an
+// A run nobody priced carries no charged_usd key at all -- not a zero, an
 // absence -- the same distinction printResult draws by leaving the line off
 // the screen entirely rather than printing "$0.0000".
-func TestAFreeRunMentionsNoMoneyInJSON(t *testing.T) {
+func TestARunNobodyPricedMentionsNoMoneyInJSON(t *testing.T) {
 	body, decoded := jsonOf(t, receipt(0))
 
 	if strings.Contains(body, "charged_usd") {
-		t.Errorf("a free run wrote a charged_usd key:\n%s", body)
+		t.Errorf("a run nobody priced wrote a charged_usd key:\n%s", body)
 	}
-	if decoded.ChargedUSD != 0 {
-		t.Errorf("charged_usd = %v, want 0", decoded.ChargedUSD)
+	if decoded.ChargedUSD != nil {
+		t.Errorf("charged_usd = %v, want it absent", *decoded.ChargedUSD)
+	}
+}
+
+// And the other zero: a provider that answered, and answered nothing.
+//
+// These two documents used to be byte-for-byte identical, because omitempty on
+// a float drops a measured zero exactly as it drops an absence. A script
+// reading this output could not tell a free provider from a silent one, which
+// is the same collapse contract.Charge.USD carries a pointer to avoid.
+func TestAProviderThatChargedNothingSaysSoInJSON(t *testing.T) {
+	body, decoded := jsonOf(t, pricedAtZero())
+
+	if !strings.Contains(body, `"charged_usd": 0`) {
+		t.Errorf("a measured zero did not reach the document:\n%s", body)
+	}
+	if decoded.ChargedUSD == nil {
+		t.Fatal("charged_usd is absent on a run the provider priced at zero")
+	}
+	if *decoded.ChargedUSD != 0 {
+		t.Errorf("charged_usd = %v, want a measured 0", *decoded.ChargedUSD)
 	}
 }
 
@@ -89,7 +109,7 @@ func TestJSONNamesTheStepThatPaidAndOverspent(t *testing.T) {
 		t.Fatalf("steps = %d, want 1", len(decoded.Steps))
 	}
 	step := decoded.Steps[0]
-	if step.ChargedUSD != 0.30 {
+	if step.ChargedUSD == nil || *step.ChargedUSD != 0.30 {
 		t.Errorf("steps[0].charged_usd = %v, want 0.30", step.ChargedUSD)
 	}
 	if diff := step.OverspentUSD - 0.05; diff > 1e-9 || diff < -1e-9 {

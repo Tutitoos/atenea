@@ -65,7 +65,9 @@ type Config struct {
 	Workflow Workflow
 	Metrics  Metrics
 	Backup   Backup
-	Security Security
+	// Retention is how long receipts and traces are kept. See the type.
+	Retention Retention
+	Security  Security
 	// LocalAgents caps the agent types a repository declares for itself.
 	// Never the zero value: an absent block is DefaultLocalAgents.
 	LocalAgents     LocalAgents
@@ -238,6 +240,29 @@ type Metrics struct {
 // one clock lane, and the design asks for retuning a beat to be a line in this
 // file rather than a rebuild. Two beats set to collide are visible here and
 // nowhere else.
+// Retention is how long the record of what Atenea did is kept.
+//
+// It covers the two stores that grow without a shape of their own: the run
+// receipts on disk and the agent traces in SQLite. The measurement base is not
+// here -- it has a retention LADDER of its own, folding attempts into hours
+// and hours into days, so it grows in detail rather than in rows.
+//
+// A receipt is the only record that a commission happened, and it carries the
+// sentence somebody typed and what the run found. So this is a decision about
+// what this machine is allowed to forget, and the default says ninety days
+// rather than forever: long enough to answer "what did I ask last quarter",
+// short enough that the five rotating backup copies stop compounding it.
+type Retention struct {
+	// Keep is how old a closed receipt or trace may be before it is removed.
+	// Zero disables pruning entirely, which is a legitimate choice for a
+	// machine whose state root is already managed elsewhere.
+	Keep time.Duration
+	// Every is how often the pass runs. It is guarded by a mark on disk, not
+	// by a beat, for the reason metrics.CompactIfDue gives: most Atenea
+	// processes are a command that lives for a second.
+	Every time.Duration
+}
+
 type Backup struct {
 	// Dir is where copies go. Empty means platform.BackupDir -- a folder of
 	// its own beside the state root, never inside it.
@@ -875,6 +900,7 @@ type file struct {
 	Model           fileModel        `toml:"model"`
 	Workflow        fileWorkflow     `toml:"workflow"`
 	Metrics         fileMetrics      `toml:"metrics"`
+	Retention       fileRetention    `toml:"retention"`
 	Backup          fileBackup       `toml:"backup"`
 	Security        fileSecurity     `toml:"security"`
 	LocalAgents     fileLocalAgents  `toml:"local_agents"`
@@ -908,6 +934,11 @@ type fileMetrics struct {
 	Flush       string `toml:"flush"`
 	Compact     string `toml:"compact"`
 	BufferLimit *int   `toml:"buffer_limit"`
+}
+
+type fileRetention struct {
+	Keep  string `toml:"keep"`
+	Every string `toml:"every"`
 }
 
 type fileBackup struct {
@@ -1442,6 +1473,9 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Retention, err = decoded.Retention.build(source); err != nil {
+		return Config{}, err
+	}
 	if cfg.Backup, err = decoded.Backup.build(source); err != nil {
 		return Config{}, err
 	}
@@ -1891,7 +1925,53 @@ const (
 	// of history in four snapshots plus the one being replaced.
 	defaultBackupEvery = 6 * time.Hour
 	defaultBackupKeep  = 5
+	// Ninety days, spelled in hours because time.ParseDuration has no day.
+	//
+	// Measured on the machine this was written on: 182 receipts in five days,
+	// 82 on the busiest, at about 4 KiB each. Ninety days is therefore around
+	// 30 MB of receipts and 6 MB of traces -- and, because every backup copy
+	// carries the whole state root, five times that in the rotation. Forever
+	// was the previous number and it was not chosen, it was the absence of a
+	// choice.
+	defaultRetentionKeep  = 2160 * time.Hour
+	defaultRetentionEvery = 24 * time.Hour
 )
+
+func (r fileRetention) build(source string) (Retention, error) {
+	out := Retention{Keep: defaultRetentionKeep, Every: defaultRetentionEvery}
+	for _, field := range []struct {
+		name string
+		raw  string
+		into *time.Duration
+		zero string
+	}{
+		{"retention.keep", r.Keep, &out.Keep,
+			"use keep = \"0s\" to keep everything forever"},
+		{"retention.every", r.Every, &out.Every, ""},
+	} {
+		if field.raw == "" {
+			continue
+		}
+		parsed, err := time.ParseDuration(field.raw)
+		if err != nil {
+			return Retention{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: %s %q: %v", source, field.name, field.raw, err)
+		}
+		if parsed < 0 {
+			return Retention{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: %s must not be negative, got %s", source, field.name, parsed)
+		}
+		// Zero is meaningful for keep -- forget nothing -- and meaningless for
+		// every, where it would ask for a pass on every beat of a rhythm that
+		// deletes things.
+		if parsed == 0 && field.zero == "" {
+			return Retention{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: %s must be above 0, got %s", source, field.name, parsed)
+		}
+		*field.into = parsed
+	}
+	return out, nil
+}
 
 func (b fileBackup) build(source string) (Backup, error) {
 	out := Backup{

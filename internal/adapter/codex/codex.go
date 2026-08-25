@@ -211,7 +211,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		Duration: time.Since(started),
 		Tokens:   answer.Usage.total(),
 		PeakRSS:  peak,
-	}, SpentUSD: answer.CostUSD}
+	}, SpentUSD: answer.CostUSD, SpentUSDKnown: answer.CostSeen}
 	if !contract.ReportCost(ctx, contract.CostUpdate{SpentUSD: answer.CostUSD, Known: answer.CostSeen}) {
 		return outcome, contract.Fail(contract.FailurePermissionDenied,
 			"codex exceeded its monetary permission during the call")

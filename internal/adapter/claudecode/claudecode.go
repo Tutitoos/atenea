@@ -266,9 +266,12 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		// Money travels as a number of its own, never folded into the token
 		// count: the baseline ranks on tokens, and a dollar rounded into them
 		// would be a price list quietly poisoning a measurement.
-		SpentUSD: answer.TotalCostUSD,
+		SpentUSD:      answer.TotalCostUSD,
+		SpentUSDKnown: answer.costSeen,
 	}
-	if !contract.ReportCost(ctx, contract.CostUpdate{SpentUSD: answer.TotalCostUSD, Known: true}) {
+	if !contract.ReportCost(ctx, contract.CostUpdate{
+		SpentUSD: answer.TotalCostUSD, Known: answer.costSeen,
+	}) {
 		return weighed, contract.Fail(contract.FailurePermissionDenied,
 			"claude code exceeded its monetary permission during the call")
 	}
@@ -534,6 +537,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		}
 		if event.costSeen {
 			out.TotalCostUSD = event.Envelope.TotalCostUSD
+			out.costSeen = true
 			if !contract.ReportCost(ctx, contract.CostUpdate{
 				SpentUSD: out.TotalCostUSD, Known: true,
 			}) {
@@ -653,7 +657,12 @@ type envelope struct {
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	Usage            usage           `json:"usage"`
 	TotalCostUSD     float64         `json:"total_cost_usd"`
-	NumTurns         int             `json:"num_turns"`
+	// costSeen is whether the provider actually reported a price, as opposed
+	// to this being the zero value of a field it left out. Derived from the
+	// raw object rather than decoded, because that distinction is exactly
+	// what decoding into a float64 destroys.
+	costSeen bool
+	NumTurns int `json:"num_turns"`
 	// PermissionDenials lists what the turn was refused. A non-empty list is
 	// the permission bin regardless of how the turn ended.
 	PermissionDenials []json.RawMessage `json:"permission_denials"`
@@ -722,6 +731,14 @@ func parse(stdout []byte) (envelope, error) {
 	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
 		return envelope{}, contract.Fail(contract.FailureUnavailable,
 			"claude code printed something this adapter cannot read").WithRaw(trimmed)
+	}
+	// Present, not non-zero. The same probe parseStreamLine makes, for the
+	// same reason: an envelope that omits total_cost_usd and one that reports
+	// a real $0.00 decode to the same float, and only one of them is a
+	// measurement.
+	var raw map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &raw) == nil {
+		_, out.costSeen = raw["total_cost_usd"]
 	}
 	return out, nil
 }
