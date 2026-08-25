@@ -64,6 +64,11 @@ Commands:
   detect [--repo ID]     Ask attached providers whether they already hold a
                          ready index; corrects indexed_by in memory when they do
   run                    Run as a service until interrupted
+  desktop ACTION         Do one thing on this machine's screen or keyboard,
+                         after showing it and asking. --repo ID --app BUNDLE_ID
+                         --set NAME=VAL --confirm. It always asks, and the act
+                         itself runs inside the service, which is the process
+                         the system grants the permission to
   mcp                    Serve an MCP client over stdin/stdout, bridged to the
                          running service; --check tests the setup without a client
   service install        Install atenea as a background service that starts
@@ -230,6 +235,31 @@ Flags:
 	"run": `Usage: atenea run
 
 Run as a service until interrupted (Ctrl-C or SIGTERM).
+`,
+	"desktop": `Usage: atenea desktop ACTION --repo ID --app BUNDLE_ID [--set NAME=VALUE ...] --confirm
+
+Do one thing on this machine's screen or keyboard.
+
+  atenea desktop click  --repo work --app com.apple.finder --set x=412 --set y=280 --confirm
+  atenea desktop type   --repo work --app com.apple.TextEdit --set text="hello" --confirm
+  atenea desktop key    --repo work --app com.apple.finder --set key=return --confirm
+
+Actions: click, move, drag, scroll, type, key. Coordinates are in the space of
+the image desktop.screenshot returned -- nothing needs to be multiplied by
+anything.
+
+It always shows what is about to happen and waits for you to type yes. There is
+no flag to skip that, deliberately: a flag to skip it is the whole point of the
+command being removed for convenience.
+
+The act itself runs inside the service, not here. macOS attributes a device
+permission to the process that is responsible for itself, which is the one
+launchd started -- a command run from a shell would be spending the terminal's
+permission instead, and the adapter refuses that. So this asks where there is a
+terminal to ask in, and dispatches where the permission actually lives.
+
+The application must be in the settings file's [desktop] allow-list, which is
+empty by default. Find bundle identifiers with the desktop.apps capability.
 `,
 	"mcp": `Usage: atenea mcp
        atenea mcp --check
@@ -761,6 +791,8 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return cmdRun(settingsPath, out)
+	case "desktop":
+		return cmdDesktop(commandArgs, os.Stdin, out)
 	case "mcp":
 		if len(commandArgs) == 1 && commandArgs[0] == "--check" {
 			return mcpProbe(out)

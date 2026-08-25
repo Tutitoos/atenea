@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
@@ -150,6 +151,12 @@ const (
 	desktopAppsCapability       = "desktop.apps"
 	desktopInspectCapability    = "desktop.inspect"
 	desktopScreenshotCapability = "desktop.screenshot"
+	desktopClickCapability      = "desktop.click"
+	desktopMoveCapability       = "desktop.move"
+	desktopDragCapability       = "desktop.drag"
+	desktopScrollCapability     = "desktop.scroll"
+	desktopTypeCapability       = "desktop.type"
+	desktopKeyCapability        = "desktop.key"
 )
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
@@ -227,6 +234,12 @@ var card = contract.Agent{
 		desktopAppsCapability,
 		desktopInspectCapability,
 		desktopScreenshotCapability,
+		desktopClickCapability,
+		desktopMoveCapability,
+		desktopDragCapability,
+		desktopScrollCapability,
+		desktopTypeCapability,
+		desktopKeyCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,
@@ -1641,6 +1654,7 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Review:         step.Review.Parent.String(),
 		Failure:        step.Failure,
 		Raw:            step.Raw,
+		Inputs:         auditableInputs(step.Step),
 		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
 		SpentUSD:       step.Outcome.SpentUSD,
@@ -1649,6 +1663,33 @@ func snapshot(step StepResult) checkpoint.StepState {
 		ClosedAt:       closed,
 		Funnel:         trace(step.Decision),
 	}
+}
+
+// auditableInputs records what a step was pointed at, for the steps where the
+// capability's name does not already say it.
+//
+// Kept for the device effect and nothing else, and that is a decision about
+// receipts rather than about permissions. Every capability's inputs are
+// interesting to somebody; recording them all would double the size of every
+// receipt on disk to answer a question nobody asks of a code search, whose
+// query is recoverable from the commission anyway. What is NOT recoverable is
+// which window somebody's machine was pointed at, and that is exactly what an
+// auditor opens a receipt to find.
+//
+// Redacted rather than trusted: a payload is caller-supplied, a receipt is
+// durable, and this is the one field where a secret could otherwise come to
+// rest on disk.
+func auditableInputs(step contract.Step) string {
+	if len(step.Payload) == 0 || !slices.Contains(step.Permission.Effects, contract.EffectDevice) {
+		return ""
+	}
+	body, err := json.Marshal(step.Payload)
+	if err != nil {
+		// The receipt is worth writing without this field; refusing to write
+		// one because its annotation would not serialize is the wrong trade.
+		return ""
+	}
+	return contract.RedactRaw(string(body))
 }
 
 // trace copies the funnel onto the receipt, or says why there is nothing to

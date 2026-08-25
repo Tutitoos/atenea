@@ -45,7 +45,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.inspect", "desktop.screenshot", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
+		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -66,8 +67,16 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
 		case "repository.index":
 			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
-		case "desktop.apps", "desktop.inspect", "desktop.screenshot":
+		case "desktop.apps", "desktop.inspect", "desktop.screenshot", "desktop.move":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
+		// Rearranges what is there or what is visible, without sending.
+		case "desktop.drag", "desktop.scroll":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectWrite}
+		// Pessimistic on purpose: a button may delete or send, and nothing can
+		// know which before it is pressed.
+		case "desktop.click", "desktop.type", "desktop.key":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice,
+				contract.EffectWrite, contract.EffectExternal}
 		default:
 			want = []contract.Effect{contract.EffectRead}
 		}
@@ -118,8 +127,14 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"kivgraph.status",
 		"kivgraph.unresolved_references",
 		"macos.apps",
+		"macos.click",
+		"macos.drag",
 		"macos.inspect",
+		"macos.key",
+		"macos.move",
 		"macos.screenshot",
+		"macos.scroll",
+		"macos.type",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",

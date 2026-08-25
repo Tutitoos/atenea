@@ -89,6 +89,99 @@ let tools: [Tool] = [
             ]
         }
     ),
+
+    // The mutating half. Everything about WHICH application may be touched is
+    // decided in Go; what these do is the act itself, plus the one refusal
+    // that can only be made here -- typing into a password field, which only
+    // the process holding the accessibility connection can detect, and only
+    // at the moment of typing, because focus moves.
+    Tool(
+        name: "click",
+        description: "Click at a point, once or twice.",
+        inputSchema: ["type": "object", "required": ["x", "y"],
+                      "properties": ["x": ["type": "number"], "y": ["type": "number"],
+                                     "clicks": ["type": "integer"]] as [String: Any]],
+        run: { args in
+            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
+                throw RPCError.invalidParams("x and y are required")
+            }
+            Input.click(at: CGPoint(x: x, y: y), clicks: args["clicks"] as? Int ?? 1)
+            return ["clicked": ["x": x, "y": y]]
+        }
+    ),
+    Tool(
+        name: "move",
+        description: "Move the pointer without clicking.",
+        inputSchema: ["type": "object", "required": ["x", "y"],
+                      "properties": ["x": ["type": "number"], "y": ["type": "number"]] as [String: Any]],
+        run: { args in
+            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
+                throw RPCError.invalidParams("x and y are required")
+            }
+            Input.move(to: CGPoint(x: x, y: y))
+            return ["moved": ["x": x, "y": y]]
+        }
+    ),
+    Tool(
+        name: "drag",
+        description: "Press at one point, drag to another, release.",
+        inputSchema: ["type": "object", "required": ["from_x", "from_y", "to_x", "to_y"],
+                      "properties": ["from_x": ["type": "number"], "from_y": ["type": "number"],
+                                     "to_x": ["type": "number"], "to_y": ["type": "number"]] as [String: Any]],
+        run: { args in
+            guard let fx = args["from_x"] as? Double, let fy = args["from_y"] as? Double,
+                  let tx = args["to_x"] as? Double, let ty = args["to_y"] as? Double else {
+                throw RPCError.invalidParams("from_x, from_y, to_x and to_y are required")
+            }
+            Input.drag(from: CGPoint(x: fx, y: fy), to: CGPoint(x: tx, y: ty))
+            return ["dragged": true]
+        }
+    ),
+    Tool(
+        name: "scroll",
+        description: "Scroll at a point.",
+        inputSchema: ["type": "object", "required": ["x", "y"],
+                      "properties": ["x": ["type": "number"], "y": ["type": "number"],
+                                     "dx": ["type": "integer"], "dy": ["type": "integer"]] as [String: Any]],
+        run: { args in
+            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
+                throw RPCError.invalidParams("x and y are required")
+            }
+            Input.scroll(at: CGPoint(x: x, y: y),
+                         dx: args["dx"] as? Int ?? 0, dy: args["dy"] as? Int ?? 0)
+            return ["scrolled": true]
+        }
+    ),
+    Tool(
+        name: "type",
+        description: "Type literal text into whatever has keyboard focus.",
+        inputSchema: ["type": "object", "required": ["text"],
+                      "properties": ["text": ["type": "string"]] as [String: Any]],
+        run: { args in
+            guard let text = args["text"] as? String else {
+                throw RPCError.invalidParams("text is required")
+            }
+            try Input.type(text)
+            // The length and not the text. A helper that echoed what it typed
+            // would put it in a log, a receipt and a model's context, which is
+            // three copies of something somebody may have meant to keep.
+            return ["typed": text.count]
+        }
+    ),
+    Tool(
+        name: "key",
+        description: "Press one key, with optional modifiers.",
+        inputSchema: ["type": "object", "required": ["key"],
+                      "properties": ["key": ["type": "string"],
+                                     "modifiers": ["type": "array", "items": ["type": "string"]]] as [String: Any]],
+        run: { args in
+            guard let name = args["key"] as? String else {
+                throw RPCError.invalidParams("key is required")
+            }
+            try Input.key(name, modifiers: (args["modifiers"] as? [String]) ?? [])
+            return ["pressed": name]
+        }
+    ),
 ]
 
 // MARK: - the loop
@@ -174,6 +267,20 @@ func handle(_ message: [String: Any]) {
     }
 }
 
+// One message at a time, and that is the exclusion this whole feature needs
+// rather than an accident of how the loop is written.
+//
+// There is one screen, one pointer and one keyboard on this machine, and two
+// calls landing on them at once would interleave into something neither caller
+// asked for. Above this process, `internal/mcpstdio` lets any number of
+// goroutines call at once and routes the answers back by id -- so the
+// serialization has to be HERE, where the desktop actually is. It is: the read
+// is synchronous, `handle` runs to completion before the next line is read,
+// and even the async capture blocks this loop on its semaphore rather than
+// returning to it.
+//
+// Anything added below that returns before its work is finished breaks this,
+// and nothing above would notice.
 while let line = readLine(strippingNewline: true) {
     if line.isEmpty { continue }
     guard let data = line.data(using: .utf8),

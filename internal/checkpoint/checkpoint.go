@@ -95,6 +95,23 @@ type StepState struct {
 	Verdict        string `json:"verdict"`
 	Review         string `json:"review,omitempty"`
 	Failure        string `json:"failure,omitempty"`
+	// Inputs is what the step was actually asked for, redacted, kept only for
+	// the steps where "it ran" is not enough of a record.
+	//
+	// A capability that reads a repository is described by its own name: the
+	// receipt already says which one, and the query is recoverable from the
+	// commission. A capability that reaches the machine's own screen or
+	// keyboard is not: "desktop.inspect ran" leaves out the only thing an
+	// auditor came to find out, which is what it was pointed at. Raw is not
+	// the place -- it is documented below as the provider's text behind a
+	// failure, and putting arguments there would be the first lie in a record
+	// kept for auditing.
+	//
+	// Redacted through contract.RedactRaw on the way in, and bounded by the
+	// same ceiling: a payload is caller-supplied and a receipt is durable, so
+	// this is the one field where somebody else's secret could otherwise come
+	// to rest on disk.
+	Inputs string `json:"inputs,omitempty"`
 	// Raw is the provider's own text behind Failure, kept for the same
 	// reason Failure itself is: a receipt that summarizes what happened
 	// without keeping the evidence is not a receipt a human can act on.

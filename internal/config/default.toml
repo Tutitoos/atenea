@@ -321,7 +321,20 @@ runners = ["omp"]
   #
   #     codesign -f -s "Apple Development: ..." \
   #       --identifier com.tutitoos.atenea.desktop --options runtime BINARY
-  implementations = ["macos.apps", "macos.inspect", "macos.screenshot"]
+  # Sorted, matching what the compiled fallback answers: a test compares the
+  # two and a difference in order would read as a difference in content.
+  # Observation is apps, inspect and screenshot; everything else acts.
+  implementations = [
+    "macos.apps",
+    "macos.click",
+    "macos.drag",
+    "macos.inspect",
+    "macos.key",
+    "macos.move",
+    "macos.screenshot",
+    "macos.scroll",
+    "macos.type",
+  ]
   timeout = "10s"             # latency, not payload: a tree walk is one IPC message per node
 
     # [orchestrator.desktop.process]
@@ -1942,6 +1955,330 @@ effects = ["read", "device"]
   required = true
   summary = "Always true: this is whatever that window chose to display."
 
+[[capability]]
+id = "desktop.click"
+version = "1.0.0"
+summary = "Click inside one application's window."
+semantics = """
+A button may delete something or send something, and nothing can know which before it is pressed. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device", "write", "external"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "x"
+  type = "int"
+  required = true
+  summary = "Horizontal position, in the space of the image desktop.screenshot returned."
+
+  [[capability.input]]
+  name = "y"
+  type = "int"
+  required = true
+  summary = "Vertical position, in that same space."
+
+  [[capability.input]]
+  name = "clicks"
+  type = "int"
+  required = false
+  summary = "1 for a single click, 2 for a double. Defaults to 1."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
+[[capability]]
+id = "desktop.move"
+version = "1.0.0"
+summary = "Move the pointer without pressing anything."
+semantics = """
+Moves the pointer and changes nothing else; it is here because hover reveals interface that is otherwise invisible. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "x"
+  type = "int"
+  required = true
+  summary = "Horizontal position, in the image's space."
+
+  [[capability.input]]
+  name = "y"
+  type = "int"
+  required = true
+  summary = "Vertical position, in the image's space."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
+[[capability]]
+id = "desktop.drag"
+version = "1.0.0"
+summary = "Press at one point, drag to another, release."
+semantics = """
+Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device", "write"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "from_x"
+  type = "int"
+  required = true
+  summary = "Where the press starts, in the image's space."
+
+  [[capability.input]]
+  name = "from_y"
+  type = "int"
+  required = true
+  summary = "Where the press starts, vertically."
+
+  [[capability.input]]
+  name = "to_x"
+  type = "int"
+  required = true
+  summary = "Where the release happens."
+
+  [[capability.input]]
+  name = "to_y"
+  type = "int"
+  required = true
+  summary = "Where the release happens, vertically."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
+[[capability]]
+id = "desktop.scroll"
+version = "1.0.0"
+summary = "Scroll at a point."
+semantics = """
+Changes what is visible rather than what is there, which is why it declares no external effect. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device", "write"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "x"
+  type = "int"
+  required = true
+  summary = "Where to scroll, in the image's space."
+
+  [[capability.input]]
+  name = "y"
+  type = "int"
+  required = true
+  summary = "Where to scroll, vertically."
+
+  [[capability.input]]
+  name = "dx"
+  type = "int"
+  required = false
+  summary = "Horizontal pixels. Negative scrolls left."
+
+  [[capability.input]]
+  name = "dy"
+  type = "int"
+  required = false
+  summary = "Vertical pixels. Negative scrolls down."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
+[[capability]]
+id = "desktop.type"
+version = "1.0.0"
+summary = "Type literal text into whatever has keyboard focus."
+semantics = """
+Refused twice over: text that reads as a credential never leaves this process, and macOS's own secure text fields are refused at the moment of typing, because focus moves and an earlier check is a check about a different field. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device", "write", "external"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "text"
+  type = "string"
+  required = true
+  summary = "The text to type. Anything that reads as a credential is refused."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
+[[capability]]
+id = "desktop.key"
+version = "1.0.0"
+summary = "Press one key, with optional modifiers."
+semantics = """
+A shortcut is a command with no label. cmd+w and cmd+q are one letter apart and neither asks first. \
+
+Coordinates are in the space of the image desktop.screenshot returned, which \
+is already reduced from the display's real pixels -- nothing needs to be \
+multiplied by anything. The application must be in the [desktop] allow-list, \
+and the target is resolved rather than taken on the caller's word.\
+"""
+effects = ["read", "device", "write", "external"]
+
+  [[capability.input]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+
+  [[capability.input]]
+  name = "key"
+  type = "string"
+  required = true
+  summary = "Key name, e.g. return, tab, escape, a."
+
+  [[capability.input]]
+  name = "modifiers"
+  type = "string_list"
+  required = false
+  summary = "Any of cmd, shift, alt, ctrl."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "The capability that ran."
+
+  [[capability.output]]
+  name = "application"
+  type = "string"
+  required = true
+  summary = "Which application it acted on."
+
+  [[capability.output]]
+  name = "bundle_id"
+  type = "string"
+  required = true
+  summary = "That application's bundle identifier."
+
 [[implementation]]
 id = "ripgrep"
 provider = "ripgrep"
@@ -2791,3 +3128,111 @@ scope_guarantee = "confined"
   # what an image of this size costs a model to read, not what it costs to make.
   estimated_duration = "800ms"
   estimated_tokens = 1600
+
+[[implementation]]
+id = "macos.click"
+provider = "desktop"
+capability = "desktop.click"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "80ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "macos.move"
+provider = "desktop"
+capability = "desktop.move"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "40ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "macos.drag"
+provider = "desktop"
+capability = "desktop.drag"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "200ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "macos.scroll"
+provider = "desktop"
+capability = "desktop.scroll"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "60ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "macos.type"
+provider = "desktop"
+capability = "desktop.type"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "300ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "macos.key"
+provider = "desktop"
+capability = "desktop.key"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip and one synthetic event. The cost is not the reason to
+  # think twice about this call.
+  estimated_duration = "60ms"
+  estimated_tokens = 100

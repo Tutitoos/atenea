@@ -68,6 +68,26 @@ const (
 	ImplementationScreenshot = "macos.screenshot"
 )
 
+// The mutating half. Each capability is one act, named the way both vendors'
+// computer-use APIs name it, so a model that learned the vocabulary elsewhere
+// does not have to be taught this one.
+//
+// mutations maps a capability to the helper tool that performs it and the
+// typed fields the adapter copies across. Nothing outside this table reaches
+// the far side: that is what keeps a caller from naming an action.
+var mutations = map[string]struct {
+	implementation string
+	tool           string
+	fields         []string
+}{
+	"desktop.click":  {"macos.click", "click", []string{"x", "y", "clicks"}},
+	"desktop.move":   {"macos.move", "move", []string{"x", "y"}},
+	"desktop.drag":   {"macos.drag", "drag", []string{"from_x", "from_y", "to_x", "to_y"}},
+	"desktop.scroll": {"macos.scroll", "scroll", []string{"x", "y", "dx", "dy"}},
+	"desktop.type":   {"macos.type", "type", []string{"text"}},
+	"desktop.key":    {"macos.key", "key", []string{"key", "modifiers"}},
+}
+
 // Ceilings for one inspect call, and the first of them is the one that binds.
 //
 // Measured on the machine this was written for: Finder's whole tree was 349
@@ -90,7 +110,23 @@ const (
 // DefaultImplementations is what this adapter answers for when a settings file
 // does not narrow it.
 func DefaultImplementations() []string {
-	return []string{ImplementationListApps, ImplementationInspect, ImplementationScreenshot}
+	out := []string{ImplementationListApps, ImplementationInspect, ImplementationScreenshot}
+	for _, m := range mutations {
+		out = append(out, m.implementation)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// capabilityFor maps an implementation back to what it answers, so dispatch
+// needs one table rather than two that can disagree.
+func capabilityFor(implementation string) (string, bool) {
+	for capability, m := range mutations {
+		if m.implementation == implementation {
+			return capability, true
+		}
+	}
+	return "", false
 }
 
 // Options configures the adapter.
@@ -197,7 +233,12 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // Capabilities is what its code can actually dispatch, which the wiring above
 // checks against Implementations before anything runs.
 func (r *Runner) Capabilities() []string {
-	return []string{CapabilityListApps, CapabilityInspect, CapabilityScreenshot}
+	out := []string{CapabilityListApps, CapabilityInspect, CapabilityScreenshot}
+	for capability := range mutations {
+		out = append(out, capability)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // Run executes one step.
@@ -223,6 +264,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	case ImplementationScreenshot:
 		return r.screenshot(ctx, req)
 	default:
+		if _, ok := capabilityFor(req.Implementation.ID); ok {
+			return r.mutate(ctx, req)
+		}
 		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
 			"desktop: nothing here answers implementation %q", req.Implementation.ID)
 	}
@@ -241,6 +285,12 @@ var osNeeds = map[string]struct{ accessibility, screenRecording bool }{
 	CapabilityListApps:   {},
 	CapabilityInspect:    {accessibility: true},
 	CapabilityScreenshot: {screenRecording: true},
+	"desktop.click":      {accessibility: true},
+	"desktop.move":       {accessibility: true},
+	"desktop.drag":       {accessibility: true},
+	"desktop.scroll":     {accessibility: true},
+	"desktop.type":       {accessibility: true},
+	"desktop.key":        {accessibility: true},
 }
 
 // permitted refuses a device capability on a process the system will not
@@ -557,6 +607,96 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 			"untrusted":   true,
 		},
 		Verdict:       contract.VerdictOK,
+		Spent:         contract.Sample{Duration: time.Since(started)},
+		SpentUSD:      0,
+		SpentUSDKnown: true,
+	}, nil
+}
+
+// credential matches text that should never be typed by an automated caller.
+//
+// The same patterns the contract already uses to keep secrets out of durable
+// storage, reused here to keep them out of somebody's keyboard. It is a
+// refusal and not a filter: a caller that meant to fill in a password has to
+// be told no, rather than quietly handed a redacted string that looks like it
+// worked and leaves a half-typed credential in a field.
+//
+// It is deliberately not the only defense. The helper refuses to type into a
+// field macOS itself marks as secure, which catches the case this cannot --
+// a password that looks like an ordinary word.
+func credential(text string) bool {
+	return contract.RedactRaw(text) != text
+}
+
+// mutate performs one act on the desktop.
+//
+// Every argument is copied field by field from the capability's declared
+// inputs into the helper's own shape. A caller cannot name the tool, cannot
+// add a field, and cannot reach anything not in the table above: the schema
+// refuses undeclared input before this runs, and this copies only what it
+// knows. Two defenses rather than one, because either alone is a single point
+// of failure on the surface that can type.
+func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+	started := time.Now()
+	capability, ok := capabilityFor(req.Implementation.ID)
+	if !ok {
+		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
+			"desktop: nothing here answers implementation %q", req.Implementation.ID)
+	}
+	spec := mutations[capability]
+
+	// The allow-list applies to acting exactly as it applies to reading, and
+	// the target is resolved rather than taken on the caller's word.
+	bundleID, _ := req.Payload["application"].(string)
+	pid, name, err := r.target(ctx, bundleID)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+
+	args := map[string]any{}
+	for _, field := range spec.fields {
+		value, present := req.Payload[field]
+		if !present {
+			continue
+		}
+		if field == "text" {
+			text, _ := value.(string)
+			if credential(text) {
+				return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
+					"desktop: that text looks like a credential, and this refuses to type one. "+
+						"If it is not, rephrase it so it does not read as one; if it is, type it yourself")
+			}
+		}
+		args[field] = value
+	}
+
+	text, err := r.call(ctx, spec.tool, args)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+	var acknowledged map[string]any
+	if err := json.Unmarshal([]byte(text), &acknowledged); err != nil {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: the helper's answer to %s is not the shape this expects: %v", spec.tool, err)
+	}
+	// What was done and to whom, and nothing else.
+	//
+	// The helper's own acknowledgement is read -- it has to parse, which is
+	// what proves the far side did the thing rather than merely accepting the
+	// message -- and then dropped. Two reasons. The contract refuses output
+	// fields a capability did not declare, and it is right to: a result that
+	// grew a field per implementation would stop being a capability. And what
+	// it acknowledges for `type` is a character count, which is a fact about
+	// somebody's keystrokes that has no business in a receipt.
+	_ = acknowledged
+	_ = pid
+	result := map[string]any{
+		"did":         capability,
+		"application": name,
+		"bundle_id":   bundleID,
+	}
+	return contract.Outcome{
+		Result: result, Verdict: contract.VerdictOK,
 		Spent:         contract.Sample{Duration: time.Since(started)},
 		SpentUSD:      0,
 		SpentUSDKnown: true,
