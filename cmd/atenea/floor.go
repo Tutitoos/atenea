@@ -200,6 +200,25 @@ func floorList(settingsPath string, out io.Writer) error {
 // floorMeasure spends one real turn to price starting another one, and
 // stores what it found -- unless the agent type calls no model at all, in
 // which case nothing is spent; see floorMeasureNoModel.
+//
+// # The rule for a command that spends outside a commission
+//
+// No flag here may carry a default that is not the conservative one: empty for
+// a string, false for a boolean. Every command in [spendsOutsideACommission]
+// is held to it by a test, and this is the sentence that test enforces.
+//
+// It exists because the alternative was somebody remembering. `--agent`
+// carried "plan" until 2026-08-16, when `atenea floor measure --repo
+// taxiprime-backend` -- typed to READ this command's own warning text,
+// expecting the refusal below -- silently priced a cold `plan` turn for
+// $0.3487. Nothing was broken: every guard fired as written, and the money
+// went because a flag nobody had set had picked what to spend it on.
+//
+// Money elsewhere in Atenea is a permission, granted per commission and split
+// between its steps, and a step spending its share is the design working. This
+// command has no commission behind it. What bounds it is that a person named
+// every part of what was about to happen, which is a property a default
+// removes silently and which nothing but a rule can keep.
 func floorMeasure(settingsPath string, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("floor measure", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)

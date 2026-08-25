@@ -7,6 +7,7 @@
 package config
 
 import (
+	"bytes"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -756,6 +758,47 @@ func Load(explicit string) (Config, error) {
 	}
 }
 
+// groundedDefaults is the embedded settings with the shipped repository's
+// relative path replaced by where this command is being run.
+//
+// `path = "."` is right for the file that ships and wrong for a file on disk.
+// It is what makes a fresh install work against the tree you are standing in
+// with no settings at all -- the CLI stands somewhere, so "." means something.
+// The moment it is written down it stops being a convenience and becomes a
+// declaration, read later by a service that stands nowhere, and a service is
+// refused for exactly that reason.
+//
+// So `config init` writes what "." meant at the moment it was typed. A person
+// running it inside a repository gets that repository, spelled out, and the
+// file goes on saying the same thing after they cd somewhere else.
+//
+// A working directory that cannot be read leaves the file as shipped rather
+// than failing: the settings are still writable and still valid, and the
+// service's own refusal names the remedy.
+func groundedDefaults() ([]byte, error) {
+	here, err := os.Getwd()
+	if err != nil {
+		return defaultSettings, nil
+	}
+	absolute, err := filepath.Abs(here)
+	if err != nil {
+		return defaultSettings, nil
+	}
+	// Anchored on the whole line, so this cannot reach a `path = "."` that
+	// belongs to some other block a later edit adds.
+	grounded := relativeRepositoryPath.ReplaceAll(defaultSettings,
+		[]byte("path = "+strconv.Quote(absolute)))
+	if bytes.Equal(grounded, defaultSettings) {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"the embedded settings no longer declare a repository at %q, so "+
+				"`config init` cannot ground it", ".")
+	}
+	return grounded, nil
+}
+
+// relativeRepositoryPath matches the one line groundedDefaults rewrites.
+var relativeRepositoryPath = regexp.MustCompile(`(?m)^path = "\."$`)
+
 // Defaults returns the embedded settings.
 func Defaults() (Config, error) {
 	return parse(defaultSettings, BuiltIn)
@@ -865,7 +908,12 @@ func WriteDefault(path string, force bool) error {
 			_ = os.Remove(name)
 		}
 	}()
-	if _, err := temp.Write(defaultSettings); err != nil {
+	body, err := groundedDefaults()
+	if err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(body); err != nil {
 		_ = temp.Close()
 		return contract.Fail(contract.FailurePermissionDenied,
 			"writing %s: %v", name, err)

@@ -2519,3 +2519,69 @@ func TestTheBuiltInSettingsAreNotMergedIntoThemselves(t *testing.T) {
 		}
 	}
 }
+
+// `config init` writes what "." meant at the moment it was typed.
+//
+// The shipped value is right for a file that has not been written yet: it is
+// what makes a fresh install work against the tree you are standing in. The
+// moment it lands on disk it stops being a convenience and becomes a
+// declaration, read later by a service that stands nowhere -- and refused
+// there for exactly that reason. So the file says where it was made.
+func TestConfigInitWritesTheDirectoryItWasRunIn(t *testing.T) {
+	repo := t.TempDir()
+	t.Chdir(repo)
+	path := filepath.Join(t.TempDir(), "atenea.toml")
+
+	if err := config.WriteDefault(path, false); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(body), "\npath = \".\"\n") {
+		t.Error("the written settings still declare a repository at \".\", which a " +
+			"service cannot resolve")
+	}
+
+	written, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// The path the file names has to be the directory, resolved -- on macOS
+	// t.TempDir hands back a symlinked /var path whose real name is /private,
+	// and either spelling is the same directory.
+	want, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	found := false
+	for _, declared := range written.Repositories {
+		got, err := filepath.EvalSymlinks(declared.Path)
+		if err == nil && got == want {
+			found = true
+		}
+		if !filepath.IsAbs(declared.Path) {
+			t.Errorf("repository %s is written at %q, which is relative", declared.ID, declared.Path)
+		}
+	}
+	if !found {
+		t.Errorf("no repository names %s: the file does not say where it was made", want)
+	}
+}
+
+// And the embedded settings keep the relative value, because that is the one
+// that works for a command with no file at all.
+func TestTheEmbeddedSettingsKeepTheRelativePath(t *testing.T) {
+	cfg, err := config.Defaults()
+	if err != nil {
+		t.Fatalf("Defaults: %v", err)
+	}
+	for _, repo := range cfg.Repositories {
+		if repo.Path == "." {
+			return
+		}
+	}
+	t.Error("the shipped settings no longer declare a repository at \".\": a fresh " +
+		"install with no settings file has nothing to work against")
+}

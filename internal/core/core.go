@@ -242,6 +242,10 @@ func New(cfg config.Config, role Role) (*Core, error) {
 	var upkeep func()
 	built := false
 	if role == Service {
+		// Before the claim, so a refusal here does not have to give one back.
+		if err := groundedRepositories(cfg); err != nil {
+			return nil, err
+		}
 		upkeep, err = claimUpkeep()
 		if err != nil {
 			return nil, err
@@ -1411,3 +1415,40 @@ func (c *Core) Uptime() time.Duration { return time.Since(c.started) }
 
 // Version of the running binary.
 func (c *Core) Version() string { return buildinfo.Full() }
+
+// groundedRepositories refuses a service whose catalog names a repository by a
+// relative path.
+//
+// `path = "."` is not a mistake in the shipped settings: it is the mechanism
+// by which a fresh install works against whatever tree you are standing in,
+// and the CLI is the thing standing somewhere. A daemon stands nowhere. Its
+// working directory is whatever its unit file left it -- $HOME before the
+// units learned to name the state root, and the state root afterwards, which
+// is Atenea's own receipts and measurement base rather than a repository.
+// Either way it is a tree nobody chose, searched under a name somebody trusts.
+//
+// So the CLI keeps the convenience and the service refuses it, by name and
+// with the one command that fixes it. Refusing rather than dropping the entry:
+// a repository quietly missing from a service's catalog is a capability that
+// answers "unknown repository" to a client that can see it in the settings
+// file, and this project's own rule about a settings file is that one quietly
+// ignored is a machine running settings nobody chose.
+func groundedRepositories(cfg config.Config) error {
+	for _, repo := range cfg.Repositories {
+		if filepath.IsAbs(repo.Path) {
+			continue
+		}
+		// The remedy differs, and saying the wrong one is worse than saying
+		// none: on the built-in defaults there is no file to edit, and telling
+		// somebody to edit one sends them looking for it.
+		remedy := fmt.Sprintf("edit %s and give %s an absolute path", cfg.Source, repo.ID)
+		if cfg.Source == config.BuiltIn {
+			remedy = "run `atenea config init`, which writes one naming the directory you run it in"
+		}
+		return contract.Fail(contract.FailureInvalidInput,
+			"repository %s is declared at %q, which is relative: a service has no "+
+				"working directory anybody chose, so it cannot resolve one. %s",
+			repo.ID, repo.Path, remedy)
+	}
+	return nil
+}
