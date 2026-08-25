@@ -56,7 +56,12 @@ struct Permissions {
     /// them.
     static func request() -> [String: Any] {
         let before = current()
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        // The key's own string rather than the SDK's symbol for it. macOS
+        // declares kAXTrustedCheckOptionPrompt as a global `var`, which Swift
+        // 6 refuses to read from a nonisolated context -- and no local copy
+        // helps, because reading it is the problem. The value is documented
+        // and fixed; only its declaration is mutable.
+        let options = ["AXTrustedCheckOptionPrompt": true]
         let granted = AXIsProcessTrustedWithOptions(options as CFDictionary)
         return [
             "accessibility_before": before.accessibility,
