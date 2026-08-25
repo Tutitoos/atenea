@@ -80,9 +80,9 @@ La versión anterior de esta página venía del run del 2026-08-22 sobre el comm
 tiene hoy 51 paquetes con tests y 188 ficheros `_test.go`. Los tres que
 faltaban son `internal/decision` y `internal/agent/semanticreviewer`, que ya
 existían cuando se publicó la tabla, e `internal/testroot`, creado después.
-`internal/mcpchecktmp` e `internal/adapter/codebasememory` se han eliminado del
-árbol y nunca llegaron a aparecer en estas tablas, así que no había nada que
-retirar.
+Los dos directorios vacíos que se han eliminado del árbol —el residuo de una
+comprobación temporal de MCP y el del adaptador retirado— nunca llegaron a
+aparecer en estas tablas: no tenían tests, así que no había nada que retirar.
 
 Una advertencia sobre la primera medición del día: un run lanzado en paralelo
 con otro `go test ./...` sobre la misma máquina hizo expirar los timeouts de
