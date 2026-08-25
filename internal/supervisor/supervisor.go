@@ -119,6 +119,11 @@ const (
 	// DefaultStopGrace bounds how long a deliberate stop waits after
 	// SIGTERM before escalating to SIGKILL.
 	DefaultStopGrace = 5 * time.Second
+	// DefaultProbeTimeout is the transport-level ceiling on the client that
+	// asks a child whether it is ready. Every probe already passes a context
+	// with a deadline; this is what a caller who supplies their own client
+	// gets by default, so a request cannot outlive the answer being useful.
+	DefaultProbeTimeout = 5 * time.Second
 	// defaultHost is the address a server listens on when Spec does not say
 	// otherwise. Never wide open by default, the same posture the rest of
 	// Atenea takes with anything that binds a socket.
@@ -256,7 +261,11 @@ func (s Spec) withDefaults() (Spec, error) {
 		s.StopGrace = DefaultStopGrace
 	}
 	if s.HTTP == nil {
-		s.HTTP = &http.Client{}
+		// A Timeout, not the zero value. Every probe passes a context with a
+		// deadline now, so this is the second lock rather than the only one --
+		// but a client with no timeout at all is a loaded gun for the next
+		// caller who forgets, and the transport-level ceiling costs nothing.
+		s.HTTP = &http.Client{Timeout: DefaultProbeTimeout}
 	}
 	return s, nil
 }

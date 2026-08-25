@@ -678,16 +678,52 @@ func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 		return answer, err
 	}
 	answer.Text, answer.Structured, answer.Passes = text, structured, 1
+	// The claim, on this path too.
+	//
+	// Only converse read it, so a single-shot turn came back with
+	// Completeness nil -- and the planner refuses an answer that states no
+	// coverage, with "the model answered without stating completeness". A
+	// turn is single-shot whenever ReadTokens is zero, which is whenever
+	// there is no budget to derive an allowance from, so `atenea agent
+	// explore --objective ...` and every RunReviewed with no BudgetUSD failed
+	// that way after paying for the turn. The OpenCode backend has always
+	// filled this in; the default backend did not.
+	if claimed, ok := claimOf(env); ok {
+		answer.Completeness, answer.StoppedAt = claimed.reported()
+	}
 	return enforceMaxTokens(answer, req.MaxTokens, nil)
 }
 
+// enforceMaxTokens refuses an answer the provider reported above the limit the
+// agent type declared.
+//
+// It counts input and output, and deliberately not the cache lines.
+//
+// Charge.Tokens() sums all four, which is the right total for a bill: cached
+// reads and writes are charged. It is the wrong total for this ceiling. A
+// cache read is context the provider had already stored, and it dwarfs the
+// rest -- 356,434 cache_read tokens observed on a single explore turn against
+// a real repository -- so a limit meant to bound the size of a request was
+// being compared against a number dominated by what the provider had cached
+// from previous ones. Every type that calls a model declares 200,000
+// (explore, reader, plan) or 100,000 (semantic-reviewer), so this refused
+// completed, paid-for answers on ordinary turns and reported them as
+// `unavailable`.
+//
+// What a provider means by max_tokens is the request, so that is what this
+// holds it to.
 func enforceMaxTokens(answer Answer, limit int, err error) (Answer, error) {
-	if err != nil || limit <= 0 || answer.Spent.Tokens() <= limit {
+	if err != nil || limit <= 0 {
+		return answer, err
+	}
+	requested := answer.Spent.InputTokens + answer.Spent.OutputTokens
+	if requested <= limit {
 		return answer, err
 	}
 	return answer, contract.Fail(contract.FailurePermissionDenied,
-		"model reported %d tokens above the requested limit of %d", answer.Spent.Tokens(), limit).
-		WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d", answer.Spent.Tokens(), limit))
+		"model reported %d tokens above the requested limit of %d", requested, limit).
+		WithRaw(fmt.Sprintf("observed_tokens=%d max_tokens=%d cached_tokens=%d",
+			requested, limit, answer.Spent.CacheReadTokens+answer.Spent.CacheWriteTokens))
 }
 
 // floorPrompt is what a Floor probe asks the model to do: nothing. It is a

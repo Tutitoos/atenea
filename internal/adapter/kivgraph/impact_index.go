@@ -1,10 +1,12 @@
 package kivgraph
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -472,27 +474,60 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 	command := exec.CommandContext(ctx, executable, "index", "--full", "--json")
 	command.Dir = root
 	command.Env = append(os.Environ(), env...)
-	var stdout limitedTail
+	// stdout is scanned as it arrives; only stderr is tailed.
+	//
+	// It used to be tailed too, and then parsed: limitedTail keeps the last
+	// 8 KiB and cuts wherever the byte fell, so the first surviving line of
+	// any longer output was half an object. parseIndexReport failed on it and
+	// repository.index -- the one mutating capability in the system -- came
+	// back "returned invalid JSONL" for an indexing run that had completed
+	// perfectly. `kivgraph index --full --json` emits a progress event per
+	// unit of work; the workspace this was built against reports 19,885
+	// symbols, so passing 8 KiB is the ordinary case and staying under it was
+	// the exception.
+	//
+	// stderr is a different job: it is quoted in an error message, so the tail
+	// is what a reader wants and the truncation costs nothing.
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return IndexReport{}, fmt.Errorf("kivgraph index --full: %w", err)
+	}
 	var stderr limitedTail
-	command.Stdout = &stdout
 	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
+	if err := command.Start(); err != nil {
+		return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w", err)
+	}
+	report, parseErr := parseIndexStream(stdout)
+	// Drained before Wait, always: Wait closes the pipe, and a Wait that ran
+	// while the scan was still reading would race it. parseIndexStream returns
+	// only after the stream ends or a line refuses to parse -- and on the
+	// second, the rest is discarded so the child is not left writing into a
+	// full pipe.
+	_, _ = io.Copy(io.Discard, stdout)
+	if err := command.Wait(); err != nil {
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
 			return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w: %s", err, detail)
 		}
 		return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w", err)
 	}
-	report, err := parseIndexReport(stdout.String())
-	if err != nil {
-		return IndexReport{}, err
+	if parseErr != nil {
+		return IndexReport{}, parseErr
 	}
 	return report, nil
 }
 
-func parseIndexReport(stream string) (IndexReport, error) {
+// parseIndexStream reads the JSONL as it arrives and keeps the last result.
+//
+// maxIndexLine is generous rather than tight: the result document carries the
+// whole run's counters, and a line the scanner refuses is reported as such
+// instead of being silently cut into something that no longer parses -- which
+// is the failure this replaced.
+func parseIndexStream(stream io.Reader) (IndexReport, error) {
+	scanner := bufio.NewScanner(stream)
+	scanner.Buffer(make([]byte, 0, 64<<10), maxIndexLine)
 	var report *indexDocument
-	for _, line := range strings.Split(stream, "\n") {
-		line = strings.TrimSpace(line)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
@@ -504,6 +539,22 @@ func parseIndexReport(stream string) (IndexReport, error) {
 			report = event.Result
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return IndexReport{}, fmt.Errorf("kivgraph index --full: reading the report: %w", err)
+	}
+	return finishIndexReport(report)
+}
+
+// parseIndexReport is the same reading over a string somebody already holds.
+func parseIndexReport(stream string) (IndexReport, error) {
+	return parseIndexStream(strings.NewReader(stream))
+}
+
+// maxIndexLine bounds one JSONL line. A provider that emits more than this on
+// a single line is reported rather than truncated.
+const maxIndexLine = 4 << 20
+
+func finishIndexReport(report *indexDocument) (IndexReport, error) {
 	if report == nil {
 		return IndexReport{}, fmt.Errorf("kivgraph index --full returned no result event")
 	}

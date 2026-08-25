@@ -13,7 +13,7 @@ import (
 // break-in rotation live -- which is the only state where any of this differs.
 func sorted(impls ...contract.Implementation) []contract.Implementation {
 	out := slices.Clone(impls)
-	slices.SortStableFunc(out, rankWith(true))
+	slices.SortStableFunc(out, rankWith(true, dominationCounts(out)))
 	return out
 }
 
