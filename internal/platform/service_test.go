@@ -13,28 +13,9 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// The unit a machine boots from, byte for byte. It is pinned rather than
-// sampled because an operator diffs what is installed against what this
-// version would install, and a field that drifts by accident is a field
-// nobody notices until the boot that needed it.
-const wantUnit = `[Unit]
-Description=Atenea orchestration core
-After=default.target
-
-[Service]
-Type=simple
-ExecStart="/opt/atenea/bin/atenea" run
-Restart=on-failure
-RestartSec=5
-KillSignal=SIGTERM
-TimeoutStopSec=15
-NoNewPrivileges=yes
-PrivateTmp=yes
-
-[Install]
-WantedBy=default.target
-`
-
+// service builds one the way NewService would, for the tests below that read
+// single directives back out of it. The byte-for-byte golden moved to
+// service_render_test.go, which every platform compiles.
 func service(t *testing.T, exec string, grace time.Duration) platform.Service {
 	t.Helper()
 	s, err := platform.NewService(exec, grace)
@@ -54,13 +35,6 @@ func unitValue(t *testing.T, text, key string) string {
 	}
 	t.Fatalf("the unit carries no %s:\n%s", key, text)
 	return ""
-}
-
-func TestTheUnitFileIsRenderedExactlyAsItWillBeInstalled(t *testing.T) {
-	got := service(t, "/opt/atenea/bin/atenea", 10*time.Second).UnitText()
-	if got != wantUnit {
-		t.Errorf("unit text drifted.\n--- got ---\n%s\n--- want ---\n%s", got, wantUnit)
-	}
 }
 
 // The manager starts a binary, not a shell: whatever is written here is what
