@@ -5,11 +5,12 @@ set -euo pipefail
 # publish a release: release publication remains owned by release.yml.
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# macOS limits UNIX socket paths to 103 bytes. Keep the gate reproducible even
-# when the caller inherited a long system TMPDIR; callers that need another
-# location can opt in explicitly without changing the repository checkout.
-export TMPDIR="${ATENEA_TEST_TMPDIR:-/tmp}"
-build_dir="$(mktemp -d "$TMPDIR/atenea-v1-readiness.XXXXXX")"
+# The suite pins its own temporary root now (internal/testroot), so this no
+# longer decides whether the tests can bind a socket -- it only gives this
+# script's own scratch directory a short home. It honours the same override the
+# suite does, so naming one place still names it everywhere.
+scratch_root="${ATENEA_TEST_TMPDIR:-${TMPDIR:-/tmp}}"
+build_dir="$(mktemp -d "$scratch_root/atenea-v1-readiness.XXXXXX")"
 trap 'rm -rf "$build_dir"' EXIT
 
 cd "$root"
@@ -26,26 +27,38 @@ echo "[2/9] retired backend references"
 # in repository text. The two fragments are joined only while the gate runs.
 legacy_prefix="codebase"
 legacy_suffix="memory"
-legacy_pattern="${legacy_prefix}.${legacy_suffix}|${legacy_prefix}_${legacy_suffix}"
-if command -v rg >/dev/null 2>&1; then
-	active_refs=(
-		rg -n -i "$legacy_pattern"
-		.
-	)
-else
-	# Ubuntu's stock runner does not include ripgrep. Keep the gate portable
-	# without weakening it when the preferred search tool is unavailable.
-	active_refs=(
-		grep -RIniE
-		--exclude-dir=.git
-		"$legacy_pattern"
-		.
-	)
-fi
-if "${active_refs[@]}"; then
+# The separator is optional. The retired adapter's directory spelled the two
+# words with nothing between them, and a pattern that required a separator
+# could not see the one place the name was most likely to survive.
+legacy_pattern="${legacy_prefix}[-_. ]?${legacy_suffix}"
+
+# One tool, and it is neither of the two this used to choose between. ripgrep
+# honours .gitignore and skips hidden files; grep -R honours neither and walks
+# dist/, coverage profiles and whatever local provider state the checkout has
+# collected. The pair therefore disagreed about what "the repository contains"
+# means, and the gate's verdict depended on which of them the machine had.
+#
+# git grep asks the only question this gate is actually about -- what is
+# committed -- gives the same answer everywhere, and is present by definition in
+# a git checkout. Step [1/9] has already refused a dirty tree, so tracked and
+# present are the same set by the time this runs.
+set +e
+git grep -Ini -E -e "$legacy_pattern"
+legacy_status=$?
+set -e
+case "$legacy_status" in
+0)
 	echo "retired backend references must not be present" >&2
 	exit 1
-fi
+	;;
+1) ;;
+*)
+	# A search that could not run is not a search that found nothing. The old
+	# `if grep ...; then` form read grep's error status as a clean result.
+	echo "retired backend scan failed with status $legacy_status" >&2
+	exit 1
+	;;
+esac
 
 echo "[3/9] formatting"
 unformatted="$(gofmt -l .)"
@@ -68,7 +81,7 @@ echo "[7/9] race suite"
 go test -race -count=1 ./...
 
 echo "[8/9] policy, load and provider entry points"
-bash -n scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/mcp-live-check.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh scripts/benchmark-check.sh scripts/load-check.sh scripts/benchmark-suite.sh scripts/render-benchmark-docs.sh scripts/validate-benchmark-summary.sh scripts/provider-matrix-check.sh scripts/coverage-check.sh scripts/coverage-history-check.sh
+bash -n scripts/build-claude-mcpb.sh scripts/install.sh scripts/release-smoke.sh scripts/opencode-smoke.sh scripts/opencode-matrix.sh scripts/mcp-live-check.sh scripts/v1-readiness.sh scripts/v1-policy-check.sh scripts/benchmark-check.sh scripts/load-check.sh scripts/benchmark-suite.sh scripts/render-benchmark-docs.sh scripts/validate-benchmark-summary.sh scripts/provider-matrix-check.sh scripts/coverage-check.sh scripts/coverage-history-check.sh
 scripts/v1-policy-check.sh
 scripts/benchmark-check.sh
 scripts/load-check.sh

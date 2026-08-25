@@ -1,0 +1,18 @@
+{
+  "manifest_version": "0.3",
+  "name": "atenea",
+  "display_name": "Atenea",
+  "version": "1.0.5",
+  "description": "Orquestador MCP local de Atenea para Claude Desktop.",
+  "author": {
+    "name": "Tutitoos"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/atenea",
+    "mcp_config": {
+      "command": "${__dirname}/server/atenea",
+      "args": ["mcp"]
+    }
+  }
+}

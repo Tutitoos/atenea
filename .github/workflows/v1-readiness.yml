@@ -23,9 +23,8 @@ permissions:
 jobs:
   gate:
     name: readiness gate
+    timeout-minutes: 60
     runs-on: ubuntu-latest
-    env:
-      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v5
 
@@ -39,6 +38,7 @@ jobs:
 
   native-build:
     name: native build / ${{ matrix.os }} / ${{ matrix.arch }}
+    timeout-minutes: 30
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -56,8 +56,6 @@ jobs:
           - runner: macos-15-intel
             os: darwin
             arch: amd64
-    env:
-      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v5
 
@@ -74,12 +72,12 @@ jobs:
 
   live-mcp:
     name: opt-in live MCP bridge
+    timeout-minutes: 30
     if: ${{ vars.ATENEA_LIVE_MCP == 'true' || (github.event_name == 'workflow_dispatch' && inputs.live_mcp) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      TMPDIR: /tmp
       ATENEA_MCP_CHECK: "1"
     steps:
       - uses: actions/checkout@v5
@@ -92,12 +90,12 @@ jobs:
 
   live-opencode:
     name: opt-in OpenCode provider and MCP matrix
+    timeout-minutes: 45
     if: ${{ vars.ATENEA_OPENCODE_SMOKE == 'true' || (github.event_name == 'workflow_dispatch' && inputs.live_opencode) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      TMPDIR: /tmp
       ATENEA_OPENCODE_SMOKE: "1"
     steps:
       - uses: actions/checkout@v5

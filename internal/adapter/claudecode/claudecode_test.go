@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	osexec "os/exec"
 	"strings"
 	"testing"
@@ -659,9 +660,22 @@ func TestAStreamEventKeepsTypeAndEnvelopeFields(t *testing.T) {
 // The only thing about this adapter that cannot be checked by reasoning: that
 // the flags it builds still exist. A renamed flag is refused by argument
 // parsing before the turn starts, in plain text on stderr with no envelope --
-// which is exactly what this asserts is NOT happening. No login is needed: an
-// unauthenticated turn still gets far enough to print the envelope.
+// which is exactly what this asserts is NOT happening.
+//
+// It is opt-in, and the reason is the sentence the old version of this comment
+// got wrong: "no login is needed" is true of the failure it looks for and false
+// of the machine it ran on. On a developer's Mac with Claude Code logged in,
+// this started a real, billable turn -- on every `go test ./...`, and on every
+// `git push`, because the pre-push hook runs the suite. It also had no deadline,
+// so a client that accepted the connection and went quiet hung the package
+// until the go test timeout.
+//
+// So: the same shape opencode's real-provider smoke already uses. An explicit
+// variable, and a deadline.
 func TestTheRealClientStillAcceptsEveryFlagWeBuild(t *testing.T) {
+	if os.Getenv(claudeSmokeEnv) != "1" {
+		t.Skipf("set %s=1 to spend a real turn checking the installed client's flags", claudeSmokeEnv)
+	}
 	requireClaude(t)
 	runner := newTestRunner(t)
 	req := request(t, map[string]any{"query": "needle"})
@@ -670,9 +684,14 @@ func TestTheRealClientStillAcceptsEveryFlagWeBuild(t *testing.T) {
 		t.Fatalf("args: %v", err)
 	}
 
-	cmd := osexec.Command(DefaultBinary, args...)
+	ctx, cancel := context.WithTimeout(t.Context(), claudeSmokeTimeout)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, DefaultBinary, args...)
 	cmd.Dir = t.TempDir()
 	stdout, _ := cmd.Output()
+	if ctx.Err() != nil {
+		t.Fatalf("the installed client did not answer within %s", claudeSmokeTimeout)
+	}
 
 	// The exit code is not the claim -- a machine with an expired login exits
 	// non-zero and is still fine. The claim is that the client understood
@@ -681,6 +700,15 @@ func TestTheRealClientStillAcceptsEveryFlagWeBuild(t *testing.T) {
 		t.Fatalf("the installed client did not accept this command line: %v\nargs: %v", err, args)
 	}
 }
+
+// claudeSmokeEnv opts into the one test here that starts a real turn against
+// the installed client, and can therefore be billed.
+const claudeSmokeEnv = "ATENEA_CLAUDECODE_SMOKE"
+
+// claudeSmokeTimeout bounds it. A turn that has not printed its envelope by now
+// is not going to, and an unbounded exec in a test suite is a hang waiting for
+// a bad day.
+const claudeSmokeTimeout = 90 * time.Second
 
 func hasStreamResult(stdout []byte) bool {
 	for _, line := range strings.Split(string(stdout), "\n") {

@@ -3,6 +3,12 @@
 # is a cgo dependency, so these builds intentionally happen on native hosts;
 # pretending a cross-compiled binary is covered would make the release claim
 # stronger than its validation.
+#
+# "The same gates" is meant literally, and used not to be: ci.yml has no tag
+# trigger, so the verify job below re-runs formatting, tidiness, vet, the race
+# suite, the coverage target, the benchmark and load barriers, the benchmark
+# summary, the provider matrix and the policy anchors itself. A tag pushed to a
+# commit that never reached main is validated by this file or by nothing.
 name: release
 
 on:
@@ -15,8 +21,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    env:
-      TMPDIR: /tmp
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
@@ -49,12 +54,53 @@ jobs:
           want="${GITHUB_REF_NAME#v}"
           grep -q "^## \[${want}\]" CHANGELOG.md
 
+      # From here down this job runs what ci.yml runs, and it runs it because
+      # the header above claims a tag is only publishable after the same source
+      # tree passed the normal gates -- which was not true. ci.yml has no tag
+      # trigger, so on a tag pushed to a commit that never reached main, none of
+      # these had ever executed and the release published anyway.
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Coverage canonical target
+        run: bash scripts/coverage-check.sh coverage.out
+
+      - name: Benchmark thresholds
+        run: bash scripts/benchmark-check.sh
+
+      - name: DAG load smoke
+        run: bash scripts/load-check.sh
+
+      - name: Validate benchmark summary artifact
+        run: bash scripts/validate-benchmark-summary.sh benchmarks/summary.json
+
+      - name: Declared provider matrix
+        run: bash scripts/provider-matrix-check.sh
+
+      - name: v1.0 policy anchors
+        run: bash scripts/v1-policy-check.sh
 
   build:
     needs: verify
     name: artifact / ${{ matrix.goos }} / ${{ matrix.goarch }}
+    timeout-minutes: 30
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -115,6 +161,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:

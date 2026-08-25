@@ -16,6 +16,7 @@ concurrency:
 jobs:
   build:
     name: build / ${{ matrix.os }} / ${{ matrix.arch }}
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,11 +30,6 @@ jobs:
             arch: arm64
           - os: macos-15-intel
             arch: amd64
-    env:
-      # macOS has a short Unix-socket path limit. Keeping temporary test
-      # fixtures under /tmp makes the same suite reproducible locally and in
-      # Actions instead of depending on the runner's long temp directory.
-      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v5
 
@@ -114,6 +110,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 

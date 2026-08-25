@@ -458,7 +458,7 @@ LSPs will activate as files are read
 ~/Desktop/atenea
 
 • OpenCode 1.18.16
-⊙ Atenea 1.0.4+<revision>
+⊙ Atenea 1.0.5+<revision>
 ```
 
 **That column has to be on screen for any of them to appear.** It is 42 columns
@@ -539,7 +539,7 @@ It reads the service's own unix socket — the same door this CLI knocks on — 
 needs no key, no port and no network. What it draws:
 
 ```text
-⊙ Atenea 1.0.4+<revision>  2 sin leer
+⊙ Atenea 1.0.5+<revision>  2 sin leer
 ```
 
 One line, written the way the client writes its own version line: a coloured

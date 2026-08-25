@@ -17,6 +17,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/testroot"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -30,6 +31,13 @@ import (
 // That already happened once. A test that wants its own state still calls
 // t.Setenv and wins; this only decides where the ones that say nothing land.
 func TestMain(m *testing.M) {
+	// Pinned before the helper branch, and deliberately: the state root below
+	// is carved out of the temporary root, so the socket the helper binds is
+	// only short enough to bind if this ran first. The helper inherits the
+	// result rather than repeating it.
+	if _, err := testroot.Pin(); err != nil {
+		panic(err)
+	}
 	// The service helper is not a test. It is this binary re-executed as a
 	// real process so that its environment can differ from its caller's,
 	// which is the only way to prove whose environment a verdict came from.

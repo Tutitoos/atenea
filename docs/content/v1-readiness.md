@@ -8,7 +8,7 @@ weight: 7
 This page is the acceptance record for the published v1.0.5 release. It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
-[`v1.0 policy`](v1-policy.md).
+[`v1.0 policy`]({{< relref "v1-policy" >}}).
 
 ## Code-backed and shipped
 
@@ -310,7 +310,7 @@ decisions or later contracts:
   answer supplies the current path.
 
 The historical design notes remain in
-[`What is not built yet`](not-built-yet.md). This page is the current acceptance
+[`What is not built yet`]({{< relref "not-built-yet" >}}). This page is the current acceptance
 record and should be updated when one of the deferred contracts is actually
 chosen and implemented.
 

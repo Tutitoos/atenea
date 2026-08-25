@@ -15,6 +15,16 @@ run_benchmark() {
 	}
 	ns="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "ns/op") print $(i - 1) }' <<<"$line")"
 	bytes="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "B/op") print $(i - 1) }' <<<"$line")"
+	# Without this the gate passes on a line it could not read. An empty ns or
+	# bytes reaches awk as the empty string, every `>` comparison against a
+	# number is then false, and the barrier reports success having measured
+	# nothing -- which is the one failure mode a barrier must not have. The
+	# load gate has always checked this; this one did not.
+	test -n "$ns" && test -n "$bytes" || {
+		echo "benchmark $benchmark reported no ns/op or B/op" >&2
+		echo "$line" >&2
+		exit 1
+	}
 	awk -v name="$benchmark" -v ns="$ns" -v max_ns="$max_ns" -v bytes="$bytes" -v max_bytes="$max_bytes" 'BEGIN {
 		if (ns > max_ns) {
 			printf "%s: %.0f ns/op exceeds %.0f\n", name, ns, max_ns
