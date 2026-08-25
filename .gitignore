@@ -6,6 +6,14 @@
 /atenea
 /coverage-summary.txt
 
+# The coverage profile a benchmark run leaves behind. cmd/atenea-benchmark
+# writes it, reads it once to compute the coverage figures it puts in
+# summary.json, and never opens it again; summary.json and raw/ are the
+# evidence a report is audited against. The committed copy was 858 KB of
+# per-line counters that every run overwrites, so it only ever showed up as
+# diff noise.
+/benchmarks/runs/*/coverage.out
+
 # Air hot reload
 /build-errors.log
 

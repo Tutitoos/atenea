@@ -364,6 +364,140 @@ printf '%s\n' '{"is_error":false,"subtype":"success","result":"fallback answer",
 	}
 }
 
+// The failures fallback exists for are the ones that print no envelope at
+// all: the binary is gone, the session is not authenticated, the provider is
+// down. Those charge nothing, so there is nothing to subtract from the
+// ceiling and no way for the next candidate to double-charge anybody.
+func TestAFailureThatSpentNothingStillReachesTheFallback(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+model=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--model" ]; then model="$arg"; fi
+  previous="$arg"
+done
+printf '%s\n' "$model $*" >> "` + dir + `/calls"
+if [ "$model" = "primary" ]; then
+  exit 1
+fi
+printf '%s\n' '{"is_error":false,"subtype":"success","result":"fallback answer","usage":{"input_tokens":10,"output_tokens":2}}'
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fallback stub: %v", err)
+	}
+	client, err := New(Options{Binary: binary, Explore: "primary", ExploreFallbacks: []string{"fallback"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := client.Turn(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Text != "fallback answer" || len(answer.Notices) != 1 {
+		t.Fatalf("answer = %+v, notices = %v", answer, answer.Notices)
+	}
+	if !strings.Contains(answer.Notices[0], "reported no spend") {
+		t.Fatalf("fallback notice = %q, want the unmeasured-spend provenance", answer.Notices[0])
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatalf("reading calls: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], "fallback ") {
+		t.Fatalf("calls = %q, want primary then fallback", string(calls))
+	}
+	if !strings.Contains(lines[1], "--max-budget-usd 0.25") {
+		t.Fatalf("fallback call = %q, want the whole untouched ceiling", lines[1])
+	}
+}
+
+// BudgetUSD zero means the caller granted this turn no ceiling of its own,
+// not that it may spend nothing -- see the field's doc. A chain that refused
+// to fall back on it turned "unlimited" into "one attempt only", which is
+// every RunReviewed with no budget figure at all.
+func TestAFallbackRunsWhenTheRequestGrantedNoCeiling(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+model=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--model" ]; then model="$arg"; fi
+  previous="$arg"
+done
+printf '%s\n' "$model $*" >> "` + dir + `/calls"
+if [ "$model" = "primary" ]; then
+  printf '%s\n' '{"is_error":true,"subtype":"timeout","result":"timed out","usage":{"input_tokens":16600}}'
+  exit 1
+fi
+printf '%s\n' '{"is_error":false,"subtype":"success","result":"fallback answer","usage":{"input_tokens":10,"output_tokens":2}}'
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fallback stub: %v", err)
+	}
+	client, err := New(Options{Binary: binary, Explore: "primary", ExploreFallbacks: []string{"fallback"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := baseRequest()
+	req.BudgetUSD = 0
+	answer, err := client.Turn(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if answer.Text != "fallback answer" || len(answer.Notices) != 1 {
+		t.Fatalf("answer = %+v, notices = %v", answer, answer.Notices)
+	}
+	if !strings.Contains(answer.Notices[0], "no ceiling") {
+		t.Fatalf("fallback notice = %q, want the no-ceiling provenance", answer.Notices[0])
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil {
+		t.Fatalf("reading calls: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], "fallback ") {
+		t.Fatalf("calls = %q, want primary then fallback", string(calls))
+	}
+	if strings.Contains(lines[1], "--max-budget-usd") {
+		t.Fatalf("fallback call = %q, want no ceiling invented for a request that granted none", lines[1])
+	}
+}
+
+// Abandoning the chain rewords the failure to say why no candidate is left,
+// and the untranslated provider text a human searches for verbatim has to
+// survive that rewording.
+func TestAChainAbandonedOnBudgetKeepsTheProviderText(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+printf '%s\n' '{"is_error":true,"subtype":"timeout","result":"upstream connect error","usage":{"input_tokens":166000}}'
+exit 1
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing exhausting stub: %v", err)
+	}
+	client, err := New(Options{Binary: binary, Explore: "primary", ExploreFallbacks: []string{"fallback"}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := baseRequest()
+	req.BudgetUSD = 0.5
+	_, err = client.Turn(context.Background(), req)
+	if err == nil {
+		t.Fatal("Turn succeeded, want the chain abandoned with no budget left")
+	}
+	if kind := contract.KindOf(err); kind != contract.FailurePermissionDenied {
+		t.Fatalf("kind = %s, want permission_denied", kind)
+	}
+	if raw := contract.RawOf(err); !strings.Contains(raw, "upstream connect error") {
+		t.Fatalf("raw = %q, want the provider's own text preserved", raw)
+	}
+}
+
 // A role built with no model name for it is discovered here, not at New: a
 // Client missing one role's model is only a problem for whichever Turn asks
 // for that role.
@@ -1470,6 +1604,26 @@ func TestTheAllowanceIsNotComparedWithTheCeiling(t *testing.T) {
 	req.BudgetUSD = 0
 	if err := req.Validate(); err != nil {
 		t.Fatalf("an allowance under an unbounded ceiling was refused: %v", err)
+	}
+}
+
+// A budget derived by dividing a grant by a share of zero is NaN, and `NaN <
+// 0` is false, so the only check here used to wave it through and format it
+// into the argv as `--max-budget-usd NaN`. The OpenCode runner refuses the
+// same three values, and the two backends have to agree about which requests
+// can be attempted at all.
+func TestANonFiniteBudgetIsRefused(t *testing.T) {
+	for _, budget := range []float64{
+		math.NaN(),
+		math.Inf(1),
+		math.Inf(-1),
+		-0.01,
+	} {
+		req := baseRequest()
+		req.BudgetUSD = budget
+		if got := contract.KindOf(req.Validate()); got != contract.FailureInvalidInput {
+			t.Errorf("budget %v: kind = %v, want invalid_input", budget, got)
+		}
 	}
 }
 

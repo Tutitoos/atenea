@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,4 +248,85 @@ func fixtureConfig(repositories ...string) config.Config {
 		cfg.Agents = append(cfg.Agents, typeDef)
 	}
 	return cfg
+}
+
+// Intent used to be classified with strings.Contains against a vocabulary
+// that includes three-letter words, so ordinary technical English matched the
+// wrong branch: "prefix" contains "fix", "address" contains "add" and
+// "explanation" contains "plan". KindChange is tested first, so every one of
+// them turned a question into a change -- the classification that decides
+// whether the plan asks for write effects and whether the CLI stops for
+// --confirm.
+func TestIntentIsClassifiedOnWholeWordsNotSubstrings(t *testing.T) {
+	for text, want := range map[string]Kind{
+		// The three traps, one per branch.
+		"dónde está el prefix handler":             KindSearch,
+		"where is the address parser":              KindSearch,
+		"give me an explanation of the retry loop": KindUnderstand,
+		// And the words themselves still classify, inflected or not.
+		"fix the login bug":            KindChange,
+		"fixing the login bug":         KindChange,
+		"añade un campo al formulario": KindChange,
+		"how would you split this":     KindPlan,
+		"diseña el flujo de pagos":     KindPlan,
+		"buscar autenticación":         KindSearch,
+		"explain how the router works": KindUnderstand,
+	} {
+		if got := infer(text); got != want {
+			t.Errorf("infer(%q) = %s, want %s", text, got, want)
+		}
+	}
+}
+
+// The plan a person reads and confirms is the plan that runs. plan.Effects is
+// what --confirm shows and what the operator agrees to; the step permissions
+// are what the workflow may actually do, and they were built from the
+// commission's own effects alone -- the standing grant reached the printed
+// list and nothing else, so a chat on a floor that allows writing was stopped
+// for confirmation over a permission its steps never received.
+func TestStandingEffectsReachTheStepsAndNotOnlyThePrintedPlan(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	// The agent types have to declare write for it to be inside their
+	// ceiling; a standing grant wider than the type is narrowed instead, as
+	// the reader shape above shows.
+	for i := range cfg.Agents {
+		cfg.Agents[i].Effects = append(cfg.Agents[i].Effects, contract.EffectWrite)
+	}
+
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "implementar el cambio", Repository: "repo", BudgetUSD: 3,
+		StandingEffects: []contract.Effect{contract.EffectWrite},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Valid {
+		t.Fatalf("plan invalid: %+v", plan.Reasons)
+	}
+	if !slices.Contains(plan.Effects, contract.EffectWrite) {
+		t.Fatalf("plan effects = %v, want the standing write the operator granted", plan.Effects)
+	}
+	explored := 0
+	for _, step := range plan.Workflow.Steps {
+		if !strings.HasPrefix(step.ID, "explore-") {
+			continue
+		}
+		explored++
+		if !slices.Contains(step.Permission.Effects, contract.EffectWrite) {
+			t.Errorf("step %s carries %v, but the plan promised %v",
+				step.ID, step.Permission.Effects, plan.Effects)
+		}
+	}
+	if explored == 0 {
+		t.Fatal("no explore step was planned, so this proves nothing")
+	}
+	// And never the other way round: a step may not carry an effect the plan
+	// did not print, because the printed list is what was agreed to.
+	for _, step := range plan.Workflow.Steps {
+		for _, effect := range step.Permission.Effects {
+			if effect != contract.EffectRead && !slices.Contains(plan.Effects, effect) {
+				t.Errorf("step %s carries %s, which the plan never showed anybody", step.ID, effect)
+			}
+		}
+	}
 }

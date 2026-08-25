@@ -1,6 +1,11 @@
 package orchestrator
 
-import "sync"
+import (
+	"math"
+	"sync"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
 
 // grant is a commission's spending ceiling while the commission is running.
 //
@@ -31,6 +36,34 @@ import "sync"
 type grant struct {
 	mu   sync.Mutex
 	left float64
+}
+
+// validGrant refuses a ceiling that is not a number of dollars, and it is the
+// one place every entry point asks -- Run, Ask, Resume, RunPlan and New.
+//
+// The three refusals are one rule, not three special cases: a ceiling has to
+// be a finite amount somebody could be charged. A negative grant is a typo,
+// and clamping it to zero would switch off every paid provider for the run so
+// the operator reads their own mistake as an outage. NaN compares false
+// against everything, so a NaN ceiling refuses nothing and permits nothing in
+// a way that depends on which side of the comparison it lands. +Inf is the
+// dangerous one and the reason this function exists: it propagates into
+// contract.Permission.BudgetUSD, and every check at the edge is a comparison
+// against a ceiling nothing can exceed, so the provider's charge stops being
+// verified at all. RunPlan already refused all three; the other three doors
+// let +Inf through, which made the strictest entry point the one nobody
+// calls from a terminal.
+//
+// The caller passes its own name, because "budget must be finite" with no
+// subject in front of it is a line an operator cannot act on: the same
+// sentence has to say whether the number came from --budget, from a resumed
+// run, or from the settings file.
+func validGrant(what string, usd float64) error {
+	if usd < 0 || math.IsNaN(usd) || math.IsInf(usd, 0) {
+		return contract.Fail(contract.FailureInvalidInput,
+			"%s: budget must be a finite amount and not negative, got %v", what, usd)
+	}
+	return nil
 }
 
 // newGrant opens a ceiling. A total of zero is a commission that may not spend,

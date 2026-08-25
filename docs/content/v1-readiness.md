@@ -291,8 +291,15 @@ Codex completion path as well as the adapter's streaming event path.
 These are not hidden failures in the current product. They are explicit v1.0
 decisions or later contracts:
 
-- interactive permission confirmation: the current security model is explicit
-  grant/refusal through policy and `--allow`, with no implicit prompt;
+- an *implicit* interactive permission prompt: no adapter and no daemon path
+  stops mid-run to ask. A service under systemd or launchd has no terminal to
+  be asked on, so such a prompt would hang the run or wait for nobody; the
+  security model stays explicit grant/refusal through policy and `--allow`.
+  The *explicit* confirmation is not deferred and already ships: `--confirm` on
+  `task`, `ask`, `decide --run` and `agent` prints the budget and the effects
+  about to be granted and refuses outright without a TTY, `agent` demands it
+  for any type declaring write or external effects, and `backup discard` takes
+  no other word for an answer;
 - exact OpenCode parity with Claude Code: the opt-in provider adapter is
   hardened, maps common provider errors and checks reported cost against the
   requested budget, but OpenCode still lacks a native schema flag, a provider

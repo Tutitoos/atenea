@@ -76,13 +76,14 @@ func base(t *testing.T, root string) Config {
 // workspace, which is the level a local type must never inherit.
 func shipped(t *testing.T, name string) AgentType {
 	t.Helper()
+	tokens := 200000
 	raw := fileAgent{
 		Name: name, Kind: "specialized", Summary: "the machine's own " + name,
 		Command: "$atenea", Args: []string{"agent-exec", name},
 		Env:         []string{"ATENEA_SHIPPED=1"},
 		Context:     []string{"repository"},
 		Effects:     []string{"read"},
-		MaxDuration: "10m", MaxTokens: 200000,
+		MaxDuration: "10m", MaxTokens: &tokens,
 		Result: []fileField{{Name: "ok", Type: "bool", Required: true}},
 	}
 	switch name {

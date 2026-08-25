@@ -225,7 +225,12 @@ JSON
 	}
 }
 
-func TestRunRefusesAnObservedCostAboveTheBudget(t *testing.T) {
+// Running out of the call's own ceiling is not a refusal by policy -- there
+// is no larger pool it was cut from -- so it bins as unavailable, exactly as
+// the Claude backend bins the identical fact. This asserted permission_denied
+// until 2026-08-25, which made the verdict on one budget exhaustion depend on
+// which backend was configured.
+func TestARunOverItsOwnCeilingIsUnavailableAsOnTheOtherBackend(t *testing.T) {
 	binary := executable(t, `
 cat <<'JSON'
 {"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
@@ -237,8 +242,8 @@ JSON
 		t.Fatalf("New: %v", err)
 	}
 	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25})
-	if contract.KindOf(err) != contract.FailurePermissionDenied || answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
-		t.Fatalf("Run answer = %+v, error = %v, want budget permission denial with observed cost", answer, err)
+	if contract.KindOf(err) != contract.FailureUnavailable || answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
+		t.Fatalf("Run answer = %+v, error = %v, want an unavailable turn carrying the observed cost", answer, err)
 	}
 }
 
@@ -258,8 +263,8 @@ printf reached > %s
 	}
 	started := time.Now()
 	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25})
-	if contract.KindOf(err) != contract.FailurePermissionDenied {
-		t.Fatalf("Run error = %v, want permission_denied", err)
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("Run error = %v, want unavailable", err)
 	}
 	if answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
 		t.Fatalf("spent = %+v, want observed cost 0.26", answer.Spent)
@@ -504,8 +509,14 @@ JSON
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// The allowance is deliberately far above what these two steps weigh
+	// (185 input-equivalent tokens). It used to be 1, which only passed
+	// because reached() waited for `finished` and so never fired mid-turn:
+	// an allowance of one token that a hundred-token step does not trip is
+	// the defect, not the guarantee. What this test is about is the `reason`
+	// field -- an intermediate tool step is not the end of the turn.
 	answer, err := runner.Run(context.Background(), Request{
-		Prompt: "answer", ReadTokens: 1,
+		Prompt: "answer", ReadTokens: 10_000,
 		Schema: map[string]any{"type": "object", "required": []any{"summary"}},
 	})
 	if err != nil {
@@ -513,6 +524,59 @@ JSON
 	}
 	if string(answer.Structured) != `{"summary":"done"}` {
 		t.Fatalf("structured = %s", answer.Structured)
+	}
+}
+
+// The read allowance protects the turn that calls tools, and that turn never
+// sets `finished` while it is still working. Two intermediate steps that
+// together weigh past the allowance have to stop the process and hand the
+// session to the tool-free finalization pass, well before the
+// maxOpenCodeToolSteps count that is the other, cruder boundary.
+func TestAnAllowanceCrossedBetweenToolStepsFinalizesTheSession(t *testing.T) {
+	binary := executable(t, `
+resume=0
+for arg in "$@"; do
+  if [ "$arg" = "--session" ]; then resume=1; fi
+done
+if [ "$resume" -eq 1 ]; then
+cat <<'JSON'
+{"type":"text","sessionID":"ses-allowance","part":{"id":"text-final","type":"text","text":"{\"summary\":\"what the reading bought\"}","time":{"end":2}}}
+{"type":"step_finish","sessionID":"ses-allowance","part":{"type":"step-finish","reason":"stop","tokens":{"input":20,"output":8}}}
+JSON
+else
+cat <<'JSON'
+{"type":"step_finish","sessionID":"ses-allowance","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":300,"output":10}}}
+{"type":"step_finish","sessionID":"ses-allowance","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":300,"output":10}}}
+JSON
+sleep 30
+fi
+`)
+	runner, err := New(Options{Binary: binary, Timeout: time.Minute})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	started := time.Now()
+	// Each tool step weighs 350 input-equivalent tokens (300 input, 10
+	// output at x5), so the allowance is crossed on the second one and not
+	// on the first.
+	answer, err := runner.Run(context.Background(), Request{
+		Prompt: "answer", ReadTokens: 600,
+		Schema: map[string]any{"type": "object", "required": []any{"summary"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if string(answer.Structured) != `{"summary":"what the reading bought"}` {
+		t.Fatalf("structured = %s, want the finalization pass's answer", answer.Structured)
+	}
+	if answer.Passes != 2 {
+		t.Fatalf("passes = %d, want the tool pass plus the finalization", answer.Passes)
+	}
+	// The child holds for 30 seconds after its second step. Ten leaves room
+	// for the race detector and a loaded host while still proving the
+	// allowance stopped it rather than the stream simply ending.
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("the allowance took %s to stop a turn it should have cut at the second step", elapsed)
 	}
 }
 
@@ -567,6 +631,111 @@ sleep 30
 	_, err = runner.Run(ctx, Request{Prompt: "answer"})
 	if contract.KindOf(err) != contract.FailureTimeout {
 		t.Fatalf("Run error kind = %v, want timeout: %v", contract.KindOf(err), err)
+	}
+}
+
+// A stream that breaks partway through still billed for the steps it did
+// deliver. Both of these paths returned an empty Answer, so a turn killed by
+// one unreadable line was recorded as a turn that cost nothing -- while every
+// other failing path in Run reports what the provider had already charged.
+func TestABrokenStreamStillReportsWhatTheProviderCharged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "an event this adapter cannot read",
+			body: `
+cat <<'JSON'
+{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":400,"output":20},"cost":0.07}}
+{"type":"step_finish","part":"this is not a part object"}
+JSON
+`,
+		},
+		{
+			name: "a line longer than the scanner will take",
+			body: `
+cat <<'JSON'
+{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":400,"output":20},"cost":0.07}}
+JSON
+head -c 9000000 /dev/zero | tr '\0' 'x'
+printf '\n'
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner, err := New(Options{Binary: executable(t, tc.body), Timeout: fixtureTimeout})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			answer, err := runner.Run(context.Background(), Request{Prompt: "answer"})
+			if err == nil {
+				t.Fatal("a broken stream was accepted")
+			}
+			if answer.Spent.InputTokens != 400 || answer.Spent.USD == nil || *answer.Spent.USD != 0.07 {
+				t.Fatalf("spent = %+v, want the step the provider had already charged for", answer.Spent)
+			}
+		})
+	}
+}
+
+// A request may be given more room than the runner's own default -- a plan
+// turn is not a search turn -- and that larger deadline has to be the one the
+// turn runs under and the one a timeout names. The runner used to re-wrap the
+// call with its own ceiling, so the smaller of the two always won and the
+// failure named a limit that had not expired.
+func TestARequestTimeoutLongerThanTheRunnersIsTheOneThatApplies(t *testing.T) {
+	binary := executable(t, `
+cat <<'JSON'
+{"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
+JSON
+sleep 1
+cat <<'JSON'
+{"type":"step_finish","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":2}}}
+JSON
+`)
+	// A quarter second is less than the child takes to finish, so a runner
+	// that kept its own ceiling would report a timeout of 250ms.
+	runner, err := New(Options{Binary: binary, Timeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if answer.Text != "answer" {
+		t.Fatalf("text = %q, want the answer the longer deadline paid for", answer.Text)
+	}
+}
+
+// The limit a timeout names has to be the one that expired, or whoever reads
+// the report goes looking for a ceiling that never fired.
+func TestATimeoutNamesTheDeadlineThatActuallyApplied(t *testing.T) {
+	binary := executable(t, `
+sleep 30
+`)
+	runner, err := New(Options{Binary: binary, Timeout: time.Minute})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(context.Background(), Request{Prompt: "answer", Timeout: 80 * time.Millisecond})
+	if contract.KindOf(err) != contract.FailureTimeout {
+		t.Fatalf("Run error kind = %v, want timeout: %v", contract.KindOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "80ms") {
+		t.Fatalf("Run error = %q, want the request's own 80ms deadline named", err)
+	}
+}
+
+func TestARequestWithANegativeTimeoutIsRefused(t *testing.T) {
+	runner, err := New(Options{Binary: executable(t, "exit 0"), Timeout: fixtureTimeout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(context.Background(), Request{Prompt: "answer", Timeout: -time.Second})
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("Run error kind = %v, want invalid_input: %v", contract.KindOf(err), err)
 	}
 }
 

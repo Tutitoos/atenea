@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Tutitoos/atenea/internal/agent/model"
+	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -66,6 +67,15 @@ type report struct {
 	Result  map[string]any `json:"result"`
 	Verdict string         `json:"verdict"`
 	Reason  *reason        `json:"reason,omitempty"`
+	// Spent is this agent's own cost, in the shape internal/agent reads back
+	// off the wire. It is not optional here in the way it is for a scripted
+	// agent: this reviewer calls a model on every review, so a report with
+	// no `spent` claims a turn that was free, and the run's accounting then
+	// shows review as the one stage that costs nothing. It is filled in on
+	// every path a turn was attempted on, including the ones that end
+	// `incomplete` -- a turn that ran and then failed to parse still occupied
+	// the provider and was billed for it.
+	Spent *planner.Charge `json:"spent,omitempty"`
 }
 
 type caller interface {
@@ -90,15 +100,15 @@ func Main(stdin io.Reader, stdout io.Writer) error {
 
 func run(ctx context.Context, in assignment) report {
 	if in.Subject == nil {
-		return incomplete("nothing to review: this assignment carries no subject")
+		return incomplete("nothing to review: this assignment carries no subject", nil)
 	}
 	if in.Subject.Verdict != "ok" {
-		return incomplete("the subject did not finish successfully: " + reasonText(in.Subject.Reason))
+		return incomplete("the subject did not finish successfully: "+reasonText(in.Subject.Reason), nil)
 	}
 	root := repositoryRoot(in)
 	cfg, err := config.LoadEffectiveIn("", root)
 	if err != nil {
-		return incomplete("the settings could not be read: " + contract.MessageOf(err))
+		return incomplete("the settings could not be read: "+contract.MessageOf(err), nil)
 	}
 	if in.Route != nil {
 		if in.Route.Backend != "" {
@@ -114,7 +124,7 @@ func run(ctx context.Context, in assignment) report {
 	}
 	client, err := model.New(model.Options(cfg.Model))
 	if err != nil {
-		return incomplete("the semantic reviewer model is unavailable: " + contract.MessageOf(err))
+		return incomplete("the semantic reviewer model is unavailable: "+contract.MessageOf(err), nil)
 	}
 	return judge(ctx, in, client, root)
 }
@@ -126,7 +136,7 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 	}
 	prompt, err := promptFor(in)
 	if err != nil {
-		return incomplete("the subject could not be encoded for review: " + err.Error())
+		return incomplete("the subject could not be encoded for review: "+err.Error(), nil)
 	}
 	answerOut, err := client.Turn(ctx, model.Request{
 		Role:      model.RoleExplore,
@@ -136,18 +146,24 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 		BudgetUSD: budget,
 		MaxTokens: in.Limits.MaxTokens,
 	})
+	// The charge survives every branch below, including the failing ones. A
+	// turn that died at its ceiling, or came back in a shape this agent
+	// cannot read, still ran on the provider and was billed for it; dropping
+	// it because the review did not conclude is how a baseline learns that
+	// failed reviews are free.
+	charged := planner.Spent(answerOut.Spent)
 	if err != nil {
-		return incomplete("semantic review could not be completed: " + contract.MessageOf(err))
+		return incomplete("semantic review could not be completed: "+contract.MessageOf(err), charged)
 	}
 	var judged answer
 	if err := json.Unmarshal(answerOut.Structured, &judged); err != nil {
-		return incomplete("semantic reviewer returned an invalid answer: " + err.Error())
+		return incomplete("semantic reviewer returned an invalid answer: "+err.Error(), charged)
 	}
 	if judged.Verdict != "supported" && judged.Verdict != "unsupported" && judged.Verdict != "indeterminate" {
-		return incomplete("semantic reviewer returned an unknown verdict")
+		return incomplete("semantic reviewer returned an unknown verdict", charged)
 	}
 	if judged.Confidence < 0 || judged.Confidence > 100 || strings.TrimSpace(judged.Scope) == "" {
-		return incomplete("semantic reviewer returned an invalid confidence or scope")
+		return incomplete("semantic reviewer returned an invalid confidence or scope", charged)
 	}
 	result := map[string]any{
 		"subject": in.Subject.RunID, "semantic_verdict": judged.Verdict,
@@ -156,11 +172,13 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 	}
 	switch judged.Verdict {
 	case "supported":
-		return report{Result: result, Verdict: "ok"}
+		return report{Result: result, Verdict: "ok", Spent: charged}
 	case "unsupported":
-		return report{Result: result, Verdict: "failed", Reason: &reason{Kind: "invalid_input", Text: "the semantic reviewer found unsupported claims"}}
+		return report{Result: result, Verdict: "failed", Spent: charged,
+			Reason: &reason{Kind: "invalid_input", Text: "the semantic reviewer found unsupported claims"}}
 	default:
-		return report{Result: result, Verdict: "incomplete", Reason: &reason{Kind: "unavailable", Text: "the semantic reviewer could not establish the conclusion"}}
+		return report{Result: result, Verdict: "incomplete", Spent: charged,
+			Reason: &reason{Kind: "unavailable", Text: "the semantic reviewer could not establish the conclusion"}}
 	}
 }
 
@@ -216,6 +234,11 @@ func reasonText(r *reason) string {
 	return r.Text
 }
 
-func incomplete(text string) report {
-	return report{Result: map[string]any{}, Verdict: "incomplete", Reason: &reason{Kind: "unavailable", Text: text}}
+// incomplete is this reviewer's own shortfall. The charge is an argument
+// rather than omitted because the shortfalls divide in two: the ones raised
+// before a turn was ever attempted carry nil, which is what unmeasured looks
+// like, and the ones raised after a turn ran carry what it cost.
+func incomplete(text string, spent *planner.Charge) report {
+	return report{Result: map[string]any{}, Verdict: "incomplete", Spent: spent,
+		Reason: &reason{Kind: "unavailable", Text: text}}
 }

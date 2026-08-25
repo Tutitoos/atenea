@@ -17,12 +17,15 @@ package floor
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/allowance"
+	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -237,6 +240,14 @@ type Store struct {
 	path string
 }
 
+// putting serializes Put inside one process. It is package-level rather than
+// a field on Store because Open hands out a fresh Store per call and holds
+// nothing between them -- a mutex on the struct would be a different mutex
+// for each of two callers writing the same file, which is no mutex at all.
+// Writes are rare enough (one per `floor measure`) that one lock for every
+// path costs nothing worth splitting it up for.
+var putting sync.Mutex
+
 // Open returns a Store backed by path, or DefaultPath() when path is empty.
 // Nothing is read yet: a file that does not exist is not a fault until
 // something asks what is in it, and even then it answers "nothing measured
@@ -312,7 +323,31 @@ func (s *Store) PriceForModel(model string) (usdPerToken float64, measuredAt tim
 
 // Put stores m, replacing whatever was measured before for the same
 // (repository, agent, model) triple and leaving every other row untouched.
+//
+// The whole read-modify-write is serialized, because "leaving every other row
+// untouched" is a promise about the file and not about this process's copy of
+// it. Two measurements finishing at once each read the file as it was before
+// either of them, each added its own row, and each wrote the whole list back:
+// the second rename won and the first row was gone, with no error anywhere to
+// say a measurement somebody paid a real turn for had been dropped. The
+// in-process lock covers the workflow engine and a `floor measure` in the
+// same binary; the file lock covers two `atenea` processes, and it refuses
+// rather than queues -- a measurement is a command somebody typed, and being
+// told another one is running beats waiting for it in silence.
 func (s *Store) Put(m Measurement) error {
+	putting.Lock()
+	defer putting.Unlock()
+	release, err := pidlock.Claim(s.path + ".lock")
+	switch {
+	case errors.Is(err, pidlock.ErrHeld):
+		return contract.Fail(contract.FailureUnavailable,
+			"floor: another process is writing %s", s.path)
+	case err != nil:
+		return contract.Fail(contract.FailurePermissionDenied,
+			"floor: locking %s: %v", s.path, err)
+	}
+	defer release()
+
 	rows, err := s.load()
 	if err != nil {
 		return err
@@ -417,6 +452,15 @@ func (s *Store) write(rows []Measurement) error {
 	}()
 
 	if _, err := temp.Write(body); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailureUnavailable, "floor: %v", err)
+	}
+	// Renaming an unsynced file is atomic about the name and says nothing
+	// about the contents: a machine that loses power after the rename can
+	// come back with floors.json in place and empty, which the next load
+	// refuses as a file Atenea did not write. registry.persistLocked already
+	// pays this cost for the same file-shaped cache.
+	if err := temp.Sync(); err != nil {
 		_ = temp.Close()
 		return contract.Fail(contract.FailureUnavailable, "floor: %v", err)
 	}

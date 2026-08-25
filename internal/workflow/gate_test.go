@@ -2,9 +2,13 @@ package workflow_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,11 +147,14 @@ func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 			workflow.Proposal{Steps: []workflow.Step{step("added", "eager", nil)}}, time.Now())
 	}()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
-	defer cancel()
+	// On t.Context(), not on a private four-second budget. `go test` already
+	// bounds this with its own -timeout, and the second, much smaller clock
+	// bounded the machine rather than the property: the freeze either holds or
+	// it does not, and there is no duration after which a correct engine
+	// becomes a wrong one.
 	done := make(chan workflow.Run, 1)
 	go func() {
-		out, _ := h.engine.Run(ctx, gate.RunID)
+		out, _ := h.engine.Run(t.Context(), gate.RunID)
 		done <- out
 	}()
 
@@ -155,7 +162,16 @@ func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 	// Under the full benchmark suite the process can be delayed by unrelated
 	// package work, while the contract we need to assert is simply that the
 	// gate is open and the already-started step has landed.
-	deadline := time.Now().Add(3 * time.Second)
+	//
+	// The deadline is a backstop that names the failure, not a budget this
+	// test is expected to come close to. Measured: 1.76s wall inside the full
+	// package run, a second of which is `slow`'s own sleep. The old three
+	// seconds left 1.24s of headroom over that -- less than the 1.2-1.5s that
+	// entering this package cold costs, which is the difference between
+	// TestAGraphRunsInOrder's 1.00s in-suite and its 2.2-2.5s run on its own.
+	// A margin thinner than a startup cost the same package already measures
+	// is a margin that will one day fail on a machine where nothing is wrong.
+	deadline := time.Now().Add(30 * time.Second)
 	var open workflow.Gate
 	var held workflow.Run
 	for {
@@ -417,6 +433,102 @@ func TestAGateIsAnsweredOnce(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "first via test") {
 		t.Errorf("refusal %q does not name who answered", err)
+	}
+}
+
+// Two answers that arrive at once, which is the case the sequential test
+// above does not reach. There, the second caller's own read already sees a
+// decided gate. Here every caller reads a waiting one, so the read decides
+// nothing and only the UPDATE's `decision = 'waiting'` predicate can say which
+// answer is real.
+//
+// The assertion is on what each caller is TOLD, not only on what the row ends
+// up holding -- the row was always right. Answer returning nil to a hand whose
+// decision was discarded is the whole failure: `atenea workflow approve`
+// prints its confirmation and the operator walks away believing they blessed a
+// run whose gate carries somebody else's name, and possibly somebody else's
+// rejection.
+func TestOnlyOneOfManySimultaneousAnswersIsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+
+	run, gate, err := h.engine.Create(t.Context(), graphOf(step("a", "worker", nil)))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	type answer struct {
+		hand string
+		gate workflow.Gate
+		err  error
+	}
+	const hands = 8
+	var start atomic.Bool
+	var ready sync.WaitGroup
+	ready.Add(hands)
+	answers := make(chan answer, hands)
+	for i := range hands {
+		go func() {
+			hand := fmt.Sprintf("hand-%d via test", i)
+			// Warm this goroutine's connection before the barrier. Opening a
+			// sqlite file costs enough that a pool doing it under the barrier
+			// staggers the hands past each other: measured on this test, the
+			// window opened in 1 run out of 10 with the warm-up removed and in
+			// 10 out of 10 with it, so without this the test would pass on a
+			// defect nine times in ten.
+			if _, err := h.state.Gate(t.Context(), run.ID, gate.Ordinal); err != nil {
+				answers <- answer{hand: hand, err: err}
+				ready.Done()
+				return
+			}
+			ready.Done()
+			for !start.Load() {
+				runtime.Gosched()
+			}
+			got, err := h.state.Answer(t.Context(), run.ID, gate.Ordinal,
+				workflow.DecisionApproved, hand, "", time.Now())
+			answers <- answer{hand: hand, gate: got, err: err}
+		}()
+	}
+	ready.Wait()
+	start.Store(true)
+
+	var accepted []string
+	var got []answer
+	for range hands {
+		a := <-answers
+		got = append(got, a)
+		if a.err == nil {
+			accepted = append(accepted, a.hand)
+		}
+	}
+	if len(accepted) != 1 {
+		t.Fatalf("%d of %d hands were told their answer was accepted, want exactly 1: %v",
+			len(accepted), hands, accepted)
+	}
+
+	// The one told yes has to be the one on the row. Anything else means the
+	// winner was decided twice, by two different pieces of code.
+	stored, err := h.state.Gate(t.Context(), run.ID, gate.Ordinal)
+	if err != nil {
+		t.Fatalf("Gate: %v", err)
+	}
+	if stored.Hand != accepted[0] {
+		t.Errorf("the record says %q answered, but %q was told it had", stored.Hand, accepted[0])
+	}
+	for _, a := range got {
+		// Every caller, winner and loser alike, is handed the gate as it
+		// really is. A loser used to be handed the one this call had built in
+		// memory, carrying its own hand on a decision nobody recorded.
+		if a.gate.Hand != stored.Hand {
+			t.Errorf("%s was handed a gate answered by %q, want the recorded %q",
+				a.hand, a.gate.Hand, stored.Hand)
+		}
+		if a.err != nil && !strings.Contains(a.err.Error(), stored.Hand) {
+			t.Errorf("the refusal given to %s does not name the winner %q: %v",
+				a.hand, stored.Hand, a.err)
+		}
 	}
 }
 

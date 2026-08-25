@@ -249,6 +249,22 @@ func (s *Store) Ask(ctx context.Context, runID string, kind Kind, p Proposal, at
 // people answering the same question is a fact worth surfacing, and the
 // second answer arriving silently would erase the first from the log that
 // exists to show who said what.
+//
+// The read below is a courtesy, not the check. What decides the race is the
+// UPDATE's own `decision = 'waiting'` predicate together with the row count it
+// reports: between the read and the write there is nothing at all, so a second
+// answer landing in that gap used to change zero rows, raise no error, and be
+// handed back the Gate this call had assembled in memory -- carrying the
+// loser's decision, the loser's hand and the loser's reason. Which is the
+// exact opposite of what the paragraph above promises: `atenea workflow
+// approve` printed its confirmation to the person whose answer was discarded,
+// under a gate the record shows somebody else answered, possibly by rejecting
+// it. Execute's own read of gate 0 is what still kept such a run from being
+// dispatched; nothing kept the operator from being told otherwise.
+//
+// No transaction is needed for that guarantee. The UPDATE is the serialization
+// point on its own; the earlier read only buys the better error message in the
+// ordinary case where nobody is racing.
 func (s *Store) Answer(ctx context.Context, runID string, ordinal int, d Decision, hand, reason string, at time.Time) (Gate, error) {
 	if d == DecisionWaiting {
 		return Gate{}, contract.Fail(contract.FailureInvalidInput,
@@ -263,22 +279,44 @@ func (s *Store) Answer(ctx context.Context, runID string, ordinal int, d Decisio
 		return Gate{}, err
 	}
 	if !gate.Waiting() {
-		return gate, contract.Fail(contract.FailureInvalidInput,
-			"workflow %s: gate %d was already %s at %s by %s",
-			runID, ordinal, gate.Decision, gate.Answered.Local().Format(time.RFC3339), gate.Hand)
+		return gate, alreadyAnswered(runID, ordinal, gate)
 	}
 	gate.Decision = d
 	gate.Answered = at.UTC()
 	gate.Hand = hand
 	gate.Reason = reason
-	_, err = s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE workflow_gate SET decision = ?, answered_at = ?, hand = ?, reason = ?
 		 WHERE workflow_id = ? AND ordinal = ? AND decision = 'waiting'`,
 		gate.Decision.String(), stamp(gate.Answered), gate.Hand, gate.Reason, runID, ordinal)
 	if err != nil {
 		return Gate{}, unavailable(err, "workflow: answering gate %d on %s", ordinal, runID)
 	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Gate{}, unavailable(err, "workflow: answering gate %d on %s", ordinal, runID)
+	}
+	if rows == 0 {
+		// Somebody answered in the gap. Re-read rather than report the gate
+		// this call assembled: the row is the only place the winning answer
+		// exists, and naming who gave it and when is what lets the loser tell
+		// a lost race from a gate that was never open.
+		winner, err := s.Gate(ctx, runID, ordinal)
+		if err != nil {
+			return Gate{}, err
+		}
+		return winner, alreadyAnswered(runID, ordinal, winner)
+	}
 	return gate, nil
+}
+
+// alreadyAnswered is the refusal both of Answer's already-decided paths give,
+// so the one a race produces and the one a plain re-answer produces cannot
+// drift into saying different things about the same situation.
+func alreadyAnswered(runID string, ordinal int, gate Gate) error {
+	return contract.Fail(contract.FailureInvalidInput,
+		"workflow %s: gate %d was already %s at %s by %s",
+		runID, ordinal, gate.Decision, gate.Answered.Local().Format(time.RFC3339), gate.Hand)
 }
 
 // Gate reads one gate back.

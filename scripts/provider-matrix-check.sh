@@ -24,17 +24,28 @@ required=(
 	"repository.index|kivgraph.index"
 )
 
+# The edge, not just its right-hand side. The loop used to search the whole
+# catalog for the implementation line and never asked which capability it
+# appeared under -- `capability` existed only to make the error message read as
+# if the arc had been checked. An implementation registered against the wrong
+# capability, which is the single thing a matrix gate is for, passed unnoticed.
+edges="$(awk -f "$root/scripts/provider-matrix-edges.awk" <<<"$catalog")"
+
+missing=0
 for pair in "${required[@]}"; do
-	capability="${pair%%|*}"
-	implementation="${pair#*|}"
-	if ! grep -Fq "    $implementation (provider " <<<"$catalog"; then
-		echo "missing declared implementation: $capability -> $implementation" >&2
-		exit 1
+	if ! grep -Fqx -- "$pair" <<<"$edges"; then
+		echo "missing declared edge: ${pair%%|*} -> ${pair#*|}" >&2
+		missing=1
 	fi
 done
+# Report every broken edge before failing: a matrix that lost a provider
+# usually lost more than one, and one run should name them all.
+test "$missing" -eq 0 || exit 1
 
 "$build_dir/atenea" config show >/dev/null
-echo "declared provider matrix passed (8 required edges)"
+# Counted, not typed. The message said "8 required edges" as a literal, so a
+# ninth edge added to the list above would still have been announced as eight.
+echo "declared provider matrix passed (${#required[@]} required edges)"
 
 if [[ "${ATENEA_MCP_CHECK:-0}" == "1" ]]; then
 	"$build_dir/atenea" mcp --check

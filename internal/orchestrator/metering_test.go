@@ -235,6 +235,43 @@ func TestABlockedStepIsNotMeasured(t *testing.T) {
 	}
 }
 
+// A step the core itself refused is the other attempt that never reached a
+// provider, and the one that is easy to miss: the funnel has already run, so
+// the step closes with a chosen implementation on it and looks exactly like a
+// dispatch that failed. It is not one. Nobody was called, the failure belongs
+// to whoever wrote the payload, and filing it puts a failed row under an
+// implementation that was never given the chance to answer -- enough of them
+// and the funnel demotes a provider for somebody else's typo.
+func TestAPayloadTheCoreRefusesIsNotMeasuredAgainstTheChosenImplementation(t *testing.T) {
+	runner := &fakeRunner{}
+	agent, counter := metered(t, runner)
+
+	// "query" is required by the fixture capability, and an empty payload is
+	// how a caller gets it wrong.
+	result, err := agent.Ask(context.Background(), orchestrator.Question{
+		Capability: "code.search", Repository: "api", Payload: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if len(result.Steps) != 1 || result.Steps[0].FailureKind != contract.FailureInvalidInput {
+		t.Fatalf("steps = %+v, want one refused for invalid input", result.Steps)
+	}
+	// The funnel's own work still shows on the trace: somebody WAS chosen,
+	// which is what made this indistinguishable from a real failure.
+	if result.Steps[0].Decision.Chosen.ID == "" {
+		t.Fatal("the trace no longer records who the funnel picked, so this proves nothing")
+	}
+	if got := runner.requests(); len(got) != 0 {
+		t.Fatalf("the runner was called %d time(s) for a payload the core refused", len(got))
+	}
+
+	if rows, _ := counter.taken(); len(rows) != 0 {
+		t.Errorf("%d measurement(s) filed against %q, which was never called: %+v",
+			len(rows), rows[0].Implementation, rows[0])
+	}
+}
+
 // What the far side said about itself travels with the numbers it produced, so
 // an upgrade starts a fresh baseline instead of averaging into the old one.
 func TestTheToolVersionTravelsWithTheMeasurement(t *testing.T) {

@@ -5,6 +5,11 @@ The canonical structured result is benchmarks/runs/latest/summary.json; raw Go
 test events and benchmark output live beside it so a report can be audited
 without trusting a hand-edited table.
 
+The `coverage.out` a run leaves in the same directory is deliberately not
+committed. It is the intermediate the coverage figures in summary.json are
+computed from, nothing reads it afterwards, and every run overwrites all
+858 KB of it.
+
 Run the fast profile with:
 
     go run ./cmd/atenea-benchmark --profile quick --benchmark-runs 3

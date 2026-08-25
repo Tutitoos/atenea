@@ -424,3 +424,66 @@ func TestANonsenseGrantIsRefusedRatherThanClamped(t *testing.T) {
 		})
 	}
 }
+
+// An infinite ceiling is not a generous ceiling, it is the absence of one.
+// It travels into contract.Permission.BudgetUSD, and every check the edge
+// makes on a provider's charge is a comparison against it -- so nothing can
+// ever exceed it and the charge stops being verified at all. RunPlan already
+// refused it; Run, Ask and Resume did not, which made the door nobody types
+// at the only one that held the line. New matters most of the three: the
+// standing grant is inherited by every commission that names no figure of
+// its own.
+func TestAnInfiniteCeilingIsRefusedAtEveryDoor(t *testing.T) {
+	for name, usd := range map[string]float64{
+		"positive": math.Inf(1),
+		"negative": math.Inf(-1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			agent := budgeted(t, runner, 0.25)
+
+			if _, err := agent.Run(context.Background(), orchestrator.Task{
+				Text: "find TODO", BudgetUSD: usd,
+			}); contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("Run took a budget of %v: %v", usd, err)
+			}
+			if _, err := agent.Ask(context.Background(), orchestrator.Question{
+				Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "TODO"}, BudgetUSD: usd,
+			}); contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("Ask took a budget of %v: %v", usd, err)
+			}
+			if _, err := agent.Resume(context.Background(), "20260101T000000-000000",
+				orchestrator.ResumeOptions{BudgetUSD: usd}); contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("Resume took a budget of %v: %v", usd, err)
+			}
+			permission := contract.Permission{Task: "find TODO", Effects: []contract.Effect{contract.EffectRead}}
+			plan := contract.Plan{Task: "find TODO", Steps: []contract.Step{{
+				ID: "search-api", Capability: "code.search", Repository: "api",
+				Payload: map[string]any{"query": "TODO"}, Permission: permission,
+			}}}
+			if _, err := agent.RunPlan(context.Background(), plan, usd); contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("RunPlan took a budget of %v: %v", usd, err)
+			}
+			// The refusal has to land before dispatch, not on the way out.
+			// A +Inf ceiling also happens to break the JSON receipt at the
+			// end of the run, so the error alone cannot tell a door that
+			// refused from a door that ran every step against a ceiling
+			// nothing could exceed and only then complained.
+			if got := runner.requests(); len(got) != 0 {
+				t.Errorf("%d step(s) were dispatched under a budget of %v", len(got), usd)
+			}
+
+			chooser, err := selector.New(selector.Config{})
+			if err != nil {
+				t.Fatalf("selector.New: %v", err)
+			}
+			_, err = orchestrator.New(orchestrator.Config{
+				Catalog: catalog(t), Chooser: chooser, Runner: &fakeRunner{}, BudgetUSD: usd,
+			})
+			if contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Errorf("the settings file wired a standing grant of %v: %v", usd, err)
+			}
+		})
+	}
+}

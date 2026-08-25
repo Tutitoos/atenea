@@ -25,6 +25,17 @@ func deathf(kind contract.FailureKind, format string, args ...any) error {
 //
 // The bin travels; the verdict does not, because the verdict is always the
 // same. Nobody saw this run finish, so nobody may say it failed.
+//
+// The text is redacted on its way to the row, because this is the point where
+// it stops being an in-memory error and becomes a durable record. Every death
+// message this package builds folds in whatever the child printed -- see note
+// -- and a child is any binary an agent type declares, so an API key echoed
+// into a failing tool's stderr would otherwise land verbatim in the
+// agent_trace reason_text column and stay there. The other two durable stores
+// already do this at the same boundary: internal/metrics and
+// internal/checkpoint both call contract.RedactRaw before writing, and the
+// trace base was the one that did not. RedactRaw also bounds the text at
+// contract.MaxPersistedRaw, which is the ceiling the other two are held to.
 func died(err error) contract.Reason {
 	kind := contract.KindOf(err)
 	if kind == contract.FailureUnspecified {
@@ -32,7 +43,7 @@ func died(err error) contract.Reason {
 		// honest reading: the thing that was going to answer did not.
 		kind = contract.FailureUnavailable
 	}
-	return contract.Reason{Kind: kind, Text: contract.MessageOf(err)}
+	return contract.Reason{Kind: kind, Text: contract.RedactRaw(contract.MessageOf(err))}
 }
 
 // intersectLevels keeps the levels a type declared that its parent may also

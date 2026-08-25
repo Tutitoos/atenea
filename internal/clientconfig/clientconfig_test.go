@@ -190,6 +190,80 @@ func TestCommentsAreStrippedWithoutEatingURLs(t *testing.T) {
 	}
 }
 
+// JSONC has two comment forms and this reader opens opencode.jsonc by name, so
+// a /* */ block is as legitimate as a //. Before it was handled the block
+// reached json.Unmarshal intact, the whole file failed to parse, and the report
+// told the operator their opencode.jsonc was unreadable -- pointing at their
+// file for something this reader did.
+//
+// The `//` inside a string is here for the same reason it is in the test above:
+// a URL is where a naive stripper eats the rest of a good line.
+func TestBothJSONCCommentFormsAreStripped(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "opencode.jsonc", `{
+	  /* the team's shared docs backend,
+	     kept here because the URL moves */
+	  "mcp": {
+	    "docs": {"type": "remote", "url": "https://docs.example.invalid/mcp"}, // moved 2026-06
+	    /* switched off while it is being rebuilt */
+	    "old": {"type": "local", "enabled": false}
+	  }
+	}`)
+	reading, err := clientconfig.Read(root)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(reading.Unreadable) != 0 {
+		t.Fatalf("a valid .jsonc was reported unreadable: %v", reading.Unreadable)
+	}
+	servers := reading.Servers()
+	if len(servers) != 2 {
+		t.Fatalf("servers = %+v, want both of the two the file declares", servers)
+	}
+	byName := map[string]clientconfig.Request{}
+	for _, server := range servers {
+		byName[server.Name] = server
+	}
+	if got := byName["docs"].Transport; got != clientconfig.TransportRemote {
+		t.Errorf("docs transport = %q, want remote: the URL was eaten", got)
+	}
+	if byName["old"].Enabled {
+		t.Error("the disabled server behind a block comment came back enabled")
+	}
+}
+
+// The two Claude settings files are joined, not layered, so `disabled` wins
+// wherever it is written. This pins the behaviour the comment on claudeToggles
+// now describes -- it used to claim settings.local.json was applied last, which
+// nothing in the code did -- so that a later attempt at real precedence has to
+// change this test on purpose rather than discover the rule by accident.
+func TestTheTwoClaudeSettingsFilesAreJoinedAndOffWins(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, ".mcp.json", `{"mcpServers": {"serena": {"type": "stdio"}, "ripgrep": {"type": "stdio"}}}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["serena"]}`)
+	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["serena"]}`)
+
+	reading, err := clientconfig.Read(root)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	byName := map[string]clientconfig.Request{}
+	for _, server := range reading.Servers() {
+		byName[server.Name] = server
+	}
+	if len(byName) != 2 {
+		t.Fatalf("servers = %+v, want both", reading.Servers())
+	}
+	if byName["serena"].Enabled {
+		t.Error("the later file switched a server back on; the lists are joined, so off wins")
+	}
+	// And the allowlist half of the join still bites: once either file names
+	// anything in enabledMcpjsonServers, a server in neither list is off.
+	if byName["ripgrep"].Enabled {
+		t.Error("a server named in no list stayed on beside a non-empty enabled list")
+	}
+}
+
 func catalog() clientconfig.Catalog {
 	return clientconfig.Catalog{
 		Implementations: []contract.Implementation{
@@ -420,6 +494,39 @@ func TestEnabledIsAUnionAcrossClients(t *testing.T) {
 	}
 	if report.Matches[0].Note != "" {
 		t.Errorf("note = %q, want the disabled note cleared once it is on somewhere", report.Matches[0].Note)
+	}
+}
+
+// Only the funnel's note says "switched off", so only the funnel's note stops
+// being true when a second client declares the same backend enabled. The other
+// answers carry an explanation of what the match IS -- nothing registered here
+// provides it, or `atenea wrap` vouches for it -- and folding the union used to
+// wipe those too, leaving the row with no reason on it at all. That is the
+// difference between a report that explains itself and a bare list of names.
+func TestFoldingTheEnabledUnionKeepsANoteThatIsNotAboutBeingOff(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, ".mcp.json", `{"mcpServers": {
+	  "dart":     {"type": "stdio"},
+	  "context7": {"type": "stdio"}
+	}}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["dart", "context7"]}`)
+	write(t, root, "opencode.json", `{"mcp": {
+	  "dart":     {"type": "local", "enabled": true},
+	  "context7": {"type": "local", "enabled": true}
+	}}`)
+
+	reading, err := clientconfig.Read(root)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	report := clientconfig.Translate(reading, catalog())
+	for _, match := range report.Matches {
+		if !match.Request.Enabled {
+			t.Fatalf("%s: the union did not fold, so this test proves nothing", match.Request.Name)
+		}
+		if match.Note == "" {
+			t.Errorf("%s (%s) lost the note explaining what it is", match.Request.Name, match.Answer)
+		}
 	}
 }
 

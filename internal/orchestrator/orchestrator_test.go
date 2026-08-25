@@ -2,6 +2,8 @@ package orchestrator_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -299,6 +301,44 @@ func TestExploringIsMeasuredLikeAnyOtherPhase(t *testing.T) {
 	}
 	if result.Spent.Duration < explore.Spent.Duration {
 		t.Error("the total leaves the look out")
+	}
+}
+
+// A phase that ended badly is exactly the phase somebody reads the report
+// for, and it used to be the one the report left out: the accounting was
+// appended after the wave loop, so both early exits -- the caller going away
+// and a receipt that could not be written -- dropped it. Steps had run, time
+// and tokens had been spent, and result.Phases said the phase never happened.
+//
+// A read-only checkpoint directory is the second exit: the first step of the
+// look closes, its dump fails, and dispatch returns from inside the loop.
+func TestAPhaseCutShortStillReportsWhatItSpent(t *testing.T) {
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) })
+	agent, _ := build(t, &fakeRunner{}, 1, filepath.Join(readOnly, "runs"))
+
+	result, err := agent.Run(t.Context(), orchestrator.Task{Text: "login"})
+	if err == nil {
+		t.Skip("this user can write into a directory with mode 0500")
+	}
+	if len(result.Phases) != 1 {
+		t.Fatalf("phases = %+v, want the look that ran before the dump failed", result.Phases)
+	}
+	explore := result.Phases[0]
+	if explore.Name != orchestrator.PhaseExplore {
+		t.Errorf("phase = %q, want %q", explore.Name, orchestrator.PhaseExplore)
+	}
+	if explore.Steps != 1 {
+		t.Errorf("phase steps = %d, want the one step that closed before the dump failed", explore.Steps)
+	}
+	if explore.Spent.Tokens != 10 {
+		t.Errorf("phase tokens = %d, want the 10 the closed step really spent", explore.Spent.Tokens)
+	}
+	if explore.Elapsed <= 0 {
+		t.Error("the phase took no time at all, which is not what a step closing looks like")
 	}
 }
 
@@ -1264,10 +1304,15 @@ func TestResumeRedoesExploreWhenSplittingNeverRan(t *testing.T) {
 	}
 }
 
-// Every layer a resumed commission can carry effects from -- the free read,
-// the standing grant, what the original commission held, and what --allow
-// adds now -- has to reach the redone look, not just some of them.
-func TestResumeComposesEveryEffectLayerOnTheRedoneExplore(t *testing.T) {
+// A redone look is rebuilt from what the receipt says the commission held --
+// the free read, its own effects, and what --allow adds now -- and from
+// nothing else. The operator's standing grant is deliberately not one of the
+// layers: the receipt does not record which floor the commission ran on, and
+// a commission opened by a connected client ran on that client's floor. This
+// test asserts the absence as hard as the presences, because the absence is
+// the whole point: it is what stops resuming a chat's run from handing it
+// every effect the operator ever granted themselves.
+func TestResumeRebuildsTheLookWithoutWideningWhatWasGranted(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{
 		answer: func(contract.RunRequest) (contract.Outcome, error) {
@@ -1325,13 +1370,17 @@ func TestResumeComposesEveryEffectLayerOnTheRedoneExplore(t *testing.T) {
 	permission := requests[0].Permission
 	for _, want := range []contract.Effect{
 		contract.EffectRead,     // free by default
-		contract.EffectProcess,  // the standing grant
 		contract.EffectWrite,    // what the original commission held
 		contract.EffectExternal, // what --allow added on this resume
 	} {
 		if !permission.Allows(want) {
 			t.Errorf("redone look permission = %v, missing %s", permission.Effects, want)
 		}
+	}
+	if permission.Allows(contract.EffectProcess) {
+		t.Errorf("redone look permission = %v: resuming re-applied the operator's "+
+			"standing grant, which the commission itself never asked for and the "+
+			"receipt never recorded", permission.Effects)
 	}
 }
 
@@ -1420,10 +1469,11 @@ func TestResumeContinuesFromASplitPlanAlreadyOnFile(t *testing.T) {
 	}
 }
 
-// A step already on a split plan keeps its own stamped permission, but the
-// standing grant and --allow still have to reach it when it is retried --
-// the same way they reach a redone look, just through the other branch.
-func TestResumeGrantsStandingAndAllowToARetriedSplitStep(t *testing.T) {
+// A step already on a split plan is retried with exactly the permission it
+// was stamped with, plus whatever --allow adds now, and the operator's
+// standing grant is not added back on top -- the same rule as the redone
+// look, through the other branch.
+func TestARetriedStepKeepsItsStampedPermissionAndOnlyWhatAllowAdds(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeRunner{
 		answer: func(contract.RunRequest) (contract.Outcome, error) {
@@ -1491,10 +1541,14 @@ func TestResumeGrantsStandingAndAllowToARetriedSplitStep(t *testing.T) {
 		t.Fatalf("requests = %d, want 1 -- only search-api needed retrying", len(requests))
 	}
 	permission := requests[0].Permission
-	for _, want := range []contract.Effect{contract.EffectRead, contract.EffectProcess, contract.EffectWrite} {
+	for _, want := range []contract.Effect{contract.EffectRead, contract.EffectWrite} {
 		if !permission.Allows(want) {
 			t.Errorf("retried step permission = %v, missing %s", permission.Effects, want)
 		}
+	}
+	if permission.Allows(contract.EffectProcess) {
+		t.Errorf("retried step permission = %v: the stamped permission was widened "+
+			"by the operator's standing grant on the way back in", permission.Effects)
 	}
 }
 

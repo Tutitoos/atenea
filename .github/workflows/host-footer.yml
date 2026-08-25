@@ -12,8 +12,8 @@ name: host-footer
 # release gets noticed before a user does.
 #
 # It is a workflow of its own rather than a step in ci: installing the client is
-# a 180 MB download against a moving `latest`, and an unrelated pull request has
-# no business failing over it.
+# a 180 MB download of whatever the registry published last, and an unrelated
+# pull request has no business failing over it.
 
 on:
   schedule:
@@ -46,9 +46,22 @@ jobs:
 
       - name: Install the newest client
         run: |
+          set -eu
+          # Watching `latest` is the job; installing the tag is not. `npm i
+          # opencode-ai@latest` executes whatever the registry resolves at that
+          # instant and leaves no record of it, so a red run said the footer
+          # changed without naming the release that changed it, and a rerun
+          # could quietly install a different build than the one that failed.
+          # Resolving the number first, printing it, and installing that exact
+          # version keeps the daily question ("is the newest client still the
+          # one we measured?") while making every run reproducible from its log.
+          version="$(npm view opencode-ai version)"
+          test -n "$version"
+          echo "newest published opencode-ai: $version"
+
           # Outside the checkout: the point is to read the client's bundle, not to
           # leave a node_modules and a lockfile in a Go repository.
-          npm i --silent --no-audit --no-fund --prefix /tmp/client opencode-ai@latest
+          npm i --silent --no-audit --no-fund --prefix /tmp/client "opencode-ai@$version"
 
           # The real binary ships in a per-platform package. Both names have been
           # seen; if neither is there the packaging changed and this must fail
@@ -61,7 +74,7 @@ jobs:
               exit 0
             fi
           done
-          echo "no client binary inside the opencode-ai package"
+          echo "no client binary inside opencode-ai@$version"
           exit 1
 
       - name: Which client answered

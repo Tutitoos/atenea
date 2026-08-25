@@ -673,24 +673,44 @@ const (
 // says otherwise.
 func DefaultPath() string { return filepath.Join(platform.ConfigDir(), "atenea.toml") }
 
+// settingsOrigin says who chose the settings path. Load needs it because the
+// path alone cannot tell "nobody asked for a file" apart from "$ATENEA_CONFIG
+// asked for one": both arrive as a plain string, and only the first may fall
+// back to the built-in defaults.
+type settingsOrigin int
+
+const (
+	originDefault settingsOrigin = iota
+	originEnv
+	originExplicit
+)
+
 // ResolvePath picks the settings file: an explicit path wins, then
 // ATENEA_CONFIG, then the default location.
 func ResolvePath(explicit string) string {
+	path, _ := resolvePath(explicit)
+	return path
+}
+
+// resolvePath is ResolvePath with the origin the caller was asked for kept.
+func resolvePath(explicit string) (string, settingsOrigin) {
 	if explicit != "" {
-		return explicit
+		return explicit, originExplicit
 	}
 	if fromEnv := os.Getenv("ATENEA_CONFIG"); fromEnv != "" {
-		return fromEnv
+		return fromEnv, originEnv
 	}
-	return DefaultPath()
+	return DefaultPath(), originDefault
 }
 
 // Load reads the settings file at path. A missing file at the default location
 // is not an error: Atenea falls back to the built-in defaults so a fresh
-// install boots without ceremony. A missing file that was asked for explicitly
-// is an error, because staying quiet there would hide a typo.
+// install boots without ceremony. A missing file that somebody asked for -- by
+// flag or by $ATENEA_CONFIG -- is an error, because staying quiet there would
+// hide a typo, and a daemon booting on the built-in catalog instead of the
+// operator's is a failure that only shows up as wrong answers much later.
 func Load(explicit string) (Config, error) {
-	path := ResolvePath(explicit)
+	path, origin := resolvePath(explicit)
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -700,8 +720,11 @@ func Load(explicit string) (Config, error) {
 		}
 		cfg.Missing = missingImplementations(cfg)
 		return cfg, nil
-	case errors.Is(err, fs.ErrNotExist) && explicit == "":
+	case errors.Is(err, fs.ErrNotExist) && origin == originDefault:
 		return Defaults()
+	case errors.Is(err, fs.ErrNotExist) && origin == originEnv:
+		return Config{}, contract.Fail(contract.FailureNotFound,
+			"settings file %s named by ATENEA_CONFIG: %v", path, err)
 	default:
 		return Config{}, contract.Fail(contract.FailureNotFound,
 			"settings file %s: %v", path, err)
@@ -779,19 +802,65 @@ func shippedAgents(source string, named map[string]bool) []AgentType {
 }
 
 // WriteDefault copies the built-in settings to path.
+//
+// The modes are 0700 on the directory and 0600 on the file, which is what the
+// rest of this repository already uses for anything that can hold a secret --
+// checkpoint, registry, backendstate, ipc, notebook, backup. This file is
+// where `[[mcp_server]].env` and every `process` block's `env` live, and those
+// are KEY=VALUE maps: the natural place for an API token. Nothing here is
+// meant to be read by another account.
+//
+// The write goes through a temporary file and a rename because os.WriteFile
+// over an existing path opens it with O_TRUNC: a `config init --force` that
+// dies halfway -- full disk, signal -- would leave a truncated atenea.toml and
+// no copy of what was there. Rename is the same shape internal/platform's
+// writeUnit and internal/core/backendstate already use, for the same reason.
 func WriteDefault(path string, force bool) error {
 	if _, err := os.Stat(path); err == nil && !force {
 		return contract.Fail(contract.FailureInvalidInput,
 			"settings file %s already exists; pass --force to overwrite", path)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return contract.Fail(contract.FailurePermissionDenied,
-			"creating %s: %v", filepath.Dir(path), err)
+			"creating %s: %v", dir, err)
 	}
-	if err := os.WriteFile(path, defaultSettings, 0o644); err != nil {
+	temp, err := os.CreateTemp(dir, "atenea.*.tmp")
+	if err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"creating a temporary file in %s: %v", dir, err)
+	}
+	name := temp.Name()
+	// The temporary file leaves here in exactly one shape: renamed into place.
+	// Every other exit takes it along, so a failed init never leaves a stray
+	// half-written catalog next to the real one.
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(name)
+		}
+	}()
+	if _, err := temp.Write(defaultSettings); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailurePermissionDenied,
+			"writing %s: %v", name, err)
+	}
+	// CreateTemp already makes it 0600; saying so here is what keeps the mode
+	// from depending on that detail of the standard library.
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailurePermissionDenied,
+			"setting the mode of %s: %v", name, err)
+	}
+	if err := temp.Close(); err != nil {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"closing %s: %v", name, err)
+	}
+	if err := os.Rename(name, path); err != nil {
 		return contract.Fail(contract.FailurePermissionDenied,
 			"writing %s: %v", path, err)
 	}
+	renamed = true
 	return nil
 }
 
@@ -1448,8 +1517,16 @@ func parse(raw []byte, source string) (Config, error) {
 	// payload is a map keyed by id, so the later would win and the earlier
 	// would never be probed or declared. Refusing is the only way the file
 	// can say which one it meant.
+	//
+	// A dashboard alias is the server's own id, so the same check covers it:
+	// there used to be a second map here guarding aliases, and it could never
+	// fire, because two blocks claiming one alias are two blocks claiming one
+	// id and the line above has already refused them. Its message even named
+	// the same id twice. The conflict that IS real -- a [[mcp_server]] whose
+	// alias collides with the graph viewer's -- is between this file and
+	// orchestrator.kivgraph.dashboard, and dashboard.AllConfig makes it where
+	// both are in hand.
 	seen := make(map[string]bool, len(decoded.MCPServers))
-	dashboardAliases := make(map[string]string)
 	for _, raw := range decoded.MCPServers {
 		server, err := raw.build(source)
 		if err != nil {
@@ -1460,13 +1537,6 @@ func parse(raw []byte, source string) (Config, error) {
 				"settings %s: mcp_server %s is declared twice", source, server.ID)
 		}
 		seen[server.ID] = true
-		if server.Dashboard != "" {
-			if previous, exists := dashboardAliases[server.ID]; exists {
-				return Config{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: dashboard alias %s is claimed by %s and %s", source, server.ID, previous, server.ID)
-			}
-			dashboardAliases[server.ID] = server.ID
-		}
 		cfg.MCPServers = append(cfg.MCPServers, server)
 	}
 	return cfg, nil
@@ -1666,8 +1736,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		}
 		out.Runners = list
 	}
-	if o.CheckpointDir != "" {
-		out.CheckpointDir = o.CheckpointDir
+	checkpointDir, err := settingsPath(source, "orchestrator.checkpoint_dir", o.CheckpointDir)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	if checkpointDir != "" {
+		out.CheckpointDir = checkpointDir
 	}
 	if o.Checkpoints != nil && !*o.Checkpoints {
 		out.CheckpointDir = ""
@@ -1765,8 +1839,12 @@ func (m fileMetrics) build(source string) (Metrics, error) {
 		// numbers that must match are one number.
 		BufferLimit: metrics.DefaultBufferLimit,
 	}
-	if strings.TrimSpace(m.Path) != "" {
-		out.Path = strings.TrimSpace(m.Path)
+	path, err := settingsPath(source, "metrics.path", m.Path)
+	if err != nil {
+		return Metrics{}, err
+	}
+	if path != "" {
+		out.Path = path
 	}
 	if m.Enabled != nil {
 		out.Enabled = *m.Enabled
@@ -1822,8 +1900,12 @@ func (b fileBackup) build(source string) (Backup, error) {
 		Every:   defaultBackupEvery,
 		Keep:    defaultBackupKeep,
 	}
-	if strings.TrimSpace(b.Dir) != "" {
-		out.Dir = strings.TrimSpace(b.Dir)
+	dir, err := settingsPath(source, "backup.dir", b.Dir)
+	if err != nil {
+		return Backup{}, err
+	}
+	if dir != "" {
+		out.Dir = dir
 	}
 	if b.Enabled != nil {
 		out.Enabled = *b.Enabled
@@ -2006,18 +2088,48 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 	return out, nil
 }
 
-// build is additive over the passed-in defaults, like every neighbor. The one
-// extra check is Root: a relative one is refused here rather than resolved,
-// because "resolved against what" has no honest answer -- the process that
-// loads the settings file is not the one that will read a path six months
-// later from a systemd unit with its own working directory.
-func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (TokensaveAdapter, error) {
-	if root := strings.TrimSpace(t.Root); root != "" {
-		if !filepath.IsAbs(root) {
-			return TokensaveAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.tokensave.root %q must be absolute", source, root)
+// settingsPath is the one rule every path a settings file writes has to pass,
+// and it is orchestrator.tokensave.root's rule generalized: a relative path is
+// refused here rather than resolved, because "resolved against what" has no
+// honest answer. The process that loads this file is not always the process
+// that uses the path -- in service mode it is the daemon, whose working
+// directory is whatever the unit gave it -- so `path = "base.duckdb"` names one
+// file from a shell and a different one from systemd, and the operator finds
+// out by opening a measurement base with nothing in it.
+//
+// A leading `~` fails the same test, which is deliberate. Nothing in this
+// package expands it -- os.UserHomeDir is called only from internal/platform --
+// so accepting it would silently create a directory whose name is the single
+// character `~`, in whatever directory the process happened to be standing in.
+//
+// An empty value is not a path: it means the key was omitted, and every caller
+// already reads that as "keep the default".
+func settingsPath(source, key, raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(trimmed) {
+		hint := ""
+		if strings.HasPrefix(trimmed, "~") {
+			hint = "; ~ is not expanded, write the home directory out"
 		}
-		out.Root = filepath.Clean(root)
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %q must be absolute%s", source, key, trimmed, hint)
+	}
+	return filepath.Clean(trimmed), nil
+}
+
+// build is additive over the passed-in defaults, like every neighbor. The one
+// extra check is Root, which must be absolute for the reason settingsPath
+// spells out.
+func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (TokensaveAdapter, error) {
+	root, err := settingsPath(source, "orchestrator.tokensave.root", t.Root)
+	if err != nil {
+		return TokensaveAdapter{}, err
+	}
+	if root != "" {
+		out.Root = root
 	}
 	if t.Implementations != nil {
 		out.Implementations = *t.Implementations

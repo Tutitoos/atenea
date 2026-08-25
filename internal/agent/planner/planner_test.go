@@ -294,7 +294,14 @@ func TestTheReadShareIsReservedFromTheGrant(t *testing.T) {
 	}
 }
 
-func TestDeclaredMaxTokensNarrowsTheObservedReadAllowance(t *testing.T) {
+// The declared ceiling and the read allowance are in different units -- a raw
+// token count against input-equivalent tokens, every kind weighed by its price
+// -- so the ceiling travels as MaxTokens and bounds nothing else. This test
+// asserted the opposite until 2026-08-25: a declared max_tokens below the
+// derived allowance replaced it, which armed a nudge of 1,234 weighted tokens
+// on a turn whose first event alone weighs 65,625, so the model was told to
+// answer with what it had before it had read anything.
+func TestTheDeclaredCeilingTravelsWithoutBoundingTheReadAllowance(t *testing.T) {
 	c := &stub{answer: whole(t, map[string]string{
 		"summary": "s", "findings": "f",
 	})}
@@ -303,11 +310,38 @@ func TestDeclaredMaxTokensNarrowsTheObservedReadAllowance(t *testing.T) {
 	in.Limits.MaxTokens = 1234
 	explore(context.Background(), in, config.Config{}, withTools(c))
 
-	if c.seen.ReadTokens != 1234 {
-		t.Errorf("read tokens = %v, want declared max %v", c.seen.ReadTokens, 1234)
+	if want := allowance.Tokens(0.80); c.seen.ReadTokens != want {
+		t.Errorf("read tokens = %v, want the grant's own allowance %v", c.seen.ReadTokens, want)
 	}
 	if c.seen.MaxTokens != 1234 {
 		t.Errorf("max tokens = %v, want declared max %v", c.seen.MaxTokens, 1234)
+	}
+}
+
+// A share too small to buy any reading arms a nudge that fires on the arrival
+// of the prompt, and a turn told to answer before its first tool call returns
+// answers with nothing. The floor keeps the nudge where it can still do its
+// job; the money is bounded by BudgetUSD, which is a separate field and is
+// passed exactly as granted.
+func TestAShareTooSmallToBuyReadingStillArmsAUsableAllowance(t *testing.T) {
+	c := &stub{answer: whole(t, map[string]string{
+		"summary": "s", "findings": "f",
+	})}
+	in := exploreAssignment()
+	in.BudgetUSD = usd(0.20)
+	explore(context.Background(), in, config.Config{}, withTools(c))
+
+	if derived := allowance.Tokens(0.20); derived > firstEventFloor {
+		t.Fatalf("this fixture no longer exercises the floor: %d tokens already clears %d",
+			derived, firstEventFloor)
+	}
+	if c.seen.ReadTokens != firstEventFloor+1 {
+		t.Errorf("read tokens = %v, want the floor %v: an allowance spent by the first event buys no reading",
+			c.seen.ReadTokens, firstEventFloor+1)
+	}
+	if c.seen.BudgetUSD != 0.20 {
+		t.Errorf("budget = %v, want the share exactly as granted: the floor is a nudge, not an authorization",
+			c.seen.BudgetUSD)
 	}
 }
 

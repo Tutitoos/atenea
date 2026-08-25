@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/procgroup"
@@ -539,11 +540,38 @@ func stopped(err error, limit time.Duration, stderr string) error {
 	return deathf(contract.FailureCanceled, "stopped before it answered%s", note(stderr))
 }
 
+// note folds what the child printed into the sentence that reports its death,
+// which is the one place a person debugging a spawn ever sees it.
+//
+// One line, and a bounded one. A child's stderr is unbounded -- a tool that
+// dies mid-write can emit megabytes without a newline in it -- and this
+// sentence ends up in a Failure message, in a report reason, and from there
+// in the agent_trace row died writes. Before the bound, a single stderr line
+// could carry the whole of that into the message and into the store.
 func note(stderr string) string {
 	if stderr == "" {
 		return ""
 	}
-	return " (stderr: " + firstLine(stderr) + ")"
+	return " (stderr: " + clip(firstLine(stderr)) + ")"
+}
+
+// clip bounds one line of child output to what a sentence can carry.
+//
+// The cut lands on a character boundary rather than a byte index: a child's
+// stderr is where non-ASCII actually turns up -- a path, a filename, a message
+// in the operator's own language -- and slicing through a multi-byte rune puts
+// a replacement character nobody sent into the record. It is the same care
+// contract.RedactRaw takes at its own ceiling, for the same reason.
+func clip(text string) string {
+	const limit = 300
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "..."
 }
 
 func firstLine(s string) string {

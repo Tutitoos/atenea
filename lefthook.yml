@@ -8,13 +8,12 @@ pre-commit:
   commands:
     gofmt:
       glob: "*.go"
-      run: |
-        unformatted=$(gofmt -l {staged_files})
-        if [ -n "$unformatted" ]; then
-          echo "gofmt would rewrite:"
-          echo "$unformatted"
-          exit 1
-        fi
+      # The staged-file list is read from git inside the script, not
+      # interpolated into this line. `gofmt -l {staged_files}` split a path
+      # containing a space into two arguments that name nothing, so the hook
+      # rejected a correctly formatted tree, and it also passed the paths of
+      # files staged for deletion, which are gone by the time gofmt looks.
+      run: bash scripts/gofmt-staged.sh
 
     govet:
       glob: "*.go"

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -266,23 +267,75 @@ func (p Planner) repositories(id string) ([]string, error) {
 	return out, nil
 }
 
+// The vocabulary each intent is recognised by, as whole words rather than as
+// substrings.
+//
+// These lists were matched with strings.Contains, and with three-letter words
+// in them that was wrong on ordinary technical English: "prefix" contains
+// "fix", "address" contains "add", and "explanation" contains "plan". Since
+// KindChange is tested first, "where is the prefix handler" -- a search --
+// came out as a change, which is the classification that decides whether the
+// plan asks for write effects and whether the CLI stops to ask for --confirm.
+//
+// The inflections are spelled out instead of stemmed. A stemmer for two
+// languages is a dependency and a source of its own surprises, where this is
+// a dozen words somebody types at a prompt, and a form that is missing
+// degrades to KindUnderstand -- the conservative end, which reads and does
+// not change anything.
+var (
+	changeWords = []string{
+		"implementar", "implementa", "implement", "implements", "implementing",
+		"cambiar", "cambia", "change", "changes", "changing",
+		"fix", "fixes", "fixed", "fixing",
+		"refactorizar", "refactoriza", "refactor", "refactors", "refactoring",
+		"construir", "construye", "build", "builds", "building",
+		"añadir", "añade", "add", "adds", "adding",
+	}
+	planWords = []string{
+		"planificar", "planifica", "plan", "plans", "planning",
+		"cómo harías", "how would",
+		"diseñar", "diseña", "design", "designs",
+	}
+	searchWords = []string{
+		"buscar", "busca", "find", "finds", "finding",
+		"search", "searches", "searching",
+		"dónde", "donde", "where", "localizar", "localiza", "locate", "locates",
+	}
+)
+
 func infer(text string) Kind {
-	lower := strings.ToLower(text)
-	if containsAny(lower, "implementar", "implement", "cambiar", "change", "fix", "refactor", "construir", "build", "añadir", "add") {
+	words := wordsOf(text)
+	if containsAny(words, changeWords...) {
 		return KindChange
 	}
-	if containsAny(lower, "plan", "planificar", "cómo harías", "how would", "diseña", "design") {
+	if containsAny(words, planWords...) {
 		return KindPlan
 	}
-	if containsAny(lower, "buscar", "find", "search", "dónde", "where", "localiza", "locate") {
+	if containsAny(words, searchWords...) {
 		return KindSearch
 	}
 	return KindUnderstand
 }
 
-func containsAny(text string, values ...string) bool {
+// wordsOf reduces a commission to its words, lowercased, separated by single
+// spaces and fenced by one at each end.
+//
+// The fence is what makes a plain substring search a word search: " fix "
+// cannot match inside "prefix". It also lets a two-word entry like "how
+// would" stay one entry, which a set of single tokens could not express
+// without the caller reassembling the phrase itself.
+func wordsOf(text string) string {
+	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	return " " + strings.Join(fields, " ") + " "
+}
+
+// containsAny reports whether any of values appears in words as a whole word
+// or whole phrase. words must come from wordsOf.
+func containsAny(words string, values ...string) bool {
 	for _, value := range values {
-		if strings.Contains(text, value) {
+		if strings.Contains(words, " "+value+" ") {
 			return true
 		}
 	}
@@ -546,7 +599,22 @@ func (p Planner) capabilityChoice(id, repo, prefer string) CapabilityChoice {
 
 func (p Planner) workflowFor(req Request, kind Kind, agent string, repos []string) workflow.Graph {
 	grant := req.BudgetUSD
-	effects := p.agentEffects(agent, req.Effects)
+	// The steps compose from the same list plan.Effects is built from, and
+	// they have to: what the plan prints is what --confirm asks the operator
+	// about, and what the steps carry is what the run may actually do.
+	// Composing them from req.Effects alone dropped the standing grant, so a
+	// chat running on a floor that allows writing was shown "write" on the
+	// plan, stopped for confirmation because of it, and then dispatched steps
+	// that could only read.
+	//
+	// The two layers are not treated alike, and the asymmetry is deliberate.
+	// What the commission explicitly asked for travels whole, so an effect
+	// the agent type cannot cause refuses the plan out loud rather than being
+	// dropped behind the operator's back. The standing grant is a floor
+	// somebody set once and is not about this commission, so it is narrowed
+	// to what this agent type declares instead of refusing every plan a wide
+	// operator line touches.
+	effects := mergeEffects(p.agentEffects(agent, req.StandingEffects), req.Effects)
 	type plannedStep struct {
 		step     workflow.Step
 		estimate BudgetEstimate
@@ -613,8 +681,34 @@ func budgetSummary(graph workflow.Graph) BudgetSummary {
 	return out
 }
 
-func (p Planner) agentEffects(name string, requested []contract.Effect) []contract.Effect {
-	return slices.Clone(requested)
+// agentEffects narrows a standing grant to what one agent type can cause.
+//
+// The narrowing is the reason this takes a name at all, and for a while it
+// did not do it: the parameter was ignored and the list was copied through
+// whole. That was survivable only because the standing grant never reached
+// here either -- once it does, an operator whose line allows spawning
+// processes would stamp `process` onto a reader step, and workflow.Compile
+// refuses the whole graph over it, because a type's declared effects are the
+// ceiling on what a spawn of that type will honour. Refusing to plan at all
+// is the wrong answer to "the operator may do more than this agent can": a
+// standing grant is a ceiling, not an instruction.
+//
+// An agent type nobody declared is left alone. Compile names that as the
+// missing type it is, which is a far more useful sentence than a step that
+// silently ends up with no effects at all.
+func (p Planner) agentEffects(name string, granted []contract.Effect) []contract.Effect {
+	index := slices.IndexFunc(p.Config.Agents, func(a config.AgentType) bool { return a.Spec.Name == name })
+	if index < 0 {
+		return slices.Clone(granted)
+	}
+	declared := p.Config.Agents[index].Effects
+	out := make([]contract.Effect, 0, len(granted))
+	for _, effect := range granted {
+		if slices.Contains(declared, effect) {
+			out = append(out, effect)
+		}
+	}
+	return out
 }
 
 func mergeEffects(base, extra []contract.Effect) []contract.Effect {

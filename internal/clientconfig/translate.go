@@ -154,7 +154,15 @@ func merge(match *Match, request Request) {
 	}
 	if request.Enabled && !match.Request.Enabled {
 		match.Request.Enabled = true
-		match.Note = ""
+		// Only the funnel's note is about being switched off, and only that
+		// one stops being true here. Every other answer's note explains what
+		// the match is -- "nothing registered here provides it", or that
+		// `atenea wrap` vouches for it -- and clearing those left the row with
+		// no explanation at all, for no reason other than that a second file
+		// happened to declare the same backend enabled.
+		if match.Answer == AnswerFunnel {
+			match.Note = ""
+		}
 	}
 	if request.Transport != match.Request.Transport && match.Disagreement == "" {
 		match.Disagreement = fmt.Sprintf("declared %s in %s and %s in %s",
