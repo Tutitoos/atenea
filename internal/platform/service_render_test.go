@@ -8,6 +8,7 @@ package platform
 // halfway through the flush it was configured to allow.
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,5 +160,50 @@ func TestTheWorkingDirectoryIsEscapedLikeTheBinaryPath(t *testing.T) {
 	if unit := systemdText(svc); !strings.Contains(unit,
 		`WorkingDirectory="/home/some one/%%h state/atenea"`) {
 		t.Errorf("the working directory is not quoted and %%-escaped:\n%s", unit)
+	}
+}
+
+// %s is the state root, which is where the service is pointed so that a
+// relative repository path resolves somewhere Atenea owns instead of in $HOME.
+// It is the one directive whose value is a property of the machine rather than
+// of this file, so the test pins it with an environment variable rather than
+// letting the golden lie about a path that moves.
+const wantUnit = `[Unit]
+Description=Atenea orchestration core
+After=default.target
+
+[Service]
+Type=simple
+ExecStart="/opt/atenea/bin/atenea" run
+WorkingDirectory="%s"
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
+`
+
+// The unit a machine boots from, byte for byte.
+//
+// It lives here rather than in the linux-tagged file it was written in, and
+// that move is the whole point: a mac never compiled that file, so the
+// WorkingDirectory line added to unitTemplate broke this golden and the only
+// machine that could notice was a CI runner. Both texts are rendered from the
+// same Service on any machine -- that is what this file is for -- so both
+// goldens belong where both can be checked.
+func TestTheUnitFileIsRenderedExactlyAsItWillBeInstalled(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/var/lib/somebody")
+	want := fmt.Sprintf(wantUnit, "/var/lib/somebody/atenea")
+
+	svc, err := NewService("/opt/atenea/bin/atenea", 10*time.Second)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if got := systemdText(svc); got != want {
+		t.Errorf("unit text drifted.\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
