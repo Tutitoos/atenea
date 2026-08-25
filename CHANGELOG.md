@@ -26,9 +26,14 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
   Neither tool declared a `repository` argument, and the empty string fell
   through to the process's own directory -- for a daemon, wherever its unit file
   left it.
-- Start the background service in Atenea's state root. A user unit with no
-  `WorkingDirectory` starts in `$HOME`, and the shipped `path = "."` then names
-  the home directory as a repository to search.
+- Start the background service in Atenea's state root, and then refuse to
+  serve a repository declared by a relative path at all. A user unit with no
+  `WorkingDirectory` starts in `$HOME`, so the shipped `path = "."` named the
+  home directory as a repository to search; naming the state root instead only
+  moved it onto Atenea's own receipts. A daemon stands nowhere, so it refuses,
+  by name and with the remedy. `config init` writes what `"."` meant when it
+  was typed, and the embedded settings keep it, because a command with no
+  settings file is standing somewhere and that is the whole point of it.
 - Bound every unframed read from a child process. Both stdio transports read a
   server's stdout with no ceiling, so a server that never emitted a newline grew
   the service's memory until the machine gave up.
@@ -86,6 +91,13 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+- A rule for a command that spends outside a commission: no flag on one may
+  carry a default that is not the conservative one. It is stated above
+  `floorMeasure` and enforced by a test that reads the source, because the
+  source is where a default is written -- `--agent` carried `"plan"` until
+  2026-08-16, when a run typed to read that command's own warning text spent
+  $0.3487 on a value nobody had named. A second test holds the list to
+  anything whose help says it spends real money, so it cannot go stale quietly.
 - Retention. Run receipts and agent traces are pruned by a `[retention]` block
   -- ninety days by default, on a daily lane guarded by a mark in the trace
   database. Only closed records go, and by when they ended: an open receipt is

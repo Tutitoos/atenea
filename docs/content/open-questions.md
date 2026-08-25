@@ -79,27 +79,32 @@ this repository's idea of the format, which is the error the widget was built
 on. Not deferred as work; the early warning is the maintainer's machine or
 nothing.
 
-**Narrowed rather than closed, and still open.** The service now starts in
-Atenea's own state root rather than in `$HOME`, so the shipped `path = "."` no
-longer names a home directory as a repository to search. That makes the failure
-empty instead of private; it does not make a relative repository path mean
-anything useful to a daemon. The remaining decision is whether the shipped
-catalog should declare a repository at all, or whether a fresh install should
-start with none and say so. It cannot be settled by making `path` absolute
-alone: the `"."` is the mechanism by which a fresh CLI install works against
-the tree you are standing in, and ten end-to-end tests exist because that
-behaviour is wanted.
+**Answered on 2026-08-26, and built.** The two the register was still holding.
 
-**Still open, and still a decision rather than a defect.**
+*A relative repository path is a command's convenience and a service's
+refusal.* `path = "."` is what makes a fresh install work against whatever tree
+you are standing in, and the CLI is the thing standing somewhere; a daemon
+stands nowhere. The service now refuses a relative path by name, with the one
+command that fixes it, and `config init` writes what `"."` meant at the moment
+it was typed — so the documented onboarding produces an absolute path and the
+convenience survives exactly where it makes sense. The embedded settings keep
+the relative value, because a command with no settings file has to work.
 
-*A rule about when refusing is required.* `atenea floor measure` needs
-`--repo` and `--agent`, and both gate spending only as a side effect of being
-required values. Nothing anywhere says that a flag which can spend money must
-carry a gate. The next flag shaped like the old `--agent` default -- one that
-spends by quietly picking a value nobody asked for -- is stopped only by
-whoever writes it remembering to check. Making that a rule means deciding what
-the rule is: every command that may spend requires a TTY confirmation, or every
-command that may spend must name what it spends on, or something narrower.
+*A flag on a command that spends outside a commission may not carry a default.*
+That is the rule, it is written above `floorMeasure` where the next such flag
+will be added, and a test enforces it — by reading the source, because the
+source is where a default is written. A second test closes the list from the
+other end: anything whose own help says it spends real money must be held to
+the rule, so the register cannot go stale by somebody forgetting to add a
+command to it.
+
+Money everywhere else in Atenea is a permission: granted per commission, split
+between the steps, refused when it runs out. A step spending its share is the
+design working, and holding `task` or `ask` to this rule would be holding the
+whole product to it. The rule is about the commands with no grant above them,
+where the only thing bounding the spend is that a person named what was about
+to happen — which is a property a default removes silently, and which nothing
+but a rule can keep.
 
 ## Channels that leave no trace on disk
 

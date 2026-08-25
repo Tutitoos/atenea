@@ -134,6 +134,28 @@ Miss either and the funnel drops it at `reach` or `constraints` and says which
 ./bin/atenea config init     # write the built-in defaults there
 ```
 
+`config init` writes what `"."` meant when you typed it. The shipped value is
+right for a file that has not been written yet — it is what makes a fresh
+install work against whatever tree you are standing in, with no settings at
+all. The moment it lands on disk it stops being a convenience and becomes a
+declaration, and the file goes on saying it after you have moved somewhere
+else. So the written `current` repository names the directory you ran `init`
+in, spelled out.
+
+A **service** refuses a relative repository path outright, by name:
+
+```text
+atenea: invalid_input: repository current is declared at ".", which is
+relative: a service has no working directory anybody chose, so it cannot
+resolve one. run `atenea config init`, which writes one naming the directory
+you run it in
+```
+
+A daemon stands nowhere. Its working directory is whatever its unit file left
+it, which is Atenea's own state root — its receipts and its measurement base,
+not a repository. Searching that under a name somebody trusts is the failure
+this refuses; running `config init` once is the whole remedy.
+
 Settings are resolved in this order:
 
 1. `--config PATH`
