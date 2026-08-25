@@ -233,7 +233,7 @@ func TestBothJSONCCommentFormsAreStripped(t *testing.T) {
 }
 
 // The two Claude settings files are joined, not layered, so `disabled` wins
-// wherever it is written. This pins the behaviour the comment on claudeToggles
+// wherever it is written. This pins the behavior the comment on claudeToggles
 // now describes -- it used to claim settings.local.json was applied last, which
 // nothing in the code did -- so that a later attempt at real precedence has to
 // change this test on purpose rather than discover the rule by accident.

@@ -1221,7 +1221,7 @@ func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol)
 		return nil, err
 	}
 	// include_snippet and snippet_lines are declared inputs of
-	// symbol.references and this path honoured neither. parseReferences always
+	// symbol.references and this path honored neither. parseReferences always
 	// fills Snippet -- from the line Serena marks, or from the whole rendered
 	// context when there is no marker -- and shape emits the key whenever it
 	// is non-empty, so a caller who asked for locations alone was handed

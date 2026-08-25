@@ -43,6 +43,9 @@ func launchctl(args ...string) (string, error) {
 		"launchctl cannot be run on this machine: %v", err)
 }
 
+// Install writes the launchd agent and loads it. See Service.UnitText for what
+// lands on disk; the plist is written before the load so a failed load leaves
+// something an operator can read rather than nothing.
 func (s Service) Install() error {
 	if err := writePlist(s.Unit, s.UnitText()); err != nil {
 		return err
@@ -57,6 +60,9 @@ func (s Service) Install() error {
 	return err
 }
 
+// Uninstall boots the agent out and removes its plist. A bootout that fails is
+// reported rather than swallowed: removing the file under a still-loaded agent
+// leaves launchd holding a definition nobody can see.
 func (s Service) Uninstall() error {
 	if out, err := launchctl("bootout", launchdTarget()); err != nil {
 		// A missing job is the safe, idempotent uninstall case.
@@ -96,6 +102,10 @@ func bootoutFoundNothing(out string) bool {
 		strings.Contains(lowered, "not find service")
 }
 
+// Query asks launchd where the agent stands. It is the darwin half of the
+// answer `atenea service status` prints, and it reports absence as a state
+// rather than as an error: a service that was never installed is a fact about
+// this machine, not a failure to look.
 func Query(name string) (ServiceState, error) {
 	state := ServiceState{Unit: unitPath(name)}
 	if _, err := os.Stat(state.Unit); err != nil {
@@ -117,6 +127,10 @@ func Query(name string) (ServiceState, error) {
 	return state, nil
 }
 
+// LingerCommand is empty on macOS. A launchd agent with RunAtLoad starts at
+// login without anything equivalent to systemd's linger, so there is no second
+// command to tell an operator about -- and inventing one would send them
+// looking for a setting that does not exist here.
 func LingerCommand() string { return "" }
 
 func writePlist(path, text string) error {

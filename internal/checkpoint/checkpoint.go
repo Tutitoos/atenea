@@ -374,7 +374,6 @@ func (s *Store) Load(id string) (Run, error) {
 	return run, nil
 }
 
-// List returns the run ids on disk, oldest first because the ids sort by time.
 // Prune removes closed receipts that stopped being updated before cutoff, and
 // reports how many went.
 //
@@ -424,6 +423,7 @@ func (s *Store) Prune(cutoff time.Time) (int, error) {
 	return removed, nil
 }
 
+// List returns the run ids on disk, oldest first because the ids sort by time.
 func (s *Store) List() ([]string, error) {
 	if !s.Enabled() {
 		return nil, nil

@@ -513,16 +513,6 @@ func (s *Store) restoreSource(name string) (string, error) {
 		"backup: snapshot %s was not found in %s", name, s.dir)
 }
 
-// SnapshotIfDue takes a copy only when the newest one on disk is older than
-// every, and reports whether it did.
-//
-// The rhythm is read from the folder rather than held in a timer, and that is
-// the point of the method. Atenea is a service that restarts -- a reboot, an
-// upgrade, a crash -- more often than it backs up, and a six-hour timer in
-// memory on a machine rebooted every four hours would mean the backup never
-// happens once, silently, forever. The metrics compaction reached for the same
-// answer for the same reason (see metrics.CompactIfDue): the mark lives where
-// the work lands, so restarting cannot lose it.
 // settle is what the caller does to the state root before it is copied. It runs
 // only when a copy is actually about to be taken, and a failure there stops the
 // copy: a snapshot of a tree somebody could not put in order is exactly the
@@ -533,6 +523,16 @@ func (s *Store) restoreSource(name string) (string, error) {
 // Whoever commissions the snapshot holds the handles.
 type settle func(context.Context) error
 
+// SnapshotIfDue takes a copy only when the newest one on disk is older than
+// every, and reports whether it did.
+//
+// The rhythm is read from the folder rather than held in a timer, and that is
+// the point of the method. Atenea is a service that restarts -- a reboot, an
+// upgrade, a crash -- more often than it backs up, and a six-hour timer in
+// memory on a machine rebooted every four hours would mean the backup never
+// happens once, silently, forever. The metrics compaction reached for the same
+// answer for the same reason (see metrics.CompactIfDue): the mark lives where
+// the work lands, so restarting cannot lose it.
 func (s *Store) SnapshotIfDue(ctx context.Context, now time.Time, every time.Duration, ready settle) (Snapshot, bool, error) {
 	if every <= 0 {
 		return Snapshot{}, false, contract.Fail(contract.FailureInvalidInput,
@@ -813,7 +813,7 @@ func (s *Store) copyTree(ctx context.Context, root, target, base string) (Snapsh
 	//
 	// Every directory, not just the one the rename publishes. copyFile syncs
 	// the bytes of each file it writes, but a file's bytes being durable says
-	// nothing about the directory entry that names it, and a hardlinked file
+	// nothing about the directory entry that names it, and a hard-linked file
 	// is a directory entry and nothing else -- so a snapshot of a tree that
 	// shared most of its files with the previous one had almost none of itself
 	// on the disk. Only s.dir was synced, after the rename, which made the
@@ -860,7 +860,7 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 			"backup: cannot create parent directory for %s: %v", destination, err)
 	}
 	// Extras land after copyTree has already made the tree durable, so each
-	// one syncs its own way back up to the snapshot root: a hardlinked extra
+	// one syncs its own way back up to the snapshot root: a hard-linked extra
 	// writes nothing but a directory entry, and a directory created for it
 	// here needs its own name in its parent on the disk as well.
 	if base != "" && link(filepath.Join(base, extra.Dest), destination, info) {

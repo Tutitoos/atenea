@@ -207,7 +207,7 @@ func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, r
 			})
 	}
 	// Retention runs before the backup in this list for a reason that is not
-	// ordering -- the clock does not honour list order -- but reading: what a
+	// ordering -- the clock does not honor list order -- but reading: what a
 	// copy carries is what retention left, and the two rhythms are the pair
 	// that decides how much of the past this machine holds. Keep of zero is
 	// the operator saying to forget nothing, so the job is not scheduled at

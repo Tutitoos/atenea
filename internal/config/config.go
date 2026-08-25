@@ -236,12 +236,6 @@ type Metrics struct {
 	BufferLimit int
 }
 
-// Backup holds what protects the history and how often.
-//
-// The rhythm lives beside the metrics rhythms on purpose: they all run in the
-// one clock lane, and the design asks for retuning a beat to be a line in this
-// file rather than a rebuild. Two beats set to collide are visible here and
-// nowhere else.
 // Retention is how long the record of what Atenea did is kept.
 //
 // It covers the two stores that grow without a shape of their own: the run
@@ -265,6 +259,12 @@ type Retention struct {
 	Every time.Duration
 }
 
+// Backup holds what protects the history and how often.
+//
+// The rhythm lives beside the metrics rhythms on purpose: they all run in the
+// one clock lane, and the design asks for retuning a beat to be a line in this
+// file rather than a rebuild. Two beats set to collide are visible here and
+// nowhere else.
 type Backup struct {
 	// Dir is where copies go. Empty means platform.BackupDir -- a folder of
 	// its own beside the state root, never inside it.
@@ -776,12 +776,15 @@ func Load(explicit string) (Config, error) {
 // than failing: the settings are still writable and still valid, and the
 // service's own refusal names the remedy.
 func groundedDefaults() ([]byte, error) {
-	here, err := os.Getwd()
-	if err != nil {
-		return defaultSettings, nil
+	// Written as "only on success" rather than as two early returns, so that
+	// falling back reads as one decision instead of as two swallowed errors.
+	absolute := ""
+	if here, err := os.Getwd(); err == nil {
+		if resolved, err := filepath.Abs(here); err == nil {
+			absolute = resolved
+		}
 	}
-	absolute, err := filepath.Abs(here)
-	if err != nil {
+	if absolute == "" {
 		return defaultSettings, nil
 	}
 	// Anchored on the whole line, so this cannot reach a `path = "."` that

@@ -124,6 +124,12 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 - `release.yml` runs the gates its header claims. `ci.yml` has no tag trigger,
   so a tag pushed to a commit that never reached main was published having run
   neither coverage nor the benchmark barriers nor the provider matrix.
+- The linter runs on macOS as well as Linux. A Go build tag decides which files
+  exist, so the ubuntu runner had never read `service_darwin.go`: four exported
+  functions there had been undocumented since they were written, invisible to a
+  gate reporting green on every pull request. Cross-linting does not substitute
+  -- DuckDB is cgo, so type-checking a Linux build from a Mac fails in the
+  bindings before it reaches this repository's code.
 - Three gates that could pass without checking anything now check:
   `v1-policy-check.sh` anchors each file rather than the list,
   `benchmark-check.sh` refuses a line with no `ns/op`, and the readiness gate

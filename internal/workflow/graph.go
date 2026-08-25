@@ -24,13 +24,6 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// Step is one node: an agent assignment, plus its place in the graph.
-//
-// It names an agent TYPE, not a capability. A capability step goes through the
-// funnel, which picks an implementation on cost and health; an agent step is
-// asked for by name and runs the one thing that name resolves to. The two are
-// different dispatches, and a step that could be either would have to be told
-// which every time.
 // Effects reports the union of what this graph's steps may cause, sorted.
 //
 // A surface that has to authorize a graph needs one answer to "what does this
@@ -52,6 +45,13 @@ func (g Graph) Effects() []contract.Effect {
 	return out
 }
 
+// Step is one node: an agent assignment, plus its place in the graph.
+//
+// It names an agent TYPE, not a capability. A capability step goes through the
+// funnel, which picks an implementation on cost and health; an agent step is
+// asked for by name and runs the one thing that name resolves to. The two are
+// different dispatches, and a step that could be either would have to be told
+// which every time.
 type Step struct {
 	ID string
 	// TypeName is the declared [[agent]] this step runs.

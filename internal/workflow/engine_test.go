@@ -691,7 +691,7 @@ func dispatching() int {
 // blocks forever in `results <- done{...}` with nobody left to receive: the
 // goroutine, and the agent process it is holding open, stay for the life of
 // the Atenea. Three of execute's five returns used to leave that way -- only
-// the OpenGate and Claim pair cancelled and drained -- which is why the
+// the OpenGate and Claim pair canceled and drained -- which is why the
 // unwinding is now one deferred call that every return goes through rather
 // than a pair repeated at some of them.
 //
