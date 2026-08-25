@@ -36,6 +36,33 @@ func stub(t *testing.T, dir, name, body string) string {
 	return path
 }
 
+// waitFor blocks until a stub says it reached a point, or fails the test.
+//
+// It replaces `time.Sleep(300 * time.Millisecond)` and the assumption
+// underneath it: that a fixed wall-clock delay is long enough for another
+// process to get somewhere. On a loaded machine it is not, and the test then
+// exercises a state nobody meant to test -- canceling a run whose agent had
+// not started yet, which is a different scenario that happens to share a name
+// with this one.
+//
+// The deadline is generous on purpose. It is not a measurement of how long the
+// step should take: it is the point past which something is wrong rather than
+// merely slow, and a test that fails at ten seconds on a busy laptop teaches
+// people to rerun it rather than read it.
+func waitFor(t *testing.T, dir, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if ran(t, dir, marker) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting for %s: it never appeared", marker)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // answers is a stub that reports ok and nothing else.
 func answers(t *testing.T, dir, name string) string {
 	t.Helper()

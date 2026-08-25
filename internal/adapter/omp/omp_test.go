@@ -641,7 +641,11 @@ func newTestRunner(t *testing.T) *Runner {
 	runner, err := New(Options{
 		Implementations: []string{"ripgrep"},
 		Sensitive:       []string{".env", "*.pem", "credentials.json"},
-		Timeout:         5 * time.Second,
+		// Generous because it is not the subject. These tests assert what omp
+		// answers, not how fast; five seconds was short enough that running
+		// the real binary on a loaded machine timed out and the failure read
+		// as though omp had answered wrongly.
+		Timeout: 60 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

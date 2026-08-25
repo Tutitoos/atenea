@@ -49,7 +49,14 @@ func declared(command string, args ...string) config.AgentType {
 		Args:    args,
 		Context: []contract.ContextLevel{contract.ContextRepository},
 		Effects: []contract.Effect{contract.EffectRead},
-		Limits:  contract.Limits{MaxDuration: 10 * time.Second, MaxTokens: 100},
+		// Sixty seconds and not ten. For every test but the one that measures
+		// the ceiling, this number is incidental -- it exists so the fixture
+		// is well formed, not because anything here should take that long. Ten
+		// was tight enough that spawning a process on a loaded machine
+		// exceeded it, and the test then reported a timeout as though the
+		// agent had misbehaved. The test that IS about the ceiling sets its
+		// own, far below this.
+		Limits: contract.Limits{MaxDuration: 60 * time.Second, MaxTokens: 100},
 	}
 }
 

@@ -239,13 +239,18 @@ func TestASubjectNobodyJudgedBlocksTheReview(t *testing.T) {
 	dir := t.TempDir()
 	judge, saved := records(t, dir, "judge")
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1},
-		declared("slow", stub(t, dir, "slow", "sleep 5"), config.PoolAgent),
+		// It says when it has started, so the cut lands on a run that is
+		// genuinely under way. A fixed delay cancels whatever the machine
+		// happened to be doing 300ms in, which under load is a run whose
+		// agent had not spawned.
+		declared("slow", stub(t, dir, "slow",
+			"touch "+filepath.Join(dir, "slow-started")+"\nsleep 5"), config.PoolAgent),
 		declared("judge", judge, config.PoolReview),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitFor(t, dir, "slow-started")
 		cancel()
 	}()
 	run, err := h.engine.Start(ctx, graphOf(
@@ -288,14 +293,15 @@ func TestAnUnjudgedWriterNamesRedoInItsCure(t *testing.T) {
 	dir := t.TempDir()
 	judge, _ := records(t, dir, "judge")
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1},
-		declared("scribe", stub(t, dir, "scribe", "sleep 5"), config.PoolAgent,
+		declared("scribe", stub(t, dir, "scribe",
+			"touch "+filepath.Join(dir, "scribe-started")+"\nsleep 5"), config.PoolAgent,
 			contract.EffectRead, contract.EffectWrite),
 		declared("judge", judge, config.PoolReview),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitFor(t, dir, "scribe-started")
 		cancel()
 	}()
 	run, _ := h.engine.Start(ctx, graphOf(

@@ -194,16 +194,21 @@ func TestADeadAgentIsIncomplete(t *testing.T) {
 func TestAbortCutsTheRunningAndSpawnsNothingQueued(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "queued-ran")
+	// The slow stub says when it has started. Canceling on a timer instead
+	// meant canceling whatever the machine happened to be doing 300ms in --
+	// on a loaded one, a run whose agent had not spawned yet, which is a
+	// different scenario wearing this test's name.
+	started := filepath.Join(dir, "slow-started")
 	h := newHarness(t, config.Workflow{MaxParallelAgent: 1},
 		declared("slow", stub(t, dir, "slow",
-			"sleep 5\n"+`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
+			"touch "+started+"\nsleep 5\n"+`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
 		declared("eager", stub(t, dir, "eager",
 			"touch "+marker+"\n"+`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		waitFor(t, dir, "slow-started")
 		cancel()
 	}()
 	run, err := h.engine.Start(ctx, graphOf(
