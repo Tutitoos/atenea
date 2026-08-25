@@ -81,6 +81,17 @@ To dispatch a single capability instead of a whole commission, `atenea ask` take
 one by name — `atenea ask code.search --repo current --set query=TODO`. Useful for
 checking a provider; `task` is the everyday one.
 
+`atenea workflow` sits on the other side of `task`: a graph of agent steps drawn
+once and then steered, with `create`, `launch`, `run`, `propose`, `approve`,
+`reject`, `resume`, `redo`, `list` and `show` as its verbs. Two things make it a
+different animal from the commands above and keep it off this page's table.
+Nothing spawns until a person runs `atenea workflow launch WF_ID` — a graph that
+was only created is waiting at a launch gate, and `approve` refuses that gate by
+name and hands back the `launch` line instead, on the grounds that whoever
+commits the grant is whoever spends it. And money is granted per graph and split
+between its steps, where `--budget` on `task` funds one commission. It is in the
+listing `atenea` prints, with the rest.
+
 ## `atenea status`
 
 One screen. The first light is Atenea as a whole, then one per provider.
@@ -88,8 +99,8 @@ One screen. The first light is Atenea as a whole, then one per provider.
 ```text
 code.search              [read process]
     amber  claude.search            provider=claude-code        health=unknown
+    amber  codex.search             provider=codex              health=unknown
     amber  ripgrep                  provider=ripgrep            health=unknown
-    amber  serena.search            provider=serena             health=unknown
 ```
 
 `amber` means nobody has measured that provider yet, which is not the same as
@@ -117,8 +128,8 @@ steps
       review   child=ok parent=ok (output matches the capability)
       found    cmd/atenea/cancel_test.go, cmd/atenea/json_test.go, cmd/atenea/main.go, cmd/atenea/main_test.go, cmd/atenea/money_test.go, docs/content/day-to-day.md, internal/adapter/claudecode/cancel_test.go, internal/adapter/claudecode/completeness_test.go
                and 16 more file(s): atenea ask code.search --repo current --json
-      dropped  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
       dropped  claude.search: no attached runner serves it
+      dropped  codex.search: no attached runner serves it
 ```
 
 If you only want to know *who would be picked* without spending anything,

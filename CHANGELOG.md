@@ -7,7 +7,7 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.1.0`. It is a commitment from the first release: an adapter is code
+  at `3.2.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.

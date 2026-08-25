@@ -99,8 +99,9 @@ will hand it the work outright when you want it.
 ### Attaching Serena for symbols
 
 Serena answers `symbol.definition`, `symbol.references`,
-`symbol.implementations` and `symbol.overview`. It is not a CLI: it runs as an
-MCP server behind a local proxy, so the setting is a URL rather than a binary.
+`symbol.implementations`, `symbol.overview` and `symbol.search`. It is not a CLI:
+it runs as an MCP server behind a local proxy, so the setting is a URL rather
+than a binary.
 
 ```toml
 [orchestrator]
@@ -165,10 +166,10 @@ repository  current
 chosen      ripgrep  (the only surviving implementation)
 
 funnel
-  constraints  3 in -> 2 out: claude.search, ripgrep
-      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
-  reach        2 in -> 1 out: ripgrep
+  constraints  3 in -> 3 out: claude.search, codex.search, ripgrep
+  reach        3 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
+      dropped codex.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep
   choice       1 in -> 1 out: ripgrep
 ```
@@ -221,8 +222,8 @@ steps
                and 9 more file(s): atenea ask code.search --repo current --json
 
 dropped in every step
-  serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
   claude.search: no attached runner serves it
+  codex.search: no attached runner serves it
 ```
 
 Two heights, like the status screen: the summary always, the full trace only
@@ -282,7 +283,7 @@ it — one capability, one repository, no planning:
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=161 --set column=20
+  --set file=internal/selector/selector.go --set line=167 --set column=20
 ```
 
 ```text
@@ -293,14 +294,14 @@ spent     158ms of tool time over 1 step(s), 207ms elapsed
   ask      1 step(s), 158ms in 178ms
 
 discovered
-  [repository] position internal/selector/selector.go:161:20 names "Select", which is symbol Select
+  [repository] position internal/selector/selector.go:167:20 names "Select", which is symbol Select
   [repository] serena answered symbol.definition for current with 1 location(s)
 
 run with --trace for the plan, the funnel and every review
 
 answer
   location
-    line     161
+    line     167
     path     internal/selector/selector.go
 ```
 
@@ -315,7 +316,7 @@ repeat the flag for each entry:
 
 ```sh
 ./bin/atenea ask symbol.references --repo current \
-  --set file=pkg/contract/capability.go --set line=135 --set column=6 \
+  --set file=pkg/contract/capability.go --set line=189 --set column=6 \
   --set scope=internal --set scope=cmd
 ```
 
@@ -966,7 +967,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 1.0.5  contract 3.1.0  AMBER
+atenea 1.0.5  contract 3.2.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

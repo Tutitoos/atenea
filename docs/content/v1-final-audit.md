@@ -177,8 +177,15 @@ el Kivgraph instalado.
    validada dentro del presupuesto configurado; Claude Code alcanzó su techo y
    reportó un sobrecoste, que el adapter rechaza como permiso excedido. Ambos
    siguen siendo proveedores opcionales.
-6. La cobertura global observada es 75,2%; el gate de 75,0% evita regresiones,
-   pero no demuestra cobertura semántica total.
+6. La cobertura global observada es 80,3%. CI la sujeta con tres barreras que
+   no miden lo mismo: `scripts/coverage-check.sh` exige un objetivo duro del
+   80,0% en la ejecución canónica `ubuntu-latest`; las otras tres entradas de
+   la matriz (`ubuntu-24.04-arm`, `macos-14`, `macos-15-intel`) bajan
+   `ATENEA_COVERAGE_TARGET` a 77,0% y se quedan en el suelo de regresión; y
+   `scripts/coverage-history-check.sh` compara con el último `main` verde y
+   falla si el total cae más de un punto. Ninguna de las tres demuestra
+   cobertura semántica total: cuentan sentencias ejecutadas, no afirmaciones
+   comprobadas.
 7. Las herramientas raw no destructivas de Semgrep, Context7, Serena,
    claude-mem, agent-device, Maestro, Headroom y Chrome DevTools fueron
    enumeradas y probadas en la medida permitida por sus objetivos; las acciones
