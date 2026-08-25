@@ -715,7 +715,7 @@ func TestRunCallsRefusesAScopeEntryLeavingTheRepository(t *testing.T) {
 		t.Fatalf("Run failed with %v, want permission_denied", err)
 	}
 	if calls := fake.callsTo(toolCallers); len(calls) != 0 {
-		t.Fatalf("the graph was walked %#v for a scope that cannot be honoured", calls)
+		t.Fatalf("the graph was walked %#v for a scope that cannot be honored", calls)
 	}
 }
 

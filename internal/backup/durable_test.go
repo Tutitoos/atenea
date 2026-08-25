@@ -15,7 +15,7 @@ import (
 //
 // The bug this covers is what that list used to contain. copyFile syncs the
 // bytes of every file it writes, but a file's bytes being durable says nothing
-// about the directory entry naming it, and a hardlinked file is a directory
+// about the directory entry naming it, and a hard-linked file is a directory
 // entry and nothing else -- so on a tree that shared most of its files with
 // the previous snapshot, almost nothing was on the disk. The only directory
 // synced was the snapshot folder, after the rename, which made the new
@@ -43,12 +43,14 @@ func TestEveryDirectoryOfASnapshotIsMadeDurableBeforeItIsPublished(t *testing.T)
 
 	dir := t.TempDir()
 	var synced []string
-	real := syncDir
+	// `real` shadowed a predeclared identifier; `wrapped` says the same thing
+	// and does not.
+	wrapped := syncDir
 	syncDir = func(path string) error {
 		synced = append(synced, path)
-		return real(path)
+		return wrapped(path)
 	}
-	t.Cleanup(func() { syncDir = real })
+	t.Cleanup(func() { syncDir = wrapped })
 
 	s, err := New(Options{
 		Source: source,

@@ -1492,7 +1492,7 @@ func TestRunGetRefusesAnEmptyStableKeyBeforeAskingTheProvider(t *testing.T) {
 }
 
 // get_symbol answers with a single object under "results" -- not the list
-// every neighbouring tool uses -- and names its fields file_path and
+// every neighboring tool uses -- and names its fields file_path and
 // start_line where the capability says path and line. symbol.get is declared
 // as a record LIST all the same, so the one row travels as a single-row list
 // and an unknown key travels as an empty one.

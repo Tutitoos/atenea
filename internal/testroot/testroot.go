@@ -59,7 +59,9 @@ func Pin() (string, error) {
 		if err := usable(named); err != nil {
 			return "", fmt.Errorf("%s=%s: %w", Override, named, err)
 		}
-		os.Setenv("TMPDIR", named)
+		if err := os.Setenv("TMPDIR", named); err != nil {
+			return "", fmt.Errorf("pinning TMPDIR to %s: %w", named, err)
+		}
 		return named, nil
 	}
 	inherited := os.TempDir()
@@ -72,7 +74,9 @@ func Pin() (string, error) {
 			"temporary root %s is %d bytes, more than the %d a socket path can spare, and %s: %w",
 			inherited, len(inherited), budget, fallback, err)
 	}
-	os.Setenv("TMPDIR", fallback)
+	if err := os.Setenv("TMPDIR", fallback); err != nil {
+		return "", fmt.Errorf("pinning TMPDIR to %s: %w", fallback, err)
+	}
 	return fallback, nil
 }
 
@@ -87,6 +91,6 @@ func usable(root string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(probe)
+	defer func() { _ = os.RemoveAll(probe) }()
 	return os.WriteFile(filepath.Join(probe, "w"), nil, 0o600)
 }

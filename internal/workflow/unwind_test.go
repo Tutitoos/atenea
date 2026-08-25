@@ -10,14 +10,14 @@ import (
 // Every exit from the dispatch loop unwinds the same way, and this reads the
 // source to say so.
 //
-// There is a behavioural test for one of the routes -- closing the store under
+// There is a behavioral test for one of the routes -- closing the store under
 // three running steps, so the Finish write fails -- and it is the expensive
 // kind: three real agent processes, a stack-dump goroutine count, and a
 // thirty-second settle. Writing three more of it, one per remaining route,
 // would cost two minutes of suite time to check the same mechanism four times,
 // and it could not choose which store call fails first anyway.
 //
-// So the behaviour is checked once and the shape is checked here. The shape is
+// So the behavior is checked once and the shape is checked here. The shape is
 // the actual invariant: `results` is unbuffered, so a return that does not
 // drain it strands every goroutine whose step has finished, and a wait that
 // does not drain it deadlocks. Both of those existed -- two exits called

@@ -229,10 +229,21 @@ func TestPerChatStdioBackendHasOneProcessPerConnection(t *testing.T) {
 // being measured is a process that is still there. `kill -0` delivers no
 // signal and succeeds only while the process exists, so its refusal is the
 // answer being waited for.
+// running reports whether pid is still in the process table.
+//
+// It returns a bool and not an error on purpose. kill -0 sends no signal and
+// succeeds only while the process exists, so its FAILURE is the news being
+// waited for -- and a caller written as `if err != nil { return nil }` reads
+// as an error swallowed, which is a shape worth never writing even when this
+// particular one is right.
+func running(pid int) bool {
+	return exec.Command("kill", "-0", strconv.Itoa(pid)).Run() == nil
+}
+
 func waitForExit(pid int) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := exec.Command("kill", "-0", strconv.Itoa(pid)).Run(); err != nil {
+		if !running(pid) {
 			return nil
 		}
 		time.Sleep(25 * time.Millisecond)

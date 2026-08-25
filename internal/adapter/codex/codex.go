@@ -262,7 +262,7 @@ type search struct {
 	regex     bool
 	wholeWord bool
 	// contextAsked records that the caller sent context_lines, which this
-	// provider cannot honour: it returns no snippets at all, so there is
+	// provider cannot honor: it returns no snippets at all, so there is
 	// nothing to put context around. The field is the count of what was asked
 	// rather than the width to render, because the only use for it is the
 	// notice that says it was ignored. It replaced a contextLines field that
@@ -352,7 +352,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	}
 	var parsed eventStream
 	// The budget is the only reason this scan ever stops early, and stopping
-	// it means cancelling the turn: procgroup.Contain put the child in its own
+	// it means canceling the turn: procgroup.Contain put the child in its own
 	// group, so cancel() is what reaches the whole tree. The previous code
 	// called cmd.Process.Kill() here, which signals the group leader alone and
 	// leaves every tool subprocess Codex started running.

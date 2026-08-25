@@ -150,9 +150,25 @@ jobs:
             npx --yes esbuild@0.25.0 --jsx=automatic --log-level=warning "$widget" >/dev/null
           done
 
+  # Two runners, because a Go build tag decides which files exist and the
+  # linter only ever sees one side. internal/platform/service_linux.go and
+  # service_darwin.go are different code with the same job, and the ubuntu
+  # runner had never read the second one: four exported functions there had
+  # gone undocumented since they were written, invisible to a gate that
+  # reported green on every pull request.
+  #
+  # Cross-linting instead of a second runner does not work here: DuckDB is a
+  # cgo dependency, so type-checking a linux build from a mac fails in the
+  # bindings before it reaches any of this repository's code. The same reason
+  # the release workflow builds on native hosts.
   lint:
-    runs-on: ubuntu-latest
+    name: lint / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
     steps:
       - uses: actions/checkout@v5
 

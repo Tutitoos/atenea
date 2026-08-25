@@ -221,7 +221,7 @@ func listCapability(id string) contract.Capability {
 			{Name: "name", Type: contract.TypeString},
 			{Name: "scope", Type: contract.TypeStringList},
 			// include_snippet and snippet_lines, spelled as the shipped
-			// catalogue spells them. The double used to declare a single
+			// catalog spells them. The double used to declare a single
 			// "snippet" bool, a name no capability has ever had, so every
 			// payload exercising the real two was rejected before reaching the
 			// adapter -- which is how the reference path came to ignore both

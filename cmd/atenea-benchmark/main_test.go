@@ -142,7 +142,12 @@ func TestReportsDocsAndBaseline(t *testing.T) {
 // misspelling as the profile that ran. Evidence that reads as a qualification
 // run and is not one is worse than no evidence.
 func TestAMisspelledProfileIsRefusedInsteadOfRunningTheQuickOne(t *testing.T) {
-	err := checkInvocation("qualificaton", nil)
+	// A near miss rather than nonsense, because the value this refuses is the
+	// one somebody meant to type. It is a plural rather than the dropped
+	// letter it used to be: `misspell` carries that particular typo in its
+	// dictionary and CI reported the fixture as a spelling mistake, which is
+	// the linter being right about the string and wrong about the test.
+	err := checkInvocation("qualifications", nil)
 	if err == nil {
 		t.Fatal("a profile this command does not implement was accepted")
 	}

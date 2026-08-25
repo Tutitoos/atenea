@@ -267,7 +267,7 @@ func (p Planner) repositories(id string) ([]string, error) {
 	return out, nil
 }
 
-// The vocabulary each intent is recognised by, as whole words rather than as
+// The vocabulary each intent is recognized by, as whole words rather than as
 // substrings.
 //
 // These lists were matched with strings.Contains, and with three-letter words
@@ -689,7 +689,7 @@ func budgetSummary(graph workflow.Graph) BudgetSummary {
 // here either -- once it does, an operator whose line allows spawning
 // processes would stamp `process` onto a reader step, and workflow.Compile
 // refuses the whole graph over it, because a type's declared effects are the
-// ceiling on what a spawn of that type will honour. Refusing to plan at all
+// ceiling on what a spawn of that type will honor. Refusing to plan at all
 // is the wrong answer to "the operator may do more than this agent can": a
 // standing grant is a ceiling, not an instruction.
 //
