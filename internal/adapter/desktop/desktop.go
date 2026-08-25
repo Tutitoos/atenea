@@ -314,12 +314,20 @@ func (r *Runner) permitted(capability contract.Capability) error {
 	if r.responsible() {
 		return nil
 	}
+	// Two different remedies, because the two causes look identical from here
+	// and sending somebody to the wrong one costs an afternoon. Reaching this
+	// from `atenea ask` means the service may be perfectly well installed and
+	// the problem is the door: ask runs the core in the CLI process, which was
+	// started from a shell. Reaching it inside the service would mean the
+	// service is not running at all.
 	return contract.Fail(contract.FailurePermissionDenied,
-		"desktop: %s causes the device effect, and Atenea is not running as a service -- "+
-			"started from a shell it borrows that shell's screen and input permissions rather "+
-			"than holding its own, so the grant could not be revoked through Atenea and its own "+
-			"kill switch would not reach it. Install the service with `atenea service install` "+
-			"and grant the permission to Atenea itself", capability.ID)
+		"desktop: %s causes the device effect, and this process is not the one the system grants "+
+			"that permission to -- started from a shell it borrows the terminal's screen and input "+
+			"access instead, which Atenea could neither revoke nor switch off. If you ran `atenea "+
+			"ask`, that runs here rather than in the service: use `atenea desktop %s`, or call it "+
+			"through an MCP client. If you are already in the service, it is not running as a "+
+			"launchd agent -- `atenea service install`", capability.ID,
+		strings.TrimPrefix(capability.ID, "desktop."))
 }
 
 // granted refuses a capability whose operating-system permission is missing,

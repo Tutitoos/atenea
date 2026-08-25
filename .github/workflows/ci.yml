@@ -93,6 +93,7 @@ jobs:
           go test ./internal/core -run '^$' -fuzz '^FuzzDispatchNeverPanicsOnArbitraryBytes$' -fuzztime=30s
           go test ./internal/config -run '^$' -fuzz '^FuzzLoadNeverPanics$' -fuzztime=30s
           go test ./internal/adapter/kivgraph -run '^$' -fuzz '^FuzzParseIndexReportNeverPanics$' -fuzztime=30s
+          go test ./internal/adapter/desktop -run '^$' -fuzz '^FuzzInspectAnswerNeverPanics$' -fuzztime=30s
 
       # The desktop helper is built here and shipped nowhere.
       #

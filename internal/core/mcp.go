@@ -68,6 +68,10 @@ type conversation struct {
 	session   *Session
 	backendMu sync.Mutex
 	backends  map[string]passthrough.Backend
+	// screen remembers whether this chat has been handed what is on the
+	// display. See internal/core/tainted.go for why that has to be remembered
+	// per chat rather than asked of the adapter.
+	screen taint
 }
 
 func (v *conversation) close() {
@@ -456,6 +460,18 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 		// which is worth more to a model than "unknown tool".
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
+	// Before the permission gate rather than after it, so a chat that may not
+	// authorize the effect at all is told that first: "you were never granted
+	// this" is a different sentence from "you may not do it now", and hearing
+	// the second when the first is true sends somebody to fix the wrong thing.
+	if err := v.screen.refuseIfTainted(capability); err != nil {
+		return toolFailure(err.Error()), nil
+	}
+	// Marked on the way in rather than on the way out, and the difference
+	// matters: a capability that failed halfway may still have put a window's
+	// contents in front of the caller, and the answer to "did this chat see
+	// the screen" has to be yes in that case too.
+	v.screen.note(capability.ID)
 
 	payload := maps.Clone(params.Arguments)
 	if payload == nil {

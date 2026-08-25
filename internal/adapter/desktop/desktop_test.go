@@ -524,3 +524,125 @@ func TestTheTargetIsResolvedRatherThanTakenFromTheCaller(t *testing.T) {
 		}
 	}
 }
+
+func screenshotCapability() contract.Capability {
+	return contract.Capability{
+		ID: desktop.CapabilityScreenshot, Version: contract.Version{Major: 1},
+		Summary: "Capture one application's frontmost window.",
+		Effects: []contract.Effect{contract.EffectRead, contract.EffectDevice},
+		Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true,
+			Summary: "Bundle identifier."}},
+		Outputs: []contract.Field{{Name: "width", Type: contract.TypeInt, Required: true,
+			Summary: "Image width."}},
+	}
+}
+
+// The Retina trap, pinned. A display holds twice the pixels it reports in
+// points, and both vendors' computer-use APIs document the same failure:
+// capture at 2x, forget to reduce, and every click lands at double the offset.
+//
+// The rule that keeps it out of here is that the helper reduces and reports
+// what it did, and this side never multiplies anything. So what is asserted is
+// an absence: whatever scale comes back, the dimensions pass through unchanged.
+func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
+	for _, tc := range []struct{ scale float64 }{{1.0}, {0.5}, {0.25}} {
+		session := fakeHelper(t, map[string]any{
+			"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+			"list_apps": map[string]any{"apps": []any{map[string]any{
+				"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
+			"screenshot": map[string]any{
+				"png_base64": "iVBORw0KGgo=", "width": 1568, "height": 980,
+				"scale": tc.scale, "bytes": 4096},
+		})
+		runner, err := desktop.New(desktop.Options{
+			Session: session, Responsible: func() bool { return true },
+			Allowed: []string{"com.apple.Notes"},
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		declared := screenshotCapability()
+		out, err := runner.Run(t.Context(), contract.RunRequest{
+			Capability:     declared,
+			Implementation: contract.Implementation{ID: desktop.ImplementationScreenshot, Capability: declared.ID},
+			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+			Payload:        map[string]any{"application": "com.apple.Notes"},
+			Permission:     contract.Permission{Task: "look", Effects: declared.Effects},
+		})
+		if err != nil {
+			t.Fatalf("scale %v: Run: %v", tc.scale, err)
+		}
+		if out.Result["width"] != 1568 || out.Result["height"] != 980 {
+			t.Errorf("scale %v: dimensions were transformed: %v x %v",
+				tc.scale, out.Result["width"], out.Result["height"])
+		}
+		if out.Result["scale"] != tc.scale {
+			t.Errorf("scale = %v, want %v reported unchanged", out.Result["scale"], tc.scale)
+		}
+	}
+}
+
+// A truncation nobody is told about is a lie by omission about what is on
+// somebody's screen: the caller sees a tidy list and no reason to doubt it.
+func TestATruncatedWalkSaysSo(t *testing.T) {
+	session := fakeHelper(t, map[string]any{
+		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"list_apps": map[string]any{"apps": []any{map[string]any{
+			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
+		"inspect": map[string]any{
+			"nodes": []any{}, "count": 0, "truncated": "time budget reached"},
+	})
+	runner, err := desktop.New(desktop.Options{
+		Session: session, Responsible: func() bool { return true },
+		Allowed: []string{"com.apple.Notes"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	out, err := runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.Result["truncated"] != "time budget reached" {
+		t.Errorf("truncated = %v, want the reason carried through", out.Result["truncated"])
+	}
+}
+
+// Nothing platform-shaped crosses the seam. The helper owns every macOS type
+// and every pixel ratio; what arrives here is numbers and strings, and a
+// result that started carrying something else would mean the scaling had
+// leaked out of the one file that is allowed to know about it.
+func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
+	session := fakeHelper(t, map[string]any{
+		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"list_apps": map[string]any{"apps": []any{map[string]any{
+			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
+		"screenshot": map[string]any{"png_base64": "iVBOR", "width": 800,
+			"height": 600, "scale": 0.5, "bytes": 12},
+	})
+	runner, err := desktop.New(desktop.Options{
+		Session: session, Responsible: func() bool { return true },
+		Allowed: []string{"com.apple.Notes"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	declared := screenshotCapability()
+	out, err := runner.Run(t.Context(), contract.RunRequest{
+		Capability:     declared,
+		Implementation: contract.Implementation{ID: desktop.ImplementationScreenshot, Capability: declared.ID},
+		Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+		Payload:        map[string]any{"application": "com.apple.Notes"},
+		Permission:     contract.Permission{Task: "look", Effects: declared.Effects},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for key, value := range out.Result {
+		switch value.(type) {
+		case string, int, float64, bool:
+		default:
+			t.Errorf("%s carries %T across the seam; only plain values may", key, value)
+		}
+	}
+}

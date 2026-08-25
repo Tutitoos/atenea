@@ -21,6 +21,12 @@ let tools: [Tool] = [
         }
     ),
     Tool(
+        name: "request_access",
+        description: "Ask macOS to show the Accessibility prompt for this process.",
+        inputSchema: ["type": "object", "properties": [:] as [String: Any]],
+        run: { _ in Permissions.request() }
+    ),
+    Tool(
         name: "list_apps",
         description: "List the applications with a user interface that are running right now.",
         inputSchema: ["type": "object", "properties": [:] as [String: Any]],

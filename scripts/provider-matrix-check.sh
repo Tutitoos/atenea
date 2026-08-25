@@ -22,6 +22,16 @@ required=(
 	"symbol.definition|kivgraph.definition"
 	"symbol.definition|serena.definition"
 	"repository.index|kivgraph.index"
+	# The desktop edges. Checked here for the reason the gate exists at all: an
+	# implementation registered against the wrong capability is the one mistake
+	# a catalog cannot notice on its own, and on this provider it would mean a
+	# capability that reads answering with one that types.
+	"desktop.apps|macos.apps"
+	"desktop.inspect|macos.inspect"
+	"desktop.screenshot|macos.screenshot"
+	"desktop.click|macos.click"
+	"desktop.type|macos.type"
+	"desktop.key|macos.key"
 )
 
 # The edge, not just its right-hand side. The loop used to search the whole

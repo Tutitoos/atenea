@@ -43,6 +43,31 @@ struct Permissions {
         }
     }
 
+    /// Asks macOS to show the Accessibility prompt, and reports what changed.
+    ///
+    /// Separate from `current()` because this one interrupts somebody. A health
+    /// probe that put a dialog on the screen is a probe nobody would run, and
+    /// the state it reported would then depend on whether anybody was looking.
+    ///
+    /// It also only does half the job. macOS shows this prompt once per process
+    /// identity and then never again, and Screen Recording has no prompting API
+    /// at all -- so the answer carries the manual route, because that is what
+    /// somebody needs the second time and there is no second prompt to tell
+    /// them.
+    static func request() -> [String: Any] {
+        let before = current()
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        let granted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        return [
+            "accessibility_before": before.accessibility,
+            "accessibility_now": granted,
+            "screen_recording": before.screenRecording,
+            "note": "macOS shows this prompt once per process identity. If no dialog appeared, "
+                + "add the binary by hand in System Settings > Privacy & Security > "
+                + "Accessibility. Screen Recording has no prompt and is always added by hand.",
+        ]
+    }
+
     func asDictionary() -> [String: Any] {
         [
             "accessibility": accessibility,
