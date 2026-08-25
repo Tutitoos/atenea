@@ -66,7 +66,7 @@ func TestTheUnitFileIsRenderedExactlyAsItWillBeInstalled(t *testing.T) {
 // The manager starts a binary, not a shell: whatever is written here is what
 // runs, and `run` is the only verb that is a lifecycle rather than a report.
 // The path is quoted because systemd splits the value on whitespace and
-// expands `%` specifiers in it -- see systemdExec.
+// expands `%` specifiers in it -- see systemdValue.
 func TestTheUnitStartsTheGivenBinaryInRunMode(t *testing.T) {
 	const binary = "/usr/local/lib/atenea/atenea"
 	got := unitValue(t, service(t, binary, 10*time.Second).UnitText(), "ExecStart")
