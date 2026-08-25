@@ -6,8 +6,24 @@
 // second opinion about when it should exit is how two owners end up
 // disagreeing over whether a child is alive.
 import Foundation
+import AppKit
 
 let version = "0.1.0"
+
+// Connects this process to the window server before anything asks it about
+// displays.
+//
+// A command-line tool has no connection by default, and ScreenCaptureKit does
+// not make one: `SCContentFilter(desktopIndependentWindow:)` asserts inside
+// SkyLight's SLSGetDisplaysWithRect and aborts the process. Measured, twice,
+// with two different crash reports before the cause was clear -- the window
+// list came back fine, so it looked like the capture was at fault rather than
+// the connection underneath it.
+//
+// Touching the shared application is what establishes it -- the Swift-visible
+// equivalent of AppKit's NSApplicationLoad. It puts no window on screen, and
+// LSUIElement keeps it out of the Dock.
+_ = NSApplication.shared
 
 // Immutable once built and read only from the serial loop at the bottom, which
 // is what makes this safe rather than merely quiet. The annotation says the
@@ -88,7 +104,7 @@ nonisolated(unsafe) let tools: [Tool] = [
             guard let pid = args["pid"] as? Int else {
                 throw RPCError.invalidParams("pid is required")
             }
-            let shot = try Capture.window(pid: pid_t(pid))
+            let shot = try await Capture.window(pid: pid_t(pid))
             return [
                 "png_base64": shot.png.base64EncodedString(),
                 "width": shot.width,
@@ -229,7 +245,7 @@ func toolResult(_ payload: Any, isError: Bool = false) -> [String: Any] {
     return ["content": [["type": "text", "text": text]], "isError": isError]
 }
 
-func handle(_ message: [String: Any]) {
+func handle(_ message: [String: Any]) async {
     let method = message["method"] as? String ?? ""
     let id = message["id"]
 
@@ -263,10 +279,14 @@ func handle(_ message: [String: Any]) {
             return
         }
         do {
-            reply(id: id, result: toolResult(try tool.run(args)))
+            reply(id: id, result: toolResult(try await tool.run(args)))
         } catch let err as RPCError {
-            reply(id: id, result: toolResult(["error": err.message], isError: true))
+            reply(id: id, result: toolResult(["error": err.message, "kind": err.kind], isError: true))
         } catch {
+            // Unlabeled on purpose. An error this file did not raise is one
+            // nobody has classified, and calling it a refusal would be a
+            // guess -- the far side treats an unlabeled failure as the
+            // provider's own, which is the safe reading.
             reply(id: id, result: toolResult(["error": "\(error)"], isError: true))
         }
     default:
@@ -297,5 +317,5 @@ while let line = readLine(strippingNewline: true) {
         log("skipping a line that is not a JSON object")
         continue
     }
-    handle(message)
+    await handle(message)
 }

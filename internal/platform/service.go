@@ -237,13 +237,22 @@ func launchdText(s Service) string {
 <plist version="1.0">
 <dict>
 	<key>Label</key><string>com.tutitoos.atenea</string>
+	<!-- Interactive and Aqua, not Background, and this is not about priority.
+	     A capability that reads the screen needs a window server connection,
+	     and a Background agent outside the Aqua session has none: measured,
+	     ScreenCaptureKit aborts the process inside SkyLight's
+	     SLSGetDisplaysWithRect rather than returning an error. Everything else
+	     Atenea does works either way, so the cost of the stronger session is
+	     nothing and the cost of the weaker one is a crash somebody has to read
+	     a panic log to understand. -->
 	<key>ProgramArguments</key>
 	<array><string>%s</string><string>run</string></array>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
 	<key>ThrottleInterval</key><integer>5</integer>
 	<key>ExitTimeOut</key><integer>%d</integer>
-	<key>ProcessType</key><string>Background</string>
+	<key>ProcessType</key><string>Interactive</string>
+	<key>LimitLoadToSessionType</key><string>Aqua</string>
 	<key>WorkingDirectory</key><string>%s</string>
 </dict>
 </plist>

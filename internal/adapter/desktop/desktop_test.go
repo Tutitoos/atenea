@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -581,8 +582,11 @@ func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
 			t.Errorf("scale %v: dimensions were transformed: %v x %v",
 				tc.scale, out.Result["width"], out.Result["height"])
 		}
-		if out.Result["scale"] != tc.scale {
-			t.Errorf("scale = %v, want %v reported unchanged", out.Result["scale"], tc.scale)
+		// Reported as text because the contract has no float type. What
+		// matters is that it is carried through, not that it arrives as a
+		// number: nothing computes with it.
+		if got := out.Result["scale"]; got != strconv.FormatFloat(tc.scale, 'g', -1, 64) {
+			t.Errorf("scale = %v, want %v reported unchanged", got, tc.scale)
 		}
 	}
 }

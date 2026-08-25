@@ -22,27 +22,6 @@ import ImageIO
 import UniformTypeIdentifiers
 import AppKit
 
-/// One value handed between a Task and whoever is waiting on it.
-///
-/// `@unchecked Sendable` is the honest label: the compiler cannot see that the
-/// lock makes this safe, and the lock does.
-private final class Box<T>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: T?
-
-    func set(_ new: T) {
-        lock.lock()
-        defer { lock.unlock() }
-        value = new
-    }
-
-    func get() -> T? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
 enum Capture {
     static let maxLongEdge = 1568
     static let maxBytes = 900_000
@@ -115,62 +94,45 @@ extension Capture {
     /// exists to keep out of frame. Asking for a window means the refusal
     /// upstream is actually enforceable.
     ///
-    /// ScreenCaptureKit is async and this process answers a synchronous
-    /// protocol, so the wait is bridged with a semaphore. Bounded, because a
-    /// window server that never answers would otherwise hang the helper and
-    /// take every waiting caller with it.
-    static func window(pid: pid_t, timeout: TimeInterval = 10) throws -> Shot {
-        // A box with a lock rather than a captured var. The Task below runs on
-        // another thread, and writing a local from there is a data race the
-        // Swift 6 language mode refuses outright -- correctly, since the
-        // semaphore orders the wait but says nothing about the memory.
-        let result = Box<Result<CGImage, Error>>()
-        let done = DispatchSemaphore(value: 0)
-
-        Task {
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(
-                    true, onScreenWindowsOnly: true)
-                // Largest on-screen window for the process: an application
-                // may own a menu-bar item and a panel as well, and the
-                // biggest one is the document somebody means.
-                let candidates = content.windows
-                    .filter { $0.owningApplication?.processID == pid }
-                    .sorted { ($0.frame.width * $0.frame.height) > ($1.frame.width * $1.frame.height) }
-                guard let window = candidates.first else {
-                    throw RPCError.denied("that application has no window on screen right now")
-                }
-                let config = SCStreamConfiguration()
-                // The pixels the display actually holds, not the points the
-                // frame reports. fit() reduces from here; capturing at point
-                // size on a Retina display would throw away half the detail
-                // before anybody could decide whether they needed it.
-                config.width = Int(window.frame.width * 2)
-                config.height = Int(window.frame.height * 2)
-                let filter = SCContentFilter(desktopIndependentWindow: window)
-                let image = try await SCScreenshotManager.captureImage(
-                    contentFilter: filter, configuration: config)
-                result.set(.success(image))
-            } catch {
-                result.set(.failure(error))
-            }
-            done.signal()
+    /// Async all the way down, with no semaphore bridging it to a synchronous
+    /// caller. Bridging is what the first version did, and it crashed:
+    /// blocking a thread the Swift runtime needs for the Task is a deadlock
+    /// the runtime aborts on rather than hangs on -- SIGABRT inside
+    /// `semaphore.wait`, measured. Putting a lock around the captured variable
+    /// fixed a data race that was real and left the deadlock untouched.
+    ///
+    /// The call is bounded by the adapter's own timeout instead. One ceiling
+    /// where there is a caller to report to beats two that can disagree.
+    static func window(pid: pid_t) async throws -> Shot {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            true, onScreenWindowsOnly: true)
+        // Largest on-screen window for the process: an application may own a
+        // menu-bar item and a panel as well, and the biggest one is the
+        // document somebody means.
+        let candidates = content.windows
+            .filter { $0.owningApplication?.processID == pid }
+            .sorted { ($0.frame.width * $0.frame.height) > ($1.frame.width * $1.frame.height) }
+        guard let target = candidates.first else {
+            throw RPCError.denied("that application has no window on screen right now")
         }
-
-        if done.wait(timeout: .now() + timeout) == .timedOut {
-            throw RPCError.internalError("the window server did not answer in \(Int(timeout))s")
+        let config = SCStreamConfiguration()
+        // The pixels the display actually holds, not the points the frame
+        // reports. fit() reduces from here; capturing at point size on a
+        // Retina display would throw away half the detail before anybody could
+        // decide whether they needed it.
+        config.width = Int(target.frame.width * 2)
+        config.height = Int(target.frame.height * 2)
+        let filter = SCContentFilter(desktopIndependentWindow: target)
+        let image: CGImage
+        do {
+            image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter, configuration: config)
+        } catch {
+            throw RPCError.denied("capture failed: \(error.localizedDescription)")
         }
-        switch result.get() {
-        case .success(let image):
-            guard let shot = fit(image) else {
-                throw RPCError.internalError("the capture could not be encoded")
-            }
-            return shot
-        case .failure(let error):
-            if let rpc = error as? RPCError { throw rpc }
-            throw RPCError.internalError("capture failed: \(error.localizedDescription)")
-        case nil:
-            throw RPCError.internalError("capture produced no answer")
+        guard let shot = fit(image) else {
+            throw RPCError.internalError("the capture could not be encoded")
         }
+        return shot
     }
 }

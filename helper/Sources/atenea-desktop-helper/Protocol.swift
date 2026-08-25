@@ -9,6 +9,14 @@ import Foundation
 struct RPCError: Error {
     let code: Int
     let message: String
+    /// What kind of refusal this is, in one word the far side can sort on.
+    ///
+    /// It exists because the caller cannot tell them apart from the message,
+    /// and getting it wrong is expensive: Atenea's funnel marks a provider
+    /// DOWN when a call fails as unavailable, so "that window is not open" --
+    /// an answer about the request -- would take screenshots out of service
+    /// for everybody until the health went stale.
+    var kind: String { code == -32000 ? "denied" : "invalid" }
     static func invalidParams(_ m: String) -> RPCError { .init(code: -32602, message: m) }
     static func internalError(_ m: String) -> RPCError { .init(code: -32603, message: m) }
     /// Refusals that are the caller's answer rather than a protocol fault. The
@@ -23,7 +31,7 @@ struct Tool {
     let name: String
     let description: String
     let inputSchema: [String: Any]
-    let run: ([String: Any]) throws -> Any
+    let run: ([String: Any]) async throws -> Any
 }
 
 func log(_ message: String) {
