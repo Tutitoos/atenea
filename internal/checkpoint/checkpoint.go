@@ -112,6 +112,15 @@ type StepState struct {
 	// and money must never rank, but a receipt with no price on it is not a
 	// receipt. Omitted when zero so free work does not carry a price tag.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
+	// SpentUSDKnown says whether the zero above is a price or an absence.
+	//
+	// `omitempty` on SpentUSD means a receipt for work through ripgrep and a
+	// receipt for work whose provider reported nothing look identical on
+	// disk: both simply have no price. This is the field that tells them
+	// apart, and it is written only on the receipts that do know, so an old
+	// receipt reads as "nobody said" -- which is what it is, since nothing
+	// could say so when it was written.
+	SpentUSDKnown bool `json:"spent_usd_known,omitempty"`
 	// OverspendUSD is how far this step's charge ran past the share it was
 	// granted, when it ran past it at all. Omitted when it stayed inside its
 	// share, which is the ordinary case: a receipt with every step reading
@@ -366,6 +375,55 @@ func (s *Store) Load(id string) (Run, error) {
 }
 
 // List returns the run ids on disk, oldest first because the ids sort by time.
+// Prune removes closed receipts that stopped being updated before cutoff, and
+// reports how many went.
+//
+// Closed only. An open receipt is a commission somebody may still resume --
+// Candidates is built out of exactly those -- so removing one by age would
+// take away the resume rather than the record of it. A run left open by a
+// machine that died is recovered by Recover, which closes it with a reason;
+// after that it ages like any other.
+//
+// Read before removed, and read fully. A receipt whose age is judged from its
+// file mtime would be judged from whenever the disk last touched it -- a
+// restore, a backup, an editor -- and Updated is the run's own answer. A file
+// this store cannot read is left alone: an unreadable receipt is a thing to
+// look at, not a thing to delete.
+func (s *Store) Prune(cutoff time.Time) (int, error) {
+	if !s.Enabled() {
+		return 0, nil
+	}
+	ids, err := s.List()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, id := range ids {
+		run, err := s.Load(id)
+		if err != nil || !run.Closed || !run.Updated.Before(cutoff) {
+			continue
+		}
+		// Under the same lock a writer takes. A receipt being resumed right
+		// now is one somebody is about to write to, and deleting it from
+		// under them would turn a resume into a run with no record.
+		release, err := s.Lock(id)
+		if err != nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, id+".json")); err == nil {
+			removed++
+		}
+		release()
+	}
+	if removed > 0 {
+		// The directory entry has to reach disk too, or a power cut leaves
+		// names pointing at files that are gone -- the same reasoning Save
+		// gives for syncing after a write.
+		_ = syncDirectory(s.dir)
+	}
+	return removed, nil
+}
+
 func (s *Store) List() ([]string, error) {
 	if !s.Enabled() {
 		return nil, nil

@@ -138,6 +138,7 @@ const (
 	jobFlush     = "metrics.flush"
 	jobCompact   = "metrics.compact"
 	jobBackup    = "backup"
+	jobRetention = "retention"
 	jobMCPHealth = "mcp.health"
 )
 
@@ -289,7 +290,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			return probeDeclaredServers(ctx, cfg.MCPServers, readings)
 		}
 	}
-	beats, err := buildLanes(cfg, store, copies, book, health)
+	beats, err := buildLanes(cfg, store, copies, checkpoints, book, health)
 	if err != nil {
 		return nil, err
 	}

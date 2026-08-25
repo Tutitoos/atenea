@@ -43,6 +43,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -215,6 +216,15 @@ CREATE INDEX IF NOT EXISTS agent_trace_started ON agent_trace(started_at);
 CREATE INDEX IF NOT EXISTS agent_trace_type ON agent_trace(type_name);
 CREATE INDEX IF NOT EXISTS agent_trace_retry ON agent_trace(retry_of);
 CREATE INDEX IF NOT EXISTS agent_trace_reviews ON agent_trace(reviews);
+-- The mark for the retention pass, in the same database as the rows it
+-- removes. On disk rather than on a beat, and read in the same transaction as
+-- the delete, for the reason metrics.CompactIfDue gives: most Atenea processes
+-- are a command that lives for a second and has no rhythm of its own, and two
+-- of them starting together must not both decide they are the one to do it.
+CREATE TABLE IF NOT EXISTS maintenance (
+    job     TEXT NOT NULL PRIMARY KEY,
+    last_at TEXT NOT NULL
+);
 `
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -379,6 +389,87 @@ type Filter struct {
 	// the newest rows instead of the oldest. Only the sweep asks for this:
 	// every reader wants the newest first.
 	Oldest bool
+}
+
+// Checkpoint folds the write-ahead log into the database file.
+//
+// This store runs in WAL mode, so a copy of traces.db taken on its own is a
+// copy of whatever had been folded in by then -- and the -wal beside it is a
+// separate file the copier may or may not have reached at the same instant.
+// TRUNCATE rather than PASSIVE: a passive checkpoint gives up when a reader
+// is in the way, and giving up quietly is what leaves the copy inconsistent.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return contract.Fail(contract.FailureUnavailable, "trace: checkpoint: %v", err)
+	}
+	return nil
+}
+
+// PruneIfDue removes closed traces older than keep, at most once per every,
+// and reports how many rows went.
+//
+// Closed only, and deliberately. An open row is a run nobody saw finish, which
+// is the one kind of trace worth keeping past its age: SweepOrphans exists to
+// turn those into closed ones with a reason, and deleting them first would
+// remove exactly the evidence that something died. A row is old by when it
+// ENDED, not when it started, so a long run is measured from the point it
+// stopped being interesting.
+//
+// keep of zero means keep everything: a machine whose state root is managed
+// elsewhere has no use for this, and an absent policy must not be a silent one.
+func (s *Store) PruneIfDue(ctx context.Context, now time.Time, keep, every time.Duration) (int, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	if every <= 0 {
+		return 0, contract.Fail(contract.FailureInvalidInput,
+			"trace: retention interval must be above 0, got %s", every)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	utc := now.UTC()
+	var last string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT last_at FROM maintenance WHERE job = 'retention'`).Scan(&last); {
+	case errors.Is(err, sql.ErrNoRows):
+		// Never run here. The first pass is due, which is what makes a fresh
+		// install tidy itself rather than wait a day to start.
+	case err != nil:
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune mark: %v", err)
+	default:
+		when, parseErr := time.Parse(time.RFC3339Nano, last)
+		// A mark this store cannot read is treated as due rather than as a
+		// reason to stop: the alternative is a corrupt timestamp switching
+		// retention off for good, silently.
+		if parseErr == nil && utc.Sub(when) < every {
+			return 0, nil
+		}
+	}
+
+	cutoff := utc.Add(-keep).Format(time.RFC3339Nano)
+	result, err := tx.ExecContext(ctx,
+		`DELETE FROM agent_trace WHERE ended_at IS NOT NULL AND ended_at < ?`, cutoff)
+	if err != nil {
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune: %v", err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune count: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO maintenance (job, last_at) VALUES ('retention', ?)
+		 ON CONFLICT(job) DO UPDATE SET last_at = excluded.last_at`,
+		utc.Format(time.RFC3339Nano)); err != nil {
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune mark: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, contract.Fail(contract.FailureUnavailable, "trace: prune commit: %v", err)
+	}
+	return int(removed), nil
 }
 
 // DefaultLimit is how many rows a listing returns when nobody says.

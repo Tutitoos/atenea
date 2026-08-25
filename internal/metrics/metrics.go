@@ -245,6 +245,34 @@ func (s *Store) Record(m Measurement) {
 	s.push(m)
 }
 
+// Checkpoint pushes everything buffered to disk and folds DuckDB's
+// write-ahead log into the database file.
+//
+// It exists for the backup. The copier walks a directory of files and has no
+// idea which of them are databases, so a copy taken while a WAL held
+// uncommitted pages produces a file that is crash-consistent and not
+// consistent: it opens, and it is missing whatever had not been folded in.
+// Restoring one of those loses measurements nobody knows are missing, which
+// is worse than losing them loudly.
+//
+// A no-op on a store with no database, which is a core running with measuring
+// switched off.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	if err := s.Flush(ctx); err != nil {
+		return err
+	}
+	db, err := s.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(ctx, "CHECKPOINT"); err != nil {
+		return contract.Fail(contract.FailureUnavailable,
+			"metrics: checkpoint: %v", err)
+	}
+	return nil
+}
+
 // Seal closes the store to new measurements, counting anything that arrives
 // afterwards as dropped.
 //
