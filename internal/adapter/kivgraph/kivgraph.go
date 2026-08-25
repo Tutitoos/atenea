@@ -1,15 +1,18 @@
-// Package kivgraph is the fifth adapter, and the first whose far side is a
-// process Atenea itself launches and holds the pipes of.
+// Package kivgraph is the fifth adapter, and the first that stopped caring
+// which transport reaches its far side.
 //
 // Every earlier client speaks over an address: omp and Claude Code as a
 // binary invoked once per call, Serena as an MCP server behind a fixed URL,
-// another graph CLI as a fresh process per call. A stdio MCP server has no
-// address at all -- there is nothing to dial, only two pipes -- so it can
-// only ever be reached by something that spawned it and kept them open. That
-// something is internal/supervisor, extended with a stdio transport for
-// exactly this adapter; this package only ever asks it for the live
-// *mcpstdio.Session already attached to a process it is not this package's
-// job to start, watch or restart.
+// another graph CLI as a fresh process per call. kivgraph itself answers two
+// ways, measured on the same 0.7.0 binary: `kivgraph serve` over stdio, a
+// server with no address at all -- nothing to dial, only two pipes, reachable
+// only by whatever spawned it and kept them open -- and `kivgraph daemon`,
+// which publishes the identical tool surface at a fixed streamable-HTTP
+// address instead, supervised once by systemd rather than once per Atenea
+// process. Both answer the same tools this package already decodes, and this
+// package only ever called one method on either far side, so it asks only
+// for a Session (see that type's own doc comment) rather than the concrete
+// *mcpstdio.Session it used to require.
 //
 // The graph itself is one global corpus, not one per repository. kivgraph
 // indexes a whole workspace (`kivgraph index --full`) and publishes a single snapshot every
@@ -149,7 +152,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -215,6 +217,12 @@ const repositoryKeyPrefix = "repository:"
 // one.
 const DefaultTimeout = 90 * time.Second
 
+// DefaultEndpoint is where kivgraph's own daemon listens when nothing else
+// is configured: `kivgraph daemon` serves streamable-HTTP MCP at a fixed
+// local port, the same "assume it's already running" shape Serena's own
+// DefaultEndpoint assumes for its proxy.
+const DefaultEndpoint = "http://127.0.0.1:7788/mcp"
+
 // DefaultImplementations is what the adapter answers for. It is a function
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
@@ -237,6 +245,19 @@ type IndexReport struct {
 // workspace in every adapter test.
 type Indexer func(context.Context, string, string) (IndexReport, error)
 
+// Session is the far side of one MCP server, whatever transport reached it.
+//
+// kivgraph 0.7.0 answers the identical tool vocabulary from `kivgraph serve`
+// over stdio and from `kivgraph daemon` over a streamable-HTTP address, and
+// this package never asked either one for anything but Call: every
+// capability below is a sequence of named tools and decoded JSON, never a
+// handshake, a session id or a wire frame. Naming the concrete stdio session
+// here would have coupled every function in this file to a transport this
+// package has no opinion about, for a method it was never going to use.
+type Session interface {
+	Call(ctx context.Context, tool string, args map[string]any) (string, error)
+}
+
 // Options configure the adapter.
 type Options struct {
 	// Implementations the adapter answers for.
@@ -249,11 +270,12 @@ type Options struct {
 	// Timeout caps one call.
 	Timeout time.Duration
 	// Session returns the live MCP session for the supervised kivgraph
-	// child. It is a function, not a stored value, because the process
-	// behind it may not exist yet when New runs (on_demand lifecycle) and
-	// may be replaced by a restart later: every call asks again rather than
-	// trusting a session it cached itself.
-	Session func(ctx context.Context) (*mcpstdio.Session, error)
+	// child, over whichever transport reaches it. It is a function, not a
+	// stored value, because the process or connection behind it may not
+	// exist yet when New runs (on_demand lifecycle) and may be replaced by
+	// a restart later: every call asks again rather than trusting a
+	// session it cached itself.
+	Session func(ctx context.Context) (Session, error)
 	// Index runs the provider's official full-index command. It is nil for an
 	// unmanaged/test adapter and becomes the configured Kivgraph binary in the
 	// core wiring.
@@ -265,7 +287,7 @@ type Runner struct {
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
-	session         func(ctx context.Context) (*mcpstdio.Session, error)
+	session         func(ctx context.Context) (Session, error)
 	index           Indexer
 }
 
@@ -273,7 +295,7 @@ type Runner struct {
 func New(opts Options) (*Runner, error) {
 	if opts.Session == nil {
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"kivgraph adapter: session is required -- a stdio server has no address to dial without one")
+			"kivgraph adapter: session is required -- there is no far side to call tools on without one")
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -346,9 +368,11 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
-	if err := sess.Initialize(call); err != nil {
-		return contract.Outcome{}, r.failureFor(err, call)
-	}
+	// Session declares only Call: an MCP handshake, if one is even needed
+	// on this transport, is whatever a Call implementation does before its
+	// first request answers -- mcpstdio.Session.Call performs it lazily and
+	// idempotently today (see internal/mcpstdio) -- not a second method this
+	// package would otherwise have to call defensively on every dispatch.
 
 	// Indexing is the one capability that is allowed to repair an absent or
 	// stale graph. It must run before the normal graph-ready gate; otherwise a
@@ -488,7 +512,7 @@ type statusAnswer struct {
 // checkGraphReady for what "trust" means here -- and graph.status itself
 // reuses this very same decoded value as its own answer (runGraphStatus)
 // rather than calling the tool a second time.
-func (r *Runner) fetchStatus(ctx context.Context, sess *mcpstdio.Session) (*statusResult, error) {
+func (r *Runner) fetchStatus(ctx context.Context, sess Session) (*statusResult, error) {
 	text, err := sess.Call(ctx, toolStatus, map[string]any{})
 	if err != nil {
 		return nil, err
@@ -690,7 +714,7 @@ var consumerResolutions = []string{"exact_symbol", "package", "candidate", "unre
 // the tool has no matching filter argument to forward it to -- this is the
 // one place that input can honestly change the output, so it narrows the
 // decoded results client-side instead.
-func (r *Runner) runConsumers(ctx context.Context, sess *mcpstdio.Session, status *statusResult, req contract.RunRequest) (map[string]any, []string, error) {
+func (r *Runner) runConsumers(ctx context.Context, sess Session, status *statusResult, req contract.RunRequest) (map[string]any, []string, error) {
 	file, ok := stringAt(req.Payload, "file")
 	if !ok || file == "" {
 		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.consumers: file is required")
@@ -790,7 +814,7 @@ func (r *Runner) repositoryNaming(status *statusResult, req contract.RunRequest)
 // pays (resolveDeclaration), stopping one hop earlier because no stable_key
 // is wanted here -- and deliberately not find_symbol, which searches by
 // name, while on this capability a name is a hint and never the subject.
-func (r *Runner) runDefinition(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+func (r *Runner) runDefinition(ctx context.Context, sess Session, status *statusResult,
 	req contract.RunRequest) (map[string]any, []string, error) {
 
 	file, ok := stringAt(req.Payload, "file")
@@ -886,7 +910,7 @@ type referencesAnswer struct {
 //     back as two rows naming that function's own declaration line: true on
 //     the wire, indistinguishable in an output whose fields are path and
 //     line. The collapsed count is reported rather than silently lost.
-func (r *Runner) runReferences(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+func (r *Runner) runReferences(ctx context.Context, sess Session, status *statusResult,
 	req contract.RunRequest) (map[string]any, []string, error) {
 
 	file, ok := stringAt(req.Payload, "file")
@@ -1008,7 +1032,7 @@ func (r *Runner) runReferences(ctx context.Context, sess *mcpstdio.Session, stat
 //     than guessed from overlapping spans, and depth 0 does not drop methods:
 //     they are what this provider considers the file's top level. depth above
 //     0 asks include_members, which is where a struct's fields come from.
-func (r *Runner) runOverview(ctx context.Context, sess *mcpstdio.Session, status *statusResult,
+func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusResult,
 	req contract.RunRequest) (map[string]any, []string, error) {
 
 	file, ok := stringAt(req.Payload, "file")
@@ -1244,7 +1268,7 @@ func compactOutlineDeclaration(kind, encoded string) (outlineDeclaration, bool) 
 // capability names the caller in every refusal. It is passed rather than
 // inferred because the same wrong answer -- "this position names no
 // declaration" -- has to be readable as the question that asked it.
-func (r *Runner) resolveDeclaration(ctx context.Context, sess *mcpstdio.Session,
+func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 	capability, repository, file string, line int, name string) (outlineDeclaration, []string, error) {
 
 	text, err := sess.Call(ctx, toolOutline, map[string]any{"repository": repository, "path": file})
@@ -1341,7 +1365,7 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess *mcpstdio.Session,
 // It is resolveDeclaration plus the one hop only this capability needs:
 // find_cross_repo_consumers is keyed by stable_key alone, while
 // find_references and the outline itself both answer to a qualified name.
-func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, repository, file string, line int, name string) (string, []string, error) {
+func (r *Runner) resolvePosition(ctx context.Context, sess Session, repository, file string, line int, name string) (string, []string, error) {
 	decl, notes, err := r.resolveDeclaration(ctx, sess, CapabilityConsumers, repository, file, line, name)
 	if err != nil {
 		return "", nil, err
@@ -1374,7 +1398,7 @@ func (r *Runner) resolvePosition(ctx context.Context, sess *mcpstdio.Session, re
 // declaration the diff touched, so a code.impact failure explained itself as a
 // symbol.consumers one and sent whoever read it looking at the wrong
 // capability.
-func (r *Runner) stableKeyOf(ctx context.Context, sess *mcpstdio.Session,
+func (r *Runner) stableKeyOf(ctx context.Context, sess Session,
 	capabilityID, repository, file string, decl outlineDeclaration) (string, error) {
 
 	if decl.StableKey != "" {
@@ -1473,7 +1497,7 @@ type getSymbolAnswer struct {
 // contract.FailureNotFound before Run ever reaches shaping. The nil-Results
 // branch below is kept anyway as the honest reading of what the tool's own
 // schema allows, not as the path this adapter expects a caller to hit.
-func (r *Runner) runGet(ctx context.Context, sess *mcpstdio.Session, req contract.RunRequest) (map[string]any, []string, error) {
+func (r *Runner) runGet(ctx context.Context, sess Session, req contract.RunRequest) (map[string]any, []string, error) {
 	stableKey, ok := stringAt(req.Payload, "stable_key")
 	if !ok || stableKey == "" {
 		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph symbol.get: stable_key is required")
@@ -1533,7 +1557,7 @@ type unresolvedAnswer struct {
 // tool's own schema but never made it into the capability's, so there is no
 // payload key to read them from: checkPayload refuses any field the
 // capability does not declare before Run is ever reached.
-func (r *Runner) runUnresolved(ctx context.Context, sess *mcpstdio.Session, req contract.RunRequest) (map[string]any, []string, error) {
+func (r *Runner) runUnresolved(ctx context.Context, sess Session, req contract.RunRequest) (map[string]any, []string, error) {
 	args := map[string]any{}
 	if reason, ok := stringAt(req.Payload, "reason"); ok {
 		args["reason"] = reason
@@ -1624,9 +1648,8 @@ func (r *Runner) ProbeIndex(ctx context.Context, root string) (bool, string, err
 	if err != nil {
 		return false, "", r.failureFor(err, ctx)
 	}
-	if err := sess.Initialize(ctx); err != nil {
-		return false, "", r.failureFor(err, ctx)
-	}
+	// See Run's own comment on this same point: Session declares only Call,
+	// and whatever handshake a transport needs happens inside it.
 	status, err := r.fetchStatus(ctx, sess)
 	if err != nil {
 		return false, "", r.failureFor(err, ctx)
@@ -1667,6 +1690,12 @@ func repositoryNameFromKey(key string) string {
 // stable_key must land in contract.FailureNotFound, never
 // contract.FailureUnavailable -- that bin drives provider health to down and
 // pulls kivgraph out of the funnel over one bad key, not one dead provider.
+// This classification is still measured against mcpstdio.Session's own
+// error shaping (see internal/mcpstdio and providerCode below): dispatch
+// above no longer names a transport, but the failures it has to sort still
+// arrive shaped by whichever one produced them, and this function's whole
+// job is knowing that shape -- it is not something Session's one-method
+// interface could ever have carried for it.
 func (r *Runner) failureFor(err error, ctx context.Context) *contract.Failure {
 	var known *contract.Failure
 	if errors.As(err, &known) {
@@ -1728,12 +1757,14 @@ func isUpperCode(s string) bool {
 }
 
 // providerCode finds kivgraph's own error code in a message that may have
-// been prefixed on the way here. mcpstdio labels a refusal with the tool
-// that refused ("find_cross_repo_consumers: SYMBOL_NOT_FOUND: ..."), so the
-// code is not reliably the first segment and cutting once would miss it --
-// which is exactly how the classification below became unreachable the first
-// time. Scans segments left to right and returns the first that reads as a
-// code, with everything after it.
+// been prefixed on the way here. mcpstdio.Session.Call labels a refusal with
+// the tool that refused ("find_cross_repo_consumers: SYMBOL_NOT_FOUND:
+// ..."), a shape this function still has to know even though the dispatch
+// above it no longer names mcpstdio anywhere, so the code is not reliably
+// the first segment and cutting once would miss it -- which is exactly how
+// the classification below became unreachable the first time. Scans
+// segments left to right and returns the first that reads as a code, with
+// everything after it.
 func providerCode(text string) (code, message string, found bool) {
 	rest := text
 	for {

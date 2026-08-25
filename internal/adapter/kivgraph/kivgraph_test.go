@@ -1,11 +1,9 @@
 package kivgraph
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,18 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// --- fake kivgraph child ---------------------------------------------------
+// --- fake kivgraph session ----------------------------------------------
 //
-// mcpstdio.Session is a concrete struct, not an interface: the only way to
-// hand the adapter a live one without spawning the real `kivgraph serve`
-// binary is a peer that speaks the same newline-delimited JSON-RPC over an
-// io.Pipe pair. It auto-answers initialize; every other call is dispatched
-// by tool name to a test-registered handler, and every call is recorded so
-// a test can assert not just the answer but what was actually asked.
+// Session names exactly one method (see its own doc comment in
+// kivgraph.go), so a double for it needs no process, no pipes and no
+// JSON-RPC framing -- only a map from tool name to a canned answer, and a
+// record of what was actually asked. Wiring a real mcpstdio.Session to
+// stdin/stdout io.Pipe ends just to reach that one method was scaffolding
+// for a stdio server no test here has any reason to model; actual stdio
+// wire framing has its own suite in internal/mcpstdio.
 type fakeKivgraph struct {
 	mu       sync.Mutex
 	calls    []fakeCall
@@ -36,18 +34,15 @@ type fakeCall struct {
 	args map[string]any
 }
 
-func newFakeKivgraph(t *testing.T) (*fakeKivgraph, *mcpstdio.Session) {
+// newFakeKivgraph returns one double under the two names every test here
+// already used it by: fake registers answers and reads back what was asked
+// (on, callsTo); sess is the same value handed to Options.Session as the
+// live Session this package now depends on, instead of a concrete
+// *mcpstdio.Session.
+func newFakeKivgraph(t *testing.T) (*fakeKivgraph, Session) {
 	t.Helper()
-	stdinR, stdinW := io.Pipe()   // the Session writes stdinW; the fake reads stdinR
-	stdoutR, stdoutW := io.Pipe() // the fake writes stdoutW; the Session reads stdoutR
 	f := &fakeKivgraph{handlers: map[string]func(map[string]any) (string, bool){}}
-	go f.serve(stdinR, stdoutW)
-	sess := mcpstdio.New(stdinW, stdoutR, mcpstdio.Options{})
-	t.Cleanup(func() {
-		_ = sess.Close()
-		_ = stdoutW.Close()
-	})
-	return f, sess
+	return f, f
 }
 
 // on registers the answer a tool call gets. A tool with no registered
@@ -72,75 +67,26 @@ func (f *fakeKivgraph) callsTo(tool string) []map[string]any {
 	return out
 }
 
-func (f *fakeKivgraph) serve(in io.Reader, out io.WriteCloser) {
-	reader := bufio.NewReaderSize(in, 1<<20)
-	for {
-		line, err := reader.ReadString('\n')
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			f.handle([]byte(trimmed), out)
-		}
-		if err != nil {
-			return
-		}
+// Call implements Session directly: no wire, no transport, just the
+// recorded call and the registered answer. An unregistered tool and a
+// handler's own isError answer are both shaped exactly the way
+// mcpstdio.Session.Call shapes a real refusal -- contract.FailureInvalidInput
+// carrying "tool: message" -- so failureFor's classification (see
+// providerCode in kivgraph.go) is exercised the same way a real wire
+// refusal would exercise it, on a double that never touches that package.
+func (f *fakeKivgraph) Call(_ context.Context, tool string, args map[string]any) (string, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeCall{tool: tool, args: args})
+	handler := f.handlers[tool]
+	f.mu.Unlock()
+	if handler == nil {
+		return "", contract.Fail(contract.FailureInvalidInput, "%s: %s", tool, fmt.Sprintf("no handler configured for %s", tool))
 	}
-}
-
-func (f *fakeKivgraph) handle(line []byte, out io.Writer) {
-	var msg struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
+	text, isErr := handler(args)
+	if isErr {
+		return "", contract.Fail(contract.FailureInvalidInput, "%s: %s", tool, strings.TrimSpace(text))
 	}
-	if json.Unmarshal(line, &msg) != nil {
-		return
-	}
-	if len(msg.ID) == 0 || string(msg.ID) == "null" {
-		return // a notification, e.g. notifications/initialized: nothing waits on an answer
-	}
-	switch msg.Method {
-	case "initialize":
-		f.reply(out, msg.ID, map[string]any{
-			"protocolVersion": "2025-06-18",
-			"serverInfo":      map[string]any{"name": "kivgraph", "version": "0.5.1"},
-			"capabilities":    map[string]any{},
-		})
-	case "tools/call":
-		var params struct {
-			Name      string         `json:"name"`
-			Arguments map[string]any `json:"arguments"`
-		}
-		_ = json.Unmarshal(msg.Params, &params)
-		f.mu.Lock()
-		f.calls = append(f.calls, fakeCall{tool: params.Name, args: params.Arguments})
-		handler := f.handlers[params.Name]
-		f.mu.Unlock()
-		if handler == nil {
-			f.reply(out, msg.ID, map[string]any{
-				"content": []map[string]any{{"type": "text", "text": fmt.Sprintf("no handler configured for %s", params.Name)}},
-				"isError": true,
-			})
-			return
-		}
-		text, isErr := handler(params.Arguments)
-		f.reply(out, msg.ID, map[string]any{
-			"content": []map[string]any{{"type": "text", "text": text}},
-			"isError": isErr,
-		})
-	default:
-		f.reply(out, msg.ID, map[string]any{})
-	}
-}
-
-func (f *fakeKivgraph) reply(out io.Writer, id json.RawMessage, result any) {
-	body, err := json.Marshal(struct {
-		Version string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  any             `json:"result"`
-	}{Version: "2.0", ID: id, Result: result})
-	if err != nil {
-		return
-	}
-	_, _ = out.Write(append(body, '\n'))
+	return text, nil
 }
 
 // --- fixtures ----------------------------------------------------------
@@ -493,10 +439,10 @@ func absPath(t *testing.T, p string) string {
 // newTestRunner builds a Runner backed by sess, the same session for every
 // call this Runner ever makes -- fine for a unit test, which never restarts
 // the child mid-test the way the supervisor's own on_demand lifecycle would.
-func newTestRunner(t *testing.T, sess *mcpstdio.Session) *Runner {
+func newTestRunner(t *testing.T, sess Session) *Runner {
 	t.Helper()
 	runner, err := New(Options{
-		Session: func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+		Session: func(context.Context) (Session, error) { return sess, nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -516,7 +462,7 @@ func slicesContain(list []string, want string) bool {
 // --- New ---------------------------------------------------------------
 
 func TestNewRejectsANegativeTimeout(t *testing.T) {
-	dummy := func(context.Context) (*mcpstdio.Session, error) { return nil, fmt.Errorf("never called") }
+	dummy := func(context.Context) (Session, error) { return nil, fmt.Errorf("never called") }
 	_, err := New(Options{Session: dummy, Timeout: -time.Second})
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureInvalidInput, err)
@@ -531,7 +477,7 @@ func TestNewRejectsANilSession(t *testing.T) {
 }
 
 func TestNewFillsInDefaults(t *testing.T) {
-	dummy := func(context.Context) (*mcpstdio.Session, error) { return nil, fmt.Errorf("never called") }
+	dummy := func(context.Context) (Session, error) { return nil, fmt.Errorf("never called") }
 	runner, err := New(Options{Session: dummy})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -549,7 +495,7 @@ func TestNewFillsInDefaults(t *testing.T) {
 // --- identity ------------------------------------------------------------
 
 func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
-	dummy := func(context.Context) (*mcpstdio.Session, error) { return nil, fmt.Errorf("never called") }
+	dummy := func(context.Context) (Session, error) { return nil, fmt.Errorf("never called") }
 	runner, err := New(Options{Session: dummy, Implementations: []string{ImplGet, ImplStatus}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -578,7 +524,7 @@ func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 // --- Run: guard rails ------------------------------------------------------
 
 func TestRunRejectsAnImplementationItDoesNotServe(t *testing.T) {
-	dummy := func(context.Context) (*mcpstdio.Session, error) { return nil, fmt.Errorf("never called") }
+	dummy := func(context.Context) (Session, error) { return nil, fmt.Errorf("never called") }
 	runner, err := New(Options{Session: dummy, Implementations: []string{ImplGet}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1413,7 +1359,7 @@ func TestRunOverviewRefusesASensitiveFileOutLoud(t *testing.T) {
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	runner, err := New(Options{
 		Sensitive: []string{".env", "*.pem"},
-		Session:   func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+		Session:   func(context.Context) (Session, error) { return sess, nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1442,7 +1388,7 @@ func TestRunDefinitionRefusesASnippetFromASensitiveFile(t *testing.T) {
 	), false)
 	runner, err := New(Options{
 		Sensitive: []string{".env"},
-		Session:   func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+		Session:   func(context.Context) (Session, error) { return sess, nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1538,6 +1484,63 @@ func TestRunGetRenamesTheOneRowAndAnswersAnUnknownKeyWithNoRows(t *testing.T) {
 	}
 }
 
+// handSession is a second, independent Session double -- deliberately not
+// fakeKivgraph, not backed by a mutex, a process or a wire -- proving the
+// point Session exists to prove: dispatch above only ever needs Call, so
+// any type at all that has one is a legitimate far side. A closure over two
+// maps is the whole implementation.
+type handSession struct {
+	answers map[string]string
+	asked   map[string]map[string]any
+}
+
+func (h *handSession) Call(_ context.Context, tool string, args map[string]any) (string, error) {
+	if h.asked == nil {
+		h.asked = map[string]map[string]any{}
+	}
+	h.asked[tool] = args
+	answer, ok := h.answers[tool]
+	if !ok {
+		return "", fmt.Errorf("%s: no answer configured on handSession", tool)
+	}
+	return answer, nil
+}
+
+// TestRunnerDispatchesThroughAnyTypeThatImplementsSession drives
+// symbol.get end to end against handSession rather than fakeKivgraph or
+// anything descended from mcpstdio.Session, and asserts the exact tool
+// arguments handSession received. Every other test in this file happens to
+// use fakeKivgraph; this one exists so that fact is never mistaken for a
+// requirement -- Options.Session's contract is the Session interface, not
+// any one implementation of it.
+func TestRunnerDispatchesThroughAnyTypeThatImplementsSession(t *testing.T) {
+	repo := testRepo(t)
+	sess := &handSession{answers: map[string]string{
+		toolStatus: readyStatus("current", absPath(t, repo.Path)),
+		toolGet: `{"results":{"stable_key":"KEY1","file_path":"src/index.ts",` +
+			`"name":"createLogger","kind":"function","start_line":41,"end_line":45}}`,
+	}}
+	runner := newTestRunner(t, sess)
+
+	out, err := runner.Run(context.Background(),
+		request(t, repo, CapabilityGet, map[string]any{"stable_key": "KEY1"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := sess.asked[toolGet]; got["stable_key"] != "KEY1" {
+		t.Fatalf("%s was asked %#v, want stable_key KEY1 and nothing else", toolGet, got)
+	}
+	rows, ok := out.Result["symbol"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("symbol = %#v, want the one decoded row", out.Result["symbol"])
+	}
+	row := rows[0].(map[string]any)
+	if row["path"] != "src/index.ts" || row["line"] != 41 ||
+		row["name"] != "createLogger" || row["kind"] != "function" {
+		t.Fatalf("row = %#v, want get_symbol's answer renamed to symbol.get's declared fields", row)
+	}
+}
+
 // symbol.unresolved declares offset and not line, because kivgraph records a
 // byte offset and synthesizing a line from it would invent a position the
 // provider never reported. requested_package is written only when the row
@@ -1558,7 +1561,7 @@ func TestRunUnresolvedKeepsTheByteOffsetAndReportsTruncation(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	asked := fake.callsTo(toolUnresolved)
-	if len(asked) != 1 || asked[0]["reason"] != "PACKAGE_PROVIDER_NOT_FOUND" || asked[0]["limit"] != float64(2) {
+	if len(asked) != 1 || asked[0]["reason"] != "PACKAGE_PROVIDER_NOT_FOUND" || asked[0]["limit"] != 2 {
 		t.Fatalf("%s was asked %#v, want the declared filters forwarded", toolUnresolved, asked)
 	}
 	if _, forwarded := asked[0]["requested_package"]; forwarded {

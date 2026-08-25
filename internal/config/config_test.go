@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -359,6 +360,7 @@ instance = "per_repository"
 func TestKivgraphDashboardProcessIsReadBack(t *testing.T) {
 	body := minimal + `
 [orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
 dashboard = "http://127.0.0.1:7777"
 
 [orchestrator.kivgraph.dashboard_process]
@@ -383,6 +385,7 @@ port = 7777
 func TestKivgraphDashboardProcessRequiresMatchingFixedPort(t *testing.T) {
 	body := minimal + `
 [orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
 dashboard = "http://127.0.0.1:7777"
 
 [orchestrator.kivgraph.dashboard_process]
@@ -392,6 +395,154 @@ lifecycle = "persistent"
 	_, err := config.Load(write(t, body))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput || !strings.Contains(err.Error(), "dashboard_process.port") {
 		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// endpoint and process are the two ways to reach kivgraph now that 0.7.0
+// ships a daemon alongside the stdio child, and a config declaring both has
+// two answers to "where is this server" -- the same failure fileMCPServer's
+// own url-vs-command refusal exists to catch.
+func TestKivgraphRefusesBothEndpointAndProcess(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
+
+[orchestrator.kivgraph.process]
+command = "kivgraph"
+args = ["daemon"]
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "has both endpoint and process") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// The moment a file writes anything at all under orchestrator.kivgraph it
+// has started answering "where is this server", and answering neither is
+// exactly as useless as answering both: nothing left for the adapter to
+// talk to.
+func TestKivgraphRefusesNeitherEndpointNorProcess(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+timeout = "30s"
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "needs an endpoint or a process") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// A bearer token authenticates a request to a daemon on the other end of an
+// HTTP connection. A stdio child Atenea itself spawns has no such door, so a
+// token with no endpoint to send it to is refused rather than silently
+// discarded.
+func TestKivgraphRefusesATokenWithoutAnEndpoint(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+token = "daemon-token"
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "token is set without endpoint") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// Also refused with a process declared alongside it: the token is still
+// meaningless once endpoint is cleared in favor of the stdio child.
+func TestKivgraphRefusesATokenWithAProcessButNoEndpoint(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+token = "daemon-token"
+
+[orchestrator.kivgraph.process]
+command = "kivgraph"
+args = ["daemon"]
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "token is set without endpoint") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+func TestKivgraphRefusesAnEndpointThatIsNotAnAbsoluteHTTPURL(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+endpoint = "ftp://127.0.0.1:7788/mcp"
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "endpoint scheme") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// The happy path: a daemon endpoint and the bearer token it demands, read
+// back onto the built adapter exactly as written.
+func TestKivgraphEndpointAndTokenAreReadBack(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
+token = "daemon-token"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Kivgraph.Endpoint != "http://127.0.0.1:7788/mcp" {
+		t.Errorf("endpoint = %q", cfg.Orchestrator.Kivgraph.Endpoint)
+	}
+	if cfg.Orchestrator.Kivgraph.Token != "daemon-token" {
+		t.Errorf("token = %q", cfg.Orchestrator.Kivgraph.Token)
+	}
+	if cfg.Orchestrator.Kivgraph.Process != nil {
+		t.Errorf("process = %+v, want nil: the file never declared one", cfg.Orchestrator.Kivgraph.Process)
+	}
+}
+
+// Choosing process over the compiled kivgraph.DefaultEndpoint fallback has
+// to actually clear it: a built adapter naming both would be exactly the
+// ambiguity the both-set refusal above exists to catch, just reached through
+// the fallback instead of the file.
+func TestKivgraphProcessClearsTheCompiledEndpointFallback(t *testing.T) {
+	body := minimal + `
+[orchestrator.kivgraph.process]
+command = "kivgraph"
+args = ["daemon"]
+lifecycle = "on_demand"
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Kivgraph.Endpoint != "" {
+		t.Errorf("endpoint = %q, want empty: process was chosen instead", cfg.Orchestrator.Kivgraph.Endpoint)
+	}
+	if cfg.Orchestrator.Kivgraph.Process == nil || cfg.Orchestrator.Kivgraph.Process.Command != "kivgraph" {
+		t.Errorf("process = %+v", cfg.Orchestrator.Kivgraph.Process)
+	}
+}
+
+// A file that never mentions orchestrator.kivgraph at all leaves Endpoint at
+// the compiled fallback -- the same "assume the daemon is already there"
+// shape Serena's own Endpoint has always had -- and Token/Process exactly as
+// unconfigured as before either key existed.
+func TestKivgraphIsUnconfiguredByDefault(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Orchestrator.Kivgraph.Endpoint != kivgraph.DefaultEndpoint {
+		t.Errorf("endpoint = %q, want the compiled fallback %q", cfg.Orchestrator.Kivgraph.Endpoint, kivgraph.DefaultEndpoint)
+	}
+	if cfg.Orchestrator.Kivgraph.Token != "" {
+		t.Errorf("token = %q, want empty when the file never mentions orchestrator.kivgraph", cfg.Orchestrator.Kivgraph.Token)
+	}
+	if cfg.Orchestrator.Kivgraph.Process != nil {
+		t.Errorf("process = %+v, want nil when the file never mentions orchestrator.kivgraph", cfg.Orchestrator.Kivgraph.Process)
 	}
 }
 

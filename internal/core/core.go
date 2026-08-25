@@ -30,6 +30,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -591,26 +592,32 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 	return guard(runner, procs, instanceID), nil
 }
 
-// buildKivgraphRunner builds the kivgraph adapter. Unlike Serena there is
-// no unmanaged mode to fall back to: a stdio server has no address, only
-// two pipes, so a settings file that names this runner without a Process
-// block has nothing this adapter could ever dial -- refused here rather
-// than reaching Run only to fail on the first call.
+// buildKivgraphRunner builds the kivgraph adapter, over whichever transport the
+// settings file named.
+//
+// kivgraph 0.7.0 serves the same tool surface two ways: `kivgraph serve` over
+// stdio, which Atenea spawns and supervises, and `kivgraph daemon` over
+// streamable HTTP at a URL that answers 401 without its bearer token. The
+// settings file admits exactly one of the two (config refuses a block naming
+// both), so this reads as one branch and not a merge.
+//
+// An endpoint is returned UNGUARDED, the same as an unmanaged Serena: there is
+// no process of Atenea's to wake before the call, and guarding a runner against
+// a supervisor that owns nothing would report a health state nobody is keeping.
 func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
-	if cfg.Orchestrator.Kivgraph.Process == nil {
-		return nil, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: kivgraph has no process to launch -- a stdio server has no address to dial without one",
-			cfg.Source)
+	graph := cfg.Orchestrator.Kivgraph
+	if graph.Process == nil {
+		return buildKivgraphOverHTTP(cfg, graph)
 	}
 	runner, err := kivgraph.New(kivgraph.Options{
-		Implementations: cfg.Orchestrator.Kivgraph.Implementations,
+		Implementations: graph.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
-		Timeout:         cfg.Orchestrator.Kivgraph.Timeout,
-		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
+		Timeout:         graph.Timeout,
+		Session: func(ctx context.Context) (kivgraph.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
 		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
-			process := cfg.Orchestrator.Kivgraph.Process
+			process := graph.Process
 			if process == nil {
 				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
 					"settings %s: kivgraph index has no process declaration", cfg.Source)
@@ -627,6 +634,47 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 	// constant name, never a per-repository lookup the way Serena needs.
 	instanceID := func(contract.Repository) string { return config.RunnerKivgraph }
 	return guard(runner, procs, instanceID), nil
+}
+
+// buildKivgraphOverHTTP dials the daemon instead of spawning a child.
+//
+// One client for the whole runner, not one per call: the MCP handshake is a
+// round trip and a session id, and re-running it per commission would pay for
+// both every time. mcphttp.Client is the same wire format Serena talks, so the
+// bearer token rides on every request the handshake included.
+//
+// repository.index is refused rather than attempted. Building a graph means
+// running the kivgraph BINARY over a checkout, and an endpoint is an address,
+// not a command -- with no process block there is nothing here to run, and the
+// daemon exposes no tool that would do it. Left as a refusal naming what is
+// missing, because silently answering "indexed" for a graph nobody rebuilt is
+// the failure this adapter exists to prevent.
+func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (contract.Runner, error) {
+	headers := map[string]string{}
+	if graph.Token != "" {
+		headers["Authorization"] = "Bearer " + graph.Token
+	}
+	client, err := mcphttp.New(mcphttp.Options{
+		Endpoint: graph.Endpoint,
+		Headers:  headers,
+		Client:   "atenea",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return kivgraph.New(kivgraph.Options{
+		Implementations: graph.Implementations,
+		Sensitive:       cfg.Security.Sensitive,
+		Timeout:         graph.Timeout,
+		Session: func(context.Context) (kivgraph.Session, error) {
+			return client, nil
+		},
+		Index: func(context.Context, string, string) (kivgraph.IndexReport, error) {
+			return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
+				"settings %s: kivgraph is reached at %s, which is an address and not a command: repository.index needs an orchestrator.kivgraph.process block to run the binary with",
+				cfg.Source, graph.Endpoint)
+		},
+	})
 }
 
 // buildTokensaveRunner builds the tokensave adapter. Same refusal as

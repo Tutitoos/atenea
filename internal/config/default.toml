@@ -95,11 +95,14 @@ checkpoint_dir = ""
 # "codex" drives the native Codex CLI; both are off by default because they
 # cost money per call. "serena" is not a CLI at all: it is an MCP server,
 # attached the same way because a capability does not care whether its provider
-# is a command or a server. "kivgraph" and "tokensave" are graph-backed
-# providers, and both speak MCP over stdio rather than HTTP: there is no
-# endpoint to fall back on, so each is launched from its own
-# [orchestrator.<name>.process] table and naming one without that table is
+# is a command or a server.
+# "tokensave" is a graph-backed provider that speaks MCP over stdio only:
+# there is no endpoint to fall back on, so it is launched from its own
+# [orchestrator.tokensave.process] table and naming it without that table is
 # refused at startup rather than discovered as a dead provider mid-run.
+# "kivgraph" is the other graph-backed provider, but unlike tokensave it also
+# has a daemon reachable over streamable HTTP -- see [orchestrator.kivgraph]
+# below for the choice between endpoint and process.
 # "local" is a stand-in
 # that searches the disk directly, for a machine with no client installed. It
 # and omp both serve ripgrep, so attaching both is refused at load: the choice
@@ -236,6 +239,23 @@ runners = ["omp"]
   # instance = "shared"
 
   [orchestrator.kivgraph]
+  # Where kivgraph's own daemon is listening. `kivgraph daemon` serves the
+  # same MCP tool surface as the supervised stdio child further down, over
+  # streamable HTTP at a fixed local port, and is ordinarily already running
+  # under its own systemd user unit before Atenea starts -- the same "assume
+  # it is there" shape [orchestrator.serena]'s own endpoint above assumes for
+  # its proxy. Mutually exclusive with process further down: a server is
+  # reached one way, and declaring both is refused at load rather than
+  # silently preferring one.
+  endpoint = "http://127.0.0.1:7788/mcp"
+  # The daemon refuses every request without this (401 otherwise). It is
+  # stable across daemon restarts but generated per install, so unlike
+  # endpoint above there is no value a shipped repo default could bake in --
+  # read it from ~/.local/state/kivgraph/daemon.json on whichever machine
+  # runs the daemon and paste it here. Meaningless, and refused, without an
+  # endpoint to send it to.
+  # token = "the daemon's token, from ~/.local/state/kivgraph/daemon.json"
+
   # The official binary is used for both the supervised read server and the
   # explicit repository.index operation. Indexing remains permission-gated and
   # is never triggered by detection or by a read capability.
@@ -264,14 +284,18 @@ runners = ["omp"]
 
     # [orchestrator.kivgraph.process]
     # Uncomment to have Atenea launch and supervise the kivgraph server
-    # itself, the same way [orchestrator.serena.process] above does but over
-    # a stdio transport instead of http: Spec.Transport = stdio carries this
-    # over the same restart-limit / on_demand / idle-timeout machinery every
-    # http-transport process block already uses. Left commented for the
-    # same reason serena's own process block above is: `command` below is a
-    # path that exists on this machine and no other, and a shipped repo
-    # default must never bake in one operator's filesystem. Uncommenting is
-    # a per-machine decision, not a compiled default.
+    # itself instead of dialing endpoint above -- an alternative to it, not a
+    # companion: the two are mutually exclusive, and leaving endpoint active
+    # while uncommenting this block is refused at load, so comment out (or
+    # blank) endpoint above first. Same shape as
+    # [orchestrator.serena.process] above but over a stdio transport instead
+    # of http: Spec.Transport = stdio carries this over the same
+    # restart-limit / on_demand / idle-timeout machinery every http-transport
+    # process block already uses. Left commented for the same reason
+    # serena's own process block above is: `command` below is a path that
+    # exists on this machine and no other, and a shipped repo default must
+    # never bake in one operator's filesystem. Uncommenting is a per-machine
+    # decision, not a compiled default.
     #
     # Persistent stdio MCP server, one for the machine: the graph is a single
     # global corpus and readers share it by atomic generation publishing, so a
@@ -2432,10 +2456,10 @@ capability = "symbol.search"
   estimated_duration = "1s"
   estimated_tokens = 1300
 
-# The nine kivgraph implementations share one provider and one supervised
-# stdio-MCP process (see [orchestrator.kivgraph] above): one child process,
-# a handful of tools called against it over the same wire, no second index to
-# build.
+# The nine kivgraph implementations share one provider and one server (see
+# [orchestrator.kivgraph] above -- either its own daemon over streamable
+# HTTP or a supervised stdio child, never both): a handful of tools called
+# against it over the same wire, no second index to build.
 #
 # Duration below is not a guess: it comes from the provider's own measured
 # SLOs, not this page's usual "nearest shape already shipped" fallback --

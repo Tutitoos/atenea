@@ -34,8 +34,13 @@ func startupFor(t *testing.T, runners, extra string) error {
 // runner without a process block declares a far side nothing could ever dial.
 // Refused at startup rather than at the first call, because the first call is
 // somebody's real work and the settings file is the thing that is wrong.
+//
+// kivgraph used to be in this list and no longer belongs in it: 0.7.0 serves
+// the same tools from `kivgraph daemon` over HTTP, so a file naming that runner
+// with no process block means the daemon, not a mistake. See
+// TestKivgraphWithNoProcessBlockDialsTheDaemonInstead.
 func TestAStdioRunnerWithNoProcessBlockIsRefusedAtStartup(t *testing.T) {
-	for _, runner := range []string{"kivgraph", "tokensave"} {
+	for _, runner := range []string{"tokensave"} {
 		t.Run(runner, func(t *testing.T) {
 			err := startupFor(t, `runners = ["local", "`+runner+`"]`, "")
 			if err == nil {
@@ -48,6 +53,16 @@ func TestAStdioRunnerWithNoProcessBlockIsRefusedAtStartup(t *testing.T) {
 				t.Errorf("err = %v, want it to say why a stdio server needs a process block", err)
 			}
 		})
+	}
+}
+
+// The other half of that retirement, and the reason the runner has two modes at
+// all: with no process block kivgraph is reached at an endpoint, so the core
+// starts. Nothing is dialed here -- building a runner opens no socket -- which
+// is exactly what makes this a startup assertion and not a daemon test.
+func TestKivgraphWithNoProcessBlockDialsTheDaemonInstead(t *testing.T) {
+	if err := startupFor(t, `runners = ["local", "kivgraph"]`, ""); err != nil {
+		t.Fatalf("kivgraph with no process block was refused: %v", err)
 	}
 }
 
