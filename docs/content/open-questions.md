@@ -10,6 +10,62 @@ using Atenea day to day, not yet decided, written down as they came up so the
 next session starts from this instead of memory. An entry leaves this list
 by being answered, not by quietly falling off it.
 
+## What the 2026-08-25 audit settled, and what it did not
+
+A full audit of the repository confirmed 209 findings and the remediation
+closed almost all of them. Three entries on this page and several in
+[`What is not built yet`]({{< relref "not-built-yet" >}}) are affected, so the
+state of each is recorded here rather than left to be inferred from a diff.
+
+**Closed by the remediation, and no longer open questions.** The funnel's cost
+comparator was not a strict weak order and could seat a provider beaten on both
+axes; `max_tokens` was compared against a total that included the provider's
+cache, so ordinary turns were refused after being paid for; a workflow launched
+over MCP resolved its repository from the service's own working directory; two
+MCP tools committed money and effects without crossing the chat's grant; and
+`Store.Own` was not atomic, so two Ateneas could execute one graph. None of
+these were questions anybody had asked -- they are listed because the pages
+that describe how the funnel and the workflow behave now describe something
+different.
+
+**Narrowed, not closed.** The service now starts in Atenea's own state root
+rather than in `$HOME`, so the shipped `path = "."` no longer names a home
+directory as a repository to search. That makes the failure empty instead of
+private; it does not make a relative repository path mean anything useful to a
+daemon. The remaining decision is whether the shipped catalog should declare a
+repository at all, or whether a fresh install should start with none and say
+so. It cannot be settled by making `path` absolute alone: the `"."` is the
+mechanism by which a fresh CLI install works against the tree you are standing
+in, and ten end-to-end tests exist because that behaviour is wanted.
+
+**Still open, and still a decision rather than a defect.**
+
+*A rule about when refusing is required.* `atenea floor measure` needs
+`--repo` and `--agent`, and both gate spending only as a side effect of being
+required values. Nothing anywhere says that a flag which can spend money must
+carry a gate. The next flag shaped like the old `--agent` default -- one that
+spends by quietly picking a value nobody asked for -- is stopped only by
+whoever writes it remembering to check. Making that a rule means deciding what
+the rule is: every command that may spend requires a TTY confirmation, or every
+command that may spend must name what it spends on, or something narrower.
+
+*Retention.* Run receipts and the trace database grow without bound, and the
+shape of the fix is known: a `Prune(before)` on `internal/checkpoint`, a
+`DELETE FROM agent_trace WHERE ended_at < ?` on `internal/trace`, a due-marker
+like `metrics.CompactIfDue`, and a window in the settings file. What is not
+known is the window. A receipt is the only record that a commission happened,
+so the number is a decision about what this machine is allowed to forget, and
+writing the verbs before that decision would leave two exported methods nobody
+calls -- the shape this project criticises in writing.
+
+*Quiescing the databases before a backup.* `metrics.duckdb` and `traces.db` are
+copied hot, so a snapshot is crash-consistent and not consistent. The document
+for `internal/backup` now says so plainly, with what is lost on restore. Doing
+better means the tree copier has to know which files are databases and load
+their drivers, which belongs to whoever commissions the snapshot rather than to
+the copier. The decision is whether a backup that can lose the last flush is
+acceptable for these two files, given that both are derived data.
+
 ## Channels that leave no trace on disk
 
 Three separate surfaces moved on 2026-08-13 with nothing written down anywhere

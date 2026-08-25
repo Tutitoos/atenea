@@ -83,7 +83,7 @@ func NewService(exec string, stopGrace time.Duration) (Service, error) {
 	}
 	if strings.ContainsFunc(exec, isControl) {
 		// Every other awkward character in a path can be written so that the
-		// manager reads it back unchanged -- see systemdExec below. A control
+		// manager reads it back unchanged -- see systemdValue below. A control
 		// character cannot: a newline inside ExecStart ends the directive and
 		// turns the rest of the path into a second directive of the [Service]
 		// section, which systemd either rejects or, worse, honors. The unit is
@@ -129,6 +129,20 @@ func NewService(exec string, stopGrace time.Duration) (Service, error) {
 // takes both providers down, and the failure would read as two broken adapters
 // rather than as one line in a unit file. Not exposed is a claim about
 // connections accepted, never about connections made.
+// WorkingDirectory is the line that stops a relative repository path from
+// meaning the user's home directory.
+//
+// A user unit with no WorkingDirectory starts in $HOME, and the shipped
+// settings declare `path = "."` for the `current` repository -- which is how a
+// fresh install works against whatever tree you are standing in when you run
+// the CLI, and is exactly wrong for a daemon that is standing nowhere. The
+// combination meant a `code.search` from a chat raked the whole home
+// directory: Documents, mail, .ssh, .aws. Pointed at the state root it
+// resolves somewhere Atenea owns and that holds nothing to find.
+//
+// It does not make `path = "."` correct for a service -- a repository of
+// nothing is still not the repository anybody meant -- but wrong and empty is
+// a different thing from wrong and private.
 const unitTemplate = `[Unit]
 Description=Atenea orchestration core
 After=default.target
@@ -136,6 +150,7 @@ After=default.target
 [Service]
 Type=simple
 ExecStart=%s run
+WorkingDirectory=%s
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
@@ -166,7 +181,7 @@ func (s Service) UnitText() string {
 // would install -- the same reason the template itself lives in the portable
 // half of this package.
 func systemdText(s Service) string {
-	return fmt.Sprintf(unitTemplate, systemdExec(s.Exec), s.stopSeconds())
+	return fmt.Sprintf(unitTemplate, systemdValue(s.Exec), systemdValue(StateDir()), s.stopSeconds())
 }
 
 // stopSeconds is how long the manager must wait after SIGTERM before killing,
@@ -184,26 +199,31 @@ func (s Service) stopSeconds() int64 {
 // unit file has. See NewService, which refuses a path carrying one.
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
 
-// systemdExec renders a binary path the way systemd's own parser reads it
-// back, because an absolute path is still user input -- the same reason
-// launchdText escapes it for XML.
+// systemdValue renders a path the way systemd's own parser reads it back,
+// because an absolute path is still user input -- the same reason launchdText
+// escapes it for XML. Both ExecStart and WorkingDirectory go through it: they
+// are the same kind of value and systemd reads them the same way.
 //
-// Three things happen to an unquoted ExecStart. systemd splits the value on
-// whitespace, so /opt/My Apps/atenea becomes the binary /opt/My with the
-// argument Apps/atenea. It expands `%` specifiers, so a path containing %h
-// silently becomes the home directory. And a `"` or `\` inside the value has
-// its own meaning to the parser. Quoting the path handles the first, doubling
-// `%` handles the second, and escaping the two metacharacters handles the
-// third. All of it is invisible until the boot that does not come up: the unit
-// installs and enables without complaint either way.
-func systemdExec(exec string) string {
-	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(exec)
+// Three things happen to an unquoted value. systemd splits it on whitespace,
+// so /opt/My Apps/atenea becomes the binary /opt/My with the argument
+// Apps/atenea. It expands `%` specifiers, so a path containing %h silently
+// becomes the home directory. And a `"` or `\` inside the value has its own
+// meaning to the parser. Quoting handles the first, doubling `%` handles the
+// second, and escaping the two metacharacters handles the third. All of it is
+// invisible until the boot that does not come up: the unit installs and
+// enables without complaint either way.
+func systemdValue(path string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace(path)
 	return `"` + escaped + `"`
 }
 
 // launchdText is kept beside the common renderer so Service.UnitText remains
 // the one public inspection point on every supported platform. launchd plist
 // values are escaped because an absolute binary path is still user input.
+//
+// WorkingDirectory is here for the reason unitTemplate gives: without it a
+// launchd agent starts in $HOME, and the shipped `path = "."` then names the
+// user's home directory as a repository to search.
 //
 // ExitTimeOut is the launchd counterpart of systemd's TimeoutStopSec, and it
 // is spelled out for the same reason: launchd's own default is 20 seconds,
@@ -224,7 +244,8 @@ func launchdText(s Service) string {
 	<key>ThrottleInterval</key><integer>5</integer>
 	<key>ExitTimeOut</key><integer>%d</integer>
 	<key>ProcessType</key><string>Background</string>
+	<key>WorkingDirectory</key><string>%s</string>
 </dict>
 </plist>
-`, html.EscapeString(s.Exec), s.stopSeconds())
+`, html.EscapeString(s.Exec), s.stopSeconds(), html.EscapeString(StateDir()))
 }

@@ -14,10 +14,103 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Security
+
+- Hold the MCP workflow tools to the chat's grant. `workflow.create` and
+  `workflow.launch` dispatched without consulting it, so a client that opened a
+  session declaring it would only read could describe a graph whose steps carry
+  `write` and `external` and then launch it. The effects arrive inside a file
+  rather than inside the request, so no schema could catch this; `launch`
+  re-reads them from the persisted run rather than trusting whoever created it.
+- Aim a workflow at a repository instead of at the service's working directory.
+  Neither tool declared a `repository` argument, and the empty string fell
+  through to the process's own directory -- for a daemon, wherever its unit file
+  left it.
+- Start the background service in Atenea's state root. A user unit with no
+  `WorkingDirectory` starts in `$HOME`, and the shipped `path = "."` then names
+  the home directory as a repository to search.
+- Bound every unframed read from a child process. Both stdio transports read a
+  server's stdout with no ceiling, so a server that never emitted a newline grew
+  the service's memory until the machine gave up.
+- Apply the `[local_agents]` token ceiling to types that declare no limit of
+  their own, which is the set it exists for.
+- Refuse a budget of `NaN` or infinity on every entry point rather than on one.
+- Persist the floor a chat narrowed itself to, so resuming a run cannot
+  re-apply the operator's wider standing grant.
+
 ### Fixed
 
+- Rank the funnel on a total order. The cost comparator was Pareto dominance
+  with an id tiebreak, which is intransitive, and with three candidates it could
+  seat one that another beat on both tokens and time.
+- Bound `max_tokens` to the request rather than to the bill. It was compared
+  against a total including the provider's cache reads, so ordinary turns were
+  refused after being paid for and reported as `unavailable`.
+- Read the model's own account of its coverage on a single-shot turn. Only the
+  multi-pass path did, so every dispatch without a budget was refused for
+  stating no completeness -- after paying for the turn.
+- Read a `kivgraph index` longer than 8 KiB. Its output was captured into a
+  buffer keeping only the tail, cut mid-object, and then parsed as complete
+  JSONL, so `repository.index` failed on every real repository.
+- Bound the readiness probe. A child that accepted a connection and then went
+  quiet blocked it forever, and with it the supervisor's stop and the service's
+  shutdown.
+- Take a workflow over atomically. `Store.Own` overwrote the writer pid
+  unconditionally after reading it, so two Ateneas could execute one graph.
+- Validate a redo before writing it. The funding check ran after the gate was
+  answered and the steps reset, so a refusal left a step no command could reach.
+- Refuse a run nothing authorized, and stop creating one: a graph whose shares
+  divided a grant of zero compiled, was written, and was then refused by the
+  gate, leaving a run `list` showed and `resume` executed.
+- Unwind `Engine.execute` the same way on every exit. Two error paths deadlocked
+  on an unbuffered channel and three others stranded the goroutines and the
+  agent processes they held.
+- Write down a review's refusal instead of holding it in memory, and stop
+  counting the refused attempt's money twice.
+- Error on a settings file named by `$ATENEA_CONFIG` that does not exist,
+  instead of booting on the embedded defaults in silence.
+- Require `max_tokens` on an agent type, which the shipped settings and the
+  documentation both already said was required.
+- Bury a stdio child that died on its own, rather than leaving a zombie and
+  three descriptors per death.
+- Give the shared backend's handshake its own context, so a client that hangs up
+  cannot kill a cold server out from under every other chat waiting on it.
+- Bound the wait for in-flight connections by the shutdown grace that exists for
+  it.
+- Read the MCP probe's answer rather than the first JSON object carrying an id:
+  a server that asks a question before answering was read as having answered.
+- Make the metrics buffer a real ring, so a full buffer no longer costs a
+  74-microsecond memmove per measurement with the store's mutex held.
 - Make tagged release publication idempotent: retries reuse an existing GitHub
   release and replace its assets instead of failing on the duplicate tag.
+
+### Changed
+
+- The contract is `3.2.0`. Four additive changes had landed on the public types
+  while `contract.Current` stayed at `3.1.0`, so that number named two different
+  shapes of the package.
+- The suite pins its own temporary root. It could not bind a socket on macOS
+  without `TMPDIR=/tmp`, which only the CI workflow set, so 58 tests failed on a
+  developer's machine and the pre-push hook with them.
+- `release.yml` runs the gates its header claims. `ci.yml` has no tag trigger,
+  so a tag pushed to a commit that never reached main was published having run
+  neither coverage nor the benchmark barriers nor the provider matrix.
+- Three gates that could pass without checking anything now check:
+  `v1-policy-check.sh` anchors each file rather than the list,
+  `benchmark-check.sh` refuses a line with no `ns/op`, and the readiness gate
+  asks `git grep` instead of whichever search tool the machine happens to have.
+- Every workflow job declares `timeout-minutes`, and the embedded status-line
+  widgets are parsed in CI.
+- The one test that started a real, billable Claude Code turn on every
+  `go test` -- and on every push, through the pre-push hook -- is opt-in and
+  bounded.
+- The Claude Desktop packaging is tracked, built from the checkout rather than
+  from one developer's `~/.local/bin`, refuses a manifest whose version
+  disagrees with the binary, and is published per platform by the release
+  workflow.
+- Documentation: the repository overlay's fourth block and its ceiling, the
+  provider catalog, the layout tree, the benchmark inventory, the coverage
+  figures and the contract history now describe the code that exists.
 
 ## [1.0.5] - 2026-08-24
 

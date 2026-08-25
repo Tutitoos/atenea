@@ -112,3 +112,52 @@ func stopTimeout(t *testing.T, text string) time.Duration {
 	t.Fatalf("the unit carries no TimeoutStopSec:\n%s", text)
 	return 0
 }
+
+// A user unit with no WorkingDirectory starts in $HOME.
+//
+// That mattered because the shipped settings declare `path = "."` for the
+// `current` repository -- which is how a fresh install works against whatever
+// tree you are standing in when you run the CLI, and is exactly wrong for a
+// daemon standing nowhere. Together they meant a `code.search` from a chat
+// raked the home directory: Documents, mail, .ssh, .aws. Pointing the service
+// at the state root does not make `path = "."` correct for a daemon, but wrong
+// and empty is a different thing from wrong and private.
+func TestBothManagersStartTheServiceInADirectoryAteneaOwns(t *testing.T) {
+	svc, err := NewService("/usr/local/bin/atenea", 10*time.Second)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	state := StateDir()
+
+	unit := systemdText(svc)
+	if !strings.Contains(unit, "WorkingDirectory=") {
+		t.Error("the systemd unit declares no WorkingDirectory: it starts in $HOME")
+	}
+	if !strings.Contains(unit, state) {
+		t.Errorf("the systemd unit does not point at the state root %q:\n%s", state, unit)
+	}
+
+	plist := launchdText(svc)
+	if !strings.Contains(plist, "<key>WorkingDirectory</key>") {
+		t.Error("the launchd agent declares no WorkingDirectory: it starts in $HOME")
+	}
+	if !strings.Contains(plist, state) {
+		t.Errorf("the launchd agent does not point at the state root %q:\n%s", state, plist)
+	}
+}
+
+// The working directory is user input the same way the binary path is, so it
+// crosses the same escaping. A state root under a home directory with a space
+// in it would otherwise become two directives systemd cannot read, and a `%h`
+// in the path would expand to the home directory the value exists to avoid.
+func TestTheWorkingDirectoryIsEscapedLikeTheBinaryPath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", `/home/some one/%h state`)
+	svc, err := NewService("/usr/local/bin/atenea", time.Second)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if unit := systemdText(svc); !strings.Contains(unit,
+		`WorkingDirectory="/home/some one/%%h state/atenea"`) {
+		t.Errorf("the working directory is not quoted and %%-escaped:\n%s", unit)
+	}
+}

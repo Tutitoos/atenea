@@ -102,6 +102,16 @@ func TestEveryDeclaredVersionIsThisOne(t *testing.T) {
 		// The Claude Desktop extension manifest, which the packer copies
 		// verbatim and whose number the build script compares the binary to.
 		{"../../packaging/claude-desktop/manifest.json", regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)},
+		// The installer URL a reader copies out of the README. A stale one
+		// downloads a real release that is not this one, which is the worst
+		// shape of this error: it works.
+		{"../../README.md", regexp.MustCompile(`releases/download/v([0-9]+\.[0-9]+\.[0-9]+)/`)},
+		// And the version that installer is then told to pin.
+		{"../../README.md", regexp.MustCompile(`atenea-install\.sh --version ([0-9]+\.[0-9]+\.[0-9]+)`)},
+		// The status line as getting-started draws it. A reader compares their
+		// own screen against this, so a stale number reads as their install
+		// being wrong.
+		{"../../docs/content/getting-started.md", regexp.MustCompile(`atenea ([0-9]+\.[0-9]+\.[0-9]+)\s+contract`)},
 	} {
 		body, err := os.ReadFile(declaration.path)
 		if err != nil {
@@ -114,7 +124,8 @@ func TestEveryDeclaredVersionIsThisOne(t *testing.T) {
 			continue
 		}
 		if got := string(found[1]); got != buildinfo.Version {
-			t.Errorf("%s declares version %s, this build is %s", declaration.path, got, buildinfo.Version)
+			t.Errorf("%s declares version %s at /%s/, this build is %s",
+				declaration.path, got, declaration.pattern, buildinfo.Version)
 		}
 	}
 }

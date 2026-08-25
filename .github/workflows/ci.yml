@@ -108,6 +108,34 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # The three widgets Atenea installs into opencode's screen are 1,173 lines of
+  # TSX embedded in the binary, and nothing in a Go suite can tell whether they
+  # parse. A syntax error ships, gets installed into a user's client config, and
+  # is discovered when the status line stops drawing -- silently, because the
+  # host has no way to report a plugin that failed to load.
+  #
+  # esbuild rather than tsc: there is no package.json, no tsconfig and no TS
+  # toolchain in this repository, and adding one to answer "does this parse"
+  # would be a node project's worth of maintenance for a question a parser
+  # answers. It checks syntax, which is the failure that actually ships.
+  widgets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Parse the embedded widgets
+        run: |
+          set -eu
+          for widget in internal/statusline/opencode/*.tsx; do
+            echo "== $widget"
+            npx --yes esbuild@0.25.0 --jsx=automatic --log-level=warning "$widget" >/dev/null
+          done
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 20
