@@ -9,7 +9,7 @@ import PackageDescription
 // Go side stays pure Go and testable against a double on all four CI legs.
 let package = Package(
     name: "atenea-desktop-helper",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(name: "atenea-desktop-helper", path: "Sources/atenea-desktop-helper")
     ]

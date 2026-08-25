@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -248,8 +249,10 @@ func TestTheRunnerDeclaresWhatItCanActuallyDispatch(t *testing.T) {
 	if !runner.Serves(desktop.ImplementationListApps) {
 		t.Errorf("does not serve its own implementation")
 	}
-	if len(runner.Capabilities()) != 1 || runner.Capabilities()[0] != desktop.CapabilityListApps {
-		t.Errorf("capabilities = %v", runner.Capabilities())
+	for _, want := range []string{desktop.CapabilityListApps, desktop.CapabilityInspect, desktop.CapabilityScreenshot} {
+		if !slices.Contains(runner.Capabilities(), want) {
+			t.Errorf("capabilities = %v, missing %s", runner.Capabilities(), want)
+		}
 	}
 }
 
@@ -369,5 +372,155 @@ func TestACapabilityThatNeedsNoPermissionIsNotGatedOnOne(t *testing.T) {
 	params := <-callsSeen
 	if name, _ := params["name"].(string); name != "list_apps" {
 		t.Errorf("first call was %q, want list_apps with no health probe before it", name)
+	}
+}
+
+func inspectCapability() contract.Capability {
+	return contract.Capability{
+		ID: desktop.CapabilityInspect, Version: contract.Version{Major: 1},
+		Summary: "Read one application's accessibility tree.",
+		Effects: []contract.Effect{contract.EffectRead, contract.EffectDevice},
+		Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true,
+			Summary: "Bundle identifier."}},
+		Outputs: []contract.Field{{Name: "count", Type: contract.TypeInt, Required: true,
+			Summary: "How many nodes."}},
+	}
+}
+
+func inspectRequest(t *testing.T, bundle string) contract.RunRequest {
+	t.Helper()
+	declared := inspectCapability()
+	return contract.RunRequest{
+		Capability:     declared,
+		Implementation: contract.Implementation{ID: desktop.ImplementationInspect, Capability: declared.ID},
+		Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+		Payload:        map[string]any{"application": bundle},
+		Permission:     contract.Permission{Task: "read a window", Effects: declared.Effects},
+	}
+}
+
+func inspectHelper(t *testing.T) func(context.Context) (*mcpstdio.Session, error) {
+	return fakeHelper(t, map[string]any{
+		"health": map[string]any{"accessibility": true, "screen_recording": true, "missing": ""},
+		"list_apps": map[string]any{"apps": []any{map[string]any{
+			"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes", "frontmost": true}}},
+		"inspect": map[string]any{
+			"nodes": []any{map[string]any{"role": "AXButton", "depth": 1,
+				"app": "Notes", "bundle_id": "com.apple.Notes", "title": "New"}},
+			"count": 1,
+		},
+	})
+}
+
+// The allow-list is the whole security posture of these two capabilities, and
+// an empty one denies rather than permits. That inversion is the thing most
+// likely to be "simplified" by somebody later, so it is pinned by name.
+func TestAnApplicationNobodyAllowedIsRefused(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     nil, // the shipped posture
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes"))
+	if err == nil {
+		t.Fatal("an application on no allow-list was read")
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Errorf("failure = %v, want permission_denied", got)
+	}
+	if !strings.Contains(err.Error(), "allow-list") {
+		t.Errorf("refusal = %q, want it to name what is missing", err)
+	}
+}
+
+// Denied wins over allowed, because a settings file naming the same
+// application in both is a mistake and the safe reading of a mistake is the
+// refusal. Getting this backwards would turn the seeded password-manager list
+// into decoration.
+func TestDeniedBeatsAllowed(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{"com.apple.Notes", "com.1password.1password"},
+		Denied:      []string{"com.1password.1password"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes")); err != nil {
+		t.Fatalf("an allowed application was refused: %v", err)
+	}
+	_, err = runner.Run(t.Context(), inspectRequest(t, "com.1password.1password"))
+	if err == nil {
+		t.Fatal("an application on both lists was read; denied must win")
+	}
+}
+
+// The result says it is untrusted, and every node carries where it came from.
+// Screen content is written by whoever controls the window; a caller that
+// forgets that is one instruction away from acting on somebody else's text.
+func TestInspectMarksItsResultUntrustedAndKeepsProvenance(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{"com.apple.Notes"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	out, err := runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.Result["untrusted"] != true {
+		t.Error("the result does not declare itself untrusted")
+	}
+	nodes, ok := out.Result["nodes"].([]map[string]any)
+	if !ok || len(nodes) == 0 {
+		t.Fatalf("nodes = %+v", out.Result["nodes"])
+	}
+	if nodes[0]["bundle_id"] != "com.apple.Notes" {
+		t.Errorf("node lost its provenance: %+v", nodes[0])
+	}
+}
+
+// A pid is a number anybody can type. The adapter resolves the target through
+// list_apps instead, so "which application" stops being the caller's claim.
+func TestTheTargetIsResolvedRatherThanTakenFromTheCaller(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{"com.apple.Notes"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes")); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Three calls in order: health, because inspect declares it needs
+	// Accessibility; list_apps, to resolve the target; then the walk itself.
+	var args map[string]any
+	for range 3 {
+		params := <-callsSeen
+		if name, _ := params["name"].(string); name == "inspect" {
+			args, _ = params["arguments"].(map[string]any)
+			break
+		}
+	}
+	if args == nil {
+		t.Fatal("the helper was never asked to inspect anything")
+	}
+	if pid, _ := args["pid"].(float64); int(pid) != 42 {
+		t.Errorf("inspect was sent pid %v, want the one list_apps reported", args["pid"])
+	}
+	// And the ceilings the adapter set, which no caller supplied.
+	for _, key := range []string{"budget_ms", "max_nodes", "max_bytes", "max_depth"} {
+		if _, ok := args[key]; !ok {
+			t.Errorf("the helper was sent no %s; a call with no ceiling is the one that hangs", key)
+		}
 	}
 }

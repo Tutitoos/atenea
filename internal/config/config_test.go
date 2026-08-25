@@ -45,7 +45,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.inspect", "desktop.screenshot", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -66,7 +66,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
 		case "repository.index":
 			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
-		case "desktop.apps":
+		case "desktop.apps", "desktop.inspect", "desktop.screenshot":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
 		default:
 			want = []contract.Effect{contract.EffectRead}
@@ -118,6 +118,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"kivgraph.status",
 		"kivgraph.unresolved_references",
 		"macos.apps",
+		"macos.inspect",
+		"macos.screenshot",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",

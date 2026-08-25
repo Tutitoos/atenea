@@ -74,7 +74,13 @@ func TestAMissingPermissionNamesWhichOneAndWhereItLives(t *testing.T) {
 		{name: "screen recording missing", needsScreen: true, hasAX: true,
 			wantRefused: true, wantMentions: "Screen Recording"},
 		{name: "both missing", needsAX: true, needsScreen: true,
-			wantRefused: true, wantMentions: "neither"},
+			wantRefused: true, wantMentions: "Accessibility and Screen Recording"},
+		// The case the wording has to get right: the machine is missing both,
+		// but this capability only asked for one. Naming the other would send
+		// somebody to grant a permission nothing here needs, and a permission
+		// granted for no reason is the one nobody remembers to take back.
+		{name: "only what it needs is named", needsAX: true,
+			wantRefused: true, wantMentions: "needs Accessibility, which"},
 		{name: "both held", needsAX: true, needsScreen: true, hasAX: true, hasScreen: true},
 		// The one that would be easy to get backwards: needing only the
 		// screen while Accessibility is absent is not a refusal.

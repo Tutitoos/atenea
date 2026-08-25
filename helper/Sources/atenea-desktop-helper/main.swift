@@ -26,6 +26,69 @@ let tools: [Tool] = [
         inputSchema: ["type": "object", "properties": [:] as [String: Any]],
         run: { _ in ["apps": Apps.list()] }
     ),
+    Tool(
+        name: "inspect",
+        description: "Read one application's accessibility tree, bounded by a time budget.",
+        inputSchema: [
+            "type": "object",
+            "required": ["pid", "bundle_id", "app"],
+            "properties": [
+                "pid": ["type": "integer"],
+                "bundle_id": ["type": "string"],
+                "app": ["type": "string"],
+                "roles": ["type": "array", "items": ["type": "string"]],
+                "budget_ms": ["type": "integer"],
+                "max_nodes": ["type": "integer"],
+                "max_bytes": ["type": "integer"],
+                "max_depth": ["type": "integer"],
+            ] as [String: Any],
+        ],
+        run: { args in
+            guard let pid = args["pid"] as? Int, let bundle = args["bundle_id"] as? String,
+                  let app = args["app"] as? String else {
+                throw RPCError.invalidParams("pid, bundle_id and app are required")
+            }
+            // Every ceiling comes from the caller. The helper enforces and
+            // never invents one: a default living down here would be a policy
+            // decision in the place with the least idea of the context.
+            let limits = TreeLimits(
+                deadline: Date().addingTimeInterval(Double(args["budget_ms"] as? Int ?? 2000) / 1000),
+                maxNodes: args["max_nodes"] as? Int ?? 10_000,
+                maxBytes: args["max_bytes"] as? Int ?? 1_000_000,
+                maxDepth: args["max_depth"] as? Int ?? 40)
+            let roles = Set((args["roles"] as? [String]) ?? [])
+            let (rows, stopped) = Tree.walk(pid: pid_t(pid), bundleID: bundle,
+                                            appName: app, roles: roles, limits: limits)
+            var out: [String: Any] = ["nodes": rows, "count": rows.count]
+            // Said out loud rather than inferred from a suspiciously round
+            // count. A truncation nobody is told about is a lie by omission
+            // about what is on somebody's screen.
+            if stopped != .none { out["truncated"] = stopped.rawValue }
+            return out
+        }
+    ),
+    Tool(
+        name: "screenshot",
+        description: "Capture one application's frontmost window as a PNG.",
+        inputSchema: [
+            "type": "object",
+            "required": ["pid"],
+            "properties": ["pid": ["type": "integer"]] as [String: Any],
+        ],
+        run: { args in
+            guard let pid = args["pid"] as? Int else {
+                throw RPCError.invalidParams("pid is required")
+            }
+            let shot = try Capture.window(pid: pid_t(pid))
+            return [
+                "png_base64": shot.png.base64EncodedString(),
+                "width": shot.width,
+                "height": shot.height,
+                "scale": shot.scale,
+                "bytes": shot.png.count,
+            ]
+        }
+    ),
 ]
 
 // MARK: - the loop

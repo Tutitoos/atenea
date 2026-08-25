@@ -72,6 +72,8 @@ type Config struct {
 	// Retention is how long receipts and traces are kept. See the type.
 	Retention Retention
 	Security  Security
+	// Desktop is the allow-list for the desktop capabilities. See the type.
+	Desktop Desktop
 	// LocalAgents caps the agent types a repository declares for itself.
 	// Never the zero value: an absent block is DefaultLocalAgents.
 	LocalAgents     LocalAgents
@@ -631,6 +633,48 @@ type DesktopAdapter struct {
 	Process *ManagedProcess
 }
 
+// Desktop is what the desktop capabilities are allowed to look at.
+//
+// Two lists rather than one because they answer different questions and one of
+// them must not be editable into a permission. Applications is what may be
+// read; Denied is what may never be, whatever the first list says. A single
+// list would make "never look at my password manager" a thing you state by
+// omission, and omission is not a statement -- it is what happens when
+// somebody adds an entry in a hurry.
+type Desktop struct {
+	// Applications is the allow-list, by bundle identifier. EMPTY MEANS DENY
+	// ALL, which is the opposite of the usual reading and is the whole point:
+	// a capability that could read every window on somebody's machine must
+	// not be enabled by a settings file that forgot to mention it.
+	//
+	// Bundle identifiers rather than display names: a name is localized and
+	// changes under the reader's feet, and two applications may share one.
+	Applications []string
+	// Denied always wins, and is seeded rather than empty. The defaults are
+	// the applications where a single screenshot is a credential: password
+	// managers, the keychain, banking. An operator who deletes the block gets
+	// them back; one who writes an explicit empty list has said something.
+	Denied []string
+}
+
+// DefaultDesktop is the shipped posture: nothing allowed, and the obvious
+// hazards refused even if somebody allows them later.
+func DefaultDesktop() Desktop {
+	return Desktop{
+		Applications: nil,
+		Denied: []string{
+			"com.apple.keychainaccess",
+			"com.1password.1password",
+			"com.agilebits.onepassword7",
+			"com.bitwarden.desktop",
+			"com.lastpass.LastPass",
+			"org.keepassxc.keepassxc",
+			"in.sinew.Enpass-Desktop",
+			"com.dashlane.dashlanephonefinal",
+		},
+	}
+}
+
 // Security is the one place delicate files are declared.
 type Security struct {
 	// Sensitive holds the path patterns that carry secrets. Reading is free by
@@ -1070,6 +1114,7 @@ type file struct {
 	Retention       fileRetention    `toml:"retention"`
 	Backup          fileBackup       `toml:"backup"`
 	Security        fileSecurity     `toml:"security"`
+	Desktop         fileDesktop      `toml:"desktop"`
 	LocalAgents     fileLocalAgents  `toml:"local_agents"`
 	Selector        fileSelector     `toml:"selector"`
 	Capabilities    []fileCapability `toml:"capability"`
@@ -1245,6 +1290,11 @@ type fileManagedProcess struct {
 // guard; emptying it on purpose is the user's call to make.
 type fileSecurity struct {
 	Sensitive *[]string `toml:"sensitive"`
+}
+
+type fileDesktop struct {
+	Applications *[]string `toml:"applications"`
+	Denied       *[]string `toml:"denied"`
 }
 
 type fileSelector struct {
@@ -1654,6 +1704,7 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Security = decoded.Security.build()
+	cfg.Desktop = decoded.Desktop.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 			Capability: rule.Capability,
@@ -2571,6 +2622,21 @@ func (p fileManagedProcess) build(source, section string) (ManagedProcess, error
 		*d.field = dur
 	}
 	return out, nil
+}
+
+// build reads [desktop] with each list independent of the other, so allowing
+// an application does not silently clear the refusals and vice versa. Absent
+// takes the shipped value; present-but-empty is a statement and is honored --
+// an explicitly empty Denied is somebody saying they know what they are doing.
+func (d fileDesktop) build() Desktop {
+	out := DefaultDesktop()
+	if d.Applications != nil {
+		out.Applications = *d.Applications
+	}
+	if d.Denied != nil {
+		out.Denied = *d.Denied
+	}
+	return out
 }
 
 func (s fileSecurity) build() Security {

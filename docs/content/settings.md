@@ -716,6 +716,36 @@ Nothing about it is tunable because nothing about it should be traded away. It
 writes one line per fault and flushes before returning — a rhythm setting would
 only ever be used to make it lose the entry it exists to keep.
 
+## The desktop allow-list
+
+```toml
+[desktop]
+applications = []           # bundle identifiers that may be looked at; EMPTY DENIES ALL
+denied = ["com.apple.keychainaccess", "com.1password.1password"]  # always wins
+```
+
+`applications` is the one list in this file where empty means *nothing* rather
+than *everything*, and the inversion is deliberate. `desktop.inspect` and
+`desktop.screenshot` can read any window on the machine, and a capability like
+that must not be switched on by a settings file that forgot to mention it. Find
+the identifiers with `desktop.apps`, which needs no entry here because it
+returns names and identifiers and nothing about what any window contains.
+
+`denied` always wins, and it is seeded rather than empty. Two lists rather than
+one, because a single list would make "never look at my password manager" a
+thing you state by omission — and omission is what happens when somebody adds
+an entry in a hurry. The shipped refusals are the applications where one
+screenshot is a credential. Deleting the block restores them; writing an
+explicitly empty list is a statement and is honored.
+
+Bundle identifiers rather than display names throughout: a name is localized,
+changes under the reader's feet, and two applications may share one.
+
+Neither list is a permission on its own. The capabilities behind them cause the
+`device` effect, which no floor grants by default, and the adapter refuses them
+outright unless Atenea is the process macOS attributes the permission to — see
+the effect's own section above.
+
 ## Security
 
 ```toml

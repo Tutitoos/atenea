@@ -672,6 +672,8 @@ func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contra
 	runner, err := desktop.New(desktop.Options{
 		Implementations: cfg.Orchestrator.Desktop.Implementations,
 		Timeout:         cfg.Orchestrator.Desktop.Timeout,
+		Allowed:         cfg.Desktop.Applications,
+		Denied:          cfg.Desktop.Denied,
 		Session: func(context.Context) (*mcpstdio.Session, error) {
 			return procs.Session(config.RunnerDesktop)
 		},

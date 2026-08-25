@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
@@ -59,13 +60,38 @@ const DefaultTimeout = 10 * time.Second
 // underscore, and conforming is cheaper than widening a rule that has kept
 // the vocabulary readable.
 const (
-	CapabilityListApps     = "desktop.apps"
-	ImplementationListApps = "macos.apps"
+	CapabilityListApps       = "desktop.apps"
+	ImplementationListApps   = "macos.apps"
+	CapabilityInspect        = "desktop.inspect"
+	ImplementationInspect    = "macos.inspect"
+	CapabilityScreenshot     = "desktop.screenshot"
+	ImplementationScreenshot = "macos.screenshot"
+)
+
+// Ceilings for one inspect call, and the first of them is the one that binds.
+//
+// Measured on the machine this was written for: Finder's whole tree was 349
+// nodes and 17KB in 122ms; Chrome's was 1513 nodes and 91KB in 609ms. The
+// bytes are nothing next to what this transport already carries. The
+// milliseconds are the cost, because a tree is walked over IPC one message per
+// node and one unresponsive application can hold the walk.
+//
+// So the budget is time, sized at roughly three times the slowest thing
+// measured, and the rest are a second net under it -- seven times the node
+// count of a real browser, eleven times its bytes, twice its depth. Numbers
+// with a reading behind them rather than round ones.
+const (
+	defaultBudget   = 2 * time.Second
+	defaultMaxNodes = 10_000
+	defaultMaxBytes = 1 << 20
+	defaultMaxDepth = 40
 )
 
 // DefaultImplementations is what this adapter answers for when a settings file
 // does not narrow it.
-func DefaultImplementations() []string { return []string{ImplementationListApps} }
+func DefaultImplementations() []string {
+	return []string{ImplementationListApps, ImplementationInspect, ImplementationScreenshot}
+}
 
 // Options configures the adapter.
 type Options struct {
@@ -78,6 +104,17 @@ type Options struct {
 	// rather than a value because the process behind it is the supervisor's,
 	// and may not have been started when this adapter was built.
 	Session func(ctx context.Context) (*mcpstdio.Session, error)
+	// Allowed is which applications may be looked at, by bundle identifier.
+	// EMPTY DENIES EVERYTHING, which is the shipped posture and the opposite
+	// of the usual reading: a capability that can read every window on
+	// somebody's machine must not be enabled by a settings file that forgot
+	// to mention it.
+	Allowed []string
+	// Denied always wins over Allowed. Two lists rather than one because a
+	// single list would make "never look at my password manager" a thing you
+	// state by omission, and omission is what happens when somebody adds an
+	// entry in a hurry.
+	Denied []string
 	// Responsible reports whether Atenea is the process macOS will attribute
 	// a device permission to. Injected so the refusal below can be tested on
 	// a machine that is not a Mac -- and so a caller that knows better than
@@ -91,6 +128,7 @@ type Runner struct {
 	timeout         time.Duration
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
 	responsible     func() bool
+	allowed, denied []string
 }
 
 // New prepares the adapter. Nothing is dialed here: the helper is started by
@@ -104,8 +142,9 @@ func New(opts Options) (*Runner, error) {
 	if len(implementations) == 0 {
 		implementations = DefaultImplementations()
 	}
+	known := DefaultImplementations()
 	for _, id := range implementations {
-		if id != ImplementationListApps {
+		if !slices.Contains(known, id) {
 			return nil, contract.Fail(contract.FailureInvalidInput,
 				"desktop: nothing here answers implementation %q", id)
 		}
@@ -123,6 +162,8 @@ func New(opts Options) (*Runner, error) {
 		timeout:         timeout,
 		session:         opts.Session,
 		responsible:     responsible,
+		allowed:         slices.Clone(opts.Allowed),
+		denied:          slices.Clone(opts.Denied),
 	}, nil
 }
 
@@ -155,7 +196,9 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 
 // Capabilities is what its code can actually dispatch, which the wiring above
 // checks against Implementations before anything runs.
-func (r *Runner) Capabilities() []string { return []string{CapabilityListApps} }
+func (r *Runner) Capabilities() []string {
+	return []string{CapabilityListApps, CapabilityInspect, CapabilityScreenshot}
+}
 
 // Run executes one step.
 func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
@@ -175,6 +218,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	switch req.Implementation.ID {
 	case ImplementationListApps:
 		return r.listApps(ctx)
+	case ImplementationInspect:
+		return r.inspect(ctx, req)
+	case ImplementationScreenshot:
+		return r.screenshot(ctx, req)
 	default:
 		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
 			"desktop: nothing here answers implementation %q", req.Implementation.ID)
@@ -191,7 +238,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 // would refuse work that functions perfectly. The capabilities that read the
 // accessibility tree or the screen do need them, and say so here.
 var osNeeds = map[string]struct{ accessibility, screenRecording bool }{
-	CapabilityListApps: {},
+	CapabilityListApps:   {},
+	CapabilityInspect:    {accessibility: true},
+	CapabilityScreenshot: {screenRecording: true},
 }
 
 // permitted refuses a device capability on a process the system will not
@@ -249,9 +298,23 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 		return contract.Fail(contract.FailureUnavailable,
 			"desktop: the helper's health answer is not the shape this expects: %v", err)
 	}
-	if needs.accessibility && !state.Accessibility || needs.screenRecording && !state.ScreenRecording {
+	// Named against what THIS capability needs, not against everything the
+	// machine happens to be missing. The helper reports the whole picture;
+	// repeating it here would send somebody to grant Screen Recording for a
+	// capability that only ever reads the accessibility tree, and a permission
+	// granted for no reason is the one nobody remembers to take back.
+	var missing []string
+	if needs.accessibility && !state.Accessibility {
+		missing = append(missing, "Accessibility")
+	}
+	if needs.screenRecording && !state.ScreenRecording {
+		missing = append(missing, "Screen Recording")
+	}
+	if len(missing) > 0 {
 		return contract.Fail(contract.FailurePermissionDenied,
-			"desktop: %s cannot run because %s", capability, state.Missing)
+			"desktop: %s needs %s, which Atenea does not have -- grant it in System Settings > "+
+				"Privacy & Security > %s, to Atenea itself and not to a terminal",
+			capability, strings.Join(missing, " and "), missing[0])
 	}
 	return nil
 }
@@ -337,4 +400,165 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 			"desktop: %s answered with nothing", tool)
 	}
 	return text, nil
+}
+
+// mayLookAt applies the allow-list. Denied first, and the order is the rule
+// rather than an optimization: a settings file naming the same application in
+// both lists is a mistake, and the safe reading of a mistake is the refusal.
+func (r *Runner) mayLookAt(bundleID string) bool {
+	if bundleID == "" || slices.Contains(r.denied, bundleID) {
+		return false
+	}
+	return slices.Contains(r.allowed, bundleID)
+}
+
+// target resolves which application a call is about and refuses one the
+// allow-list does not name.
+//
+// The refusal lives here, in Go, and not in the helper. Policy belongs where
+// the settings file is read; the helper is the mechanism and is deliberately
+// given no opinion about what it may look at. Splitting it the other way would
+// put the allow-list in a process that has to be rebuilt to change it.
+//
+// Resolved through list_apps rather than trusting a pid the caller supplied.
+// A pid is a number anybody can type, and this is the seam where "which
+// application" stops being the caller's claim and becomes a fact the machine
+// checked.
+func (r *Runner) target(ctx context.Context, bundleID string) (int, string, error) {
+	if !r.mayLookAt(bundleID) {
+		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+			"desktop: %q is not in the desktop allow-list -- add it to [desktop] applications "+
+				"in the settings file, and note that [desktop] denied always wins", bundleID)
+	}
+	text, err := r.call(ctx, "list_apps", map[string]any{})
+	if err != nil {
+		return 0, "", err
+	}
+	var answer struct {
+		Apps []struct {
+			PID      int    `json:"pid"`
+			Name     string `json:"name"`
+			BundleID string `json:"bundle_id"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return 0, "", contract.Fail(contract.FailureUnavailable,
+			"desktop: the helper's answer to list_apps is not the shape this expects: %v", err)
+	}
+	for _, app := range answer.Apps {
+		if app.BundleID == bundleID {
+			return app.PID, app.Name, nil
+		}
+	}
+	return 0, "", contract.Fail(contract.FailureNotFound,
+		"desktop: %q is allowed but is not running", bundleID)
+}
+
+// inspect answers desktop.inspect.
+func (r *Runner) inspect(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+	started := time.Now()
+	bundleID, _ := req.Payload["application"].(string)
+	pid, name, err := r.target(ctx, bundleID)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+	// Built here from typed fields, never forwarded. The ceilings are this
+	// adapter's to set even when the caller named none, because a call with
+	// no ceiling is the one that hangs.
+	args := map[string]any{
+		"pid":       pid,
+		"bundle_id": bundleID,
+		"app":       name,
+		"budget_ms": int(defaultBudget / time.Millisecond),
+		"max_nodes": defaultMaxNodes,
+		"max_bytes": defaultMaxBytes,
+		"max_depth": defaultMaxDepth,
+	}
+	if roles, ok := req.Payload["roles"].([]any); ok && len(roles) > 0 {
+		filter := make([]string, 0, len(roles))
+		for _, role := range roles {
+			if text, ok := role.(string); ok {
+				filter = append(filter, text)
+			}
+		}
+		args["roles"] = filter
+	}
+	text, err := r.call(ctx, "inspect", args)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+	var answer struct {
+		Nodes     []map[string]any `json:"nodes"`
+		Count     int              `json:"count"`
+		Truncated string           `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: the helper's answer to inspect is not the shape this expects: %v", err)
+	}
+	result := map[string]any{
+		"nodes": answer.Nodes,
+		"count": answer.Count,
+		// Marked on the result rather than left for a reader to infer. Screen
+		// content is written by whoever controls the window, and a caller that
+		// forgets that is one instruction away from acting on somebody else's
+		// text. Every node carries its own app and bundle_id too, so the
+		// provenance survives a result that mixes several.
+		"untrusted": true,
+	}
+	if answer.Truncated != "" {
+		result["truncated"] = answer.Truncated
+	}
+	return contract.Outcome{
+		Result: result, Verdict: contract.VerdictOK,
+		Spent:         contract.Sample{Duration: time.Since(started)},
+		SpentUSD:      0,
+		SpentUSDKnown: true,
+	}, nil
+}
+
+// screenshot answers desktop.screenshot.
+func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+	started := time.Now()
+	bundleID, _ := req.Payload["application"].(string)
+	pid, name, err := r.target(ctx, bundleID)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+	text, err := r.call(ctx, "screenshot", map[string]any{"pid": pid})
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+	var answer struct {
+		PNG    string  `json:"png_base64"`
+		Width  int     `json:"width"`
+		Height int     `json:"height"`
+		Scale  float64 `json:"scale"`
+		Bytes  int     `json:"bytes"`
+	}
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: the helper's answer to screenshot is not the shape this expects: %v", err)
+	}
+	return contract.Outcome{
+		Result: map[string]any{
+			"png_base64": answer.PNG,
+			// The image's own dimensions, which is the coordinate space
+			// anything read off it is expressed in. The helper already
+			// reduced from the display's real pixels; scale says by how
+			// much, so a reader can tell a small window from a heavily
+			// reduced one without needing it to interpret anything.
+			"width":       answer.Width,
+			"height":      answer.Height,
+			"scale":       answer.Scale,
+			"bytes":       answer.Bytes,
+			"application": name,
+			"bundle_id":   bundleID,
+			"untrusted":   true,
+		},
+		Verdict:       contract.VerdictOK,
+		Spent:         contract.Sample{Duration: time.Since(started)},
+		SpentUSD:      0,
+		SpentUSDKnown: true,
+	}, nil
 }

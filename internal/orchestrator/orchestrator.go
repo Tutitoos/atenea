@@ -146,7 +146,11 @@ const (
 // device effect, which no floor grants by default and which the adapter
 // refuses outright unless Atenea is the process the system attributes the
 // permission to.
-const desktopAppsCapability = "desktop.apps"
+const (
+	desktopAppsCapability       = "desktop.apps"
+	desktopInspectCapability    = "desktop.inspect"
+	desktopScreenshotCapability = "desktop.screenshot"
+)
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
@@ -221,6 +225,8 @@ var card = contract.Agent{
 		unresolvedCapability,
 		graphStatusCapability,
 		desktopAppsCapability,
+		desktopInspectCapability,
+		desktopScreenshotCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,
