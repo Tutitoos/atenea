@@ -353,6 +353,24 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 // map per call today, and a mutation that depends on that is a bug waiting for
 // the day somebody caches it.
 func (v *conversation) aimable(schema map[string]any) map[string]any {
+	out := v.aimedAt(schema)
+	properties, _ := out["properties"].(map[string]any)
+	properties[routePreferArg] = map[string]any{
+		"type":        "string",
+		"description": "Optional implementation preference stamped by the decision router; it is honored only if it survives the selector.",
+	}
+	return out
+}
+
+// aimedAt adds the repository argument to a schema and makes it required when
+// the machine has more than one to choose between.
+//
+// Split out of aimable because the workflow tools need exactly this half and
+// none of the other: route_prefer is the selector's, and a workflow step names
+// its own agent. They used to declare no repository at all, which meant a
+// caller had no way to aim them and the code behind them fell back to the
+// service's working directory.
+func (v *conversation) aimedAt(schema map[string]any) map[string]any {
 	repos := v.core.catalog.Repositories()
 	ids := make([]string, 0, len(repos))
 	for _, repo := range repos {
@@ -376,10 +394,6 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 	properties[repositoryArg] = map[string]any{
 		"type":        "string",
 		"description": description,
-	}
-	properties[routePreferArg] = map[string]any{
-		"type":        "string",
-		"description": "Optional implementation preference stamped by the decision router; it is honored only if it survives the selector.",
 	}
 	out["properties"] = properties
 

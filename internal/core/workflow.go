@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Tutitoos/atenea/internal/workflow"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // The workflow surface: two tools, and deliberately two.
@@ -35,7 +36,7 @@ func (v *conversation) workflowTools() []map[string]any {
 			"The graph comes from a TOML file: nothing here invents one. " +
 			"The answer names every step, the agent each runs, what share of the grant each claims, " +
 			"and a digest. Nothing spawns until a person calls " + toolWorkflowLaunch + ".",
-		"inputSchema": map[string]any{
+		"inputSchema": v.aimedAt(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"file": map[string]any{
@@ -44,14 +45,14 @@ func (v *conversation) workflowTools() []map[string]any {
 				},
 			},
 			"required": []string{"file"},
-		},
+		}),
 	}, {
 		"name": toolWorkflowLaunch,
 		"description": "Launch a plan that " + toolWorkflowCreate + " wrote down, and run it to the end. " +
 			"This commits the grant and lets the agents spawn, so it is a person's call and not a model's. " +
 			"If the graph grows mid-run it stops and waits for an approval, indefinitely; " +
 			"nothing new is dispatched while it waits.",
-		"inputSchema": map[string]any{
+		"inputSchema": v.aimedAt(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id": map[string]any{
@@ -60,7 +61,7 @@ func (v *conversation) workflowTools() []map[string]any {
 				},
 			},
 			"required": []string{"id"},
-		},
+		}),
 	}}
 }
 
@@ -76,7 +77,17 @@ func (v *conversation) workflowCreate(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
-	engine, closers, err := v.workflowEngine(ctx, args)
+	// Before the engine, because Create writes the run. A chat that may not
+	// authorize these effects should not leave a plan on disk it can never
+	// launch, and the refusal is more useful here than after the id exists.
+	if refusal := v.authorize(toolWorkflowCreate, graph.Effects()); refusal != nil {
+		return refusal, nil
+	}
+	repository, aimErr := v.workflowRepository(toolWorkflowCreate, args)
+	if aimErr != nil {
+		return nil, aimErr
+	}
+	engine, closers, err := v.workflowEngine(ctx, repository)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
 	}
@@ -128,13 +139,30 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 		return nil, &rpcError{Code: codeInvalidParams,
 			Message: toolWorkflowLaunch + ": id is required"}
 	}
-	engine, closers, err := v.workflowEngine(ctx, args)
+	repository, aimErr := v.workflowRepository(toolWorkflowLaunch, args)
+	if aimErr != nil {
+		return nil, aimErr
+	}
+	engine, closers, err := v.workflowEngine(ctx, repository)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
 	}
 	defer closers()
 
-	run, runErr := engine.Launch(ctx, strings.TrimSpace(id))
+	id = strings.TrimSpace(id)
+	// Re-read from the run rather than trusting the create that wrote it.
+	// A launch may arrive on a different connection, with a different grant,
+	// long after the plan was drawn -- and the effects that matter are the
+	// ones about to happen, not the ones somebody was entitled to describe.
+	effects, err := engine.Effects(ctx, id)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	if refusal := v.authorize(toolWorkflowLaunch, effects); refusal != nil {
+		return refusal, nil
+	}
+
+	run, runErr := engine.Launch(ctx, id)
 	if run.ID == "" {
 		return nil, &rpcError{Code: codeInvalidParams, Message: runErr.Error()}
 	}
@@ -154,16 +182,58 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 	return toolResult(out)
 }
 
+// authorize holds a workflow's effects against what this chat may grant.
+//
+// Every other tools/call path crosses this seam: the capability path through
+// Session.Ask, the raw path explicitly in rawCall. These two did not, and the
+// gap was not academic -- a chat opened with `grant = []`, a client saying it
+// will only read, could describe a graph whose steps declare write and
+// external and then launch it. The effects arrive inside a file rather than
+// inside the request, which is exactly why the schema cannot catch this and
+// the check has to be here.
+//
+// A refusal is an answer, not a protocol error, for the same reason rawCall's
+// is: the caller asked for something real and can read why it did not work.
+func (v *conversation) authorize(tool string, effects []contract.Effect) any {
+	if len(effects) == 0 {
+		return nil
+	}
+	if err := v.session.entitled(effects); err != nil {
+		return toolFailure(tool + ": " + err.Error())
+	}
+	return nil
+}
+
+// workflowRepository resolves which repository a workflow call is about.
+//
+// The same rule the capability path uses, and for the same reason. An empty id
+// reached WorkspaceFor, which falls back to the working directory of the
+// PROCESS -- and here the process is the service, started from wherever its
+// unit file left it. On a machine with several repositories that silently ran
+// agents against $HOME, or against whatever git root contains it, under the
+// grant of a run nobody had aimed.
+func (v *conversation) workflowRepository(tool string, args map[string]any) (string, *rpcError) {
+	repository, _ := args[repositoryArg].(string)
+	if repository = strings.TrimSpace(repository); repository != "" {
+		return repository, nil
+	}
+	repos := v.core.catalog.Repositories()
+	if len(repos) != 1 {
+		return "", &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
+			"%s: %s is required: %d repositories are registered", tool, repositoryArg, len(repos))}
+	}
+	return repos[0].ID, nil
+}
+
 // workflowEngine builds the engine this connection's calls run through.
 //
 // Per call, and over the same trace database the CLI uses: a workflow held in
 // one process's memory would be one nobody else could answer a gate on, and
 // the gate outliving its asker is the whole design.
-func (v *conversation) workflowEngine(ctx context.Context, args map[string]any) (*workflow.Engine, func(), error) {
+func (v *conversation) workflowEngine(ctx context.Context, repository string) (*workflow.Engine, func(), error) {
 	surface := "mcp"
 	if v.session != nil {
 		surface = "mcp session " + v.session.ID()
 	}
-	repository, _ := args[repositoryArg].(string)
-	return workflow.Serve(ctx, v.core.settings, "", strings.TrimSpace(repository), surface, nil)
+	return workflow.Serve(ctx, v.core.settings, "", repository, surface, nil)
 }

@@ -31,6 +31,27 @@ import (
 // asked for by name and runs the one thing that name resolves to. The two are
 // different dispatches, and a step that could be either would have to be told
 // which every time.
+// Effects reports the union of what this graph's steps may cause, sorted.
+//
+// A surface that has to authorize a graph needs one answer to "what does this
+// let happen", and the effects are spread across the steps -- inside a file the
+// request only names. Sorted and deduplicated so the refusal reads the same
+// whichever step declared what.
+func (g Graph) Effects() []contract.Effect {
+	seen := make(map[contract.Effect]struct{}, 4)
+	for _, step := range g.Steps {
+		for _, effect := range step.Permission.Effects {
+			seen[effect] = struct{}{}
+		}
+	}
+	out := make([]contract.Effect, 0, len(seen))
+	for effect := range seen {
+		out = append(out, effect)
+	}
+	slices.Sort(out)
+	return out
+}
+
 type Step struct {
 	ID string
 	// TypeName is the declared [[agent]] this step runs.
@@ -317,9 +338,17 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 	// Money is split, not copied: four steps each handed the whole grant
 	// would spend it four times over and every one of them would be inside
 	// its own ceiling while doing it.
-	if graph.GrantUSD > 0 && shares > graph.GrantUSD+moneyEpsilon {
+	//
+	// The zero grant is not an exemption, and treating it as one is how a run
+	// with no gate got written. `graph.GrantUSD > 0` skipped the check exactly
+	// where the arithmetic is most obviously wrong -- shares that add up to
+	// anything at all, out of nothing -- so the graph compiled, the run was
+	// written, and Store.Ask (which does check) refused afterwards. What was
+	// left behind was a workflow row with every step pending and no gate at
+	// all: `list` showed it, and `resume` ran it.
+	if shares > graph.GrantUSD+moneyEpsilon {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput,
-			"workflow: step shares add up to %.2f, past the %.2f grant",
+			"workflow: step shares add up to $%.2f, past the $%.2f grant",
 			shares, graph.GrantUSD)
 	}
 
