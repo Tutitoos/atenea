@@ -5,7 +5,10 @@ weight: 7
 
 # v1 readiness
 
-This page is the acceptance record for the published v1.0.5 release. It separates what is
+This page is the acceptance record for the published releases. The evidence below the
+"Latest 1.0.5 verification" heading was measured against that release and stays
+filed under it; what was checked for 1.1.0 has a section of its own at the end.
+It separates what is
 implemented and tested in this repository from capabilities that would require
 a new contract or an external provider decision. The normative policy is in
 [`v1.0 policy`]({{< relref "v1-policy" >}}).
@@ -285,6 +288,34 @@ JSON-schema error; the adapter now closes nested objects with
 `additionalProperties: false`, and the follow-up smoke completed with `ok`, one
 match, 40,558 tokens and one provider observation. This validates the real
 Codex completion path as well as the adapter's streaming event path.
+
+## 1.1.0 verification
+
+On 2026-08-25 the audit remediation was merged to `main` as fifteen commits and
+this is what was run against the merged tree, on this machine unless the run is
+named as a CI one:
+
+- `bash scripts/v1-readiness.sh` passed all nine stages, including
+  `go test -race -count=1 ./...`, the policy anchors and the `1.1.0`/`3.3.0`
+  build identity.
+- CI passed all seven jobs on `main`: four native builds, the lint job on both
+  ubuntu and macOS, and the widget parser.
+- Coverage was 81.3% on ubuntu and 81.4% on macOS, against a hard 80.0% target
+  and a 77.0% floor. The history check compared it with the previous successful
+  `main` run and reported `previous 80.0%, current 81.3%`.
+- The three fuzz targets ran in CI for thirty seconds each and found nothing.
+- `golangci-lint` v2.12.2 reported zero issues on both platforms.
+
+What was NOT re-run for this release: no live MCP probe, no paid provider call,
+no OpenCode matrix, and no provider-side indexing. Those are the opt-in jobs and
+they stay opt-in; the observations recorded above them in this page are still
+the ones from 1.0.5 and are dated as such.
+
+Two changes in this release can stop an existing installation from starting, and
+both are stated in the changelog: an `[[agent]]` block that omits `max_tokens`
+is now refused rather than silently given no ceiling, and a service whose
+catalog declares a repository by a relative path is refused rather than
+resolving it against whatever directory the unit file left it in.
 
 ## Deliberately deferred
 

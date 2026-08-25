@@ -14,6 +14,34 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-25
+
+The repository audit and its remediation. Seventeen commits closing 209
+confirmed findings, six decisions taken that the audit could not take, and three
+defects that the audit did not find and CI did.
+
+### Breaking
+
+Two changes here can stop an existing installation from starting. Both are the
+code beginning to enforce something already written down, and both refuse with
+the remedy in the message.
+
+- **An `[[agent]]` block must declare `max_tokens`.** It was documented as
+  required in the shipped settings and in `settings.md`, and was not enforced:
+  an omitted key reached `contract.Limits` as zero, which `Limits.Fits` reads as
+  a parent that constrains nothing, so the type ran with no token ceiling and
+  nobody had chosen that. A hand-written type that omits it now fails to load.
+  *Remedy: write `max_tokens = 0` to declare no ceiling on purpose, or a real
+  number.*
+- **A service refuses a repository declared by a relative path.** The shipped
+  `path = "."` is what makes a fresh install work against whatever tree you are
+  standing in, and a daemon stands nowhere: its working directory is whatever
+  its unit file left it, which was `$HOME`. A service on the built-in defaults
+  now refuses to start rather than searching a directory nobody chose.
+  *Remedy: run `atenea config init`, which writes a settings file naming the
+  directory you run it in.* Commands are unaffected -- that convenience is why
+  the shipped value is what it is.
+
 ### Security
 
 - Hold the MCP workflow tools to the chat's grant. `workflow.create` and
@@ -3006,6 +3034,7 @@ Cost was deliberately left out of the funnel until real measurements existed
   `atenea service install` is implemented for `systemd --user` and says so
   plainly everywhere else.
 
+[1.1.0]: https://github.com/Tutitoos/atenea/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Tutitoos/atenea/releases/tag/v1.0.0
 [0.10.3]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.3
 [0.10.1]: https://github.com/Tutitoos/atenea/releases/tag/v0.10.1
