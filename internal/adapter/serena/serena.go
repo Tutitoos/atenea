@@ -38,13 +38,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -81,11 +81,6 @@ const DefaultTimeout = 90 * time.Second
 // caller asks for a fragment without saying how much of one.
 const defaultSnippetLines = 5
 
-// protocolVersion is the MCP revision this adapter speaks. It is stated rather
-// than negotiated down: a server that cannot answer it should say so at the
-// handshake, not halfway through a commission.
-const protocolVersion = "2025-06-18"
-
 // DefaultImplementations is what the adapter answers for. It is a function and
 // not a package-level slice because a caller that appended to a shared one
 // would quietly change what every other Atenea in this process serves.
@@ -116,9 +111,6 @@ type Options struct {
 	Sensitive []string
 	// Timeout caps one call.
 	Timeout time.Duration
-	// HTTP is the client used to reach every endpoint. Zero uses a default one.
-	// Tests point this at a stub server; nothing else should need it.
-	HTTP *http.Client
 }
 
 // conn is one live MCP session against one Serena URL. Session state cannot
@@ -131,32 +123,24 @@ type conn struct {
 	// project at a time means one caller at a time per URL, so two
 	// commissions never interleave activation or the session lifecycle.
 	mu sync.Mutex
-	// handshakeMu serializes the initialize exchange itself. wireMu cannot:
-	// the handshake is a check, a round trip, and then a write, and holding a
-	// field lock across a network call would block every concurrent sibling
-	// from so much as reading nextID. Held only on the path that has no
-	// session yet, so an established connection never touches it.
-	handshakeMu sync.Mutex
-	// wireMu additionally guards session, active, nextID, and version below.
-	// A commission holds mu for its whole exchange, but symbol.overview's
-	// locateAll dispatches many find_symbol calls concurrently inside that
-	// one hold: mu excludes other commissions from each other, not these
-	// siblings, so the fields every rpc() call touches need their own,
-	// finer lock that each concurrent call actually takes.
-	wireMu sync.Mutex
-	// session is the MCP session id, established lazily on the first call
-	// and reused. Guarded by wireMu.
-	session string
+	// client owns the MCP session itself -- the handshake, Mcp-Session-Id,
+	// JSON-RPC framing -- moved out to internal/mcphttp because that wire
+	// format is not particular to Serena: kivgraph's own daemon speaks the
+	// same streamable HTTP, reached with a bearer token instead of an open
+	// localhost proxy. Its own locking already serializes the handshake and
+	// protects its session state against symbol.overview's concurrent
+	// find_symbol fan-out; nothing here has to repeat that.
+	client *mcphttp.Client
+	// activeMu guards active below. It is separate from mu because
+	// symbol.overview's locateAll dispatches many find_symbol calls
+	// concurrently inside one hold of mu, and every one of them may read
+	// active during activation; mu excludes other commissions from each
+	// other, not these siblings.
+	activeMu sync.Mutex
 	// active is the project path this Serena is currently pointed at, so a
 	// run of steps against one repository does not re-activate it every
-	// time. Guarded by wireMu.
+	// time. Guarded by activeMu.
 	active string
-	// nextID numbers the JSON-RPC requests on this session. Guarded by
-	// wireMu.
-	nextID int
-	// version is what the server called itself when the session opened.
-	// Guarded by wireMu.
-	version string
 }
 
 // Runner is the Serena far side of contract.Runner.
@@ -166,7 +150,6 @@ type Runner struct {
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
-	http            *http.Client
 
 	// conns holds one session per distinct endpoint URL. Guarded by connsMu
 	// only for map insert/lookup; each conn.mu guards that session's wire
@@ -216,20 +199,12 @@ func New(opts Options) (*Runner, error) {
 		impls = DefaultImplementations()
 	}
 	slices.Sort(impls)
-	client := opts.HTTP
-	if client == nil {
-		// The per-call deadline is carried on the context, so the client keeps
-		// no timeout of its own: two ceilings on the same call would race, and
-		// the one that fired first would be the one nobody configured.
-		client = &http.Client{}
-	}
 	return &Runner{
 		defaultEndpoint: endpoint,
 		endpointFor:     opts.EndpointFor,
 		implementations: impls,
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
-		http:            client,
 		conns:           make(map[string]*conn),
 	}, nil
 }
@@ -259,7 +234,11 @@ func (r *Runner) connFor(repo contract.Repository) (*conn, error) {
 	if c, ok := r.conns[endpoint]; ok {
 		return c, nil
 	}
-	c := &conn{endpoint: endpoint}
+	client, err := mcphttp.New(mcphttp.Options{Endpoint: endpoint, Client: "atenea"})
+	if err != nil {
+		return nil, err
+	}
+	c := &conn{endpoint: endpoint, client: client}
 	r.conns[endpoint] = c
 	return c, nil
 }
@@ -355,9 +334,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	// retarget Serena between them. Distinct endpoints take distinct locks.
 	c.mu.Lock()
 	records, notes, runErr := r.resolve(call, c, root, kind, ask)
-	c.wireMu.Lock()
-	toolVersion = c.version
-	c.wireMu.Unlock()
+	toolVersion = c.client.Version()
 	c.mu.Unlock()
 
 	if runErr != nil {
@@ -430,9 +407,7 @@ func (r *Runner) runSearch(ctx context.Context, req contract.RunRequest) (contra
 	}
 	c.mu.Lock()
 	entries, notes, runErr := r.search(call, c, root, a)
-	c.wireMu.Lock()
-	toolVersion := c.version
-	c.wireMu.Unlock()
+	toolVersion := c.client.Version()
 	c.mu.Unlock()
 	if runErr != nil {
 		return contract.Outcome{}, toolVersion, r.failureFor(runErr, call)
@@ -472,7 +447,7 @@ func (r *Runner) search(ctx context.Context, c *conn, root string, a searchAsk) 
 	if retargeted {
 		notes = append(notes, fmt.Sprintf("serena retargeted %s from %s to %s", c.endpoint, previous, root))
 	}
-	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
+	raw, err := c.client.Call(ctx, "find_symbol", map[string]any{
 		"name_path_pattern": a.query,
 		"include_body":      false,
 	})
@@ -563,9 +538,7 @@ func (r *Runner) runOverview(ctx context.Context, req contract.RunRequest) (cont
 	// it, held under one lock for the whole exchange.
 	c.mu.Lock()
 	entries, notes, runErr := r.overview(call, c, root, a)
-	c.wireMu.Lock()
-	toolVersion := c.version
-	c.wireMu.Unlock()
+	toolVersion := c.client.Version()
 	c.mu.Unlock()
 
 	if runErr != nil {
@@ -625,7 +598,7 @@ func (r *Runner) overview(ctx context.Context, c *conn, root string, a overviewA
 		notes = append(notes, fmt.Sprintf(
 			"serena retargeted %s from %s to %s", c.endpoint, previous, root))
 	}
-	raw, err := r.call(ctx, c, "get_symbols_overview", map[string]any{
+	raw, err := c.client.Call(ctx, "get_symbols_overview", map[string]any{
 		"relative_path": a.file,
 		"depth":         a.depth,
 	})
@@ -918,22 +891,22 @@ func (r *Runner) resolve(ctx context.Context, c *conn, root string, k kind, a as
 // case that tears language servers down. A first activation (previous empty)
 // is not a retarget.
 func (r *Runner) activate(ctx context.Context, c *conn, root string) (retargeted bool, previous string, err error) {
-	c.wireMu.Lock()
+	c.activeMu.Lock()
 	already := c.active == root
 	previous = c.active
-	c.wireMu.Unlock()
+	c.activeMu.Unlock()
 	if already {
 		return false, "", nil
 	}
-	if _, err := r.call(ctx, c, "activate_project", map[string]any{"project": root}); err != nil {
-		c.wireMu.Lock()
+	if _, err := c.client.Call(ctx, "activate_project", map[string]any{"project": root}); err != nil {
+		c.activeMu.Lock()
 		c.active = ""
-		c.wireMu.Unlock()
+		c.activeMu.Unlock()
 		return false, previous, err
 	}
-	c.wireMu.Lock()
+	c.activeMu.Lock()
 	c.active = root
-	c.wireMu.Unlock()
+	c.activeMu.Unlock()
 	return previous != "", previous, nil
 }
 
@@ -1024,7 +997,7 @@ func (r *Runner) locateAll(ctx context.Context, c *conn, root string, a overview
 // one name where get_symbols_overview already said there was one," which are
 // not the same fact, and only the second is this adapter's to report.
 func (r *Runner) locateOne(ctx context.Context, c *conn, root string, a overviewAsk, n overviewName) (overviewEntry, error) {
-	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
+	raw, err := c.client.Call(ctx, "find_symbol", map[string]any{
 		"name_path_pattern": n.queryPath,
 		"relative_path":     a.file,
 		"max_matches":       5,
@@ -1130,7 +1103,7 @@ func (r *Runner) symbolAt(ctx context.Context, c *conn, root string, a ask) (sym
 	if found, ok := r.declarationAt(ctx, c, root, a); ok {
 		return found, definitionNote(a, found), nil
 	}
-	raw, err := r.call(ctx, c, "find_symbol", map[string]any{
+	raw, err := c.client.Call(ctx, "find_symbol", map[string]any{
 		"name_path_pattern": a.identifier,
 		"relative_path":     a.file,
 		"include_body":      a.snippet,
@@ -1167,7 +1140,7 @@ func (r *Runner) declarationAt(ctx context.Context, c *conn, root string, a ask)
 	if err != nil {
 		return symbol{}, false
 	}
-	raw, err := r.call(ctx, c, "find_declaration", map[string]any{
+	raw, err := c.client.Call(ctx, "find_declaration", map[string]any{
 		"relative_path": a.file,
 		"regex":         regex,
 	})
@@ -1209,7 +1182,7 @@ func definitionNote(a ask, found symbol) string {
 // cheap lookup finds nothing to search from. Measured: given the correct
 // file, one call found references in two different files at once.
 func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol) ([]location, error) {
-	raw, err := r.call(ctx, c, "find_referencing_symbols", map[string]any{
+	raw, err := c.client.Call(ctx, "find_referencing_symbols", map[string]any{
 		"name_path":     target.NamePath,
 		"relative_path": target.Path,
 	})
@@ -1245,7 +1218,7 @@ func (r *Runner) referencing(ctx context.Context, c *conn, a ask, target symbol)
 // say so plainly. That is a provider that cannot answer here, not a broken
 // commission, so the bin is unavailable and the funnel falls back.
 func (r *Runner) findImplementations(ctx context.Context, c *conn, root string, a ask, target symbol) ([]location, error) {
-	raw, err := r.call(ctx, c, "find_implementations", map[string]any{
+	raw, err := c.client.Call(ctx, "find_implementations", map[string]any{
 		"name_path":     target.NamePath,
 		"relative_path": target.Path,
 	})

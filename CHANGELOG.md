@@ -28,6 +28,32 @@ changes. It is on no floor as shipped.
 `atenea desktop ACTION` performs one act after showing it and waiting for a
 person to agree. It always asks and there is no flag to skip that.
 
+Kivgraph can be reached over HTTP. kivgraph 0.7.0 ships `kivgraph daemon`,
+which serves the same tool surface to many clients from one process over
+streamable HTTP and a unix socket, so `[orchestrator.kivgraph]` now takes
+`endpoint` and `token` beside the existing `process` block -- exclusive of it,
+because two answers to "where is this server" is no answer. The daemon requires
+a bearer token (401 without one) and publishes it with its url in
+`~/.local/state/kivgraph/daemon.json`; measured 2026-08-25, that token survives
+a daemon restart, which is why it can be declared in settings rather than read
+from that file on every launch.
+
+What it buys on a machine where the daemon already runs: no second reader of the
+same global corpus, and no ~165 MB `kivgraph serve` of Atenea's own beside it.
+An endpoint-mode runner is unguarded, like an unmanaged Serena -- there is no
+process of Atenea's to wake before a call. `repository.index` is refused in that
+mode rather than attempted, naming what is missing: an address is not a command,
+and the daemon exposes no tool that rebuilds a graph.
+
+Two shapes moved to make room for it. The streamable-HTTP MCP client that lived
+inside the Serena adapter is now `internal/mcphttp`, one home for the wire
+format, with request headers as its one new capability -- that header is what
+carries the bearer token, on the handshake and on every call after it. And the
+kivgraph adapter no longer names a transport: it asks for a `Session`, an
+interface with the one method it ever used, so the same code answers from a
+stdio child or from the daemon. Verified by parity: `symbol.references` over
+both transports returns byte-identical answers, down to the not_found message.
+
 ### The measurements that shaped it
 
 macOS attributes a device permission to the **responsible ancestor**, not to the

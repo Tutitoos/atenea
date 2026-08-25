@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -84,7 +83,7 @@ type indexDocument struct {
 // The command indexes every repository in Kivgraph's registry; the requested
 // repository is checked afterwards so the result cannot claim success for a
 // graph that did not publish that repository.
-func (r *Runner) runIndex(ctx context.Context, sess *mcpstdio.Session, req contract.RunRequest) (map[string]any, []string, error) {
+func (r *Runner) runIndex(ctx context.Context, sess Session, req contract.RunRequest) (map[string]any, []string, error) {
 	if r.index == nil {
 		return nil, nil, contract.Fail(contract.FailureUnavailable,
 			"kivgraph repository.index: no official index command is configured")
@@ -133,7 +132,7 @@ func (r *Runner) runIndex(ctx context.Context, sess *mcpstdio.Session, req contr
 // provider's official blast-radius traversal for incoming consumers. Kivgraph
 // returns a global graph, while code.impact has repository-relative paths and
 // no repository field, so foreign repositories are intentionally omitted.
-func (r *Runner) runImpact(ctx context.Context, sess *mcpstdio.Session, status *statusResult, req contract.RunRequest) (map[string]any, []string, error) {
+func (r *Runner) runImpact(ctx context.Context, sess Session, status *statusResult, req contract.RunRequest) (map[string]any, []string, error) {
 	baseline, ok := stringAt(req.Payload, "baseline")
 	if !ok || strings.TrimSpace(baseline) == "" {
 		return nil, nil, contract.Fail(contract.FailureInvalidInput, "kivgraph code.impact: baseline is required")

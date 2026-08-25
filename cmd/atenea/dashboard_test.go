@@ -42,7 +42,10 @@ func TestKivgraphDashboardCheckUsesOrchestratorDeclaration(t *testing.T) {
 	defer server.Close()
 
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	body := settings + "\n[orchestrator.kivgraph]\ndashboard = \"" + server.URL + "\"\n"
+	// endpoint alongside the dashboard: writing anything under
+	// [orchestrator.kivgraph] makes the table explicit, and an explicit table
+	// has to say where the server is -- a dashboard is a viewer, not a far side.
+	body := settings + "\n[orchestrator.kivgraph]\nendpoint = \"http://127.0.0.1:7788/mcp\"\ndashboard = \"" + server.URL + "\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}

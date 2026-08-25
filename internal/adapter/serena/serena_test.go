@@ -1663,140 +1663,26 @@ func TestColumnOfNoMatchReturnsFalse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// The wire
+// The session: what this adapter still owns once the wire moved out
 // ---------------------------------------------------------------------------
-
-// One connection opens one session, however many callers arrive at once.
 //
-// symbol.overview dispatches up to sixteen find_symbol calls concurrently
-// inside a single hold of c.mu, and every one of them begins by asking whether
-// a session exists. Written as "read the field, release the lock, then
-// initialize", that check decides nothing: several callers each conclude there
-// is no session and each run their own initialize, every one but the last
-// stamping a session the server then abandons. c.mu does not exclude them from
-// each other -- that is what it means for them to be siblings.
-//
-// Driven at handshake directly rather than through a commission, because Run
-// happens to activate the project first today and that one sequential call
-// warms the session before the fan-out starts. The invariant is not "the
-// current call order hides this"; it is that concurrent callers open one
-// session, which is what a session-clearing error mid-fan-out relies on.
-func TestOneConnectionOpensExactlyOneSessionUnderConcurrentCallers(t *testing.T) {
-	s, endpoint := newStub(t)
-	// Slow enough that a second goroutine reaching the check while the first
-	// is still in flight is the ordinary outcome rather than a lucky one.
-	s.slowHandshake = 40 * time.Millisecond
-	runner := newRunner(t, endpoint)
-	c, err := runner.connFor(repo(t, map[string]string{"pkg/shapes.go": "package pkg\n"}))
-	if err != nil {
-		t.Fatalf("connFor: %v", err)
-	}
-
-	var wg sync.WaitGroup
-	errs := make([]error, maxConcurrentSymbolLookups)
-	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			errs[i] = runner.handshake(t.Context(), c)
-		}(i)
-	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("handshake %d: %v", i, err)
-		}
-	}
-
-	s.mu.Lock()
-	got := s.initializes
-	s.mu.Unlock()
-	if got != 1 {
-		t.Fatalf("initialize ran %d time(s), want 1: the handshake is not serialized", got)
-	}
-}
-
-// An SSE body is a stream of events, not one payload: a server may interleave
-// a progress notification, or a reply to another request, into the same
-// response. Concatenating the data of every event produces valid JSON only
-// when exactly one event ever arrives.
-func TestAnSSEBodyIsReadEventByEventAndTheRightReplyIsTaken(t *testing.T) {
-	s, endpoint := newStub(t)
-	s.extraEvent = `{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}`
-	s.answers["find_declaration"] = declarationAnswer
-	s.answers["find_referencing_symbols"] = referenceAnswer
-	runner := newRunner(t, endpoint)
-
-	// The handshake is the exchange the stub frames as SSE, so a body with a
-	// notification in front of the reply has to survive it or nothing else in
-	// this commission ever runs.
-	if _, err := run(t, runner, CapabilityReferences, repo(t, map[string]string{
-		"pkg/shapes.go": "package pkg\n\nfunc area() int { return 1 }\n",
-	}), map[string]any{"file": "pkg/shapes.go", "line": 3, "column": 6}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-}
-
-// decode's own rules, stated once rather than inferred from a commission.
-func TestDecodePicksTheEventAnsweringTheRequestItWasGiven(t *testing.T) {
-	const wanted = `{"jsonrpc":"2.0","id":7,"result":{"answer":"mine"}}`
-	body := "event: message\ndata: " + `{"jsonrpc":"2.0","method":"notifications/progress"}` + "\n\n" +
-		"event: message\ndata: " + `{"jsonrpc":"2.0","id":6,"result":{"answer":"someone else's"}}` + "\n\n" +
-		"event: message\ndata: " + wanted + "\n\n"
-
-	result, err := decode(answer{contentType: "text/event-stream", body: body}, 7)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !strings.Contains(string(result), "mine") {
-		t.Fatalf("result = %s, want the reply to request 7", result)
-	}
-
-	// A stream that answers a different request is not this request's answer,
-	// and reading it as one would hand the caller somebody else's result.
-	if _, err := decode(answer{contentType: "text/event-stream", body: body}, 9); err == nil {
-		t.Fatal("decode accepted a stream carrying no reply to the request it was given")
-	}
-}
-
-// The framing is decided by the header that exists to declare it. Sniffing the
-// first bytes of the body missed every SSE stream that opens with anything but
-// "event:" or "data:" -- an id: line and a comment are both ordinary -- and
-// sent it into the JSON decoder, where it came back as "unreadable JSON".
-func TestDecodeTrustsTheContentTypeOverTheShapeOfTheFirstLine(t *testing.T) {
-	body := ": keep-alive\nid: 42\nevent: message\ndata: " +
-		`{"jsonrpc":"2.0","id":3,"result":{"answer":"here"}}` + "\n\n"
-
-	result, err := decode(answer{contentType: "text/event-stream; charset=utf-8", body: body}, 3)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !strings.Contains(string(result), "here") {
-		t.Fatalf("result = %s, want the reply the stream carried", result)
-	}
-
-	// And a plain JSON document is still a plain JSON document.
-	plain, err := decode(answer{
-		contentType: "application/json",
-		body:        `{"jsonrpc":"2.0","id":3,"result":{"answer":"plain"}}`,
-	}, 3)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if !strings.Contains(string(plain), "plain") {
-		t.Fatalf("result = %s, want the JSON body read as JSON", plain)
-	}
-}
+// The framing, the handshake, session handling under concurrent callers, and
+// SSE decoding used to be tested here, against this adapter's own private
+// wire client. That client moved to internal/mcphttp -- kivgraph's daemon
+// speaks the same streamable HTTP, reached with a bearer token instead of an
+// open localhost proxy, and two copies of the same framing rules is not a
+// thing this repository keeps -- and its tests moved with it. What is left
+// here is what is still this adapter's own: which project conn.active names.
 
 // Which project this Serena is pointed at belongs to whoever holds c.mu.
 //
-// rpc used to clear it on any POST error, and rpc runs on all sixteen of
-// locateAll's concurrent siblings: one of them losing its connection said
-// nothing about the project the other fifteen were still asking about, and the
-// next commission re-activated for no reason -- which on a monorepo is the
-// project walk that hangs. The session IS dropped, because a dead session
-// really must not be reused; the two facts have different owners.
-func TestAFailedCallDropsTheSessionAndLeavesTheActiveProjectAlone(t *testing.T) {
+// A sibling's find_symbol losing its connection said nothing about the
+// project the other concurrent lookups in the same commission were still
+// asking about, and re-pointing conn.active on that failure re-activated the
+// next commission for no reason -- which on a monorepo is the project walk
+// that hangs. mcphttp.Client owns dropping the dead session on its own; this
+// adapter only has active left to answer for.
+func TestAFailedCallLeavesTheActiveProjectAlone(t *testing.T) {
 	s, endpoint := newStub(t)
 	s.failTools = map[string]bool{"find_symbol": true}
 	runner := newRunner(t, endpoint)
@@ -1809,17 +1695,14 @@ func TestAFailedCallDropsTheSessionAndLeavesTheActiveProjectAlone(t *testing.T) 
 		t.Fatalf("activate: %v", err)
 	}
 
-	if _, err := runner.call(t.Context(), c, "find_symbol", map[string]any{"name_path_pattern": "a"}); err == nil {
+	if _, err := c.client.Call(t.Context(), "find_symbol", map[string]any{"name_path_pattern": "a"}); err == nil {
 		t.Fatal("call succeeded against a transport that refused it")
 	}
 
-	c.wireMu.Lock()
-	active, session := c.active, c.session
-	c.wireMu.Unlock()
+	c.activeMu.Lock()
+	active := c.active
+	c.activeMu.Unlock()
 	if active != r.Path {
 		t.Errorf("active = %q, want the project activate put there: a sibling's broken POST does not re-point Serena", active)
-	}
-	if session != "" {
-		t.Errorf("session = %q, want it dropped: a dead session must not be reused", session)
 	}
 }

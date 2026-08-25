@@ -559,15 +559,28 @@ type SerenaAdapter struct {
 
 // KivgraphAdapter configures the Kivgraph adapter.
 //
-// Kivgraph is the second far side that is not a CLI, but unlike Serena it
-// is never anything else: there is no proxy to point at and no externally
-// managed instance to assume is already running, so this struct has no
-// Endpoint field. The child is a persistent stdio-MCP server Atenea itself
-// spawns and supervises over its own stdin/stdout -- see Process below and
-// supervisor.TransportStdio -- and a process reached by talking to its own
-// stdin has no URL for an Endpoint to name, or to fall back to once Process
-// is unset.
+// Kivgraph is the second far side that is not a CLI. For most of this
+// adapter's life it was never anything else either: no proxy to point at, no
+// externally managed instance to assume was already running, so the only
+// child was a persistent stdio-MCP server Atenea itself spawned and
+// supervised -- see Process below and supervisor.TransportStdio. Kivgraph
+// 0.7.0 changed that: `kivgraph daemon` serves the same MCP tool surface over
+// streamable HTTP at a fixed local URL, refuses every request without a
+// bearer token (401), and is ordinarily already running under its own
+// systemd user unit before Atenea starts, the same "assume it is there"
+// shape Serena's own Endpoint assumes for its proxy. Endpoint and Token name
+// that server; Process remains for the stdio child, now one of two ways to
+// reach Kivgraph rather than the only one.
 type KivgraphAdapter struct {
+	// Endpoint is where the kivgraph daemon's MCP server is listening.
+	// Mutually exclusive with Process: a server is reached one way, and
+	// declaring both leaves an operator's later "the other one" edit
+	// silently ignored instead of refused.
+	Endpoint string
+	// Token is the bearer token the daemon at Endpoint requires; the daemon
+	// answers 401 without one. Meaningless without Endpoint, so build refuses
+	// a Token with no Endpoint to send it to.
+	Token string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one call. It sits at Serena's own
@@ -575,15 +588,16 @@ type KivgraphAdapter struct {
 	// stuck.
 	Timeout time.Duration
 	// Dashboard is the optional read-only web viewer exposed by a separate
-	// Kivgraph UI process. Kivgraph's MCP server remains stdio; the viewer is
-	// deliberately a different process and transport.
+	// Kivgraph UI process. The viewer is deliberately a different process and
+	// transport from whichever one of Endpoint or Process reaches the MCP
+	// server itself.
 	Dashboard string
 	// DashboardProcess is the optional supervised HTTP viewer process.
 	DashboardProcess *ManagedProcess
-	// Process launches and supervises the kivgraph server itself, over a
-	// stdio transport rather than the http one Serena's Process uses.
-	// Unlike Serena, this is not optional: with no Endpoint to fall back to,
-	// a nil Process leaves the adapter with no child to talk to at all.
+	// Process launches and supervises the kivgraph server itself over a
+	// stdio transport, the alternative to dialing Endpoint. Optional now
+	// that Endpoint exists: build refuses both set and refuses neither, so a
+	// non-nil Process here always means Endpoint is empty.
 	Process *ManagedProcess
 }
 
@@ -1243,6 +1257,8 @@ type fileSerenaAdapter struct {
 // talks over, only fileManagedProcess.build's caller does (see the section
 // parameter it takes below).
 type fileKivgraphAdapter struct {
+	Endpoint         string              `toml:"endpoint"`
+	Token            string              `toml:"token"`
 	Implementations  *[]string           `toml:"implementations"`
 	Timeout          string              `toml:"timeout"`
 	Dashboard        string              `toml:"dashboard"`
@@ -1429,14 +1445,11 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 		out.Dashboard = validated
 	}
 	if hasURL {
-		parsed, err := url.Parse(strings.TrimSpace(m.URL))
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return fail("mcp_server %s: url %q is not an absolute http(s) url", id, m.URL)
+		validated, err := validateAbsoluteURL(source, "mcp_server", id, "url", m.URL)
+		if err != nil {
+			return MCPServer{}, err
 		}
-		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return fail("mcp_server %s: url scheme %q is not http or https", id, parsed.Scheme)
-		}
-		out.URL = parsed.String()
+		out.URL = validated
 	}
 	for i, part := range out.Command {
 		if strings.TrimSpace(part) == "" {
@@ -1554,6 +1567,25 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 		out.ToolEffects[name] = narrowed
 	}
 	return out, nil
+}
+
+// validateAbsoluteURL checks that raw is a URL a plain http(s) client could
+// dial: some scheme, some host, nothing fancier. This is the shape the far
+// side of an MCP connection itself takes -- mcp_server's own url and
+// KivgraphAdapter's Endpoint -- as opposed to validateDashboardURL just
+// below, which is a viewer bolted onto a server rather than the server
+// itself and carries a dashboard alias requirement neither of these needs.
+func validateAbsoluteURL(source, section, id, field, raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: %s %q is not an absolute http(s) url", source, section, id, field, raw)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %s %s: %s scheme %q is not http or https", source, section, id, field, parsed.Scheme)
+	}
+	return parsed.String(), nil
 }
 
 func validateDashboardURL(source, section, id, raw string) (string, error) {
@@ -1908,6 +1940,7 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Timeout:         serena.DefaultTimeout,
 		},
 		Kivgraph: KivgraphAdapter{
+			Endpoint:        kivgraph.DefaultEndpoint,
 			Implementations: kivgraph.DefaultImplementations(),
 			Timeout:         kivgraph.DefaultTimeout,
 		},
@@ -2346,10 +2379,44 @@ func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapte
 
 // build is additive over the passed-in defaults, never zeroing: an omitted
 // key keeps whatever the caller already put in out (the compiled-in
-// defaults), the same shape every other adapter's build follows. Unlike
-// fileSerenaAdapter.build there is no Endpoint branch: KivgraphAdapter has
-// no such field, so there is nothing here to leave alone.
+// defaults), the same shape every other adapter's build follows -- with one
+// exception. A file that leaves the whole orchestrator.kivgraph table
+// untouched is left exactly as out already was, kivgraph.DefaultEndpoint and
+// all: the same "assume the daemon is already there" fallback Serena's own
+// compiled endpoint gives it. The moment any field in this table IS written,
+// though, the operator has started answering "where is this server" for
+// themselves, and endpoint and process are the two answers TOML can give:
+// naming both, or naming neither, is refused here instead of discovered
+// later as a provider with no door in and no door out.
 func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (KivgraphAdapter, error) {
+	if l == (fileKivgraphAdapter{}) {
+		return out, nil
+	}
+	hasEndpoint := strings.TrimSpace(l.Endpoint) != ""
+	hasProcess := l.Process != nil
+	hasToken := strings.TrimSpace(l.Token) != ""
+	switch {
+	case hasEndpoint && hasProcess:
+		return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.kivgraph has both endpoint and process; a server is reached one way", source)
+	case !hasEndpoint && !hasProcess && !hasToken:
+		return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.kivgraph needs an endpoint or a process", source)
+	}
+	if hasEndpoint {
+		validated, err := validateAbsoluteURL(source, "orchestrator.kivgraph", "kivgraph", "endpoint", l.Endpoint)
+		if err != nil {
+			return KivgraphAdapter{}, err
+		}
+		out.Endpoint = validated
+	}
+	if hasToken {
+		if !hasEndpoint {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.token is set without endpoint; a bearer token for a stdio child has no server to authenticate against", source)
+		}
+		out.Token = strings.TrimSpace(l.Token)
+	}
 	if l.Implementations != nil {
 		out.Implementations = *l.Implementations
 	}
@@ -2398,6 +2465,12 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 			return KivgraphAdapter{}, err
 		}
 		out.Process = &process
+		// The compiled kivgraph.DefaultEndpoint fallback out arrived with is
+		// exactly the "nothing was said" default this operator just said
+		// something about: declaring process is a deliberate choice of the
+		// stdio child over it, and leaving the fallback in place would leave
+		// the built adapter naming both, contradicting the refusal above.
+		out.Endpoint = ""
 	}
 	return out, nil
 }

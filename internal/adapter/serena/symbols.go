@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -64,7 +65,7 @@ func parseSymbols(text string) ([]symbol, error) {
 	}
 	var out []symbol
 	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
-		return nil, fmt.Errorf("serena sent a symbol list nobody can read: %s", clip(trimmed))
+		return nil, fmt.Errorf("serena sent a symbol list nobody can read: %s", mcphttp.Clip(trimmed))
 	}
 	return out, nil
 }
@@ -95,7 +96,7 @@ func parseSymbol(text string) (symbol, error) {
 	trimmed := strings.TrimSpace(text)
 	var out symbol
 	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
-		return symbol{}, fmt.Errorf("serena sent a definition nobody can read: %s", clip(trimmed))
+		return symbol{}, fmt.Errorf("serena sent a definition nobody can read: %s", mcphttp.Clip(trimmed))
 	}
 	return out, nil
 }
@@ -133,7 +134,7 @@ func parseOverviewNames(text string) ([]overviewName, error) {
 	}
 	var grouped map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(trimmed), &grouped); err != nil {
-		return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", clip(trimmed))
+		return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", mcphttp.Clip(trimmed))
 	}
 	// A Go map has no order, and two identical commissions returning the
 	// same names shuffled would make every diff of two runs noise -- same
@@ -147,7 +148,7 @@ func parseOverviewNames(text string) ([]overviewName, error) {
 	for _, k := range kinds {
 		names, err := walkOverviewGroup(grouped[k], "", "")
 		if err != nil {
-			return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", clip(trimmed))
+			return nil, fmt.Errorf("serena sent a symbol overview nobody can read: %s", mcphttp.Clip(trimmed))
 		}
 		out = append(out, names...)
 	}
@@ -172,7 +173,7 @@ func walkOverviewGroup(raw json.RawMessage, parent, parentPath string) ([]overvi
 		}
 		var withChildren map[string]json.RawMessage
 		if err := json.Unmarshal(item, &withChildren); err != nil || len(withChildren) != 1 {
-			return nil, fmt.Errorf("unreadable overview entry: %s", clip(string(item)))
+			return nil, fmt.Errorf("unreadable overview entry: %s", mcphttp.Clip(string(item)))
 		}
 		for name, children := range withChildren {
 			childPath := qualify(parentPath, name)
@@ -232,7 +233,7 @@ func parseReferences(text string) ([]location, error) {
 		Around string `json:"content_around_reference"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &byPath); err != nil {
-		return nil, fmt.Errorf("serena sent references nobody can read: %s", clip(trimmed))
+		return nil, fmt.Errorf("serena sent references nobody can read: %s", mcphttp.Clip(trimmed))
 	}
 	var out []location
 	for path, byKind := range byPath {

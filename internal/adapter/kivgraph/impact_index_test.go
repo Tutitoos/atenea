@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -133,7 +132,7 @@ func TestRunIndexUsesExplicitIndexerAndPostcondition(t *testing.T) {
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	var gotRoot, gotMode string
 	runner, err := New(Options{
-		Session: func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+		Session: func(context.Context) (Session, error) { return sess, nil },
 		Index: func(_ context.Context, root, mode string) (IndexReport, error) {
 			gotRoot, gotMode = root, mode
 			return IndexReport{Generation: "next", Nodes: 3074, Edges: 11460}, nil
@@ -166,7 +165,7 @@ func TestRunIndexRejectsUnsupportedMode(t *testing.T) {
 	fake, sess := newFakeKivgraph(t)
 	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
 	runner, err := New(Options{
-		Session: func(context.Context) (*mcpstdio.Session, error) { return sess, nil },
+		Session: func(context.Context) (Session, error) { return sess, nil },
 		Index:   func(context.Context, string, string) (IndexReport, error) { return IndexReport{}, nil },
 	})
 	if err != nil {
