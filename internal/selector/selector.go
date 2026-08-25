@@ -415,7 +415,7 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer))
 	}
 	ranked := slices.Clone(survivors)
-	slices.SortFunc(ranked, rankWith(req.Measuring))
+	slices.SortFunc(ranked, rankWith(req.Measuring, dominationCounts(ranked)))
 	// A break-in turn that overtakes a provider the record calls alive is the
 	// one ranking a reader would not predict, so it is said out loud. It is
 	// also self-limiting: two calls and it stops happening.
@@ -573,7 +573,7 @@ func healthSettles(a, b contract.Implementation, measuring bool) bool {
 // Health still comes first, with one exception carried by settlingRank: an
 // implementation nobody has looked at yet is not held below one somebody has,
 // or the turn could never reach it.
-func rankWith(measuring bool) func(a, b contract.Implementation) int {
+func rankWith(measuring bool, dominated map[string]int) func(a, b contract.Implementation) int {
 	return func(a, b contract.Implementation) int {
 		if d := settlingRank(a, measuring) - settlingRank(b, measuring); d != 0 {
 			return d
@@ -594,14 +594,47 @@ func rankWith(measuring bool) func(a, b contract.Implementation) int {
 				return 1
 			}
 		}
-		switch {
-		case cheaper(a, b):
-			return -1
-		case cheaper(b, a):
-			return 1
+		if d := dominated[a.ID] - dominated[b.ID]; d != 0 {
+			return d
 		}
 		return strings.Compare(a.ID, b.ID)
 	}
+}
+
+// dominationCounts is how many candidates beat each one outright.
+//
+// It exists because `cheaper` is a partial order and slices.SortFunc requires
+// a total one. Two implementations trading tokens for seconds are incomparable
+// by design -- nobody has decided what a second is worth, so the tie is honest
+// -- but feeding that straight to a comparator, with an id tiebreak on top,
+// produces an intransitive relation, and an intransitive comparator does not
+// merely order oddly: it can leave a dominated candidate first.
+//
+// Measured on three healthy candidates with no measurements, arriving in id
+// order from the registry: alpha {2000 tokens, 2s}, bravo {500, 9s},
+// charlie {1000, 1s}. charlie beats alpha on both axes. cmp(bravo, alpha)
+// ties and the id decides; cmp(charlie, bravo) ties and the id decides; the
+// insertion sort SortFunc uses for small inputs never compares charlie with
+// alpha at all, and alpha -- dominated -- wins the funnel.
+//
+// Counting dominators fixes it without inventing a weight. It is transitive,
+// because it compares integers, and it can never rank a candidate above
+// something that beats it: everything dominating x also dominates whatever x
+// dominates, plus x itself, so a dominator's count is always the smaller. Two
+// incomparable candidates keep tying, and the id still settles them.
+func dominationCounts(over []contract.Implementation) map[string]int {
+	counts := make(map[string]int, len(over))
+	for _, one := range over {
+		counts[one.ID] = 0
+	}
+	for i := range over {
+		for j := range over {
+			if i != j && cheaper(over[j], over[i]) {
+				counts[over[i].ID]++
+			}
+		}
+	}
+	return counts
 }
 
 // cheaper reports whether a costs less than b on BOTH axes, using each one's

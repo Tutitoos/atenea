@@ -756,7 +756,17 @@ func buildLocalAgent(want localAgent, shipped map[string]AgentType,
 	if ceiling.Limits.MaxDuration > 0 && ceiling.Limits.MaxDuration < inherited.MaxDuration {
 		inherited.MaxDuration = ceiling.Limits.MaxDuration
 	}
-	if ceiling.Limits.MaxTokens > 0 && ceiling.Limits.MaxTokens < inherited.MaxTokens {
+	// The `inherited.MaxTokens == 0` half is what made this a ceiling at all.
+	//
+	// contract.Limits reads zero as "no bound declared" -- Fits returns true
+	// unconditionally against a parent of zero -- so a base type that omits
+	// max_tokens inherits nothing to be tightened, and `20000 < 0` is false.
+	// The machine ceiling then applied to every type EXCEPT the ones with no
+	// limit of their own, which is precisely the set it exists for: a cloned
+	// repository's .atenea/config.toml could declare `runs = "worker"` with
+	// max_tokens = 5000000 and both Fits checks below would pass it.
+	if ceiling.Limits.MaxTokens > 0 &&
+		(inherited.MaxTokens == 0 || ceiling.Limits.MaxTokens < inherited.MaxTokens) {
 		inherited.MaxTokens = ceiling.Limits.MaxTokens
 	}
 	limits := inherited

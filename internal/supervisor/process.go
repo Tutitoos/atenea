@@ -417,15 +417,25 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 // the handshake but never answers it does not itself starve waitForReady's
 // own ability to notice stopCh or ready_timeout in the meantime.
 func (p *process) readyNow(session *mcpstdio.Session) bool {
+	// One tick, on every branch. The stdio branch was bounded and the two
+	// HTTP ones were not: they passed context.Background() to a client whose
+	// default has no Timeout either, so a child that accepted the TCP
+	// connection and then went quiet blocked this call forever. That is
+	// inside waitForReady's `case <-ticker.C`, so ready_timeout and stopCh
+	// stopped being evaluated at all -- and with run() parked there,
+	// waitStopped polled a state that could never change, Supervisor.Stop
+	// never returned, and Core.Shutdown hung behind it. A connection that is
+	// merely refused fails instantly and is unaffected, which is why the
+	// ordinary case never showed this.
+	ctx, cancel := context.WithTimeout(context.Background(), probeEvery)
+	defer cancel()
 	if session != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), probeEvery)
-		defer cancel()
 		return session.Initialize(ctx) == nil
 	}
 	if p.spec.Readiness == ReadinessHTTP {
-		return probeHTTP(context.Background(), p.spec.HTTP, p.endpoint) == nil
+		return probeHTTP(ctx, p.spec.HTTP, p.endpoint) == nil
 	}
-	return probeReady(context.Background(), p.spec.HTTP, p.endpoint) == nil
+	return probeReady(ctx, p.spec.HTTP, p.endpoint) == nil
 }
 
 // gracefulStop asks a ready server to leave the polite way: SIGTERM to the

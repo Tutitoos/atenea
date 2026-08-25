@@ -72,6 +72,11 @@ Commands:
   agent TYPE [FILE]      Run one declared agent type as a process, once;
                          --objective/--criterion set the task; --confirm
                          approves write or external effects
+  workflow VERB          Draw, launch and steer a graph of agent steps:
+                         create, launch, run, propose, approve, reject,
+                         resume, redo, list, show. Money is granted per graph
+                         and split between its steps; nothing spawns until a
+                         person launches it
   traces                 What agents ran and how they ended; filter with
                          --type, --verdict, --open, --since, --id, --limit
   metrics                What the base measured, per capability and provider;

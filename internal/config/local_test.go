@@ -850,3 +850,53 @@ func TestTheEffectiveSettingsCanBeAskedAboutAnotherDirectory(t *testing.T) {
 		t.Error("resolved, but not marked as the repository's own")
 	}
 }
+
+// The ceiling has to hold over a base type that declares no token limit of its
+// own, which is exactly where it used to stop holding.
+//
+// contract.Limits reads zero as "no bound declared" -- Fits returns true
+// unconditionally against a parent of zero -- so the narrowing
+// `ceiling < inherited` compared 20000 against 0, found it not smaller, and
+// left the inherited limit at zero. Both Fits checks then passed anything. The
+// machine ceiling applied to every type EXCEPT the ones with no limit of their
+// own, which is the set it exists for.
+func TestTheMachineCeilingHoldsOverATypeWithNoLimitOfItsOwn(t *testing.T) {
+	unbounded := shipped(t, "reviewer")
+	unbounded.Limits.MaxTokens = 0
+
+	capped := func(t *testing.T, root string) Config {
+		cfg := base(t, root)
+		cfg.Agents = []AgentType{unbounded}
+		cfg.LocalAgents = LocalAgents{Limits: contract.Limits{MaxTokens: 20000}}
+		return cfg
+	}
+
+	// Asking for far more than the machine allows, against a base that
+	// declares no limit at all.
+	greedy := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \""+unbounded.Spec.Name+"\"\nsummary = \"s\"\nmax_tokens = 5000000\n")
+	_, err := withLocal(capped(t, greedy), greedy)
+	if contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("kind = %v, want invalid_input: a repository held 5,000,000 tokens under a 20,000 ceiling (err = %v)",
+			contract.KindOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "this machine allows") {
+		t.Errorf("the refusal does not name the machine's ceiling: %v", err)
+	}
+
+	// And saying nothing inherits the ceiling rather than the absence.
+	quiet := repo(t, t.TempDir(),
+		"[[agent]]\nname = \"mine\"\nruns = \""+unbounded.Spec.Name+"\"\nsummary = \"s\"\n")
+	merged, err := withLocal(capped(t, quiet), quiet)
+	if err != nil {
+		t.Fatalf("withLocal: %v", err)
+	}
+	got, err := merged.AgentTypeByName("mine")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.Limits.MaxTokens != 20000 {
+		t.Errorf("max_tokens = %d, want the machine's 20000: saying nothing must not hold more than saying something",
+			got.Limits.MaxTokens)
+	}
+}

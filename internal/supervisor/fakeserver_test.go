@@ -86,6 +86,14 @@ func runFakeServer() int {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		// The pathological far side: it accepts the connection and then says
+		// nothing, ever. This is the shape that used to hang the probe --
+		// a refused connection fails instantly and never showed the defect,
+		// which is why the ordinary case looked fine for so long.
+		if boolEnv("FAKE_ACCEPT_AND_HANG") {
+			<-r.Context().Done()
+			return
+		}
 		if boolEnv("FAKE_BAD_INITIALIZE") {
 			http.Error(w, "not ready yet", http.StatusServiceUnavailable)
 			return
