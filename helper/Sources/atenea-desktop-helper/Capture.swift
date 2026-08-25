@@ -22,6 +22,27 @@ import ImageIO
 import UniformTypeIdentifiers
 import AppKit
 
+/// One value handed between a Task and whoever is waiting on it.
+///
+/// `@unchecked Sendable` is the honest label: the compiler cannot see that the
+/// lock makes this safe, and the lock does.
+private final class Box<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+
+    func set(_ new: T) {
+        lock.lock()
+        defer { lock.unlock() }
+        value = new
+    }
+
+    func get() -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 enum Capture {
     static let maxLongEdge = 1568
     static let maxBytes = 900_000
@@ -99,7 +120,11 @@ extension Capture {
     /// window server that never answers would otherwise hang the helper and
     /// take every waiting caller with it.
     static func window(pid: pid_t, timeout: TimeInterval = 10) throws -> Shot {
-        var result: Result<CGImage, Error>?
+        // A box with a lock rather than a captured var. The Task below runs on
+        // another thread, and writing a local from there is a data race the
+        // Swift 6 language mode refuses outright -- correctly, since the
+        // semaphore orders the wait but says nothing about the memory.
+        let result = Box<Result<CGImage, Error>>()
         let done = DispatchSemaphore(value: 0)
 
         Task {
@@ -125,9 +150,9 @@ extension Capture {
                 let filter = SCContentFilter(desktopIndependentWindow: window)
                 let image = try await SCScreenshotManager.captureImage(
                     contentFilter: filter, configuration: config)
-                result = .success(image)
+                result.set(.success(image))
             } catch {
-                result = .failure(error)
+                result.set(.failure(error))
             }
             done.signal()
         }
@@ -135,7 +160,7 @@ extension Capture {
         if done.wait(timeout: .now() + timeout) == .timedOut {
             throw RPCError.internalError("the window server did not answer in \(Int(timeout))s")
         }
-        switch result {
+        switch result.get() {
         case .success(let image):
             guard let shot = fit(image) else {
                 throw RPCError.internalError("the capture could not be encoded")

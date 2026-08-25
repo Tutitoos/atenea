@@ -9,7 +9,10 @@ import Foundation
 
 let version = "0.1.0"
 
-let tools: [Tool] = [
+// Immutable once built and read only from the serial loop at the bottom, which
+// is what makes this safe rather than merely quiet. The annotation says the
+// compiler cannot see that and this file can.
+nonisolated(unsafe) let tools: [Tool] = [
     Tool(
         name: "health",
         description: "Report whether this machine can be driven: permissions and graphical session.",

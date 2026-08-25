@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 
 // The desktop helper is a separate artifact on purpose. Atenea is a Go binary
@@ -12,5 +12,11 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(name: "atenea-desktop-helper", path: "Sources/atenea-desktop-helper")
-    ]
+    ],
+    // Pinned rather than left to the toolchain, because leaving it to the
+    // toolchain is how a local build and a CI build check different things:
+    // under Swift 5 the concurrency rules are warnings and under Swift 6 they
+    // are errors, so this compiled here and failed there. Same shape as the
+    // lint job that only ran on ubuntu and never read the darwin files.
+    swiftLanguageModes: [.v6]
 )
