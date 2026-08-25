@@ -113,16 +113,29 @@ func TestTheScreenSaysCanceledAndNotTimeout(t *testing.T) {
 		return
 	}
 
+	dir := t.TempDir()
 	child := osexec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.timeout=60s")
-	child.Env = append(os.Environ(), interruptEnv+"="+t.TempDir())
+	child.Env = append(os.Environ(), interruptEnv+"="+dir)
 	var screen strings.Builder
 	child.Stdout, child.Stderr = &screen, &screen
 	if err := child.Start(); err != nil {
 		t.Fatalf("starting the other Atenea: %v", err)
 	}
 
-	// Two seconds, exactly as reported.
-	time.Sleep(2 * time.Second)
+	// Signaled when the far side is genuinely in the state this is about --
+	// its grandchild spawned and waiting -- rather than after a fixed delay.
+	// The deadline below is not a measurement of how long that should take: it
+	// is the point past which something is wrong rather than merely slow.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "omp-running")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the other Atenea never reached the call this interrupts:\n%s", screen.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err := child.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("signaling: %v", err)
 	}
@@ -172,7 +185,12 @@ func hangUntilInterrupted() {
 	client := filepath.Join(dir, "slow-omp")
 	// The grandchild is deliberate: it inherits the pipe, which is what used
 	// to keep the call waiting long after the signal.
-	script := "#!/bin/sh\ncase \"$1\" in --version) echo 'omp 9.9.9'; exit 0;; esac\nsleep 25 &\nwait\n"
+	// It says when it is actually running. The parent used to sleep two
+	// seconds and hope, which on a loaded machine signals a child that has
+	// not spawned this yet -- testing the wrong moment under this test's name.
+	running := filepath.Join(dir, "omp-running")
+	script := "#!/bin/sh\ncase \"$1\" in --version) echo 'omp 9.9.9'; exit 0;; esac\n" +
+		"touch " + running + "\nsleep 25 &\nwait\n"
 	if err := os.WriteFile(client, []byte(script), 0o700); err != nil {
 		panic(err)
 	}
