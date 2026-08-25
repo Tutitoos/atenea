@@ -15,7 +15,7 @@ not do yet, in the order the design itself put them. Each entry says how you wou
 know it was finished, because "done" is the word this page exists to be careful
 with.
 
-For the current implementation status, use [v1 readiness](v1-readiness.md).
+For the current implementation status, use [v1 readiness]({{< relref "v1-readiness" >}}).
 This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
@@ -561,7 +561,7 @@ A new tool namespace and a new receipt shape are additive, so those steps were a
 contract minor -- `2.3.0` -- and no adapter changes. Step 5 was not: removing a
 field is a major, and the contract then read `3.0.0`. At that historical
 checkpoint it was still not a `1.0.0` conversation; the current release status
-is recorded in [the final audit](v1-final-audit.md).
+is recorded in [the final audit]({{< relref "v1-final-audit" >}}).
 
 **Done when:** a client's configuration names `atenea`, `headroom` and
 `claude-mem` and nothing else; the backend process count reports one with

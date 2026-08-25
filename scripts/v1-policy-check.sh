@@ -8,14 +8,41 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+# contains asserts that EVERY file named still carries the anchor.
+#
+# It used to be an OR: one match anywhere in the list passed, so the anchor that
+# tied CI's coverage threshold to the published policy was satisfied by the
+# policy page alone. Deleting the threshold from the workflow left this gate
+# green, which is the opposite of what an anchor is for. Where an OR is really
+# what is wanted -- one page among several must say a thing -- `contains_any`
+# says so out loud.
+#
+# One tool, not two: `rg -q` is case-sensitive and `grep -q -i` is not, so the
+# pair could disagree about the same anchor. grep is on every runner.
 contains() {
 	local pattern="$1"
 	shift
-	if command -v rg >/dev/null 2>&1; then
-		rg -q "$pattern" "$@"
-	else
-		grep -RIniEq --exclude-dir=.git "$pattern" "$@"
-	fi
+	local file missing=0
+	for file in "$@"; do
+		grep -IniEq -- "$pattern" "$file" || {
+			echo "missing anchor /$pattern/ in $file" >&2
+			missing=1
+		}
+	done
+	test "$missing" -eq 0
+}
+
+contains_any() {
+	local pattern="$1"
+	shift
+	local file
+	for file in "$@"; do
+		if grep -IniEq -- "$pattern" "$file"; then
+			return 0
+		fi
+	done
+	echo "missing anchor /$pattern/ in all of: $*" >&2
+	return 1
 }
 
 required_files=(
@@ -37,15 +64,22 @@ done
 
 policy_docs=(docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md)
 contains 'limits\.max_tokens' "${policy_docs[@]}"
-contains 'advisory|hard cap' "${policy_docs[@]}"
-contains 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/content/v1-contracts.md
+contains_any 'advisory|hard cap' "${policy_docs[@]}"
+contains_any 'OpenCode.*provider|provider.*OpenCode' docs/content/v1-policy.md docs/content/v1-contracts.md
 contains 'interactive permission|confirmación interactiva|interactivo' \
 	docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains 'Tokensave|Semgrep|Context7|claude-mem|Headroom' docs/content/v1-final-audit.md
+contains_any 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
+contains_any 'Tokensave|Semgrep|Context7|claude-mem|Headroom' docs/content/v1-final-audit.md
 contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-contains '77\.0%' .github/workflows/ci.yml docs/content/v1-policy.md docs/content/v1-readiness.md
-contains 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md
+# Split, because the two sides spell it differently and the single pattern
+# only ever matched one of them: the workflow sets ATENEA_COVERAGE_TARGET:
+# "77.0" with no percent sign, so /77\.0%/ could never match it and the anchor
+# was carried entirely by the prose.
+contains '77\.0' .github/workflows/ci.yml scripts/coverage-check.sh
+contains '77,0%|77\.0%' docs/content/v1-policy.md docs/content/v1-readiness.md
+contains '80\.0' scripts/coverage-check.sh
+contains '80,0%|80\.0%' docs/content/v1-policy.md
+contains_any 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md
 
 echo "v1 policy anchors passed"

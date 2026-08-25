@@ -9,7 +9,7 @@ Fases 10 y 11 convierten las preguntas de diseño restantes en contratos
 explícitos. Una capacidad está completa cuando su comportamiento tiene código y
 tests; una función que necesita otro provider o una decisión interactiva queda
 registrada como límite deliberado, no implícita en la configuración. La matriz
-operativa completa está en [v1.0 policy](v1-policy.md).
+operativa completa está en [v1.0 policy]({{< relref "v1-policy" >}}).
 
 ## Structural search
 
@@ -30,11 +30,26 @@ text-search capability.
 
 ## Security and permissions
 
-The v1 behavior is intentionally non-interactive at the adapter and daemon
-layers. Effects are granted before dispatch, and an effect outside the grant is
-refused. The CLI's `--allow` is the explicit escalation mechanism. Adding a
-prompt would require a separate UI/session contract and is therefore not
-silently introduced into a process that may be running unattended.
+Effects are granted before dispatch, and an effect outside the grant is refused.
+The CLI's `--allow` is the explicit escalation mechanism.
+
+There is no *implicit* interactive permission prompt, and that is the deliberate
+limit: no adapter and no daemon path stops to ask. A process running unattended
+under systemd or launchd has no terminal to be asked on, so a prompt introduced
+there would either hang the run or be answered by nobody. Introducing one would
+require a separate UI/session contract.
+
+What does exist is an interactive permission gate the caller asks for by name.
+`--confirm` on `task`, `ask`, `decide --run` and `agent` prints the execution
+summary -- the budget and the effects about to be granted -- and requires a
+confirmation on a TTY before anything is dispatched; without a TTY it refuses
+rather than proceeding. It is a floor for one command, opted into per
+invocation. `agent` goes further and *requires* it for any type declaring write
+or external effects, so the shortest form of that command cannot cause them.
+`backup discard` requires the same word for the same reason.
+
+The distinction matters because the two are easy to conflate: Atenea will never
+interrupt a run to ask, and Atenea will always ask when the caller said to.
 
 ## Provider boundaries
 
@@ -101,5 +116,5 @@ bash scripts/v1-readiness.sh
 ```
 
 The historical design ledger remains in
-[`What is not built yet`](not-built-yet.md); this page and
-[`v1 readiness`](v1-readiness.md) describe the current tree.
+[`What is not built yet`]({{< relref "not-built-yet" >}}); this page and
+[`v1 readiness`]({{< relref "v1-readiness" >}}) describe the current tree.

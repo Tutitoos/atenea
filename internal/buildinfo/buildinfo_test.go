@@ -2,6 +2,7 @@ package buildinfo_test
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -82,6 +83,38 @@ func TestTheDocumentationNamesThisVersion(t *testing.T) {
 		}
 		if !strings.Contains(string(body), buildinfo.Version) {
 			t.Errorf("%s never names version %s", path, buildinfo.Version)
+		}
+	}
+}
+
+// Some files do not merely mention the version, they declare one: a reader --
+// or a packager -- takes the number from them. Those cannot be checked by
+// "contains", because a file that still says 1.0.1 contains a version perfectly
+// well. docs/hugo.toml said 1.0.1 for four releases and put "Atenea 1.0.1" in
+// the footer of every published page whose body said 1.0.5.
+func TestEveryDeclaredVersionIsThisOne(t *testing.T) {
+	for _, declaration := range []struct {
+		path    string
+		pattern *regexp.Regexp
+	}{
+		// params.version, which the theme prints in the site footer.
+		{"../../docs/hugo.toml", regexp.MustCompile(`(?m)^\s*version\s*=\s*"([^"]+)"`)},
+		// The Claude Desktop extension manifest, which the packer copies
+		// verbatim and whose number the build script compares the binary to.
+		{"../../packaging/claude-desktop/manifest.json", regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)},
+	} {
+		body, err := os.ReadFile(declaration.path)
+		if err != nil {
+			t.Errorf("read %s: %v", declaration.path, err)
+			continue
+		}
+		found := declaration.pattern.FindSubmatch(body)
+		if found == nil {
+			t.Errorf("%s declares no version at all", declaration.path)
+			continue
+		}
+		if got := string(found[1]); got != buildinfo.Version {
+			t.Errorf("%s declares version %s, this build is %s", declaration.path, got, buildinfo.Version)
 		}
 	}
 }
