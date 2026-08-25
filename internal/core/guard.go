@@ -51,6 +51,19 @@ func (g guardedRunner) Run(ctx context.Context, req contract.RunRequest) (contra
 	return g.Runner.Run(ctx, req)
 }
 
+// Unwrap returns the runner underneath, so an optional interface the wrapper
+// does not itself implement can still be found.
+//
+// It exists because guardedRunner embeds contract.Runner -- an interface -- so
+// only that method set is promoted and every optional one is dropped. For
+// contract.IndexProber that is solved by guardedProber below, and it has to
+// be: a probe must be bracketed by Acquire/Release like any other question for
+// the far side. But an optional interface that needs NO bracketing gets no
+// benefit from a wrapper type, and a type per combination is how two optional
+// interfaces become four types and three of them get written wrong. Those are
+// found through here instead.
+func (g guardedRunner) Unwrap() contract.Runner { return g.Runner }
+
 // guardedProber is guardedRunner for a runner that also answers
 // contract.IndexProber.
 //
@@ -103,6 +116,26 @@ func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func
 	return guarded
 }
 
+// surfaceOf finds a runner's optional surface report, through any wrapper.
+//
+// Asked of the wrapper first so a wrapper that ever does implement it wins,
+// then down the Unwrap chain. Bounded rather than recursive to a fixed point:
+// a cycle here would hang a status screen, and nothing in this package nests
+// more than twice.
+func surfaceOf(runner contract.Runner) (string, bool) {
+	for depth := 0; runner != nil && depth < 4; depth++ {
+		if reporter, ok := runner.(contract.SurfaceReporter); ok {
+			return reporter.Surface(), true
+		}
+		unwrapper, ok := runner.(interface{ Unwrap() contract.Runner })
+		if !ok {
+			return "", false
+		}
+		runner = unwrapper.Unwrap()
+	}
+	return "", false
+}
+
 // guardFailure sorts an EnsureReady error into the shared bins, mirroring
 // each adapter's own failureFor: whatever the supervisor says, the core only
 // ever sees one of the six, with the untranslated text kept beside it.
@@ -115,7 +148,13 @@ func guardFailure(err error, ctx context.Context, id string) *contract.Failure {
 		return contract.Fail(contract.StopKind(ctxErr),
 			"%s did not come up before the call ended", id).WithRaw(err.Error())
 	}
-	return contract.Fail(contract.FailureUnavailable, "%s did not come up", id).WithRaw(err.Error())
+	// The reason in the message and not only in Raw. A failure traveling up
+	// through the funnel is re-summarized -- "every implementation of X is
+	// down" -- and Raw does not survive that trip, so a message that said
+	// only "did not come up" left the operator with nothing to act on for the
+	// commonest cause of all: a provider whose binary is not installed.
+	return contract.Fail(contract.FailureUnavailable,
+		"%s did not come up: %v", id, err).WithRaw(err.Error())
 }
 
 // buildSupervisor collects every managed-process spec the settings file
@@ -140,6 +179,13 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	}
 	if p := cfg.Orchestrator.Tokensave.Process; p != nil {
 		added, err := tokensaveSpecs(cfg.Source, *p)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, added...)
+	}
+	if p := cfg.Orchestrator.Desktop.Process; p != nil {
+		added, err := desktopSpecs(cfg.Source, *p)
 		if err != nil {
 			return nil, err
 		}
@@ -292,6 +338,20 @@ func tokensaveSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, 
 				"project -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
 	}
 	return []supervisor.Spec{stdioSpec(config.RunnerTokensave, p)}, nil
+}
+
+// desktopSpecs registers the helper. There is one screen, one pointer and one
+// keyboard on this machine, so `shared` is not a default here but the only
+// coherent answer: a second helper would be a second thing moving the same
+// mouse, and per_repository would make that depend on how many projects
+// happen to be open.
+func desktopSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
+	if p.Instance == config.InstancePerRepository {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.desktop.process.instance is %q, but there is one desktop on "+
+				"this machine -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
+	}
+	return []supervisor.Spec{stdioSpec(config.RunnerDesktop, p)}, nil
 }
 
 // stopProcesses stops every server Atenea launched itself. A core with

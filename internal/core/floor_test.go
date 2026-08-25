@@ -337,3 +337,53 @@ func TestACommissionFromAChatRunsOnTheClientFloorToo(t *testing.T) {
 		t.Errorf("effects = %v, want no write: the commission door skipped the floor", got)
 	}
 }
+
+// device is the effect the operator holds and a client does not, and that
+// asymmetry is the whole permission story for desktop control. It is checked
+// here rather than trusted because the two floors are separate numbers that
+// merely start out equal, and because what sits behind this effect is not a
+// permission Atenea owns: measured on macOS 26.6, the system attributes its
+// device grant to the responsible ancestor rather than to the process asking,
+// so a client that could authorize `device` would be spending a permission
+// granted to something else entirely.
+func TestAClientMayNotAuthorizeDevice(t *testing.T) {
+	atenea := floors(t, "effects = [\"process\", \"device\"]\nclient_effects = [\"process\"]")
+	defer func() { _ = atenea.Shutdown() }()
+
+	console, err := atenea.Ask(t.Context(), question())
+	if err != nil {
+		t.Fatalf("console Ask: %v", err)
+	}
+	if got := granted(t, console); !slices.Contains(got, contract.EffectDevice) {
+		t.Fatalf("console effects = %v, want device: the operator granted it to themselves", got)
+	}
+
+	client, err := openChat(t, atenea).Ask(t.Context(), question())
+	if err != nil {
+		t.Fatalf("client Ask: %v", err)
+	}
+	if got := granted(t, client); slices.Contains(got, contract.EffectDevice) {
+		t.Errorf("client effects = %v, want no device: a client reached the desktop", got)
+	}
+}
+
+// And a client cannot help itself to it either. Asking for an effect the
+// machine does not hold is refused at the door rather than quietly narrowed,
+// which is what keeps the shipped default -- device on no floor at all -- from
+// being a suggestion.
+func TestAClientCannotGrantItselfDeviceTheMachineDoesNotHold(t *testing.T) {
+	atenea := floors(t, "effects = [\"process\"]\nclient_effects = [\"process\"]")
+	defer func() { _ = atenea.Shutdown() }()
+
+	_, err := atenea.Open(core.SessionOptions{
+		ID: "client", Client: "test",
+		Grant:   []contract.Effect{contract.EffectDevice},
+		Context: []contract.ContextLevel{contract.ContextRepository},
+	})
+	if err == nil {
+		t.Fatal("a client was granted device on a machine whose floor never held it")
+	}
+	if !strings.Contains(err.Error(), "device") {
+		t.Errorf("refusal = %q, want it to name the effect it refused", err)
+	}
+}

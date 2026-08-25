@@ -1,0 +1,373 @@
+package desktop_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/Tutitoos/atenea/internal/adapter/desktop"
+	"github.com/Tutitoos/atenea/internal/mcpstdio"
+	"github.com/Tutitoos/atenea/pkg/contract"
+)
+
+// fakeHelper is an MCP server over pipes, standing in for the Swift binary.
+//
+// It is here rather than a build tag around the real helper because the real
+// helper only exists on macOS, and the logic being tested -- what gets sent,
+// what comes back, what is refused -- is the same everywhere. A test that only
+// ran on one leg of the matrix would leave that logic uncovered on the other
+// three, which is exactly the hole the whole separate-process design exists to
+// avoid.
+func fakeHelper(t *testing.T, answers map[string]any) func(context.Context) (*mcpstdio.Session, error) {
+	t.Helper()
+	toServer, fromClient := io.Pipe()
+	toClient, fromServer := io.Pipe()
+	seen := make(chan map[string]any, 8)
+
+	go func() {
+		defer func() { _ = fromServer.Close() }()
+		decoder := json.NewDecoder(toServer)
+		for {
+			var msg map[string]any
+			if err := decoder.Decode(&msg); err != nil {
+				return
+			}
+			id, hasID := msg["id"]
+			if !hasID {
+				continue // a notification answers nobody
+			}
+			var result any
+			switch msg["method"] {
+			case "initialize":
+				result = map[string]any{"protocolVersion": "2025-06-18",
+					"serverInfo": map[string]any{"name": "fake", "version": "0"}}
+			case "tools/call":
+				params, _ := msg["params"].(map[string]any)
+				seen <- params
+				name, _ := params["name"].(string)
+				body, _ := json.Marshal(answers[name])
+				result = map[string]any{
+					"content": []any{map[string]any{"type": "text", "text": string(body)}},
+				}
+			default:
+				result = map[string]any{}
+			}
+			out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+			_, _ = fromServer.Write(append(out, '\n'))
+		}
+	}()
+
+	session := mcpstdio.New(fromClient, toClient, mcpstdio.Options{})
+	t.Cleanup(func() { _ = session.Close() })
+	t.Cleanup(func() { close(seen) })
+	callsSeen = seen
+	return func(context.Context) (*mcpstdio.Session, error) { return session, nil }
+}
+
+// callsSeen carries what the fake was asked, so a test can assert on the
+// arguments the adapter BUILT rather than on the answer it got back. That is
+// the property worth pinning: a client's payload must never reach the far side.
+var callsSeen chan map[string]any
+
+func request(t *testing.T, capability contract.Capability, payload map[string]any) contract.RunRequest {
+	t.Helper()
+	return contract.RunRequest{
+		Capability:     capability,
+		Implementation: contract.Implementation{ID: desktop.ImplementationListApps, Capability: capability.ID},
+		Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+		Payload:        payload,
+		Permission:     contract.Permission{Task: "list what is open", Effects: capability.Effects},
+	}
+}
+
+func appsCapability(effects ...contract.Effect) contract.Capability {
+	if len(effects) == 0 {
+		effects = []contract.Effect{contract.EffectRead, contract.EffectDevice}
+	}
+	return contract.Capability{
+		ID: desktop.CapabilityListApps, Version: contract.Version{Major: 1},
+		Summary: "List the applications with a user interface running on this machine.",
+		Effects: effects,
+		Outputs: []contract.Field{{Name: "apps", Type: contract.TypeRecordList, Required: true,
+			Summary: "The running applications.",
+			Fields: []contract.Field{
+				{Name: "pid", Type: contract.TypeInt, Required: true, Summary: "Process id."},
+				{Name: "name", Type: contract.TypeString, Required: true, Summary: "Display name."},
+			}}},
+	}
+}
+
+func TestAppsAreReadBackFromTheHelper(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": map[string]any{
+		"apps": []any{map[string]any{
+			"pid": 42, "name": "Finder", "bundle_id": "com.apple.finder", "frontmost": true,
+		}},
+	}})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	out, err := runner.Run(t.Context(), request(t, appsCapability(), nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	apps, ok := out.Result["apps"].([]map[string]any)
+	if !ok || len(apps) != 1 {
+		t.Fatalf("result = %+v", out.Result)
+	}
+	if apps[0]["name"] != "Finder" || apps[0]["bundle_id"] != "com.apple.finder" {
+		t.Errorf("app = %+v", apps[0])
+	}
+	// Free work says so, rather than staying silent and being read as
+	// "nobody said". The two are different facts; contract 3.3.0 exists to
+	// keep them apart.
+	if out.SpentUSD != 0 || !out.SpentUSDKnown {
+		t.Errorf("spent = %v known = %v, want a declared zero", out.SpentUSD, out.SpentUSDKnown)
+	}
+}
+
+// The gate has two layers and both are pinned, because either alone is a
+// single point of failure.
+//
+// Layer one: a field the capability never declared is refused before the
+// adapter runs at all. Layer two, below: what does reach the helper is built
+// here from typed inputs rather than forwarded. A passthrough has neither --
+// internal/passthrough filters on the tool NAME and hands the arguments over
+// untouched, which is survivable for a search tool and is not survivable for
+// one that can type.
+func TestAnUndeclaredPayloadIsRefusedBeforeAnythingRuns(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": map[string]any{"apps": []any{}}})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	smuggled := map[string]any{"action": "type", "text": "rm -rf /"}
+	_, err = runner.Run(t.Context(), request(t, appsCapability(), smuggled))
+	if err == nil {
+		t.Fatal("a payload naming fields this capability never declared was accepted")
+	}
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
+		t.Errorf("failure = %v, want invalid_input", got)
+	}
+}
+
+func TestTheHelperIsSentArgumentsThisAdapterBuilt(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": map[string]any{"apps": []any{}}})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), request(t, appsCapability(), nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	params := <-callsSeen
+	if name, _ := params["name"].(string); name != "list_apps" {
+		t.Errorf("helper was asked for %q", name)
+	}
+	args, _ := params["arguments"].(map[string]any)
+	if len(args) != 0 {
+		t.Fatalf("the helper was sent %+v; this capability takes no input and must send none", args)
+	}
+}
+
+func TestDeviceIsRefusedWhenAteneaIsNotTheResponsibleProcess(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": map[string]any{"apps": []any{}}})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return false },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), request(t, appsCapability(), nil))
+	if err == nil {
+		t.Fatal("a device capability ran on a process the system attributes nobody's permission to")
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Errorf("failure = %v, want permission_denied", got)
+	}
+	// The remedy has to be in the message. A refusal that does not say what
+	// to do next is a refusal somebody works around.
+	if !strings.Contains(err.Error(), "service") {
+		t.Errorf("refusal = %q, want it to name the remedy", err)
+	}
+}
+
+// A capability that causes no device effect is not this adapter's business to
+// gate, and gating it anyway would make the refusal above look like a general
+// suspicion of the caller rather than a statement about one specific
+// permission.
+func TestACapabilityWithoutDeviceIsNotGatedOnResponsibility(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": map[string]any{"apps": []any{}}})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return false },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	plain := appsCapability(contract.EffectRead)
+	if _, err := runner.Run(t.Context(), request(t, plain, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestAnUnknownImplementationIsRefusedAtConstruction(t *testing.T) {
+	_, err := desktop.New(desktop.Options{
+		Implementations: []string{"macos.nonesuch"},
+		Session:         fakeHelper(t, nil),
+	})
+	if err == nil {
+		t.Fatal("an implementation nothing answers was accepted")
+	}
+}
+
+func TestTheRunnerDeclaresWhatItCanActuallyDispatch(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{Session: fakeHelper(t, nil)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if runner.ID() != "desktop" {
+		t.Errorf("ID = %q", runner.ID())
+	}
+	// Implementations is what settings told it to answer for; Capabilities is
+	// what its code can dispatch. The wiring above compares the two, so an
+	// adapter that disagreed with itself would be caught at startup.
+	if !runner.Serves(desktop.ImplementationListApps) {
+		t.Errorf("does not serve its own implementation")
+	}
+	if len(runner.Capabilities()) != 1 || runner.Capabilities()[0] != desktop.CapabilityListApps {
+		t.Errorf("capabilities = %v", runner.Capabilities())
+	}
+}
+
+// A helper that answers something this adapter cannot read is a provider
+// problem, not a caller's mistake, and the bin has to say so: sorted as
+// invalid_input it would send somebody to re-check a payload that was fine.
+func TestAnAnswerTheAdapterCannotReadIsAProviderFailure(t *testing.T) {
+	session := fakeHelper(t, map[string]any{"list_apps": "not an object at all"})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), request(t, appsCapability(), nil))
+	if err == nil {
+		t.Fatal("a malformed answer was accepted")
+	}
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Errorf("failure = %v, want unavailable", got)
+	}
+}
+
+// A helper that will not start is the ordinary case on a machine where the
+// binary was never built, and it must read as unavailable rather than as a
+// crash: the difference is whether the funnel may try somebody else.
+func TestAHelperThatCannotBeReachedIsUnavailable(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session: func(context.Context) (*mcpstdio.Session, error) {
+			return nil, errors.New("no such file or directory")
+		},
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), request(t, appsCapability(), nil))
+	if got := contract.KindOf(err); got != contract.FailureUnavailable {
+		t.Errorf("failure = %v, want unavailable", got)
+	}
+}
+
+func TestImplementationsIsWhatSettingsAskedFor(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Implementations: []string{desktop.ImplementationListApps},
+		Session:         fakeHelper(t, nil),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got := runner.Implementations()
+	if len(got) != 1 || got[0] != desktop.ImplementationListApps {
+		t.Fatalf("Implementations = %v", got)
+	}
+	// Handed out as a copy: a caller that sorted or truncated the returned
+	// slice would otherwise be editing what the runner answers with.
+	got[0] = "mutated"
+	if runner.Implementations()[0] != desktop.ImplementationListApps {
+		t.Error("the returned slice shares the runner's own")
+	}
+}
+
+// Surface reports whose permissions would be used, not whether they are
+// granted. On a shell-started process the honest sentence is that the terminal
+// holds them and Atenea is standing behind it, and a status screen that said
+// "granted" instead would be describing somebody else's authority as Atenea's.
+func TestSurfaceSaysWhosePermissionsTheseWouldBe(t *testing.T) {
+	for _, tc := range []struct {
+		responsible bool
+		want        string
+	}{
+		{true, "service:own-permissions"},
+		{false, "shell:borrowed-permissions"},
+	} {
+		runner, err := desktop.New(desktop.Options{
+			Session:     fakeHelper(t, nil),
+			Responsible: func() bool { return tc.responsible },
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		reporter, ok := any(runner).(interface{ Surface() string })
+		if !ok {
+			t.Fatal("the runner no longer reports a surface")
+		}
+		if got := reporter.Surface(); got != tc.want {
+			t.Errorf("responsible=%v surface = %q, want %q", tc.responsible, got, tc.want)
+		}
+	}
+}
+
+// A capability that needs no operating-system permission must not be gated on
+// one. desktop.apps asks the window server what is running; refusing it for a
+// missing Accessibility grant would deny work that functions perfectly, and
+// would teach people to grant a permission they do not need.
+func TestACapabilityThatNeedsNoPermissionIsNotGatedOnOne(t *testing.T) {
+	session := fakeHelper(t, map[string]any{
+		"list_apps": map[string]any{"apps": []any{}},
+		"health": map[string]any{
+			"accessibility": false, "screen_recording": false,
+			"missing": "neither Accessibility nor Screen Recording is granted",
+		},
+	})
+	runner, err := desktop.New(desktop.Options{
+		Session:     session,
+		Responsible: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), request(t, appsCapability(), nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// And it did not even ask: a capability needing nothing skips the round
+	// trip rather than making it and ignoring the answer.
+	params := <-callsSeen
+	if name, _ := params["name"].(string); name != "list_apps" {
+		t.Errorf("first call was %q, want list_apps with no health probe before it", name)
+	}
+}

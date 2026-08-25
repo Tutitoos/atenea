@@ -141,6 +141,13 @@ const (
 	graphStatusCapability = "graph.status"
 )
 
+// What is open on this machine's screen. Listed here so a commission can name
+// a target instead of guessing, and gated everywhere else: it causes the
+// device effect, which no floor grants by default and which the adapter
+// refuses outright unless Atenea is the process the system attributes the
+// permission to.
+const desktopAppsCapability = "desktop.apps"
+
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
 const probeContextLines = 0
@@ -213,6 +220,7 @@ var card = contract.Agent{
 		symbolGetCapability,
 		unresolvedCapability,
 		graphStatusCapability,
+		desktopAppsCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,

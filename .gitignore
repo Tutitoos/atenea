@@ -35,3 +35,7 @@
 
 # TokenSave keeps a project-local semantic index and token ledger here.
 /.tokensave/
+
+# Swift build output for the desktop helper. The helper is compiled on the
+# machine that runs it and ships in no release, so this is always local.
+helper/.build/

@@ -22,11 +22,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
+	"github.com/Tutitoos/atenea/internal/adapter/desktop"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
@@ -334,6 +336,7 @@ type Orchestrator struct {
 	Serena     SerenaAdapter
 	Kivgraph   KivgraphAdapter
 	Tokensave  TokensaveAdapter
+	Desktop    DesktopAdapter
 }
 
 // Model fixes which model backs each of the two model-backed built-in
@@ -607,6 +610,27 @@ type TokensaveAdapter struct {
 	Process *ManagedProcess
 }
 
+// DesktopAdapter drives this machine's own screen, pointer and accessibility
+// tree, through a helper process that owns every macOS API involved.
+//
+// It is off unless `runners` names it, and that is not the usual caution about
+// a young feature. What sits behind it is a permission Atenea cannot grant
+// itself and cannot revoke: macOS attributes a device grant to the responsible
+// ancestor, so an Atenea started from a shell borrows that shell's screen and
+// input access. The adapter refuses the device effect in that case rather than
+// succeeding on somebody else's permission.
+type DesktopAdapter struct {
+	// Implementations the adapter answers for.
+	Implementations []string
+	// Timeout caps one call. Sized for latency rather than payload: walking
+	// an accessibility tree is one IPC message per node, and a browser
+	// measured 609ms while its whole tree was 91KB.
+	Timeout time.Duration
+	// Process launches and supervises the helper. Not optional, for the same
+	// reason as Kivgraph and tokensave: a stdio server has no address to dial.
+	Process *ManagedProcess
+}
+
 // Security is the one place delicate files are declared.
 type Security struct {
 	// Sensitive holds the path patterns that carry secrets. Reading is free by
@@ -684,7 +708,7 @@ func DefaultLocalAgents() LocalAgents {
 }
 
 // RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
-// RunnerTokensave and RunnerLocal are the values
+// RunnerTokensave, RunnerDesktop and RunnerLocal are the values
 // orchestrator.runners accepts.
 const (
 	RunnerOMP        = "omp"
@@ -693,6 +717,7 @@ const (
 	RunnerSerena     = "serena"
 	RunnerKivgraph   = "kivgraph"
 	RunnerTokensave  = "tokensave"
+	RunnerDesktop    = "desktop"
 	RunnerLocal      = "local"
 )
 
@@ -808,14 +833,72 @@ func groundedDefaults() ([]byte, error) {
 	}
 	// Anchored on the whole line, so this cannot reach a `path = "."` that
 	// belongs to some other block a later edit adds.
+	quoted, err := tomlString(absolute)
+	if err != nil {
+		return nil, err
+	}
 	grounded := relativeRepositoryPath.ReplaceAll(defaultSettings,
-		[]byte("path = "+strconv.Quote(absolute)))
+		[]byte("path = "+quoted))
 	if bytes.Equal(grounded, defaultSettings) {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"the embedded settings no longer declare a repository at %q, so "+
 				"`config init` cannot ground it", ".")
 	}
 	return grounded, nil
+}
+
+// tomlString writes s as a TOML basic string.
+//
+// strconv.Quote was the obvious thing and it is the wrong one: it produces Go
+// escapes, and the two languages do not agree. Go emits \a for 0x07 and \v for
+// 0x0b, which TOML's grammar does not define -- a directory whose name carries
+// one produced a settings file that would not parse afterwards. Worse, Go emits
+// \xNN for a byte that is not valid UTF-8, which TOML's lexer does accept and
+// reads as the code point U+00NN: the path written down stops being the path
+// that was meant, silently. A file name on Linux is any byte sequence without a
+// NUL, so neither case is theoretical.
+//
+// TOML defines \b \t \n \f \r \" \\ and the two \u forms, so everything that
+// needs escaping goes out as \uXXXX. A path that is not valid UTF-8 cannot be
+// written as a TOML string at all, and is refused here rather than mangled.
+func tomlString(s string) (string, error) {
+	if !utf8.ValidString(s) {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"the path %q is not valid UTF-8, so it cannot be written into a settings file",
+			s)
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			// Control characters are the only other thing TOML forbids raw in
+			// a basic string. Everything else -- accents, CJK, emoji -- is
+			// written as itself, because a settings file an operator opens
+			// should show the directory they typed.
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String(), nil
 }
 
 // relativeRepositoryPath matches the one line groundedDefaults rewrites.
@@ -935,6 +1018,20 @@ func WriteDefault(path string, force bool) error {
 		_ = temp.Close()
 		return err
 	}
+	// Parsed before it is written, not after it is in place.
+	//
+	// This file is generated by substitution into an embedded template, which
+	// is exactly the kind of thing that is correct until the day it is not:
+	// a path needing an escape, an edit to the template, a regex that matched
+	// one line too many. Nothing downstream re-reads the file before the
+	// operator does, so an unparseable one would first be noticed by a service
+	// refusing to start. Reading it back here costs one parse of a file this
+	// function just built.
+	if _, err := parse(body, path); err != nil {
+		_ = temp.Close()
+		return contract.Fail(contract.FailureUnavailable,
+			"the settings this would write do not parse, so nothing was written: %v", err)
+	}
 	if _, err := temp.Write(body); err != nil {
 		_ = temp.Close()
 		return contract.Fail(contract.FailurePermissionDenied,
@@ -1043,6 +1140,7 @@ type fileOrchestrator struct {
 	Serena     fileSerenaAdapter     `toml:"serena"`
 	Kivgraph   fileKivgraphAdapter   `toml:"kivgraph"`
 	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
+	Desktop    fileDesktopAdapter    `toml:"desktop"`
 }
 
 type fileLocalRunner struct {
@@ -1109,6 +1207,12 @@ type fileKivgraphAdapter struct {
 
 // fileTokensaveAdapter is the TOML shape of TokensaveAdapter. `root` is the
 // one key its neighbor has no counterpart for: see TokensaveAdapter.Root.
+type fileDesktopAdapter struct {
+	Implementations *[]string           `toml:"implementations"`
+	Timeout         string              `toml:"timeout"`
+	Process         *fileManagedProcess `toml:"process"`
+}
+
 type fileTokensaveAdapter struct {
 	Root            string              `toml:"root"`
 	Implementations *[]string           `toml:"implementations"`
@@ -1760,6 +1864,10 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Implementations: tokensave.DefaultImplementations(),
 			Timeout:         tokensave.DefaultTimeout,
 		},
+		Desktop: DesktopAdapter{
+			Implementations: desktop.DefaultImplementations(),
+			Timeout:         desktop.DefaultTimeout,
+		},
 	}
 	if o.MaxParallel != nil {
 		if *o.MaxParallel < 0 || *o.MaxParallel > maxMaxParallel {
@@ -1821,12 +1929,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		for _, name := range *o.Runners {
 			switch name {
 			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
-				RunnerTokensave, RunnerLocal:
+				RunnerTokensave, RunnerDesktop, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s",
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena,
-					RunnerKivgraph, RunnerTokensave, RunnerLocal)
+					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -1886,6 +1994,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Tokensave = index
+	screen, err := o.Desktop.build(source, out.Desktop)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Desktop = screen
 	return out, nil
 }
 
@@ -2273,6 +2386,32 @@ func settingsPath(source, key, raw string) (string, error) {
 // build is additive over the passed-in defaults, like every neighbor. The one
 // extra check is Root, which must be absolute for the reason settingsPath
 // spells out.
+func (d fileDesktopAdapter) build(source string, out DesktopAdapter) (DesktopAdapter, error) {
+	if d.Implementations != nil {
+		out.Implementations = *d.Implementations
+	}
+	if d.Timeout != "" {
+		timeout, err := time.ParseDuration(d.Timeout)
+		if err != nil {
+			return DesktopAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.desktop.timeout %q: %v", source, d.Timeout, err)
+		}
+		if timeout <= 0 {
+			return DesktopAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.desktop.timeout must be above 0, got %s", source, timeout)
+		}
+		out.Timeout = timeout
+	}
+	if d.Process != nil {
+		process, err := d.Process.build(source, "orchestrator.desktop.process")
+		if err != nil {
+			return DesktopAdapter{}, err
+		}
+		out.Process = &process
+	}
+	return out, nil
+}
+
 func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (TokensaveAdapter, error) {
 	root, err := settingsPath(source, "orchestrator.tokensave.root", t.Root)
 	if err != nil {

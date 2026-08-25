@@ -126,3 +126,47 @@ func TestTheKivgraphViewerIsSupervisedAsItsOwnHTTPProcess(t *testing.T) {
 		t.Errorf("port = %d, want the one the settings declared", spec.Port)
 	}
 }
+
+// surfacingRunner answers contract.SurfaceReporter, which guardedRunner does
+// not promote: it embeds contract.Runner, an interface, so only that method
+// set survives the wrapper.
+type surfacingRunner struct {
+	probingRunner
+	surface string
+}
+
+func (s *surfacingRunner) Surface() string { return s.surface }
+
+// The defect this closes, stated plainly: a guarded runner's optional surface
+// used to vanish, and the status screen printed "surfaces -" for a provider
+// that had one. It is the same shape as the IndexProber bug guardedProber
+// exists for -- an interface swallowed by a wrapper, with no error anywhere to
+// say so -- and the reason it is solved by Unwrap rather than by a fourth
+// wrapper type is that a surface needs no bracketing: two optional interfaces
+// would already mean four types to keep in step.
+func TestAGuardedRunnersSurfaceIsStillFound(t *testing.T) {
+	runner := &surfacingRunner{surface: "service:own-permissions"}
+	guarded := guard(runner, nil, func(contract.Repository) string { return "fake" })
+
+	// Through the wrapper, the assertion the status screen used to make on
+	// its own fails -- which is exactly why it no longer makes it.
+	if _, direct := guarded.(contract.SurfaceReporter); direct {
+		t.Log("the wrapper now implements SurfaceReporter itself; surfaceOf still has to work")
+	}
+	got, ok := surfaceOf(guarded)
+	if !ok {
+		t.Fatal("a guarded runner's surface was not found")
+	}
+	if got != "service:own-permissions" {
+		t.Errorf("surface = %q", got)
+	}
+}
+
+// A runner with no surface must not grow one, or every guarded provider would
+// print an empty line on the status screen.
+func TestARunnerWithoutASurfaceReportsNone(t *testing.T) {
+	guarded := guard(&probingRunner{}, nil, func(contract.Repository) string { return "fake" })
+	if surface, ok := surfaceOf(guarded); ok {
+		t.Errorf("surface = %q, want none reported", surface)
+	}
+}

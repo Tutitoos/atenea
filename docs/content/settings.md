@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "3.3.0"
+contract = "3.4.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "3.3.0"          # required: the contract version this file targets
+contract = "3.4.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -113,13 +113,13 @@ health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is supported, so
-a file targeting `3.0.0` remains readable by the current `3.3.0` core because
+a file targeting `3.0.0` remains readable by the current `3.4.0` core because
 every 3.x addition since has been backward-compatible. A file from a newer contract
 is refused and must be reviewed before use:
 
 ```text
 settings ~/.config/atenea/atenea.toml: contract 4.0.0 is not supported by
-this core (3.3.0): change the contract line to "3.3.0"; no other key moves
+this core (3.4.0): change the contract line to "3.4.0"; no other key moves
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the
@@ -313,6 +313,31 @@ refuses `code.search`: every implementation of it is a binary and so needs
 `process`. That is why it is not the default. A default that refuses the
 headline capability on day one does not teach caution, it teaches people to
 turn the default off.
+
+
+The provider behind it, `[orchestrator.desktop]`, is also the one whose helper
+is **built on the machine that runs it** and ships in no release. Distributing
+a macOS binary that drives the screen needs a Developer ID signature and
+notarization; measured on macOS 26.6, an Apple Development signature is
+rejected by Gatekeeper on another machine exactly as an unsigned one is, so the
+weaker options do not substitute. Code compiled locally carries no quarantine
+attribute, so Gatekeeper never enters and no certificate is needed by anybody:
+
+    swift build -c release --package-path helper
+
+A certificate would buy one thing and it is not the right to run: that the
+permission survives a rebuild. See `helper/README.md` for the measurements.
+
+`device` is the one effect that argues the other way, and it is on neither
+floor as shipped. It marks a capability that reaches the pointer, the keyboard
+or the screen, and the permission behind it is not Atenea's to spend: measured
+on macOS 26.6, the system attributes its device grant to the responsible
+ancestor rather than to the process asking, so an executable whose own
+identifier was never authorized reports full access merely for having been
+launched from a terminal that has it. Granting `device` on `client_effects`
+would therefore hand a connected client something nobody granted Atenea. It
+belongs on `effects` alone, typed deliberately, and only where Atenea is that
+responsible ancestor.
 
 A chat opened by a client holds this list. That sentence is younger than the
 key: in the historical `0.10.0` behavior a chat opened holding nothing at all, so
@@ -720,7 +745,7 @@ id = "code.search"          # dotted lowercase
 version = "1.0.0"
 summary = "Find literal text in a repository."
 semantics = "Flat text search. Options are stated as intent, never as an order."
-effects = ["read", "process"]  # read | write | external | process
+effects = ["read", "process"]  # read | write | external | process | device
 
   [[capability.input]]
   name = "query"            # lowercase snake_case
@@ -1483,8 +1508,8 @@ an *absent* list are defensible -- offer everything, offer nothing -- which is
 exactly why neither is guessed. A block declaring `raw` with no `tools` is
 refused, and so is an empty list.
 
-`effects` is what those tools are authorized to cause, in the same four names
-capabilities use: `read`, `write`, `external`, `process`. Atenea cannot infer
+`effects` is what those tools are authorized to cause, in the same five names
+capabilities use: `read`, `write`, `external`, `process`, `device`. Atenea cannot infer
 them; a backend's own list can hold `execute_shell_command` beside
 `find_symbol`, and nothing in a name or a schema says which is which. A
 `[[mcp_server.tool]]` block narrows the declaration for one tool, and a tool

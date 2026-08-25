@@ -94,6 +94,35 @@ jobs:
           go test ./internal/config -run '^$' -fuzz '^FuzzLoadNeverPanics$' -fuzztime=30s
           go test ./internal/adapter/kivgraph -run '^$' -fuzz '^FuzzParseIndexReportNeverPanics$' -fuzztime=30s
 
+      # The desktop helper is built here and shipped nowhere.
+      #
+      # It does not travel in a release because it could not be used if it
+      # did: distributing a macOS binary that drives the screen needs a
+      # Developer ID signature and notarization, and measured on macOS 26.6 an
+      # Apple Development signature is rejected by Gatekeeper on any other
+      # machine just as an unsigned one is. What DOES work is building it
+      # here, on the user's own machine -- locally compiled code carries no
+      # quarantine attribute, so Gatekeeper never enters, and no certificate
+      # is needed by anybody.
+      #
+      # So what this step protects is the source: a helper that stopped
+      # compiling would otherwise be discovered by the first person who tried
+      # to build it, which is the worst possible moment.
+      - name: Build the desktop helper
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          set -eu
+          swift build -c release --package-path helper
+          # A real handshake. Started with no stdin the helper exits zero
+          # having done nothing, so merely running it would pass for a binary
+          # that cannot answer at all.
+          probe='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+          answer="$(printf '%s\n' "$probe" | helper/.build/release/atenea-desktop-helper)"
+          case "$answer" in
+            *atenea-desktop-helper*) echo "helper answered its handshake" ;;
+            *) echo "helper did not answer initialize: $answer" >&2; exit 1 ;;
+          esac
+
       - name: Benchmark thresholds
         run: bash scripts/benchmark-check.sh
 

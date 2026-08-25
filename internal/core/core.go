@@ -19,6 +19,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
+	"github.com/Tutitoos/atenea/internal/adapter/desktop"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
@@ -518,6 +519,8 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 		return buildKivgraphRunner(cfg, procs)
 	case config.RunnerTokensave:
 		return buildTokensaveRunner(cfg, procs)
+	case config.RunnerDesktop:
+		return buildDesktopRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -657,6 +660,28 @@ func buildTokensaveRunner(cfg config.Config, procs *supervisor.Supervisor) (cont
 	// One server for the whole root, so one instance id: the graph is the
 	// project's, not a repository's, exactly as with Kivgraph's global corpus.
 	instanceID := func(contract.Repository) string { return config.RunnerTokensave }
+	return guard(runner, procs, instanceID), nil
+}
+
+func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	if cfg.Orchestrator.Desktop.Process == nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: desktop has no helper to launch -- everything it does lives behind macOS "+
+				"APIs in a separate process, and there is no address to dial without one", cfg.Source)
+	}
+	runner, err := desktop.New(desktop.Options{
+		Implementations: cfg.Orchestrator.Desktop.Implementations,
+		Timeout:         cfg.Orchestrator.Desktop.Timeout,
+		Session: func(context.Context) (*mcpstdio.Session, error) {
+			return procs.Session(config.RunnerDesktop)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// One desktop, so one instance id, and it does not vary by repository:
+	// which project a step belongs to says nothing about whose screen it is.
+	instanceID := func(contract.Repository) string { return config.RunnerDesktop }
 	return guard(runner, procs, instanceID), nil
 }
 

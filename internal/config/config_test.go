@@ -45,14 +45,20 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.impact", "code.search", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
+	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
 
 	// Read capabilities may also declare process when they invoke a local
 	// command. repository.index additionally declares write because it publishes
-	// provider state.
+	// provider state, and desktop.apps declares device because it reaches this
+	// machine's own session rather than any repository.
+	//
+	// Spelled out per capability rather than checked against a set, and that
+	// is the point of the assertion: a shipped capability quietly growing an
+	// effect is exactly what nobody would notice, and `device` is the one
+	// where not noticing is most expensive.
 	for _, capability := range cfg.Capabilities {
 		var want []contract.Effect
 		switch capability.ID {
@@ -60,6 +66,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
 		case "repository.index":
 			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
+		case "desktop.apps":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
 		default:
 			want = []contract.Effect{contract.EffectRead}
 		}
@@ -109,6 +117,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"kivgraph.references",
 		"kivgraph.status",
 		"kivgraph.unresolved_references",
+		"macos.apps",
 		"ripgrep",
 		"serena.definition",
 		"serena.implementations",
@@ -720,7 +729,11 @@ func TestAStdioBackendIsDeclaredLikeAnyOther(t *testing.T) {
 
 func TestBrokenCatalogEntriesAreRefused(t *testing.T) {
 	cases := map[string]string{
-		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["device"]`, 1),
+		// Not "device": that was this fixture until the effect by that name
+		// was added, at which point the case started asserting that a valid
+		// file is refused. A stand-in for "no such effect" has to be a word
+		// the vocabulary will not adopt later.
+		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["nonesuch"]`, 1),
 		"unknown type":     strings.Replace(minimal, `type = "string"`, `type = "float"`, 1),
 		"unknown scale":    strings.Replace(minimal, `scale = "small"`, `scale = "huge"`, 1),
 		"unknown vcs":      strings.Replace(minimal, `vcs = "present"`, `vcs = "sideways"`, 1),
@@ -2624,5 +2637,67 @@ func TestConfigInitRefusesToDeclareTheHomeDirectory(t *testing.T) {
 	t.Chdir(repo)
 	if err := config.WriteDefault(path, false); err != nil {
 		t.Errorf("a repository inside the home directory was refused: %v", err)
+	}
+}
+
+// TestConfigInitWritesAParseableFileFromAnAwkwardDirectory covers the two ways
+// a generated settings file used to stop being the file that was meant.
+//
+// The path is substituted into an embedded template, and it was quoted with
+// strconv.Quote -- Go's escapes, not TOML's. Go writes \a for 0x07 and \v for
+// 0x0b, which TOML does not define, so such a directory produced a settings
+// file that would not parse; and Go writes \xNN for a byte that is not valid
+// UTF-8, which TOML's lexer does accept and reads as U+00NN, so the path
+// quietly stopped being the directory it came from. A file name on Linux is
+// any byte sequence without a NUL, so neither is theoretical.
+func TestConfigInitWritesAParseableFileFromAnAwkwardDirectory(t *testing.T) {
+	for _, name := range []string{
+		`plain`,
+		`with space`,
+		`with"quote`,
+		`with\backslash`,
+		"with\ttab",
+		`with%percent`,
+		`acentuado-ñ-日本語`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			repo := filepath.Join(home, name)
+			if err := os.MkdirAll(repo, 0o700); err != nil {
+				t.Skipf("this filesystem will not hold %q: %v", name, err)
+			}
+			t.Chdir(repo)
+			path := filepath.Join(t.TempDir(), "atenea.toml")
+
+			if err := config.WriteDefault(path, false); err != nil {
+				t.Fatalf("WriteDefault from %q: %v", name, err)
+			}
+			// The written file has to parse, which is the half that used to
+			// break outright.
+			written, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("the settings written from %q do not parse: %v", name, err)
+			}
+			// And it has to name this directory, which is the half that used
+			// to break silently.
+			want, err := filepath.EvalSymlinks(repo)
+			if err != nil {
+				t.Fatalf("EvalSymlinks: %v", err)
+			}
+			found := false
+			for _, declared := range written.Repositories {
+				if got, err := filepath.EvalSymlinks(declared.Path); err == nil && got == want {
+					found = true
+				}
+			}
+			if !found {
+				var got []string
+				for _, declared := range written.Repositories {
+					got = append(got, declared.Path)
+				}
+				t.Errorf("no repository names %q; the file declares %q", want, got)
+			}
+		})
 	}
 }

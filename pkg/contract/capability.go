@@ -21,6 +21,10 @@ import (
 // the internals of. It composes with the other three rather than replacing
 // any of them -- code.search causes read AND process at once, because
 // ripgrep is both.
+//
+// Device is a fifth on the same footing: where the effect lands rather than
+// what it changes. It marks a capability that reaches the pointer, the
+// keyboard, the screen or the accessibility tree of whatever is on it.
 type Effect uint8
 
 const (
@@ -34,6 +38,25 @@ const (
 	// claude CLI and other external tools all cause it, each alongside
 	// whichever of the other three effects that same call also causes.
 	EffectProcess
+	// EffectDevice reaches the machine's own input and display surfaces:
+	// the pointer, the keyboard, the screen, and the accessibility tree of
+	// whatever happens to be on it. It composes rather than replaces, the
+	// same as process -- a desktop screenshot causes read AND device, and
+	// pressing a button causes those plus write and external, because
+	// nothing can know what a control does before it is pressed.
+	//
+	// Appended rather than inserted: the numbers above are written into
+	// receipts on disk and UnmarshalJSON still reads them, so renumbering
+	// them would rewrite history rather than extend it.
+	//
+	// The permission behind it is not Atenea's to hand out. Measured on
+	// macOS 26.6: TCC attributes a grant to the responsible ancestor, not
+	// to the binary asking -- a signed executable with an identifier that
+	// was never authorized reports full access merely for having been
+	// launched from a terminal that has it. So a device capability may only
+	// be answered where Atenea is that ancestor, and never on a floor
+	// nobody granted deliberately.
+	EffectDevice
 )
 
 var (
@@ -42,12 +65,14 @@ var (
 		EffectWrite:    "write",
 		EffectExternal: "external",
 		EffectProcess:  "process",
+		EffectDevice:   "device",
 	}
 	effectByName = map[string]Effect{
 		"read":     EffectRead,
 		"write":    EffectWrite,
 		"external": EffectExternal,
 		"process":  EffectProcess,
+		"device":   EffectDevice,
 	}
 )
 
@@ -63,7 +88,7 @@ func ParseEffect(s string) (Effect, error) {
 	if e, ok := effectByName[s]; ok {
 		return e, nil
 	}
-	return 0, Fail(FailureInvalidInput, "unknown effect %q: want read, write, external or process", s)
+	return 0, Fail(FailureInvalidInput, "unknown effect %q: want read, write, external, process or device", s)
 }
 
 // MarshalJSON writes an effect as its name.

@@ -764,8 +764,8 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 
 	for _, runner := range c.runners {
 		out.Runners = append(out.Runners, runner.ID())
-		if reporter, ok := runner.(contract.SurfaceReporter); ok {
-			out.Surfaces = append(out.Surfaces, runner.ID()+"="+reporter.Surface())
+		if surface, ok := surfaceOf(runner); ok {
+			out.Surfaces = append(out.Surfaces, runner.ID()+"="+surface)
 		}
 	}
 	slices.Sort(out.Surfaces)

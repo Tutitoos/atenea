@@ -266,7 +266,17 @@ func TestParseEffectAndFieldType(t *testing.T) {
 	if got := contract.EffectProcess.String(); got != "process" {
 		t.Fatalf("String = %q, want process", got)
 	}
-	if _, err := contract.ParseEffect("device"); err == nil {
+	if e, err := contract.ParseEffect("device"); err != nil || e != contract.EffectDevice {
+		t.Fatalf("ParseEffect = %v, %v", e, err)
+	}
+	if got := contract.EffectDevice.String(); got != "device" {
+		t.Fatalf("String = %q, want device", got)
+	}
+	// Not "device", which is what this line held until the effect by that
+	// name was added and the assertion started proving the opposite of what
+	// it says. A fixture for "no such effect" has to be a word the
+	// vocabulary will not adopt later, or the test quietly becomes a clock.
+	if _, err := contract.ParseEffect("nonesuch"); err == nil {
 		t.Fatal("unknown effect should fail")
 	}
 	if ft, err := contract.ParseFieldType("record_list"); err != nil || ft != contract.TypeRecordList {
@@ -304,6 +314,23 @@ func TestEffectsAreWrittenAsNamesAndReadBackFromEither(t *testing.T) {
 	}
 	if !slices.Equal(old, []contract.Effect{contract.EffectRead, contract.EffectProcess}) {
 		t.Errorf("older receipt read as %v", old)
+	}
+	// device was appended rather than inserted, so it has a number of its own
+	// and every number written before it still means what it meant. A receipt
+	// naming it round-trips, and one holding its number reads back as itself.
+	body, err = json.Marshal([]contract.Effect{contract.EffectDevice})
+	if err != nil {
+		t.Fatalf("Marshal device: %v", err)
+	}
+	if got, want := string(body), `["device"]`; got != want {
+		t.Fatalf("marshaled %s, want %s", got, want)
+	}
+	var device []contract.Effect
+	if err := json.Unmarshal([]byte(`[4]`), &device); err != nil {
+		t.Fatalf("device by number: %v", err)
+	}
+	if !slices.Equal(device, []contract.Effect{contract.EffectDevice}) {
+		t.Errorf("device by number read as %v", device)
 	}
 	// A number nothing names is refused rather than read as some effect.
 	if err := json.Unmarshal([]byte(`[9]`), &old); err == nil {

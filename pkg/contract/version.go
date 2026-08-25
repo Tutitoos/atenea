@@ -286,7 +286,23 @@ type Version struct {
 // built against 3.2.0 has no line of code that could set the flag, so every
 // paid call it made would have started failing. A minor bump does not get to
 // do that.
-var Current = Version{Major: 3, Minor: 3, Patch: 0}
+// 3.4.0 added the `device` effect: a capability that reaches the pointer, the
+// keyboard, the screen or the accessibility tree behind them.
+//
+// Additive on the same terms as `process` in 1.4.0, and for the same reason --
+// Effect is an open uint8, not a closed set an adapter exhausts, so an adapter
+// built against 3.3.0 goes on compiling and never has to name it. The constant
+// is appended rather than inserted, so every number already written into a
+// receipt still reads back as what it was.
+//
+// What it is NOT is a permission. The floor decides that, and the shipped
+// defaults leave `device` out of both `effects` and `client_effects`, so a core
+// speaking 3.4.0 refuses it until somebody grants it on purpose. That default
+// is load-bearing rather than cautious: measured on macOS 26.6, the operating
+// system attributes its own device permission to the responsible ancestor
+// rather than to the process asking, so a core that granted this effect freely
+// would be spending a permission it never asked for and cannot revoke.
+var Current = Version{Major: 3, Minor: 4, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

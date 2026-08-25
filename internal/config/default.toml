@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "3.3.0"
+contract = "3.4.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -286,6 +286,50 @@ runners = ["omp"]
     # instance = "shared"
     # lifecycle = "on_demand"
     # idle_timeout = "10m"
+
+  [orchestrator.desktop]
+  # This machine's own screen, pointer and accessibility tree, answered through
+  # a helper process that owns every macOS API involved. Off unless `runners`
+  # names it, and that is not the usual caution about a young feature.
+  #
+  # What sits behind it is a permission Atenea cannot grant itself. macOS
+  # attributes a device grant to the RESPONSIBLE ANCESTOR rather than to the
+  # process asking, so an Atenea started from a shell borrows that shell's
+  # screen and input access -- measured on macOS 26.6, a signed binary whose
+  # own identifier was never authorized reported full access merely for having
+  # been launched from a terminal that had it. The adapter refuses the device
+  # effect in that case rather than succeeding on somebody else's permission,
+  # so this provider is only useful once `atenea service install` has run and
+  # the permission has been granted to Atenea itself.
+  #
+  # The helper is built on this machine and ships in no release:
+  #
+  #     swift build -c release --package-path helper
+  #
+  # Not an omission. Distributing a macOS binary that drives the screen needs
+  # a Developer ID signature and notarization -- measured on macOS 26.6, an
+  # Apple Development signature is rejected by Gatekeeper on another machine
+  # exactly as an unsigned one is. Code compiled here carries no quarantine
+  # attribute, so Gatekeeper never enters and no certificate is needed by
+  # anybody.
+  #
+  # What a certificate WOULD buy is that the permission survives a rebuild: an
+  # ad-hoc signature's designated requirement is pinned to a hash that changes
+  # every time, even rebuilding identical source. Signing your own build with
+  # your own Apple Development identity (free) is an optional upgrade, not a
+  # requirement:
+  #
+  #     codesign -f -s "Apple Development: ..." \
+  #       --identifier com.tutitoos.atenea.desktop --options runtime BINARY
+  implementations = ["macos.apps"]
+  timeout = "10s"             # latency, not payload: a tree walk is one IPC message per node
+
+    # [orchestrator.desktop.process]
+    # command = "/absolute/path/to/helper/.build/release/atenea-desktop-helper"
+    # instance = "shared"       # there is one desktop; per_repository is refused
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+    # ready_timeout = "10s"
 
   [orchestrator.tokensave]
   # tokensave is the second stdio far side, and the one that is not a corpus of
@@ -1652,6 +1696,54 @@ effects = ["read"]
 # checker exists, live probes own this value.
 # ---------------------------------------------------------------------------
 
+[[capability]]
+id = "desktop.apps"
+version = "1.0.0"
+summary = "List the applications with a user interface running on this machine."
+semantics = """
+Answers what is open right now, so a later step can name a target instead of \
+guessing at one. Only applications with a user interface are reported: a macOS \
+session carries dozens of agents and helpers with no window, and listing them \
+would be a much wider statement about somebody's machine than the question \
+asks for. bundle_id is the stable name to write an allow-list against; name is \
+localized and changes under the reader's feet.\
+"""
+# device, alongside read. It reads nothing off the filesystem, so `read` is
+# almost a courtesy here -- what it really touches is the machine's own
+# session. See the effect's own documentation for why it is granted to nobody
+# by default.
+effects = ["read", "device"]
+
+  [[capability.output]]
+  name = "apps"
+  type = "record_list"
+  required = true
+  summary = "The running applications that have a user interface, by name."
+
+    [[capability.output.field]]
+    name = "pid"
+    type = "int"
+    required = true
+    summary = "Process id."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "Display name, as this machine's language shows it."
+
+    [[capability.output.field]]
+    name = "bundle_id"
+    type = "string"
+    required = false
+    summary = "Bundle identifier, when the application has one. The stable name."
+
+    [[capability.output.field]]
+    name = "frontmost"
+    type = "bool"
+    required = true
+    summary = "Whether this application is the one in front right now."
+
 [[implementation]]
 id = "ripgrep"
 provider = "ripgrep"
@@ -2024,6 +2116,30 @@ capability = "symbol.overview"
   # tokensave.calls above.
   estimated_duration = "2s"
   estimated_tokens = 300
+
+
+[[implementation]]
+id = "macos.apps"
+provider = "desktop"
+capability = "desktop.apps"
+# The capability says what, this says how -- which is why the platform is in
+# the name and not in the capability's. "What is running" is a question any
+# desktop can be asked; this is the one answer a Mac has, and naming it so
+# leaves the obvious room beside it.
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One IPC round trip to a helper that asks the window server. Measured on
+  # the machine this was written on; the tree walks are the slow ones, not
+  # this.
+  estimated_duration = "40ms"
+  estimated_tokens = 200
 
 # ---------------------------------------------------------------------------
 # Repositories: the unit of work. Not the project -- the repository.
