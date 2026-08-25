@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "3.1.0"
+contract = "3.2.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -64,7 +64,7 @@ from an explicitly empty one, deliberately:
 | `[]` | genuinely nothing: dispatch nowhere, skip no directory, treat no file as sensitive |
 
 Strip `implementations` out of `[orchestrator.serena]` and Serena still answers
-for all four symbol capabilities. Write `implementations = []` in the same
+for all five symbol capabilities. Write `implementations = []` in the same
 place and it answers for none, while every other key in the block keeps working.
 
 `effects` is the one list that does not play by this rule, because a grant
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "3.1.0"          # required: the contract version this file targets
+contract = "3.2.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -113,13 +113,13 @@ health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is supported, so
-a file targeting `3.0.0` remains readable by the current `3.1.0` core because
-the `3.1.0` additions are backward-compatible. A file from a newer contract
+a file targeting `3.0.0` remains readable by the current `3.2.0` core because
+every 3.x addition since has been backward-compatible. A file from a newer contract
 is refused and must be reviewed before use:
 
 ```text
 settings ~/.config/atenea/atenea.toml: contract 4.0.0 is not supported by
-this core (3.1.0): change the contract line to "3.1.0"; no other key moves
+this core (3.2.0): change the contract line to "3.2.0"; no other key moves
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the
@@ -166,7 +166,8 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
   [orchestrator.serena]
   endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
-  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview"]
+  implementations = ["serena.definition", "serena.references", "serena.implementations",
+                     "serena.overview", "serena.symbol_search"]
   timeout = "90s"                      # a language server indexing cold is slow, not stuck
 
   # Optional. Present means Atenea launches and watches the server itself,
@@ -185,6 +186,19 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   stable_after = "30s"                 # uptime that earns a fresh restart budget
   idle_timeout = "5m"                  # on_demand only; refused beside persistent
   stop_grace = "5s"                    # SIGTERM, then SIGKILL
+
+  [orchestrator.tokensave]
+  root = "/srv/workspace"              # required, and ABSOLUTE: every path is relative to it
+  implementations = ["tokensave.context", "tokensave.calls", "tokensave.overview"]
+  timeout = "90s"                      # re-syncs its own index first: kivgraph's class, not omp's
+
+    # Not optional the way Serena's is: a stdio child has no address to dial.
+    [orchestrator.tokensave.process]
+    command = "tokensave"              # required once this table exists
+    args = ["serve", "--path", "/srv/workspace"]
+    lifecycle = "on_demand"            # required: "persistent" or "on_demand"
+    instance = "shared"                # the only value here; per_repository is refused
+    idle_timeout = "10m"               # on_demand only, same as every process table
 
 ```
 
@@ -206,7 +220,7 @@ can be attached at once. `omp` is the client adapter that ships attached.
 `claudecode` drives the Claude Code CLI and is off by default, because it is
 the only far side that costs money per call. `serena` is not a CLI at all: it
 is an MCP server, which is why its block takes a URL instead of a binary, and
-it answers the four symbol capabilities rather than a text search.
+it answers the five symbol capabilities rather than a text search.
 `kivgraph` and `tokensave` are graph-backed MCP providers. `local` is a
 stand-in that searches the disk directly, for a machine with no client
 installed. An empty list leaves the core able to plan and choose but unable to
@@ -430,6 +444,63 @@ process. So what probing finds is recorded per repository, the funnel filters
 on what the repository in front of it found, and `atenea status` names the
 repository that found the failure — `health=down (on web: ...)`. A verdict
 from one repository never refuses work on another.
+
+### The far side that serves one root
+
+`tokensave` is a stdio server rather than an HTTP one, so there is no
+`endpoint` for it to fall back on and `[orchestrator.tokensave.process]` is
+not the optional table Serena's is. Naming `tokensave` in `runners` without
+one is refused at startup — `tokensave has no process to launch -- a stdio
+server has no address to dial without one` — because there is nothing else in
+the block that could say where the far side is.
+
+`root` is the key no other adapter has, and it is required for the same
+reason it exists. `kivgraph` publishes one corpus addressed by repository
+*name*, while tokensave serves **one project rooted at a directory** and
+speaks paths relative to that root, so every path crossing this adapter is
+translated in both directions and the translation has to know where the root
+begins. Leave it out and the runner is refused by name:
+
+```text
+settings ~/.config/atenea/atenea.toml: orchestrator.tokensave.root is
+required -- every path tokensave reports is relative to it
+```
+
+It has to be absolute, and a relative one is refused rather than resolved:
+"resolved against what" has no honest answer here, because the process that
+loads this file is not the one that reads the path six months later from a
+systemd unit with a working directory of its own. It is declared rather than
+derived from the `[[repository]]` list for the matching reason — a root
+guessed from that list is silently wrong the day a repository is added
+outside it.
+
+Every repository this provider answers for lives under that root, and the
+graph does not stop at a repository boundary: a symbol in one repository can
+have callers in another. Those rows have nowhere to travel, since
+`symbol.calls` declares repository-relative paths and no field for "another
+repository", so they are dropped and the drop comes back as a discovery.
+Renaming a foreign path into a repository-relative one would be a lie the
+caller could not detect.
+
+The three implementations are what the far side can answer honestly:
+`tokensave.context` for `code.context`, `tokensave.calls` for `symbol.calls`
+and `tokensave.overview` for `symbol.overview`. Three things are deliberately
+absent. No `code.search`, because tokensave has no text engine and a flat
+search answered out of a symbol index is a different answer wearing the same
+name. No `symbol.definition`, because resolving the symbol under a *position*
+back to its declaration needs a type checker and tokensave resolves by name.
+And no indexing implementation at all, unlike kivgraph: this far side
+re-syncs its index on every call, so there is nothing for the funnel to
+trigger.
+
+That re-sync is also what `timeout` is sized for. `90s` is kivgraph's ceiling
+rather than omp's because an index brought back into step before the answer
+is slow long before it is stuck.
+
+`instance` may only be `shared`, and `per_repository` is refused rather than
+accepted: a second copy pointed at the same root would index the same files
+twice into the same database. The whole graph belongs to the root, not to a
+repository, which is why one process is the honest number.
 
 ## The model client
 
@@ -1698,7 +1769,7 @@ launch, `[[implementation]]` decides what runs behind a capability, and a
 shortened `[security] sensitive` disarms the skip that keeps secrets out of a
 search.
 
-So the overlay accepts three things and refuses the rest **by name**, with the
+So the overlay accepts four things and refuses the rest **by name**, with the
 reason:
 
 | allowed | what it says |
@@ -1706,6 +1777,7 @@ reason:
 | `[[repository]]` — `languages`, `scale`, `vcs`, `indexed_by` | what this repository is |
 | `[[selector.rule]]` | which implementation to prefer, for this repository only |
 | `[security] sensitive` | further files to treat as delicate |
+| `[[agent]]` — with `runs` | a type of its own, reusing a spawn this machine already declared |
 
 `sensitive` is **unioned** with the global list, never replaced: a repository
 may tighten the guard and may not loosen it, so an empty local list adds
@@ -1721,9 +1793,66 @@ is not, which is the same refusal the global file already makes.
 directory the file was found in; letting the file name another one is the only
 way this layer could reach outside its own tree.
 
+#### `[[agent]]`, and why it is not a hole
+
+A repository may declare an agent type, and it must name `runs`: the type it
+borrows the spawn from. What it may not name is the spawn itself. `command`,
+`args` and `env` are refused by name, for the reason each refusal gives —
+the command is what this machine launches, the arguments are the other half of
+it, and a `PATH` set in `env` redirects even a command the machine did choose:
+
+```
+atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:
+  agent.command: the command is the binary this machine spawns; a repository
+  choosing it is a cloned file deciding what runs here
+```
+
+So the shape a repository can declare is a narrower use of something already
+on this machine: a different objective, a smaller share, a tighter result
+schema. Anything it declares is held to two ceilings at once — the type it
+runs, and `[local_agents]` below — and the tighter of the two wins. Saying
+nothing inherits that same tighter figure, because saying nothing must not be
+a way to hold more than saying something.
+
+#### `[local_agents]`
+
+The global file's ceiling on everything the section above allows. It belongs to
+the machine's owner and a repository cannot touch it:
+
+```toml
+[local_agents]
+effects = ["read"]              # the most a locally declared type may cause
+context = ["repository"]        # the most it may be served
+# max_tokens = 20000            # unset: the ceiling is the type being run
+# max_duration = "5m"           # the same, for wall clock
+```
+
+The two shipped keys are also the defaults, and they are what every type this
+project ships already holds, so the floor is useful rather than a gesture.
+Deleting the whole block does **not** lift the ceiling: it restores those
+values, which is also what a settings file written before the feature existed
+gets. An absent ceiling that read as no ceiling would be the same mistake as an
+unmeasured cost that reads as free.
+
+`effects = []` turns the feature off entirely: a type that may cause nothing is
+refused, so no repository-declared type loads at all. `context` matters more
+than it looks — `workspace` is the catalog of every repository on this machine
+and `history` is what other runs of the same type were told, so `repository` is
+the only level that cannot carry one project's file into another's prompt.
+
+The two limits are commented out on purpose. A local type is already bounded by
+the limits of the type it runs, which it may lower and never raise, so state a
+number here only to hold a cloned repository below what a generous shipped type
+would otherwise allow it.
+
+A repository cannot set this block. `[local_agents]` is refused in an overlay
+by name — *"it is the ceiling on what a repository's own types may do, so a
+repository setting it would be granting itself the permissions it is being held
+to."*
+
 Everything else — `contract`, `[core]`, `[orchestrator]`, `[metrics]`,
-`[backup]`, `[[capability]]`, `[[implementation]]`, `[[mcp_server]]` — is
-refused naming the block and why:
+`[backup]`, `[local_agents]`, `[[capability]]`, `[[implementation]]`,
+`[[mcp_server]]` — is refused naming the block and why:
 
 ```
 atenea: invalid_input: local settings /tmp/repo/.atenea/config.toml:

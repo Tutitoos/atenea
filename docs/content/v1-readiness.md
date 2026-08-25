@@ -165,7 +165,7 @@ responses. A real large-file overview returned 45 symbols successfully.
 On 2026-08-23 the complete current snapshot was applied to an isolated
 temporary clone and committed only inside that clone so the clean-tree gate
 could run. `bash scripts/v1-readiness.sh` passed all nine stages, including
-`go test -race -count=1 ./...`, policy anchors and the `1.0.5`/`3.1.0` build
+`go test -race -count=1 ./...`, policy anchors and the `1.0.5`/`3.2.0` build
 identity. The release was subsequently published by the release workflow.
 
 The end-to-end test

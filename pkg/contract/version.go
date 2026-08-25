@@ -1,5 +1,8 @@
 // Package contract defines the wire contract shared by the Atenea core and its
-// client adapters (omp, Claude Code, OpenCode).
+// adapters: omp, Claude Code and Codex for client CLIs, Serena for symbols,
+// and Kivgraph and Tokensave for graph and context operations. OpenCode is an
+// opt-in model backend rather than an adapter, and does not compile against
+// this package.
 //
 // Adapters are dumb translators: they compile against this package and nothing
 // else. No internal package may leak into it, and nothing here may know how any
@@ -22,9 +25,10 @@ type Version struct {
 // Current is the version of this contract.
 //
 // It is versioned independently from the Atenea product version: the product is
-// in alpha (0.x.y) while the format adapters compile against is already a
-// commitment. Major bumps break adapters; minor bumps add fields without
-// breaking them; patch is cosmetic.
+// stable at 1.x.y and the format adapters compile against is its own separate
+// commitment, which is why the two numbers do not move together. Major bumps
+// break adapters; minor bumps add fields without breaking them; patch is
+// cosmetic.
 //
 // What that promise covers is the data: the types above and below travel
 // between a core and an adapter, and a field added to one is additive by
@@ -122,7 +126,9 @@ type Version struct {
 // field existed.
 //
 // 2.0.0 removed `Health.ObservedAt`, and it is the first bump here that is
-// not additive. Every entry above adds; this one takes away, so it is major
+// not additive. (It came back in 3.2.0, for a job the windows below turned out
+// not to do; the entry there says why. Read on its own this paragraph sends a
+// reader looking for a field that exists.) Every entry above adds; this one takes away, so it is major
 // by the rule at the top rather than by how much code it moved. An adapter
 // built against 1.x that named the field in a composite literal stops
 // compiling, and `Supports` refuses the whole 1.x line rather than letting a
@@ -213,7 +219,44 @@ type Version struct {
 // that it could not before, and it is deliberately not a shade of `failed`:
 // failed says discard this, incomplete says keep it and continue, and an
 // adapter built against 3.0.0 never sends either.
-var Current = Version{Major: 3, Minor: 1, Patch: 0}
+// 3.2.0 is one entry for four additions, and it is one entry because none of
+// them was ever announced.
+//
+// They landed while this constant stayed at 3.1.0, which means the number
+// 3.1.0 as published covers two different shapes of this package: the one the
+// entry above describes, and the one an adapter compiling against `main`
+// actually gets. Splitting them into 3.2.0 through 3.5.0 now would invent a
+// history no adapter ever saw. 3.2.0 is the first number that means what it
+// says, and what it covers is:
+//
+//   - `Health.ObservedAt`, back, together with `Health.Stale`. What 2.0.0
+//     removed it for was a job the Fault and Baseline windows already did --
+//     and they do, for health a core computes from its own measurements. They
+//     do not cover health a core was TOLD: a handshake result persisted across
+//     a restart has no window to sit inside, and a reading with no date is one
+//     nothing can age out. The field is the date; Stale is the question.
+//   - `RedactRaw` and the bounded raw string. A generic-bin failure carries
+//     the provider's own text (1.5.0), and that text reaches disk. Redaction
+//     at the boundary rather than at each writer is the only arrangement where
+//     a new writer cannot forget.
+//   - `CostObserver`, `WithCostObserver` and `CostUpdate`. The optional seam an
+//     adapter uses to report spend mid-turn and be told to stop. Optional in
+//     the literal sense: it travels on the context, so an adapter that does
+//     not look for it is unaffected, which is what keeps this additive on a
+//     seam that is otherwise not.
+//   - `Assignment.CommissionUSD` and `Assignment.Route`. The first tells a
+//     step what the whole run was granted, which is a different fact from its
+//     own share and the one an agent drawing a graph has to divide; without it
+//     the shipped planner divided its own share under the name of the
+//     commission's. The second records the model, capability and provider a
+//     decision resolved to, so a resume cannot silently fall back to whatever
+//     the machine's defaults say today.
+//
+// `Limits.Validate` also stopped requiring a positive `max_tokens`, which is a
+// relaxation and therefore additive: every file that validated before still
+// validates, and zero now reads as "no bound declared" consistently with
+// `Limits.Fits`, which had always read it that way.
+var Current = Version{Major: 3, Minor: 2, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

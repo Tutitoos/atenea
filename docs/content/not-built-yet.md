@@ -104,25 +104,65 @@ schedule is worse than one with no reader, so it now survives the fold.
 
 **Done when:** the cost stage reads this number alongside duration and tokens.
 
-## One agent does everything
+## The second agent family was deleted, and then shipped anyway
 
 The contract drew up two agent families early on: `AgentOrchestrator` and a
-specialist that would only execute, never decide. Only the orchestrator was
-ever built, and `AgentSpecialist` is now deleted rather than finished.
+specialist that would only execute, never decide. The specialist was struck on
+2026-08-05 — commit `f6c6a9f`, *"delete AgentSpecialist, never built and never
+needed"* — and this entry was written to record why. Eight days later it came
+back under a different name, and the entry went on saying it had not, which is
+the one mistake a page called "what is not built yet" cannot afford to make.
 
-It is not a gap waiting its turn. The reason to want several orchestrators
-in the first place was context economy — *"cada uno ve solo lo que necesita
-y ahorras tokens"* — but the orchestrator that got built spends no tokens of
-its own to economize: it is a deterministic dispatcher, not a model burning
-context on its own reasoning, and every adapter that does spend tokens
-already starts a fresh process per call. "Tools do not decide" closed the
-rest of the case — a specialist would only ever have made one implementation
-call and reviewed one outcome, which is exactly what the orchestrator's own
-dispatch already does. There was nothing left for a second agent to be the
-one to do.
+What shipped: `AgentSpecialized` is in the contract at
+`pkg/contract/agent.go:30`, added in 3.1.0 together with the agent contract
+proper — `Assignment`, `Report`, `Task`, `Limits`, `VerdictIncomplete` — as the
+changelog comment at the top of `pkg/contract/version.go` records. Seven types
+declare `kind = "specialized"` in the shipped settings, at
+`internal/config/default.toml:2039`, `:2077`, `:2179`, `:2206`, `:2261`,
+`:2295` and `:2321`: `filereader`, `reviewer`, `plan-check`,
+`semantic-reviewer`, `explore`, `reader` and `plan`. Three of them declare
+`max_tokens = 1` because they genuinely spend nothing — a file read, a citation
+check, and the engine's own plan compiler quoted back at the planner — and the
+other four are real model turns.
 
-This stays one agent, honestly, until a capability shows up whose dispatch
-genuinely needs a decision the orchestrator's own loop does not already make.
+What did not come back is the thing this entry was actually about: a second
+*orchestrator*. Exactly one card in the tree declares `AgentOrchestrator`, the
+one the orchestrator carries about itself at
+`internal/orchestrator/orchestrator.go:199`, and nothing in the shipped
+settings declares `kind = "orchestrator"`. The context-economy argument —
+*"cada uno ve solo lo que necesita y ahorras tokens"* — still holds there and
+only there: the orchestrator's planner is three deterministic Go loops that
+stamp one step per repository (`orchestrator.go:463`, `:823` and `:947`), so it
+burns no context of its own to economize, and every adapter that does spend
+tokens already starts a fresh process per call.
+
+Where the old entry went wrong was in reading "a specialist would only ever
+make one implementation call and review one outcome" as "so there is nothing
+left for it to be". A specialized type is not a thinner orchestrator. It is the
+unit the workflow engine dispatches (`internal/workflow/engine.go:1623`) and
+the unit `atenea agent` runs by name (`cmd/atenea/agent.go:127`), and what a
+step may reach turned out to be worth declaring per type rather than deciding
+per call: `reader` is `explore` minus Atenea's capability catalogue, and the
+comment above it in `default.toml` measures the difference on 2026-08-15 at
+$0.27 and 26,603 tokens to start an `explore` turn against $0.06 and 4,991
+tokens for the identical probe with no tools at all.
+
+**Done:** seven specialized types ship, and both dispatchers run them.
+
+**Still open, and it is the half this entry should have been about:** the kind
+is recorded everywhere and enforced nowhere. It is parsed from the settings,
+carried on the assignment, written on the wire (`internal/agent/wire.go:151`)
+and stored in the trace row (`internal/trace/trace.go:266`), and the only
+decision any shipped code makes on its value is refusing a repository-local
+type that tries to relabel what it runs (`internal/config/local.go:687`).
+Nothing branches on it to stop a specialized agent splitting work, which is
+exactly what the contract says a specialized agent never does. What bounds a
+child today is `Assignment.Child` (`pkg/contract/assignment.go:454`): the
+effect subset, the narrowed limits and the depth cap of three. And no shipped
+caller passes a parent at all — the workflow engine, the reviewer and
+`atenea agent` all dispatch roots — so `Child` is reached only from tests, and
+every agent that runs runs at depth zero. The authority rule is not being broken
+because nothing has yet been in a position to break it.
 
 ## Every plan step is the same capability
 

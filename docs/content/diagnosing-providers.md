@@ -28,14 +28,20 @@ and broken are different findings, and only the second is worth debugging.
 
 ```text
 serves     ripgrep
-no runner  claude.search,
+no runner  claude.search, codex.search,
+           kivgraph.cross_repo_consumers, kivgraph.definition, kivgraph.get,
+           kivgraph.impact, kivgraph.index, kivgraph.overview,
+           kivgraph.references, kivgraph.status,
+           kivgraph.unresolved_references,
            serena.definition, serena.implementations, serena.overview,
-           serena.references, serena.search
+           serena.references, serena.symbol_search,
+           tokensave.calls, tokensave.context, tokensave.overview
 ```
 
-That is the stock catalogue: eleven implementations declared, one reachable,
-because `runners = ["omp"]` attaches a single adapter. Attaching Serena — the
-configuration this write-up is about — makes it five:
+That is the stock catalogue: twenty implementations across fourteen
+capabilities, exactly one reachable, because `runners = ["omp"]` attaches a
+single adapter and `[orchestrator.omp]` declares exactly `ripgrep`. Attaching
+Serena — the configuration this write-up is about — makes it six:
 
 | Capability | Reachable with Serena attached | Over |
 | --- | --- | --- |
@@ -44,24 +50,36 @@ configuration this write-up is about — makes it five:
 | `symbol.references` | `serena.references` | **local HTTP** |
 | `symbol.implementations` | `serena.implementations` | **local HTTP** |
 | `symbol.overview` | `serena.overview` | **local HTTP** |
+| `symbol.search` | `serena.symbol_search` | **local HTTP** |
 
-Note what the catalogue does *not* buy you here. `code.search` declares three
-implementations, but two of them have no adapter — `serena.search` is
-deliberately excluded even from the Serena adapter, which is wired for symbols
-and refuses to claim a text search it has no code for. So the coverage is
-lopsided in a way the capability list alone does not show: text search stands on
-a local binary, and **every symbol capability stands on one transport**.
-`symbol.overview` is the only one with a second provider declared —
-the graph overview provider, over a local binary — and it is not attached in
-this configuration, so it does not soften the outage below.
+Note what the other fourteen implementations do *not* buy you here.
+`code.search` declares three — `claude.search`, `codex.search` and `ripgrep` —
+and Serena is in none of them: the Serena adapter's fifth implementation is
+`serena.symbol_search`, and it answers `symbol.search`, a structural query
+against Serena's own index that returns declarations. That is a different
+capability from the literal-text one, so attaching Serena adds nothing to text
+search and everything to the symbol half.
+
+The symbol half is where the coverage is thinner than the catalogue makes it
+look. `symbol.definition`, `symbol.references` and `symbol.overview` each
+declare a kivgraph sibling, and `symbol.overview` declares a tokensave one on
+top of that — but both of those adapters are stdio child processes that this
+configuration never attaches, and an implementation nobody wired up is not a
+fallback. `symbol.implementations` and `symbol.search` do not even have a
+sibling to leave unattached: one declared implementation each, both Serena's.
+So text search stands on a local binary, and **all five symbol capabilities
+stand on one transport**.
 
 Now break that transport.
 
 `code.search` never touched it. `ripgrep` answers, commissions finish, and
 nothing is reported — correctly, because nothing failed.
 
-The four symbol capabilities lose their only implementation at the same
-instant. No survivor, so they fail out loud, every time.
+All five symbol capabilities lose their only reachable implementation at the
+same instant. The three with a kivgraph or tokensave sibling declared do not
+survive on it — the funnel drops those at `reach`, before health is ever
+consulted, and it drops them exactly as fast whether the transport is up or
+down. No survivor, so all five fail out loud, every time.
 
 The operator sees: *symbols are broken, search is fine.* The only name attached
 to the broken half is Serena. So the report says Serena — and the next hour goes
@@ -163,26 +181,57 @@ atenea select code.search --repo current
 ```
 
 `select` asks the funnel who *would* answer and prints every stage with what it
-dropped and why. This is how you see a fallback that is working silently — the
-capability still answers, and the trace names whoever quietly stopped being
-available:
+dropped and why. This is how you see a capability that is still answering while
+its alternatives quietly went away — the answer comes back, and the trace names
+everybody who did not give it:
 
 ```text
+capability  code.search
+repository  current
 chosen      ripgrep  (the only surviving implementation)
 
 funnel
-  constraints  3 in -> 2 out: claude.search, ripgrep
-      dropped serena.search: needs an index from provider serena, repository has none -- atenea detect looks for one; index it with the provider's own tooling
-  reach        2 in -> 1 out: ripgrep
+  constraints  3 in -> 3 out: claude.search, codex.search, ripgrep
+  reach        3 in -> 1 out: ripgrep
       dropped claude.search: no attached runner serves it
+      dropped codex.search: no attached runner serves it
   health       1 in -> 1 out: ripgrep
   choice       1 in -> 1 out: ripgrep
 ```
 
 Read the stage a name was dropped at, not just that it was dropped. `reach`
 means nobody wired it up — a settings question, and no reason to touch the
-provider. `health` means it was wired and did not answer, which is the only one
-of the two that is an outage.
+provider. `constraints` means it was wired but does not fit *this* repository,
+which is usually a missing index and never an outage. `health` means it was
+wired, it fit, and it did not answer, which is the only one of the three worth
+paging anybody over.
+
+Asking the same repository for `symbol.overview` puts the first two verdicts on
+one screen, and shows that three declared implementations can still produce zero
+answers:
+
+```sh
+atenea select symbol.overview --repo current
+```
+
+```text
+capability  symbol.overview
+repository  current
+
+funnel
+  constraints  3 in -> 1 out: tokensave.overview
+      dropped kivgraph.overview: needs an index from provider kivgraph, repository has none -- atenea detect looks for one; the provider must be indexed externally
+      dropped serena.overview: needs an index from provider serena, repository has none -- atenea detect looks for one; the provider must be indexed externally
+  reach        1 in -> 0 out: -
+      dropped tokensave.overview: no attached runner serves it
+atenea: unavailable: no attached runner serves any implementation of symbol.overview
+```
+
+Nothing here is Serena's fault, or kivgraph's, or tokensave's. Two providers
+hold no index for this repository and the third was never attached, so the
+funnel empties before it reaches `health` and no provider is asked a single
+question. A report written from the failure alone would still name one of the
+three.
 
 `health` is narrower than "it failed", and deliberately so. Four bins never
 reach the record at all: `not_found`, `permission_denied`, `invalid_input` and

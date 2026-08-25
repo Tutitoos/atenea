@@ -15,3 +15,28 @@ dashboard: catalog
 | run-plan-concurrent-medium-dag | load | 3 | 320015458.0 | 3000776.0 | 9655.0 | 3.1 | 275562496 | 2328.8 | 2.6% | 0.0% | 🟠 ORANGE |
 
 Los resultados detallados se conservan en benchmarks/runs/latest/.
+
+## Procedencia de estas medidas
+
+Observación fechada: estas cinco filas proceden del perfil `quick` ejecutado el
+2026-08-22T23:44:54Z sobre el commit `9630fd4d`, con tres procesos independientes
+por benchmark. **No se han vuelto a medir en la remediación del 2026-08-25.** Las
+tablas de tests y cobertura de las otras páginas sí se regeneraron ese día, así
+que ambas cifras no comparten ejecución.
+
+El motivo es que no existe forma de refrescar sólo esta tabla: el único productor
+es `go run ./cmd/atenea-benchmark --profile quick --benchmark-runs 3`, que
+reescribe además `benchmarks/summary.json`, `benchmarks/summary.md` y
+`docs/data/benchmarks/latest.json` en la misma pasada. Inventar aquí un ns/op
+sería exactamente lo que `benchmarks/README.md` prohíbe cuando pide que un
+informe se pueda auditar sin fiarse de una tabla editada a mano.
+
+Lo que sí se verificó contra el árbol actual es el conjunto de benchmarks: los
+cinco nombres, sus categorías y sus paquetes siguen coincidiendo uno a uno con
+las especificaciones declaradas en `cmd/atenea-benchmark/main.go:268-272`, de
+modo que la tabla no lista escenarios que ya no existan. Lo que puede haber
+envejecido son los valores, no el catálogo.
+
+Comparar estas cifras con otra máquina o con otro perfil no es válido: el
+criterio de comparabilidad del proyecto exige mismo benchmark, mismo perfil,
+mismo dataset y hardware compatible.

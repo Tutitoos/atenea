@@ -10,7 +10,7 @@ it serves. omp, Claude Code, Codex and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `1.0.5`, speaking contract `3.1.0` — stable core with optional external
+Version `1.0.5`, speaking contract `3.2.0` — stable core with optional external
 providers. The release is published with checksum-verified installers for
 Linux and macOS on `amd64` and `arm64`; the [final audit](docs/content/v1-final-audit.md)
 records the evidence and the remaining provider-dependent limits. What landed is in the
@@ -86,7 +86,7 @@ graph-backed operations where an indexed repository is required.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=161 --set column=20
+  --set file=internal/selector/selector.go --set line=167 --set column=20
 ```
 
 `ask` is one capability against one repository — the atomic unit a workflow is
@@ -177,28 +177,61 @@ background
 ## Layout
 
 ```text
-cmd/atenea/         entry point: the service and the operator commands
-internal/           the brain, not importable from outside
-  adapter/claudecode/      the client adapter: translates for the Claude Code CLI
+cmd/atenea/             entry point: the service and the operator commands
+cmd/atenea-benchmark/   the evidence run: profiles, raw output and summaries
+internal/               the brain, not importable from outside
+  adapter/claudecode/       the client adapter: translates for the Claude Code CLI
   adapter/codex/            the client adapter: translates for the Codex CLI
   adapter/kivgraph/         graph adapter: impact, indexing and structural queries
-  adapter/omp/             the client adapter: translates for the omp CLI
-  adapter/serena/          the symbol adapter: MCP over HTTP, positions to names and back
+  adapter/omp/              the client adapter: translates for the omp CLI
+  adapter/serena/           the symbol adapter: MCP over HTTP, positions to names and back
   adapter/tokensave/        context and call adapter for the indexed repository
-  checkpoint/              run receipts on disk
-  clock/                   the one lane every background rhythm runs in
-  config/                  the single settings file
-  core/                    wiring, status and clean shutdown
-  metrics/                 the measurement base: DuckDB, batched, one writer
-  notebook/                the crash notebook: Atenea's own faults, synced on write
-  orchestrator/            the agent: explore, split, dispatch, review
-  procstat/                weighing a finished child process, per platform
-  registry/                the Capability Registry
-  runner/local/            stand-in far side, for a machine with no client installed
-  selector/                the funnel
-  toolversion/             asking a tool who it is, once per process
-pkg/contract/       the contract shared by the core and its adapters
-docs/               documentation sources, served by Hugo on GitHub Pages
+  agent/                    one declared agent as one real process
+  agent/filereader/         the minimal agent: one file, no model, no key
+  agent/model/              the seam an agent calls its own model through
+  agent/opencode/           the isolated model runner for OpenCode's CLI
+  agent/plancheck/          the planner's TOML checked against the engine
+  agent/planner/            explore and plan, two runs so a retry is cheap
+  agent/reviewer/           the auditor: only claims it can prove on the spot
+  agent/semanticreviewer/   does the conclusion follow from the evidence
+  allowance/                money-to-reading arithmetic, in one place
+  backup/                   five complete copies in rotation, never a chain
+  benchmark/                the evidence format for reproducible runs
+  buildinfo/                the version of the running binary
+  checkpoint/               run receipts on disk
+  clientconfig/             reads a repository's .mcp.json, never runs it
+  clock/                    the one lane every background rhythm runs in
+  config/                   the single settings file
+  core/                     wiring, status and clean shutdown
+  dashboard/                the optional web UI beside an MCP declaration
+  decision/                 a commission in prose to an explainable plan
+  floor/                    what a turn costs before it has done anything
+  ipc/                      the door a client knocks on: one unix socket
+  mcpprobe/                 asks an MCP server if it is really there
+  mcpstdio/                 JSON-RPC over a child's own stdin and stdout
+  metrics/                  the measurement base: DuckDB, batched, one writer
+  notebook/                 the crash notebook: Atenea's own faults, synced on write
+  orchestrator/             the agent: explore, split, dispatch, review
+  passthrough/              somebody else's tools, re-offered under a raw. id
+  pidlock/                  one named right at a time, held by a pid file
+  platform/                 where data lives and how Atenea starts, per OS
+  procgroup/                making a canceled child and its helpers stop
+  procstat/                 weighing a finished child process, per platform
+  registry/                 the Capability Registry
+  runner/local/             stand-in far side, for a machine with no client installed
+  selector/                 the funnel
+  statusline/               Atenea's traffic light on a client's screen
+  supervisor/               the MCP servers Atenea launches and keeps alive
+  testroot/                 short test paths, so a unix socket still fits
+  toolpath/                 a client's binary, not one installation path
+  toolversion/              asking a tool who it is, once per process
+  trace/                    which agents ran, when, and how they ended
+  workflow/                 a DAG of agent steps: waves, ceilings, failure
+  wrap/                     launching a client on configuration Atenea checked
+pkg/contract/           the contract shared by the core and its adapters
+docs/                   documentation sources, served by Hugo on GitHub Pages
+benchmarks/             the recorded evidence a report is audited against
+tools/                  standalone scripts: MCP drift check, loopback recorder
 ```
 
 ## Development
