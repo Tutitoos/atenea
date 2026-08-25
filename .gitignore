@@ -39,3 +39,10 @@
 # Swift build output for the desktop helper. The helper is compiled on the
 # machine that runs it and ships in no release, so this is always local.
 helper/.build/
+
+# A test in cmd/atenea-benchmark has to create its artifact directory inside the
+# source tree -- a path under /var would make the "../" it is checking saturate
+# at the filesystem root, so the bug it covers could not happen there. It cleans
+# up after itself; a run that is killed does not get to. Ignored so a leftover
+# cannot be swept into a commit by `git add -A`, which is how one already was.
+cmd/atenea-benchmark/coverage-anchor-*/
