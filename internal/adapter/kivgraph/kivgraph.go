@@ -1182,12 +1182,30 @@ type outlineAnswer struct {
 	Truncated  bool   `json:"truncated"`
 	NextCursor string `json:"next_cursor"`
 	Results    struct {
+		// Kind is hoisted out of the rows when every declaration on the page
+		// shares one, which is how the compact form pays for itself. It is
+		// the only kind those rows carry, so a decoder that ignores it
+		// reports every declaration as kindless.
+		Kind    string               `json:"kind"`
 		Symbols []outlineDeclaration `json:"symbols"`
-		Files   []struct {
-			Symbols []outlineDeclaration `json:"symbols"`
-		} `json:"files"`
-		Groups []outlineGroup `json:"groups"`
+		Files   []outlineFile        `json:"files"`
+		Groups  []outlineGroup       `json:"groups"`
 	} `json:"results"`
+}
+
+// outlineFile is one file's declarations. Which field carries them depends
+// on the server: "symbols" on kivgraph 0.2.1, and "at" on 0.7.0, whose
+// get_file_outline weighs the grouped encoding against the flat one and
+// ships whichever is smaller. Grouping only wins when a (kind, visibility)
+// pair repeats enough to pay for its own header, so the flat shape below is
+// not an edge case -- it is what a file of mixed declarations produces.
+// Measured against 0.7.0: lib/main.dart came back flat with 19 declarations
+// and read as empty, while a file whose kinds repeated came back grouped and
+// read fine, which is why this looked intermittent rather than broken.
+type outlineFile struct {
+	File    string               `json:"file"`
+	Symbols []outlineDeclaration `json:"symbols"`
+	At      []json.RawMessage    `json:"at"`
 }
 
 // outlineGroup is the compact shape emitted by the installed kivgraph
@@ -1197,11 +1215,8 @@ type outlineAnswer struct {
 // above: accepting a new wire shape here is cheaper and safer than letting a
 // valid graph look empty to every position-first capability.
 type outlineGroup struct {
-	Kind  string `json:"kind"`
-	Files []struct {
-		File string   `json:"file"`
-		At   []string `json:"at"`
-	} `json:"files"`
+	Kind  string        `json:"kind"`
+	Files []outlineFile `json:"files"`
 }
 
 // declarations is every declaration the outline carried, whichever of the
@@ -1213,18 +1228,62 @@ func (a outlineAnswer) declarations() []outlineDeclaration {
 	out := a.Results.Symbols
 	for _, file := range a.Results.Files {
 		out = append(out, file.Symbols...)
+		// The page-level kind is the only one a flat row carries; grouped
+		// rows get theirs from the group instead.
+		out = append(out, compactDeclarations(a.Results.Kind, file.At)...)
 	}
 	for _, group := range a.Results.Groups {
 		for _, file := range group.Files {
-			for _, at := range file.At {
-				decl, ok := compactOutlineDeclaration(group.Kind, at)
-				if ok {
-					out = append(out, decl)
-				}
-			}
+			out = append(out, compactDeclarations(group.Kind, file.At)...)
 		}
 	}
 	return out
+}
+
+// compactDeclarations reads one file's compact rows. Each is either the bare
+// "Name@start-end" string, or a tuple whose first element is that same
+// encoding and whose rest names what the page could not hoist. Both are
+// accepted because which one arrives is decided per page by the server, not
+// by the caller: a decoder that reads only one shape reports the other as a
+// file that declares nothing, and an empty outline is indistinguishable from
+// a file with no declarations -- a wrong answer wearing a resolved one's
+// clothes.
+func compactDeclarations(kind string, rows []json.RawMessage) []outlineDeclaration {
+	var out []outlineDeclaration
+	for _, row := range rows {
+		if decl, ok := compactOutlineEntry(kind, row); ok {
+			out = append(out, decl)
+		}
+	}
+	return out
+}
+
+// compactOutlineEntry decodes one compact row. The tuple form carries the
+// qualified name in its encoding and the simple name beside it, and both are
+// kept: columnOf scans the source line for the simple name and would never
+// find a qualified one, while parentOf needs the qualified name to name the
+// declaration that encloses this one.
+func compactOutlineEntry(kind string, row json.RawMessage) (outlineDeclaration, bool) {
+	var encoded string
+	if err := json.Unmarshal(row, &encoded); err == nil {
+		return compactOutlineDeclaration(kind, encoded)
+	}
+	var tuple []string
+	if err := json.Unmarshal(row, &tuple); err != nil || len(tuple) == 0 {
+		return outlineDeclaration{}, false
+	}
+	decl, ok := compactOutlineDeclaration(kind, tuple[0])
+	if !ok {
+		return outlineDeclaration{}, false
+	}
+	decl.StableKey = tuple[0]
+	if len(tuple) > 1 && tuple[1] != "" {
+		decl.Name = tuple[1]
+	}
+	if len(tuple) > 2 && tuple[2] != "" {
+		decl.Kind = tuple[2]
+	}
+	return decl, true
 }
 
 func compactOutlineDeclaration(kind, encoded string) (outlineDeclaration, bool) {
