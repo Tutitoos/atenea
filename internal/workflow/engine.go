@@ -243,7 +243,7 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	if err != nil {
 		return Run{}, Gate{}, err
 	}
-	if err := e.checkFunding(ctx, "", plan); err != nil {
+	if err := e.checkFunding(ctx, "", plan, nil); err != nil {
 		return Run{}, Gate{}, err
 	}
 	id := e.ids()
@@ -254,6 +254,15 @@ func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
 	gate, err := e.store.Ask(ctx, id, KindLaunch,
 		Proposal{Steps: plan.Graph.Steps}, at)
 	if err != nil {
+		// The run exists and nothing authorized it. Leaving it there is what
+		// produced runs with every step pending and no gate: `list` showed
+		// them and `resume` executed them. The discard is best effort because
+		// the refusal above is the news -- a cleanup that failed must not
+		// replace the reason the plan was turned down.
+		if discardErr := e.store.Discard(ctx, id); discardErr != nil {
+			return Run{}, Gate{}, contract.Fail(contract.KindOf(err),
+				"%v (and the unauthorized run %s could not be discarded: %v)", err, id, discardErr)
+		}
 		return Run{}, Gate{}, err
 	}
 	run, err := e.store.Load(ctx, id)
@@ -407,7 +416,11 @@ type underfunded struct {
 // reader of the receipt would have no way to tell the figure they authorized
 // from the one the engine preferred. Refusing is the honest move. The shares
 // in a plan are its author's, and they stay its author's.
-func (e *Engine) checkFunding(ctx context.Context, id string, plan Plan) error {
+// deaths, when given, supplies what a step already spent dying instead of
+// reading it back from the archive. Redo needs that: the number lives on the
+// live row until Reset files it, and Reset is a write -- so a check that had to
+// read the archive could only run after the writes it exists to prevent.
+func (e *Engine) checkFunding(ctx context.Context, id string, plan Plan, deaths map[string]float64) error {
 	if e.floors == nil || e.modelFor == nil {
 		return nil
 	}
@@ -460,6 +473,9 @@ func (e *Engine) checkFunding(ctx context.Context, id string, plan Plan) error {
 		// non-empty at Redo, where it is the one place this can ever be
 		// non-zero, on the one step being raised.
 		deadUSD, hadDeath := e.deadSpend(ctx, id, step.ID)
+		if usd, given := deaths[step.ID]; given {
+			deadUSD, hadDeath = usd, true
+		}
 		// What completed steps of this type have cost, population-wide.
 		// Read before the probe gating below, because it is the one rule
 		// that does not need a probe to have run: a type nobody measured a
@@ -840,6 +856,34 @@ func (e *Engine) Launch(ctx context.Context, id string) (Run, error) {
 	return e.Run(ctx, id)
 }
 
+// Effects reports every effect the steps of a recorded workflow may cause.
+//
+// It reads and only reads, which is the point: a surface that has to authorize
+// a launch has to know what it is authorizing BEFORE it commits anything.
+// Launching and checking afterwards authorizes by doing.
+//
+// Separate from Graph.Effects because the two answer about different things: a
+// graph is a file somebody may still edit, a run is what was written down. A
+// launch must be held to the second.
+func (e *Engine) Effects(ctx context.Context, id string) ([]contract.Effect, error) {
+	run, err := e.store.Load(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[contract.Effect]struct{}, 4)
+	for _, row := range run.Steps {
+		for _, effect := range row.Step.Permission.Effects {
+			seen[effect] = struct{}{}
+		}
+	}
+	out := make([]contract.Effect, 0, len(seen))
+	for effect := range seen {
+		out = append(out, effect)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
 // Run drives a workflow that is already on disk: it takes the run over and
 // executes whatever the graph and the gates say to do next.
 func (e *Engine) Run(ctx context.Context, id string) (Run, error) {
@@ -851,7 +895,11 @@ func (e *Engine) Run(ctx context.Context, id string) (Run, error) {
 	if err != nil {
 		return run, err
 	}
-	if err := e.store.Own(ctx, id, e.pid); err != nil {
+	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
+	// the claim conditional on that observation still holding, so an Atenea
+	// that slipped in between the two loses the UPDATE instead of sharing the
+	// run.
+	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
 		return run, err
 	}
 	return e.execute(ctx, id, plan)
@@ -1022,7 +1070,11 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 			return run, err
 		}
 	}
-	if err := e.store.Own(ctx, id, e.pid); err != nil {
+	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
+	// the claim conditional on that observation still holding, so an Atenea
+	// that slipped in between the two loses the UPDATE instead of sharing the
+	// run.
+	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
 		return run, err
 	}
 	return e.execute(ctx, id, plan)
@@ -1092,6 +1144,7 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	// steps must not leave the first two resharded and the run reopened.
 	seen := make(map[string]bool, len(raises))
 	steps := make([]Step, 0, len(raises))
+	deaths := make(map[string]float64, len(raises))
 	for _, raise := range raises {
 		if seen[raise.StepID] {
 			return run, contract.Fail(contract.FailureInvalidInput,
@@ -1119,6 +1172,30 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 		step := row.Step.Clone()
 		step.Permission.BudgetUSD = raise.USD
 		steps = append(steps, step)
+		// What this attempt spent before it was cut, taken from the live row.
+		// Reset is what files this into the archive, and Reset is a write; a
+		// funding check that could only read the archive was therefore a
+		// check that could only run after the writes.
+		if row.Spent.USD != nil {
+			deaths[raise.StepID] = *row.Spent.USD
+		}
+	}
+
+	// Before a single write, which is what the paragraph above always claimed
+	// and the code did not do.
+	//
+	// checkFunding used to run last: after Regrant, after the gate was asked
+	// and approved, and after every named step had been Reset and resharded.
+	// A refusal there left the step `pending` -- so CutAtItsCeiling() was
+	// false and a second redo refused it -- on a run still closed, so resume
+	// refused it too. The step was unreachable by any command, and the only
+	// evidence of why was a gate answered "approved" for work that never ran.
+	prospective, err := e.replan(withShares(run, steps, grant))
+	if err != nil {
+		return run, err
+	}
+	if err := e.checkFunding(ctx, id, prospective, deaths); err != nil {
+		return run, err
 	}
 
 	if grant > 0 {
@@ -1164,14 +1241,11 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	if err != nil {
 		return run, err
 	}
-	// The raised share meets the same admission rule a new plan would. A share
-	// funded past its old ceiling and still under what starting a turn costs is
-	// doomed for the second reason, and finding that out by spending it is what
-	// this check exists to prevent.
-	if err := e.checkFunding(ctx, id, plan); err != nil {
-		return run, err
-	}
-	if err := e.store.Own(ctx, id, e.pid); err != nil {
+	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
+	// the claim conditional on that observation still holding, so an Atenea
+	// that slipped in between the two loses the UPDATE instead of sharing the
+	// run.
+	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
 		return run, err
 	}
 	return e.execute(ctx, id, plan)
@@ -1193,6 +1267,33 @@ func elsewhere(row StepRow) string {
 func touchesTheWorld(effects []contract.Effect) bool {
 	return slices.Contains(effects, contract.EffectWrite) ||
 		slices.Contains(effects, contract.EffectExternal)
+}
+
+// withShares copies a run with some steps replaced and, when one is given, a
+// new grant -- so a plan can be compiled from what a change WOULD produce
+// without the change having happened.
+//
+// The grant belongs here rather than being left at its old value: a redo that
+// raises the grant and the shares together is one act, and compiling the new
+// shares against the old ceiling would refuse it for a limit it is in the
+// middle of lifting.
+func withShares(run Run, steps []Step, grant float64) Run {
+	replaced := make(map[string]Step, len(steps))
+	for _, step := range steps {
+		replaced[step.ID] = step
+	}
+	out := run
+	if grant > 0 {
+		out.GrantUSD = grant
+	}
+	out.Steps = make([]StepRow, len(run.Steps))
+	copy(out.Steps, run.Steps)
+	for i := range out.Steps {
+		if step, ok := replaced[out.Steps[i].Step.ID]; ok {
+			out.Steps[i].Step = step
+		}
+	}
+	return out
 }
 
 // replan rebuilds the compiled plan from what is on disk. The graph is read
@@ -1258,6 +1359,34 @@ func (e *Engine) await(ctx context.Context, id string, ordinal int) (Gate, error
 	}
 }
 
+// unwind stops a dispatch loop that is leaving, whatever the reason.
+//
+// Both halves are load-bearing and neither used to happen reliably. `results`
+// is unbuffered, so a goroutine whose step has finished blocks on its send
+// until somebody reads it -- and canceling the context does not release a
+// blocked send. Two exits called cancel() and wg.Wait() with nobody left
+// reading and deadlocked outright, hanging the command forever; the other
+// exits returned without either, stranding those goroutines and the agent
+// processes they hold, in a service that does not exit between runs.
+//
+// The drain is complete when the WaitGroup is: each goroutine sends and only
+// then defers its Done, so a returned Wait means every send was received.
+func unwind(cancel context.CancelFunc, wg *sync.WaitGroup, results <-chan done) {
+	cancel()
+	landed := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(landed)
+	}()
+	for {
+		select {
+		case <-results:
+		case <-landed:
+			return
+		}
+	}
+}
+
 // done is one finished dispatch, handed back to the single writer.
 type done struct {
 	stepID string
@@ -1290,12 +1419,6 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	// a refusal and the relaunch it causes, and a run resumed after that
 	// window is a run a person is steering, not one still mid-correction.
 	rejections := make(map[string]contract.Subject, len(run.Steps))
-	// carried is what an abandoned attempt already cost. A step's own row
-	// holds one attempt -- Claim clears it on every re-claim, so a redo does
-	// not inherit a charge it did not incur -- but the run paid for both,
-	// and a receipt that drops the refused half understates the bill by
-	// exactly the amount the correction cost.
-	carried := make(map[string]contract.Charge, len(run.Steps))
 	// seed rebuilds the four maps from the record. It runs again after a
 	// graph grows, so an expansion's steps arrive the same way a resumed
 	// run's do -- from disk, not from a second construction path that could
@@ -1323,7 +1446,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	// what happened to them. A store call on the caller's context would fail
 	// exactly when the record matters most.
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// Every exit from this function unwinds the same way, including the ones
+	// that used not to unwind at all. See unwind: `results` is unbuffered, so
+	// leaving without draining it strands every goroutine whose step has
+	// already finished, and waiting without draining it deadlocks outright.
+	defer unwind(cancel, &wg, results)
 	write := context.WithoutCancel(ctx)
 
 	aborted := false
@@ -1332,9 +1459,27 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	// answer may have arrived while nothing was running, and an execute that
 	// only consulted OPEN gates would find none and dispatch the graph
 	// somebody had just turned down.
+	//
+	// The absence of gate 0 is now a refusal too, and it used to be silence.
+	// `err == nil &&` meant a run with no launch gate at all fell through to
+	// the loop and dispatched -- and such runs existed: Create wrote the run
+	// before Ask could refuse it, so a proposal Ask turned down left a
+	// workflow row with every step pending and nothing blessing the money.
+	// `list` showed it and `resume` ran it. Ask can no longer be reached in
+	// that state, and this is the second lock on the same door: the launch
+	// gate IS the authorization this loop runs under, so running without one
+	// cannot be a thing the code is able to do.
 	rejected := false
-	if launch, err := e.store.Gate(write, id, 0); err == nil &&
-		launch.Kind == KindLaunch && launch.Decision == DecisionRejected {
+	launch, err := e.store.Gate(write, id, 0)
+	switch {
+	case err != nil:
+		return run, contract.Fail(contract.FailureInvalidInput,
+			"workflow %s has no launch gate: nothing authorized it, so there is nothing to run", id)
+	case launch.Kind != KindLaunch:
+		return run, contract.Fail(contract.FailureInvalidInput,
+			"workflow %s: gate 0 is a %s, not a launch: the record does not say who authorized this run",
+			id, launch.Kind)
+	case launch.Decision == DecisionRejected:
 		rejected = true
 	}
 	for {
@@ -1351,8 +1496,6 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		if !aborted {
 			gate, waiting, err := e.store.OpenGate(write, id)
 			if err != nil {
-				cancel()
-				wg.Wait()
 				return run, err
 			}
 			switch {
@@ -1468,8 +1611,6 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
 					attempts[step.ID], e.now(), e.pid); err != nil {
-					cancel()
-					wg.Wait()
 					return run, err
 				}
 				traces[step.ID] = traceID
@@ -1509,9 +1650,6 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			status[finished.stepID] = StatusInterrupted
 			continue
 		}
-		if before, ok := carried[finished.stepID]; ok {
-			finished.report.Spent = finished.report.Spent.Plus(before)
-		}
 		if err := e.store.Finish(write, id, finished.stepID, finished.status,
 			finished.report, e.now()); err != nil {
 			return run, err
@@ -1545,14 +1683,33 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		if redo, ok := e.refused(plan, finished, attempts, answers); ok {
 			rejections[redo] = agent.RejectedCard(
 				mustSubject(answers[redo]), traces[finished.stepID], finished.report.Reason)
-			carried[redo] = answers[redo].Spent.Plus(carried[redo])
-			status[redo] = StatusPending
-			status[finished.stepID] = StatusPending
-			delete(answers, redo)
-			delete(answers, finished.stepID)
+			// Written down, not merely remembered.
+			//
+			// These two statuses used to exist only in this process's map. An
+			// Atenea that died between a review's refusal and the re-dispatch
+			// it causes left a run where nothing was pending and nothing was
+			// interrupted -- so Run.Done() said true, End wrote StopNone, and
+			// the record claimed a finished run whose correction never
+			// happened. Reset also files the refused attempt, which is where
+			// its money belongs: the run paid for both halves, and the
+			// archive is the one place that says so. A second in-memory tally
+			// of the same charge -- which is what this used to keep -- made
+			// the live row carry it as well, and the balance counted it twice.
+			for _, stepID := range [...]string{redo, finished.stepID} {
+				if err := e.store.Reset(write, id, stepID, e.now()); err != nil {
+					return run, err
+				}
+				status[stepID] = StatusPending
+				delete(answers, stepID)
+			}
 		}
 	}
-	wg.Wait()
+	// The loop only breaks with nothing running, so this waits on nobody
+	// today. It goes through unwind anyway: a future break that left a step
+	// in flight would otherwise write the run's ending while it was still
+	// happening, and the version of this that was a bare wg.Wait() would have
+	// hung there instead of saying so.
+	unwind(cancel, &wg, results)
 
 	stop := StopNone
 	switch {

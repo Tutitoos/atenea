@@ -100,7 +100,7 @@ func TestSharesMayNotAddUpPastTheGrant(t *testing.T) {
 	graph.GrantUSD = 1
 	graph.Steps[0].Permission.BudgetUSD = 0.75
 	graph.Steps[1].Permission.BudgetUSD = 0.75
-	refuses(t, graph, "past the 1.00 grant")
+	refuses(t, graph, "past the $1.00 grant")
 }
 
 func TestSharesThatFitAreAccepted(t *testing.T) {

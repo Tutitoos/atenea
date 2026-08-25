@@ -704,6 +704,47 @@ SELECT workflow_id, id, attempt, trace_id, status, verdict,
 FROM workflow_step
 WHERE workflow_id = ? AND id = ? AND attempt > 0`
 
+// Discard removes a run that was written and then refused before anything
+// could authorize it.
+//
+// It exists for exactly one caller: Create writes the run, then asks the launch
+// gate, and the ask can refuse. What that used to leave behind was a workflow
+// row with every step pending and no gate at all -- visible to `list`, and
+// runnable by `resume`, with nobody having approved a penny of it.
+//
+// Deliberately narrow. It refuses a run that has any gate, because a run
+// somebody has been asked about is a run with a record, and a record is not
+// something a cleanup path gets to delete. Nothing else in this package
+// removes a run, and nothing else should.
+func (s *Store) Discard(ctx context.Context, id string) error {
+	gates, err := s.Gates(ctx, id)
+	if err != nil {
+		return err
+	}
+	if len(gates) > 0 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow %s has %d gate(s) on the record and is not a run to discard", id, len(gates))
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: discarding %s", id)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, statement := range []string{
+		`DELETE FROM workflow_step WHERE workflow_id = ?`,
+		`DELETE FROM workflow_attempt WHERE workflow_id = ?`,
+		`DELETE FROM workflow WHERE id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement, id); err != nil {
+			return unavailable(err, "workflow: discarding %s", id)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return unavailable(err, "workflow: discarding %s", id)
+	}
+	return nil
+}
+
 // Claim marks a step running, with the pid that owns it, and files the
 // attempt it is replacing.
 //
@@ -825,9 +866,25 @@ func (s *Store) Reset(ctx context.Context, id, stepID string, at time.Time) erro
 	if _, err := tx.ExecContext(ctx, fileAttempt, stamp(at), id, stepID); err != nil {
 		return unavailable(err, "workflow: filing %s step %s attempt", id, stepID)
 	}
+	// The same columns Claim clears, and for the same reason: the attempt has
+	// just been filed, so leaving its outcome on the live row makes the run
+	// hold one attempt's money twice -- once in workflow_attempt and once
+	// here -- and Run.Budget() sums both. It also left `verdict = ok` on a
+	// step whose status now says pending, a row that reads as a finished step
+	// nobody has started.
+	//
+	// Claim did clear them, which hid this: in the ordinary path a reset step
+	// is claimed moments later. A reset that is never followed by a claim --
+	// a redo the funding check refuses, a run somebody abandons -- kept the
+	// lie permanently.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE workflow_step
-		 SET status = ?, ended_at = '', reason_kind = '', reason_text = '', writer_pid = 0
+		 SET status = ?, ended_at = '', writer_pid = 0,
+		     verdict = '', reason_kind = '', reason_text = '',
+		     result = '', discovered = '', spent_usd = NULL,
+		     spent_input_tokens = NULL, spent_output_tokens = NULL,
+		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
+		     priced_by = '', completeness = NULL, stopped_at = ''
 		 WHERE workflow_id = ? AND id = ?`,
 		StatusPending.String(), id, stepID); err != nil {
 		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
@@ -838,14 +895,42 @@ func (s *Store) Reset(ctx context.Context, id, stepID string, at time.Time) erro
 	return nil
 }
 
-// Own records which Atenea is running this workflow now. A resume takes the
-// run over; nothing else may, and the pid is what says so.
-func (s *Store) Own(ctx context.Context, id string, pid int) error {
-	_, err := s.db.ExecContext(ctx,
+// Own records which Atenea is running this workflow now, and refuses if
+// somebody else got there first.
+//
+// The predicate is the point. takeOver reads writer_pid, checks the process is
+// gone, and calls this -- and between the read and the write there was nothing
+// at all. Two Ateneas resuming the same id milliseconds apart both saw a free
+// run, both wrote their own pid, and both executed the graph: every step
+// dispatched twice, the grant charged twice, both write effects applied, and
+// the two processes overwriting each other's Finish on the same row. `held` is
+// what the caller believed when it decided, so the UPDATE only lands if that is
+// still true.
+//
+// Passing the caller's own pid as held is how a re-entry keeps working: a
+// process taking over a run it already owns is not a race with itself.
+func (s *Store) Own(ctx context.Context, id string, pid, held int) error {
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE workflow SET writer_pid = ?, closed = 0, ended_at = '', stop = ''
-		 WHERE id = ?`, pid, id)
+		 WHERE id = ? AND writer_pid = ?`, pid, id, held)
 	if err != nil {
 		return unavailable(err, "workflow: claiming %s", id)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return unavailable(err, "workflow: claiming %s", id)
+	}
+	if rows == 0 {
+		// Either another Atenea took it in the gap, or the id is gone. Load
+		// says which, and naming the winner is what turns "try again" into
+		// something the reader can act on.
+		current, loadErr := s.Load(ctx, id)
+		if loadErr != nil {
+			return loadErr
+		}
+		return contract.Fail(contract.FailureUnavailable,
+			"workflow %s was taken over by pid %d while this one was starting it",
+			id, current.WriterPID)
 	}
 	return nil
 }

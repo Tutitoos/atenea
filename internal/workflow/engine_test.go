@@ -428,6 +428,7 @@ func TestARunOwnedByALiveProcessIsNotTakenOver(t *testing.T) {
 	if err := h.state.Create(t.Context(), "wf-live", plan, "", time.Now(), 9999); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	launched(t, h, "wf-live", plan)
 	if err := h.state.Claim(t.Context(), "wf-live", "a", "trace-1", 1, time.Now(), 9999); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -442,6 +443,25 @@ func TestARunOwnedByALiveProcessIsNotTakenOver(t *testing.T) {
 }
 
 // Atenea dying is not the same as Atenea being cut, and a resume can tell:
+// launched puts the launch gate on a run a fixture wrote straight to the store.
+//
+// A run created through the engine always has one; a fixture that shortcuts
+// store.Create does not, and execute now refuses a run nothing authorized. The
+// state these tests simulate -- a run a dead Atenea left mid-flight -- is by
+// definition a run that WAS launched, so the gate belongs in the fixture.
+func launched(t *testing.T, h *harness, id string, plan workflow.Plan) {
+	t.Helper()
+	gate, err := h.state.Ask(t.Context(), id, workflow.KindLaunch,
+		workflow.Proposal{Steps: plan.Graph.Steps}, time.Now())
+	if err != nil {
+		t.Fatalf("asking the launch gate on %s: %v", id, err)
+	}
+	if _, err := h.state.Answer(t.Context(), id, gate.Ordinal,
+		workflow.DecisionApproved, "tester via test", "", time.Now()); err != nil {
+		t.Fatalf("approving the launch gate on %s: %v", id, err)
+	}
+}
+
 // the record says running, the pid it names is gone, so nobody judged that
 // step and the reason says why.
 func TestARunLeftByADeadProcessResumes(t *testing.T) {
@@ -462,6 +482,7 @@ func TestARunLeftByADeadProcessResumes(t *testing.T) {
 	if err := h.state.Create(t.Context(), "wf-dead", plan, "", time.Now(), 5150); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	launched(t, h, "wf-dead", plan)
 	if err := h.state.Claim(t.Context(), "wf-dead", "a", "trace-1", 1, time.Now(), 5150); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

@@ -239,11 +239,26 @@ func TestTheRefusedAttemptsChargeStaysOnTheReceipt(t *testing.T) {
 	if spend.USD == nil {
 		t.Fatalf("the run reports no dollar figure: %+v", spend)
 	}
-	if *spend.USD < 0.059 || *spend.USD > 0.061 {
-		t.Errorf("spent $%.4f, want both attempts ($0.06)", *spend.USD)
+	// The two halves are held apart, and the receipt adds them. The refused
+	// attempt lives in the archive, which is where Reset files it and where
+	// it survives the process that heard the refusal; the live row holds the
+	// attempt that stands. This used to be one number on the live row -- an
+	// in-memory tally folded into it at Finish -- and the archive held the
+	// same money again, so the balance line, which adds both, charged $0.09
+	// for two attempts that cost $0.06.
+	if spend.SupersededAttempts != 1 {
+		t.Errorf("archived attempts = %d, want the one the review refused", spend.SupersededAttempts)
 	}
-	if spend.Tokens != 2400 {
-		t.Errorf("tokens = %d, want both attempts (2400)", spend.Tokens)
+	if charged := *spend.USD + spend.SupersededUSD; charged < 0.059 || charged > 0.061 {
+		t.Errorf("charged $%.4f, want both attempts ($0.06)", charged)
+	}
+	if *spend.USD < 0.029 || *spend.USD > 0.031 {
+		t.Errorf("the live row holds $%.4f, want only the attempt that stands ($0.03)", *spend.USD)
+	}
+	// Tokens come from the live rows alone -- see [workflow.Spend], which
+	// says why -- so this is the standing attempt's count, not the pair's.
+	if spend.Tokens != 1200 {
+		t.Errorf("tokens = %d, want the standing attempt's (1200)", spend.Tokens)
 	}
 }
 
@@ -276,3 +291,49 @@ func TestAddingChargesKeepsTheDollarFigureOnlyWhenBothHaveOne(t *testing.T) {
 }
 
 func usdOf(v float64) *float64 { return &v }
+
+// A refusal that only lives in this process's memory is a refusal that does not
+// survive it.
+//
+// The two statuses a refused review sets -- the work back to pending, the
+// review with it -- used to exist only in a map. An Atenea that died between
+// the refusal and the re-dispatch left a run where nothing was pending and
+// nothing was interrupted: Run.Done() said true, End wrote StopNone, and the
+// record claimed a finished run whose correction never happened.
+func TestARefusedReviewIsOnDiskBeforeTheRedispatch(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, noCeiling(),
+		declared("work", charged(t, dir, "work", 1000, 200, 0.03, "a price list"), config.PoolAgent),
+		declared("judge", refusesOnce(t, dir, "judge", "wrong"), config.PoolReview),
+	)
+
+	run, err := h.engine.Start(t.Context(),
+		graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w")))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Read back from disk rather than from the returned value: what the next
+	// process would see is the only thing this is about.
+	recorded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Both halves of the correction are filed: the work the review refused and
+	// the review that refused it. Two attempts, one for each step that was put
+	// back to pending.
+	filed := map[string]bool{}
+	for _, attempt := range recorded.Superseded {
+		filed[attempt.StepID] = true
+	}
+	for _, want := range []string{"w", "j"} {
+		if !filed[want] {
+			t.Errorf("step %q has no archived attempt: %v", want, filed)
+		}
+	}
+	// And the run really did close on the corrected work, not on a graph
+	// somebody has to guess the state of.
+	if !recorded.Closed {
+		t.Error("the run is still open after the correction ran")
+	}
+}

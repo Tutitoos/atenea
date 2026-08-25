@@ -22,7 +22,12 @@ func priced(t *testing.T, store *workflow.Store, id, repository, typeName string
 	t.Helper()
 	one := step("a", typeName, nil)
 	one.Permission.BudgetUSD = grant
-	plan, err := workflow.Compile(graphOf(one),
+	// The graph is granted what its one step is handed. A share drawn out of
+	// a zero grant is the shape Compile now refuses, and a fixture that built
+	// it was asserting on a graph the engine would never accept.
+	funding := graphOf(one)
+	funding.GrantUSD = grant
+	plan, err := workflow.Compile(funding,
 		[]config.AgentType{declared(typeName, "/bin/true", config.PoolAgent)})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)

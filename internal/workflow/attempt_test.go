@@ -27,7 +27,11 @@ func twoAttempts(t *testing.T, store *workflow.Store, id string) {
 	t.Helper()
 	one := step("a", "reader", nil)
 	one.Permission.BudgetUSD = 0.45
-	plan, err := workflow.Compile(graphOf(one),
+	// Granted what the step is handed: a share drawn out of a zero grant is
+	// the shape Compile refuses.
+	funding := graphOf(one)
+	funding.GrantUSD = 0.45
+	plan, err := workflow.Compile(funding,
 		[]config.AgentType{declared("reader", "/bin/true", config.PoolAgent)})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)

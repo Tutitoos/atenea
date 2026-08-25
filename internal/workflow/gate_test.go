@@ -454,7 +454,7 @@ func TestAGateOutlivesTheAteneaThatOpenedIt(t *testing.T) {
 
 	// It gets as far as opening an expansion gate, then dies. Nobody
 	// answered, and nothing closed the run.
-	if err := first.state.Own(t.Context(), run.ID, 4242); err != nil {
+	if err := first.state.Own(t.Context(), run.ID, 4242, 0); err != nil {
 		t.Fatalf("Own: %v", err)
 	}
 	if _, err := first.state.Ask(t.Context(), run.ID, workflow.KindApprove,
