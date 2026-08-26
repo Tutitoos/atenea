@@ -392,6 +392,8 @@ runners = ["omp"]
   # Sorted, matching what the compiled fallback answers: a test compares the
   # two and a difference in order would read as a difference in content.
   implementations = [
+    "scrapling.crawl",
+    "scrapling.crawl_stealth",
     "scrapling.extract_fetch",
     "scrapling.extract_request",
     "scrapling.extract_stealth",
@@ -407,6 +409,24 @@ runners = ["omp"]
     # lifecycle = "on_demand"
     # idle_timeout = "10m"
     # ready_timeout = "30s"     # it may have to start Chromium before it answers
+
+    # web.crawl's far side, which is NOT scrapling-mcp: its thirteen tools do
+    # not include a crawl, so the Spider API is reached through a helper this
+    # repository ships. Omit this block and the crawl implementations are
+    # simply not served -- the adapter does not claim what it cannot answer.
+    #
+    #     helper/scrapling-spider/atenea_spider.py
+    #
+    # It runs on the same interpreter Scrapling is installed on, so `command`
+    # is that python and the script is its argument.
+    #
+    # [orchestrator.scrapling.spider]
+    # command = "/absolute/path/to/the/python/scrapling/is/installed/on"
+    # args = ["/absolute/path/to/helper/scrapling-spider/atenea_spider.py"]
+    # instance = "shared"
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+    # ready_timeout = "30s"
 
   [orchestrator.tokensave]
   # tokensave is the second stdio far side, and the one that is not a corpus of
@@ -3670,3 +3690,148 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   # The last level, so a block here is the answer rather than an escalation.
   estimated_duration = "40s"
   estimated_tokens = 1300
+
+# ---------------------------------------------------------------------------
+# Walking one site.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "web.crawl"
+version = "1.0.0"
+summary = "Walk one site from a starting page and return what it found."
+semantics = """
+One site, many pages. `start_url` is the seed; every page reached is on the SAME HOST as \
+that seed, and that is a property of the capability rather than an option. The destination \
+gate resolves a host and judges the address before anything is fetched, and a crawl's \
+frontier is discovered as it goes -- so the frontier is confined to the host the gate \
+already approved, because the alternative is a second copy of that gate in the helper, and \
+a security control with two implementations has two behaviors. \
+robots.txt is obeyed and is not an argument. A caller who could turn it off per call would \
+make "does Atenea respect robots.txt" a question with no answer; if it should ever be \
+possible, that belongs in [web] where somebody writes it down once. \
+Bounded twice: `max_depth` is what the caller asked for and `max_pages` is the ceiling that \
+makes a mistake in the first one survivable, because a depth of three on a site with a \
+calendar is not a small number. Why the walk ENDED comes back as a discovery, because a \
+budget that ran out and a site with no more links produce the same rows and only one of \
+them means there is more here. \
+This is the expensive way to read a site. For one page, web.fetch costs one request.\
+"""
+effects = ["read", "external"]
+subject_from = "start_url"
+subject_kind = "url_host"
+
+  [[capability.input]]
+  name = "start_url"
+  type = "string"
+  required = true
+  summary = "Where to start. http or https; every page reached is on this host."
+
+  [[capability.input]]
+  name = "max_pages"
+  type = "int"
+  required = false
+  summary = "How many pages at most. Defaults to 25 and the helper caps it at 500."
+
+  [[capability.input]]
+  name = "max_depth"
+  type = "int"
+  required = false
+  summary = "How many links deep from the seed. Defaults to 2; zero fetches only the seed."
+
+  [[capability.input]]
+  name = "selector"
+  type = "string"
+  required = false
+  summary = "CSS selector to narrow each page to. Omitted returns the whole page."
+
+  [[capability.input]]
+  name = "format"
+  type = "string"
+  required = false
+  enum = ["text", "markdown", "html"]
+  summary = "How to render each page. Defaults to text."
+
+  [[capability.output]]
+  name = "pages"
+  type = "record_list"
+  required = true
+  summary = "The pages the walk reached, the seed first."
+
+    [[capability.output.field]]
+    name = "url"
+    type = "string"
+    required = true
+    summary = "The page's own url."
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+    summary = "How many links from the seed, which is zero."
+
+    [[capability.output.field]]
+    name = "status"
+    type = "int"
+    required = false
+    summary = "The HTTP status, when the far side reports one."
+
+    [[capability.output.field]]
+    name = "title"
+    type = "string"
+    required = false
+    summary = "The page title, when there is one."
+
+    [[capability.output.field]]
+    name = "content"
+    type = "string"
+    required = true
+    summary = "The page, in the requested rendering."
+
+# Two implementations rather than three. A crawl is already many requests, and
+# a middle tier between plain and stealth would multiply the cost that is the
+# whole reason to reach for web.fetch instead when one page will do.
+#
+# Neither escalates. With two levels the cheap one moving up IS the ladder, and
+# a crawl that spent its page budget being challenged has spent it -- reporting
+# that as unavailable would buy a retry of the whole walk at the expensive
+# level, against a site that has already said no once per page.
+#
+# The durations are per CRAWL, not per page: max_pages defaults to 25 and the
+# helper throttles itself, so these are the estimates for a default-sized walk
+# and the base overrules them as soon as real ones land.
+
+[[implementation]]
+id = "scrapling.crawl"
+provider = "scrapling"
+capability = "web.crawl"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Twenty-five pages at roughly the plain-request cost, plus the delay the
+  # helper keeps between them on purpose.
+  estimated_duration = "45s"
+  estimated_tokens = 12000
+
+[[implementation]]
+id = "scrapling.crawl_stealth"
+provider = "scrapling"
+capability = "web.crawl"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # A browser per page. This is the number that should make a caller ask
+  # whether they wanted a crawl at all.
+  estimated_duration = "5m"
+  estimated_tokens = 14000

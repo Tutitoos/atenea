@@ -16,6 +16,51 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+`web.crawl` walks one site from a starting page and returns what it found, with
+the depth each page was reached at. Two implementations behind it,
+`scrapling.crawl` and `scrapling.crawl_stealth`.
+
+Its far side is not `scrapling-mcp`. Those thirteen tools do not include a
+crawl -- the Spider API that does is Python-only -- so this reaches it through
+a helper the repository now ships at `helper/scrapling-spider/`, the same shape
+as the Swift desktop helper and for the same reason: somebody else's logic,
+kept out of the Go build and the Go coverage profile. Unlike that one there is
+nothing to compile; it is a script run by whichever interpreter Scrapling is
+installed on, and it reports Scrapling's own version on the handshake so
+measurements are filed under what actually did the work.
+
+**A crawl cannot leave the host it started on**, and that is a property of the
+capability rather than an option on it. The destination gate resolves a
+hostname and judges the address, and it lives in Go; a crawler's frontier is
+discovered as it goes, and it is discovered in the helper. That leaves two ways
+to gate it, and re-implementing the gate in Python is refused -- a security
+control with two implementations has two behaviors, and the one nobody is
+looking at is the one that drifts. So the frontier is pinned to the host the
+gate already approved. Atenea gates the seed, and nothing the helper fetches
+can be anywhere else.
+
+**`robots.txt` is always obeyed** and is not an argument. Scrapling defaults
+`robots_txt_obey` to False, so the helper turns it on deliberately; a caller
+who could turn it back off per call would make "does Atenea respect
+robots.txt" a question with no answer. If it should ever be possible, that
+belongs in `[web]` where somebody writes it down once.
+
+Two levels rather than three, and neither escalates: a crawl is already many
+requests, and a walk that spent its page budget being challenged has spent it.
+Bounded twice -- `max_depth` is what the caller asked for and `max_pages` is
+the ceiling that makes a mistake in the first one survivable. Why the walk
+ended comes back as a discovery, because a budget that ran out and a site with
+no more links produce the same rows.
+
+Omit the helper from the settings file and the capability is not served at all.
+The adapter does not claim implementations it has no far side for.
+
+Verified end to end against `www.iana.org`: three pages, the seed at depth zero
+and two links at depth one, all on the one host, with the gate refusing
+loopback and the LAN in front of it.
+
+### Added
+
 A capability can say what a call is ABOUT beyond the repository it names, and
 the funnel scopes health to it. `subject_from` and `subject_kind` in the
 catalog, `Capability.Subject` in the contract at **3.6.0**, a `subject` column
@@ -39,7 +84,7 @@ that is not declared, an input that is not a string, one key without the other.
 A subject key that means nothing does not fail loudly -- it files measurements
 under nonsense and lets the funnel rank as if that were fine.
 
-Fixing the base alone did not fix the behaviour, and the end-to-end proof is
+Fixing the base alone did not fix the behavior, and the end-to-end proof is
 what caught it: there are two health stores. The registry keeps its own map of
 what probing found, keyed by repository and nothing else, and every
 `unavailable` wrote to it. A capability that declares a subject no longer does
@@ -1625,7 +1670,7 @@ old one reads.
   process per `[[repository]]`, each launched against its own project through a
   new `{{project}}` placeholder, each on its own port, each named
   `serena@<repository>` on the status screen. `shared` stays the default and
-  the behaviour every managed server had before the key existed. Measured
+  the behavior every managed server had before the key existed. Measured
   against the real binary: two repositories, two processes, one declaration,
   and both reaped when Atenea stopped. The two hand-written `serena` systemd
   units this replaces -- one per repository, differing only in `--port` and
@@ -1664,7 +1709,7 @@ old one reads.
 - **`expose` on an `[[mcp_server]]` block, and the `raw.` namespace it
   uses.** The declaration list has always meant one thing -- point a client at a
   server that is already running, then step out of the path. `expose` names
-  that behaviour `off` and reserves `raw` for the other one: Atenea holding the
+  that behavior `off` and reserves `raw` for the other one: Atenea holding the
   connection and re-offering a backend's own tools verbatim as
   `raw.<server>.<tool>`. The field is parsed and its value checked; an unknown
   value is refused rather than read as `off`, because a backend an operator
@@ -2493,8 +2538,8 @@ told the opposite, because no edit to it can help: upgrade the binary.
   meant.
 - **`golangci-lint` had been red since v0.3.0 and three releases were cut on
   top of it.** An unused `serverVersion` on the Serena runner, orphaned when
-  per-call `ToolVersion` replaced it, and one `behaviour` in a contract
-  comment. Neither changes behaviour; the streak is the finding. `lefthook.yml`
+  per-call `ToolVersion` replaced it, and one `behavior` in a contract
+  comment. Neither changes behavior; the streak is the finding. `lefthook.yml`
   already runs the linter pre-commit — it has never been installed on the
   machine cutting the releases, so CI was the only gate and nobody read it.
 
@@ -2699,7 +2744,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
   outage sentence names the run that actually earned the verdict rather than
   the whole history. Verified against that live record: `3 permission_denied
   failures in a row`, `down`, dropped from the funnel. The docs described this
-  behaviour correctly all along -- only the code disagreed.
+  behavior correctly all along -- only the code disagreed.
 
 ### Added
 
@@ -2866,7 +2911,7 @@ told the opposite, because no edit to it can help: upgrade the binary.
   project; switching pays a full language-server restart (measured ~0.3 s into
   a Go repo, ~1–2.5 s into a Rust/TS one, and throws away multi-gigabyte
   rust-analyzer state). `Repository.SerenaEndpoint` is an optional MCP URL:
-  empty keeps today's single-default behaviour (adapter endpoint +
+  empty keeps today's single-default behavior (adapter endpoint +
   `activate_project` retarget); a set URL routes that repository to its own
   process. The adapter keeps one MCP session per distinct URL, locked
   independently, so two endpoints answer in parallel. A real retarget on a

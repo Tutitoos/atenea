@@ -155,6 +155,16 @@ const (
 	ImplementationExtractRequest = "scrapling.extract_request"
 	ImplementationExtractFetch   = "scrapling.extract_fetch"
 	ImplementationExtractStealth = "scrapling.extract_stealth"
+
+	// The crawl half, whose far side is not scrapling-mcp at all: Scrapling's
+	// thirteen MCP tools do not include one, so this reaches the Spider API
+	// through a helper of our own. Two levels rather than three -- a crawl is
+	// already many requests, and a middle tier between "plain" and "stealth"
+	// would multiply a cost that is the reason to think twice about the call.
+	CapabilityCrawl = "web.crawl"
+
+	ImplementationCrawl        = "scrapling.crawl"
+	ImplementationCrawlStealth = "scrapling.crawl_stealth"
 )
 
 // levels is the whole dispatch table: which far-side tool each implementation
@@ -180,6 +190,13 @@ var levels = map[string]struct {
 	ImplementationExtractRequest: {CapabilityExtract, "make_request", true},
 	ImplementationExtractFetch:   {CapabilityExtract, "fetch", true},
 	ImplementationExtractStealth: {CapabilityExtract, "stealthy_fetch", false},
+
+	// Both call the same helper tool; `stealth` is an argument this adapter
+	// builds, not one a caller picks. Neither escalates: with two levels the
+	// cheap one moving up is the whole ladder, and a crawl that already spent
+	// a page budget being blocked has spent it.
+	ImplementationCrawl:        {CapabilityCrawl, "crawl", false},
+	ImplementationCrawlStealth: {CapabilityCrawl, "crawl", false},
 }
 
 // DefaultImplementations is what this adapter answers for when a settings file
@@ -204,6 +221,12 @@ type Options struct {
 	// than a value because the process behind it belongs to the supervisor
 	// and may not have been started when this adapter was built.
 	Session func(ctx context.Context) (*mcpstdio.Session, error)
+	// Spider hands over a live session with the crawl helper, which is a
+	// different process from the one Session reaches: Scrapling's MCP server
+	// has no crawl tool, so web.crawl talks to helper/scrapling-spider
+	// instead. Nil leaves the crawl implementations unserved, which is what a
+	// settings file that never declared the helper is saying.
+	Spider func(ctx context.Context) (*mcpstdio.Session, error)
 	// Domains narrows what may be reached, by host. EMPTY MEANS ANY PUBLIC
 	// HOST, which is the opposite of [desktop] applications and is a
 	// considered difference rather than an oversight: every window on a
@@ -230,6 +253,7 @@ type Runner struct {
 	implementations []string
 	timeout         time.Duration
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
+	spider          func(ctx context.Context) (*mcpstdio.Session, error)
 	resolve         func(ctx context.Context, host string) ([]netip.Addr, error)
 	domains         []string
 	deniedNets      []netip.Prefix
@@ -254,6 +278,18 @@ func New(opts Options) (*Runner, error) {
 				"scrapling: nothing here answers implementation %q", id)
 		}
 	}
+	// A crawl implementation with no helper behind it is one this runner
+	// cannot answer, so it does not claim it. Claiming it and failing at
+	// dispatch would be worse than not offering it: the funnel would rank it,
+	// choose it, and learn at the far side that it was never there -- and
+	// contract.Runner's own doc calls that the difference Capabilities exists
+	// to catch, "a settings file could name an implementation the adapter had
+	// no case for and be accepted".
+	if opts.Spider == nil {
+		implementations = slices.DeleteFunc(implementations, func(id string) bool {
+			return levels[id].capability == CapabilityCrawl
+		})
+	}
 	nets, hosts, err := splitDenied(opts.Denied)
 	if err != nil {
 		return nil, err
@@ -270,6 +306,7 @@ func New(opts Options) (*Runner, error) {
 		implementations: implementations,
 		timeout:         timeout,
 		session:         opts.Session,
+		spider:          opts.Spider,
 		resolve:         resolve,
 		domains:         normalizeHosts(opts.Domains),
 		deniedNets:      nets,
@@ -372,6 +409,13 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 func (r *Runner) Capabilities() []string {
 	out := make([]string, 0, len(levels))
 	for _, level := range levels {
+		// web.crawl is only dispatchable with a helper behind it, and this
+		// list is what the wiring above checks Implementations against. A
+		// capability named here and unserved there is the disagreement that
+		// check exists to catch.
+		if level.capability == CapabilityCrawl && !r.servesCrawl() {
+			continue
+		}
 		if !slices.Contains(out, level.capability) {
 			out = append(out, level.capability)
 		}
@@ -392,10 +436,14 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	if level.capability == CapabilityExtract {
+	switch level.capability {
+	case CapabilityExtract:
 		return r.extract(ctx, req, level.tool, level.escalates)
+	case CapabilityCrawl:
+		return r.crawl(ctx, req)
+	default:
+		return r.fetch(ctx, req, level.tool, level.escalates)
 	}
-	return r.fetch(ctx, req, level.tool, level.escalates)
 }
 
 // fetch answers web.fetch at whichever level the funnel picked.

@@ -941,6 +941,52 @@ atenea ask web.extract --repo current --allow external --payload fields.json
 The two are mutually exclusive: one is the whole payload and the other is a
 field of it, and merging them would mean a rule about which wins per field.
 
+## Walking a site
+
+```toml
+[orchestrator.scrapling.spider]
+command = "~/.local/share/uv/tools/scrapling/bin/python"
+args = ["/absolute/path/to/helper/scrapling-spider/atenea_spider.py"]
+instance = "shared"
+lifecycle = "on_demand"
+ready_timeout = "30s"
+```
+
+`web.crawl` takes a `start_url` and returns the pages it reached, with the
+depth each one was found at. Its far side is **not** `scrapling-mcp`: those
+thirteen tools do not include a crawl, so the Spider API is reached through a
+helper this repository ships at
+[`helper/scrapling-spider/`](https://github.com/Tutitoos/atenea/tree/main/helper/scrapling-spider).
+
+Omit the block and the capability is simply not served. The adapter does not
+claim implementations it has no far side for — claiming them and failing at
+dispatch would have the funnel rank one, choose it, and learn at the far side
+that it was never there.
+
+Two levels rather than three: `scrapling.crawl` and `scrapling.crawl_stealth`.
+A crawl is already many requests, and a middle tier would multiply the cost
+that is the whole reason to reach for `web.fetch` when one page will do.
+Neither escalates — with two levels the cheap one moving up *is* the ladder,
+and a walk that spent its page budget being challenged has spent it.
+
+**A crawl cannot leave the host it started on**, and that is a property rather
+than an option. The destination gate resolves a hostname and judges the
+address, and it lives in Go; a crawler's frontier is discovered as it goes, and
+it is discovered in the helper. Gating it there would mean a second copy of the
+gate in Python, and a security control with two implementations has two
+behaviors. So the frontier is pinned to the host the gate already approved.
+
+**`robots.txt` is always obeyed** and is not an argument. Scrapling defaults it
+off, so the helper turns it on deliberately. A caller who could turn it back
+off per call would make "does Atenea respect robots.txt" a question with no
+answer.
+
+Bounded twice: `max_depth` is what the caller asked for and `max_pages` is the
+ceiling that makes a mistake in the first one survivable, because a depth of
+three on a site with a calendar is not a small number. Why the walk *ended*
+comes back as a discovery, because a budget that ran out and a site with no
+more links produce the same rows and only one of them means there is more here.
+
 ## Security
 
 ```toml
