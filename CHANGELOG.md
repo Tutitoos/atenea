@@ -16,6 +16,42 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+`web.extract` pulls named fields off a page: a list of `{name, selector}` in,
+one row of `{field, index, value}` per match out. Three more implementations
+behind it — `scrapling.extract_request`, `.extract_fetch`, `.extract_stealth` —
+sharing `web.fetch`'s gate, its three prices and its escalation.
+
+The answer is long rather than wide because it has to be: output fields are
+declared statically in the catalog, so a shape that depends on the caller's
+selectors cannot be named in advance, and the alternative is an untyped bag.
+The shape earns itself on ragged data too — measured against the Hacker News
+front page, 30 titles, 30 ages and 29 scores, because one job posting carries
+no score. A wide record would have to invent a null there.
+
+It costs one request per field, which is the far side taking one selector per
+call. Fetching once and applying the selectors in Go was the alternative and
+was refused: it needs a CSS engine of our own, and `.foo` matching differently
+in `web.extract` than in `web.fetch` is worse than a capability that costs
+more. The capability says both costs out loud in its own semantics — N requests
+to the origin, and fields read seconds apart on a page that may change between
+them.
+
+Two things this turned up. `answerOf` used to refuse an answer with no body,
+which is right for `web.fetch` (a page is the promise) and wrong for
+`web.extract` (a selector matching nothing is a fact about the page, not a
+fault in the provider) — the same conflation `internal/adapter/kivgraph` warns
+about between an empty graph and a query that legitimately matched nothing. The
+decoder now decodes and each caller says what empty means to its own promise.
+
+And the wire shape recorded in Phase A was wrong in a way that happened not to
+bite. `content` is not `[page, match]`: without a selector it is the page and a
+trailing empty string, and WITH one it is one element per match — thirty of
+them for `.titleline` on Hacker News, with the page absent. The joining code
+was right by luck; the comments, the test name and the model they taught were
+not, and are corrected. That second shape is exactly why `web.extract` needs no
+CSS engine of its own: the list is already the result set.
+
+
 Atenea can fetch a web page. `web.fetch` is the first capability that leaves
 this machine on Atenea's own behalf -- until now the only route to the network
 was handing `WebFetch` to Claude Code and letting the client make the request,
