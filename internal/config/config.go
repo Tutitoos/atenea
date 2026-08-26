@@ -1434,6 +1434,11 @@ type fileCapability struct {
 	Effects   []string    `toml:"effects"`
 	Inputs    []fileField `toml:"input"`
 	Outputs   []fileField `toml:"output"`
+	// SubjectFrom names the input that says what a call is about beyond the
+	// repository, and SubjectKind says how to read it. Both absent on every
+	// capability that has no such thing, which is most of them.
+	SubjectFrom string `toml:"subject_from"`
+	SubjectKind string `toml:"subject_kind"`
 }
 
 type fileField struct {
@@ -3058,11 +3063,61 @@ func (c fileCapability) build(source string) (contract.Capability, error) {
 	if out.Outputs, err = buildFields(c.Outputs); err != nil {
 		return fail("%v", err)
 	}
+	if err := buildSubject(c, &out); err != nil {
+		return fail("%v", err)
+	}
 	if err := out.Validate(); err != nil {
 		return contract.Capability{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: %v", source, err)
 	}
 	return out, nil
+}
+
+// buildSubject reads the subject declaration, and refuses every half of it.
+//
+// A subject is a grouping key for measurements, so getting it wrong does not
+// fail loudly at call time: it files health and cost under something that
+// means nothing, and the funnel goes on ranking as if that were fine. There is
+// no run to inspect afterwards and no error anybody would notice. So the whole
+// declaration is checked at the door, where a mistake is still cheap:
+//
+//   - a `subject_from` naming an input the capability does not declare would
+//     always read empty, which looks exactly like a capability that declared
+//     no subject at all;
+//   - a `subject_from` on a non-string input cannot be read as one, and
+//     url_host is the only kind there is;
+//   - either key without the other is somebody who meant to finish and did
+//     not, and guessing which half they meant is worse than asking.
+func buildSubject(c fileCapability, out *contract.Capability) error {
+	from, kind := strings.TrimSpace(c.SubjectFrom), strings.TrimSpace(c.SubjectKind)
+	if from == "" && kind == "" {
+		return nil
+	}
+	if from == "" || kind == "" {
+		return fmt.Errorf(
+			"capability %s declares only half a subject: subject_from and subject_kind go together", c.ID)
+	}
+	parsed, err := contract.ParseSubjectKind(kind)
+	if err != nil {
+		return fmt.Errorf("capability %s: %w", c.ID, err)
+	}
+	if parsed == contract.SubjectNone {
+		return fmt.Errorf(
+			"capability %s: subject_kind is empty, which is how a capability says it has no subject -- "+
+				"drop subject_from too", c.ID)
+	}
+	index := slices.IndexFunc(out.Inputs, func(f contract.Field) bool { return f.Name == from })
+	if index < 0 {
+		return fmt.Errorf(
+			"capability %s: subject_from names %q, which is not one of its inputs", c.ID, from)
+	}
+	if field := out.Inputs[index]; field.Type != contract.TypeString {
+		return fmt.Errorf(
+			"capability %s: subject_from names %q, which is a %s -- a subject is read from a string",
+			c.ID, from, field.Type)
+	}
+	out.SubjectFrom, out.SubjectKind = from, parsed
+	return nil
 }
 
 func buildFields(raw []fileField) ([]contract.Field, error) {

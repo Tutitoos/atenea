@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "3.5.0"
+contract = "3.6.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -3367,6 +3367,17 @@ unavailable so the funnel escalates to a heavier one -- see the note on cost.\
 """
 effects = ["read", "external"]
 
+# What a call here is about, beyond the repository -- which these two capabilities
+# ignore entirely. Every page on one site is one subject, because whether a site
+# refuses a provider is a fact about the site and not about the path.
+#
+# It scopes HEALTH and not cost. One page behind Cloudflare must not mark the
+# cheap implementation unhealthy for every other site, which is what happened
+# before this existed. What a fetch costs is a fact about the far side and its
+# browser, so merging subjects there gives a larger sample of the same thing.
+subject_from = "url"
+subject_kind = "url_host"
+
   [[capability.input]]
   name = "url"
   type = "string"
@@ -3532,6 +3543,17 @@ format = "html" returns the matched elements whole, hrefs included, for a caller
 needs them.\
 """
 effects = ["read", "external"]
+
+# What a call here is about, beyond the repository -- which these two capabilities
+# ignore entirely. Every page on one site is one subject, because whether a site
+# refuses a provider is a fact about the site and not about the path.
+#
+# It scopes HEALTH and not cost. One page behind Cloudflare must not mark the
+# cheap implementation unhealthy for every other site, which is what happened
+# before this existed. What a fetch costs is a fact about the far side and its
+# browser, so merging subjects there gives a larger sample of the same thing.
+subject_from = "url"
+subject_kind = "url_host"
 
   [[capability.input]]
   name = "url"

@@ -321,7 +321,30 @@ type Version struct {
 // not do I/O to decide -- whether the far side is up is a different question,
 // asked at a different stage, and folding the two together would make a
 // provider that is merely down look like one that was never meant to answer.
-var Current = Version{Major: 3, Minor: 5, Patch: 0}
+// 3.6.0 gave a capability a way to say what a call is ABOUT, beyond the
+// repository it names: SubjectFrom and SubjectKind on Capability, and the
+// Subject method that reads one out of a payload.
+//
+// It exists because health and cost were recorded per repository, which is the
+// only dimension a code capability has, and a capability that ignores the
+// repository entirely had nowhere to hang them. Measured before it existed:
+// one page behind Cloudflare marked the cheapest implementation of web.fetch
+// unhealthy, and the next fetch of an unrelated site skipped that
+// implementation too -- with a drop reason still quoting the first site's url.
+//
+// Additive on the same terms as everything above. Two fields appended to a
+// struct adapters receive rather than construct; a capability that declares
+// neither behaves exactly as it did, which is every capability shipped before
+// this one. SubjectKind is an open uint8 with SubjectNone as its zero, so the
+// absent declaration and the zero value are the same statement -- an adapter
+// built against 3.5.0 goes on compiling and never has to name it.
+//
+// What it is NOT is a permission or a filter. A subject is a grouping key for
+// measurements, which is why Capability.Subject answers "" rather than an
+// error for anything it cannot read: a call nobody can key is filed the way
+// every call was filed before this existed, which is a worse baseline and not
+// a wrong answer.
+var Current = Version{Major: 3, Minor: 6, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

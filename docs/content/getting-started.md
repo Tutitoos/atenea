@@ -989,7 +989,7 @@ happens — before the process is allowed to die.
 The status screen only mentions it when there is something to mention:
 
 ```text
-atenea 1.1.0  contract 3.5.0  AMBER
+atenea 1.1.0  contract 3.6.0  AMBER
 funnel    constraints -> reach -> health -> cost (measured for 8 of 11 implementations, the rest on declared estimates)
 incidents 1 unread, latest 2026-08-02 19:32:35  (atenea incidents)
 ```

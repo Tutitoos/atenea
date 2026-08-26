@@ -610,7 +610,7 @@ func TestConcurrentReadersQueueForTheFile(t *testing.T) {
 	for range readers {
 		go func() {
 			start.Wait()
-			_, err := s.Baselines(context.Background(), "code.search", "current")
+			_, err := s.Baselines(context.Background(), "code.search", "current", "")
 			errs <- err
 		}()
 	}

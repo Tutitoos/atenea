@@ -21,7 +21,7 @@ func call(at time.Time, impl, version string, d time.Duration, tokens int, ok bo
 
 func costsOf(t *testing.T, s *Store, capability, repository string) map[string]Baseline {
 	t.Helper()
-	out, err := s.Baselines(context.Background(), capability, repository)
+	out, err := s.Baselines(context.Background(), capability, repository, "")
 	if err != nil {
 		t.Fatalf("Baselines: %v", err)
 	}

@@ -7,12 +7,51 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.5.0`. It is a commitment from the first release: an adapter is code
+  at `3.6.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
+
+### Added
+
+A capability can say what a call is ABOUT beyond the repository it names, and
+the funnel scopes health to it. `subject_from` and `subject_kind` in the
+catalog, `Capability.Subject` in the contract at **3.6.0**, a `subject` column
+on `measurement`, and `Baselines` reading it back scoped.
+
+It exists because health was recorded per `(capability, repository)` and
+`web.fetch` ignores the repository, so a run of failures against one site was
+the health of that implementation everywhere. Measured before the fix: after
+`example.com` challenged `scrapling.request`, a fetch of `iana.org` went
+straight to the stealth level, with the dropped lines still quoting
+`example.com`.
+
+Health is scoped and cost is not, which is a split rather than a shortcut.
+Whether a site refuses a provider is a fact about that site; what a fetch costs
+is a fact about the far side and its browser. It is also the only split the
+data supports -- recency reads `measurement` alone, while the cost query unions
+in `rollup`, which is compacted history with no subject column.
+
+The whole declaration is refused at load rather than at call time: an input
+that is not declared, an input that is not a string, one key without the other.
+A subject key that means nothing does not fail loudly -- it files measurements
+under nonsense and lets the funnel rank as if that were fine.
+
+Fixing the base alone did not fix the behaviour, and the end-to-end proof is
+what caught it: there are two health stores. The registry keeps its own map of
+what probing found, keyed by repository and nothing else, and every
+`unavailable` wrote to it. A capability that declares a subject no longer does
+-- giving that map a subject dimension would have been worse, since it is
+persisted and would grow one entry per host ever touched. The trade has a
+number: the registry marked a provider down after one failure and the base
+needs three, so escalating past a blocked site costs three cheap attempts per
+level instead of one, and only on that site.
+
+`atenea select` names no subject and says so in its notices. It asks who
+*would* answer a capability, which is a question about the capability rather
+than about a call.
 
 ### Added
 

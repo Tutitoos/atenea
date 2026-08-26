@@ -76,49 +76,67 @@ applies everywhere.
 The version worth building is the one that closes all three, and for the two
 browser levels that needs something the far side does not offer today.
 
-## One blocked site downgrades every site — 2026-08-26
+## One blocked site downgraded every site — 2026-08-26, closed 2026-08-27
 
-`web.fetch` ships three implementations at very different prices and lets the
-funnel choose. The mechanism that makes a cheap attempt give way to an
-expensive one is health: `scrapling.request` reports an anti-bot interstitial
-as `unavailable`, that marks it unhealthy, and the next call's funnel drops it
-at the health stage and reaches for `scrapling.fetch`.
+`web.fetch` ships three implementations at different prices and lets the funnel
+choose. A cheap attempt that meets an anti-bot interstitial reports
+`unavailable`, which is what moves the next call up a level.
 
-**It works, and it is measured, and the escalation is across calls rather than
-inside one.** From a clean state directory, against a far side that challenges
-the two cheaper levels: run 1 dispatches `scrapling.request` and fails, run 2
-drops it and dispatches `scrapling.fetch` and fails, run 3 drops both and
-`scrapling.stealth` answers. Three calls for the first page. That is the funnel
-working as designed — one dispatch per commission, and what a step cost on the
-way out deciding who answers next time in — but it is not what "the funnel
-escalates" sounds like, so it is written down rather than left to be discovered.
+The defect was the scope of that report. Health was recorded per
+`(capability, repository)`, and `web.fetch` ignores the repository entirely, so
+a run of failures against one site WAS the health of that implementation
+everywhere. Measured: after `example.com` challenged `scrapling.request`, a
+fetch of `iana.org` went straight to `scrapling.stealth`, and the two dropped
+lines still quoted `example.com`.
 
-**The part that is a defect rather than a design is the scope of the record.**
-Health is per implementation. It is not per host, and for a capability that
-ignores the repository there is no other dimension to hang it on. Measured
-immediately after the run above: `web.fetch` on `https://iana.org/` — a
-different host, one that answers plain HTTP perfectly well — went straight to
-`scrapling.stealth`, and the two dropped lines still quoted `example.com` as
-the reason. One protected site pays for a browser on every unprotected site
-after it, for as long as `health_stale_after` stands, and the explanation the
-operator is shown names a URL they did not ask for.
+### What closed it
 
-Three ways out, none taken yet:
+A capability can now say what a call is ABOUT beyond the repository —
+`subject_from` and `subject_kind` in the catalog, `Capability.Subject` in the
+contract at 3.6.0, a `subject` column on `measurement`, and `Baselines` scoped
+to it. For `web.fetch` and `web.extract` the subject is the URL's host, so
+every page on one site is one subject and two sites are two.
 
-1. **Per-host health.** The honest fix and the expensive one. Health is keyed
-   by implementation across the whole core; adding a dimension that only one
-   capability has an opinion about is not a change to make for one adapter.
-2. **Do not report a block as `unavailable`.** Cheap, and it trades the whole
-   escalation away: the levels stop competing and the caller is back to picking
-   one, which is what declaring three implementations existed to avoid.
-3. **Remember the block in the adapter, per host, and choose the level there.**
-   Puts the ranking inside a runner that is supposed to be a dumb translator,
-   and hides from the funnel a decision the funnel exists to make. It would
-   work, and it would make the measurement base describe something other than
-   what happened.
+**Health is scoped by subject and cost deliberately is not.** Whether a site
+refuses a provider is a fact about that site. What a fetch costs is a fact
+about the machinery — the far side and its browser dominate, not the host — so
+merging subjects there gives a larger sample of one thing rather than mixing
+two. It is also the only split the data supports: recency reads `measurement`
+alone and can be scoped completely, while the cost query unions in `rollup`,
+which is compacted history with no subject column and no honest way to invent
+one.
 
-The first is right and the third is tempting, which is the usual shape. Until
-one is chosen, the mitigation is `health_stale_after` under `[selector]`.
+### The second door, and what it cost to close
+
+Fixing the base alone did not fix the behaviour, and the end-to-end proof is
+what caught it. There are two health stores, not one. Besides the measurement
+base there is the registry's own map of what probing found, keyed by repository
+and nothing else, and `runStep` wrote to it on every `unavailable` — so the
+mark arrived globally through a second door while the base was being scoped
+correctly through the first.
+
+Giving that map a subject dimension was the obvious fix and is the wrong one:
+it is persisted, so it would grow one entry per host ever touched and never
+shrink. Instead, a capability that declares a subject no longer writes there at
+all. The base is its whole record, and a better one — it carries the subject,
+it has retention, and `Baselines` reads it back scoped to the site being asked
+about.
+
+**That trade is not free, and the number is worth knowing.** The registry
+marked a provider down after ONE failure; the base needs `FaultStreak`, which
+is three. So escalating past a blocked site now costs three cheap attempts per
+level instead of one. Measured end to end: attempts 1–3 stay on
+`scrapling.request`, attempt 4 moves to `scrapling.fetch`, and a fetch of an
+unrelated host in the middle of all that still gets `scrapling.request`. Three
+wasted cheap attempts on one site beats one wasted attempt on that site plus a
+browser on every site after it.
+
+### What is still open
+
+`health_stale_after` still governs how long a subject's verdict stands, and it
+is a single global number rather than something a capability can say anything
+about. A site that fixed its bot filter an hour ago is still refused for as
+long as a language server that is genuinely down.
 
 ## Ranked code search, if anything ever wants it
 
