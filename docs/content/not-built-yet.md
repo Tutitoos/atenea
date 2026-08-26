@@ -20,6 +20,35 @@ This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
 
+## The redirect the gate cannot see is closable, and is not closed — 2026-08-26
+
+`web.fetch` judges where a request may go by resolving the host and checking
+the address. The far side then follows redirects inside its own process, so a
+URL that passed can still end somewhere that would not have. The adapter
+re-judges the destination the server reports landing on and refuses to hand
+back an answer that came from a refused address — but by then the request has
+been made, which for an internal service is already a read and an existence
+oracle.
+
+That was written up as unclosable. It is not. Measured against scrapling-mcp
+0.3.9 on 2026-08-26, `make_request` takes `follow_redirects` — `false`, or one
+of `safe`/`all`/`obeycode`/`firstonly`, defaulting to `safe` — and
+`max_redirects`, default 30. Setting it to `false` means the server hands back
+the 3xx instead of chasing it, and the adapter can put the `Location` through
+`mayReach` before deciding whether to issue the next request itself.
+
+It is not done because doing it properly means writing a redirect walker into
+the adapter: issue, gate, re-issue, count hops, detect loops. That is real
+logic behind a seam documented as a dumb translator, and it buys nothing at the
+other two levels — `fetch` and `stealthy_fetch` expose no such flag, because a
+browser follows redirects natively and there is no point in the middle to stop
+it. So the cheapest level could be made airtight while the two above it stayed
+exactly as leaky, which is a worse thing to document than one honest limit that
+applies everywhere.
+
+The version worth building is the one that closes all three, and for the two
+browser levels that needs something the far side does not offer today.
+
 ## One blocked site downgrades every site — 2026-08-26
 
 `web.fetch` ships three implementations at very different prices and lets the
