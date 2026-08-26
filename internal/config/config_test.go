@@ -47,7 +47,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.extract", "web.fetch"}
+		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -79,7 +79,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice,
 				contract.EffectWrite, contract.EffectExternal}
 		// The only capabilities whose whole purpose is to leave this machine.
-		case "web.fetch", "web.extract":
+		case "web.fetch", "web.extract", "web.crawl":
 			want = []contract.Effect{contract.EffectRead, contract.EffectExternal}
 		default:
 			want = []contract.Effect{contract.EffectRead}
@@ -140,6 +140,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"macos.scroll",
 		"macos.type",
 		"ripgrep",
+		"scrapling.crawl",
+		"scrapling.crawl_stealth",
 		"scrapling.extract_fetch",
 		"scrapling.extract_request",
 		"scrapling.extract_stealth",

@@ -229,6 +229,9 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 		}
 		specs = append(specs, added...)
 	}
+	if p := cfg.Orchestrator.Scrapling.Spider; p != nil {
+		specs = append(specs, stdioSpec(SpiderProcessID, *p))
+	}
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -405,6 +408,14 @@ func scraplingSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, 
 	}
 	return []supervisor.Spec{stdioSpec(config.RunnerScrapling, p)}, nil
 }
+
+// SpiderProcessID names the crawl helper's supervised process.
+//
+// Deliberately its own id rather than a second session on the scrapling one,
+// the same split kivgraph's dashboard gets: they are two programs with two
+// lifecycles, and sharing an id would make one look healthy while the other
+// was the one being supervised.
+const SpiderProcessID = "scrapling-spider"
 
 // stopProcesses stops every server Atenea launched itself. A core with
 // nothing managed has nothing to do here, the same way settle has nothing to

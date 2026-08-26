@@ -670,6 +670,16 @@ type ScraplingAdapter struct {
 	// reason as Kivgraph, tokensave and desktop: a stdio server has no
 	// address to dial.
 	Process *ManagedProcess
+	// Spider launches the crawl helper, which is a DIFFERENT far side from
+	// the one above: Scrapling's MCP server has thirteen tools and none of
+	// them crawls, so web.crawl reaches the Spider API through a helper this
+	// repository ships.
+	//
+	// Optional, and absence is not an error. It leaves the crawl
+	// implementations unserved, which is exactly what a settings file that
+	// never mentioned the helper is saying -- the same reading `runners`
+	// gives an adapter nobody attached.
+	Spider *ManagedProcess
 }
 
 // Desktop is what the desktop capabilities are allowed to look at.
@@ -1367,6 +1377,7 @@ type fileScraplingAdapter struct {
 	Implementations *[]string           `toml:"implementations"`
 	Timeout         string              `toml:"timeout"`
 	Process         *fileManagedProcess `toml:"process"`
+	Spider          *fileManagedProcess `toml:"spider"`
 }
 
 type fileTokensaveAdapter struct {
@@ -2675,6 +2686,13 @@ func (s fileScraplingAdapter) build(source string, out ScraplingAdapter) (Scrapl
 			return ScraplingAdapter{}, err
 		}
 		out.Process = &process
+	}
+	if s.Spider != nil {
+		spider, err := s.Spider.build(source, "orchestrator.scrapling.spider")
+		if err != nil {
+			return ScraplingAdapter{}, err
+		}
+		out.Spider = &spider
 	}
 	return out, nil
 }

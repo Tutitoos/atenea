@@ -175,6 +175,7 @@ const (
 const (
 	webFetchCapability   = "web.fetch"
 	webExtractCapability = "web.extract"
+	webCrawlCapability   = "web.crawl"
 )
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
@@ -261,6 +262,7 @@ var card = contract.Agent{
 		desktopKeyCapability,
 		webFetchCapability,
 		webExtractCapability,
+		webCrawlCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,
