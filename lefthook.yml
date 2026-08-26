@@ -45,4 +45,17 @@ pre-commit:
 pre-push:
   commands:
     test:
-      run: go test -race ./...
+      # `env -u GIT_DIR ...` and not a bare `go test`, because a hook runs with
+      # those set and every child inherits them. Several tests in this tree
+      # shell out to git inside a temp directory, and GIT_DIR beats the working
+      # directory when git decides which repository it is in -- so the suite
+      # run from here operated on the real checkout instead. One `git init`
+      # later the repository was core.bare = true, which breaks every worktree,
+      # and a `git config user.email` had written a test identity into it.
+      #
+      # The tests scrub the same variables themselves, which is the fix that
+      # matters because it holds however the suite is invoked. This line is the
+      # second net, here because the failure was silent, arrived through a
+      # command nobody thinks of as dangerous, and left a repository that had
+      # to be repaired by hand.
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR go test -race ./...
