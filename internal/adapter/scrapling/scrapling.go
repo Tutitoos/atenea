@@ -76,8 +76,15 @@
 //
 // # What the far side actually said
 //
-// Measured against `scrapling-mcp` 0.3.9 on 2026-08-26, over stdio. Three
-// things were confirmed and one was a surprise:
+// Measured against `scrapling-mcp` 0.4.15 on 2026-08-26, over stdio -- the
+// version its own serverInfo reports, asked rather than assumed. An earlier
+// draft of this comment said 0.3.9, which was read out of the documentation
+// and never verified: a version string here is the thing a future reader
+// checks a behavior against, so one that was inferred is worse than none.
+//
+// Four facts, and only the first is one this package had already assumed --
+// an earlier draft counted them as "three confirmed and one surprise", which
+// flattered the guesswork in both directions:
 //
 //   - `css_selector` narrows on all three tools, and `extraction_type` is a
 //     text|html|markdown enum that decides the rendering ON THE WAY IN. So
@@ -466,7 +473,8 @@ func (r *Runner) fetch(ctx context.Context, req contract.RunRequest, tool string
 			"content":   answer.pick(format(req.Payload)),
 			"truncated": answer.truncated,
 		}}},
-		Verdict: contract.VerdictOK,
+		Verdict:     contract.VerdictOK,
+		ToolVersion: r.toolVersion(ctx),
 		// Duration only. No tokens and no memory: the far side is a process
 		// the supervisor owns rather than one this call spawned, and an HTTP
 		// request is not a model turn. Inventing either figure would poison
@@ -559,8 +567,9 @@ func (r *Runner) extract(ctx context.Context, req contract.RunRequest, tool stri
 	}
 
 	return contract.Outcome{
-		Result:  map[string]any{"rows": rows},
-		Verdict: contract.VerdictOK,
+		Result:      map[string]any{"rows": rows},
+		Verdict:     contract.VerdictOK,
+		ToolVersion: r.toolVersion(ctx),
 		// Duration only, as with fetch: the far side is the supervisor's
 		// process and an HTTP request is not a model turn.
 		Spent:         contract.Sample{Duration: time.Since(started)},
@@ -618,6 +627,23 @@ func format(payload map[string]any) string {
 }
 
 // call reaches the server and returns its text answer.
+// toolVersion is what the far side called itself on the handshake, or empty
+// when it has not spoken yet or would not say.
+//
+// Asked of the session rather than written down here, and that is the point.
+// An earlier version of this package's own comment named a version that had
+// been read out of the documentation instead of measured, and was wrong by
+// two minor releases -- exactly the drift contract.Outcome.ToolVersion exists
+// to make impossible. Measurements are filed under this string, so an upgrade
+// on disk starts a fresh baseline instead of averaging the old numbers in.
+func (r *Runner) toolVersion(ctx context.Context) string {
+	session, err := r.session(ctx)
+	if err != nil || session == nil {
+		return ""
+	}
+	return session.Version()
+}
+
 func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (string, error) {
 	session, err := r.session(ctx)
 	if err != nil {

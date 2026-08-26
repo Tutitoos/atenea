@@ -54,7 +54,7 @@ been made, which for an internal service is already a read and an existence
 oracle.
 
 That was written up as unclosable. It is not. Measured against scrapling-mcp
-0.3.9 on 2026-08-26, `make_request` takes `follow_redirects` — `false`, or one
+0.4.15 on 2026-08-26, `make_request` takes `follow_redirects` — `false`, or one
 of `safe`/`all`/`obeycode`/`firstonly`, defaulting to `safe` — and
 `max_redirects`, default 30. Setting it to `false` means the server hands back
 the 3xx instead of chasing it, and the adapter can put the `Location` through

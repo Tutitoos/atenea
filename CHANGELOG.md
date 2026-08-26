@@ -16,6 +16,41 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Fixed
 
+A provider reached over stdio is now filed under the version it says it is,
+and the entry that prompted this is one of ours: the scrapling adapter's own
+comment named `scrapling-mcp` 0.3.9 as the version its decoding was measured
+against. It had been read out of the documentation rather than asked of the
+server, which reports 0.4.15. Two minor releases wrong, in exactly the string
+a later reader would check a behavior against.
+
+Correcting the comment does not stop it happening again, and the mechanism
+that does was already half-built. `internal/mcphttp` captured
+`serverInfo.version` on the handshake it was already paying for;
+`internal/mcpstdio` threw the initialize result away, so every provider on that
+transport -- scrapling, kivgraph over stdio, tokensave, desktop -- filed its
+measurements under no version at all. It now reads the same field the same way,
+through the same `toolversion.Clean`, and exposes it as `Session.Version()`.
+
+The scrapling adapter stamps it on every Outcome. Verified against the real
+server: `atenea metrics` shows `web.fetch scrapling.request … 0.4.15`, taken
+from the far side rather than from anything written down. That is what
+`contract.Outcome.ToolVersion` is documented to be for -- "the case worth
+catching is a tool upgraded on disk by someone who never opened the TOML" --
+and an upgrade now starts a fresh baseline instead of averaging itself into the
+numbers that came before it.
+
+A server that does not introduce itself leaves the field empty, which is a fact
+rather than a failure, and a handshake whose `serverInfo` cannot be read is not
+a handshake that failed. Both are pinned by tests.
+
+Two other corrections in the same sweep, both to claims already merged. The
+`content` list was described in the first changelog entry as "the page, then
+whatever the selector matched", which is only what it looks like when no
+selector was given. And a comment counting "three confirmed and one surprise"
+listed four facts, only one of which this package had actually assumed.
+
+### Fixed
+
 Nothing that shells out to git can be steered away from the directory it was
 pointed at any more, and the reason this is a Fixed rather than a hardening is
 that it already happened: a `git push` from this checkout left the repository
@@ -156,13 +191,21 @@ closed and the two browser levels could not, which is why it is documented as
 one limit rather than fixed in one of three places.
 
 Everything about the far side is measured rather than assumed: scrapling-mcp
-0.3.9 over stdio, on 2026-08-26. Two of those measurements changed the code.
-The answer's `content` is a LIST of strings -- the page, then whatever the
-selector matched -- and the first draft decoded it as a string, which would
-have handed back raw JSON as page content. And the rendering is chosen on the
-way IN through `extraction_type`, whose enum is exactly the `text|html|markdown`
-the capability declares, so `format` is sent rather than applied to the answer;
-before that it was a declared input that reached nothing.
+0.4.15 over stdio, on 2026-08-26. Two of those measurements changed the code.
+The answer's `content` is a LIST of strings rather than a string, and the first
+draft decoded it as one, which would have handed back raw JSON as page content.
+And the rendering is chosen on the way IN through `extraction_type`, whose enum
+is exactly the `text|html|markdown` the capability declares, so `format` is sent
+rather than applied to the answer; before that it was a declared input that
+reached nothing.
+
+Two corrections to this entry, both made after it was first written and both
+kept visible rather than quietly overwritten. The version above said 0.3.9,
+which had been read out of the documentation instead of asked of the server --
+and a version string is precisely the thing a later reader checks a behavior
+against. And the list was described here as "the page, then whatever the
+selector matched", which is only what it looks like when no selector was given;
+see the next entry for what it actually holds.
 
 The declared costs are measured too, and they were wrong by an order of
 magnitude in the first draft: request 2.49s, fetch 8.44s, stealth 12.72s. What
