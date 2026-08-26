@@ -17,12 +17,15 @@ import (
 
 // fakeServer is an MCP server over pipes, standing in for scrapling-mcp.
 //
-// A double rather than the real server, and not only because installing it
-// pulls a browser onto every CI leg. The properties worth pinning here are
-// what the adapter SENDS and what it does with what comes back, and both are
-// the same whether or not a real fetch happened. The one thing a double
-// cannot check is the wire shape the real server actually uses -- see the
-// package comment about what has not been measured.
+// A double rather than the real server, because installing it pulls a browser
+// onto every CI leg and because a test that reaches the open web fails on the
+// day somebody else's site changes. The properties worth pinning here are what
+// the adapter SENDS and what it does with what comes back, and both are the
+// same whether or not a real fetch happened.
+//
+// What the double answers is not invented: `page` below is the shape measured
+// against the real scrapling-mcp, so these tests fail if that shape is ever
+// decoded wrongly again -- which is how the list-shaped `content` was caught.
 func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mcpstdio.Session, error) {
 	t.Helper()
 	toServer, fromClient := io.Pipe()
@@ -79,10 +82,13 @@ func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mc
 // side, because the argument that matters to a fetcher is the destination.
 var callsSeen chan map[string]any
 
-// page is a plausible answer, used wherever the test is about something other
-// than decoding.
+// page is the answer shape measured against scrapling-mcp on 2026-08-26:
+// a status, a url, and `content` as a LIST whose second element is whatever
+// the css_selector matched. Used wherever the test is about something other
+// than decoding, so the ordinary path is exercised against the real shape
+// rather than a convenient one.
 func page(body string) map[string]any {
-	return map[string]any{"status": 200, "url": "https://example.com/", "title": "Example", "text": body}
+	return map[string]any{"status": 200, "url": "https://example.com/", "content": []any{body, ""}}
 }
 
 func fetchCapability() contract.Capability {
@@ -202,8 +208,15 @@ func TestOnlyBuiltArgumentsReachTheServer(t *testing.T) {
 	if args["css_selector"] != "main article" {
 		t.Errorf("css_selector = %v, want the selector translated", args["css_selector"])
 	}
-	if len(args) != 2 {
-		t.Errorf("args = %+v, want exactly the two this adapter builds", args)
+	// The rendering is chosen on the way in, so it is always sent.
+	if args["extraction_type"] != "text" {
+		t.Errorf("extraction_type = %v, want the declared default", args["extraction_type"])
+	}
+	// The far side takes twenty-odd arguments on make_request -- proxies,
+	// auth, headers, TLS verification. Exactly three are reachable from here,
+	// and that is the property this number is guarding.
+	if len(args) != 3 {
+		t.Errorf("args = %+v, want exactly the three this adapter builds", args)
 	}
 }
 
@@ -532,6 +545,43 @@ func TestAMissingFormatFallsBackRatherThanFailing(t *testing.T) {
 	rows := out.Result["page"].([]map[string]any)
 	if rows[0]["content"] != "plain only" {
 		t.Errorf("content = %v, want the rendering that does exist", rows[0]["content"])
+	}
+}
+
+// The measured shape: `content` is a list, and both halves are kept -- the
+// page and whatever the selector matched. Dropping either would mean a
+// narrowed fetch losing something the caller asked for.
+func TestBothHalvesOfAListBodyAreKept(t *testing.T) {
+	runner := newRunner(t, scrapling.Options{Session: fakeServer(t, map[string]any{
+		"make_request": map[string]any{"status": 200, "url": "https://example.com/",
+			"content": []any{"the whole page", "the matched bit"}},
+	})})
+	out, err := runner.Run(t.Context(), request(t, scrapling.ImplementationRequest,
+		map[string]any{"url": "https://example.com/", "selector": "main"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows := out.Result["page"].([]map[string]any)
+	body, _ := rows[0]["content"].(string)
+	if !strings.Contains(body, "the whole page") || !strings.Contains(body, "the matched bit") {
+		t.Errorf("content = %q, want both halves", body)
+	}
+}
+
+// A list whose second half is empty -- the ordinary case, no selector given --
+// must not arrive with the separator dangling on the end.
+func TestAnEmptyHalfIsNotJoinedIn(t *testing.T) {
+	runner := newRunner(t, scrapling.Options{Session: fakeServer(t, map[string]any{
+		"make_request": map[string]any{"status": 200, "content": []any{"just the page", ""}},
+	})})
+	out, err := runner.Run(t.Context(), request(t, scrapling.ImplementationRequest,
+		map[string]any{"url": "https://example.com/"}))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows := out.Result["page"].([]map[string]any)
+	if rows[0]["content"] != "just the page" {
+		t.Errorf("content = %q, want no trailing separator", rows[0]["content"])
 	}
 }
 

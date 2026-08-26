@@ -69,7 +69,22 @@ judged, not the first, so a split-horizon name cannot pass on resolver
 ordering. One hole is left open and named rather than papered over: the far
 side follows redirects inside its own process, so the destination it reports
 having landed on is put back through the gate before the answer is handed over,
-but the request has already been made by then.
+but the request has already been made by then. `scrapling.request` could be
+closed and the two browser levels could not, which is why it is documented as
+one limit rather than fixed in one of three places.
+
+Everything about the far side is measured rather than assumed: scrapling-mcp
+0.3.9 over stdio, on 2026-08-26. Two of those measurements changed the code.
+The answer's `content` is a LIST of strings -- the page, then whatever the
+selector matched -- and the first draft decoded it as a string, which would
+have handed back raw JSON as page content. And the rendering is chosen on the
+way IN through `extraction_type`, whose enum is exactly the `text|html|markdown`
+the capability declares, so `format` is sent rather than applied to the answer;
+before that it was a declared input that reached nothing.
+
+The declared costs are measured too, and they were wrong by an order of
+magnitude in the first draft: request 2.49s, fetch 8.44s, stealth 12.72s. What
+dominates is the Python far side and its browser, not the network.
 
 `pkg/contract` does not move. A capability and its implementations are catalog,
 not wire format.

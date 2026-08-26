@@ -3426,15 +3426,24 @@ effects = ["read", "external"]
     summary = "Whether the body was cut. The ceiling is the transport's, not this capability's."
 
 # Three implementations, one capability, and the funnel picks on measured cost.
-# The durations below are ESTIMATES rather than measurements -- nothing has run
-# against a live server yet -- so they decide the ranking only until the base
-# has samples of its own. They are ordered the way the levels actually cost:
-# a plain request is milliseconds, a browser render is seconds, and a stealth
-# render waits out a challenge on purpose.
 #
-# The tokens are what a page costs a model to read and are the same at every
-# level, because the page is the same page. Ranking these three apart is a
-# question about time, not about payload.
+# The durations are MEASURED, against scrapling-mcp 0.3.9 on 2026-08-26,
+# fetching https://example.com/ through Atenea: request 2.49s over five calls,
+# fetch 8.44s, stealth 12.72s over four. They are an order of magnitude above
+# the first draft of this table, which guessed 250ms for a plain HTTP request
+# and was wrong about what dominates -- the cost here is the Python far side
+# and its browser, not the network.
+#
+# They still only decide the ranking until the base has samples of its own,
+# which is the point: the first version of this table sent the funnel to the
+# cheapest-declared level, the measurement came back at 3.95s, and the next
+# call moved to `fetch` on its own. Declared numbers are a starting guess that
+# the base is expected to overrule.
+#
+# The tokens are estimates and stay estimates: they are what a page costs a
+# model to read, they are the same at every level because the page is the same
+# page, and example.com is not a page worth generalizing a size from. Ranking
+# these three apart is a question about time, not about payload.
 
 [[implementation]]
 id = "scrapling.request"
@@ -3450,8 +3459,9 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.cost]
   # One HTTP request with browser impersonation. No browser is started, which
-  # is the whole reason this level exists and the reason it ranks first.
-  estimated_duration = "250ms"
+  # is the whole reason this level exists and the reason it ranks first. The
+  # seconds are the far side, not the fetch.
+  estimated_duration = "2.5s"
   estimated_tokens = 800
 
 [[implementation]]
@@ -3468,9 +3478,8 @@ scope_guarantee = "confined"   # it never looks at the repository at all
 
   [implementation.cost]
   # A real browser renders the page. This is what a site that builds its
-  # content in JavaScript costs, and it is an order of magnitude on the one
-  # above.
-  estimated_duration = "3s"
+  # content in JavaScript costs, and it is roughly three times the one above.
+  estimated_duration = "8.5s"
   estimated_tokens = 1200
 
 [[implementation]]
@@ -3486,9 +3495,9 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   max_scale = ""
 
   [implementation.cost]
-  # Fingerprint spoofing and waiting a challenge out. The last level there is,
-  # so a block here is reported as the answer rather than as unavailable:
-  # escalating would be asking the funnel to fall back to nobody and lose the
-  # reason on the way.
-  estimated_duration = "8s"
+  # Fingerprint spoofing and waiting a challenge out -- solve_cloudflare is
+  # this level's real weapon. The last level there is, so a block here is
+  # reported as the answer rather than as unavailable: escalating would be
+  # asking the funnel to fall back to nobody and lose the reason on the way.
+  estimated_duration = "13s"
   estimated_tokens = 1200

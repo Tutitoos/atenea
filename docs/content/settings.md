@@ -829,6 +829,10 @@ somewhere that would not have. What Atenea can do it does — the destination th
 server reports having landed on goes back through the same gate before the
 answer is handed over, and an answer from a refused address is a failure rather
 than a result. What it cannot do is stop the request from having been made.
+`scrapling.request` could be made airtight (its far side can be told not to
+follow redirects at all), but the two browser levels cannot, so the limit is
+documented as one that applies everywhere rather than fixed in one of three
+places — see [what is not built yet](not-built-yet.md).
 
 ## Reaching the web
 

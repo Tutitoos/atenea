@@ -34,8 +34,10 @@
 // landed on is put back through the same gate before the answer is handed
 // over, and an answer that came from an address the gate refuses is a
 // failure rather than a result. What it cannot do is stop the request from
-// having been made. Closing that properly needs the far side to stop
-// following redirects on its own, which its tools do not today expose.
+// having been made. Closing it properly means the far side not following
+// redirects at all, and make_request DOES expose that -- see the note below on
+// what was measured, and docs/content/not-built-yet.md for why it is still
+// open.
 //
 // # Three levels, and why a block has to be a failure
 //
@@ -72,17 +74,25 @@
 // blocked site downgrades every site" in docs/content/not-built-yet.md rather
 // than left for somebody to rediscover from a browser bill.
 //
-// # What has not been measured
+// # What the far side actually said
 //
-// Every other adapter in this tree states which version of its far side a
-// decoding fact was measured on. This one cannot yet: it was written against
-// Scrapling's published tool reference and not against a running server, so
-// the wire shapes in answerOf are decoded permissively and an answer that
-// matches none of them is contract.FailureUnavailable naming what arrived
-// rather than a guess dressed as a result. The comments here say "expected"
-// where the rest of this repository would say "measured", and that difference
-// is deliberate. First live run against a real `scrapling-mcp` should replace
-// this section with the version it was confirmed on.
+// Measured against `scrapling-mcp` 0.3.9 on 2026-08-26, over stdio. Three
+// things were confirmed and one was a surprise:
+//
+//   - `css_selector` narrows on all three tools, and `extraction_type` is a
+//     text|html|markdown enum that decides the rendering ON THE WAY IN. So
+//     only one rendering ever comes back, and the capability's `format` is
+//     sent rather than applied to the answer.
+//   - the answer's `content` is a LIST of strings, not a string: the page,
+//     then whatever the selector matched. answerOf says what it does with it.
+//   - there is no `title` in the answer at all. The declared output keeps the
+//     field optional and this adapter leaves it empty, because parsing one out
+//     of the body would be this package inventing a fact.
+//   - make_request takes `follow_redirects` (false, or safe|all|obeycode|
+//     firstonly, default safe) and `max_redirects`. That means the redirect
+//     hole above IS closable at this level -- see the note in
+//     docs/content/not-built-yet.md for why it is not closed yet and what
+//     closing it costs.
 package scrapling
 
 import (
@@ -368,8 +378,20 @@ func (r *Runner) fetch(ctx context.Context, req contract.RunRequest, tool string
 
 	// Built field by field. The caller's payload is read here and never
 	// forwarded: an argument the far side understands and this adapter does
-	// not is an argument nobody authorized.
-	args := map[string]any{"url": target}
+	// not is an argument nobody authorized. Measured 2026-08-26, that far side
+	// takes twenty-odd arguments on make_request alone -- proxies, auth,
+	// headers, TLS verification, browser executables. Three of them are
+	// reachable from here and the rest are unreachable BY CONSTRUCTION rather
+	// than by an allow-list somebody has to remember to update.
+	args := map[string]any{
+		"url": target,
+		// Chosen on the way in: the far side renders once, in this format,
+		// and only this one comes back. Its own enum is text|html|markdown,
+		// the same three the capability declares, so the value crosses
+		// unchanged -- and it is always sent, because the far side's default
+		// is markdown while the capability's is text.
+		"extraction_type": format(req.Payload),
+	}
 	if selector, ok := req.Payload["selector"].(string); ok && selector != "" {
 		// Narrowing before the answer leaves the server, which is where it is
 		// cheapest -- the alternative is carrying a whole page across the
@@ -504,39 +526,56 @@ func (a answer) pick(want string) string {
 
 // answerOf decodes what the far side said.
 //
-// Permissive on purpose, and the reason is in the package comment: the field
-// names here come from Scrapling's published tool reference rather than from a
-// server this repository has run, so several plausible spellings are accepted
-// for the same fact. What it will not do is invent one -- an answer carrying
-// no body under any of the names is a failure that quotes what arrived, not an
-// empty page reported as a successful fetch.
+// Measured against scrapling-mcp on 2026-08-26, whose answer to make_request,
+// fetch and stealthy_fetch is:
+//
+//	{"status": 200, "url": "https://example.com/", "content": ["...", ""]}
+//
+// Three facts about that shape are worth writing down because none of them is
+// the obvious guess:
+//
+//   - `content` is a LIST of strings, not a string. The first is the page in
+//     the requested extraction_type; the second is whatever the css_selector
+//     matched, empty when none was given. They are joined rather than picked
+//     between, so a narrowed fetch does not silently lose the page it narrowed.
+//   - there is no `title` field at all. The declared output keeps `title`
+//     optional and this adapter leaves it empty rather than parsing one out of
+//     the body, which would be this package inventing a fact.
+//   - the rendering is chosen on the way IN, by extraction_type, so only one
+//     ever comes back. `pick` still exists for the fallback it names, but on
+//     this far side it is choosing between one candidate and nothing.
+//
+// The decode stays permissive around those facts: a string `content`, and a
+// bare page with no envelope at all, are both still read. What it will not do
+// is invent a body -- an answer carrying none is a failure that quotes what
+// arrived, never an empty page reported as a successful fetch.
 func answerOf(tool, text string) (answer, error) {
 	var raw struct {
-		Status     *int   `json:"status"`
-		StatusCode *int   `json:"status_code"`
-		URL        string `json:"url"`
-		FinalURL   string `json:"final_url"`
-		Title      string `json:"title"`
-		Truncated  bool   `json:"truncated"`
-		Text       string `json:"text"`
-		Content    string `json:"content"`
-		Markdown   string `json:"markdown"`
-		HTML       string `json:"html"`
-		Body       string `json:"body"`
+		Status     *int            `json:"status"`
+		StatusCode *int            `json:"status_code"`
+		URL        string          `json:"url"`
+		FinalURL   string          `json:"final_url"`
+		Title      string          `json:"title"`
+		Truncated  bool            `json:"truncated"`
+		Content    json.RawMessage `json:"content"`
+		Text       string          `json:"text"`
+		Markdown   string          `json:"markdown"`
+		HTML       string          `json:"html"`
+		Body       string          `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(text), &raw); err != nil {
-		// Not every MCP server wraps its answer in an object, and one that
-		// hands back the page itself is giving us the only field that is
-		// strictly required. Treating that as the body is a reading, so it is
-		// marked as one: no status, no title, nothing claimed that was not
-		// said.
+		// Not every answer is an envelope, and one that hands back the page
+		// itself is giving us the only field that is strictly required.
+		// Treating that as the body is a reading, so it is marked as one: no
+		// status, no title, nothing claimed that was not said.
 		return answer{text: text, content: text}, nil //nolint:nilerr // a bare page is the body, not a decode failure
 	}
+	body := bodyOf(raw.Content)
 	out := answer{
 		finalURL:  first(raw.FinalURL, raw.URL),
 		title:     raw.Title,
 		truncated: raw.Truncated,
-		text:      first(raw.Text, raw.Content),
+		text:      first(raw.Text, body),
 		markdown:  raw.Markdown,
 		html:      first(raw.HTML, raw.Body),
 	}
@@ -550,9 +589,37 @@ func answerOf(tool, text string) (answer, error) {
 	if out.content == "" {
 		return answer{}, contract.Fail(contract.FailureUnavailable,
 			"scrapling: %s answered with no page body under any name this understands "+
-				"(text, content, markdown, html, body) -- got %s", tool, clip(text))
+				"(content, text, markdown, html, body) -- got %s", tool, clip(text))
 	}
 	return out, nil
+}
+
+// bodyOf reads the `content` field, which arrives as a list on the far side
+// measured here and as a plain string on anything simpler.
+//
+// The parts are joined rather than chosen between. The second element is what
+// a css_selector matched, and dropping either half would mean a narrowed fetch
+// losing something the caller asked for: the page if the selector matched, the
+// match if it did not.
+func bodyOf(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []string
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 func first(values ...string) string {
