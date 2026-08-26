@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -99,6 +100,14 @@ type Session struct {
 
 	initMu      sync.Mutex
 	initialized bool
+	// version is what the far side called itself on the handshake, cleaned
+	// the way every other provider's version is. It rides in on a round trip
+	// the caller already pays for, so filing measurements under the server
+	// that actually produced them costs nothing extra -- and it is the only
+	// version anybody should trust: one written into a comment or a settings
+	// file is a claim about what was installed the day somebody looked.
+	// Guarded by initMu, which is already held wherever it is written.
+	version string
 
 	// closeOnce guards dead and why together: the reader goroutine reaching
 	// EOF and a caller's own Close must not race to close dead twice, and
@@ -143,7 +152,7 @@ func (s *Session) Initialize(ctx context.Context) error {
 	if s.initialized {
 		return nil
 	}
-	_, err := s.rpc(ctx, "initialize", map[string]any{
+	result, err := s.rpc(ctx, "initialize", map[string]any{
 		"protocolVersion": s.opts.ProtocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]any{
@@ -154,11 +163,35 @@ func (s *Session) Initialize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Mirrors internal/mcphttp: a server that does not introduce itself
+	// leaves this empty, which is a fact rather than a guess, and a handshake
+	// whose shape this cannot read is not a handshake that failed.
+	var hello struct {
+		ServerInfo struct {
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
+	if json.Unmarshal(result, &hello) == nil {
+		s.version = toolversion.Clean(hello.ServerInfo.Version)
+	}
 	if err := s.notify("notifications/initialized", map[string]any{}); err != nil {
 		return err
 	}
 	s.initialized = true
 	return nil
+}
+
+// Version is what the far side called itself, or empty when it has not been
+// asked yet or would not say.
+//
+// Empty is a fact and not a failure: contract.Outcome.ToolVersion is
+// documented as empty exactly when "the far side would not say", and a
+// provider that stays quiet about its version should be filed under no
+// version rather than under a guessed one.
+func (s *Session) Version() string {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return s.version
 }
 
 // Call runs one tool and returns the concatenated text of every text-typed

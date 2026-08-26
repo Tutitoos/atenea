@@ -49,7 +49,7 @@ func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mc
 			switch msg["method"] {
 			case "initialize":
 				result = map[string]any{"protocolVersion": "2025-06-18",
-					"serverInfo": map[string]any{"name": "fake", "version": "0"}}
+					"serverInfo": map[string]any{"name": "Scrapling", "version": "0.4.15"}}
 			case "tools/call":
 				params, _ := msg["params"].(map[string]any)
 				seen <- params
@@ -192,6 +192,14 @@ func TestAPageIsReadBackFromTheServer(t *testing.T) {
 	// adapter is handing the core something the catalog does not describe.
 	if err := fetchCapability().ValidateOutput(out.Result); err != nil {
 		t.Errorf("ValidateOutput: %v", err)
+	}
+	// Filed under the version the far side gave on the handshake, not one
+	// written down here. An earlier comment in this package named a version
+	// read out of documentation, and it was wrong by two minor releases;
+	// measurements filed under a guess average an upgrade into the numbers
+	// that came before it.
+	if out.ToolVersion != "0.4.15" {
+		t.Errorf("ToolVersion = %q, want what the server called itself", out.ToolVersion)
 	}
 }
 
