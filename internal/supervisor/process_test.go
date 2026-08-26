@@ -181,12 +181,25 @@ func TestProcessCrashAfterReadyRestartsThenGoesDown(t *testing.T) {
 // exceeded a restart limit of one and stopped at attempt two.
 func TestProcessStabilityResetsTheRestartBudget(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "invocations")
+	// The numbers carry the whole test, and they are spread rather than tight
+	// on purpose. What is being asserted is a three-way distinction -- crashed
+	// too fast to count, ran long enough to count, crashed too fast again --
+	// and every one of those is a comparison of a MEASURED lifetime against
+	// StableAfter. On a loaded runner a process told to live 50ms can be
+	// observed living considerably longer, and the moment that observation
+	// crosses StableAfter the second crash reads as stable, the budget resets
+	// a second time, and a fourth restart appears.
+	//
+	// That is not hypothetical: at 50/100/300 this failed on CI's Intel macOS
+	// leg with "Restarts = 4, want 3". Six times the margin below and three
+	// times above costs about half a second and takes the assertion out of the
+	// range where a busy machine can blur the two states together.
 	spec := fakeSpec("recovers", OnDemand, map[string]string{
-		"FAKE_EXIT_AFTER_MS_SEQUENCE": "50,300,50",
+		"FAKE_EXIT_AFTER_MS_SEQUENCE": "50,900,50",
 		"FAKE_STATE_FILE":             stateFile,
 	})
 	spec.RestartLimit = 1
-	spec.StableAfter = 100 * time.Millisecond
+	spec.StableAfter = 300 * time.Millisecond
 	spec.RestartDelay = 20 * time.Millisecond
 	p := newTestProcess(t, spec)
 
