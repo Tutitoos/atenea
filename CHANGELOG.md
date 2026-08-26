@@ -7,7 +7,7 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.4.0`. It is a commitment from the first release: an adapter is code
+  at `3.5.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
@@ -53,6 +53,32 @@ kivgraph adapter no longer names a transport: it asks for a `Session`, an
 interface with the one method it ever used, so the same code answers from a
 stdio child or from the daemon. Verified by parity: `symbol.references` over
 both transports returns byte-identical answers, down to the not_found message.
+
+A provider can say which repositories it reaches, and the funnel believes it
+before dispatching rather than after. `RepositoryReacher` joins the contract at
+**3.5.0** beside `SurfaceReporter` and `IndexProber`, and like them it is
+optional -- absence means "reaches everywhere it is attached", so every adapter
+that says nothing is offered exactly where it was.
+
+It exists because one shape of provider could not be described. tokensave is
+rooted at a single checkout and serves the repositories under it; nothing in
+`Implementations()` could say so, because that list names implementations, not
+places. So the funnel offered it for all six repositories here, dispatched, and
+read the scope off a refusal: measured in the base, seven round trips across
+five repositories to be told what its own settings already declared.
+
+The trace stopped lying in the same change. A provider dropped for scope used to
+report "no attached runner serves it", which is true of the ordinary miss and
+false of this one -- it sends whoever reads it to check wiring that is already
+correct. Scope drops now name the root instead, and the ordinary miss keeps its
+own words.
+
+The lookup that finds these interfaces through `guard()` is generic now, on its
+third caller rather than its second. `guardedRunner` embeds `contract.Runner`,
+an interface, so only that method set is promoted and every optional one is
+swallowed -- the bug that printed `surfaces -` for a provider that had one.
+Written once and copied twice, it is a lookup where one copy eventually forgets
+the depth bound.
 
 ### The measurements that shaped it
 

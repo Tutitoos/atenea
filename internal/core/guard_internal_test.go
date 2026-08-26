@@ -170,3 +170,46 @@ func TestARunnerWithoutASurfaceReportsNone(t *testing.T) {
 		t.Errorf("surface = %q, want none reported", surface)
 	}
 }
+
+// scopedRunner answers contract.RepositoryReacher, the third optional
+// interface guardedRunner does not promote and the reason the lookup above is
+// generic rather than copied a third time.
+type scopedRunner struct {
+	probingRunner
+	reaches bool
+}
+
+func (s *scopedRunner) ReachesRepository(contract.Repository) (string, bool) {
+	if s.reaches {
+		return "", true
+	}
+	return "serves only /somewhere/else, repository is outside it", false
+}
+
+// The same swallowing, one interface later. This is the test that has to exist
+// before any adapter implements the interface: a scope declared and then eaten
+// by the wrapper looks exactly like a scope never declared, so the provider
+// would go on being offered everywhere and the bug would read as "the fix did
+// nothing" rather than as a wrapper problem.
+func TestAGuardedRunnersRepositoryScopeIsStillFound(t *testing.T) {
+	runner := &scopedRunner{reaches: false}
+	guarded := guard(runner, nil, func(contract.Repository) string { return "fake" })
+
+	reason, reaches := reachesRepository(guarded, contract.Repository{ID: "elsewhere"})
+	if reaches {
+		t.Fatal("a guarded runner's declared scope was swallowed by the wrapper")
+	}
+	if reason == "" {
+		t.Error("a refused reach must say why; an empty reason reads as no reason")
+	}
+}
+
+// Absence is the permissive answer, and that is what keeps the interface
+// additive: every adapter that says nothing about scope has to go on being
+// offered exactly where it was before this existed.
+func TestARunnerThatDeclaresNoScopeReachesEverywhere(t *testing.T) {
+	guarded := guard(&probingRunner{}, nil, func(contract.Repository) string { return "fake" })
+	if _, reaches := reachesRepository(guarded, contract.Repository{ID: "anywhere"}); !reaches {
+		t.Error("a runner that declares no scope was treated as reaching nowhere")
+	}
+}

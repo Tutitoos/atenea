@@ -302,7 +302,26 @@ type Version struct {
 // system attributes its own device permission to the responsible ancestor
 // rather than to the process asking, so a core that granted this effect freely
 // would be spending a permission it never asked for and cannot revoke.
-var Current = Version{Major: 3, Minor: 4, Patch: 0}
+//
+// 3.5.0 added the `RepositoryReacher` interface. A provider rooted at one
+// directory serves the repositories under it and no others, and nothing it
+// could already implement said so: `Implementations()` names implementations,
+// not places. The funnel therefore offered such a provider everywhere,
+// dispatched, and learned the scope from a refusal -- measured against
+// tokensave, seven round trips across five repositories to be told what its
+// own settings already declared.
+//
+// Additive on the same terms as `IndexProber` in 1.8.0, and read the same way:
+// implementing it is a runner's choice, and NOT implementing it means "reaches
+// everywhere it is attached". Absence is the permissive answer on purpose,
+// because the alternative would make a silent adapter unreachable the day this
+// version shipped.
+//
+// It asks about declared scope, never health. A runner that answers here must
+// not do I/O to decide -- whether the far side is up is a different question,
+// asked at a different stage, and folding the two together would make a
+// provider that is merely down look like one that was never meant to answer.
+var Current = Version{Major: 3, Minor: 5, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

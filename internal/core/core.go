@@ -928,13 +928,15 @@ func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (
 	// prints and exits. The store bounds its own wait on the file lock, so a
 	// background context here cannot hang on a second Atenea's flush.
 	measuring, notices := c.priced(context.Background(), capabilityID, repo.ID, candidates)
+	reachable, unreachable := c.reach(repo)
 	decision, err := c.chooser.Select(selector.Request{
-		Capability: capabilityID,
-		Repository: repo,
-		Candidates: candidates,
-		Reachable:  c.reach(),
-		Measuring:  measuring,
-		Prefer:     prefer,
+		Capability:  capabilityID,
+		Repository:  repo,
+		Candidates:  candidates,
+		Reachable:   reachable,
+		Unreachable: unreachable,
+		Measuring:   measuring,
+		Prefer:      prefer,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	return decision, err
@@ -957,13 +959,38 @@ func (c *Core) priced(ctx context.Context, capability, repository string,
 	return true, metrics.Apply(base, candidates, time.Now())
 }
 
-// reach is every implementation the attached runners can execute between them.
-func (c *Core) reach() []string {
+// reach is every implementation the attached runners can execute for this
+// repository between them.
+//
+// Per repository, not per core: a provider rooted at one checkout serves the
+// repositories under it and no others, and before this the funnel learned that
+// by dispatching and being refused. A runner that says nothing about scope
+// reaches everywhere it is attached, so this is the same list it always was
+// for every provider but the rooted shape.
+// The second return explains the misses this repository has and another would
+// not, so the trace can tell "attached but not here" apart from "nothing
+// serves this at all". Nil when every runner reached, which is the ordinary
+// machine.
+func (c *Core) reach(repo contract.Repository) ([]string, map[string]string) {
 	var out []string
+	var scoped map[string]string
 	for _, runner := range c.runners {
+		reason, reaches := reachesRepository(runner, repo)
+		if !reaches {
+			if reason == "" {
+				reason = "attached, but does not reach this repository"
+			}
+			if scoped == nil {
+				scoped = map[string]string{}
+			}
+			for _, id := range runner.Implementations() {
+				scoped[id] = reason
+			}
+			continue
+		}
 		out = append(out, runner.Implementations()...)
 	}
-	return out
+	return out, scoped
 }
 
 // Agent exposes the orchestrator.

@@ -116,24 +116,55 @@ func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func
 	return guarded
 }
 
-// surfaceOf finds a runner's optional surface report, through any wrapper.
+// optional finds a runner's optional interface, through any wrapper.
 //
 // Asked of the wrapper first so a wrapper that ever does implement it wins,
 // then down the Unwrap chain. Bounded rather than recursive to a fixed point:
 // a cycle here would hang a status screen, and nothing in this package nests
 // more than twice.
-func surfaceOf(runner contract.Runner) (string, bool) {
+//
+// Generic on the third caller rather than the second. guardedRunner embeds
+// contract.Runner, an interface, so only that method set is promoted and every
+// optional one is swallowed -- the bug that printed `surfaces -` for a
+// provider that had one. Written once for SurfaceReporter, it would have been
+// copied twice by now; a lookup that each caller reimplements is a lookup
+// where one of them eventually forgets the depth bound.
+func optional[T any](runner contract.Runner) (T, bool) {
+	var zero T
 	for depth := 0; runner != nil && depth < 4; depth++ {
-		if reporter, ok := runner.(contract.SurfaceReporter); ok {
-			return reporter.Surface(), true
+		if found, ok := runner.(T); ok {
+			return found, true
 		}
 		unwrapper, ok := runner.(interface{ Unwrap() contract.Runner })
 		if !ok {
-			return "", false
+			return zero, false
 		}
 		runner = unwrapper.Unwrap()
 	}
-	return "", false
+	return zero, false
+}
+
+// surfaceOf finds a runner's optional surface report, through any wrapper.
+func surfaceOf(runner contract.Runner) (string, bool) {
+	reporter, ok := optional[contract.SurfaceReporter](runner)
+	if !ok {
+		return "", false
+	}
+	return reporter.Surface(), true
+}
+
+// reachesRepository asks a runner whether it can answer for repo at all.
+//
+// A runner that does not implement contract.RepositoryReacher reaches
+// everywhere it is attached, so absence answers yes. That default is what
+// keeps this additive: every provider but the rooted shape says nothing here
+// and is offered exactly as before.
+func reachesRepository(runner contract.Runner, repo contract.Repository) (string, bool) {
+	reacher, ok := optional[contract.RepositoryReacher](runner)
+	if !ok {
+		return "", true
+	}
+	return reacher.ReachesRepository(repo)
 }
 
 // guardFailure sorts an EnsureReady error into the shared bins, mirroring

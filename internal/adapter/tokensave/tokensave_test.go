@@ -580,6 +580,34 @@ func TestRunRefusesARepositoryOutsideTheRoot(t *testing.T) {
 	}
 }
 
+// The scope this adapter declares and the repository Run refuses have to be
+// the same set, and this is the test that says so. A reach that answered yes
+// where Run says no puts the provider back in the ranking to be refused at
+// dispatch -- the seven wasted round trips this interface exists to remove --
+// and one that answered no where Run would have worked hides a working
+// provider silently. Both halves are asserted against one workspace so they
+// cannot drift apart.
+func TestTheDeclaredScopeIsExactlyWhatRunWillAnswerFor(t *testing.T) {
+	root, repo := workspace(t)
+	outside := contract.NewRepository("elsewhere", t.TempDir(), nil,
+		contract.ScaleSmall, contract.VCSUnspecified, nil)
+	_, sess := newFakeTokensave(t)
+	runner := newTestRunner(t, root, sess)
+
+	if reason, reaches := runner.ReachesRepository(repo); !reaches {
+		t.Errorf("the served repository was reported out of scope: %s", reason)
+	}
+	reason, reaches := runner.ReachesRepository(outside)
+	if reaches {
+		t.Fatal("a repository outside the root was reported in scope")
+	}
+	// The reason is shown in the funnel trace where "no attached runner serves
+	// it" used to be, so it has to name the root rather than restate the miss.
+	if !strings.Contains(reason, root) {
+		t.Errorf("reason = %q, want the served root named", reason)
+	}
+}
+
 // A path climbing out of the repository is refused, whatever it says.
 func TestToRootRefusesAPathLeavingTheRepository(t *testing.T) {
 	if _, err := toRoot("services/api", "../other/secret.go", "api"); err == nil {
