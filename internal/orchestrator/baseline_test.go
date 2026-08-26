@@ -27,9 +27,16 @@ type stubBase struct {
 	asked []string
 }
 
-func (s *stubBase) Baselines(_ context.Context, capability, repository string) (map[string]metrics.Baseline, error) {
+func (s *stubBase) Baselines(_ context.Context, capability, repository, subject string) (map[string]metrics.Baseline, error) {
 	s.mu.Lock()
-	s.asked = append(s.asked, capability+"@"+repository)
+	// The subject joins the record of what was asked, because "which health
+	// did the funnel read" is now a three-part question and a stub that
+	// dropped a third of it would pass while the scoping was wrong.
+	asked := capability + "@" + repository
+	if subject != "" {
+		asked += "#" + subject
+	}
+	s.asked = append(s.asked, asked)
 	s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err

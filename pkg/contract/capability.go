@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -221,6 +222,92 @@ type Capability struct {
 	Inputs    []Field
 	Outputs   []Field
 	Effects   []Effect
+	// SubjectFrom names the input whose value says WHAT this call is about,
+	// beyond the repository, and SubjectKind says how to read it. Both empty
+	// on every capability that has no such thing, which is most of them.
+	//
+	// It exists because health and cost are recorded per repository, and for a
+	// capability that ignores the repository entirely there is no other
+	// dimension to hang them on. Measured before it existed: `web.fetch`
+	// against a site behind Cloudflare marked its cheapest implementation
+	// unhealthy, and the next fetch of an unrelated site skipped that
+	// implementation too -- with a drop reason still quoting the first site's
+	// url. One protected page paid for a browser on every page after it.
+	//
+	// Declared here rather than inferred by the core, because the core has no
+	// business knowing that `url` means something different from `query`. A
+	// capability knows what it is about; this is where it says so.
+	SubjectFrom string
+	SubjectKind SubjectKind
+}
+
+// SubjectKind is how the value named by SubjectFrom becomes a subject.
+//
+// A kind rather than a free string, because the subject is a grouping key: two
+// calls that mean the same place must produce the same key, and "whatever the
+// caller typed" does not. `https://Example.COM/a` and `http://example.com/b`
+// are one subject, and only something that knows the value is a URL can say
+// so.
+type SubjectKind uint8
+
+const (
+	// SubjectNone is a capability whose calls are about nothing beyond the
+	// repository, which is the shipped default and every code capability.
+	SubjectNone SubjectKind = iota
+	// SubjectURLHost reads the input as a URL and takes its host, lowercased
+	// and without a port. Every page on one site is one subject: a site
+	// either answers this provider or does not, and that is a fact about the
+	// site rather than about the path.
+	SubjectURLHost
+)
+
+var subjectKindNames = map[SubjectKind]string{
+	SubjectNone:    "",
+	SubjectURLHost: "url_host",
+}
+
+func (k SubjectKind) String() string { return subjectKindNames[k] }
+
+// ParseSubjectKind reads a subject-kind name. The empty string is "no
+// subject", the same convention Scale and VCS use.
+func ParseSubjectKind(s string) (SubjectKind, error) {
+	for kind, name := range subjectKindNames {
+		if name == s {
+			return kind, nil
+		}
+	}
+	return 0, Fail(FailureInvalidInput,
+		"unknown subject kind %q: want url_host, or nothing", s)
+}
+
+// Subject reads this call's subject out of its payload, or "" when the
+// capability declares none, the input is absent, or the value cannot be read
+// as the declared kind.
+//
+// Empty on failure rather than an error, and that is the whole posture: a
+// subject is a grouping key for measurements, not a permission. A key nobody
+// could derive means the call is filed the way every call was filed before
+// this existed, which is a worse baseline and not a wrong answer. Refusing the
+// call instead would let a malformed url break a fetch that the gate is about
+// to refuse anyway, for its own better reasons.
+func (c Capability) Subject(payload map[string]any) string {
+	if c.SubjectFrom == "" || c.SubjectKind == SubjectNone {
+		return ""
+	}
+	raw, _ := payload[c.SubjectFrom].(string)
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	switch c.SubjectKind {
+	case SubjectURLHost:
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(parsed.Hostname())
+	default:
+		return ""
+	}
 }
 
 var (

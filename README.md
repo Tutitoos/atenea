@@ -10,7 +10,7 @@ it serves. omp, Claude Code, Codex and OpenCode all connect to the same core.
 reference and getting started. The sources live in [`docs/`](docs/) and travel
 in the same pull request as the code.
 
-Version `1.1.0`, speaking contract `3.5.0` — stable core with optional external
+Version `1.1.0`, speaking contract `3.6.0` — stable core with optional external
 providers. The release is published with checksum-verified installers for
 Linux and macOS on `amd64` and `arm64`; the [final audit](docs/content/v1-final-audit.md)
 records the evidence and the remaining provider-dependent limits. What landed is in the

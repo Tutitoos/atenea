@@ -106,6 +106,14 @@ type Measurement struct {
 	Implementation string
 	Provider       string
 	Repository     string
+	// Subject is what this call was about beyond the repository, or empty for
+	// every capability that declares none -- which is most of them, and every
+	// row written before the column existed.
+	//
+	// It is the capability's own declaration that produces it (see
+	// contract.Capability.Subject), because the core has no business knowing
+	// that a url means something different from a query.
+	Subject string
 	// ToolVersion is what the far side said it is, empty when it would not say.
 	ToolVersion string
 	Spent       contract.Sample
@@ -381,9 +389,9 @@ func (s *Store) Written() int {
 
 const insertMeasurement = `INSERT INTO measurement
 	(happened_at, run_id, step_id, capability, implementation, provider,
-	 repository, tool_version, duration_us, tokens, peak_rss_bytes,
+	 repository, subject, tool_version, duration_us, tokens, peak_rss_bytes,
 	 ok, failure_kind, failure, raw, out_of_scope)
-	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // Flush writes the buffered batch. An empty buffer is not an error and does not
 // touch the disk.
@@ -445,7 +453,7 @@ func (s *Store) write(ctx context.Context, batch []Measurement) error {
 		}
 		_, err := stmt.ExecContext(ctx,
 			m.At.UTC(), m.RunID, m.StepID, m.Capability, m.Implementation,
-			m.Provider, m.Repository, m.ToolVersion,
+			m.Provider, m.Repository, m.Subject, m.ToolVersion,
 			m.Spent.Duration.Microseconds(), int64(m.Spent.Tokens), rss,
 			m.OK, m.FailureKind, m.Failure, m.Raw, int64(m.OutOfScope))
 		if err != nil {

@@ -32,7 +32,7 @@ what it knows about the repository in front of it.
 ## Where the project stands
 
 **These pages describe Atenea `1.1.0`**, speaking
-contract `3.5.0`. The product is stable; Claude Code, Codex, OpenCode and the
+contract `3.6.0`. The product is stable; Claude Code, Codex, OpenCode and the
 Kivgraph web viewer remain optional external provider surfaces. The
 [changelog](https://github.com/Tutitoos/atenea/blob/main/CHANGELOG.md) has what
 landed.

@@ -131,7 +131,7 @@ func TestADecisionFlipsOnceTheBaseHasRealNumbers(t *testing.T) {
 
 	// The base is not just being consulted, it is being filled: six asks in,
 	// the losing provider stopped being asked and its count stopped growing.
-	costs, err := store.Baselines(context.Background(), "code.search", "api")
+	costs, err := store.Baselines(context.Background(), "code.search", "api", "")
 	if err != nil {
 		t.Fatalf("Baselines: %v", err)
 	}

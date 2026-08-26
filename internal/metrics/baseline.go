@@ -374,7 +374,21 @@ GROUP BY 1, 2, 3`
 // a fix to the shape cannot land in only half of them, which is exactly how
 // the funnel and the status screen would drift apart.
 var (
-	recencyHere = fmt.Sprintf(recencyTemplate, "AND capability = ? AND repository = ?")
+	// Health is filtered by subject and cost deliberately is not, which is a
+	// split worth stating rather than discovering.
+	//
+	// Whether a site refuses this provider is a fact about that site: one page
+	// behind Cloudflare must not mark an implementation unhealthy for every
+	// other page, which is exactly what happened before this filter existed.
+	// What a fetch COSTS is a fact about the machinery -- the Python far side
+	// and its browser dominate, not the host -- so merging subjects there
+	// gives a larger sample of the same thing rather than mixing two things.
+	//
+	// It is also the only split the data supports. Recency reads `measurement`
+	// alone, so it can be scoped completely; the cost query unions in `rollup`,
+	// which is compacted history with no subject column and no honest way to
+	// invent one.
+	recencyHere = fmt.Sprintf(recencyTemplate, "AND capability = ? AND repository = ? AND subject = ?")
 	recencyAll  = fmt.Sprintf(recencyTemplate, "")
 )
 
@@ -386,7 +400,7 @@ var (
 // same provider is cheap with a warm index and expensive without one. An
 // implementation absent from the answer has never been tried here, which is
 // not the same as being free.
-func (s *Store) Baselines(ctx context.Context, capability, repository string) (map[string]Baseline, error) {
+func (s *Store) Baselines(ctx context.Context, capability, repository, subject string) (map[string]Baseline, error) {
 	// Flushing first matters more here than anywhere else: a funnel reading a
 	// store with its own batch still in memory would rank on a baseline stale
 	// by exactly the calls that just ran.
@@ -403,7 +417,7 @@ func (s *Store) Baselines(ctx context.Context, capability, repository string) (m
 	if err := s.readCosts(ctx, db, capability, repository, out); err != nil {
 		return nil, err
 	}
-	if err := s.readRecency(ctx, db, capability, repository, out); err != nil {
+	if err := s.readRecency(ctx, db, capability, repository, subject, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -507,9 +521,9 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 
 // readRecency fills in each implementation's newest end for one capability on
 // one repository.
-func (s *Store) readRecency(ctx context.Context, db *sql.DB, capability, repository string,
+func (s *Store) readRecency(ctx context.Context, db *sql.DB, capability, repository, subject string,
 	out map[string]Baseline) error {
-	rows, err := db.QueryContext(ctx, recencyHere, capability, repository)
+	rows, err := db.QueryContext(ctx, recencyHere, capability, repository, subject)
 	if err != nil {
 		return fmt.Errorf("metrics: recency: %w", err)
 	}

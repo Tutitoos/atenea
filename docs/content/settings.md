@@ -31,7 +31,7 @@ the shipped file declares none, so there is nothing there to lose. A settings
 file containing only
 
 ```toml
-contract = "3.5.0"
+contract = "3.6.0"
 
 [orchestrator]
 runners = ["omp", "claudecode"]
@@ -103,7 +103,7 @@ and the day that candidate died there was nothing behind it.
 ## Skeleton
 
 ```toml
-contract = "3.5.0"          # required: the contract version this file targets
+contract = "3.6.0"          # required: the contract version this file targets
 
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
@@ -113,13 +113,13 @@ health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
 version by name rather than reading it and hoping. Minor lag is supported, so
-a file targeting `3.0.0` remains readable by the current `3.5.0` core because
+a file targeting `3.0.0` remains readable by the current `3.6.0` core because
 every 3.x addition since has been backward-compatible. A file from a newer contract
 is refused and must be reviewed before use:
 
 ```text
 settings ~/.config/atenea/atenea.toml: contract 4.0.0 is not supported by
-this core (3.5.0): change the contract line to "3.5.0"; no other key moves
+this core (3.6.0): change the contract line to "3.6.0"; no other key moves
 ```
 
 Do that and you are done. The refusal is deliberately not a fallback to the
@@ -1016,6 +1016,49 @@ Numeric bounds are not part of a field. A range in the contract is a range
 every implementation must honour, and a line number is bounded by the file, not
 by the capability — `max_input` under an implementation is where a *particular*
 tool says what it can be asked.
+
+### What a call is about, beyond the repository
+
+```toml
+[[capability]]
+id = "web.fetch"
+subject_from = "url"        # which input says what this call is about
+subject_kind = "url_host"   # how to read it
+```
+
+Both keys or neither, and most capabilities declare neither. Health and cost
+are recorded per repository, which is the only dimension a code capability
+has — and a capability that ignores the repository entirely has nowhere to hang
+them. `web.fetch` reaches the open web and never looks at a checkout, so before
+this existed every site landed in one bucket.
+
+What that cost was measured, not imagined: one page behind Cloudflare marked
+the cheapest implementation of `web.fetch` unhealthy, and the next fetch of an
+unrelated site skipped that implementation too — with a drop reason still
+quoting the first site's url. One protected page paid for a browser on every
+page after it, for as long as `health_stale_after` stood.
+
+**It scopes health and deliberately not cost.** Whether a site refuses a
+provider is a fact about that site. What a fetch *costs* is a fact about the
+machinery — the far side and its browser dominate, not the host — so merging
+subjects there gives a larger sample of one thing rather than mixing two.
+
+`subject_kind` is a kind rather than a free string because the subject is a
+grouping key: two calls meaning the same place must produce the same key, and
+whatever the caller happened to type does not. `url_host` reads the input as a
+URL and takes its host, lowercased and without a port, so `https://Example.COM/a`
+and `http://example.com/b` are one subject.
+
+The whole declaration is checked when settings load — an input that is not
+declared, an input that is not a string, one key without the other. A subject
+key that means nothing does not fail at call time; it files measurements under
+nonsense and lets the funnel rank as if that were fine, so it is refused at the
+door instead.
+
+`atenea select` names no subject and says so in its notices: it asks who
+*would* answer a capability, which is a question about the capability rather
+than about a call, and the health it shows is what was recorded for no subject
+in particular.
 
 ## Implementations
 

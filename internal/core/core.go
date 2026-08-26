@@ -994,7 +994,22 @@ func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (
 	// Select is a one-shot lookup with no caller to cancel it: the CLI asks,
 	// prints and exits. The store bounds its own wait on the file lock, so a
 	// background context here cannot hang on a second Atenea's flush.
-	measuring, notices := c.priced(context.Background(), capabilityID, repo.ID, candidates)
+	// No subject, and the notice below says so rather than leaving the reader
+	// to assume otherwise.
+	//
+	// This is `atenea select`, which asks who WOULD answer a capability. There
+	// is no payload here and there cannot be one: the question is about the
+	// capability in general, not about a particular call. So the health this
+	// ranks on is the health recorded for no subject in particular -- true,
+	// and not the same answer a real dispatch would get for a site that has
+	// been refusing the cheap implementation all morning.
+	measuring, notices := c.priced(context.Background(), capabilityID, repo.ID, "", candidates)
+	if capability, err := c.catalog.Capability(capabilityID); err == nil && capability.SubjectFrom != "" {
+		notices = append(notices, fmt.Sprintf(
+			"%s ranks per %s, and this question names none: the health below is what was recorded "+
+				"for no %s in particular, which a real call may not get",
+			capabilityID, capability.SubjectFrom, capability.SubjectFrom))
+	}
 	reachable, unreachable := c.reach(repo)
 	decision, err := c.chooser.Select(selector.Request{
 		Capability:  capabilityID,
@@ -1013,12 +1028,12 @@ func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (
 // seam the orchestrator uses, and for the same reason: the catalog declares
 // what a provider is guessed to cost, the store knows what it did cost, and
 // the funnel is the one place the two meet.
-func (c *Core) priced(ctx context.Context, capability, repository string,
+func (c *Core) priced(ctx context.Context, capability, repository, subject string,
 	candidates []contract.Implementation) (bool, []string) {
 	if c.measurements == nil {
 		return false, nil
 	}
-	base, err := c.measurements.Baselines(ctx, capability, repository)
+	base, err := c.measurements.Baselines(ctx, capability, repository, subject)
 	if err != nil {
 		return false, []string{fmt.Sprintf(
 			"the measurement base could not be read (%v); ranking on the declared estimates", err)}

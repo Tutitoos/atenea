@@ -81,7 +81,7 @@ func (unmetered) Settle(context.Context)     {}
 // exactly as well; it simply keeps ranking on the estimates in the settings
 // file, and the trace keeps saying so.
 type Base interface {
-	Baselines(ctx context.Context, capability, repository string) (map[string]metrics.Baseline, error)
+	Baselines(ctx context.Context, capability, repository, subject string) (map[string]metrics.Baseline, error)
 }
 
 // Phase names, in the order they run.
@@ -425,8 +425,15 @@ type StepResult struct {
 	// Raw is the provider's own text behind Failure, when whatever adapter
 	// raised it kept one. Empty on success, and empty on a failure the core
 	// raised itself with nothing to quote.
-	Raw   string
-	Spent contract.Sample
+	Raw string
+	// Subject is what this step was about beyond the repository, derived once
+	// from the payload by the capability's own declaration. It scopes the
+	// health the funnel selects on and is written onto the measurement
+	// afterwards, and it has to be the same string in both places -- a step
+	// ranked under one subject and filed under another would teach the base
+	// something that never happened.
+	Subject string
+	Spent   contract.Sample
 	// Dispatched says the chosen implementation was actually called. It is
 	// not the same question as "was somebody chosen": the funnel picks a
 	// winner before the request is validated, so a payload missing a required
@@ -1261,7 +1268,10 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		return a.close(out, err)
 	}
 	candidates = a.catalog.Observed(repository.ID, candidates)
-	measuring, notices := a.priced(ctx, step.Capability, repository.ID, candidates)
+	// Derived before the funnel and carried to the measurement, so the health
+	// this step ranks on and the row it writes describe the same thing.
+	out.Subject = capability.Subject(step.Payload)
+	measuring, notices := a.priced(ctx, step.Capability, repository.ID, out.Subject, candidates)
 	decision, err := a.chooser.Select(selector.Request{
 		Capability: step.Capability,
 		Repository: repository,
@@ -1308,7 +1318,23 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		// A provider reporting itself unusable is news the catalog needs: the
 		// funnel filters on health, and health is owned by whoever probed last.
 		// Running a step is a probe.
-		if contract.KindOf(runErr) == contract.FailureUnavailable {
+		//
+		// Unless the capability declares a subject, in which case this mark
+		// would be a lie in the other direction. The catalog's health is keyed
+		// by repository and nothing else, so a web.fetch that a single site
+		// refused would mark the implementation down for every site -- which
+		// is the exact defect the subject column was added to close, arriving
+		// through a second door. Measured: after one page behind Cloudflare,
+		// an unrelated host went straight to the stealth level with a drop
+		// reason still quoting the first.
+		//
+		// For those the measurement base is the whole record, and a better
+		// one: it carries the subject, it has retention, and Baselines reads
+		// it back scoped to the site actually being asked about. Giving the
+		// catalog a subject dimension instead was the other option and is
+		// worse -- that map is persisted, so it would grow one entry per host
+		// ever touched and never shrink.
+		if contract.KindOf(runErr) == contract.FailureUnavailable && out.Subject == "" {
 			_ = a.catalog.SetHealth(repository.ID, decision.Chosen.ID, contract.Health{
 				State:  contract.HealthDown,
 				Reason: runErr.Error(),
@@ -1329,12 +1355,12 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 // when a measurement exists on disk is a decision nobody can reproduce. The
 // second return carries that admission and anything else the base wants the
 // trace to know, and is empty when there is nothing to say.
-func (a *Agent) priced(ctx context.Context, capability, repository string,
+func (a *Agent) priced(ctx context.Context, capability, repository, subject string,
 	candidates []contract.Implementation) (bool, []string) {
 	if a.base == nil {
 		return false, nil
 	}
-	base, err := a.base.Baselines(ctx, capability, repository)
+	base, err := a.base.Baselines(ctx, capability, repository, subject)
 	if err != nil {
 		return false, []string{fmt.Sprintf(
 			"the measurement base could not be read (%v); ranking on the declared estimates", err)}
@@ -1776,6 +1802,7 @@ func measure(runID string, step StepResult) metrics.Measurement {
 		Implementation: step.Decision.Chosen.ID,
 		Provider:       step.Decision.Chosen.Provider,
 		Repository:     step.Step.Repository,
+		Subject:        step.Subject,
 		ToolVersion:    step.Outcome.ToolVersion,
 		Spent:          step.Spent,
 		OK:             step.Review.Parent == contract.VerdictOK,
