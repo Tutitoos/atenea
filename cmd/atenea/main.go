@@ -208,6 +208,8 @@ Flags:
   --repo ID       repository to ask about (required when several are
                   registered)
   --set NAME=VAL  payload field; repeat for several
+  --payload FILE  the whole payload as json, for inputs --set cannot express
+                  (a record or a list of them). Not combinable with --set
   --allow EFFECT  effect beyond reading to grant this question; repeat for
                   several (default: none)
   --budget USD    what this question may spend (default: the settings file)
@@ -2315,6 +2317,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	capabilityID, args := strings.TrimSpace(args[0]), args[1:]
 
 	var fields fieldList
+	var payloadFile string
 	var allow effectList
 	var repository string
 	var trace bool
@@ -2326,6 +2329,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&repository, "repo", "", "repository to ask about (required when several are registered)")
 	flags.Var(&fields, "set", "payload field as name=value; repeat for several")
+	flags.StringVar(&payloadFile, "payload", "", "read the whole payload from a json file, for inputs --set cannot express")
 	flags.Var(&allow, "allow", "effect beyond reading to grant this question; repeat for several (default: none)")
 	flags.Float64Var(&budget, "budget", 0, "what this question may spend in usd (default: the settings file)")
 	flags.StringVar(&prefer, "prefer", "", "one-call implementation preference")
@@ -2356,7 +2360,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 	// The capability's own declaration is what types the payload. A parser of
 	// its own here would be a second schema to keep in step with the first,
 	// and it would be wrong the moment a capability gains a field.
-	payload, err := fields.payload(capability)
+	payload, err := askPayload(capability, fields, payloadFile)
 	if err != nil {
 		return err
 	}
@@ -2554,6 +2558,55 @@ type fieldList []string
 func (f *fieldList) String() string     { return strings.Join(*f, ",") }
 func (f *fieldList) Set(v string) error { *f = append(*f, v); return nil }
 
+// askPayload builds the payload from whichever of the two ways the caller
+// used, and refuses both at once.
+//
+// --set is the right shape for what a shell is good at, and it deliberately
+// refuses a record: "Records are a shape a shell cannot express without
+// becoming a JSON parser. Refusing is honest; a half-parser would be worse."
+// That refusal still stands. What it did not anticipate is a capability whose
+// REQUIRED input is a record_list -- web.extract's `fields` -- which made the
+// capability reachable from every MCP client and from nothing on the command
+// line.
+//
+// So the second way is a whole payload as JSON, read from a file, and it is
+// not a parser bolted onto --set: it is the same document an MCP client would
+// have sent. Nothing types it here either, because contract.ValidateInput
+// types it a few lines below against the same declaration -- and JSON numbers
+// arriving as float64 are already what every adapter reads, since the MCP path
+// has always delivered them that way.
+//
+// The two are mutually exclusive. Merging them would mean deciding which wins
+// per field, which is a rule nobody would remember and both sides could
+// disagree about.
+func askPayload(capability contract.Capability, fields fieldList, file string) (map[string]any, error) {
+	if file == "" {
+		return fields.payload(capability)
+	}
+	if len(fields) > 0 {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"--payload and --set cannot both be given: one is the whole payload and the other is a field of it")
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"--payload %s: %v", file, err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"--payload %s is not a json object: %v", file, err)
+	}
+	if out == nil {
+		// `null` decodes without error into a nil map, and a nil payload
+		// reaching ValidateInput reads as "no fields given" rather than as the
+		// malformed file it is.
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"--payload %s is empty", file)
+	}
+	return out, nil
+}
+
 func (f fieldList) payload(capability contract.Capability) (map[string]any, error) {
 	declared := make(map[string]contract.Field, len(capability.Inputs))
 	for _, field := range capability.Inputs {
@@ -2614,8 +2667,15 @@ func coerce(field contract.Field, raw string) (any, error) {
 	default:
 		// Records are a shape a shell cannot express without becoming a JSON
 		// parser. Refusing is honest; a half-parser would be worse.
+		//
+		// The refusal predates any capability that could trip it, and it was
+		// right then and is right now. What was missing was the other half of
+		// the sentence: a caller told only what they cannot do has to go and
+		// find out what they can, and web.extract was reachable from every MCP
+		// client and from nothing here.
 		return nil, contract.Fail(contract.FailureInvalidInput,
-			"%s is a %s, which --set cannot express", field.Name, field.Type)
+			"%s is a %s, which --set cannot express -- pass the whole payload as json with --payload FILE",
+			field.Name, field.Type)
 	}
 }
 

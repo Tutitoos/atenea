@@ -20,28 +20,32 @@ This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
 
-## A capability the command line cannot call — 2026-08-26
+## A capability the command line could not call — 2026-08-26, closed 2026-08-27
 
 `web.extract` takes its selectors as a `record_list`, the first input of that
-type in the catalog. `atenea ask --set NAME=VAL` cannot express one and says
-so — "Records are a shape a shell cannot express without becoming a JSON
-parser. Refusing is honest; a half-parser would be worse" (cmd/atenea/main.go).
+type in the catalog, and `atenea ask --set NAME=VAL` cannot express one. It
+said so clearly — "Records are a shape a shell cannot express without becoming
+a JSON parser. Refusing is honest; a half-parser would be worse" — but a
+caller told only what they cannot do still has to go and find out what they
+can, and the answer was "nothing here": the capability was reachable from every
+MCP client and from no command line at all.
 
-That refusal was written before any capability could trip it, and it is still
-the right call. What is new is that a capability now exists which `ask` cannot
-reach at all: it is callable from every MCP client, where JSON is the wire, and
-from nothing on the command line.
+Three options were listed. The one taken is `--payload FILE`, which is the
+second of them and not the first: teaching `--set` to parse JSON when the
+declared field is a record would have made the shell a JSON parser, which is
+precisely what the original refusal declined to do. A whole payload read from a
+file is not that. It is the same document an MCP client sends, handed over
+whole, typed by `contract.ValidateInput` against the same declaration as
+before — and JSON numbers arriving as float64 are what every adapter has always
+read, because the MCP path has always delivered them that way.
 
-Three options, none taken. Teach `--set` to parse JSON when the declared field
-is a record — small, and it makes the shell a JSON parser, which is the thing
-the comment refused. Add `--payload FILE` for the whole input at once — honest,
-and it is a second way to say what `--set` already says, which invites the two
-to drift. Or leave `ask` as the tool for string-shaped capabilities and let MCP
-carry the rest — free, and it means the CLI quietly covers less of the catalog
-as the catalog grows, with nothing announcing which parts.
+The two are mutually exclusive rather than merged. Merging would mean a rule
+about which wins per field, and a rule nobody remembers is a rule that
+surprises somebody.
 
-The third is what ships today, by omission rather than by decision, which is
-why it is written down here.
+What is still true, and is the reason this entry stays rather than being
+deleted: the CLI covers less of the catalog than MCP does, and nothing
+announces which parts. `--payload` closes today's gap without closing that one.
 
 ## The redirect the gate cannot see is closable, and is not closed — 2026-08-26
 

@@ -928,10 +928,18 @@ markdown and does not extract attributes, so declaring one would promise what
 nothing here can honor. `format = "html"` returns matched elements whole, hrefs
 included, for a caller that needs them.
 
-**`atenea ask` cannot call it.** `--set NAME=VAL` cannot express a
-`record_list`, and refuses rather than half-parsing JSON — a deliberate limit
-that `web.extract` is simply the first capability to meet. It is reachable from
-any MCP client, where JSON is native.
+**From the command line it needs `--payload`.** `--set NAME=VAL` cannot express
+a `record_list` and refuses rather than half-parsing JSON — a deliberate limit
+that `web.extract` was simply the first capability to meet. `--payload FILE`
+takes the whole payload as JSON instead, which is the same document an MCP
+client would have sent:
+
+```sh
+atenea ask web.extract --repo current --allow external --payload fields.json
+```
+
+The two are mutually exclusive: one is the whole payload and the other is a
+field of it, and merging them would mean a rule about which wins per field.
 
 ## Security
 
