@@ -14,6 +14,52 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Fixed
+
+Nothing that shells out to git can be steered away from the directory it was
+pointed at any more, and the reason this is a Fixed rather than a hardening is
+that it already happened: a `git push` from this checkout left the repository
+`core.bare = true` -- which breaks every worktree -- with a test identity
+written into its config, so the next commit would have been authored by "Test
+<test@example.invalid>".
+
+The chain is short and every link looks harmless. lefthook's pre-push hook runs
+`go test -race ./...`. A git hook exports GIT_DIR. `GIT_DIR` names the
+repository git operates on and **overrides the working directory**, so
+`command.Dir = t.TempDir()` -- which reads as sufficient, and is what the
+helper in `internal/adapter/kivgraph` used -- stopped applying. Its `git init`
+re-initialized the real checkout, and with no GIT_WORK_TREE beside it marked it
+bare; its `git config user.email` wrote into the real config.
+
+Four places were exposed and all four are fixed by removing the steering
+variables from the child environment -- removed, not blanked: `GIT_DIR=` is a
+GIT_DIR holding the empty string and git answers "fatal: The empty string is
+not a valid path".
+
+- `internal/adapter/kivgraph`'s test helper, which caused the damage, and which
+  no longer sets an identity through `git config` at all -- it travels as
+  GIT_AUTHOR_*/GIT_COMMITTER_*, the way `scripts/gates_test.go` already did.
+- **`gitDiff` in `internal/adapter/kivgraph`, which is shipped code.** Same
+  exposure, and worse consequences than a dirty config: `code.impact` would
+  have diffed a repository the caller never named and answered confidently
+  about the wrong code. It already forced `--src-prefix`/`--dst-prefix` against
+  a developer's diff configuration; this is the same lesson one variable over.
+- **`GitState` in `internal/benchmark`,** also shipped. Read-only, so it can
+  damage nothing -- what it can do is stamp a benchmark manifest with a commit
+  that did not produce the numbers beside it.
+- `scripts/gates_test.go`, whose hook runner passed or failed depending on
+  whether whoever ran the suite happened to have GIT_DIR set.
+
+The pre-push hook now also runs the suite under `env -u GIT_DIR ...`, which is
+a second net rather than the fix: the scrubbing in the code is what holds
+however the suite is invoked.
+
+Two tests hold it. One puts a repository somewhere else, points GIT_DIR at it
+the way a hook would, runs the helper and checks that repository came out
+untouched -- it is the test that would have caught this. The other pins the
+pre-push line. The whole suite now passes with a foreign GIT_DIR exported,
+which nothing had ever tried.
+
 ### Added
 
 `web.extract` pulls named fields off a page: a list of `{name, selector}` in,

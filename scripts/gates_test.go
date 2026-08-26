@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -172,6 +173,44 @@ func TestTheCommitHookIsTheScriptTheseTestsExercise(t *testing.T) {
 	}
 }
 
+// The pre-push hook runs the whole suite, and a hook runs with GIT_DIR
+// exported. Several tests in this tree shell out to git inside a temp
+// directory; GIT_DIR beats their working directory when git decides which
+// repository it is in, so the suite invoked from here operated on the real
+// checkout instead. One `git init` marked it core.bare = true, which breaks
+// every worktree, and a `git config user.email` wrote a test identity into it.
+//
+// The tests scrub the variables themselves and that is the fix that matters,
+// because it holds however the suite is invoked. This is the second net, and
+// it is a net worth having: the failure was silent, it arrived through a
+// command nobody thinks of as dangerous, and it left a repository to repair by
+// hand.
+func TestThePrePushHookDoesNotHandGitDirToTheSuite(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRoot, "lefthook.yml"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var line string
+	for _, candidate := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(candidate)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, "go test") && strings.Contains(trimmed, "-race") {
+			line = trimmed
+			break
+		}
+	}
+	if line == "" {
+		t.Fatal("lefthook.yml no longer runs the race suite before a push")
+	}
+	for _, variable := range []string{"GIT_DIR", "GIT_WORK_TREE"} {
+		if !strings.Contains(line, "-u "+variable) {
+			t.Errorf("the pre-push suite inherits %s: %s", variable, line)
+		}
+	}
+}
+
 // A workflow that installs a floating tag runs code nobody chose and leaves no
 // record of which code that was. host-footer.yml installed opencode-ai@latest
 // on a daily schedule and then executed the binary inside it, while the other
@@ -287,13 +326,41 @@ func newRepository(t *testing.T) *repository {
 	return created
 }
 
+// withoutGitSteering is os.Environ() with every variable that decides WHICH
+// repository git operates on taken out.
+//
+// Removed rather than set empty: `GIT_DIR=` is a GIT_DIR holding the empty
+// string, and git answers "fatal: The empty string is not a valid path".
+func withoutGitSteering() []string {
+	steering := []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE=", "GIT_COMMON_DIR=",
+		"GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="}
+	out := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		if slices.ContainsFunc(steering, func(prefix string) bool {
+			return strings.HasPrefix(entry, prefix)
+		}) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func (r *repository) git(t *testing.T, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", arguments...)
 	command.Dir = r.dir
 	// An identity on the command line rather than in a config file: the test
 	// must not depend on, or write to, the developer's global git settings.
-	command.Env = append(os.Environ(),
+	//
+	// The cleared variables are the other half of that sentence and were the
+	// half missing. command.Dir says where to RUN; GIT_DIR says which
+	// repository git is IN, and it wins. A git hook exports it, so a suite run
+	// from lefthook's pre-push inherits one pointing at the real checkout and
+	// every `git init` here lands there instead. Measured the hard way -- see
+	// gitEnv in internal/adapter/kivgraph/impact_index_test.go for what it
+	// cost.
+	command.Env = append(withoutGitSteering(),
 		"GIT_AUTHOR_NAME=atenea", "GIT_AUTHOR_EMAIL=atenea@example.invalid",
 		"GIT_COMMITTER_NAME=atenea", "GIT_COMMITTER_EMAIL=atenea@example.invalid",
 	)
@@ -317,6 +384,11 @@ func (r *repository) hook(t *testing.T) (string, error) {
 	}
 	command := exec.Command("bash", script)
 	command.Dir = r.dir
+	// The script shells out to git itself, so it needs the same scrubbing as
+	// the calls above. Without it this test passed or failed depending on
+	// whether whoever ran the suite happened to have GIT_DIR set -- which, run
+	// from the pre-push hook, they always do.
+	command.Env = withoutGitSteering()
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

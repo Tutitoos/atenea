@@ -5,11 +5,53 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+// gitEnv is the environment every git this file runs must be handed.
+//
+// command.Dir is NOT enough to keep a test's git inside its own temp
+// directory, and the day that mattered cost a repository. GIT_DIR overrides
+// the working directory when git decides which repository it is in, and a git
+// HOOK exports it -- so `go test ./...` run from lefthook's pre-push inherits
+// a GIT_DIR pointing at the real checkout. This helper then ran `git init` and
+// `git config user.email` there: the first re-initialized the developer's own
+// repository and, with no GIT_WORK_TREE beside it, marked it core.bare = true,
+// which breaks every worktree; the second wrote a test identity into their
+// config, so their next commit would have been authored by "Test".
+//
+// So the variables are cleared rather than trusted, and the identity travels
+// as GIT_AUTHOR_*/GIT_COMMITTER_* rather than through `git config`, which is
+// what scripts/gates_test.go already did for the same reason. A test that
+// writes configuration writes it somewhere, and "somewhere" is not a thing to
+// leave to the environment.
+//
+// The variables are REMOVED rather than set empty, and the difference is not
+// cosmetic: `GIT_DIR=` is a GIT_DIR whose value is the empty string, and git
+// answers `fatal: The empty string is not a valid path`. Setting them to
+// nothing trades a repository that gets written to for a suite that cannot
+// run, which is louder but no more correct.
+func gitEnv() []string {
+	steering := []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE=", "GIT_COMMON_DIR=",
+		"GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="}
+	out := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		if slices.ContainsFunc(steering, func(prefix string) bool {
+			return strings.HasPrefix(entry, prefix)
+		}) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out,
+		"GIT_AUTHOR_NAME=atenea", "GIT_AUTHOR_EMAIL=atenea@example.invalid",
+		"GIT_COMMITTER_NAME=atenea", "GIT_COMMITTER_EMAIL=atenea@example.invalid",
+	)
+}
 
 func gitTestRepo(t *testing.T) (string, string) {
 	t.Helper()
@@ -17,9 +59,10 @@ func gitTestRepo(t *testing.T) (string, string) {
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc Changed() int { return 1 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "test@example.invalid"}, {"config", "user.name", "Test"}, {"add", "main.go"}, {"commit", "-qm", "baseline"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "main.go"}, {"commit", "-qm", "baseline"}} {
 		command := exec.Command("git", args...)
 		command.Dir = root
+		command.Env = gitEnv()
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
 		}
@@ -35,6 +78,7 @@ func runGit(t *testing.T, root string, args ...string) []byte {
 	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = root
+	command.Env = gitEnv()
 	output, err := command.Output()
 	if err != nil {
 		t.Fatalf("git %v: %v", args, err)

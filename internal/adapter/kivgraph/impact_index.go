@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -415,11 +416,43 @@ func impactScope(root string, scope []string) ([]string, error) {
 // one and blames far more symbols than the change touched. The prefixes are
 // forced on the command line now; the count is what would say so if the
 // assumption ever breaks again.
+// gitIn builds a git invocation that operates on root and nowhere else.
+//
+// command.Dir alone does not achieve that, which is the whole reason this
+// exists. GIT_DIR names the repository git works on and OVERRIDES the working
+// directory; GIT_WORK_TREE, GIT_INDEX_FILE and the object-directory variables
+// steer the rest of it the same way. Every one of them is exported into the
+// environment by a git hook, so an Atenea reached from inside one -- or from
+// any parent that happened to set them -- would diff a repository the caller
+// never named, and answer confidently about the wrong code.
+//
+// It is the same class of problem the prefix flags above already guard
+// against: the environment is not a neutral place to run git from, and the
+// fix in both cases is to say what is meant rather than to inherit it. The
+// variables are REMOVED rather than blanked, because `GIT_DIR=` is a GIT_DIR
+// holding the empty string and git refuses it outright.
+func gitIn(ctx context.Context, root string, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "git", args...)
+	command.Dir = root
+	steering := []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE=", "GIT_COMMON_DIR=",
+		"GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="}
+	environment := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if slices.ContainsFunc(steering, func(prefix string) bool {
+			return strings.HasPrefix(entry, prefix)
+		}) {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	command.Env = environment
+	return command
+}
+
 func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]string, map[string][]diffRange, int, error) {
 	args := []string{"diff", "--name-only", "-z", "--no-ext-diff", "--no-renames", baseline, "--"}
 	args = append(args, scope...)
-	command := exec.CommandContext(ctx, "git", args...)
-	command.Dir = root
+	command := gitIn(ctx, root, args...)
 	var names bytes.Buffer
 	if output, err := command.Output(); err != nil {
 		return nil, nil, 0, fmt.Errorf("git diff changed files against %q: %w", baseline, err)
@@ -438,8 +471,7 @@ func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]stri
 	// compare, so include them as additions and cover their current lines.
 	args = []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
 	args = append(args, scope...)
-	command = exec.CommandContext(ctx, "git", args...)
-	command.Dir = root
+	command = gitIn(ctx, root, args...)
 	output, err := command.Output()
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("git list untracked files: %w", err)
@@ -457,8 +489,7 @@ func gitDiff(ctx context.Context, root, baseline string, scope []string) ([]stri
 	args = []string{"diff", "--unified=0", "--no-ext-diff", "--no-renames",
 		"--src-prefix=a/", "--dst-prefix=b/", baseline, "--"}
 	args = append(args, scope...)
-	command = exec.CommandContext(ctx, "git", args...)
-	command.Dir = root
+	command = gitIn(ctx, root, args...)
 	output, err = command.Output()
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("git diff hunks against %q: %w", baseline, err)

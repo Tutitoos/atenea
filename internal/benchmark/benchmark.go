@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -184,14 +185,40 @@ func valueAfter(text, label string) string {
 	return ""
 }
 
+// gitHere runs git against the working directory and refuses to be steered
+// away from it by the environment.
+//
+// GIT_DIR names the repository git operates on and overrides the working
+// directory, and a git hook exports it. Every one of these calls is read-only,
+// so nothing here can damage a repository -- what it can do is answer about
+// the wrong one, which for this package means stamping a manifest with a
+// commit that did not produce the numbers beside it. A measurement filed under
+// the wrong revision is worse than one filed under none.
+func gitHere(ctx context.Context, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "git", args...)
+	steering := []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE=", "GIT_COMMON_DIR=",
+		"GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="}
+	environment := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if slices.ContainsFunc(steering, func(prefix string) bool {
+			return strings.HasPrefix(entry, prefix)
+		}) {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	command.Env = environment
+	return command
+}
+
 // GitState returns the current commit and whether tracked changes are present.
 func GitState(ctx context.Context) (commit string, dirty bool) {
-	commit = commandOutput(ctx, "git", "rev-parse", "HEAD")
-	cmd := exec.CommandContext(ctx, "git", "diff", "--quiet")
-	dirty = cmd.Run() != nil
+	if output, err := gitHere(ctx, "rev-parse", "HEAD").Output(); err == nil {
+		commit = strings.TrimSpace(string(output))
+	}
+	dirty = gitHere(ctx, "diff", "--quiet").Run() != nil
 	if !dirty {
-		cmd = exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
-		dirty = cmd.Run() != nil
+		dirty = gitHere(ctx, "diff", "--cached", "--quiet").Run() != nil
 	}
 	return commit, dirty
 }
