@@ -115,6 +115,32 @@ type IndexProber interface {
 	ProbeIndex(ctx context.Context, root string) (ready bool, hint string, err error)
 }
 
+// RepositoryReacher is implemented by a runner that can only answer for some
+// of the repositories it is attached to, and knows which before it is asked.
+//
+// The reason it exists: a provider rooted at one directory serves exactly the
+// repositories under it, and nothing in Implementations() can say so -- that
+// list names implementations, not places. Without this the funnel offers such
+// a provider for every repository, dispatches, and learns the answer from a
+// refusal. Measured against tokensave, whose root is one checkout: seven
+// round trips spent on five repositories to be told what its settings already
+// said.
+//
+// Optional, and absence means yes. A runner that does not implement it
+// reaches everywhere it is attached, which is what every provider but this
+// shape does -- so adding the interface changes no existing behavior.
+type RepositoryReacher interface {
+	// ReachesRepository reports whether this runner can answer for repo at
+	// all, and when it cannot, why -- in the words the constraints stage
+	// will show, so a provider that vanishes from the ranking says what
+	// removed it rather than going quiet.
+	//
+	// It is asked before dispatch and must not do I/O: this is a question
+	// about declared scope, not about health. Whether the far side is up is
+	// a different stage with a different answer.
+	ReachesRepository(repo Repository) (reason string, reaches bool)
+}
+
 // RunRequest is everything the far side needs and nothing it does not.
 //
 // It carries the capability rather than just its id because the far side has

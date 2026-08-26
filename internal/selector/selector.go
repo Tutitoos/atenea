@@ -106,6 +106,16 @@ type Request struct {
 	// before anything ran. Filing one under the other would mean a settings
 	// change had to wait for a probe to be believed.
 	Reachable []string
+	// Unreachable explains, per implementation, a reach this repository does
+	// not get that another one would. Optional: an empty map means every miss
+	// is the ordinary one, nothing attached serves it at all.
+	//
+	// It exists because those two misses are different facts wearing the same
+	// absence. A provider rooted at one checkout is attached, serves the
+	// implementation, and still cannot answer here -- reporting that as "no
+	// attached runner serves it" would send whoever reads the trace looking
+	// for wiring that is already correct.
+	Unreachable map[string]string
 	// Measuring says whether a measurement base is feeding this funnel. It is
 	// what makes break-in mode meaningful: a turn handed to an unmeasured
 	// implementation only pays for itself if the call it earns is written
@@ -218,9 +228,13 @@ func filterReach(req Request, candidates []contract.Implementation) ([]contract.
 	kept := make([]contract.Implementation, 0, len(candidates))
 	for _, impl := range candidates {
 		if !slices.Contains(req.Reachable, impl.ID) {
+			reason := "no attached runner serves it"
+			if scoped, ok := req.Unreachable[impl.ID]; ok && scoped != "" {
+				reason = scoped
+			}
 			stage.Dropped = append(stage.Dropped, Drop{
 				Implementation: impl.ID,
-				Reason:         "no attached runner serves it",
+				Reason:         reason,
 			})
 			continue
 		}

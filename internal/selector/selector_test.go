@@ -724,6 +724,62 @@ func TestNothingReachableIsUnavailable(t *testing.T) {
 	}
 }
 
+// A provider that is attached and serves the implementation, and still cannot
+// answer for this repository, must not be reported as unwired. The default
+// reason is true of the ordinary miss and false of this one, and the whole
+// point of a trace is that somebody acts on what it says: "no attached runner
+// serves it" sends them to check wiring that is already correct.
+func TestAProviderOutOfScopeSaysSoRatherThanReadingAsUnwired(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Reachable:  []string{"ripgrep"},
+		Unreachable: map[string]string{
+			"serena.search": "serves only /elsewhere, repository is outside it",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	var reason string
+	for _, stage := range decision.Stages {
+		for _, drop := range stage.Dropped {
+			if drop.Implementation == "serena.search" {
+				reason = drop.Reason
+			}
+		}
+	}
+	if reason == "" {
+		t.Fatal("the out-of-scope provider was dropped without a reason")
+	}
+	if !strings.Contains(reason, "outside it") {
+		t.Errorf("reason = %q, want the declared scope rather than the wiring default", reason)
+	}
+}
+
+// The ordinary miss keeps the ordinary words. Nothing declared a scope here,
+// so the default has to survive -- a reason that grew vaguer for every
+// provider would be a worse trace, not a better one.
+func TestAnOrdinaryUnreachableKeepsTheWiringReason(t *testing.T) {
+	decision, err := mustSelector(t).Select(selector.Request{
+		Capability: "code.search",
+		Repository: smallGoRepo(),
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Reachable:  []string{"ripgrep"},
+	})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	for _, stage := range decision.Stages {
+		for _, drop := range stage.Dropped {
+			if drop.Implementation == "serena.search" && !strings.Contains(drop.Reason, "no attached runner") {
+				t.Errorf("reason = %q, want the wiring default", drop.Reason)
+			}
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Cost
 // ---------------------------------------------------------------------------

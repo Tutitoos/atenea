@@ -366,6 +366,26 @@ func (r *Runner) prefixFor(repo contract.Repository) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
+// ReachesRepository implements contract.RepositoryReacher: this adapter
+// translates paths against one served root, so the repositories it can answer
+// for are exactly those under it.
+//
+// Answered from prefixFor rather than from a second path comparison beside it.
+// The two must never disagree -- a reach that said yes where Run says no puts
+// the provider back in the ranking to be refused at dispatch, which is the
+// behavior this interface exists to remove, and a reach that said no where
+// Run would have answered hides a working provider for good. One of those is
+// the old bug and the other is worse, so there is one rule and both read it.
+//
+// No I/O, as the interface requires: repo.Path is absolute by the time a
+// repository is registered, so this is arithmetic on strings.
+func (r *Runner) ReachesRepository(repo contract.Repository) (string, bool) {
+	if _, err := r.prefixFor(repo); err != nil {
+		return fmt.Sprintf("serves only %s, repository is outside it", r.root), false
+	}
+	return "", true
+}
+
 // toRoot turns a repository-relative path into the root-relative one
 // tokensave reads, refusing anything that climbs out of the repository:
 // reading outside the unit of work is outside the commission, whatever the
