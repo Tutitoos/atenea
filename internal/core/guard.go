@@ -222,6 +222,13 @@ func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 		}
 		specs = append(specs, added...)
 	}
+	if p := cfg.Orchestrator.Scrapling.Process; p != nil {
+		added, err := scraplingSpecs(cfg.Source, *p)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, added...)
+	}
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -383,6 +390,20 @@ func desktopSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, er
 				"this machine -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
 	}
 	return []supervisor.Spec{stdioSpec(config.RunnerDesktop, p)}, nil
+}
+
+// scraplingSpecs refuses a per-repository policy for the same reason desktop
+// does, arrived at from the other direction: the desktop is one thing on this
+// machine, and the web is one thing everywhere. Neither has per-repository
+// state to warm, so a server per repository would be several browsers idling
+// to answer questions none of them holds anything about.
+func scraplingSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, error) {
+	if p.Instance == config.InstancePerRepository {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: orchestrator.scrapling.process.instance is %q, but a fetcher holds no "+
+				"per-repository state -- only %q is meaningful here", source, config.InstancePerRepository, config.InstanceShared)
+	}
+	return []supervisor.Spec{stdioSpec(config.RunnerScrapling, p)}, nil
 }
 
 // stopProcesses stops every server Atenea launched itself. A core with

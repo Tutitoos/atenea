@@ -784,6 +784,111 @@ is the only process that can perform it. Note that it dispatches over the same
 socket a client uses, so it is governed by `client_effects` too — the
 confirmation is a control on top of the floor, never instead of it.
 
+## The web allow-list
+
+```toml
+[web]
+domains = []              # empty: any PUBLIC host. Non-empty: only these.
+denied  = ["127.0.0.0/8", "169.254.0.0/16", "10.0.0.0/8", "*.lan", "*.local"]
+```
+
+`domains` empty means *any public host*, and that is deliberately not how
+`[desktop] applications` reads. There, empty denies everything, because any
+window on this machine can be a credential. Here it does not, because an
+arbitrary public web page is not the hazard — the hazard is the inside of this
+network, and refusing that is `denied`'s job. Inverting this list too would put
+one settings edit per site exactly where the risk is not, and the predictable
+end of that trade is somebody emptying `denied` to make the nuisance stop.
+
+A non-empty `domains` narrows to the hosts it names. A bare domain covers its
+subdomains, so `example.com` reaches `api.example.com`.
+
+`denied` always wins, takes CIDR blocks and host patterns in one list — the
+thing being refused is one idea, "the inside of this network", that is spelled
+two ways — and is seeded rather than empty. The shipped entries are loopback,
+link-local, the RFC1918 ranges and the mDNS suffixes. Deleting the block
+restores them; writing an explicitly empty list is a statement and is honored,
+and it is the one setting on this page that hands out an unrestricted HTTP
+client. A malformed entry is refused at load rather than skipped at call time:
+a denial rule nobody can parse is a denial that silently does not apply.
+
+`169.254.0.0/16` is the entry worth reading twice. `169.254.169.254` is the
+cloud metadata endpoint on every major provider, it answers over plain HTTP
+with no authentication at all, and reaching it is the single most valuable
+thing anybody can do with somebody else's fetcher.
+
+**The check runs against the resolved address, never the name.** A hostname is
+somebody else's claim about where it points, and there are as many public names
+with an `A` record to `127.0.0.1` as anybody cares to publish — `localtest.me`
+is one. Every address a name resolves to is judged, not the first, so a name
+with one public and one private record does not pass on resolver ordering.
+
+One hole is left open and named rather than papered over: the far side follows
+redirects inside its own process, so a URL that passes the gate can still end
+somewhere that would not have. What Atenea can do it does — the destination the
+server reports having landed on goes back through the same gate before the
+answer is handed over, and an answer from a refused address is a failure rather
+than a result. What it cannot do is stop the request from having been made.
+
+## Reaching the web
+
+```toml
+[orchestrator.scrapling]
+implementations = ["scrapling.fetch", "scrapling.request", "scrapling.stealth"]
+timeout = "30s"
+
+  [orchestrator.scrapling.process]
+  command = "/absolute/path/to/scrapling-mcp"
+  instance = "shared"       # a fetcher holds no per-repository state
+  lifecycle = "on_demand"
+  ready_timeout = "30s"
+```
+
+Off unless `runners` names it. `web.fetch` causes the `external` effect, which
+no floor grants by default.
+
+Three implementations answer the one capability, because they are the same
+question at very different prices: `scrapling.request` is a plain HTTP request
+with browser impersonation, `scrapling.fetch` renders in a real browser, and
+`scrapling.stealth` defeats anti-bot interstitials. Ranking equivalent work by
+measured cost is the whole job of the funnel, so the level is not an input the
+caller picks.
+
+An interstitial has to be a failure rather than a result. A challenge page
+arrives as a successful `200` carrying a page about how much the site cares
+about security; reported as an answer, the funnel would learn that the cheapest
+level works every time and hand back challenge pages as content forever. The
+two cheaper levels report it as `unavailable`. `scrapling.stealth` does not,
+because it is the last level there is and there is nobody to fall back to.
+
+**The escalation happens across calls, not inside one.** There is one dispatch
+per commission: an `unavailable` marks that implementation unhealthy, and it is
+the next call whose funnel drops it at the health stage and reaches for the
+level above. A page behind Cloudflare therefore takes three calls to come back
+the first time, after which the funnel goes straight to stealth for as long as
+the health record stands — `health_stale_after` under `[selector]`, 24 hours as
+shipped.
+
+That record is per implementation and not per host, which is the sharp edge:
+one protected site marks `scrapling.request` down for *every* site, so the
+cheap path stays skipped even for the pages that would have answered over plain
+HTTP. Shorten `health_stale_after` to shrink the window. It is written up in
+full under "One blocked site downgrades every site" on the [what is not built
+yet](not-built-yet.md) page.
+
+`timeout` is sized for that last level rather than for the average: a plain
+request is milliseconds, and a stealth render starts a browser and waits a
+challenge out on purpose. `instance` accepts only `shared`; a fetcher holds no
+per-repository state, so a server per repository would be several browsers
+idling to answer questions none of them holds anything about.
+
+The server is installed on this machine and ships in no release:
+
+```sh
+pip install "scrapling[fetchers,ai]"
+scrapling install     # downloads Chromium; several hundred MB
+```
+
 ## Security
 
 ```toml

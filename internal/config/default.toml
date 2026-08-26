@@ -368,6 +368,43 @@ runners = ["omp"]
     # idle_timeout = "10m"
     # ready_timeout = "10s"
 
+  [orchestrator.scrapling]
+  # The open web, answered through a Scrapling MCP server over stdio. Off
+  # unless `runners` names it, like every adapter that can cause an effect
+  # beyond reading this disk.
+  #
+  # Three implementations rather than one with a `mode` input, because they
+  # are the same question at very different prices -- a plain HTTP request, a
+  # real browser render, and a stealth render that defeats anti-bot
+  # interstitials -- and ranking equivalent work by measured cost is the whole
+  # job of the funnel. A `mode` input would move that decision to whoever
+  # wrote the prompt.
+  #
+  # WHERE it may reach is not declared here. That lives in [web], so a reader
+  # looking for the destination gate finds it without having to know which
+  # adapter implements the capability.
+  #
+  # The server is installed on this machine and ships in no release:
+  #
+  #     pip install "scrapling[fetchers,ai]"
+  #     scrapling install     # downloads Chromium; several hundred MB
+  #
+  # Sorted, matching what the compiled fallback answers: a test compares the
+  # two and a difference in order would read as a difference in content.
+  implementations = [
+    "scrapling.fetch",
+    "scrapling.request",
+    "scrapling.stealth",
+  ]
+  timeout = "30s"             # sized for the stealth level: it starts a browser and waits out a challenge
+
+    # [orchestrator.scrapling.process]
+    # command = "/absolute/path/to/scrapling-mcp"
+    # instance = "shared"       # a fetcher holds no per-repository state; per_repository is refused
+    # lifecycle = "on_demand"
+    # idle_timeout = "10m"
+    # ready_timeout = "30s"     # it may have to start Chromium before it answers
+
   [orchestrator.tokensave]
   # tokensave is the second stdio far side, and the one that is not a corpus of
   # repositories but ONE project rooted at a directory: it speaks paths relative
@@ -557,6 +594,49 @@ denied = [
   "org.keepassxc.keepassxc",
   "in.sinew.Enpass-Desktop",
   "com.dashlane.dashlanephonefinal",
+]
+
+[web]
+# Where the web capabilities may reach.
+#
+# `domains` EMPTY MEANS ANY PUBLIC HOST, and that is deliberately NOT how
+# [desktop] applications reads. There, empty denies everything, because any
+# window on this machine can be a credential. Here it does not, because an
+# arbitrary public web page is not the hazard -- the hazard is the inside of
+# this network, and refusing that is `denied`'s job. Inverting this list too
+# would put one settings edit per site exactly where the risk is not, and the
+# predictable end of that trade is somebody emptying `denied` to make the
+# nuisance stop. A non-empty list narrows to the hosts it names; a bare domain
+# covers its subdomains, so "example.com" reaches "api.example.com".
+#
+# `denied` always wins, takes CIDR blocks and host patterns in one list, and
+# is seeded rather than empty. Deleting this block restores these defaults; an
+# explicitly empty list is a statement and is honored -- and it is the one
+# setting in this file that hands out an unrestricted HTTP client.
+#
+# 169.254.0.0/16 is the entry worth reading twice. 169.254.169.254 is the
+# cloud metadata endpoint on every major provider, it answers over plain HTTP
+# with no authentication at all, and reaching it is the single most valuable
+# thing anybody can do with somebody else's fetcher.
+#
+# The check runs against the RESOLVED address, never the name it was given.
+# A hostname is somebody else's claim about where it points, and there are as
+# many public names with an A record to 127.0.0.1 as anybody cares to publish.
+domains = []
+denied = [
+  "127.0.0.0/8",
+  "::1/128",
+  "169.254.0.0/16",
+  "fe80::/10",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "fc00::/7",
+  "0.0.0.0/8",
+  "*.lan",
+  "*.local",
+  "*.internal",
+  "localhost",
 ]
 
 [security]
@@ -3260,3 +3340,155 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   # think twice about this call.
   estimated_duration = "60ms"
   estimated_tokens = 100
+
+# ---------------------------------------------------------------------------
+# The web: one capability, three prices.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "web.fetch"
+version = "1.0.0"
+summary = "Fetch one web page and return its content."
+semantics = """
+One page, one answer. `url` must be http or https, and where it may point is decided by \
+[web] against the RESOLVED address rather than the hostname -- a name is somebody else's \
+claim about where it points. `selector` narrows to matching elements before the answer \
+leaves the server, which is where narrowing is cheapest; without it the whole page comes \
+back and the only ceiling is the transport's, not this capability's. `format` picks a \
+rendering and falls back rather than failing when the far side did not produce it: the \
+page was retrieved either way, and an error about the missing rendering would be less \
+useful than the one that exists. \
+An anti-bot interstitial is NOT an answer. It arrives as a successful 200 carrying a page \
+about how much the site cares about security, and the implementations below report it as \
+unavailable so the funnel escalates to a heavier one -- see the note on cost.\
+"""
+effects = ["read", "external"]
+
+  [[capability.input]]
+  name = "url"
+  type = "string"
+  required = true
+  summary = "The page to fetch. http or https; anything else is refused by scheme."
+
+  [[capability.input]]
+  name = "selector"
+  type = "string"
+  required = false
+  summary = "CSS selector to narrow to before answering. Omitted returns the whole page."
+
+  [[capability.input]]
+  name = "format"
+  type = "string"
+  required = false
+  enum = ["text", "markdown", "html"]
+  summary = "How to render the body. Defaults to text."
+
+  [[capability.output]]
+  name = "page"
+  type = "record_list"
+  required = true
+  summary = "The page that was fetched. Exactly one row."
+
+    [[capability.output.field]]
+    name = "url"
+    type = "string"
+    required = true
+    summary = "The url that was asked for."
+
+    [[capability.output.field]]
+    name = "final_url"
+    type = "string"
+    required = false
+    summary = "Where the far side reports having landed, when it says. Re-checked against [web]."
+
+    [[capability.output.field]]
+    name = "status"
+    type = "int"
+    required = false
+    summary = "The HTTP status, when the far side reports one."
+
+    [[capability.output.field]]
+    name = "title"
+    type = "string"
+    required = false
+    summary = "The page title, when there is one."
+
+    [[capability.output.field]]
+    name = "content"
+    type = "string"
+    required = true
+    summary = "The body, in the requested rendering or the nearest one that exists."
+
+    [[capability.output.field]]
+    name = "truncated"
+    type = "bool"
+    required = false
+    summary = "Whether the body was cut. The ceiling is the transport's, not this capability's."
+
+# Three implementations, one capability, and the funnel picks on measured cost.
+# The durations below are ESTIMATES rather than measurements -- nothing has run
+# against a live server yet -- so they decide the ranking only until the base
+# has samples of its own. They are ordered the way the levels actually cost:
+# a plain request is milliseconds, a browser render is seconds, and a stealth
+# render waits out a challenge on purpose.
+#
+# The tokens are what a page costs a model to read and are the same at every
+# level, because the page is the same page. Ranking these three apart is a
+# question about time, not about payload.
+
+[[implementation]]
+id = "scrapling.request"
+provider = "scrapling"
+capability = "web.fetch"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # One HTTP request with browser impersonation. No browser is started, which
+  # is the whole reason this level exists and the reason it ranks first.
+  estimated_duration = "250ms"
+  estimated_tokens = 800
+
+[[implementation]]
+id = "scrapling.fetch"
+provider = "scrapling"
+capability = "web.fetch"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # A real browser renders the page. This is what a site that builds its
+  # content in JavaScript costs, and it is an order of magnitude on the one
+  # above.
+  estimated_duration = "3s"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "scrapling.stealth"
+provider = "scrapling"
+capability = "web.fetch"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Fingerprint spoofing and waiting a challenge out. The last level there is,
+  # so a block here is reported as the answer rather than as unavailable:
+  # escalating would be asking the funnel to fall back to nobody and lose the
+  # reason on the way.
+  estimated_duration = "8s"
+  estimated_tokens = 1200

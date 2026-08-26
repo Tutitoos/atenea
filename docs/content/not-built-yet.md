@@ -20,6 +20,50 @@ This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
 
+## One blocked site downgrades every site — 2026-08-26
+
+`web.fetch` ships three implementations at very different prices and lets the
+funnel choose. The mechanism that makes a cheap attempt give way to an
+expensive one is health: `scrapling.request` reports an anti-bot interstitial
+as `unavailable`, that marks it unhealthy, and the next call's funnel drops it
+at the health stage and reaches for `scrapling.fetch`.
+
+**It works, and it is measured, and the escalation is across calls rather than
+inside one.** From a clean state directory, against a far side that challenges
+the two cheaper levels: run 1 dispatches `scrapling.request` and fails, run 2
+drops it and dispatches `scrapling.fetch` and fails, run 3 drops both and
+`scrapling.stealth` answers. Three calls for the first page. That is the funnel
+working as designed — one dispatch per commission, and what a step cost on the
+way out deciding who answers next time in — but it is not what "the funnel
+escalates" sounds like, so it is written down rather than left to be discovered.
+
+**The part that is a defect rather than a design is the scope of the record.**
+Health is per implementation. It is not per host, and for a capability that
+ignores the repository there is no other dimension to hang it on. Measured
+immediately after the run above: `web.fetch` on `https://iana.org/` — a
+different host, one that answers plain HTTP perfectly well — went straight to
+`scrapling.stealth`, and the two dropped lines still quoted `example.com` as
+the reason. One protected site pays for a browser on every unprotected site
+after it, for as long as `health_stale_after` stands, and the explanation the
+operator is shown names a URL they did not ask for.
+
+Three ways out, none taken yet:
+
+1. **Per-host health.** The honest fix and the expensive one. Health is keyed
+   by implementation across the whole core; adding a dimension that only one
+   capability has an opinion about is not a change to make for one adapter.
+2. **Do not report a block as `unavailable`.** Cheap, and it trades the whole
+   escalation away: the levels stop competing and the caller is back to picking
+   one, which is what declaring three implementations existed to avoid.
+3. **Remember the block in the adapter, per host, and choose the level there.**
+   Puts the ranking inside a runner that is supposed to be a dumb translator,
+   and hides from the funnel a decision the funnel exists to make. It would
+   work, and it would make the measurement base describe something other than
+   what happened.
+
+The first is right and the third is tempting, which is the usual shape. Until
+one is chosen, the mitigation is `health_stale_after` under `[selector]`.
+
 ## Ranked code search, if anything ever wants it
 
 `code.search` used to declare a fourth graph implementation,

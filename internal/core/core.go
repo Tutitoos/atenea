@@ -22,6 +22,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
+	"github.com/Tutitoos/atenea/internal/adapter/scrapling"
 	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/backup"
@@ -522,6 +523,8 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 		return buildTokensaveRunner(cfg, procs)
 	case config.RunnerDesktop:
 		return buildDesktopRunner(cfg, procs)
+	case config.RunnerScrapling:
+		return buildScraplingRunner(cfg, procs)
 	case config.RunnerLocal:
 		return local.New(local.Options{
 			Implementations: cfg.Orchestrator.Local.Implementations,
@@ -732,6 +735,30 @@ func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contra
 	// One desktop, so one instance id, and it does not vary by repository:
 	// which project a step belongs to says nothing about whose screen it is.
 	instanceID := func(contract.Repository) string { return config.RunnerDesktop }
+	return guard(runner, procs, instanceID), nil
+}
+
+func buildScraplingRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
+	if cfg.Orchestrator.Scrapling.Process == nil {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: scrapling has no server to launch -- it speaks stdio, so there is "+
+				"no address to dial without one", cfg.Source)
+	}
+	runner, err := scrapling.New(scrapling.Options{
+		Implementations: cfg.Orchestrator.Scrapling.Implementations,
+		Timeout:         cfg.Orchestrator.Scrapling.Timeout,
+		Domains:         cfg.Web.Domains,
+		Denied:          cfg.Web.Denied,
+		Session: func(context.Context) (*mcpstdio.Session, error) {
+			return procs.Session(config.RunnerScrapling)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// One web, so one instance id, and it does not vary by repository: which
+	// project a step belongs to says nothing about what is on the internet.
+	instanceID := func(contract.Repository) string { return config.RunnerScrapling }
 	return guard(runner, procs, instanceID), nil
 }
 

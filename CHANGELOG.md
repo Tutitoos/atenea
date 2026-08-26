@@ -16,6 +16,64 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ### Added
 
+Atenea can fetch a web page. `web.fetch` is the first capability that leaves
+this machine on Atenea's own behalf -- until now the only route to the network
+was handing `WebFetch` to Claude Code and letting the client make the request,
+which meant no schema, no funnel and no measurement. It is answered by a
+Scrapling MCP server over stdio, supervised the way the desktop helper and
+tokensave already are, and it is off unless `runners` names it.
+
+Three implementations rather than one, because they are the same question at
+very different prices: `scrapling.request` is a plain HTTP request with browser
+impersonation, `scrapling.fetch` renders in a real browser, and
+`scrapling.stealth` defeats anti-bot interstitials. The two cheaper levels
+report a challenge page as `unavailable` rather than as an answer -- an
+interstitial arrives as a successful 200 carrying a page about how much the
+site cares about security, and reported as content the funnel would learn that
+the cheapest level works every time and hand back challenge pages forever. The
+same shape of guard as `checkGraphReady`, which exists because an empty graph
+also answers successfully. `scrapling.stealth` does not report a block that
+way: it is the last level there is, and there is nobody to fall back to.
+
+**The escalation is across calls, not inside one**, and that is worth knowing
+before relying on it. There is one dispatch per commission; an `unavailable`
+marks that implementation unhealthy, and it is the NEXT call whose funnel drops
+it at the health stage and picks the level above. Measured: a page behind
+Cloudflare takes three calls to come back, then the funnel goes straight to
+stealth while the health record stands. See "One blocked site downgrades every
+site" in `docs/content/not-built-yet.md` for what that costs, because health is
+per implementation and not per host.
+
+Deliberately an adapter and not a passthrough, which was the cheaper option and
+the wrong one. `internal/passthrough` filters on the tool NAME and nothing
+else, and the argument that matters to a fetcher is the destination:
+`raw.scrapling.make_request` would be an unrestricted HTTP client handed to
+every connected client, and the valuable addresses on a developer machine are
+not on the open web -- they are the MCP servers on loopback, the admin services
+on the LAN, and the metadata endpoint at 169.254.169.254. Every request this
+adapter sends is built from the capability's typed inputs instead.
+
+`[web]` is the gate. Two lists like `[desktop]`, and one deliberate difference:
+an empty `domains` means *any public host*, not none. Empty denies everything
+for the desktop because any window on this machine can be a credential; an
+arbitrary public web page is not that hazard, and inverting this list too would
+have put one settings edit per site exactly where the risk is not -- whose
+predictable end is somebody emptying `denied` to make the nuisance stop. So
+`denied` is the seeded list that always wins, holding loopback, link-local, the
+RFC1918 ranges and the mDNS suffixes.
+
+The check runs against the resolved address, never the hostname. A name is
+somebody else's claim about where it points, and `localtest.me` is a real
+public name with an A record to 127.0.0.1; every address a name resolves to is
+judged, not the first, so a split-horizon name cannot pass on resolver
+ordering. One hole is left open and named rather than papered over: the far
+side follows redirects inside its own process, so the destination it reports
+having landed on is put back through the gate before the answer is handed over,
+but the request has already been made by then.
+
+`pkg/contract` does not move. A capability and its implementations are catalog,
+not wire format.
+
 Atenea can drive this machine's desktop: read an application's accessibility
 tree, capture one of its windows, and click, type, press keys, scroll and drag
 inside it. Nine capabilities behind an allow-list, answered by a helper written
