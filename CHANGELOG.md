@@ -14,6 +14,25 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Added
+
+`atenea ask --payload FILE` reads the whole payload as JSON, for capabilities
+whose inputs `--set NAME=VAL` cannot express. `web.extract` takes its selectors
+as a `record_list` and was the first to need it: reachable from every MCP
+client, and from no command line at all.
+
+Not a JSON parser bolted onto `--set`, which would be the thing that flag's own
+refusal declined to become. A whole payload from a file is the same document an
+MCP client sends, typed by `contract.ValidateInput` against the same
+declaration — and JSON numbers arriving as float64 are what every adapter
+already reads, since the MCP path has always delivered them that way. The two
+flags are mutually exclusive: one is the whole payload and the other is a field
+of it. And the refusal that names the wall now names the way out too.
+
+Verified against the real far side: 59 rows off the Hacker News front page,
+30 titles and 29 scores, from a command line that could not reach the
+capability an hour earlier.
+
 ### Fixed
 
 A provider reached over stdio is now filed under the version it says it is,
