@@ -20,6 +20,29 @@ This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
 
+## A capability the command line cannot call — 2026-08-26
+
+`web.extract` takes its selectors as a `record_list`, the first input of that
+type in the catalog. `atenea ask --set NAME=VAL` cannot express one and says
+so — "Records are a shape a shell cannot express without becoming a JSON
+parser. Refusing is honest; a half-parser would be worse" (cmd/atenea/main.go).
+
+That refusal was written before any capability could trip it, and it is still
+the right call. What is new is that a capability now exists which `ask` cannot
+reach at all: it is callable from every MCP client, where JSON is the wire, and
+from nothing on the command line.
+
+Three options, none taken. Teach `--set` to parse JSON when the declared field
+is a record — small, and it makes the shell a JSON parser, which is the thing
+the comment refused. Add `--payload FILE` for the whole input at once — honest,
+and it is a second way to say what `--set` already says, which invites the two
+to drift. Or leave `ask` as the tool for string-shaped capabilities and let MCP
+carry the rest — free, and it means the CLI quietly covers less of the catalog
+as the catalog grows, with nothing announcing which parts.
+
+The third is what ships today, by omission rather than by decision, which is
+why it is written down here.
+
 ## The redirect the gate cannot see is closable, and is not closed — 2026-08-26
 
 `web.fetch` judges where a request may go by resolving the host and checking

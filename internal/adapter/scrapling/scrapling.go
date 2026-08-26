@@ -83,8 +83,13 @@
 //     text|html|markdown enum that decides the rendering ON THE WAY IN. So
 //     only one rendering ever comes back, and the capability's `format` is
 //     sent rather than applied to the answer.
-//   - the answer's `content` is a LIST of strings, not a string: the page,
-//     then whatever the selector matched. answerOf says what it does with it.
+//   - the answer's `content` is a LIST of strings, not a string, and what it
+//     holds depends on the selector: without one it is the whole page and a
+//     trailing empty string; with one it is ONE ELEMENT PER MATCH and a
+//     trailing empty string, with the page absent entirely. Measured on Hacker
+//     News: no selector gave [3881 chars, ""], `.titleline` gave thirty short
+//     strings and an empty one. That second shape is the whole reason
+//     web.extract needs no CSS engine of its own -- the list IS the result set.
 //   - there is no `title` in the answer at all. The declared output keeps the
 //     field optional and this adapter leaves it empty, because parsing one out
 //     of the body would be this package inventing a fact.
@@ -121,16 +126,28 @@ const DefaultTimeout = 30 * time.Second
 
 // Capability and implementation ids this adapter answers.
 //
-// The capability says WHAT -- fetch one page -- and the implementations say
-// HOW MUCH, which is why they are named for the machinery rather than for the
-// question. One word per dotted segment, matching every capability already
-// shipped.
+// Two capabilities, three prices each. The capability says WHAT -- one page,
+// or named fields out of one page -- and the implementations say HOW MUCH,
+// which is why they are named for the machinery rather than for the question.
+// Six implementations rather than three with a flag, because an implementation
+// answers exactly one capability and contract.RunRequest.Validate refuses any
+// other reading. One word per dotted segment, matching every capability
+// already shipped.
 const (
-	CapabilityFetch = "web.fetch"
+	CapabilityFetch   = "web.fetch"
+	CapabilityExtract = "web.extract"
 
 	ImplementationRequest = "scrapling.request"
 	ImplementationFetch   = "scrapling.fetch"
 	ImplementationStealth = "scrapling.stealth"
+
+	// The extract half. Three more implementations rather than an input on
+	// the three above, because they are the same three prices paid for a
+	// different promise, and an implementation answers exactly one
+	// capability -- contract.RunRequest.Validate refuses any other reading.
+	ImplementationExtractRequest = "scrapling.extract_request"
+	ImplementationExtractFetch   = "scrapling.extract_fetch"
+	ImplementationExtractStealth = "scrapling.extract_stealth"
 )
 
 // levels is the whole dispatch table: which far-side tool each implementation
@@ -152,6 +169,10 @@ var levels = map[string]struct {
 	ImplementationRequest: {CapabilityFetch, "make_request", true},
 	ImplementationFetch:   {CapabilityFetch, "fetch", true},
 	ImplementationStealth: {CapabilityFetch, "stealthy_fetch", false},
+
+	ImplementationExtractRequest: {CapabilityExtract, "make_request", true},
+	ImplementationExtractFetch:   {CapabilityExtract, "fetch", true},
+	ImplementationExtractStealth: {CapabilityExtract, "stealthy_fetch", false},
 }
 
 // DefaultImplementations is what this adapter answers for when a settings file
@@ -364,6 +385,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	if level.capability == CapabilityExtract {
+		return r.extract(ctx, req, level.tool, level.escalates)
+	}
 	return r.fetch(ctx, req, level.tool, level.escalates)
 }
 
@@ -405,6 +429,11 @@ func (r *Runner) fetch(ctx context.Context, req contract.RunRequest, tool string
 	}
 	answer, err := answerOf(tool, text)
 	if err != nil {
+		return contract.Outcome{}, err
+	}
+	// web.fetch promises a page, so an empty one is a provider that did not
+	// answer. web.extract makes a different promise and does not apply this.
+	if err := requireBody(tool, text, answer); err != nil {
 		return contract.Outcome{}, err
 	}
 
@@ -449,6 +478,135 @@ func (r *Runner) fetch(ctx context.Context, req contract.RunRequest, tool string
 		SpentUSD:      0,
 		SpentUSDKnown: true,
 	}, nil
+}
+
+// extract answers web.extract: named selectors in, one row per match out.
+//
+// # Why the output is long and not wide
+//
+// The obvious shape is one record per result with a column per field, and it
+// is not declarable here. Output fields are declared statically in the catalog
+// -- name, type, required -- and a shape that depends on the selectors a
+// caller happens to pass cannot be named in advance. So the rows are
+// (field, index, value) and the caller pivots. That is a real cost paid to
+// keep the capability honest: a wide shape would have to be declared as an
+// untyped bag, which is a promise that says nothing.
+//
+// # Why one call per field
+//
+// The far side's css_selector takes ONE selector, so N named fields are N
+// calls -- measured warm at about 0.75s each. Fetching once and applying the
+// selectors here was the alternative and was refused: it needs a CSS engine in
+// Go, which means `.foo` could match differently in web.extract than it does
+// in web.fetch, and a selector that means two things in one system is worse
+// than a capability that costs more.
+//
+// Two consequences the caller should know, and the capability's semantics say
+// so out loud: the origin sees N requests for one page, and the fields are
+// read up to N*0.75s apart, so a page that changes underneath produces a
+// record that was never true all at once.
+func (r *Runner) extract(ctx context.Context, req contract.RunRequest, tool string, escalates bool) (contract.Outcome, error) {
+	started := time.Now()
+
+	target, _ := req.Payload["url"].(string)
+	// Gated once rather than per field: it is the same URL every time, and a
+	// second resolution would be a second answer to a question already asked
+	// -- one that could differ from the first and leave half the fields read
+	// under a verdict the other half never got.
+	if err := r.mayReach(ctx, target); err != nil {
+		return contract.Outcome{}, err
+	}
+	fields, err := fieldsOf(req.Payload)
+	if err != nil {
+		return contract.Outcome{}, err
+	}
+
+	rendering := format(req.Payload)
+	rows := make([]map[string]any, 0, len(fields))
+	for _, field := range fields {
+		text, err := r.call(ctx, tool, map[string]any{
+			"url":             target,
+			"css_selector":    field.selector,
+			"extraction_type": rendering,
+		})
+		if err != nil {
+			return contract.Outcome{}, err
+		}
+		answer, err := answerOf(tool, text)
+		if err != nil {
+			return contract.Outcome{}, err
+		}
+		if escalates && blocked(answer.status, answer.content) {
+			// Stop at the first blocked field rather than finishing the
+			// others. Every remaining call would be blocked the same way, and
+			// a partial record built out of a challenge page is worse than no
+			// record: it would be handed back as a successful extraction.
+			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+				"scrapling: %s answered %s with an anti-bot challenge rather than the page "+
+					"(status %d, reading %q) -- a heavier implementation may get through",
+				tool, target, answer.status, field.name)
+		}
+		// One row per match. A field that matched nothing contributes no rows,
+		// which is the honest answer and is distinguishable from a field that
+		// was never asked for only by the caller, who knows what they sent.
+		for i, value := range answer.parts {
+			rows = append(rows, map[string]any{
+				"field": field.name,
+				"index": i,
+				"value": value,
+			})
+		}
+	}
+
+	return contract.Outcome{
+		Result:  map[string]any{"rows": rows},
+		Verdict: contract.VerdictOK,
+		// Duration only, as with fetch: the far side is the supervisor's
+		// process and an HTTP request is not a model turn.
+		Spent:         contract.Sample{Duration: time.Since(started)},
+		SpentUSD:      0,
+		SpentUSDKnown: true,
+	}, nil
+}
+
+// field is one named selector the caller asked for.
+type field struct{ name, selector string }
+
+// fieldsOf reads the `fields` input, which is the catalog's first record_list
+// INPUT -- every other capability shipped takes strings, ints and bools.
+//
+// contract.Capability.ValidateInput has already checked the shape and the
+// required sub-fields by the time this runs, so what is left here is the part
+// a schema cannot state: that two fields must not share a name, because the
+// output is keyed by it and a duplicate would produce rows nobody can pivot.
+func fieldsOf(payload map[string]any) ([]field, error) {
+	raw, _ := payload["fields"].([]any)
+	if len(raw) == 0 {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"scrapling: web.extract needs at least one field to read")
+	}
+	out := make([]field, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for i, entry := range raw {
+		record, ok := entry.(map[string]any)
+		if !ok {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"scrapling: fields[%d] is not a record", i)
+		}
+		name, _ := record["name"].(string)
+		selector, _ := record["selector"].(string)
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(selector) == "" {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"scrapling: fields[%d] needs both a name and a selector", i)
+		}
+		if _, dup := seen[name]; dup {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"scrapling: fields names %q twice, and the rows are keyed by that name", name)
+		}
+		seen[name] = struct{}{}
+		out = append(out, field{name: name, selector: selector})
+	}
+	return out, nil
 }
 
 // format reads the requested rendering, defaulting to text.
@@ -497,6 +655,12 @@ type answer struct {
 	// so that a challenge page is caught regardless of which rendering the
 	// caller asked for.
 	content string
+	// parts is the far side's `content` list before it was joined, which is
+	// the whole reason web.extract can exist without a second CSS engine:
+	// a narrowed answer arrives as one element per match, so the list IS the
+	// result set. web.fetch joins it into one body; web.extract keeps the
+	// rows apart. Empty on an answer that carried no list.
+	parts []string
 }
 
 // pick returns the body in the requested rendering, falling back rather than
@@ -534,10 +698,12 @@ func (a answer) pick(want string) string {
 // Three facts about that shape are worth writing down because none of them is
 // the obvious guess:
 //
-//   - `content` is a LIST of strings, not a string. The first is the page in
-//     the requested extraction_type; the second is whatever the css_selector
-//     matched, empty when none was given. They are joined rather than picked
-//     between, so a narrowed fetch does not silently lose the page it narrowed.
+//   - `content` is a LIST of strings, not a string, and what the list HOLDS
+//     depends on whether a selector was given. With none, it is the whole page
+//     followed by one empty string. With one, it is ONE ELEMENT PER MATCH,
+//     followed by one empty string -- measured on Hacker News: no selector gave
+//     [3881 chars, ""], and `.titleline` gave thirty short strings and an empty
+//     one. The page is not in the list at all when a selector narrowed it.
 //   - there is no `title` field at all. The declared output keeps `title`
 //     optional and this adapter leaves it empty rather than parsing one out of
 //     the body, which would be this package inventing a fact.
@@ -570,8 +736,10 @@ func answerOf(tool, text string) (answer, error) {
 		// status, no title, nothing claimed that was not said.
 		return answer{text: text, content: text}, nil //nolint:nilerr // a bare page is the body, not a decode failure
 	}
-	body := bodyOf(raw.Content)
+	parts := partsOf(raw.Content)
+	body := strings.Join(parts, "\n\n")
 	out := answer{
+		parts:     parts,
 		finalURL:  first(raw.FinalURL, raw.URL),
 		title:     raw.Title,
 		truncated: raw.Truncated,
@@ -586,40 +754,67 @@ func answerOf(tool, text string) (answer, error) {
 		out.status = *raw.StatusCode
 	}
 	out.content = out.pick("text")
-	if out.content == "" {
-		return answer{}, contract.Fail(contract.FailureUnavailable,
-			"scrapling: %s answered with no page body under any name this understands "+
-				"(content, text, markdown, html, body) -- got %s", tool, clip(text))
-	}
 	return out, nil
+}
+
+// requireBody is the guard that used to live inside answerOf, and moving it
+// out is the whole reason web.extract can share that decoder.
+//
+// An answer with no body means two different things depending on who asked.
+// For web.fetch it is a failure: the promise is a page, and a page that came
+// back empty is a provider that did not answer. For web.extract it is an
+// ordinary result: the promise is whatever the selector matched, and matching
+// nothing is a fact about the page rather than a fault in the far side.
+//
+// Deciding that inside the decoder meant deciding it once for both, which is
+// the same conflation internal/adapter/kivgraph warns about at length -- there,
+// an empty graph and a query that legitimately matched nothing look identical
+// and must not be treated alike. So the decoder decodes, and each caller says
+// what an empty answer means to the promise it is keeping.
+func requireBody(tool, text string, out answer) error {
+	if out.content != "" {
+		return nil
+	}
+	return contract.Fail(contract.FailureUnavailable,
+		"scrapling: %s answered with no page body under any name this understands "+
+			"(content, text, markdown, html, body) -- got %s", tool, clip(text))
 }
 
 // bodyOf reads the `content` field, which arrives as a list on the far side
 // measured here and as a plain string on anything simpler.
 //
-// The parts are joined rather than chosen between. The second element is what
-// a css_selector matched, and dropping either half would mean a narrowed fetch
-// losing something the caller asked for: the page if the selector matched, the
-// match if it did not.
-func bodyOf(raw json.RawMessage) string {
+// Every non-empty part is joined, and the count is not fixed: one part for an
+// unnarrowed page, one part PER MATCH when a selector narrowed it, and always
+// a trailing empty string. Joining rather than indexing is what makes both
+// shapes come out right without this function having to know which it was
+// handed -- an earlier version described the list as [page, match] and would
+// have kept only the first two of thirty matched rows had it ever indexed on
+// that belief.
+func partsOf(raw json.RawMessage) []string {
 	if len(raw) == 0 {
-		return ""
+		return nil
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return text
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		return []string{text}
 	}
 	var parts []string
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return ""
+		return nil
 	}
 	kept := make([]string, 0, len(parts))
 	for _, part := range parts {
+		// The trailing empty string the far side always sends is dropped
+		// here rather than at each caller, so neither the joined body nor
+		// the extracted rows ever carry a blank nobody asked for.
 		if strings.TrimSpace(part) != "" {
 			kept = append(kept, part)
 		}
 	}
-	return strings.Join(kept, "\n\n")
+	return kept
 }
 
 func first(values ...string) string {

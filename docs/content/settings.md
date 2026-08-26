@@ -893,6 +893,46 @@ pip install "scrapling[fetchers,ai]"
 scrapling install     # downloads Chromium; several hundred MB
 ```
 
+## Reading named fields off a page
+
+`web.extract` takes a list of `{name, selector}` and answers with one row per
+match: `{field, index, value}`. Same gate, same three levels, same escalation
+as `web.fetch` — the implementations are `scrapling.extract_request`,
+`scrapling.extract_fetch` and `scrapling.extract_stealth`.
+
+**The answer is long, not wide.** Rows keyed by field name rather than one
+record with a column per field, and that is forced rather than chosen: output
+fields are declared statically in the catalog, so a shape that depends on the
+selectors a caller passes cannot be named in advance. The alternative is an
+untyped bag, which is a promise that says nothing.
+
+The long shape also survives ragged data, which the wide one does not. Measured
+against the Hacker News front page: 30 titles, 30 ages, and 29 scores — one job
+posting carries no score. Long format simply has one fewer row for that field;
+a wide one would have to invent a null or misalign the column.
+
+**It costs one request per field.** The far side takes one selector per call,
+so three named fields are three fetches of the same page, about 0.75s each once
+the server is warm. Two consequences worth knowing before reaching for it: the
+origin sees N requests for one page, and the fields are read seconds apart, so
+a page changing underneath yields a record that was never true all at once. For
+anything that moves, fetch once with `web.fetch` and read the whole thing.
+
+Fetching once and applying the selectors inside Atenea was the alternative and
+was refused: it needs a CSS engine in Go, which would mean `.foo` matching
+differently in `web.extract` than in `web.fetch`. A selector that means two
+things in one system is worse than a capability that costs more.
+
+There is no per-field `attribute` input. The far side renders text, html or
+markdown and does not extract attributes, so declaring one would promise what
+nothing here can honor. `format = "html"` returns matched elements whole, hrefs
+included, for a caller that needs them.
+
+**`atenea ask` cannot call it.** `--set NAME=VAL` cannot express a
+`record_list`, and refuses rather than half-parsing JSON — a deliberate limit
+that `web.extract` is simply the first capability to meet. It is reachable from
+any MCP client, where JSON is native.
+
 ## Security
 
 ```toml

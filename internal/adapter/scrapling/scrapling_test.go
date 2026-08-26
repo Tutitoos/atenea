@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"slices"
@@ -54,6 +55,14 @@ func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mc
 				seen <- params
 				name, _ := params["name"].(string)
 				answer := answers[name]
+				// web.extract asks the same tool once per field, so a test
+				// about extraction has to answer differently per call. A
+				// function answer gets the arguments and decides; everything
+				// else is the fixed value it always was.
+				if vary, isFunc := answer.(func(map[string]any) any); isFunc {
+					args, _ := params["arguments"].(map[string]any)
+					answer = vary(args)
+				}
 				text, isText := answer.(string)
 				if !isText {
 					body, _ := json.Marshal(answer)
@@ -83,10 +92,11 @@ func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mc
 var callsSeen chan map[string]any
 
 // page is the answer shape measured against scrapling-mcp on 2026-08-26:
-// a status, a url, and `content` as a LIST whose second element is whatever
-// the css_selector matched. Used wherever the test is about something other
-// than decoding, so the ordinary path is exercised against the real shape
-// rather than a convenient one.
+// a status, a url, and `content` as a LIST -- the unnarrowed page followed by
+// one empty string. A narrowed answer is a different shape entirely, one
+// element per match, and has its own test below. Used wherever the test is
+// about something other than decoding, so the ordinary path is exercised
+// against the real shape rather than a convenient one.
 func page(body string) map[string]any {
 	return map[string]any{"status": 200, "url": "https://example.com/", "content": []any{body, ""}}
 }
@@ -548,23 +558,32 @@ func TestAMissingFormatFallsBackRatherThanFailing(t *testing.T) {
 	}
 }
 
-// The measured shape: `content` is a list, and both halves are kept -- the
-// page and whatever the selector matched. Dropping either would mean a
-// narrowed fetch losing something the caller asked for.
-func TestBothHalvesOfAListBodyAreKept(t *testing.T) {
+// A narrowed answer is one element PER MATCH, not two halves. Measured on
+// Hacker News: `.titleline` came back as thirty strings and a trailing empty
+// one, with the page itself absent. Every match has to survive -- an earlier
+// version of this decoder described the list as [page, match], which would
+// have thrown away twenty-eight rows the moment it indexed on that belief.
+func TestEveryMatchOfANarrowedAnswerSurvives(t *testing.T) {
+	matches := make([]any, 0, 31)
+	for i := range 30 {
+		matches = append(matches, fmt.Sprintf("headline %d", i))
+	}
+	matches = append(matches, "") // the trailing empty the far side always sends
 	runner := newRunner(t, scrapling.Options{Session: fakeServer(t, map[string]any{
-		"make_request": map[string]any{"status": 200, "url": "https://example.com/",
-			"content": []any{"the whole page", "the matched bit"}},
+		"make_request": map[string]any{"status": 200, "url": "https://news.ycombinator.com/",
+			"content": matches},
 	})})
 	out, err := runner.Run(t.Context(), request(t, scrapling.ImplementationRequest,
-		map[string]any{"url": "https://example.com/", "selector": "main"}))
+		map[string]any{"url": "https://news.ycombinator.com/", "selector": ".titleline"}))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	rows := out.Result["page"].([]map[string]any)
 	body, _ := rows[0]["content"].(string)
-	if !strings.Contains(body, "the whole page") || !strings.Contains(body, "the matched bit") {
-		t.Errorf("content = %q, want both halves", body)
+	for i := range 30 {
+		if !strings.Contains(body, fmt.Sprintf("headline %d", i)) {
+			t.Fatalf("match %d is missing from the body", i)
+		}
 	}
 }
 
@@ -679,10 +698,15 @@ func TestTheRunnerDescribesItself(t *testing.T) {
 	// Implementations is what a settings file told this runner to answer for;
 	// Capabilities is what its code can dispatch. The wiring above compares
 	// them, so a difference here is caught before anything runs.
-	if got := runner.Capabilities(); !slices.Equal(got, []string{scrapling.CapabilityFetch}) {
+	if got := runner.Capabilities(); !slices.Equal(got,
+		[]string{scrapling.CapabilityExtract, scrapling.CapabilityFetch}) {
 		t.Errorf("Capabilities = %v", got)
 	}
-	want := []string{scrapling.ImplementationFetch, scrapling.ImplementationRequest, scrapling.ImplementationStealth}
+	want := []string{
+		scrapling.ImplementationExtractFetch, scrapling.ImplementationExtractRequest,
+		scrapling.ImplementationExtractStealth, scrapling.ImplementationFetch,
+		scrapling.ImplementationRequest, scrapling.ImplementationStealth,
+	}
 	if got := runner.Implementations(); !slices.Equal(got, want) {
 		t.Errorf("Implementations = %v, want %v", got, want)
 	}

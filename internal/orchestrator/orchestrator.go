@@ -172,7 +172,10 @@ const (
 // gated the same way everywhere else: it causes the external effect, which no
 // floor grants by default, and the adapter refuses a destination [web] does
 // not allow before anything is dialed.
-const webFetchCapability = "web.fetch"
+const (
+	webFetchCapability   = "web.fetch"
+	webExtractCapability = "web.extract"
+)
 
 // probeContextLines is what exploring asks for: the hit and nothing around it.
 // The look is meant to find out WHERE the commission lands, not to read it.
@@ -257,6 +260,7 @@ var card = contract.Agent{
 		desktopTypeCapability,
 		desktopKeyCapability,
 		webFetchCapability,
+		webExtractCapability,
 	},
 	Context: []contract.ContextLevel{
 		contract.ContextRepository,

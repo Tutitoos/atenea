@@ -392,6 +392,9 @@ runners = ["omp"]
   # Sorted, matching what the compiled fallback answers: a test compares the
   # two and a difference in order would read as a difference in content.
   implementations = [
+    "scrapling.extract_fetch",
+    "scrapling.extract_request",
+    "scrapling.extract_stealth",
     "scrapling.fetch",
     "scrapling.request",
     "scrapling.stealth",
@@ -3501,3 +3504,147 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   # asking the funnel to fall back to nobody and lose the reason on the way.
   estimated_duration = "13s"
   estimated_tokens = 1200
+
+# ---------------------------------------------------------------------------
+# Pulling named fields out of a page.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "web.extract"
+version = "1.0.0"
+summary = "Pull named fields out of one web page."
+semantics = """
+Named selectors in, one row per match out. `fields` is a list of {name, selector}; the \
+answer is a list of {field, index, value}, one row for every element a selector matched, \
+in document order. A field that matched nothing contributes no rows. \
+The answer is LONG rather than wide -- rows keyed by field name, not one record with a \
+column per field -- because output fields are declared statically in this catalog, and a \
+shape that depends on the selectors a caller happens to pass cannot be named in advance. \
+The caller pivots. A wide shape would have to be declared as an untyped bag, which is a \
+promise that says nothing. \
+Two costs to know before using it, both consequences of the far side taking ONE selector \
+per call. The origin sees ONE REQUEST PER FIELD for a single page. And the fields are \
+read seconds apart, so a page that changes underneath yields a record that was never true \
+all at once -- for anything moving, fetch once with web.fetch and read the whole thing. \
+There is no per-field attribute input. The far side renders text, html or markdown and \
+does not extract attributes, so declaring one would promise what nothing here can honor; \
+format = "html" returns the matched elements whole, hrefs included, for a caller that \
+needs them.\
+"""
+effects = ["read", "external"]
+
+  [[capability.input]]
+  name = "url"
+  type = "string"
+  required = true
+  summary = "The page to read. http or https; anything else is refused by scheme."
+
+  [[capability.input]]
+  name = "fields"
+  type = "record_list"
+  required = true
+  summary = "The named selectors to read. Names must be unique: the rows are keyed by them."
+
+    [[capability.input.field]]
+    name = "name"
+    type = "string"
+    required = true
+    summary = "What to call this field in the answer."
+
+    [[capability.input.field]]
+    name = "selector"
+    type = "string"
+    required = true
+    summary = "The CSS selector that finds it. Every match becomes a row."
+
+  [[capability.input]]
+  name = "format"
+  type = "string"
+  required = false
+  enum = ["text", "markdown", "html"]
+  summary = "How to render each match. Defaults to text. Applies to every field."
+
+  [[capability.output]]
+  name = "rows"
+  type = "record_list"
+  required = true
+  summary = "One row per match, grouped by field and ordered as the page had them."
+
+    [[capability.output.field]]
+    name = "field"
+    type = "string"
+    required = true
+    summary = "The name the caller gave this selector."
+
+    [[capability.output.field]]
+    name = "index"
+    type = "int"
+    required = true
+    summary = "Which match this is within that field, from zero, in document order."
+
+    [[capability.output.field]]
+    name = "value"
+    type = "string"
+    required = true
+    summary = "The matched element, in the requested rendering."
+
+# The same three prices as web.fetch, paid for a different promise -- and paid
+# once PER FIELD, which is what the durations below already account for. They
+# are the fetch numbers multiplied by three, on the reading that a caller asking
+# for named fields is typically asking for a handful rather than one. A guess
+# about shape rather than about speed, and the base overrules it as soon as real
+# calls land.
+
+[[implementation]]
+id = "scrapling.extract_request"
+provider = "scrapling"
+capability = "web.extract"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # Measured warm at ~0.75s per selector against news.ycombinator.com; the
+  # first call of a cold server pays for the far side starting.
+  estimated_duration = "7.5s"
+  estimated_tokens = 900
+
+[[implementation]]
+id = "scrapling.extract_fetch"
+provider = "scrapling"
+capability = "web.extract"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # A browser render per field, which is the level where the per-field cost
+  # stops being an implementation detail and starts being the reason to reach
+  # for web.fetch instead.
+  estimated_duration = "25s"
+  estimated_tokens = 1300
+
+[[implementation]]
+id = "scrapling.extract_stealth"
+provider = "scrapling"
+capability = "web.extract"
+scope_guarantee = "confined"   # it never looks at the repository at all
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+
+  [implementation.cost]
+  # The last level, so a block here is the answer rather than an escalation.
+  estimated_duration = "40s"
+  estimated_tokens = 1300
