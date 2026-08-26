@@ -482,6 +482,9 @@ func buildRunners(cfg config.Config) ([]contract.Runner, *supervisor.Supervisor,
 	if err := checkDispatch(cfg.Source, cfg.Implementations, out); err != nil {
 		return nil, nil, err
 	}
+	if err := checkAskable(cfg.Source, cfg.Capabilities, orchestrator.Card()); err != nil {
+		return nil, nil, err
+	}
 	return out, procs, nil
 }
 
@@ -819,6 +822,43 @@ func checkDispatch(source string, impls []contract.Implementation, runners []con
 		}
 	}
 	return nil
+}
+
+// checkAskable refuses a catalog capability the orchestrator may not ask for.
+//
+// The third door in the family checkReach and checkDispatch guard, closed
+// against the last quiet lie left in the wiring. A capability can be declared
+// in the catalog, bound to an implementation, served by an attached runner and
+// picked by the funnel -- `atenea select` will name the winner and print the
+// four stages it survived -- and then be refused at dispatch because the card
+// that decides what may be asked never named it. What the caller reads is a
+// permission problem with their own request in it, for a wiring mistake made
+// long before them; what a client sees is a tool offered on every connection
+// that fails on every call.
+//
+// It is knowable here, with the catalog and the card both in hand.
+//
+// Unlike checkDispatch, an unclaimed entry is NOT excused. That exemption
+// exists because a runner may legitimately declare more than a small
+// hand-written catalog uses, and an id the catalog never names can never be
+// chosen. Neither half holds here: the card is compiled in, so a capability
+// outside it is unanswerable on every machine rather than merely unused on
+// this one, and it is offered to clients whether or not anything implements it.
+func checkAskable(source string, caps []contract.Capability, card contract.Agent) error {
+	var missing []string
+	for _, capability := range caps {
+		if !card.CanAsk(capability.ID) {
+			missing = append(missing, capability.ID)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return contract.Fail(contract.FailureInvalidInput,
+		"settings %s: the catalog declares %s, which agent %s may not ask for: "+
+			"a capability the card does not name is offered to clients as a tool and "+
+			"refused on every call",
+		source, strings.Join(missing, ", "), card.ID)
 }
 
 // fanOut is the one runner the orchestrator sees when several are attached.

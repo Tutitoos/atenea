@@ -114,7 +114,15 @@ const contextCapability = "code.context"
 // them because declaring is what makes a step askable at all. A capability
 // the card does not name cannot be dispatched even when the catalog, the
 // funnel and a runner are all ready for it.
+//
+// symbol.search is here because it was once not. It shipped complete in every
+// other respect -- declared in default.toml, bound to serena.symbol_search,
+// answered by runSearch, chosen by the funnel -- and every call was refused at
+// this list. Warning about the trap in a comment turned out not to be the same
+// as closing it, so core.checkAskable now refuses at load a catalog capability
+// this card does not name.
 const (
+	symbolSearchCapability    = "symbol.search"
 	definitionCapability      = "symbol.definition"
 	referencesCapability      = "symbol.references"
 	implementationsCapability = "symbol.implementations"
@@ -227,6 +235,7 @@ var card = contract.Agent{
 	Capabilities: []string{
 		contextCapability,
 		searchCapability,
+		symbolSearchCapability,
 		definitionCapability,
 		referencesCapability,
 		implementationsCapability,
@@ -306,6 +315,15 @@ func New(cfg Config) (*Agent, error) {
 
 // Card returns the agent's contract.
 func (a *Agent) Card() contract.Agent { return a.card.Clone() }
+
+// Card is what the orchestrator declares about itself, without an agent to ask.
+//
+// The wiring checks in internal/core run before anything is dispatched and need
+// only the declaration, not a running agent. Building one to read a constant
+// would mean a catalog, a chooser and a checkpoint store existing before the
+// question "is this catalog even askable" may be put -- which is backwards, and
+// which is why the check that needed it did not exist.
+func Card() contract.Agent { return card.Clone() }
 
 // Runner reports who is behind the agent, or nil when nothing is wired yet.
 func (a *Agent) Runner() contract.Runner { return a.runner }
