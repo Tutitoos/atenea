@@ -32,12 +32,24 @@
 // passes the gate can still end somewhere that would not have. What this
 // package can do it does: the destination the server reports having actually
 // landed on is put back through the same gate before the answer is handed
-// over, and an answer that came from an address the gate refuses is a
-// failure rather than a result. What it cannot do is stop the request from
-// having been made. Closing it properly means the far side not following
-// redirects at all, and make_request DOES expose that -- see the note below on
-// what was measured, and docs/content/not-built-yet.md for why it is still
-// open.
+// over, and an answer that came from an address the gate refuses is a failure
+// rather than a result. What it cannot do is stop the request from having
+// been made.
+//
+// That is a decision rather than an omission, and it was made with the flag
+// in hand. make_request takes `follow_redirects: false` and could be walked
+// hop by hop from here; fetch and stealthy_fetch take no such flag, because a
+// browser follows redirects natively and there is no point in the middle to
+// stop it. So closing it is available at exactly one of the three levels --
+// and the funnel picks the level, so a caller cannot know which one ran. A
+// guarantee that holds one time in three is one nobody can build on, and
+// false confidence is worse than a limit everybody can read. Pre-resolving
+// the chain cheaply and handing the browser the endpoint does not rescue it
+// either: sites redirect differently by user-agent, so the browser would land
+// somewhere other than what was approved.
+//
+// What IS uniform is a bound, and maxRedirects is it. See
+// docs/content/not-built-yet.md for the decision in full.
 //
 // # Three levels, and why a block has to be a failure
 //
@@ -101,10 +113,10 @@
 //     field optional and this adapter leaves it empty, because parsing one out
 //     of the body would be this package inventing a fact.
 //   - make_request takes `follow_redirects` (false, or safe|all|obeycode|
-//     firstonly, default safe) and `max_redirects`. That means the redirect
-//     hole above IS closable at this level -- see the note in
-//     docs/content/not-built-yet.md for why it is not closed yet and what
-//     closing it costs.
+//     firstonly, default safe) and `max_redirects`. None of the modes is
+//     host-aware -- they are curl's, and they decide how many hops and which
+//     status codes, never where. So the flag bounds the chain and does not
+//     gate it, which is what makes the decision above the one it is.
 package scrapling
 
 import (
@@ -130,6 +142,17 @@ import (
 // minute on a slow site. A ceiling under that would turn the level that
 // exists to succeed on hard pages into the level that always times out.
 const DefaultTimeout = 30 * time.Second
+
+// maxRedirects bounds how many hops one plain request will chase.
+//
+// Five rather than the far side's own thirty. A redirect chain longer than
+// about three is a misconfiguration or a trap in practice, and every hop is a
+// request somebody else's server pays for -- including, on a hostile chain,
+// one aimed somewhere the gate would refuse if it could see it in time.
+//
+// It applies to make_request alone, which is the only level that takes the
+// flag. That asymmetry is the whole reason this is a cap and not a cure.
+const maxRedirects = 5
 
 // Capability and implementation ids this adapter answers.
 //
@@ -470,6 +493,25 @@ func (r *Runner) fetch(ctx context.Context, req contract.RunRequest, tool string
 		// unchanged -- and it is always sent, because the far side's default
 		// is markdown while the capability's is text.
 		"extraction_type": format(req.Payload),
+	}
+	if tool == "make_request" {
+		// The one hardening the redirect problem actually admits, and it is a
+		// bound rather than a fix.
+		//
+		// The far side follows redirects inside its own process and this level
+		// is the only one that can be told not to -- fetch and stealthy_fetch
+		// expose no such flag, because a browser follows them natively. Telling
+		// only this one to stop was considered and refused: the funnel picks
+		// the implementation, so a caller cannot know which level ran, and a
+		// guarantee that holds at one of three is one nobody can rely on. False
+		// confidence is worse than a limit everybody knows about. See
+		// docs/content/not-built-yet.md for the whole reasoning.
+		//
+		// What a cap does buy is uniform in the only sense available: a hostile
+		// chain gets five requests out of us rather than the default thirty,
+		// whichever of them lands somewhere the gate would refuse. Small, real,
+		// and not to be mistaken for closing the hole.
+		args["max_redirects"] = maxRedirects
 	}
 	if selector, ok := req.Payload["selector"].(string); ok && selector != "" {
 		// Narrowing before the answer leaves the server, which is where it is
