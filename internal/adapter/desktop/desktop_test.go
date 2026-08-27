@@ -458,6 +458,35 @@ func TestTheWildcardReachesAnApplicationNobodyNamed(t *testing.T) {
 	}
 }
 
+// A denied application is refused for being denied, and the refusal has to say
+// so. Before the wildcard existed "not in the allow-list" was true of a denied
+// application nearly always; with "*" it is never true -- the application IS
+// allowed, and denied is what stops it. A message that sends somebody to widen
+// a list that was not refusing costs them the edit and then costs them the
+// afternoon, because the edit does not work.
+func TestADeniedApplicationIsRefusedForBeingDeniedAndSaysSo(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{desktop.AllApplications},
+		Denied:      []string{"com.1password.1password"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), inspectRequest(t, "com.1password.1password"))
+	if err == nil {
+		t.Fatal("a denied application was read")
+	}
+	if !strings.Contains(err.Error(), "denied") {
+		t.Errorf("refusal = %q, want it to name the list that actually refused", err)
+	}
+	// The remedy that does not work must not be offered as one.
+	if strings.Contains(err.Error(), "add it to [desktop] applications") {
+		t.Errorf("refusal = %q, want it not to suggest an edit that cannot help", err)
+	}
+}
+
 // And it does not reach past Denied. This is the property that makes the
 // widest allow-list survivable: the seeded password-manager list has to
 // outrank the token that means "everything", or "everything" would quietly

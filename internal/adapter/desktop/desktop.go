@@ -517,10 +517,22 @@ func (r *Runner) mayLookAt(bundleID string) bool {
 // application" stops being the caller's claim and becomes a fact the machine
 // checked.
 func (r *Runner) target(ctx context.Context, bundleID string) (int, string, error) {
+	// Two refusals, because the two causes are different facts and the remedy
+	// for one does not work on the other. Denied is checked first and named on
+	// its own: telling somebody to add an application they already allowed --
+	// which is what "*" does -- sends them to edit a list that was never the
+	// thing refusing, and the edit they make will not help.
+	if slices.Contains(r.denied, bundleID) {
+		return 0, "", contract.Fail(contract.FailurePermissionDenied,
+			"desktop: %q is on [desktop] denied, which wins over every allow-list including %q -- "+
+				"adding it to applications will not change this; remove it from denied if that is "+
+				"deliberate", bundleID, AllApplications)
+	}
 	if !r.mayLookAt(bundleID) {
 		return 0, "", contract.Fail(contract.FailurePermissionDenied,
 			"desktop: %q is not in the desktop allow-list -- add it to [desktop] applications "+
-				"in the settings file, and note that [desktop] denied always wins", bundleID)
+				"in the settings file, or %q for every application denied does not name",
+			bundleID, AllApplications)
 	}
 	text, err := r.call(ctx, "list_apps", map[string]any{})
 	if err != nil {
