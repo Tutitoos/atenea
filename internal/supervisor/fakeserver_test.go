@@ -323,6 +323,25 @@ func fakeStdioSpec(id string, lifecycle Lifecycle, env map[string]string) Spec {
 // timeout. Every state this package reports settles from a background
 // goroutine's own timing, not the caller's, so asserting on it means polling
 // rather than reading once.
+// waitCeiling is how long a test will wait for something to become true.
+//
+// Generous on purpose, and it costs nothing: waitFor polls and returns the
+// instant the condition holds, so on a machine that is not busy every one of
+// these finishes in well under a second. The number is only ever paid on a
+// machine where it was going to be paid anyway.
+//
+// It is deliberately not tuned per test. Every one of these waits on something
+// bounded by a timeout the test itself set -- an idle window, a ready
+// deadline, a restart budget -- and the failure they were producing was never
+// "the supervisor is wrong", it was "this runner is slower than the margin
+// somebody guessed". Measured: CI's Intel macOS leg failed
+// TestProcessStabilityResetsTheRestartBudget with Restarts = 4 and
+// TestTheIdleReaperStopsAnUnusedServerButNotOneInUse with "condition not met
+// within 3s", a fortnight apart, on assertions that both pass locally every
+// time. A ceiling that only trips on a loaded machine is not testing the
+// supervisor.
+const waitCeiling = 15 * time.Second
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

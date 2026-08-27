@@ -52,6 +52,13 @@ func request(t *testing.T, root string, payload map[string]any) contract.RunRequ
 	}
 }
 
+// codexTestTimeout is what a FAKE codex is given, and it is generous on
+// purpose. The binary behind it is a shell script that echoes a fixture, so
+// the number is never about codex -- it is the margin against a machine that
+// is running the rest of the suite under -race at the same time. Measured:
+// this package takes five seconds alone and exceeded ten during a full run.
+const codexTestTimeout = 60 * time.Second
+
 func fakeCodex(t *testing.T, stdout string, exit int, delay time.Duration, stderr string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -317,7 +324,7 @@ func TestCodexProcessErrorIsRecoverable(t *testing.T) {
 func TestCodexDropsResultsOutsideRepositoryAndSensitiveFiles(t *testing.T) {
 	root := t.TempDir()
 	body := eventJSON(t, `{"matches":[{"path":"inside.ts","line":1,"column":1},{"path":"../outside.ts","line":1,"column":1},{"path":".env","line":1,"column":1}]}`)
-	runner, err := New(Options{Binary: fakeCodex(t, body, 0, 0, ""), Implementations: []string{"codex.search"}, Sensitive: []string{".env"}, Timeout: 10 * time.Second})
+	runner, err := New(Options{Binary: fakeCodex(t, body, 0, 0, ""), Implementations: []string{"codex.search"}, Sensitive: []string{".env"}, Timeout: codexTestTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}

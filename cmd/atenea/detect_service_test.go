@@ -177,7 +177,13 @@ func detectSettings(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	block := "\n[[mcp_server]]\nid = \"fake\"\ncommand = [\"fake-mcp\"]\n" +
+	// A probe deadline of its own, because the shipped default is ten seconds
+	// and it is measured against a machine. This suite spawns a service, a
+	// child and a fake server under -race all at once; measured, this test
+	// takes under two seconds alone and blew the ten during a full parallel
+	// run. The default is not changed -- what ships is what ships -- only what
+	// this fake declares for itself.
+	block := "\n[[mcp_server]]\nid = \"fake\"\ncommand = [\"fake-mcp\"]\ntimeout = \"60s\"\n" +
 		"expose = \"raw\"\ntools = [\"noop\"]\neffects = [\"read\"]\n"
 	if err := os.WriteFile(base, append(body, block...), 0o600); err != nil {
 		t.Fatalf("write: %v", err)

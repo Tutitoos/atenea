@@ -141,6 +141,17 @@ func shippedReviewer(t *testing.T, root string) config.AgentType {
 	if err != nil {
 		t.Fatalf("loading shipped reviewer: %v", err)
 	}
+	// The shipped limit is 30 seconds and it is not being changed -- what
+	// ships is what ships, and a product number moved to make a test pass is
+	// a number that stopped meaning anything.
+	//
+	// This raises it for THIS RUN only, because the deadline is measured
+	// against a machine and the machine here is running the whole suite under
+	// -race at once. Measured: 4.8s for this agent on its own, and a failure
+	// at 30s inside a full parallel run -- six times slower, which says
+	// everything about the runner and nothing about the reviewer. A test that
+	// fails on a busy laptop is a test people learn to re-run.
+	reviewer.Limits.MaxDuration = 3 * time.Minute
 	return reviewer
 }
 
