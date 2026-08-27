@@ -14,6 +14,59 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Fixed
+
+Timing assertions that only failed on somebody else's machine. CI's Intel macOS
+leg had gone down twice in a fortnight on two unrelated tests that pass locally
+every time, and neither failure was about the code under test.
+
+The shape that breaks is specific -- a MEASURED duration compared against a
+threshold, with a narrow ratio between them -- and surveying for that rather
+than for the word `Millisecond` narrowed 49 test files to one package. Every
+`waitFor` ceiling in `internal/supervisor` is now one reasoned constant rather
+than a hand-tuned two or three seconds, which costs nothing: `waitFor` polls
+and returns the instant its condition holds, so the number is only ever paid on
+a machine where it was going to be paid anyway. A test refuses a hand-tuned one
+from here on, because the alternative is remembering.
+
+The one fixed `time.Sleep` of that family turns out to be safe on inspection --
+it asserts that an acquired process is NOT reaped, so oversleeping strengthens
+it and undersleeping cannot happen.
+
+That survey was too narrow, and running the suite proved it immediately. A
+threshold a test SETS is one shape; a deadline a test INHERITS is the same
+disease with no `Millisecond` anywhere near it. Three turned up, each blowing a
+limit it clears five times over alone: the reviewer at 30s (4.8s alone),
+`TestDetectAsksTheService` at 10s (1.9s), `TestCodexValidJSONLBecomesCodeSearch`
+at 10s (4.9s). The first two are production defaults the tests exercise on
+purpose and neither is changed -- each test declares a deadline of its own
+instead, because a number moved to make a test pass has stopped meaning
+anything.
+
+The full suite now passes under `-race`, which it had not done once while any
+of this was being written.
+
+### Changed
+
+`web.fetch` caps redirect chains at five hops on `scrapling.request`, down from
+the far side's default of thirty.
+
+That is a bound and not the fix, and the decision behind it is worth reading
+rather than inferring. `make_request` takes `follow_redirects: false` and could
+be walked hop by hop, gating each `Location` before the next request; `fetch`
+and `stealthy_fetch` take no such flag, because a browser follows redirects
+natively. So closing the hole is available at exactly one of three levels --
+and the funnel picks the level, so a caller cannot know which one ran. A
+guarantee that holds one time in three is one nobody can build on, and false
+confidence is worse than a limit everybody can read. Pre-resolving the chain
+cheaply and handing the browser the endpoint does not rescue it either: sites
+redirect differently by user-agent.
+
+Written up as a decision rather than a pending option in
+`docs/content/not-built-yet.md`, along with what would actually close it --
+the browser sessions exposing the control their HTTP client already does, which
+is upstream work.
+
 ### Added
 
 `web.crawl` walks one site from a starting page and returns what it found, with

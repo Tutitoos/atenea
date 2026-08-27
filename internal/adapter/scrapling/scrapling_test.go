@@ -91,6 +91,11 @@ func fakeServer(t *testing.T, answers map[string]any) func(context.Context) (*mc
 // side, because the argument that matters to a fetcher is the destination.
 var callsSeen chan map[string]any
 
+// maxRedirectsForTest mirrors the adapter's own cap. Spelled out rather than
+// imported, so a change to that number has to be a change here too -- it is a
+// bound on somebody else's server, not an implementation detail.
+const maxRedirectsForTest = 5
+
 // page is the answer shape measured against scrapling-mcp on 2026-08-26:
 // a status, a url, and `content` as a LIST -- the unnarrowed page followed by
 // one empty string. A narrowed answer is a different shape entirely, one
@@ -230,11 +235,16 @@ func TestOnlyBuiltArgumentsReachTheServer(t *testing.T) {
 	if args["extraction_type"] != "text" {
 		t.Errorf("extraction_type = %v, want the declared default", args["extraction_type"])
 	}
+	// A bound on the redirect chain, sent at this level because it is the only
+	// one that takes it. See maxRedirects for why it is a cap and not a cure.
+	if args["max_redirects"] != float64(maxRedirectsForTest) {
+		t.Errorf("max_redirects = %v, want the cap", args["max_redirects"])
+	}
 	// The far side takes twenty-odd arguments on make_request -- proxies,
-	// auth, headers, TLS verification. Exactly three are reachable from here,
+	// auth, headers, TLS verification. Exactly four are reachable from here,
 	// and that is the property this number is guarding.
-	if len(args) != 3 {
-		t.Errorf("args = %+v, want exactly the three this adapter builds", args)
+	if len(args) != 4 {
+		t.Errorf("args = %+v, want exactly the four this adapter builds", args)
 	}
 }
 

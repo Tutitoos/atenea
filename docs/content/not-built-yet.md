@@ -47,7 +47,85 @@ What is still true, and is the reason this entry stays rather than being
 deleted: the CLI covers less of the catalog than MCP does, and nothing
 announces which parts. `--payload` closes today's gap without closing that one.
 
-## The redirect the gate cannot see is closable, and is not closed — 2026-08-26
+## Timing margins that only fail on somebody else's machine — 2026-08-27
+
+CI's Intel macOS leg failed twice in a fortnight, on two unrelated assertions
+that pass locally every time. `TestTheScreenSaysCanceledAndNotTimeout` on the
+25th of August, and `TestProcessStabilityResetsTheRestartBudget` on the 26th
+with "Restarts = 4, want 3". Neither was a defect in the code under test.
+
+### The shape, because 49 test files use `Millisecond` and almost none of them
+### have it
+
+The failure needs a specific shape: **a measured duration compared against a
+threshold, with a narrow ratio between them.** A `time.Sleep` on its own is not
+that. `StableAfter` at 100ms against a process told to live 50ms is: the
+process only has to be observed living twice as long as it was told to, and a
+loaded runner does that easily.
+
+Surveying for that shape rather than for the word `Millisecond` narrowed 49
+files to one package for the THRESHOLD form -- `StableAfter`, `ReadyTimeout`,
+`IdleTimeout` and `StopGrace` are all set in `internal/supervisor`, and most of
+the pairs there have margins of 50x and are in no danger.
+
+That survey was too narrow, and running the suite proved it before the ink was
+dry. A threshold a test sets is one shape; a **deadline a test inherits** is
+the same disease with no `Millisecond` anywhere near it. Three of those turned
+up, each blowing a limit it clears five times over when run alone:
+
+| test | deadline | alone | where the number comes from |
+| --- | --- | --- | --- |
+| `TestRealReviewerRunsThroughRunner` | 30s | 4.8s | the shipped reviewer's `max_duration` |
+| `TestDetectAsksTheService` | 10s | 1.9s | `mcpprobe`'s default for a server declaring none |
+| `TestCodexValidJSONLBecomesCodeSearch` | 10s | 4.9s | the test's own `Options.Timeout` |
+
+The first two are production numbers the tests exercise on purpose, and neither
+is changed: what ships is what ships, and a number moved to make a test pass
+has stopped meaning anything. Each test now declares a deadline of its own --
+a reviewer limit for the run, a `timeout` on the fake `[[mcp_server]]` -- which
+is the same distinction, drawn where it belongs.
+
+Two sub-shapes, and only one of them is a problem:
+
+- **A `waitFor` ceiling** returns the instant its condition holds, so a
+  generous number costs nothing on a machine that is not busy. Every one of
+  these was a hand-tuned two or three seconds against a window the test itself
+  set. They are now one constant, `waitCeiling`, at fifteen seconds, with a
+  test that refuses a hand-tuned one.
+- **A fixed `time.Sleep` used as "well past X"** cannot stretch, and widening
+  it costs real time on every run. There is one, and it turns out to be safe:
+  it asserts that an ACQUIRED process is not reaped, so oversleeping only
+  strengthens it and undersleeping cannot happen.
+
+### The one outside that package
+
+`TestRealReviewerRunsThroughRunner` failed at a 30-second deadline during a
+full `-race` run, having taken 4.8 seconds on its own -- six times slower under
+load. That deadline is the SHIPPED reviewer's `max_duration`, loaded from
+`default.toml` on purpose, so the test exercises the real declared type.
+
+It is raised for the test run and not in the product. A number that ships is
+what ships; one moved to make a test pass has stopped meaning anything.
+
+### What is still true
+
+This fixes the assertions that have bitten, and the full suite now passes under
+`-race` -- which it had not done once while any of this was being written.
+
+It does not make the Intel leg faster, and the next thing to trip will be
+whatever has the next-narrowest margin. That is not a guess: this entry
+predicted it in its first draft and was proved right within the hour, by two
+tests in packages the survey had already cleared.
+
+The gate in `internal/supervisor/waits_test.go` covers `waitFor` ceilings in
+that one package, because that is the form it can recognise by reading source.
+An inherited deadline has no syntax to grep for -- it is a default somewhere
+else, arriving through a config file or a struct nobody named in the test --
+and nothing here catches those. What would is a suite that reports how close
+each test came to its own limit, so a margin gets thin visibly rather than
+suddenly. That is not built.
+
+## The redirect the gate cannot see — decided 2026-08-27, not closed
 
 `web.fetch` judges where a request may go by resolving the host and checking
 the address. The far side then follows redirects inside its own process, so a
@@ -57,24 +135,45 @@ back an answer that came from a refused address — but by then the request has
 been made, which for an internal service is already a read and an existence
 oracle.
 
-That was written up as unclosable. It is not. Measured against scrapling-mcp
-0.4.15 on 2026-08-26, `make_request` takes `follow_redirects` — `false`, or one
-of `safe`/`all`/`obeycode`/`firstonly`, defaulting to `safe` — and
-`max_redirects`, default 30. Setting it to `false` means the server hands back
-the 3xx instead of chasing it, and the adapter can put the `Location` through
-`mayReach` before deciding whether to issue the next request itself.
+An earlier entry here said this was closable at the `scrapling.request` level
+and left the question open. It has now been decided: **it is not being closed,
+and the reason is not cost.**
 
-It is not done because doing it properly means writing a redirect walker into
-the adapter: issue, gate, re-issue, count hops, detect loops. That is real
-logic behind a seam documented as a dumb translator, and it buys nothing at the
-other two levels — `fetch` and `stealthy_fetch` expose no such flag, because a
-browser follows redirects natively and there is no point in the middle to stop
-it. So the cheapest level could be made airtight while the two above it stayed
-exactly as leaky, which is a worse thing to document than one honest limit that
-applies everywhere.
+### Why not
 
-The version worth building is the one that closes all three, and for the two
-browser levels that needs something the far side does not offer today.
+`make_request` takes `follow_redirects: false`; `fetch` and `stealthy_fetch`
+take no such flag, because a browser follows redirects natively and there is no
+point in the middle to stop it. So the fix is available at exactly one of three
+levels.
+
+**And the caller does not choose the level — the funnel does.** A guarantee
+that holds on one implementation of three, selected by cost and health without
+the caller's involvement, is a guarantee nobody can build on. It would be true
+some mornings and false others, with nothing in the answer to say which. A
+limit everybody can read is better than a protection that is sometimes there.
+
+Pre-resolving the chain with the cheap client and handing the browser the
+endpoint looks like a way to make it uniform, and is not one: sites redirect
+differently by user-agent, so the browser would follow its own chain from a URL
+that was approved for somebody else's.
+
+Nor do the modes help. `safe`, `all`, `obeycode` and `firstonly` are curl's,
+and they decide how many hops and which status codes — never where. None of
+them is host-aware.
+
+### What was done instead
+
+`max_redirects` is capped at 5 rather than the far side's default of 30, on the
+one level that takes it. A hostile chain gets five requests out of us instead
+of thirty. That is a bound on the blast radius and not a fix, and it is
+described that way in the code so nobody later reads it as one.
+
+### What would actually close it
+
+The far side refusing to follow at every level, which means the browser
+sessions exposing the same control their HTTP client already does. That is
+upstream work, not ours — and it is the shape worth asking for if this ever
+matters enough to ask.
 
 ## One blocked site downgraded every site — 2026-08-26, closed 2026-08-27
 
