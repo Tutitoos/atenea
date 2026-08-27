@@ -159,7 +159,7 @@ func TestProcessCrashAfterReadyRestartsThenGoesDown(t *testing.T) {
 		t.Fatalf("the first attempt should reach ready before crashing: %v", err)
 	}
 
-	waitFor(t, 3*time.Second, func() bool { return p.status().State == StateDown })
+	waitFor(t, waitCeiling, func() bool { return p.status().State == StateDown })
 
 	st := p.status()
 	if st.Restarts != 3 {
@@ -208,7 +208,7 @@ func TestProcessStabilityResetsTheRestartBudget(t *testing.T) {
 		t.Fatalf("the first attempt should reach ready before crashing: %v", err)
 	}
 
-	waitFor(t, 3*time.Second, func() bool { return p.status().State == StateDown })
+	waitFor(t, waitCeiling, func() bool { return p.status().State == StateDown })
 
 	st := p.status()
 	if st.Restarts != 3 {
@@ -311,7 +311,7 @@ func TestProcessAcquireBlocksIdleStopAndReleaseAllowsIt(t *testing.T) {
 	}
 
 	p.release()
-	waitFor(t, 2*time.Second, func() bool {
+	waitFor(t, waitCeiling, func() bool {
 		p.stopIfIdle()
 		return p.status().State == StateStopped
 	})

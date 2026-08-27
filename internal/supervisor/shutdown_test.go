@@ -166,7 +166,7 @@ func TestEnsureReadyGivesUpWhenTheServerIsStoppedUnderIt(t *testing.T) {
 		_, err := p.ensureReady(ctx)
 		landed <- err
 	}()
-	waitFor(t, 3*time.Second, func() bool { return p.status().State == StateStarting })
+	waitFor(t, waitCeiling, func() bool { return p.status().State == StateStarting })
 	p.requestStop()
 
 	select {
@@ -193,7 +193,7 @@ func TestStopReturnsWhileAChildIsStillStartingUp(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	go func() { _, _ = s.EnsureReady(context.Background(), "slow-start") }()
-	waitFor(t, 3*time.Second, func() bool { return s.Status()[0].State == StateStarting })
+	waitFor(t, waitCeiling, func() bool { return s.Status()[0].State == StateStarting })
 
 	returned := make(chan struct{})
 	go func() {
@@ -249,7 +249,7 @@ func TestTheIdleReaperStopsAnUnusedServerButNotOneInUse(t *testing.T) {
 	}
 
 	s.Release("idle")
-	waitFor(t, 3*time.Second, func() bool { return s.Status()[0].State == StateStopped })
+	waitFor(t, waitCeiling, func() bool { return s.Status()[0].State == StateStopped })
 	if st := s.Status()[0]; st.PID != 0 {
 		t.Fatalf("pid after the reaper stopped the server = %d, want zero", st.PID)
 	}
