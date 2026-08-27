@@ -698,13 +698,45 @@ type Desktop struct {
 	//
 	// Bundle identifiers rather than display names: a name is localized and
 	// changes under the reader's feet, and two applications may share one.
+	//
+	// The single entry "*" means every application Denied does not name. It is
+	// a token that has to be TYPED, and that is the whole design: the rule
+	// above is that omission is not a statement, so the widest possible
+	// allow-list must not be reachable by leaving something blank. Mixing it
+	// with named bundle ids is refused at load rather than resolved, because a
+	// list reading "everything, and also these two" is an operator who does not
+	// know which of the two sentences is in force.
 	Applications []string
 	// Denied always wins, and is seeded rather than empty. The defaults are
 	// the applications where a single screenshot is a credential: password
 	// managers, the keychain, banking. An operator who deletes the block gets
 	// them back; one who writes an explicit empty list has said something.
+	//
+	// It outranks the wildcard too, which is what keeps "*" survivable: the
+	// widest allow-list still cannot reach a password manager.
 	Denied []string
+	// LookThenAct lets one chat act on the screen it has already read.
+	//
+	// False shipped, and the default is the security control rather than a
+	// cautious guess. desktop.inspect and desktop.screenshot return whatever a
+	// window chose to display, written by whoever controls that window; with
+	// this off, a chat handed that content may no longer cause a device effect
+	// that changes anything, so a sentence inside somebody else's email cannot
+	// reach the pointer. See internal/core/tainted.go for the whole argument.
+	//
+	// Turning it on is what an operator does to get the continuous drive-the-
+	// desktop loop -- look, click, look again -- and it removes the only
+	// control Atenea has against prompt injection reaching input, because
+	// Atenea runs no classifier over what it captured. What survives it is
+	// Denied above, the hard refusal to type into a secure field, credential
+	// redaction in desktop.type, and the audit receipts.
+	LookThenAct bool
 }
+
+// AllApplications is the token that widens the desktop allow-list to every
+// application Denied does not name. Defined by the adapter that enforces it so
+// there is one spelling rather than two that must be kept in step.
+const AllApplications = desktop.AllApplications
 
 // DefaultDesktop is the shipped posture: nothing allowed, and the obvious
 // hazards refused even if somebody allows them later.
@@ -1417,6 +1449,7 @@ type fileSecurity struct {
 type fileDesktop struct {
 	Applications *[]string `toml:"applications"`
 	Denied       *[]string `toml:"denied"`
+	LookThenAct  *bool     `toml:"look_then_act"`
 }
 
 // fileWeb is [web] as written. Pointers, so an omitted list inherits the
@@ -1854,7 +1887,9 @@ func parse(raw []byte, source string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Security = decoded.Security.build()
-	cfg.Desktop = decoded.Desktop.build()
+	if cfg.Desktop, err = decoded.Desktop.build(source); err != nil {
+		return Config{}, err
+	}
 	cfg.Web = decoded.Web.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
@@ -2862,7 +2897,7 @@ func (p fileManagedProcess) build(source, section string) (ManagedProcess, error
 // an application does not silently clear the refusals and vice versa. Absent
 // takes the shipped value; present-but-empty is a statement and is honored --
 // an explicitly empty Denied is somebody saying they know what they are doing.
-func (d fileDesktop) build() Desktop {
+func (d fileDesktop) build(source string) (Desktop, error) {
 	out := DefaultDesktop()
 	if d.Applications != nil {
 		out.Applications = *d.Applications
@@ -2870,7 +2905,20 @@ func (d fileDesktop) build() Desktop {
 	if d.Denied != nil {
 		out.Denied = *d.Denied
 	}
-	return out
+	if d.LookThenAct != nil {
+		out.LookThenAct = *d.LookThenAct
+	}
+	// "everything, and also these two" is not a wider list than "everything":
+	// it is two sentences that disagree about which one is in force. Refused
+	// here rather than resolved to either reading, because whichever this code
+	// picked would be the one the operator did not mean half the time.
+	if slices.Contains(out.Applications, AllApplications) && len(out.Applications) > 1 {
+		return Desktop{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: desktop.applications lists %q beside named applications; %q already means every "+
+				"application desktop.denied does not name, so remove one or the other",
+			source, AllApplications, AllApplications)
+	}
+	return out, nil
 }
 
 // build reads [web] with each list independent of the other, the same way

@@ -38,6 +38,46 @@ func TestActingAfterLookingIsRefused(t *testing.T) {
 	}
 }
 
+// The zero value refuses, and that is the property worth pinning rather than
+// the switch working. `taint{}` is what every chat gets unless something goes
+// out of its way to permit the loop, so a future field ordering or a forgotten
+// assignment must fail closed. This is the test that would catch the switch
+// being turned on by accident.
+func TestTheDefaultChatStillRefusesToActOnWhatItRead(t *testing.T) {
+	var chat taint
+	chat.note("desktop.screenshot")
+	if err := chat.refuseIfTainted(capabilityWith("desktop.click",
+		contract.EffectRead, contract.EffectDevice,
+		contract.EffectWrite, contract.EffectExternal)); err == nil {
+		t.Fatal("a chat with no explicit permission acted on what it had read")
+	}
+}
+
+// With the operator's permission the loop runs: look, act, look again. This is
+// what `[desktop] look_then_act` buys and the reason somebody turns it on.
+func TestAPermittedChatMayActOnWhatItRead(t *testing.T) {
+	chat := taint{permitted: true}
+	chat.note("desktop.screenshot")
+	if err := chat.refuseIfTainted(capabilityWith("desktop.click",
+		contract.EffectRead, contract.EffectDevice,
+		contract.EffectWrite, contract.EffectExternal)); err != nil {
+		t.Fatalf("a permitted chat was refused: %v", err)
+	}
+}
+
+// Permission changes whether the refusal fires, never whether the reading is
+// noticed. If a permitted chat stopped recording, turning the switch off would
+// leave chats that had already read the screen believing they never had --
+// the meaning of the setting would depend on when a client happened to
+// connect, which is exactly the rule nobody can reason about under pressure.
+func TestAPermittedChatStillRecordsThatItLooked(t *testing.T) {
+	chat := taint{permitted: true}
+	chat.note("desktop.inspect")
+	if !chat.read {
+		t.Fatal("a permitted chat did not record that it had been handed the screen")
+	}
+}
+
 // A capture taints exactly as a tree walk does: pixels are as much somebody
 // else's writing as text is.
 func TestAScreenshotTaintsToo(t *testing.T) {

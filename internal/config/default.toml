@@ -602,11 +602,18 @@ keep = 5
 # window on this machine must not be switched on by a settings file that forgot
 # to mention it. Find identifiers with desktop.apps, which needs no entry here.
 #
+# The single entry "*" means every application `denied` does not name. It has
+# to be TYPED, and that is the design: the rule above is that omission is not a
+# statement, so the widest possible allow-list must not be reachable by leaving
+# something blank. Writing it beside named identifiers is refused at load --
+# "everything, and also these two" is two sentences that disagree.
+#
 # `denied` always wins, and is seeded rather than empty. Two lists rather than
 # one because a single list would make "never look at my password manager" a
 # thing you state by omission -- and omission is what happens when somebody
 # adds an entry in a hurry. Deleting this block restores these defaults; an
-# explicitly empty list is a statement and is honored.
+# explicitly empty list is a statement and is honored. It outranks "*" too,
+# which is what keeps the widest allow-list survivable.
 applications = []
 denied = [
   "com.apple.keychainaccess",
@@ -618,6 +625,24 @@ denied = [
   "in.sinew.Enpass-Desktop",
   "com.dashlane.dashlanephonefinal",
 ]
+# Whether one chat may act on the screen it has already read.
+#
+# False here is the security control, not a cautious guess about one.
+# desktop.inspect and desktop.screenshot hand back whatever a window chose to
+# display, written by whoever controls that window -- an email, a web page, a
+# chat somebody else is in. With this off, a chat handed that content may no
+# longer move the pointer or type, so a sentence inside somebody else's message
+# cannot reach this machine's input. Acting is still possible: `atenea desktop`
+# shows what will happen and waits for a person to agree.
+#
+# Turning it on is what buys the continuous loop -- look, click, look again --
+# and it is the only way to get it. Say plainly what it costs: Atenea runs no
+# classifier over what it captured, so with this on there is nothing left
+# between a window's text and the pointer. What still stands is `denied` above,
+# the hard refusal to type into a secure field, credential redaction in
+# desktop.type, and the receipts, which keep the target application and the
+# redacted arguments of every device call.
+look_then_act = false
 
 [web]
 # Where the web capabilities may reach.

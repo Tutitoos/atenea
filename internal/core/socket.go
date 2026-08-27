@@ -224,7 +224,10 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	// One conversation per connection, and it dies with it: the chat a client
 	// opens is closed by hanging up, which is the only signal a client that
 	// crashed will ever send.
-	talk := &conversation{core: c}
+	// The look-then-act permission is read once, here, and held for the life of
+	// the connection. Reading it per call would let a settings edit change what
+	// a chat may do halfway through the loop it is already running.
+	talk := &conversation{core: c, screen: taint{permitted: c.settings.Desktop.LookThenAct}}
 	defer talk.close()
 	for lines.Scan() {
 		var req rpcRequest

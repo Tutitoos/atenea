@@ -434,6 +434,29 @@ swallowed -- the bug that printed `surfaces -` for a provider that had one.
 Written once and copied twice, it is a lookup where one copy eventually forgets
 the depth bound.
 
+An operator can let one chat act on the screen it has just read. `[desktop]
+look_then_act` is false as shipped, and the default is the control rather than
+a cautious guess about one: with it off, a chat handed a window's contents may
+no longer move the pointer or type, so a sentence inside somebody else's email
+cannot reach this machine's input.
+
+Turning it on is the only way to get the continuous loop — look, click, look
+again — which is what driving a desktop actually requires, and it is worth
+saying plainly what it costs. Atenea runs no classifier over what it captured,
+so with this on there is nothing left between a window's text and the pointer.
+What still stands is the deny-list, the hard refusal to type into a secure
+field, credential redaction in `desktop.type`, and the receipts. `atenea
+status` prints a line whenever it is on, and only when it is on: a control that
+is off gets remembered, and one that is on gets forgotten.
+
+The allow-list gained `"*"`, meaning every application `denied` does not name.
+It has to be typed. The rule that block already defended is that omission is
+not a statement, so the widest list this file can express must not be reachable
+by leaving something blank — and writing it beside named identifiers is refused
+at load, because "everything, and also these two" is two sentences that
+disagree about which is in force. `denied` outranks it, which is what makes it
+survivable: even `"*"` cannot reach a password manager.
+
 ### The measurements that shaped it
 
 macOS attributes a device permission to the **responsible ancestor**, not to the

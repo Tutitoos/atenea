@@ -478,12 +478,28 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 	return text, nil
 }
 
+// AllApplications is the token an operator writes to widen the allow-list to
+// every application Denied does not name.
+//
+// It lives here, where it is enforced, and internal/config reads it from here:
+// the settings package already depends on the adapters for their defaults, and
+// the spelling of a permission token must have exactly one home.
+const AllApplications = "*"
+
 // mayLookAt applies the allow-list. Denied first, and the order is the rule
 // rather than an optimization: a settings file naming the same application in
 // both lists is a mistake, and the safe reading of a mistake is the refusal.
+//
+// The wildcard widens the second half only. An empty bundle id is still no
+// answer -- the token says which applications are allowed, not that the target
+// no longer has to be resolved -- and Denied is still read first, so the widest
+// allow-list an operator can write still cannot reach a password manager.
 func (r *Runner) mayLookAt(bundleID string) bool {
 	if bundleID == "" || slices.Contains(r.denied, bundleID) {
 		return false
+	}
+	if slices.Contains(r.allowed, AllApplications) {
+		return true
 	}
 	return slices.Contains(r.allowed, bundleID)
 }
