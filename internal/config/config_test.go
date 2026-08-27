@@ -413,6 +413,61 @@ lifecycle = "persistent"
 // ships a daemon alongside the stdio child, and a config declaring both has
 // two answers to "where is this server" -- the same failure fileMCPServer's
 // own url-vs-command refusal exists to catch.
+// "everything, and also these two" is two sentences that disagree about which
+// one is in force. Refused rather than resolved, because whichever reading
+// this code picked would be the one the operator did not mean half the time --
+// and on this list being wrong means reading a window nobody meant to share.
+func TestTheDesktopWildcardIsRefusedBesideNamedApplications(t *testing.T) {
+	body := minimal + `
+[desktop]
+applications = ["*", "com.apple.finder"]
+`
+	_, err := config.Load(write(t, body))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "beside named applications") {
+		t.Fatalf("error = %v, kind = %v", err, got)
+	}
+}
+
+// The shipped posture did not move. This is the assertion that has to survive
+// the wildcard existing: an allow-list nobody wrote still denies everything,
+// so forgetting to mention the block is never how a machine ends up readable.
+func TestAnEmptyDesktopAllowListStillDeniesEverything(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Desktop.Applications) != 0 {
+		t.Errorf("applications = %v, want none allowed by default", cfg.Desktop.Applications)
+	}
+	if cfg.Desktop.LookThenAct {
+		t.Error("look_then_act shipped enabled; the default has to be the control")
+	}
+	if len(cfg.Desktop.Denied) == 0 {
+		t.Error("the seeded deny list is empty; the password managers are the point")
+	}
+}
+
+// The token alone is accepted, and it is the only way to say "everything":
+// there is no arrangement of an empty list that reaches this state.
+func TestTheDesktopWildcardIsAcceptedAlone(t *testing.T) {
+	body := minimal + `
+[desktop]
+applications = ["*"]
+look_then_act = true
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !slices.Contains(cfg.Desktop.Applications, config.AllApplications) {
+		t.Errorf("applications = %v, want the wildcard kept", cfg.Desktop.Applications)
+	}
+	if !cfg.Desktop.LookThenAct {
+		t.Error("look_then_act was written true and did not survive the load")
+	}
+}
+
 func TestKivgraphRefusesBothEndpointAndProcess(t *testing.T) {
 	body := minimal + `
 [orchestrator.kivgraph]

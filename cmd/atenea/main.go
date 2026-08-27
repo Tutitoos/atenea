@@ -1083,6 +1083,13 @@ func printStatus(out io.Writer, status core.Status) error {
 		clients += "  (inherited: widening standing widens clients)"
 	}
 	fmt.Fprintf(out, "  clients    %s\n", clients)
+	// Printed only when it is on. A line saying a control is doing its job
+	// teaches an operator to skim past it, and this is the one line that must
+	// still be read on the day it appears.
+	if agent.LookThenAct {
+		fmt.Fprintf(out, "  desktop    look-then-act ALLOWED over %s -- a chat may act on what it read\n",
+			agent.DesktopScope)
+	}
 	fmt.Fprintf(out, "  parallel   %s\n", ceiling(agent.MaxParallel))
 	fmt.Fprintf(out, "  runs       %s\n", agent.Checkpoints)
 

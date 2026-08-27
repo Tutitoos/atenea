@@ -7,7 +7,24 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// A chat that has read this machine's screen may not then act on it.
+// A chat that has read this machine's screen may not then act on it, unless
+// the operator has said otherwise in settings.
+//
+// # The switch, and what turning it on costs
+//
+// `[desktop] look_then_act` is false as shipped, and the default IS the
+// control rather than a cautious guess about one. Turned on, everything below
+// still happens -- the reading is still noticed, the order is still known --
+// and the refusal simply does not fire. That is the whole of the change,
+// because an operator driving their own desktop wants exactly the loop this
+// otherwise forbids: look, click, look again.
+//
+// What it costs is stated here rather than in a release note, because this is
+// where somebody reads it: with it on, a sentence inside somebody else's email
+// can reach the pointer, and Atenea runs no classifier over what it captured
+// to notice. What still stands is the deny-list, which outranks even the "*"
+// allow-list token, the hard refusal to type into a secure field, credential
+// redaction in desktop.type, and the receipts.
 //
 // # The hole this closes
 //
@@ -44,6 +61,14 @@ type taint struct {
 	// clears: a chat that has seen a window cannot un-see it, and an
 	// expiry would only mean an attacker waits.
 	read bool
+	// permitted mirrors `[desktop] look_then_act` for the life of this chat.
+	//
+	// The reading is still recorded when it is true, rather than skipped as an
+	// optimization, so the two states differ only in whether the refusal
+	// fires. A build that stopped noticing would make the switch's meaning
+	// depend on when a chat happened to connect, which is the kind of rule
+	// nobody can reason about at the moment they need to.
+	permitted bool
 }
 
 // observing reports whether a capability hands back what is on the screen.
@@ -69,9 +94,9 @@ func acting(capability contract.Capability) bool {
 		slices.Contains(capability.Effects, contract.EffectExternal)
 }
 
-// refuseIfTainted stops an act that follows a look.
+// refuseIfTainted stops an act that follows a look, unless settings allow it.
 func (t *taint) refuseIfTainted(capability contract.Capability) error {
-	if !acting(capability) || !t.read {
+	if t.permitted || !acting(capability) || !t.read {
 		return nil
 	}
 	return contract.Fail(contract.FailurePermissionDenied,

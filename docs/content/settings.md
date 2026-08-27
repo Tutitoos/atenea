@@ -722,6 +722,7 @@ only ever be used to make it lose the entry it exists to keep.
 [desktop]
 applications = []           # bundle identifiers that may be looked at; EMPTY DENIES ALL
 denied = ["com.apple.keychainaccess", "com.1password.1password"]  # always wins
+look_then_act = false       # may a chat act on the screen it just read?
 ```
 
 `applications` is the one list in this file where empty means *nothing* rather
@@ -738,8 +739,33 @@ an entry in a hurry. The shipped refusals are the applications where one
 screenshot is a credential. Deleting the block restores them; writing an
 explicitly empty list is a statement and is honored.
 
+The single entry `"*"` means every application `denied` does not name. It has to
+be typed, and that is the point: the rule above is that omission is not a
+statement, so the widest allow-list this file can express must not be reachable
+by leaving something blank. Writing it beside named identifiers is refused at
+load — "everything, and also these two" is two sentences that disagree about
+which is in force. `denied` outranks it, which is what keeps it survivable: even
+`"*"` cannot reach a password manager.
+
 Bundle identifiers rather than display names throughout: a name is localized,
 changes under the reader's feet, and two applications may share one.
+
+`look_then_act` decides whether one chat may act on the screen it has already
+read, and `false` is the security control rather than a cautious guess about
+one. `desktop.inspect` and `desktop.screenshot` return whatever a window chose
+to display, written by whoever controls it. With this off, a chat handed that
+content may no longer move the pointer or type — so a sentence inside somebody
+else's email cannot reach this machine's input. Acting is still available:
+`atenea desktop` shows what will happen and waits for a person to agree.
+
+Turning it on is the only way to get the continuous loop — look, click, look
+again — which is what driving a desktop actually requires. What it costs, said
+plainly: Atenea runs no classifier over what it captured, so with this on there
+is nothing left between a window's text and the pointer. What still stands is
+`denied`, the hard refusal to type into a secure field, credential redaction in
+`desktop.type`, and the receipts. `atenea status` prints a line whenever it is
+on, because a control that is off gets remembered and one that is on gets
+forgotten.
 
 Neither list is a permission on its own. The capabilities behind them cause the
 `device` effect, which no floor grants by default, and the adapter refuses them

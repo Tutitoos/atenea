@@ -442,6 +442,45 @@ func TestAnApplicationNobodyAllowedIsRefused(t *testing.T) {
 	}
 }
 
+// The wildcard reaches an application nobody named, which is what an operator
+// asks for when they write it: drive whatever is on this desktop.
+func TestTheWildcardReachesAnApplicationNobodyNamed(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{desktop.AllApplications},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := runner.Run(t.Context(), inspectRequest(t, "com.apple.Notes")); err != nil {
+		t.Fatalf("the wildcard refused an application: %v", err)
+	}
+}
+
+// And it does not reach past Denied. This is the property that makes the
+// widest allow-list survivable: the seeded password-manager list has to
+// outrank the token that means "everything", or "everything" would quietly
+// include the one place a single screenshot is a credential.
+func TestTheWildcardDoesNotReachPastDenied(t *testing.T) {
+	runner, err := desktop.New(desktop.Options{
+		Session:     inspectHelper(t),
+		Responsible: func() bool { return true },
+		Allowed:     []string{desktop.AllApplications},
+		Denied:      []string{"com.1password.1password"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = runner.Run(t.Context(), inspectRequest(t, "com.1password.1password"))
+	if err == nil {
+		t.Fatal("the wildcard read a denied application")
+	}
+	if got := contract.KindOf(err); got != contract.FailurePermissionDenied {
+		t.Errorf("failure = %v, want permission_denied", got)
+	}
+}
+
 // Denied wins over allowed, because a settings file naming the same
 // application in both is a mistake and the safe reading of a mistake is the
 // refusal. Getting this backwards would turn the seeded password-manager list

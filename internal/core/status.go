@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -347,8 +348,35 @@ type OrchestratorStatus struct {
 	// the screen: two equal lists with no note would look like a decision.
 	ClientFloor          []string
 	ClientFloorInherited bool
-	Checkpoints          string
-	Light                Light
+	// LookThenAct says a chat that has read the screen may then act on it,
+	// and DesktopScope says how wide the allow-list that governs it is.
+	//
+	// On the screen because a control that is off is remembered and a control
+	// that is on is forgotten. This one removes Atenea's only defense against
+	// screen content reaching the pointer, so the machine has to say so
+	// somewhere its operator already looks, rather than only in the file they
+	// edited once.
+	LookThenAct  bool
+	DesktopScope string
+	Checkpoints  string
+	Light        Light
+}
+
+// desktopScope describes the allow-list in one phrase, counting rather than
+// listing: an operator who allowed thirty applications does not want them on
+// the status screen, and one who allowed none needs to be told that plainly
+// rather than shown an empty space.
+func desktopScope(screen config.Desktop) string {
+	switch {
+	case slices.Contains(screen.Applications, config.AllApplications):
+		return fmt.Sprintf("every application except %d denied", len(screen.Denied))
+	case len(screen.Applications) == 0:
+		return "no application"
+	case len(screen.Applications) == 1:
+		return "1 application"
+	default:
+		return fmt.Sprintf("%d applications", len(screen.Applications))
+	}
 }
 
 // funnelLine says out loud which filters are wired and, crucially, how far the
@@ -743,6 +771,8 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 	}
 	orchestrator := c.settings.Orchestrator
 	out.ClientFloorInherited = orchestrator.ClientEffectsInherited
+	out.LookThenAct = c.settings.Desktop.LookThenAct
+	out.DesktopScope = desktopScope(c.settings.Desktop)
 	for _, effect := range orchestrator.StandingEffects {
 		out.Standing = append(out.Standing, effect.String())
 	}
