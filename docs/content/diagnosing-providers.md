@@ -30,9 +30,9 @@ and broken are different findings, and only the second is worth debugging.
 serves     ripgrep
 no runner  claude.search, codex.search,
            kivgraph.cross_repo_consumers, kivgraph.definition, kivgraph.get,
-           kivgraph.impact, kivgraph.index, kivgraph.overview,
+           kivgraph.dependencies, kivgraph.impact, kivgraph.index,
+           kivgraph.intent_search, kivgraph.overview,
            kivgraph.references, kivgraph.status,
-           kivgraph.unresolved_references,
            serena.definition, serena.implementations, serena.overview,
            serena.references, serena.symbol_search,
            tokensave.calls, tokensave.context, tokensave.overview

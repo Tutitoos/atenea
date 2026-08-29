@@ -592,12 +592,17 @@ type KivgraphAdapter struct {
 	// answers 401 without one. Meaningless without Endpoint, so build refuses
 	// a Token with no Endpoint to send it to.
 	Token string
+	// Binary is Kivgraph's official CLI, used only by repository.index. It is
+	// independent from Endpoint and does not supervise another MCP server.
+	Binary string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one call. It sits at Serena's own
 	// ceiling: opening a graph database cold is slow long before it is
 	// stuck.
 	Timeout time.Duration
+	// IndexTimeout caps a full repository.index rebuild separately from reads.
+	IndexTimeout time.Duration
 	// Dashboard is the optional read-only web viewer exposed by a separate
 	// Kivgraph UI process. The viewer is deliberately a different process and
 	// transport from whichever one of Endpoint or Process reaches the MCP
@@ -1397,8 +1402,10 @@ type fileSerenaAdapter struct {
 type fileKivgraphAdapter struct {
 	Endpoint         string              `toml:"endpoint"`
 	Token            string              `toml:"token"`
+	Binary           string              `toml:"binary"`
 	Implementations  *[]string           `toml:"implementations"`
 	Timeout          string              `toml:"timeout"`
+	IndexTimeout     string              `toml:"index_timeout"`
 	Dashboard        string              `toml:"dashboard"`
 	DashboardProcess *fileManagedProcess `toml:"dashboard_process"`
 	Process          *fileManagedProcess `toml:"process"`
@@ -2130,8 +2137,10 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		},
 		Kivgraph: KivgraphAdapter{
 			Endpoint:        kivgraph.DefaultEndpoint,
+			Binary:          kivgraph.DefaultBinary,
 			Implementations: kivgraph.DefaultImplementations(),
 			Timeout:         kivgraph.DefaultTimeout,
+			IndexTimeout:    kivgraph.DefaultIndexTimeout,
 		},
 		Tokensave: TokensaveAdapter{
 			Implementations: tokensave.DefaultImplementations(),
@@ -2618,6 +2627,13 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 		}
 		out.Token = strings.TrimSpace(l.Token)
 	}
+	if l.Binary != "" {
+		out.Binary = strings.TrimSpace(l.Binary)
+		if out.Binary == "" {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.binary must not be blank", source)
+		}
+	}
 	if l.Implementations != nil {
 		out.Implementations = *l.Implementations
 	}
@@ -2632,6 +2648,14 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 				"settings %s: orchestrator.kivgraph.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
+	}
+	if l.IndexTimeout != "" {
+		timeout, err := time.ParseDuration(l.IndexTimeout)
+		if err != nil || timeout <= 0 {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.index_timeout %q must be a positive duration", source, l.IndexTimeout)
+		}
+		out.IndexTimeout = timeout
 	}
 	if strings.TrimSpace(l.Dashboard) != "" {
 		validated, err := validateDashboardURL(source, "orchestrator.kivgraph", "kivgraph", l.Dashboard)

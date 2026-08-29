@@ -52,6 +52,21 @@ func newFakeKivgraph(t *testing.T) (*fakeKivgraph, Session) {
 func (f *fakeKivgraph) on(tool string, result string, isError bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Most fixtures predate Kivgraph 0.9.2's mandatory epistemic envelope.
+	// Mark well-formed legacy query fixtures COMPLETE so individual tests can
+	// stay focused on the row shape they exercise. modern_test.go tests missing,
+	// corrupt and LOWER_BOUND metadata directly.
+	if !isError && slicesContain([]string{toolConsumers, toolReferences, toolOutline, toolBlast}, tool) {
+		var document map[string]any
+		if json.Unmarshal([]byte(result), &document) == nil {
+			if _, present := document["completeness"]; !present {
+				document["completeness"] = map[string]any{"verdict": "COMPLETE"}
+				if encoded, err := json.Marshal(document); err == nil {
+					result = string(encoded)
+				}
+			}
+		}
+	}
 	f.handlers[tool] = func(map[string]any) (string, bool) { return result, isError }
 }
 
@@ -175,28 +190,56 @@ func getCapability() contract.Capability {
 	}
 }
 
-func unresolvedCapability() contract.Capability {
+func intentCapability() contract.Capability {
 	return contract.Capability{
-		ID:      CapabilityUnresolved,
-		Version: contract.Version{Major: 1},
-		Summary: "test double for symbol.unresolved",
-		Effects: []contract.Effect{contract.EffectRead},
+		ID: CapabilityIntent, Version: contract.Version{Major: 1}, Summary: "intent search", Effects: []contract.Effect{contract.EffectRead},
 		Inputs: []contract.Field{
-			{Name: "reason", Type: contract.TypeString, Required: false},
-			{Name: "requested_package", Type: contract.TypeString, Required: false},
-			{Name: "limit", Type: contract.TypeInt, Required: false},
+			{Name: "intent", Type: contract.TypeString, Required: true},
+			{Name: "keywords", Type: contract.TypeStringList}, {Name: "path_prefix", Type: contract.TypeString},
+			{Name: "kind", Type: contract.TypeString}, {Name: "limit", Type: contract.TypeInt}, {Name: "cursor", Type: contract.TypeString},
 		},
-		Outputs: []contract.Field{{
-			Name: "unresolved", Type: contract.TypeRecordList, Required: true,
-			Fields: []contract.Field{
-				{Name: "path", Type: contract.TypeString, Required: true},
-				// offset, not line: kivgraph records a byte offset here and
-				// the capability declares what it has.
-				{Name: "offset", Type: contract.TypeInt, Required: true},
-				{Name: "reason", Type: contract.TypeString, Required: true},
-				{Name: "requested_package", Type: contract.TypeString, Required: false},
-			},
-		}},
+		Outputs: []contract.Field{
+			{Name: "matches", Type: contract.TypeRecordList, Required: true, Fields: []contract.Field{
+				{Name: "rank", Type: contract.TypeInt, Required: true}, {Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "qualified_name", Type: contract.TypeString, Required: true}, {Name: "kind", Type: contract.TypeString, Required: true},
+				{Name: "path", Type: contract.TypeString, Required: true}, {Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "end_line", Type: contract.TypeInt, Required: true}, {Name: "match", Type: contract.TypeString, Required: true},
+				{Name: "terms", Type: contract.TypeInt, Required: true},
+			}},
+			{Name: "term_diagnostics", Type: contract.TypeRecordList, Required: true, Fields: []contract.Field{
+				{Name: "term", Type: contract.TypeString, Required: true}, {Name: "symbols", Type: contract.TypeInt, Required: true},
+				{Name: "frequency", Type: contract.TypeString, Required: true},
+			}},
+			{Name: "unmatched_terms", Type: contract.TypeStringList, Required: true},
+			{Name: "truncated", Type: contract.TypeBool, Required: true}, {Name: "next_cursor", Type: contract.TypeString},
+		},
+	}
+}
+
+func dependenciesCapability() contract.Capability {
+	return contract.Capability{
+		ID: CapabilityDependencies, Version: contract.Version{Major: 1}, Summary: "dependencies", Effects: []contract.Effect{contract.EffectRead},
+		Inputs: []contract.Field{
+			{Name: "file", Type: contract.TypeString, Required: true}, {Name: "line", Type: contract.TypeInt, Required: true},
+			{Name: "column", Type: contract.TypeInt, Required: true}, {Name: "name", Type: contract.TypeString},
+			{Name: "to", Type: contract.TypeString}, {Name: "to_path", Type: contract.TypeString},
+			{Name: "depth", Type: contract.TypeInt}, {Name: "max_nodes", Type: contract.TypeInt},
+			{Name: "edge_kinds", Type: contract.TypeStringList}, {Name: "confidence", Type: contract.TypeString},
+			{Name: "include_derived", Type: contract.TypeBool}, {Name: "limit", Type: contract.TypeInt}, {Name: "cursor", Type: contract.TypeString},
+		},
+		Outputs: []contract.Field{
+			{Name: "dependencies", Type: contract.TypeRecordList, Required: true, Fields: []contract.Field{
+				{Name: "repository", Type: contract.TypeString, Required: true}, {Name: "name", Type: contract.TypeString, Required: true},
+				{Name: "qualified_name", Type: contract.TypeString, Required: true}, {Name: "kind", Type: contract.TypeString, Required: true},
+				{Name: "path", Type: contract.TypeString, Required: true}, {Name: "line", Type: contract.TypeInt, Required: true},
+				{Name: "end_line", Type: contract.TypeInt, Required: true}, {Name: "depth", Type: contract.TypeInt, Required: true},
+				{Name: "reached_from", Type: contract.TypeString, Required: true}, {Name: "via_kind", Type: contract.TypeString, Required: true},
+				{Name: "via_confidence", Type: contract.TypeString, Required: true}, {Name: "via_provenance", Type: contract.TypeString, Required: true},
+			}},
+			{Name: "reached", Type: contract.TypeInt, Required: true}, {Name: "deepest_depth", Type: contract.TypeInt, Required: true},
+			{Name: "truncated", Type: contract.TypeBool, Required: true}, {Name: "next_cursor", Type: contract.TypeString},
+			{Name: "witness_to", Type: contract.TypeString}, {Name: "witness_hops", Type: contract.TypeInt},
+		},
 	}
 }
 
@@ -360,8 +403,10 @@ func capabilityFor(id string) contract.Capability {
 		return consumersCapability()
 	case CapabilityGet:
 		return getCapability()
-	case CapabilityUnresolved:
-		return unresolvedCapability()
+	case CapabilityIntent:
+		return intentCapability()
+	case CapabilityDependencies:
+		return dependenciesCapability()
 	case CapabilityGraphStatus:
 		return statusCapability()
 	case CapabilityImpact:
@@ -385,8 +430,10 @@ func implFor(capabilityID string) string {
 		return ImplConsumers
 	case CapabilityGet:
 		return ImplGet
-	case CapabilityUnresolved:
-		return ImplUnresolved
+	case CapabilityIntent:
+		return ImplIntent
+	case CapabilityDependencies:
+		return ImplDependencies
 	case CapabilityGraphStatus:
 		return ImplStatus
 	case CapabilityImpact:
@@ -512,7 +559,7 @@ func TestRunnerAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 	caps := runner.Capabilities()
 	for _, want := range []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
-		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+		CapabilityConsumers, CapabilityGet, CapabilityIntent, CapabilityDependencies, CapabilityGraphStatus,
 		CapabilityImpact, CapabilityIndex,
 	} {
 		if !slicesContain(caps, want) {
@@ -571,7 +618,7 @@ func TestRunRejectsACapabilityItHasNoCodeFor(t *testing.T) {
 func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 	capabilities := []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
-		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+		CapabilityConsumers, CapabilityGet, CapabilityIntent, CapabilityDependencies, CapabilityGraphStatus,
 	}
 	for _, capabilityID := range capabilities {
 		t.Run(capabilityID, func(t *testing.T) {
@@ -579,8 +626,7 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 			fake, sess := newFakeKivgraph(t)
 			// isError:false, every count zero -- kivgraph's own empty-config
 			// failure mode. Nothing else is registered: reaching
-			// find_cross_repo_consumers, get_symbol or
-			// get_unresolved_references at all would itself be the bug this
+			// a query tool at all would itself be the bug this
 			// test exists to catch, since the fake fails loudly on any tool
 			// it was not told to answer.
 			fake.on(toolStatus, emptyStatus, false)
@@ -588,8 +634,10 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 
 			var payload map[string]any
 			switch capabilityID {
-			case CapabilityDefinition, CapabilityReferences, CapabilityConsumers:
+			case CapabilityDefinition, CapabilityReferences, CapabilityConsumers, CapabilityDependencies:
 				payload = map[string]any{"file": "a.go", "line": 1, "column": 1}
+			case CapabilityIntent:
+				payload = map[string]any{"intent": "find the logger"}
 			case CapabilityOverview:
 				payload = map[string]any{"file": "a.go"}
 			case CapabilityGet:
@@ -602,7 +650,7 @@ func TestRunRefusesEveryCapabilityWhenTheGraphIsEmpty(t *testing.T) {
 			if got := contract.KindOf(err); got != contract.FailureUnavailable {
 				t.Fatalf("kind = %v, want %v (err=%v)", got, contract.FailureUnavailable, err)
 			}
-			for _, tool := range []string{toolConsumers, toolReferences, toolGet, toolUnresolved, toolOutline} {
+			for _, tool := range []string{toolConsumers, toolReferences, toolGet, toolIntent, toolDependencies, toolOutline} {
 				if calls := fake.callsTo(tool); len(calls) > 0 {
 					t.Errorf("%s was called %d time(s) despite the empty-graph guard", tool, len(calls))
 				}
@@ -1598,52 +1646,6 @@ func TestRunnerDispatchesThroughAnyTypeThatImplementsSession(t *testing.T) {
 	if row["path"] != "src/index.ts" || row["line"] != 41 ||
 		row["name"] != "createLogger" || row["kind"] != "function" {
 		t.Fatalf("row = %#v, want get_symbol's answer renamed to symbol.get's declared fields", row)
-	}
-}
-
-// symbol.unresolved declares offset and not line, because kivgraph records a
-// byte offset and synthesizing a line from it would invent a position the
-// provider never reported. requested_package is written only when the row
-// carries one, and a truncated answer says so rather than reading as complete.
-func TestRunUnresolvedKeepsTheByteOffsetAndReportsTruncation(t *testing.T) {
-	repo := testRepo(t)
-	fake, sess := newFakeKivgraph(t)
-	fake.on(toolStatus, readyStatus("current", absPath(t, repo.Path)), false)
-	fake.on(toolUnresolved, `{"results":[
-		{"file_path":"src/a.ts","start_offset":1487,"reason":"PACKAGE_PROVIDER_NOT_FOUND","requested_package":"@kena/logger"},
-		{"file_path":"src/b.ts","start_offset":92,"reason":"AMBIGUOUS"}
-	],"truncated":true,"next_cursor":"c-42"}`, false)
-	runner := newTestRunner(t, sess)
-
-	out, err := runner.Run(context.Background(), request(t, repo, CapabilityUnresolved,
-		map[string]any{"reason": "PACKAGE_PROVIDER_NOT_FOUND", "limit": 2}))
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	asked := fake.callsTo(toolUnresolved)
-	if len(asked) != 1 || asked[0]["reason"] != "PACKAGE_PROVIDER_NOT_FOUND" || asked[0]["limit"] != 2 {
-		t.Fatalf("%s was asked %#v, want the declared filters forwarded", toolUnresolved, asked)
-	}
-	if _, forwarded := asked[0]["requested_package"]; forwarded {
-		t.Fatalf("%s was asked %#v, want no key for a filter nobody sent", toolUnresolved, asked)
-	}
-	rows, ok := out.Result["unresolved"].([]any)
-	if !ok || len(rows) != 2 {
-		t.Fatalf("unresolved = %#v, want both rows", out.Result["unresolved"])
-	}
-	first := rows[0].(map[string]any)
-	if first["offset"] != 1487 || first["requested_package"] != "@kena/logger" {
-		t.Fatalf("first row = %#v, want start_offset carried through as offset", first)
-	}
-	if _, hasLine := first["line"]; hasLine {
-		t.Fatalf("first row = %#v, want no line: kivgraph reports none here", first)
-	}
-	second := rows[1].(map[string]any)
-	if _, has := second["requested_package"]; has {
-		t.Fatalf("second row = %#v, want no requested_package for a reason that names none", second)
-	}
-	if !hasNote(out, "past cursor \"c-42\"") {
-		t.Fatalf("discoveries = %#v, want one saying the answer was truncated", out.Discoveries)
 	}
 }
 
