@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/floor"
@@ -100,6 +101,47 @@ func TestCommandReadsCoreBackedViews(t *testing.T) {
 	}
 }
 
+func TestCommandAliasesAndSafeErrors(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	service, err := New(config.Config{}, Command)
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	for _, test := range []struct {
+		name string
+		want string
+	}{
+		{name: "", want: "status"},
+		{name: "health", want: "status"},
+		{name: "providers", want: "catalog"},
+		{name: "detect", want: "detect"},
+	} {
+		response, err := service.Command(context.Background(), CommandRequest{Name: test.name})
+		if err != nil {
+			t.Fatalf("command %q: %v", test.name, err)
+		}
+		if response.Command != test.want {
+			t.Fatalf("command %q normalized to %q, want %q", test.name, response.Command, test.want)
+		}
+	}
+	if response, err := service.Command(context.Background(), CommandRequest{Name: "incidents", All: true}); err != nil {
+		t.Fatalf("all incidents: %v", err)
+	} else if response.Status != "ok" {
+		t.Fatalf("all incidents response = %#v", response)
+	}
+
+	for _, request := range []CommandRequest{
+		{Name: "traces", Since: "not-a-duration"},
+		{Name: "traces", Verdict: "passed"},
+		{Name: "intent"},
+		{Name: "intent", Repository: "missing"},
+	} {
+		if _, err := service.Command(context.Background(), request); err == nil {
+			t.Fatalf("unsafe or invalid request was accepted: %#v", request)
+		}
+	}
+}
+
 func TestCommandMarkdownCoversReadOnlyDataShapes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -108,8 +150,10 @@ func TestCommandMarkdownCoversReadOnlyDataShapes(t *testing.T) {
 	}{
 		{name: "strings", data: []string{"help"}, want: "/atenea help"},
 		{name: "status", data: Status{}, want: "**Luz:**"},
+		{name: "status permissions", data: Status{Orchestrator: OrchestratorStatus{ClientFloor: []string{"read"}}}, want: "Permisos de cliente"},
 		{name: "empty metrics", data: []metrics.Row{}, want: "No hay mediciones"},
 		{name: "traces", data: []trace.Row{{TypeName: "worker", Objective: "goal"}}, want: "| Started |"},
+		{name: "closed trace", data: []trace.Row{{StartedAt: time.Now(), EndedAt: time.Now(), TypeName: "worker", Objective: "goal"}}, want: "| goal |"},
 		{name: "floor", data: []floor.Measurement{{}}, want: "| Repository |"},
 		{name: "empty incidents", data: notebook.Read{}, want: "No hay incidencias"},
 		{name: "commands map", data: map[string]any{"commands": []string{"status"}}, want: "/atenea status"},
@@ -149,14 +193,25 @@ func TestPromptsListAndGetUseStrictTypedArguments(t *testing.T) {
 	}
 
 	for _, raw := range []string{
+		`{"name":"status","extra":"x"}`,
 		`{"name":"missing"}`,
 		`{"name":"status","arguments":{"unknown":"x"}}`,
 		`{"name":"incidents","arguments":{"all":"sometimes"}}`,
 		`{"name":"traces","arguments":{"limit":"many"}}`,
+		`{"name":"traces","arguments":{"open":"sometimes"}}`,
 		`{"name":"status"} {}`,
 	} {
 		if _, err := conv.promptsGet(json.RawMessage(raw)); err == nil {
 			t.Errorf("invalid prompt request was accepted: %s", raw)
+		}
+	}
+	for _, raw := range []string{
+		`{"name":"metrics","arguments":{"capability":"code.search","implementation":"ripgrep","repository":"api"}}`,
+		`{"name":"doctor","arguments":{"client":"claude","profile":"claude"}}`,
+		`{"name":"incidents","arguments":{"all":"true"}}`,
+	} {
+		if _, err := conv.promptsGet(json.RawMessage(raw)); err != nil {
+			t.Errorf("valid prompt request was rejected: %s: %v", raw, err)
 		}
 	}
 
