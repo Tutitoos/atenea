@@ -824,9 +824,6 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if profile != "" {
-			_ = os.Setenv("ATENEA_DESKTOP_PROFILE", profile)
-		}
 		if len(mcpArgs) == 1 && mcpArgs[0] == "--check" {
 			return mcpProbe(out)
 		}
@@ -834,7 +831,7 @@ func run(args []string, out io.Writer) error {
 			return contract.Fail(contract.FailureInvalidInput,
 				"mcp takes no arguments (or --check): %q", mcpArgs[0])
 		}
-		return cmdMCP(os.Stdin, out)
+		return cmdMCP(os.Stdin, out, profile)
 	case "service":
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
@@ -3594,7 +3591,7 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	name, rest := options.Client, options.ClientArgs
 	if name == "chatgpt" {
 		if options.EmitConfig {
-			return emitChatGPTConfig(settingsPath, options.Profile, os.Stdout)
+			return emitChatGPTConfig(settingsPath, options.Profile, out)
 		}
 		installArgs := []string{"install", "chatgpt"}
 		if options.Profile != "" {
@@ -3610,10 +3607,11 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	// Resolved before anything is probed. Spending eleven handshakes to
 	// discover the binary is not installed would be the report arriving
 	// after the answer that makes it pointless.
-	binary, err := exec.LookPath(name)
-	if err != nil && !options.EmitConfig {
+	resolved := resolveDesktopClient(name, nil)
+	binary := resolved.Path
+	if binary == "" && !options.EmitConfig {
 		return contract.Fail(contract.FailureNotFound,
-			"%s is not on PATH: %v", name, err)
+			"%s no está disponible en PATH ni en el bundle de ChatGPT", name)
 	}
 
 	// Settings only. A Core would open the measurement base and may start a
@@ -3633,14 +3631,7 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	for _, impl := range cfg.Implementations {
 		served[impl.Provider] = true
 	}
-	profiles, err := config.DesktopProfilesFromFile(settingsPath)
-	if err != nil {
-		return err
-	}
-	if err := config.ValidateDesktopProfiles(profiles, cfg.MCPServers); err != nil {
-		return err
-	}
-	profile, err := config.ResolveDesktopProfile(profiles, options.Profile, name)
+	profile, err := config.ResolveDesktopProfile(cfg.DesktopProfiles, options.Profile, name)
 	if err != nil {
 		return err
 	}
@@ -3668,7 +3659,11 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		if flags, err = client.flags(plan, core); err != nil {
 			return err
 		}
-		flags = append(supportedClientFlags(binary, profile.ClientFlags), flags...)
+		supported, omitted := detectClientFlags(binary, profile.ClientFlags)
+		flags = append(supported, flags...)
+		if !options.EmitConfig && len(omitted) > 0 {
+			fmt.Fprintf(out, "wrap %s degraded: omitted unsupported client flag(s): %s\n", name, strings.Join(omitted, ", "))
+		}
 	}
 	if client.env != "" {
 		payload, err := client.render(plan, core)
@@ -3685,7 +3680,6 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		fmt.Fprintf(os.Stdout, "%s %s\n", name, strings.Join(flags, " "))
 		return nil
 	}
-	env = append(config.DesktopPolicyEnv(profile), env...)
 	return launch(binary, clientArgv(name, flags, rest, client.variadic), env)
 }
 

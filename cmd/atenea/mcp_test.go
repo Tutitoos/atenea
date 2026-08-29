@@ -22,7 +22,7 @@ func TestTheBridgeCarriesAConversationBothWays(t *testing.T) {
 	toBridge, fromClient := io.Pipe()
 	fromBridge, toClient := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- cmdMCP(toBridge, toClient) }()
+	go func() { done <- cmdMCP(toBridge, toClient, "") }()
 
 	answers := bufio.NewScanner(fromBridge)
 	write := func(line string) {
@@ -89,7 +89,7 @@ func TestTheBridgeCarriesAConversationBothWays(t *testing.T) {
 func TestTheBridgeWithNoServiceSaysHowToStartOne(t *testing.T) {
 	isolated(t)
 
-	err := cmdMCP(strings.NewReader(""), io.Discard)
+	err := cmdMCP(strings.NewReader(""), io.Discard, "")
 	if err == nil {
 		t.Fatal("the bridge started with no service behind it")
 	}
@@ -140,6 +140,25 @@ func TestTheBridgeRefusesArgumentsItDoesNotKnow(t *testing.T) {
 	}
 }
 
+func TestTheBridgeOwnsTheDesktopProfileInInitialize(t *testing.T) {
+	line, ok := injectMCPProfile([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","_meta":{"atenea":{"profile":"attacker"},"trace":"keep"}}`), "claude")
+	if !ok {
+		t.Fatal("initialize was not transformed")
+	}
+	var message map[string]any
+	if err := json.Unmarshal(line, &message); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := message["_meta"].(map[string]any)
+	atenea, _ := meta["atenea"].(map[string]any)
+	if atenea["profile"] != "claude" {
+		t.Fatalf("profile = %v, want trusted wrapper profile", atenea["profile"])
+	}
+	if meta["trace"] != "keep" {
+		t.Fatalf("unrelated metadata changed: %v", meta)
+	}
+}
+
 // The isolation is a claim until somebody can see it. A connected client is a
 // row on the status screen, and a screen that cannot show one makes every
 // statement about per-chat grants unfalsifiable from the outside.
@@ -158,7 +177,7 @@ func TestAConnectedClientIsOnTheStatusScreen(t *testing.T) {
 
 	toBridge, fromClient := io.Pipe()
 	fromBridge, toClient := io.Pipe()
-	go func() { _ = cmdMCP(toBridge, toClient) }()
+	go func() { _ = cmdMCP(toBridge, toClient, "") }()
 	defer func() { _ = fromClient.Close() }()
 	go func() { _, _ = io.Copy(io.Discard, fromBridge) }()
 

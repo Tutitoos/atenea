@@ -74,3 +74,26 @@ null arguments become `{}`, `input` is accepted as an argument alias, and
 Compatibility events are stored in Atenea's state directory. They include the
 client, version, profile, tool, outcome, latency, and fallback status, but never
 tool arguments, results, prompts, tokens, headers, or environment values.
+
+## Current validation boundary
+
+The automated suite covers configuration loading, profile propagation, MCP
+normalization, fallback diagnostics, atomic installation, and compatibility
+log aggregation. The live three-client matrix is intentionally deferred while
+Claude Code, ChatGPT Desktop, or Codex chats are active: it requires an
+authorized maintenance window to restart clients and temporarily adopt their
+real configuration entries.
+
+During that window, use this sequence:
+
+```text
+atenea doctor --client claude --json
+atenea doctor --client chatgpt --json
+atenea doctor --client codex --json
+```
+
+Then validate `initialize`, `tools/list`, read-only `code.search`, and
+`raw.semgrep.get_supported_languages`. Finally remove the managed entries and
+restore the saved configuration byte-for-byte. Do not use `--replace` outside
+that window; an existing unmarked `mcp_servers.atenea` entry is an
+`unmanaged_collision` by design.

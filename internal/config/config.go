@@ -1995,6 +1995,16 @@ func parse(raw []byte, source string) (Config, error) {
 		seen[server.ID] = true
 		cfg.MCPServers = append(cfg.MCPServers, server)
 	}
+	profiles, err := validateDesktopProfiles(defaultDesktopProfiles(), decoded.DesktopProfiles)
+	if err != nil {
+		return Config{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %v", source, err)
+	}
+	if err := ValidateDesktopProfiles(profiles, cfg.MCPServers); err != nil {
+		return Config{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: %v", source, err)
+	}
+	cfg.DesktopProfiles = profiles
 	return cfg, nil
 }
 

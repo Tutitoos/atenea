@@ -2,8 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -70,105 +68,6 @@ func parseDesktopDuration(raw string, fallback time.Duration) (time.Duration, er
 	return d, nil
 }
 
-// DesktopProfilesFromFile reads only the profile blocks. The main config
-// decoder still owns validation of the rest of Atenea's TOML document.
-func DesktopProfilesFromFile(path string) ([]DesktopProfile, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			profiles, buildErr := validateDesktopProfiles(defaultDesktopProfiles(), nil)
-			return profiles, buildErr
-		}
-		return nil, err
-	}
-	var blocks []fileDesktopProfile
-	var current *fileDesktopProfile
-	flush := func() error {
-		if current == nil {
-			return nil
-		}
-		p, err := current.build()
-		if err != nil {
-			return err
-		}
-		blocks = append(blocks, fileDesktopProfileFrom(p))
-		current = nil
-		return nil
-	}
-	for _, rawLine := range strings.Split(string(b), "\n") {
-		line := strings.TrimSpace(strings.SplitN(rawLine, "#", 2)[0])
-		if line == "[[desktop_profile]]" {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-			current = &fileDesktopProfile{}
-			continue
-		}
-		if current == nil || !strings.Contains(line, "=") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-		switch key {
-		case "name":
-			current.Name = parseDesktopString(value)
-		case "clients":
-			current.Clients = parseDesktopStrings(value)
-		case "mcp_mode":
-			current.MCPMode = parseDesktopString(value)
-		case "direct_mcp":
-			current.DirectMCP = parseDesktopStrings(value)
-		case "enabled_tools":
-			current.EnabledTools = parseDesktopStrings(value)
-		case "disabled_tools":
-			current.DisabledTools = parseDesktopStrings(value)
-		case "startup_timeout":
-			current.StartupTimeout = parseDesktopString(value)
-		case "tool_timeout":
-			current.ToolTimeout = parseDesktopString(value)
-		case "fallback":
-			current.Fallback = parseDesktopString(value)
-		case "client_flags":
-			current.ClientFlags = parseDesktopStrings(value)
-		}
-	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	return validateDesktopProfiles(defaultDesktopProfiles(), blocks)
-}
-
-func parseDesktopString(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if len(raw) >= 2 && ((raw[0] == '"' && raw[len(raw)-1] == '"') || (raw[0] == '\'' && raw[len(raw)-1] == '\'')) {
-		return strings.ReplaceAll(raw[1:len(raw)-1], `\"`, `"`)
-	}
-	return raw
-}
-
-func parseDesktopStrings(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if len(raw) < 2 || raw[0] != '[' || raw[len(raw)-1] != ']' {
-		return nil
-	}
-	var values []string
-	for _, part := range strings.Split(raw[1:len(raw)-1], ",") {
-		if value := parseDesktopString(strings.TrimSpace(part)); value != "" {
-			values = append(values, value)
-		}
-	}
-	return values
-}
-
-func fileDesktopProfileFrom(p DesktopProfile) fileDesktopProfile {
-	return fileDesktopProfile{
-		Name: p.Name, Clients: p.Clients, MCPMode: p.MCPMode, DirectMCP: p.DirectMCP,
-		EnabledTools: p.EnabledTools, DisabledTools: p.DisabledTools,
-		StartupTimeout: p.StartupTimeout.String(), ToolTimeout: p.ToolTimeout.String(),
-		Fallback: p.Fallback, ClientFlags: p.ClientFlags,
-	}
-}
-
 func defaultDesktopProfiles() []fileDesktopProfile {
 	return []fileDesktopProfile{
 		{Name: "claude", Clients: []string{"claude"}, MCPMode: "atenea_only", Fallback: "diagnostic", ClientFlags: []string{"--strict-mcp-config"}},
@@ -184,10 +83,15 @@ func validateDesktopProfiles(defaults, overrides []fileDesktopProfile) ([]Deskto
 		merged[p.Name] = p
 		order = append(order, p.Name)
 	}
+	seenOverrides := make(map[string]bool, len(overrides))
 	for _, p := range overrides {
 		if p.Name == "" {
 			return nil, fmt.Errorf("desktop_profile requires name")
 		}
+		if seenOverrides[p.Name] {
+			return nil, fmt.Errorf("desktop_profile %q is declared twice", p.Name)
+		}
+		seenOverrides[p.Name] = true
 		if _, exists := merged[p.Name]; !exists {
 			order = append(order, p.Name)
 		}
@@ -240,7 +144,7 @@ func ResolveDesktopProfile(profiles []DesktopProfile, name, client string) (Desk
 		if p.Name != name {
 			continue
 		}
-		if len(p.Clients) > 0 && !containsDesktop(p.Clients, client) && !containsDesktop(p.Clients, "*") {
+		if client != "" && len(p.Clients) > 0 && !containsDesktop(p.Clients, client) && !containsDesktop(p.Clients, "*") {
 			return DesktopProfile{}, fmt.Errorf("desktop_profile %q is not compatible with client %q", name, client)
 		}
 		return p, nil
@@ -294,16 +198,4 @@ func FilterDesktopMCPServers(servers []MCPServer, profile DesktopProfile) []MCPS
 		filtered = append(filtered, server)
 	}
 	return filtered
-}
-
-// DesktopPolicyEnv serializes non-sensitive profile policy for the Atenea MCP
-// process. Values are allowlists/denylists only; no credentials are included.
-func DesktopPolicyEnv(profile DesktopProfile) []string {
-	return []string{
-		"ATENEA_DESKTOP_PROFILE=" + profile.Name,
-		"ATENEA_DESKTOP_FALLBACK=" + profile.Fallback,
-		"ATENEA_DESKTOP_ENABLED_TOOLS=" + strings.Join(profile.EnabledTools, ","),
-		"ATENEA_DESKTOP_DISABLED_TOOLS=" + strings.Join(profile.DisabledTools, ","),
-		"ATENEA_DESKTOP_TOOL_TIMEOUT_MS=" + strconv.FormatInt(profile.ToolTimeout.Milliseconds(), 10),
-	}
 }
