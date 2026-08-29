@@ -237,6 +237,15 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 	// A second initialize on one connection is the same client saying hello
 	// twice. Taking it as a new chat would leave the first stranded in the
 	// table with nothing to close it.
+	profileName := strings.TrimSpace(params.Meta.Atenea.Profile)
+	policy := desktopPolicy{Fallback: "none"}
+	if profileName != "" {
+		profile, err := config.ResolveDesktopProfile(v.core.settings.DesktopProfiles, profileName, desktopClientID(name))
+		if err != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "initialize profile: " + err.Error()}
+		}
+		policy = desktopPolicyFromProfile(profile)
+	}
 	v.close()
 	session, err := v.core.Open(SessionOptions{Client: name, Grant: asked})
 	if err != nil {
@@ -249,10 +258,7 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 	v.session = session
 	v.clientName = name
 	v.clientVersion = strings.TrimSpace(params.ClientInfo.Version)
-	v.policy = desktopPolicyFromEnv()
-	if profile := strings.TrimSpace(params.Meta.Atenea.Profile); profile != "" {
-		v.policy.Profile = profile
-	}
+	v.policy = policy
 
 	// What the chat ended up holding, said out loud. A client that asked for
 	// nothing still learns what it has, and one that asked to be narrowed can
@@ -479,15 +485,18 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call: " + err.Error()}
 	}
-	arguments, err := params.argumentMap()
-	if err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call arguments: " + err.Error()}
-	}
 	requestedTool = strings.TrimSpace(params.Name)
 	params.Name, fallbackUsed = normalizeDesktopToolName(requestedTool)
+	arguments, err := params.argumentMap()
+	if err != nil {
+		return desktopDiagnostic("invalid_arguments", requestedTool, params.Name, fallbackUsed,
+			"tool arguments must be a JSON object", "Retry with arguments or input as a JSON object."), nil
+	}
 	if !v.policy.allows(params.Name) {
 		outcomeHint = "denied"
-		return toolFailure(fmt.Sprintf("tool %q is not enabled for desktop profile %q", params.Name, v.policy.Profile)), nil
+		return desktopDiagnostic("profile_denied", requestedTool, params.Name, fallbackUsed,
+			fmt.Sprintf("tool %q is not enabled for desktop profile %q", params.Name, v.policy.Profile),
+			"Enable the tool in the Atenea desktop profile and retry."), nil
 	}
 	// The reserved segment is checked before the catalog, and it is checked
 	// by name rather than by looking for a backend: a name in the reserved
@@ -495,7 +504,11 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	// would answer "unknown capability, did you mean..." for a tool whose
 	// real problem is that its backend is not declared here.
 	if server, tool, ok := passthrough.Split(params.Name); ok {
-		return v.rawCall(ctx, server, tool, params)
+		result, rpcErr := v.rawCall(ctx, server, tool, params)
+		if result, ok := result.(map[string]any); ok && fallbackUsed {
+			annotateDesktopResult(result, requestedTool, params.Name, true)
+		}
+		return result, rpcErr
 	}
 	if params.Name == toolListRepositories {
 		return v.listRepositories()
@@ -510,21 +523,26 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if err != nil {
 		if v.policy.Fallback == "diagnostic" {
 			fallbackUsed = true
-			return toolFailure(fmt.Sprintf("unknown tool %q; call tools/list to refresh the available contract", params.Name)), nil
+			return desktopDiagnostic("unknown_tool", requestedTool, params.Name, true,
+				fmt.Sprintf("unknown tool %q", params.Name),
+				"Call tools/list and retry with an advertised tool name."), nil
 		}
 		// The registry's own answer names the near miss when there is one,
 		// which is worth more to a model than "unknown tool".
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
 	if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
-		return toolFailure(fmt.Sprintf("capability %q is not exposed to MCP clients", capability.ID)), nil
+		return desktopDiagnostic("profile_denied", requestedTool, params.Name, fallbackUsed,
+			fmt.Sprintf("capability %q is not exposed to MCP clients", capability.ID),
+			"Call tools/list and retry with an advertised tool name."), nil
 	}
 	// Before the permission gate rather than after it, so a chat that may not
 	// authorize the effect at all is told that first: "you were never granted
 	// this" is a different sentence from "you may not do it now", and hearing
 	// the second when the first is true sends somebody to fix the wrong thing.
 	if err := v.screen.refuseIfTainted(capability); err != nil {
-		return toolFailure(err.Error()), nil
+		return desktopDiagnostic("permission_denied", requestedTool, params.Name, fallbackUsed,
+			err.Error(), "Request the required permission before retrying."), nil
 	}
 	// Marked on the way in rather than on the way out, and the difference
 	// matters: a capability that failed halfway may still have put a window's
@@ -558,11 +576,18 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		Payload:    payload,
 	})
 	if runErr != nil {
-		return toolFailure(runErr.Error()), nil
+		code := "tool_failure"
+		recommendation := "Inspect the tool error and retry if appropriate."
+		if ctx.Err() != nil {
+			code = "tool_timeout"
+			recommendation = "Retry with a smaller request or a profile with a longer allowed timeout."
+		}
+		return desktopDiagnostic(code, requestedTool, params.Name, fallbackUsed, runErr.Error(), recommendation), nil
 	}
 	answer, ok := answerOf(runResult)
 	if !ok {
-		return toolFailure(refusalOf(runResult)), nil
+		return desktopDiagnostic("tool_failure", requestedTool, params.Name, fallbackUsed,
+			refusalOf(runResult), "Inspect the tool error and retry if appropriate."), nil
 	}
 	// The text block carries the same answer serialized, because a client
 	// that cannot read structuredContent must not get a different story --
@@ -591,8 +616,9 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	backend, ok := v.rawBackend(server)
 	if !ok {
 		if v.policy.Fallback == "diagnostic" {
-			return toolFailure(fmt.Sprintf(
-				"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)), nil
+			return desktopDiagnostic("backend_unavailable", params.Name, params.Name, true,
+				fmt.Sprintf("%s: no backend named %q is declared with expose = \"raw\"", params.Name, server),
+				"Call tools/list and verify that the raw MCP backend is available."), nil
 		}
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
@@ -610,11 +636,13 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	effects := backend.declared.EffectsOf(tool)
 	if err := v.session.entitled(effects); err != nil {
 		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
-		return toolFailure(err.Error()), nil
+		return desktopDiagnostic("permission_denied", params.Name, params.Name, false,
+			err.Error(), "Request the required permission before retrying."), nil
 	}
 	arguments, err := params.argumentMap()
 	if err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call arguments: " + err.Error()}
+		return desktopDiagnostic("invalid_arguments", params.Name, params.Name, false,
+			"tool arguments must be a JSON object", "Retry with arguments or input as a JSON object."), nil
 	}
 	result, err := backend.Call(ctx, tool, arguments)
 	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
@@ -626,7 +654,13 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		// A backend's refusal is an answer, not a protocol error: the model
 		// asked for something real and can read why it did not work. The
 		// same split the capability path already makes.
-		return toolFailure(err.Error()), nil
+		code := "backend_unavailable"
+		recommendation := "Check the MCP backend and retry."
+		if ctx.Err() != nil {
+			code = "tool_timeout"
+			recommendation = "Retry with a smaller request or a longer backend timeout."
+		}
+		return desktopDiagnostic(code, params.Name, params.Name, false, err.Error(), recommendation), nil
 	}
 	// The backend's own result is handed back whole. It already carries
 	// `content` and may carry `structuredContent` and `isError`; re-wrapping
@@ -673,6 +707,35 @@ func toolFailure(message string) map[string]any {
 		"content": []any{map[string]any{"type": "text", "text": message}},
 		"isError": true,
 	}
+}
+
+func desktopDiagnostic(code, requested, normalized string, fallback bool, message, recommendation string) map[string]any {
+	diagnostic := map[string]any{
+		"error_code":      code,
+		"requested_tool":  requested,
+		"normalized_tool": normalized,
+		"fallback_used":   fallback,
+		"recommendation":  recommendation,
+	}
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": message}},
+		"structuredContent": diagnostic,
+		"_meta":             map[string]any{"atenea": diagnostic},
+		"isError":           true,
+	}
+}
+
+func annotateDesktopResult(result map[string]any, requested, normalized string, fallback bool) {
+	meta, _ := result["_meta"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["atenea"] = map[string]any{
+		"requested_tool":  requested,
+		"normalized_tool": normalized,
+		"fallback_used":   fallback,
+	}
+	result["_meta"] = meta
 }
 
 // repositoriesTool is the schema entry for catalog.repositories, inserted
