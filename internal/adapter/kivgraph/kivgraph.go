@@ -1,15 +1,9 @@
 // Package kivgraph is the fifth adapter, and the first that stopped caring
 // which transport reaches its far side.
 //
-// Every earlier client speaks over an address: omp and Claude Code as a
-// binary invoked once per call, Serena as an MCP server behind a fixed URL,
-// another graph CLI as a fresh process per call. kivgraph itself answers two
-// ways, measured on the same 0.7.0 binary: `kivgraph serve` over stdio, a
-// server with no address at all -- nothing to dial, only two pipes, reachable
-// only by whatever spawned it and kept them open -- and `kivgraph daemon`,
-// which publishes the identical tool surface at a fixed streamable-HTTP
-// address instead, supervised once by systemd rather than once per Atenea
-// process. Both answer the same tools this package already decodes, and this
+// Atenea reaches Kivgraph 0.9.2 through its native daemon, which publishes the
+// MCP surface at a fixed authenticated streamable-HTTP address and is
+// supervised by the operating system rather than by each Atenea process. This
 // package only ever called one method on either far side, so it asks only
 // for a Session (see that type's own doc comment) rather than the concrete
 // *mcpstdio.Session it used to require.
@@ -68,10 +62,9 @@
 // the same fact. consumer_repository_key is a KEY ("repository:backend"),
 // not a bare name -- there is no consumer_repository_name field -- so the
 // declared "repository" output strips the prefix (repositoryNameFromKey).
-// get_unresolved_references carries no line number, only start_offset, a
-// byte offset, so symbol.unresolved's declared output is "offset", not
-// "line": synthesizing a line by reading the file back would be a second,
-// unverified guess about a position kivgraph itself never reported.
+// Kivgraph 0.9.2 no longer exposes get_unresolved_references. Atenea therefore
+// keeps symbol.unresolved as a generic capability but does not claim a
+// Kivgraph implementation; blind spots now arrive in completeness metadata.
 // find_cross_repo_consumers classifies each row with "category", whose real
 // values (exact_symbol, package, candidate, unresolved) are kept verbatim as
 // the declared "resolution" rather than normalized to the coverage
@@ -160,25 +153,27 @@ import (
 // capability is the "what" and an implementation is the "who": another
 // provider may answer the same four capabilities tomorrow.
 const (
-	CapabilityDefinition  = "symbol.definition"
-	CapabilityReferences  = "symbol.references"
-	CapabilityOverview    = "symbol.overview"
-	CapabilityConsumers   = "symbol.consumers"
-	CapabilityGet         = "symbol.get"
-	CapabilityUnresolved  = "symbol.unresolved"
-	CapabilityGraphStatus = "graph.status"
-	CapabilityImpact      = "code.impact"
-	CapabilityIndex       = "repository.index"
+	CapabilityDefinition   = "symbol.definition"
+	CapabilityReferences   = "symbol.references"
+	CapabilityOverview     = "symbol.overview"
+	CapabilityConsumers    = "symbol.consumers"
+	CapabilityGet          = "symbol.get"
+	CapabilityIntent       = "symbol.intent_search"
+	CapabilityDependencies = "symbol.dependencies"
+	CapabilityGraphStatus  = "graph.status"
+	CapabilityImpact       = "code.impact"
+	CapabilityIndex        = "repository.index"
 
-	ImplDefinition = "kivgraph.definition"
-	ImplReferences = "kivgraph.references"
-	ImplOverview   = "kivgraph.overview"
-	ImplConsumers  = "kivgraph.cross_repo_consumers"
-	ImplGet        = "kivgraph.get"
-	ImplUnresolved = "kivgraph.unresolved_references"
-	ImplStatus     = "kivgraph.status"
-	ImplImpact     = "kivgraph.impact"
-	ImplIndex      = "kivgraph.index"
+	ImplDefinition   = "kivgraph.definition"
+	ImplReferences   = "kivgraph.references"
+	ImplOverview     = "kivgraph.overview"
+	ImplConsumers    = "kivgraph.cross_repo_consumers"
+	ImplGet          = "kivgraph.get"
+	ImplIntent       = "kivgraph.intent_search"
+	ImplDependencies = "kivgraph.dependencies"
+	ImplStatus       = "kivgraph.status"
+	ImplImpact       = "kivgraph.impact"
+	ImplIndex        = "kivgraph.index"
 )
 
 // The MCP tool names behind each capability, on kivgraph's own far side.
@@ -186,13 +181,14 @@ const (
 // calls it internally, through resolvePosition, to turn a position into
 // the stable_key find_cross_repo_consumers actually requires.
 const (
-	toolConsumers  = "find_cross_repo_consumers"
-	toolReferences = "find_references"
-	toolGet        = "get_symbol"
-	toolUnresolved = "get_unresolved_references"
-	toolStatus     = "graph_status"
-	toolOutline    = "get_file_outline"
-	toolBlast      = "get_blast_radius"
+	toolConsumers    = "find_cross_repo_consumers"
+	toolReferences   = "find_references"
+	toolGet          = "get_symbol"
+	toolIntent       = "find_by_intent"
+	toolDependencies = "trace_dependencies"
+	toolStatus       = "graph_status"
+	toolOutline      = "get_file_outline"
+	toolBlast        = "get_blast_radius"
 )
 
 // maxSnippetBytes caps a file read for a snippet or a column. A minified
@@ -217,17 +213,26 @@ const repositoryKeyPrefix = "repository:"
 // one.
 const DefaultTimeout = 90 * time.Second
 
+// DefaultIndexTimeout is separate because a full workspace rebuild is a
+// mutation measured in minutes, while snapshot reads should still fail fast.
+const DefaultIndexTimeout = 10 * time.Minute
+
 // DefaultEndpoint is where kivgraph's own daemon listens when nothing else
 // is configured: `kivgraph daemon` serves streamable-HTTP MCP at a fixed
 // local port, the same "assume it's already running" shape Serena's own
 // DefaultEndpoint assumes for its proxy.
 const DefaultEndpoint = "http://127.0.0.1:7788/mcp"
 
+// DefaultBinary is used only for the explicit repository.index mutation. The
+// daemon is an address, not a command, so keeping this separate lets Atenea
+// dial the daemon for reads and still invoke Kivgraph's official index command.
+const DefaultBinary = "kivgraph"
+
 // DefaultImplementations is what the adapter answers for. It is a function
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplUnresolved, ImplStatus, ImplImpact, ImplIndex}
+	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplIntent, ImplDependencies, ImplStatus, ImplImpact, ImplIndex}
 }
 
 // IndexReport is the authoritative result of Kivgraph's full index command.
@@ -238,6 +243,7 @@ type IndexReport struct {
 	Generation string
 	Nodes      int
 	Edges      int
+	NotLoaded  map[string]int
 }
 
 // Indexer is the explicit process boundary for repository.index. Keeping it
@@ -247,8 +253,7 @@ type Indexer func(context.Context, string, string) (IndexReport, error)
 
 // Session is the far side of one MCP server, whatever transport reached it.
 //
-// kivgraph 0.7.0 answers the identical tool vocabulary from `kivgraph serve`
-// over stdio and from `kivgraph daemon` over a streamable-HTTP address, and
+// kivgraph 0.9.2 answers through its native streamable-HTTP daemon, and
 // this package never asked either one for anything but Call: every
 // capability below is a sequence of named tools and decoded JSON, never a
 // handshake, a session id or a wire frame. Naming the concrete stdio session
@@ -269,6 +274,8 @@ type Options struct {
 	Sensitive []string
 	// Timeout caps one call.
 	Timeout time.Duration
+	// IndexTimeout caps repository.index independently from read calls.
+	IndexTimeout time.Duration
 	// Session returns the live MCP session for the supervised kivgraph
 	// child, over whichever transport reaches it. It is a function, not a
 	// stored value, because the process or connection behind it may not
@@ -287,6 +294,7 @@ type Runner struct {
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
+	indexTimeout    time.Duration
 	session         func(ctx context.Context) (Session, error)
 	index           Indexer
 }
@@ -305,6 +313,14 @@ func New(opts Options) (*Runner, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"kivgraph adapter: timeout must not be negative, got %s", timeout)
 	}
+	indexTimeout := opts.IndexTimeout
+	if indexTimeout == 0 {
+		indexTimeout = DefaultIndexTimeout
+	}
+	if indexTimeout < 0 {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"kivgraph adapter: index timeout must not be negative, got %s", indexTimeout)
+	}
 	// A pattern that cannot compile is refused here rather than silently
 	// matching nothing at the one moment it was supposed to protect a file.
 	for _, pattern := range opts.Sensitive {
@@ -322,6 +338,7 @@ func New(opts Options) (*Runner, error) {
 		implementations: impls,
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
+		indexTimeout:    indexTimeout,
 		session:         opts.Session,
 		index:           opts.Index,
 	}, nil
@@ -345,7 +362,7 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 func (r *Runner) Capabilities() []string {
 	return []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
-		CapabilityConsumers, CapabilityGet, CapabilityUnresolved, CapabilityGraphStatus,
+		CapabilityConsumers, CapabilityGet, CapabilityIntent, CapabilityDependencies, CapabilityGraphStatus,
 		CapabilityImpact, CapabilityIndex,
 	}
 }
@@ -361,7 +378,11 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 
 	started := time.Now()
-	call, cancel := context.WithTimeout(ctx, r.timeout)
+	timeout := r.timeout
+	if req.Capability.ID == CapabilityIndex {
+		timeout = r.indexTimeout
+	}
+	call, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	sess, err := r.session(call)
@@ -412,8 +433,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		result, notes, err = r.runConsumers(call, sess, status, req)
 	case CapabilityGet:
 		result, notes, err = r.runGet(call, sess, req)
-	case CapabilityUnresolved:
-		result, notes, err = r.runUnresolved(call, sess, req)
+	case CapabilityIntent:
+		result, notes, err = r.runIntentSearch(call, sess, status, req)
+	case CapabilityDependencies:
+		result, notes, err = r.runDependencies(call, sess, status, req)
 	case CapabilityGraphStatus:
 		result, notes, err = r.runGraphStatus(status, req)
 	case CapabilityImpact:
@@ -752,6 +775,11 @@ func (r *Runner) runConsumers(ctx context.Context, sess Session, status *statusR
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolConsumers, err)
 	}
+	metadataNotes, err := queryMetadata(toolConsumers, text, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	notes = append(notes, metadataNotes...)
 
 	records := make([]any, 0, len(answer.Results.rows))
 	for _, row := range answer.Results.rows {
@@ -950,6 +978,11 @@ func (r *Runner) runReferences(ctx context.Context, sess Session, status *status
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolReferences, err)
 	}
+	metadataNotes, err := queryMetadata(toolReferences, text, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	notes = append(notes, metadataNotes...)
 
 	type site struct {
 		path string
@@ -1068,7 +1101,7 @@ func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusRe
 	if err != nil {
 		return nil, nil, err
 	}
-	args := map[string]any{"repository": kivgraphRepo, "path": relative}
+	args := map[string]any{"repository": kivgraphRepo, "path": relative, "view": "full", "response_format": "detailed"}
 	if depth > 0 {
 		args["include_members"] = true
 	}
@@ -1079,6 +1112,10 @@ func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusRe
 	var answer outlineAnswer
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolOutline, err)
+	}
+	metadataNotes, err := outlineMetadata(text)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Read once for every row's column, not once per row.
@@ -1109,8 +1146,8 @@ func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusRe
 		return nil, nil, err
 	}
 
-	notes := []string{fmt.Sprintf("kivgraph: %s declares %d symbol(s) in %s",
-		relative, len(symbols), kivgraphRepo)}
+	notes := append(metadataNotes, fmt.Sprintf("kivgraph: %s declares %d symbol(s) in %s",
+		relative, len(symbols), kivgraphRepo))
 	if lines == nil {
 		notes = append(notes, fmt.Sprintf(
 			"%s could not be read from disk, so every column falls back to 1; the lines are the graph's own", relative))
@@ -1330,7 +1367,9 @@ func compactOutlineDeclaration(kind, encoded string) (outlineDeclaration, bool) 
 func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 	capability, repository, file string, line int, name string) (outlineDeclaration, []string, error) {
 
-	text, err := sess.Call(ctx, toolOutline, map[string]any{"repository": repository, "path": file})
+	text, err := sess.Call(ctx, toolOutline, map[string]any{
+		"repository": repository, "path": file, "view": "full", "response_format": "detailed",
+	})
 	if err != nil {
 		// The extra call is not free and must not be invisible: a failure
 		// reaching the outline at all belongs in the empty-graph guard's own
@@ -1346,6 +1385,11 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
 			"kivgraph %s: unreadable outline for %s: %v", capability, file, err)
+	}
+	metadataNotes, err := outlineMetadata(text)
+	if err != nil {
+		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
+			"kivgraph %s: invalid outline metadata for %s: %v", capability, file, err)
 	}
 
 	var candidates []outlineDeclaration
@@ -1376,11 +1420,11 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 		}
 		for _, decl := range byName {
 			if decl.QualifiedName == name {
-				return decl, nil, nil
+				return decl, metadataNotes, nil
 			}
 		}
 		if len(byName) == 1 {
-			return byName[0], nil, nil
+			return byName[0], metadataNotes, nil
 		}
 		if len(byName) > 0 {
 			candidates = byName
@@ -1388,7 +1432,7 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 	}
 
 	innermost := narrowestSpan(candidates)
-	var notes []string
+	notes := metadataNotes
 	if len(candidates) > 1 {
 		var passedOver []string
 		for _, decl := range candidates {
@@ -1570,6 +1614,10 @@ func (r *Runner) runGet(ctx context.Context, sess Session, req contract.RunReque
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolGet, err)
 	}
+	notes, err := queryMetadata(toolGet, text, false)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	records := []any{}
 	if answer.Results != nil {
@@ -1585,81 +1633,7 @@ func (r *Runner) runGet(ctx context.Context, sess Session, req contract.RunReque
 		return nil, nil, err
 	}
 
-	notes := []string{fmt.Sprintf("kivgraph answered symbol.get for %s with %d row", req.Repository.ID, len(records))}
-	return result, notes, nil
-}
-
-// unresolvedRecord is one row of get_unresolved_references. There is no
-// line number here -- only start_offset, a byte offset -- and
-// requested_package is absent for a reason that names no package at all.
-type unresolvedRecord struct {
-	FilePath         string `json:"file_path"`
-	StartOffset      int    `json:"start_offset"`
-	Reason           string `json:"reason"`
-	RequestedPackage string `json:"requested_package"`
-}
-
-// unresolvedAnswer is get_unresolved_references' envelope.
-type unresolvedAnswer struct {
-	Results    []unresolvedRecord `json:"results"`
-	Truncated  bool               `json:"truncated"`
-	NextCursor string             `json:"next_cursor"`
-}
-
-// runUnresolved answers symbol.unresolved. get_unresolved_references
-// carries no line number, only start_offset -- so the declared output field
-// is "offset", not "line": synthesizing a line by reading the file back
-// would be inventing a position kivgraph itself never reported.
-//
-// reason, requested_package and limit are the only declared inputs -- repo,
-// package, requested_symbol, language and cursor are real arguments on the
-// tool's own schema but never made it into the capability's, so there is no
-// payload key to read them from: checkPayload refuses any field the
-// capability does not declare before Run is ever reached.
-func (r *Runner) runUnresolved(ctx context.Context, sess Session, req contract.RunRequest) (map[string]any, []string, error) {
-	args := map[string]any{}
-	if reason, ok := stringAt(req.Payload, "reason"); ok {
-		args["reason"] = reason
-	}
-	if requestedPackage, ok := stringAt(req.Payload, "requested_package"); ok {
-		args["requested_package"] = requestedPackage
-	}
-	if limit, ok := intAt(req.Payload, "limit"); ok {
-		args["limit"] = limit
-	}
-
-	text, err := sess.Call(ctx, toolUnresolved, args)
-	if err != nil {
-		return nil, nil, err
-	}
-	var answer unresolvedAnswer
-	if err := json.Unmarshal([]byte(text), &answer); err != nil {
-		return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolUnresolved, err)
-	}
-
-	records := make([]any, 0, len(answer.Results))
-	for _, row := range answer.Results {
-		record := map[string]any{
-			"path":   row.FilePath,
-			"offset": row.StartOffset,
-			"reason": row.Reason,
-		}
-		if row.RequestedPackage != "" {
-			record["requested_package"] = row.RequestedPackage
-		}
-		records = append(records, record)
-	}
-	result := map[string]any{"unresolved": records}
-	if err := req.Capability.ValidateOutput(result); err != nil {
-		return nil, nil, err
-	}
-
-	notes := []string{fmt.Sprintf("kivgraph answered symbol.unresolved for %s with %d row(s)",
-		req.Repository.ID, len(records))}
-	if answer.Truncated {
-		notes = append(notes, fmt.Sprintf(
-			"kivgraph truncated this answer; more unresolved references exist past cursor %q", answer.NextCursor))
-	}
+	notes = append(notes, fmt.Sprintf("kivgraph answered symbol.get for %s with %d row", req.Repository.ID, len(records)))
 	return result, notes, nil
 }
 

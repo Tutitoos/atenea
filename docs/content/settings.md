@@ -1766,12 +1766,17 @@ the current working directory. Serena instances are warmed sequentially so
 their dashboard port selection cannot collide; their browser opening remains
 manual.
 
-Kivgraph has two separate processes: its stdio MCP server and its optional
-read-only graph viewer. The viewer must be built with Kivgraph's `webassets`
-tag and can be supervised independently:
+Kivgraph has two separate processes: its native daemon, which serves MCP over
+authenticated streamable HTTP, and its optional read-only graph viewer. Install
+the daemon with `kivgraph daemon install`, then copy its endpoint and token from
+`~/.local/state/kivgraph/daemon.json` into Atenea. The viewer remains independent:
 
 ```toml
 [orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
+token = "token from ~/.local/state/kivgraph/daemon.json"
+binary = "kivgraph"
+index_timeout = "10m" # separate from the shorter read timeout
 dashboard = "http://127.0.0.1:7777"
 
 [orchestrator.kivgraph.dashboard_process]

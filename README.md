@@ -80,7 +80,8 @@ one more to a single commission.
 
 Symbols include `symbol.search`, `symbol.definition`, `symbol.references`,
 `symbol.implementations`, `symbol.overview`, `symbol.calls`,
-`symbol.consumers`, `symbol.get` and `symbol.unresolved`. Serena answers the
+`symbol.consumers`, `symbol.get`, `symbol.intent_search`, `symbol.dependencies`
+and `symbol.unresolved`. Serena answers the
 language-server symbol operations over MCP; Kivgraph and Tokensave provide the
 graph-backed operations where an indexed repository is required.
 

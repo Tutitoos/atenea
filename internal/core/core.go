@@ -619,6 +619,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 		Implementations: graph.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         graph.Timeout,
+		IndexTimeout:    graph.IndexTimeout,
 		Session: func(ctx context.Context) (kivgraph.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
@@ -649,12 +650,9 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 // both every time. mcphttp.Client is the same wire format Serena talks, so the
 // bearer token rides on every request the handshake included.
 //
-// repository.index is refused rather than attempted. Building a graph means
-// running the kivgraph BINARY over a checkout, and an endpoint is an address,
-// not a command -- with no process block there is nothing here to run, and the
-// daemon exposes no tool that would do it. Left as a refusal naming what is
-// missing, because silently answering "indexed" for a graph nobody rebuilt is
-// the failure this adapter exists to prevent.
+// repository.index remains an explicit local process boundary. Binary is
+// separate from the daemon endpoint so indexing does not require a second,
+// supervised stdio MCP server merely to recover the command name.
 func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (contract.Runner, error) {
 	headers := map[string]string{}
 	if graph.Token != "" {
@@ -672,13 +670,16 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 		Implementations: graph.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         graph.Timeout,
+		IndexTimeout:    graph.IndexTimeout,
 		Session: func(context.Context) (kivgraph.Session, error) {
 			return client, nil
 		},
-		Index: func(context.Context, string, string) (kivgraph.IndexReport, error) {
-			return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
-				"settings %s: kivgraph is reached at %s, which is an address and not a command: repository.index needs an orchestrator.kivgraph.process block to run the binary with",
-				cfg.Source, graph.Endpoint)
+		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
+			if strings.TrimSpace(graph.Binary) == "" {
+				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
+					"settings %s: orchestrator.kivgraph.binary is required for repository.index", cfg.Source)
+			}
+			return kivgraph.RunConfiguredIndex(ctx, graph.Binary, nil, root, mode)
 		},
 	})
 }

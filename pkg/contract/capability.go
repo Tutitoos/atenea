@@ -311,7 +311,7 @@ func (c Capability) Subject(payload map[string]any) string {
 }
 
 var (
-	capabilityID = regexp.MustCompile(`^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$`)
+	capabilityID = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	fieldName    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 

@@ -47,7 +47,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
+		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -123,13 +123,14 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codex.search",
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
+		"kivgraph.dependencies",
 		"kivgraph.get",
 		"kivgraph.impact",
 		"kivgraph.index",
+		"kivgraph.intent_search",
 		"kivgraph.overview",
 		"kivgraph.references",
 		"kivgraph.status",
-		"kivgraph.unresolved_references",
 		"macos.apps",
 		"macos.click",
 		"macos.drag",

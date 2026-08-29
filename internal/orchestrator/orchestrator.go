@@ -123,7 +123,9 @@ const contextCapability = "code.context"
 // this card does not name.
 const (
 	symbolSearchCapability    = "symbol.search"
+	intentSearchCapability    = "symbol.intent_search"
 	definitionCapability      = "symbol.definition"
+	dependenciesCapability    = "symbol.dependencies"
 	referencesCapability      = "symbol.references"
 	implementationsCapability = "symbol.implementations"
 	overviewCapability        = "symbol.overview"
@@ -240,7 +242,9 @@ var card = contract.Agent{
 		contextCapability,
 		searchCapability,
 		symbolSearchCapability,
+		intentSearchCapability,
 		definitionCapability,
+		dependenciesCapability,
 		referencesCapability,
 		implementationsCapability,
 		overviewCapability,
@@ -1344,6 +1348,17 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 			})
 		}
 		return a.close(out, runErr)
+	}
+	// The same probe cuts both ways. A later successful, unscoped call must
+	// clear an earlier unavailable verdict; otherwise the registry permanently
+	// drops an implementation even after its configuration is repaired.
+	if out.Subject == "" {
+		observed := a.catalog.Observed(repository.ID, []contract.Implementation{decision.Chosen})
+		if len(observed) == 1 && observed[0].Health.State == contract.HealthDown {
+			_ = a.catalog.SetHealth(repository.ID, decision.Chosen.ID, contract.Health{
+				State: contract.HealthAlive,
+			})
+		}
 	}
 	return a.close(out, nil)
 }
