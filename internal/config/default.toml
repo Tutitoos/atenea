@@ -3867,3 +3867,34 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   # whether they wanted a crawl at all.
   estimated_duration = "5m"
   estimated_tokens = 14000
+[[desktop_profile]]
+name = "claude"
+clients = ["claude"]
+mcp_mode = "atenea_only"
+direct_mcp = []
+enabled_tools = []
+disabled_tools = []
+startup_timeout = "10s"
+tool_timeout = "60s"
+fallback = "diagnostic"
+client_flags = ["--strict-mcp-config"]
+
+[[desktop_profile]]
+name = "chatgpt"
+clients = ["chatgpt", "codex"]
+mcp_mode = "atenea_only"
+direct_mcp = []
+enabled_tools = []
+disabled_tools = []
+startup_timeout = "10s"
+tool_timeout = "60s"
+fallback = "diagnostic"
+
+[[desktop_profile]]
+name = "shared"
+clients = ["claude", "chatgpt", "codex", "opencode", "omp"]
+mcp_mode = "hybrid"
+direct_mcp = ["*"]
+startup_timeout = "10s"
+tool_timeout = "60s"
+fallback = "diagnostic"
