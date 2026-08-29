@@ -51,6 +51,7 @@ const BuiltIn = "built-in defaults"
 
 // Config is the decoded, validated settings file.
 type Config struct {
+	DesktopProfiles []DesktopProfile
 	// Source is the file it came from, or BuiltIn. When a repository's own
 	// overlay applied, it names both, joined by " + ".
 	Source string
@@ -1250,24 +1251,25 @@ func WriteDefault(path string, force bool) error {
 // ---------------------------------------------------------------------------
 
 type file struct {
-	Contract        string           `toml:"contract"`
-	Core            fileCore         `toml:"core"`
-	Orchestrator    fileOrchestrator `toml:"orchestrator"`
-	Model           fileModel        `toml:"model"`
-	Workflow        fileWorkflow     `toml:"workflow"`
-	Metrics         fileMetrics      `toml:"metrics"`
-	Retention       fileRetention    `toml:"retention"`
-	Backup          fileBackup       `toml:"backup"`
-	Security        fileSecurity     `toml:"security"`
-	Desktop         fileDesktop      `toml:"desktop"`
-	Web             fileWeb          `toml:"web"`
-	LocalAgents     fileLocalAgents  `toml:"local_agents"`
-	Selector        fileSelector     `toml:"selector"`
-	Capabilities    []fileCapability `toml:"capability"`
-	Implementations []fileImpl       `toml:"implementation"`
-	Repositories    []fileRepository `toml:"repository"`
-	Agents          []fileAgent      `toml:"agent"`
-	MCPServers      []fileMCPServer  `toml:"mcp_server"`
+	Contract        string               `toml:"contract"`
+	Core            fileCore             `toml:"core"`
+	Orchestrator    fileOrchestrator     `toml:"orchestrator"`
+	Model           fileModel            `toml:"model"`
+	Workflow        fileWorkflow         `toml:"workflow"`
+	Metrics         fileMetrics          `toml:"metrics"`
+	Retention       fileRetention        `toml:"retention"`
+	Backup          fileBackup           `toml:"backup"`
+	Security        fileSecurity         `toml:"security"`
+	Desktop         fileDesktop          `toml:"desktop"`
+	Web             fileWeb              `toml:"web"`
+	LocalAgents     fileLocalAgents      `toml:"local_agents"`
+	Selector        fileSelector         `toml:"selector"`
+	Capabilities    []fileCapability     `toml:"capability"`
+	Implementations []fileImpl           `toml:"implementation"`
+	Repositories    []fileRepository     `toml:"repository"`
+	Agents          []fileAgent          `toml:"agent"`
+	MCPServers      []fileMCPServer      `toml:"mcp_server"`
+	DesktopProfiles []fileDesktopProfile `toml:"desktop_profile"`
 }
 
 // fileModel is [model] as written.

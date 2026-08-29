@@ -48,6 +48,7 @@ Usage:
 
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
+	 doctor                 Check desktop client/profile compatibility and MCP wiring
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
@@ -589,7 +590,8 @@ and never removed from it). Every other key is refused by name: a file
 that arrives with a git clone may not hand this machine a command to run.
 Set ATENEA_LOCAL_CONFIG=0 to ignore the layer entirely.
 `,
-	"wrap": `Usage: atenea wrap CLIENT [client args...]
+	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [--emit-config] [client args...]
+	       atenea wrap --client CLIENT [--profile NAME] [--emit-config]
 
 Launches CLIENT with MCP configuration Atenea generated from the
 [[mcp_server]] blocks in the settings file, having checked every one of
@@ -610,6 +612,10 @@ variable or on the client's own command line, for the lifetime of the
 child, so a client launched without wrap is a client with exactly the
 configuration it had before. There is no unwrap because there is nothing
 to undo.
+
+Flags:
+  --profile NAME     desktop policy profile
+  --emit-config      print the generated client configuration without launching
 
 Arguments after CLIENT are passed through untouched.
 
@@ -763,6 +769,9 @@ func run(args []string, out io.Writer) error {
 		}
 		return cmdVersion(out)
 	case "status":
+		if len(commandArgs) > 0 {
+			return cmdDesktopStatusCompat(settingsPath, commandArgs, out)
+		}
 		if err := noArguments("status", commandArgs); err != nil {
 			return err
 		}
@@ -794,14 +803,26 @@ func run(args []string, out io.Writer) error {
 		}
 		return cmdRun(settingsPath, out)
 	case "desktop":
+		if len(commandArgs) > 0 && (commandArgs[0] == "install" || commandArgs[0] == "remove") {
+			return cmdDesktopMCP(settingsPath, commandArgs, out)
+		}
 		return cmdDesktop(commandArgs, os.Stdin, out)
+	case "doctor":
+		return cmdDoctorCompat(settingsPath, commandArgs, out)
 	case "mcp":
-		if len(commandArgs) == 1 && commandArgs[0] == "--check" {
+		profile, mcpArgs, err := peelDesktopProfile(commandArgs)
+		if err != nil {
+			return err
+		}
+		if profile != "" {
+			_ = os.Setenv("ATENEA_DESKTOP_PROFILE", profile)
+		}
+		if len(mcpArgs) == 1 && mcpArgs[0] == "--check" {
 			return mcpProbe(out)
 		}
-		if len(commandArgs) != 0 {
+		if len(mcpArgs) != 0 {
 			return contract.Fail(contract.FailureInvalidInput,
-				"mcp takes no arguments (or --check): %q", commandArgs[0])
+				"mcp takes no arguments (or --check): %q", mcpArgs[0])
 		}
 		return cmdMCP(os.Stdin, out)
 	case "service":
@@ -3552,11 +3573,25 @@ var clients = map[string]struct {
 }
 
 func cmdWrap(settingsPath string, args []string, out io.Writer) error {
-	if len(args) == 0 {
+	options, err := parseWrapOptions(args)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if options.Client == "" {
 		return contract.Fail(contract.FailureInvalidInput,
 			"wrap needs a client, e.g. atenea wrap opencode")
 	}
-	name, rest := args[0], args[1:]
+	name, rest := options.Client, options.ClientArgs
+	if name == "chatgpt" {
+		if options.EmitConfig {
+			return emitChatGPTConfig(settingsPath, options.Profile, os.Stdout)
+		}
+		installArgs := []string{"install", "chatgpt"}
+		if options.Profile != "" {
+			installArgs = append(installArgs, "--profile", options.Profile)
+		}
+		return cmdDesktopMCP(settingsPath, installArgs, out)
+	}
 	client, ok := clients[name]
 	if !ok {
 		return contract.Fail(contract.FailureInvalidInput,
@@ -3566,7 +3601,7 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	// discover the binary is not installed would be the report arriving
 	// after the answer that makes it pointless.
 	binary, err := exec.LookPath(name)
-	if err != nil {
+	if err != nil && !options.EmitConfig {
 		return contract.Fail(contract.FailureNotFound,
 			"%s is not on PATH: %v", name, err)
 	}
@@ -3588,7 +3623,25 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	for _, impl := range cfg.Implementations {
 		served[impl.Provider] = true
 	}
-	plan := wrap.Check(context.Background(), cfg.MCPServers, served)
+	profiles, err := config.DesktopProfilesFromFile(settingsPath)
+	if err != nil {
+		return err
+	}
+	if err := config.ValidateDesktopProfiles(profiles, cfg.MCPServers); err != nil {
+		return err
+	}
+	profile, err := config.ResolveDesktopProfile(profiles, options.Profile, name)
+	if err != nil {
+		return err
+	}
+	servers := config.FilterDesktopMCPServers(cfg.MCPServers, profile)
+	ctx := context.Background()
+	if profile.StartupTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, profile.StartupTimeout)
+		defer cancel()
+	}
+	plan := wrap.Check(ctx, servers, served)
 	plan.Report(out, name)
 
 	// The door is this binary. Resolving it here rather than trusting
@@ -3598,13 +3651,14 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable, "cannot locate the running atenea: %v", err)
 	}
-	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp"}}
+	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp", "--desktop-profile", profile.Name}}
 
 	var flags, env []string
 	if client.flags != nil {
 		if flags, err = client.flags(plan, core); err != nil {
 			return err
 		}
+		flags = append(supportedClientFlags(binary, profile.ClientFlags), flags...)
 	}
 	if client.env != "" {
 		payload, err := client.render(plan, core)
@@ -3612,7 +3666,16 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 			return err
 		}
 		env = []string{client.env + "=" + payload}
+		if options.EmitConfig {
+			fmt.Fprintln(os.Stdout, payload)
+			return nil
+		}
 	}
+	if options.EmitConfig {
+		fmt.Fprintf(os.Stdout, "%s %s\n", name, strings.Join(flags, " "))
+		return nil
+	}
+	env = append(config.DesktopPolicyEnv(profile), env...)
 	return launch(binary, clientArgv(name, flags, rest, client.variadic), env)
 }
 

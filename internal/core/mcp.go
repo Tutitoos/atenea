@@ -64,10 +64,13 @@ const toolListRepositories = "catalog.repositories"
 // looks like popularity. Holding it here rather than in a map on the core means
 // the lifetime is the connection's and nothing has to remember to clean up.
 type conversation struct {
-	core      *Core
-	session   *Session
-	backendMu sync.Mutex
-	backends  map[string]passthrough.Backend
+	core          *Core
+	session       *Session
+	clientName    string
+	clientVersion string
+	policy        desktopPolicy
+	backendMu     sync.Mutex
+	backends      map[string]passthrough.Backend
 	// screen remembers whether this chat has been handed what is on the
 	// display. See internal/core/tainted.go for why that has to be remembered
 	// per chat rather than asked of the adapter.
@@ -169,7 +172,12 @@ func (v *conversation) detect(ctx context.Context, raw json.RawMessage) (any, *r
 
 type initializeParams struct {
 	ProtocolVersion string `json:"protocolVersion"`
-	ClientInfo      struct {
+	Meta            struct {
+		Atenea struct {
+			Profile string `json:"profile"`
+		} `json:"atenea"`
+	} `json:"_meta"`
+	ClientInfo struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"clientInfo"`
@@ -239,6 +247,12 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: code, Message: "opening the chat: " + err.Error()}
 	}
 	v.session = session
+	v.clientName = name
+	v.clientVersion = strings.TrimSpace(params.ClientInfo.Version)
+	v.policy = desktopPolicyFromEnv()
+	if profile := strings.TrimSpace(params.Meta.Atenea.Profile); profile != "" {
+		v.policy.Profile = profile
+	}
 
 	// What the chat ended up holding, said out loud. A client that asked for
 	// nothing still learns what it has, and one that asked to be narrowed can
@@ -343,15 +357,11 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			// the repository argument is not added: that argument is
 			// Atenea's own question about which repository a capability
 			// runs in, and a raw tool has no idea what a repository is.
-			if len(tool.InputSchema) > 0 {
-				entry["inputSchema"] = tool.InputSchema
-			} else {
-				entry["inputSchema"] = map[string]any{"type": "object"}
-			}
+			entry["inputSchema"] = normalizeDesktopSchema(tool.InputSchema)
 			tools = append(tools, entry)
 		}
 	}
-	return map[string]any{"tools": tools}, nil
+	return map[string]any{"tools": v.filterDesktopTools(tools)}, nil
 }
 
 // aimable adds the repository argument to a capability's declared inputs.
@@ -421,8 +431,27 @@ func (v *conversation) aimedAt(schema map[string]any) map[string]any {
 }
 
 type toolsCallParams struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+	Input     json.RawMessage `json:"input"`
+}
+
+func (p toolsCallParams) argumentMap() (map[string]any, error) {
+	raw := p.Arguments
+	if len(raw) == 0 || string(raw) == "null" {
+		raw = p.Input
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return map[string]any{}, nil
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return nil, err
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	return arguments, nil
 }
 
 // toolsCall runs one capability and answers in the two shapes a client may
@@ -432,13 +461,33 @@ type toolsCallParams struct {
 // to act on: a protocol error means the request was malformed and sending it
 // again unchanged is pointless, while `isError` is an answer -- work ran, it
 // did not go well, and a model can read why and try something else.
-func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (result any, rpcErr *rpcError) {
+	started := time.Now()
+	requestedTool := "unknown"
+	fallbackUsed := false
+	outcomeHint := ""
+	defer func() {
+		outcome, errorCode := compatibilityOutcome(result, rpcErr, outcomeHint, fallbackUsed)
+		v.recordCompatibility(requestedTool, outcome, errorCode, started, fallbackUsed)
+	}()
 	if v.session == nil {
 		return nil, notInitialized()
 	}
+	ctx, cancel := v.policy.withToolTimeout(ctx)
+	defer cancel()
 	var params toolsCallParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call: " + err.Error()}
+	}
+	arguments, err := params.argumentMap()
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call arguments: " + err.Error()}
+	}
+	requestedTool = strings.TrimSpace(params.Name)
+	params.Name, fallbackUsed = normalizeDesktopToolName(requestedTool)
+	if !v.policy.allows(params.Name) {
+		outcomeHint = "denied"
+		return toolFailure(fmt.Sprintf("tool %q is not enabled for desktop profile %q", params.Name, v.policy.Profile)), nil
 	}
 	// The reserved segment is checked before the catalog, and it is checked
 	// by name rather than by looking for a backend: a name in the reserved
@@ -453,12 +502,16 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	}
 	switch params.Name {
 	case toolWorkflowCreate:
-		return v.workflowCreate(ctx, params.Arguments)
+		return v.workflowCreate(ctx, arguments)
 	case toolWorkflowLaunch:
-		return v.workflowLaunch(ctx, params.Arguments)
+		return v.workflowLaunch(ctx, arguments)
 	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
+		if v.policy.Fallback == "diagnostic" {
+			fallbackUsed = true
+			return toolFailure(fmt.Sprintf("unknown tool %q; call tools/list to refresh the available contract", params.Name)), nil
+		}
 		// The registry's own answer names the near miss when there is one,
 		// which is worth more to a model than "unknown tool".
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
@@ -479,10 +532,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	// the screen" has to be yes in that case too.
 	v.screen.note(capability.ID)
 
-	payload := maps.Clone(params.Arguments)
-	if payload == nil {
-		payload = map[string]any{}
-	}
+	payload := maps.Clone(arguments)
 	// The repository is Atenea's argument, not the capability's, and the
 	// capability's schema refuses keys it never declared. Leaving it in would
 	// fail validation on a field this layer put there.
@@ -501,7 +551,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 		repository = repos[0].ID
 	}
 
-	result, runErr := v.session.Ask(ctx, orchestrator.Question{
+	runResult, runErr := v.session.Ask(ctx, orchestrator.Question{
 		Capability: capability.ID,
 		Repository: repository,
 		Prefer:     prefer,
@@ -510,9 +560,9 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 	if runErr != nil {
 		return toolFailure(runErr.Error()), nil
 	}
-	answer, ok := answerOf(result)
+	answer, ok := answerOf(runResult)
 	if !ok {
-		return toolFailure(refusalOf(result)), nil
+		return toolFailure(refusalOf(runResult)), nil
 	}
 	// The text block carries the same answer serialized, because a client
 	// that cannot read structuredContent must not get a different story --
@@ -540,6 +590,10 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (any, *rpcError) {
 	backend, ok := v.rawBackend(server)
 	if !ok {
+		if v.policy.Fallback == "diagnostic" {
+			return toolFailure(fmt.Sprintf(
+				"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)), nil
+		}
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
 	}
@@ -558,7 +612,11 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 		return toolFailure(err.Error()), nil
 	}
-	result, err := backend.Call(ctx, tool, params.Arguments)
+	arguments, err := params.argumentMap()
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call arguments: " + err.Error()}
+	}
+	result, err := backend.Call(ctx, tool, arguments)
 	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 	// A call is the other place a backend's state becomes known for free.
 	// Only an unavailable or timed-out one counts against it; see
@@ -579,7 +637,7 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		return nil, &rpcError{Code: codeInternal, Message: fmt.Sprintf(
 			"%s: the backend's answer is not an object: %v", params.Name, err)}
 	}
-	return out, nil
+	return normalizeDesktopResult(out), nil
 }
 
 // answerOf finds the one answer in a result, and says so when there is none.
