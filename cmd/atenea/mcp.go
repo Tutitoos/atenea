@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ import (
 // its own core, its own catalog and its own idea of what is running, which is
 // the arrangement this whole design exists to replace -- and the chats table
 // would go back to being empty.
-func cmdMCP(in io.Reader, out io.Writer) error {
+func cmdMCP(in io.Reader, out io.Writer, profile string) error {
 	warnIfTerminal(in)
 	conn, err := ipc.Dial(core.SocketPath())
 	if err != nil {
@@ -47,10 +48,87 @@ func cmdMCP(in io.Reader, out io.Writer) error {
 	// socket. Both mean the same thing here -- there is nobody left to relay
 	// for -- and waiting for the other side after that is how a subprocess
 	// becomes an orphan a client has to SIGKILL.
+	if profile == "" {
+		profile = "shared"
+	}
 	done := make(chan error, 2)
-	go func() { done <- relay(conn, in, "to the service") }()
+	go func() { done <- relayMCPClient(conn, in, "to the service", profile) }()
 	go func() { done <- relay(out, conn, "from the service") }()
 	return <-done
+}
+
+func relayMCPClient(dst io.Writer, src io.Reader, direction, profile string) error {
+	if profile == "" {
+		return relay(dst, src, direction)
+	}
+	scanner := bufio.NewScanner(src)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		if transformed, ok := injectMCPProfile(line, profile); ok {
+			line = transformed
+		}
+		if _, err := dst.Write(append(line, '\n')); err != nil {
+			return fmt.Errorf("relaying %s: %w", direction, err)
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("reading %s: %w", direction, err)
+	}
+	return nil
+}
+
+func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(line, &message); err != nil {
+		return line, false
+	}
+	var method string
+	if raw, ok := message["method"]; !ok || json.Unmarshal(raw, &method) != nil || method != core.MethodInitialize {
+		return line, false
+	}
+	params := map[string]json.RawMessage{}
+	if raw, ok := message["params"]; ok {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return line, false
+		}
+	}
+	meta := map[string]json.RawMessage{}
+	if raw, ok := params["_meta"]; ok {
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return line, false
+		}
+	}
+	delete(meta, "atenea")
+	atenea, _ := json.Marshal(map[string]string{"profile": profile})
+	meta["atenea"] = atenea
+	encodedMeta, err := json.Marshal(meta)
+	if err != nil {
+		return line, false
+	}
+	params["_meta"] = encodedMeta
+	encodedParams, err := json.Marshal(params)
+	if err != nil {
+		return line, false
+	}
+	message["params"] = encodedParams
+	// `_meta` belongs inside initialize.params in MCP. If a non-standard
+	// client also supplied a top-level copy, remove only its Atenea profile so
+	// an untrusted value cannot survive in the forwarded request.
+	if raw, ok := message["_meta"]; ok {
+		topMeta := map[string]json.RawMessage{}
+		if err := json.Unmarshal(raw, &topMeta); err == nil {
+			delete(topMeta, "atenea")
+			if encodedTopMeta, marshalErr := json.Marshal(topMeta); marshalErr == nil {
+				message["_meta"] = encodedTopMeta
+			}
+		}
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return line, false
+	}
+	return encoded, true
 }
 
 // relay copies whole lines, flushing each one.

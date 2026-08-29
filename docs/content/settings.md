@@ -135,6 +135,7 @@ max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
+client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
   runners = ["omp"]           # any of omp, claudecode, codex, serena, kivgraph, tokensave, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
@@ -1983,6 +1984,22 @@ and its `--config` overlay feeds a settings tree whose schema has no
 server. Wrapping it would mean writing one of those files. That is the
 guarantee above being traded away, so it is not done, and `atenea wrap --help`
 says so by name rather than leaving a reader to discover the omission.
+
+## Desktop client profiles
+
+The optional `[[desktop_profile]]` blocks define the policy Atenea applies when
+wrapping Claude Code, ChatGPT Desktop or Codex. The built-in profiles are
+`claude`, `chatgpt` and `shared`; a user block with the same `name` replaces
+that preset completely.
+
+The profile fields are `mcp_mode`, `direct_mcp`, `enabled_tools`,
+`disabled_tools`, `startup_timeout`, `tool_timeout`, `fallback` and
+`client_flags`. `atenea_only` exposes only Atenea, while `hybrid` may expose
+declared `expose = "on"` MCPs listed by `direct_mcp`; raw MCPs are never
+exposed directly. Tool allowlists run before denylists and are enforced both
+when listing and calling tools. `startup_timeout` and `tool_timeout` cap the
+session and call durations, and `fallback` is either `diagnostic` or `none`.
+Client flags are added only when the installed client advertises them.
 
 ## Arguments handed to the client, and `--auto`
 

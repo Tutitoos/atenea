@@ -42,6 +42,15 @@ sólo hace falta para probar un cambio antes de etiquetarlo.
 En Claude Desktop: `Settings → Extensions → Advanced settings → Install
 Extension…`. Después, verificarla desde `+ → Connectors`.
 
+La extensión publica sólo el servidor MCP de Atenea y arranca con el perfil
+`claude`, que conserva las mutaciones `desktop.*` fuera del catálogo MCP. Sus
+comandos read-only
+(`status`, `metrics`, `traces`, `catalog`, `doctor`, `detect`, `incidents`,
+`floor`, `config`, `intent` y `help`) se presentan como MCP Prompts y devuelven
+Markdown por defecto. No incluye un servidor `computer-use` raw ni habilita
+las seis capacidades interactivas `desktop.*`; esas acciones siguen siendo
+denegadas para MCP en la primera activación.
+
 ## Sobre el entorno
 
 El manifiesto no fija `XDG_STATE_HOME`. Fijarlo parecía prudente y no lo era:

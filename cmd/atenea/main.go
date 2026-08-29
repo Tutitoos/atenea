@@ -48,6 +48,8 @@ Usage:
 
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
+  command NAME           Read-only chat command; use --markdown, --json or --text
+  doctor                 Check desktop client/profile compatibility and MCP wiring
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
@@ -124,6 +126,17 @@ Global flags:
 // their flags even see anything -- "atenea ask -h" would otherwise be
 // swallowed as the capability id, not recognized as a request for help.
 var commandHelp = map[string]string{
+	"command": `Usage: atenea command NAME [flags]
+
+Run a closed, read-only command for chat adapters. Markdown is the default.
+Names: help, status, metrics, traces, catalog, doctor, detect, incidents,
+floor, config, intent.
+
+Flags:
+  --markdown       print Markdown (default)
+  --json           print the structured JSON response
+  --text           print a plain fallback
+`,
 	"version": `Usage: atenea version
 
 Print the product and contract versions.
@@ -131,6 +144,16 @@ Print the product and contract versions.
 	"status": `Usage: atenea status
 
 Short health screen: one light for Atenea, one per provider it talks to.
+`,
+	"doctor": `Usage: atenea doctor --client CLIENT [--profile NAME] [--json]
+
+Diagnose desktop client/profile compatibility and MCP wiring without invoking
+tools with effects.
+
+Flags:
+  --client CLIENT   claude, chatgpt or codex
+  --profile NAME    desktop policy profile
+  --json            print the diagnostic result as json
 `,
 	"catalog": `Usage: atenea catalog
 
@@ -589,7 +612,8 @@ and never removed from it). Every other key is refused by name: a file
 that arrives with a git clone may not hand this machine a command to run.
 Set ATENEA_LOCAL_CONFIG=0 to ignore the layer entirely.
 `,
-	"wrap": `Usage: atenea wrap CLIENT [client args...]
+	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [--emit-config] [client args...]
+	       atenea wrap --client CLIENT [--profile NAME] [--emit-config]
 
 Launches CLIENT with MCP configuration Atenea generated from the
 [[mcp_server]] blocks in the settings file, having checked every one of
@@ -610,6 +634,10 @@ variable or on the client's own command line, for the lifetime of the
 child, so a client launched without wrap is a client with exactly the
 configuration it had before. There is no unwrap because there is nothing
 to undo.
+
+Flags:
+  --profile NAME     desktop policy profile
+  --emit-config      print the generated client configuration without launching
 
 Arguments after CLIENT are passed through untouched.
 
@@ -763,10 +791,15 @@ func run(args []string, out io.Writer) error {
 		}
 		return cmdVersion(out)
 	case "status":
+		if len(commandArgs) > 0 && (commandArgs[0] == "--client" || commandArgs[0] == "--profile") {
+			return cmdDesktopStatusCompat(settingsPath, commandArgs, out)
+		}
 		if err := noArguments("status", commandArgs); err != nil {
 			return err
 		}
 		return cmdStatus(settingsPath, out)
+	case "command":
+		return cmdCommand(settingsPath, commandArgs, out)
 	case "catalog":
 		if err := noArguments("catalog", commandArgs); err != nil {
 			return err
@@ -794,16 +827,25 @@ func run(args []string, out io.Writer) error {
 		}
 		return cmdRun(settingsPath, out)
 	case "desktop":
+		if len(commandArgs) > 0 && (commandArgs[0] == "install" || commandArgs[0] == "remove") {
+			return cmdDesktopMCP(settingsPath, commandArgs, out)
+		}
 		return cmdDesktop(commandArgs, os.Stdin, out)
+	case "doctor":
+		return cmdDoctorCompat(settingsPath, commandArgs, out)
 	case "mcp":
-		if len(commandArgs) == 1 && commandArgs[0] == "--check" {
+		profile, mcpArgs, err := peelDesktopProfile(commandArgs)
+		if err != nil {
+			return err
+		}
+		if len(mcpArgs) == 1 && mcpArgs[0] == "--check" {
 			return mcpProbe(out)
 		}
-		if len(commandArgs) != 0 {
+		if len(mcpArgs) != 0 {
 			return contract.Fail(contract.FailureInvalidInput,
-				"mcp takes no arguments (or --check): %q", commandArgs[0])
+				"mcp takes no arguments (or --check): %q", mcpArgs[0])
 		}
-		return cmdMCP(os.Stdin, out)
+		return cmdMCP(os.Stdin, out, profile)
 	case "service":
 		return cmdService(settingsPath, commandArgs, out)
 	case "incidents":
@@ -3552,11 +3594,25 @@ var clients = map[string]struct {
 }
 
 func cmdWrap(settingsPath string, args []string, out io.Writer) error {
-	if len(args) == 0 {
+	options, err := parseWrapOptions(args)
+	if err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if options.Client == "" {
 		return contract.Fail(contract.FailureInvalidInput,
 			"wrap needs a client, e.g. atenea wrap opencode")
 	}
-	name, rest := args[0], args[1:]
+	name, rest := options.Client, options.ClientArgs
+	if name == "chatgpt" {
+		if options.EmitConfig {
+			return emitChatGPTConfig(settingsPath, options.Profile, out)
+		}
+		installArgs := []string{"install", "chatgpt"}
+		if options.Profile != "" {
+			installArgs = append(installArgs, "--profile", options.Profile)
+		}
+		return cmdDesktopMCP(settingsPath, installArgs, out)
+	}
 	client, ok := clients[name]
 	if !ok {
 		return contract.Fail(contract.FailureInvalidInput,
@@ -3565,10 +3621,11 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	// Resolved before anything is probed. Spending eleven handshakes to
 	// discover the binary is not installed would be the report arriving
 	// after the answer that makes it pointless.
-	binary, err := exec.LookPath(name)
-	if err != nil {
+	resolved := resolveDesktopClient(name, nil)
+	binary := resolved.Path
+	if binary == "" && !options.EmitConfig {
 		return contract.Fail(contract.FailureNotFound,
-			"%s is not on PATH: %v", name, err)
+			"%s no está disponible en PATH ni en el bundle de ChatGPT", name)
 	}
 
 	// Settings only. A Core would open the measurement base and may start a
@@ -3588,7 +3645,18 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	for _, impl := range cfg.Implementations {
 		served[impl.Provider] = true
 	}
-	plan := wrap.Check(context.Background(), cfg.MCPServers, served)
+	profile, err := config.ResolveDesktopProfile(cfg.DesktopProfiles, options.Profile, name)
+	if err != nil {
+		return err
+	}
+	servers := config.FilterDesktopMCPServers(cfg.MCPServers, profile)
+	ctx := context.Background()
+	if profile.StartupTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, profile.StartupTimeout)
+		defer cancel()
+	}
+	plan := wrap.Check(ctx, servers, served)
 	plan.Report(out, name)
 
 	// The door is this binary. Resolving it here rather than trusting
@@ -3598,12 +3666,17 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable, "cannot locate the running atenea: %v", err)
 	}
-	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp"}}
+	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp", "--desktop-profile", profile.Name}}
 
 	var flags, env []string
 	if client.flags != nil {
 		if flags, err = client.flags(plan, core); err != nil {
 			return err
+		}
+		supported, omitted := detectClientFlags(binary, profile.ClientFlags)
+		flags = append(supported, flags...)
+		if !options.EmitConfig && len(omitted) > 0 {
+			fmt.Fprintf(out, "wrap %s degraded: omitted unsupported client flag(s): %s\n", name, strings.Join(omitted, ", "))
 		}
 	}
 	if client.env != "" {
@@ -3612,6 +3685,14 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 			return err
 		}
 		env = []string{client.env + "=" + payload}
+		if options.EmitConfig {
+			fmt.Fprintln(os.Stdout, payload)
+			return nil
+		}
+	}
+	if options.EmitConfig {
+		fmt.Fprintf(os.Stdout, "%s %s\n", name, strings.Join(flags, " "))
+		return nil
 	}
 	return launch(binary, clientArgv(name, flags, rest, client.variadic), env)
 }
