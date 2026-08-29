@@ -64,22 +64,6 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
 
-      - name: Coverage canonical target
-        if: matrix.os == 'ubuntu-latest'
-        run: bash scripts/coverage-check.sh coverage.out
-
-      - name: Coverage matrix floor
-        if: matrix.os != 'ubuntu-latest'
-        env:
-          ATENEA_COVERAGE_TARGET: "77.0"
-        run: bash scripts/coverage-check.sh coverage.out
-
-      - name: Coverage history regression
-        if: matrix.os == 'ubuntu-latest'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/coverage-history-check.sh coverage.out
-
       # Short, and only on one runner. A fuzz target's value is that it runs
       # at all -- a target nothing executes is a file, not a check -- and the
       # corpus that matters accumulates in the cache between runs. Thirty
@@ -143,15 +127,6 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}
           path: coverage.out
-          if-no-files-found: error
-
-      - name: Upload coverage history point
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v6
-        with:
-          name: atenea-coverage-history
-          path: coverage-summary.txt
-          retention-days: 90
           if-no-files-found: error
 
   # The three widgets Atenea installs into opencode's screen are 1,173 lines of

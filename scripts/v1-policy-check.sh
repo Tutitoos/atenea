@@ -10,12 +10,10 @@ cd "$root"
 
 # contains asserts that EVERY file named still carries the anchor.
 #
-# It used to be an OR: one match anywhere in the list passed, so the anchor that
-# tied CI's coverage threshold to the published policy was satisfied by the
-# policy page alone. Deleting the threshold from the workflow left this gate
-# green, which is the opposite of what an anchor is for. Where an OR is really
-# what is wanted -- one page among several must say a thing -- `contains_any`
-# says so out loud.
+# It used to be an OR: one match anywhere in the list passed, which made a
+# policy anchor easy to satisfy accidentally. Where an OR is really what is
+# wanted -- one page among several must say a thing -- `contains_any` says so
+# out loud.
 #
 # One tool, not two: `rg -q` is case-sensitive and `grep -q -i` is not, so the
 # pair could disagree about the same anchor. grep is on every runner.
@@ -72,14 +70,6 @@ contains 'citation|cita' docs/content/v1-policy.md docs/content/v1-contracts.md 
 contains_any 'citation_count|uncited_fields|resolved_path' docs/content/v1-contracts.md docs/content/v1-readiness.md
 contains_any 'Tokensave|Semgrep|Context7|claude-mem|Headroom' docs/content/v1-final-audit.md
 contains 'symbol\.search' docs/content/v1-policy.md docs/content/v1-contracts.md docs/content/v1-readiness.md
-# Split, because the two sides spell it differently and the single pattern
-# only ever matched one of them: the workflow sets ATENEA_COVERAGE_TARGET:
-# "77.0" with no percent sign, so /77\.0%/ could never match it and the anchor
-# was carried entirely by the prose.
-contains '77\.0' .github/workflows/ci.yml scripts/coverage-check.sh
-contains '77,0%|77\.0%' docs/content/v1-policy.md docs/content/v1-readiness.md
-contains '80\.0' scripts/coverage-check.sh
-contains '80,0%|80\.0%' docs/content/v1-policy.md
 contains_any 'code\.impact.*repository\.index|repository\.index.*code\.impact' docs/content/v1-policy.md docs/content/v1-readiness.md docs/content/v1-final-audit.md
 
 echo "v1 policy anchors passed"

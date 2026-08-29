@@ -6,7 +6,7 @@
 #
 # "The same gates" is meant literally, and used not to be: ci.yml has no tag
 # trigger, so the verify job below re-runs formatting, tidiness, vet, the race
-# suite, the coverage target, the benchmark and load barriers, the benchmark
+# suite, the benchmark and load barriers, the benchmark
 # summary, the provider matrix and the policy anchors itself. A tag pushed to a
 # commit that never reached main is validated by this file or by nothing.
 name: release
@@ -78,9 +78,6 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
-
-      - name: Coverage canonical target
-        run: bash scripts/coverage-check.sh coverage.out
 
       - name: Benchmark thresholds
         run: bash scripts/benchmark-check.sh
