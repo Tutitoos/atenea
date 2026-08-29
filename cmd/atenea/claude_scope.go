@@ -224,6 +224,9 @@ func claudeMCPFingerprint(raw map[string]any) (string, error) {
 	if transport, ok := contract["type"].(string); !ok || transport == "" || strings.EqualFold(transport, "stdio") {
 		delete(contract, "type")
 	}
+	if env, ok := contract["env"].(map[string]any); ok && len(env) == 0 {
+		delete(contract, "env")
+	}
 	encoded, err := json.Marshal(contract)
 	if err != nil {
 		return "", err
