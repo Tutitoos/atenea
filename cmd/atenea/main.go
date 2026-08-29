@@ -48,7 +48,7 @@ Usage:
 
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
-	 doctor                 Check desktop client/profile compatibility and MCP wiring
+  doctor                 Check desktop client/profile compatibility and MCP wiring
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
@@ -132,6 +132,16 @@ Print the product and contract versions.
 	"status": `Usage: atenea status
 
 Short health screen: one light for Atenea, one per provider it talks to.
+`,
+	"doctor": `Usage: atenea doctor --client CLIENT [--profile NAME] [--json]
+
+Diagnose desktop client/profile compatibility and MCP wiring without invoking
+tools with effects.
+
+Flags:
+  --client CLIENT   claude, chatgpt or codex
+  --profile NAME    desktop policy profile
+  --json            print the diagnostic result as json
 `,
 	"catalog": `Usage: atenea catalog
 
@@ -769,7 +779,7 @@ func run(args []string, out io.Writer) error {
 		}
 		return cmdVersion(out)
 	case "status":
-		if len(commandArgs) > 0 {
+		if len(commandArgs) > 0 && (commandArgs[0] == "--client" || commandArgs[0] == "--profile") {
 			return cmdDesktopStatusCompat(settingsPath, commandArgs, out)
 		}
 		if err := noArguments("status", commandArgs); err != nil {
