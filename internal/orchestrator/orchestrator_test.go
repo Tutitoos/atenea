@@ -184,6 +184,11 @@ func hits(paths ...string) contract.Outcome {
 }
 
 func build(t testHelper, runner contract.Runner, maxParallel int, dir string) (*orchestrator.Agent, *registry.Registry) {
+	return buildWithSelector(t, runner, maxParallel, dir, selector.Config{})
+}
+
+func buildWithSelector(t testHelper, runner contract.Runner, maxParallel int, dir string,
+	selectorConfig selector.Config) (*orchestrator.Agent, *registry.Registry) {
 	t.Helper()
 	reg := catalog(t)
 	if fake, ok := runner.(*fakeRunner); ok && fake.serves == nil {
@@ -198,7 +203,7 @@ func build(t testHelper, runner contract.Runner, maxParallel int, dir string) (*
 			}
 		}
 	}
-	chooser, err := selector.New(selector.Config{})
+	chooser, err := selector.New(selectorConfig)
 	if err != nil {
 		t.Fatalf("selector.New: %v", err)
 	}
@@ -733,6 +738,51 @@ func TestAProviderThatReportsItselfDownIsMarkedDown(t *testing.T) {
 	}
 	if declared.Health.State == contract.HealthDown {
 		t.Error("a probe rewrote the declared health")
+	}
+}
+
+// A runtime health verdict expires so the provider can prove it recovered.
+// When that retry succeeds, the new observation must carry both the alive
+// state and the evidence that cleared the earlier failure.
+func TestASuccessfulRetryRecoversAnObservedDownState(t *testing.T) {
+	runner := &fakeRunner{serves: []string{"ripgrep"}}
+	agent, reg := buildWithSelector(t, runner, 0, "", selector.Config{
+		HealthStaleAfter: time.Hour,
+	})
+	failedAt := time.Now().Add(-2 * time.Hour).UTC()
+	if err := reg.SetHealth("api", "ripgrep", contract.Health{
+		State:      contract.HealthDown,
+		Reason:     "the earlier probe could not start",
+		ObservedAt: failedAt,
+	}); err != nil {
+		t.Fatalf("SetHealth: %v", err)
+	}
+
+	result, err := agent.Ask(t.Context(), orchestrator.Question{
+		Capability: "code.search",
+		Repository: "api",
+		Prefer:     "ripgrep",
+		Payload:    map[string]any{"query": "login"},
+	})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if result.Verdict != contract.VerdictOK {
+		t.Fatalf("verdict = %v, want ok", result.Verdict)
+	}
+
+	health, where, ok := reg.Observations("ripgrep")
+	if !ok || where != "api" {
+		t.Fatalf("observation = (%+v, %q, %v), want ripgrep alive on api", health, where, ok)
+	}
+	if health.State != contract.HealthAlive {
+		t.Fatalf("health = %v, want alive", health.State)
+	}
+	if health.Reason == "" {
+		t.Fatal("the successful retry recovered health without recording why")
+	}
+	if !health.ObservedAt.After(failedAt) {
+		t.Fatalf("ObservedAt = %v, want a new observation after %v", health.ObservedAt, failedAt)
 	}
 }
 
