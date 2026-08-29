@@ -240,8 +240,12 @@ if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
   if [ -f "$FAKE_CLAUDE_STATE" ]; then cat "$FAKE_CLAUDE_STATE"; exit 0; fi
   exit 1
 fi
-if [ "$1" = "mcp" ] && [ "$2" = "remove" ]; then rm -f "$FAKE_CLAUDE_STATE"; exit 0; fi
-if [ "$1" = "mcp" ] && [ "$2" = "add" ]; then printf '%s\n' "$@" > "$FAKE_CLAUDE_STATE"; exit 0; fi
+if [ "$1" = "mcp" ] && [ "$2" = "remove" ]; then printf '{}\n' > "$HOME/.claude.json"; rm -f "$FAKE_CLAUDE_STATE"; exit 0; fi
+if [ "$1" = "mcp" ] && [ "$2" = "add" ]; then
+  printf '%s\n' "$@" > "$FAKE_CLAUDE_STATE"
+  printf '{"mcpServers":{"atenea":{"command":"%s","args":["mcp","--desktop-profile","%s"]}}}\n' "${7}" "${10}" > "$HOME/.claude.json"
+  exit 0
+fi
 exit 1
 `)
 	profile := config.DesktopProfile{Name: "claude", Fallback: "diagnostic"}
@@ -252,6 +256,9 @@ exit 1
 		t.Fatal("idempotent Claude install failed:", err)
 	}
 	if err := os.WriteFile(state, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"atenea":{"command":"foreign","args":[]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := installClaudeMCP("/tmp/atenea", profile, false); err == nil {

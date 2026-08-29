@@ -21,6 +21,27 @@ atenea wrap claude --profile claude
 atenea doctor --client claude
 ```
 
+For a persistent user-scope installation, use:
+
+```text
+atenea desktop install claude --profile claude
+```
+
+If Claude already defines `atenea` in local or user scope, adoption requires
+`--replace`. A project-scope definition in `.mcp.json` is shared with the
+team, so it additionally requires the explicit `--replace-project` flag:
+
+```text
+atenea desktop install claude --profile claude --replace
+atenea desktop install claude --profile claude --replace --replace-project
+```
+
+The installer inspects local, project, and user definitions without running
+`claude mcp list`, removes only the scopes explicitly authorized, and restores
+the original files if add or verification fails. `doctor` reports
+`missing`, `managed_match`, `scope_mismatch`, `managed_drift`, or
+`unmanaged_collision` for the Claude installation state.
+
 `desktop install` changes only the Atenea-managed block in
 `~/.codex/config.toml`. It creates a timestamped backup before a change and
 refuses to replace an unrelated `mcp_servers.atenea` entry unless
