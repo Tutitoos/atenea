@@ -144,12 +144,55 @@ func TestTheHandshakeNamesTheProtocolAndTheTools(t *testing.T) {
 	if _, ok := caps["tools"]; !ok {
 		t.Errorf("the server does not declare tools: %v", caps)
 	}
+	if _, ok := caps["prompts"]; !ok {
+		t.Errorf("the server does not declare prompts: %v", caps)
+	}
 	info, _ := got["serverInfo"].(map[string]any)
 	if info["name"] != "atenea" {
 		t.Errorf("serverInfo.name = %v, want atenea", info["name"])
 	}
 	if info["version"] == "" || info["version"] == nil {
 		t.Errorf("serverInfo carries no version: %v", info)
+	}
+}
+
+func TestAteneaPromptsExposeTheReadOnlyCommandSurface(t *testing.T) {
+	atenea := buildService(t, mcpSettings(t))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("claude-code")
+	list := result(t, c.call("prompts/list", nil), "prompts/list")
+	prompts, _ := list["prompts"].([]any)
+	if len(prompts) != 11 {
+		t.Fatalf("prompts = %d, want all read-only commands: %v", len(prompts), list)
+	}
+	get := result(t, c.call("prompts/get", map[string]any{
+		"name": "metrics", "arguments": map[string]string{"capability": "code.search"},
+	}), "prompts/get")
+	messages, _ := get["messages"].([]any)
+	if len(messages) != 1 || !strings.Contains(fmt.Sprint(messages[0]), "atenea.command") {
+		t.Fatalf("prompt does not route to the typed command tool: %v", get)
+	}
+}
+
+func TestAteneaCommandRejectsUnknownFieldsAndMutations(t *testing.T) {
+	atenea := buildService(t, mcpSettings(t))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	c.handshake("claude-desktop")
+	answer := c.call("tools/call", map[string]any{
+		"name": "atenea.command", "arguments": map[string]any{"name": "status", "extra": true},
+	})
+	if errObj, ok := answer["error"].(map[string]any); !ok || errObj["code"] != float64(codeInvalidParams) {
+		t.Fatalf("unknown command field was not rejected: %v", answer)
+	}
+	answer = c.call("tools/call", map[string]any{
+		"name": "atenea.command", "arguments": map[string]any{"name": "desktop.click"},
+	})
+	if errObj, ok := answer["error"].(map[string]any); !ok || errObj["code"] != float64(codeInvalidParams) {
+		t.Fatalf("mutating command was not rejected: %v", answer)
 	}
 }
 

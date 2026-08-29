@@ -48,6 +48,7 @@ Usage:
 
 Commands:
   status                 Short health screen: one light for Atenea, one per provider
+  command NAME           Read-only chat command; use --markdown, --json or --text
   doctor                 Check desktop client/profile compatibility and MCP wiring
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
@@ -125,6 +126,17 @@ Global flags:
 // their flags even see anything -- "atenea ask -h" would otherwise be
 // swallowed as the capability id, not recognized as a request for help.
 var commandHelp = map[string]string{
+	"command": `Usage: atenea command NAME [flags]
+
+Run a closed, read-only command for chat adapters. Markdown is the default.
+Names: help, status, metrics, traces, catalog, doctor, detect, incidents,
+floor, config, intent.
+
+Flags:
+  --markdown       print Markdown (default)
+  --json           print the structured JSON response
+  --text           print a plain fallback
+`,
 	"version": `Usage: atenea version
 
 Print the product and contract versions.
@@ -786,6 +798,8 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return cmdStatus(settingsPath, out)
+	case "command":
+		return cmdCommand(settingsPath, commandArgs, out)
 	case "catalog":
 		if err := noArguments("catalog", commandArgs); err != nil {
 			return err
