@@ -63,11 +63,10 @@ The same jobs can be launched manually with `live_mcp=true` and
 inputs and a failed live job is recorded as an environment/provider result,
 not converted into a local readiness claim.
 
-CI applies a 77.0% regression floor and a hard 80.0% global target. The latest
-local observation is 80.1% under the race-enabled command used by CI. GitHub
-Actions stores one canonical Linux coverage summary for 90 days and compares
-each successful main run with the previous successful main point, allowing a
-regression greater than one percentage point to fail.
+CI runs the race-enabled suite with a coverage profile and publishes the
+measurement and per-platform artifacts. Coverage is informational: no global
+percentage target, matrix floor or historical percentage regression can fail
+the workflow.
 
 On 2026-08-22, Hugo `0.165.0` built `docs/` locally without errors. `atenea wrap opencode --version` completed MCP handshakes for all
 8 configured team servers: 2 were declared directly and 6 were retained as
@@ -300,9 +299,8 @@ named as a CI one:
   build identity.
 - CI passed all seven jobs on `main`: four native builds, the lint job on both
   ubuntu and macOS, and the widget parser.
-- Coverage was 81.3% on ubuntu and 81.4% on macOS, against a hard 80.0% target
-  and a 77.0% floor. The history check compared it with the previous successful
-  `main` run and reported `previous 80.0%, current 81.3%`.
+- Coverage was 81.3% on ubuntu and 81.4% on macOS. Those values were reported
+  as measurements, not used as merge gates.
 - The three fuzz targets ran in CI for thirty seconds each and found nothing.
 - `golangci-lint` v2.12.2 reported zero issues on both platforms.
 

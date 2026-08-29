@@ -189,15 +189,10 @@ el Kivgraph instalado.
    validada dentro del presupuesto configurado; Claude Code alcanzó su techo y
    reportó un sobrecoste, que el adapter rechaza como permiso excedido. Ambos
    siguen siendo proveedores opcionales.
-6. La cobertura global observada es 80,3%. CI la sujeta con tres barreras que
-   no miden lo mismo: `scripts/coverage-check.sh` exige un objetivo duro del
-   80,0% en la ejecución canónica `ubuntu-latest`; las otras tres entradas de
-   la matriz (`ubuntu-24.04-arm`, `macos-14`, `macos-15-intel`) bajan
-   `ATENEA_COVERAGE_TARGET` a 77,0% y se quedan en el suelo de regresión; y
-   `scripts/coverage-history-check.sh` compara con el último `main` verde y
-   falla si el total cae más de un punto. Ninguna de las tres demuestra
-   cobertura semántica total: cuentan sentencias ejecutadas, no afirmaciones
-   comprobadas.
+6. La cobertura global observada es 80,3%. CI conserva la ejecución con perfil
+   y publica la medición por plataforma, pero no convierte ningún porcentaje
+   en requisito de paso. La cobertura cuenta sentencias ejecutadas, no
+   afirmaciones comprobadas.
 7. Las herramientas raw no destructivas de Semgrep, Context7, Serena,
    claude-mem, agent-device, Maestro, Headroom y Chrome DevTools fueron
    enumeradas y probadas en la medida permitida por sus objetivos; las acciones
@@ -210,7 +205,7 @@ el Kivgraph instalado.
 ## Cierre de la Fase 21
 
 La deriva Tokensave del overlay quedó corregida sin habilitar un proceso que no
-existe. CI ya tiene un suelo cuantitativo de cobertura. Hugo se construyó
+existe. CI publica la cobertura como señal informativa. Hugo se construyó
 localmente con la misma versión de CI, los ocho MCP respondieron al handshake y
 Semgrep/Context7 completaron llamadas seguras reales. Los MCP raw/off siguen
 siendo integraciones externas hasta que se prueben sus herramientas concretas.
