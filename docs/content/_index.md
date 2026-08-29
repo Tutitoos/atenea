@@ -68,6 +68,7 @@ rewritten when they do.
 - [Architecture]({{< relref "architecture" >}})
 - [Decision router]({{< relref "decision" >}}) — model, tool, MCP, provider and workflow choices
 - [Settings]({{< relref "settings" >}})
+- [Computer Use]({{< relref "computer-use" >}}) — macOS desktop access through Atenea
 - [When a provider looks flaky]({{< relref "diagnosing-providers" >}})
 - [When the instrument is the bug]({{< relref "measuring-the-wrong-process" >}}) — three defects that were not there
 - [What is not built yet]({{< relref "not-built-yet" >}}) — and what the next brick is

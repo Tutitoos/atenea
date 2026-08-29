@@ -320,6 +320,12 @@ type Orchestrator struct {
 	// to know whether the key was written: an absent key is copied from
 	// StandingEffects once, and the two are separate lists from then on.
 	ClientEffects []contract.Effect
+	// ClientDeniedCapabilities is the MCP kill switch for individual
+	// capabilities. Effects describe what a call may cause; this list is the
+	// narrower surface connected clients may see at all. It is separate so a
+	// read-only desktop capability can remain available without exposing a
+	// pointer-moving capability that happens to share `device`.
+	ClientDeniedCapabilities []string
 	// ClientEffectsInherited records that the copy above is a copy. Nothing
 	// behaves differently for it -- it is on the status screen, because
 	// inheriting is the case that still carries the sharp edge and a screen
@@ -1312,8 +1318,11 @@ type fileOrchestrator struct {
 	// Effects, while an explicitly empty list is how the operator says a
 	// client may do nothing but read. Those two cannot be the same value.
 	ClientEffects *[]string `toml:"client_effects"`
-	Checkpoints   *bool     `toml:"checkpoints"`
-	CheckpointDir string    `toml:"checkpoint_dir"`
+	// An omitted key keeps the safe built-in MCP posture. An explicit empty
+	// list is the deliberate phase-two answer that exposes every capability.
+	ClientDeniedCapabilities *[]string `toml:"client_denied_capabilities"`
+	Checkpoints              *bool     `toml:"checkpoints"`
+	CheckpointDir            string    `toml:"checkpoint_dir"`
 	// Runners uses a pointer so an omitted list and an explicitly empty one
 	// are different things: leaving the block out keeps the shipped adapter,
 	// while writing an empty list is how a user says "dispatch nowhere".
@@ -2052,6 +2061,19 @@ var defaultCodexImplementations = []string{"codex.search"}
 // thing the 2.0.0 break removed -- never appears in a settings file at all.
 // So the file is almost always already correct and only says the wrong year.
 //
+// clientDeniedCapabilitiesDefault is the first-phase MCP surface. The list
+// is capability-level rather than effect-level: desktop.move only causes
+// read + device, so a client floor that allows observation would otherwise
+// allow moving the pointer too.
+var clientDeniedCapabilitiesDefault = []string{
+	"desktop.move",
+	"desktop.drag",
+	"desktop.scroll",
+	"desktop.click",
+	"desktop.type",
+	"desktop.key",
+}
+
 // Every other direction is a file this binary is too old to read, and no edit
 // to the file can fix that. Saying "change the line" there would be advice
 // that produces a second, more confusing failure.
@@ -2064,11 +2086,12 @@ func contractRemedy(declared contract.Version) string {
 
 func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 	out := Orchestrator{
-		MaxParallel:   defaultMaxParallel,
-		BudgetUSD:     defaultBudgetUSD,
-		Runners:       []string{RunnerOMP},
-		CheckpointDir: checkpoint.DefaultDir(),
-		Local:         LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
+		MaxParallel:              defaultMaxParallel,
+		BudgetUSD:                defaultBudgetUSD,
+		Runners:                  []string{RunnerOMP},
+		CheckpointDir:            checkpoint.DefaultDir(),
+		ClientDeniedCapabilities: slices.Clone(clientDeniedCapabilitiesDefault),
+		Local:                    LocalRunner{Implementations: defaultServedImplementations, SkipDirs: defaultSkipDirs},
 		OMP: OMPAdapter{
 			Binary:          omp.DefaultBinary,
 			Implementations: defaultServedImplementations,
@@ -2164,6 +2187,9 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			effects = append(effects, effect)
 		}
 		out.ClientEffects = effects
+	}
+	if o.ClientDeniedCapabilities != nil {
+		out.ClientDeniedCapabilities = slices.Clone(*o.ClientDeniedCapabilities)
 	}
 	if o.Runners != nil {
 		seen := make(map[string]struct{}, len(*o.Runners))

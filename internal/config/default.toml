@@ -74,6 +74,13 @@ effects = ["process"]
 # and may ask at `initialize` to hold less.
 client_effects = ["process"]
 
+# Capability-level MCP kill switch. Effects alone cannot block `desktop.move`
+# while still allowing read + device observation, so the six interactive
+# capabilities stay out of tools/list and are refused if called by name.
+# Set this to [] only as an explicit phase-two activation.
+client_denied_capabilities = ["desktop.move", "desktop.drag", "desktop.scroll",
+                              "desktop.click", "desktop.type", "desktop.key"]
+
 # Whether the state of a run in flight is written to disk. Memory is a
 # whiteboard; disk is paper. The dump happens when a step closes and again when
 # the run closes, and at no other moment.

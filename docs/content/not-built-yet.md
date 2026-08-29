@@ -418,32 +418,36 @@ payload, and a declared agent pays for the trace query only when it starts.
 the first one found. The tests live in `internal/agent/agent_test.go` and the
 workflow wiring is in `internal/workflow/serve.go`.
 
-## Permissions cover four effects, and never ask
+## Device permissions are now part of the contract
 
-The design (backlog P2, *Seguridad*) names five kinds of effect —
-read / write / process / network / device — and asks that dangerous actions
-require a policy and a confirmation.
+The `device` effect is the fifth orthogonal effect in Atenea. It marks access
+to the pointer, keyboard, screen and macOS accessibility tree. It composes
+with the other effects: observation is `read + device`, while an interaction
+also declares the `write` and, where the result may leave the machine,
+`external` effects.
 
-The contract has four: `read`, `write`, `external`, `process`. That is a
-closed count, not four-of-five-so-far. `network` was never a fifth group of
-its own — `external` already names it, "leaves the machine: network,
-external services," from the design's own three-way split, closed before
-this backlog list was ever written. `process` was the real gap:
-`code.search`'s own adapters made it impossible to ignore, since every
-implementation of it spawns a binary to answer at all, and a permission
-model that could not name that was checking three quarters of what the one
-P0 capability actually does. It closed in `1.4.0`.
+The native `desktop.*` catalog is the Computer Use surface. It is backed by
+the supervised `atenea-desktop-helper`, not by a raw MCP passthrough. The
+helper is serialized because one machine has one pointer and one keyboard,
+and calls are bounded by Atenea's timeout and cancellation path.
 
-`device` is not a gap waiting its turn. Nothing in Atenea's own catalog is
-device-shaped: no capability declares it, no adapter could cause it, and no
-design decision ever closed it into the contract the way read, write and
-external were — it lived only in this backlog's own five-item wishlist,
-written before the three-way split that actually shipped. The one plausible
-source of a real need, an MCP tool for driving a mobile device, is scoped to
-a different project's tooling, not a settled requirement inside this
-catalog. `ParseEffect("device")` is refused on purpose, and two tests exist
-to keep it that way — this stays four, honestly, until something in
-Atenea's own catalog genuinely needs a fifth.
+Connected clients have two independent controls. `[orchestrator]
+client_effects` grants the effects a client may hold, while
+`client_denied_capabilities` is a capability-level kill switch. The shipped
+posture keeps the six interactive capabilities out of the MCP surface, so
+granting `device` for `desktop.apps`, `desktop.inspect` and
+`desktop.screenshot` cannot accidentally authorize `desktop.move`.
+
+The `[desktop] applications` list is an allow-list of bundle identifiers;
+empty means deny all, and `denied` always wins. Accessibility is required for
+tree inspection and input control; Screen Recording is required for captures.
+Secure text fields and credential-like input are refused, and screenshots or
+typed text are not placed in receipts.
+
+This centralizes the Computer Use route, not every native client tool. MCP
+does not intercept a client's own `Bash`, `Read`, browser automation or other
+native tools. Those direct routes must be disabled separately when Atenea is
+intended to be the sole Computer Use entry point.
 
 Direct `task` and `ask` remain non-interactive by default: `--allow` is an
 explicit command-line grant, and MCP clients cannot widen their initialized

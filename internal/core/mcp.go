@@ -293,6 +293,9 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		tools = append(tools, tool)
 	}
 	for _, capability := range capabilities {
+		if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
+			continue
+		}
 		input, err := capability.InputSchema()
 		if err != nil {
 			return nil, &rpcError{Code: codeInternal,
@@ -459,6 +462,9 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (any,
 		// The registry's own answer names the near miss when there is one,
 		// which is worth more to a model than "unknown tool".
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
+		return toolFailure(fmt.Sprintf("capability %q is not exposed to MCP clients", capability.ID)), nil
 	}
 	// Before the permission gate rather than after it, so a chat that may not
 	// authorize the effect at all is told that first: "you were never granted
