@@ -38,7 +38,7 @@ no runner  claude.search, codex.search,
            tokensave.calls, tokensave.context, tokensave.overview
 ```
 
-That is the stock catalogue: twenty implementations across fourteen
+That is the stock catalogue: twenty-one implementations across fifteen
 capabilities, exactly one reachable, because `runners = ["omp"]` attaches a
 single adapter and `[orchestrator.omp]` declares exactly `ripgrep`. Attaching
 Serena — the configuration this write-up is about — makes it six:
@@ -52,7 +52,7 @@ Serena — the configuration this write-up is about — makes it six:
 | `symbol.overview` | `serena.overview` | **local HTTP** |
 | `symbol.search` | `serena.symbol_search` | **local HTTP** |
 
-Note what the other fourteen implementations do *not* buy you here.
+Note what the other fifteen implementations do *not* buy you here.
 `code.search` declares three — `claude.search`, `codex.search` and `ripgrep` —
 and Serena is in none of them: the Serena adapter's fifth implementation is
 `serena.symbol_search`, and it answers `symbol.search`, a structural query
