@@ -135,6 +135,7 @@ max_parallel = 4            # steps of one wave at a time; 0 lifts the ceiling
 budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
+client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
   runners = ["omp"]           # any of omp, claudecode, codex, serena, kivgraph, tokensave, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
