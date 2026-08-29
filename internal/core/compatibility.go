@@ -154,7 +154,7 @@ func (v *conversation) recordCompatibility(tool, outcome, errorCode string, star
 	path := filepath.Join(platform.StateDir(), "compatibility-"+time.Now().UTC().Format("20060102")+".jsonl")
 	event := compatibilityEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Client:    v.clientName, ClientVersion: v.clientVersion, Profile: v.policy.Profile,
+		Client:    compatibilityClientID(v.clientName, v.policy.Profile), ClientVersion: v.clientVersion, Profile: v.policy.Profile,
 		Server: "atenea", Tool: tool, Outcome: outcome,
 		LatencyMS: time.Since(started).Milliseconds(), FallbackUsed: fallbackUsed,
 		ErrorCode: errorCode,
@@ -224,6 +224,8 @@ func ReadCompatibilitySummaryFor(client, profile string) CompatibilitySummary {
 
 func readCompatibilitySummary(client, profile string) CompatibilitySummary {
 	var summary CompatibilitySummary
+	lastErrorAt := ""
+	client = compatibilityClientID(client, "")
 	entries, err := os.ReadDir(platform.StateDir())
 	if err != nil {
 		return summary
@@ -247,7 +249,10 @@ func readCompatibilitySummary(client, profile string) CompatibilitySummary {
 			if err := decoder.Decode(&event); err != nil {
 				break
 			}
-			if (client != "" && event.Client != client) || (profile != "" && event.Profile != profile) {
+			eventClient := compatibilityClientID(event.Client, event.Profile)
+			profileMatch := profile == "" || event.Profile == profile ||
+				(profile == "chatgpt" && event.Profile == "" && eventClient == "chatgpt")
+			if (client != "" && eventClient != client) || !profileMatch {
 				continue
 			}
 			switch event.Outcome {
@@ -263,8 +268,9 @@ func readCompatibilitySummary(client, profile string) CompatibilitySummary {
 			if event.Timestamp > summary.LastEventAt {
 				summary.LastEventAt = event.Timestamp
 			}
-			if event.ErrorCode != "" && event.Timestamp >= summary.LastEventAt {
+			if event.ErrorCode != "" && event.Timestamp > lastErrorAt {
 				summary.LastErrorCode = event.ErrorCode
+				lastErrorAt = event.Timestamp
 			}
 		}
 		_ = file.Close()
@@ -307,6 +313,17 @@ func compatibilityOutcome(result any, rpcErr *rpcError, hinted string, fallback 
 
 func (v *conversation) filterDesktopTools(tools []map[string]any) []map[string]any {
 	return v.policy.filterTools(tools)
+}
+
+func compatibilityClientID(name, profile string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "codex-mcp-client" {
+		return "chatgpt"
+	}
+	if id := desktopClientID(name); id != "" {
+		return id
+	}
+	return name
 }
 
 func desktopClientID(name string) string {

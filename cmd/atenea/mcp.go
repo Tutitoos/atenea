@@ -87,9 +87,17 @@ func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
 	if raw, ok := message["method"]; !ok || json.Unmarshal(raw, &method) != nil || method != core.MethodInitialize {
 		return line, false
 	}
+	params := map[string]json.RawMessage{}
+	if raw, ok := message["params"]; ok {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return line, false
+		}
+	}
 	meta := map[string]json.RawMessage{}
-	if raw, ok := message["_meta"]; ok {
-		_ = json.Unmarshal(raw, &meta)
+	if raw, ok := params["_meta"]; ok {
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return line, false
+		}
 	}
 	delete(meta, "atenea")
 	atenea, _ := json.Marshal(map[string]string{"profile": profile})
@@ -98,7 +106,24 @@ func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
 	if err != nil {
 		return line, false
 	}
-	message["_meta"] = encodedMeta
+	params["_meta"] = encodedMeta
+	encodedParams, err := json.Marshal(params)
+	if err != nil {
+		return line, false
+	}
+	message["params"] = encodedParams
+	// `_meta` belongs inside initialize.params in MCP. If a non-standard
+	// client also supplied a top-level copy, remove only its Atenea profile so
+	// an untrusted value cannot survive in the forwarded request.
+	if raw, ok := message["_meta"]; ok {
+		topMeta := map[string]json.RawMessage{}
+		if err := json.Unmarshal(raw, &topMeta); err == nil {
+			delete(topMeta, "atenea")
+			if encodedTopMeta, marshalErr := json.Marshal(topMeta); marshalErr == nil {
+				message["_meta"] = encodedTopMeta
+			}
+		}
+	}
 	encoded, err := json.Marshal(message)
 	if err != nil {
 		return line, false

@@ -54,6 +54,29 @@ func TestReadCompatibilitySummaryIsSanitizedAndAggregated(t *testing.T) {
 	}
 }
 
+func TestCompatibilitySummaryNormalizesChatGPTEmbeddedClient(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	path := filepath.Join(stateHome, "atenea", "compatibility-20260829.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"timestamp":"2026-08-29T10:00:00.000000000Z","client":"codex-mcp-client","client_version":"0.150.0-alpha.12.2","tool":"code.search","outcome":"available","latency_ms":2,"fallback_used":false}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary := ReadCompatibilitySummaryFor("chatgpt", "chatgpt")
+	if summary.Available != 1 {
+		t.Fatalf("embedded ChatGPT event was not included: %#v", summary)
+	}
+}
+
+func TestCompatibilityClientIDNormalizesEmbeddedChatGPT(t *testing.T) {
+	if got := compatibilityClientID("codex-mcp-client", "chatgpt"); got != "chatgpt" {
+		t.Fatalf("client id = %q, want chatgpt", got)
+	}
+}
+
 func TestDesktopSchemaAndResultNormalization(t *testing.T) {
 	schema := normalizeDesktopSchema(map[string]any{"required": []any{"query"}})
 	if schema["type"] != "object" || schema["properties"] == nil || schema["required"] == nil {

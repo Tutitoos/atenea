@@ -141,7 +141,7 @@ func TestTheBridgeRefusesArgumentsItDoesNotKnow(t *testing.T) {
 }
 
 func TestTheBridgeOwnsTheDesktopProfileInInitialize(t *testing.T) {
-	line, ok := injectMCPProfile([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","_meta":{"atenea":{"profile":"attacker"},"trace":"keep"}}`), "claude")
+	line, ok := injectMCPProfile([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","_meta":{"atenea":{"profile":"attacker"},"trace":"remove-only"},"params":{"_meta":{"atenea":{"profile":"attacker"},"trace":"keep"}}}`), "claude")
 	if !ok {
 		t.Fatal("initialize was not transformed")
 	}
@@ -149,13 +149,18 @@ func TestTheBridgeOwnsTheDesktopProfileInInitialize(t *testing.T) {
 	if err := json.Unmarshal(line, &message); err != nil {
 		t.Fatal(err)
 	}
-	meta, _ := message["_meta"].(map[string]any)
+	params, _ := message["params"].(map[string]any)
+	meta, _ := params["_meta"].(map[string]any)
 	atenea, _ := meta["atenea"].(map[string]any)
 	if atenea["profile"] != "claude" {
 		t.Fatalf("profile = %v, want trusted wrapper profile", atenea["profile"])
 	}
 	if meta["trace"] != "keep" {
 		t.Fatalf("unrelated metadata changed: %v", meta)
+	}
+	topMeta, _ := message["_meta"].(map[string]any)
+	if _, ok := topMeta["atenea"]; ok {
+		t.Fatalf("untrusted top-level profile survived: %v", topMeta)
 	}
 }
 
