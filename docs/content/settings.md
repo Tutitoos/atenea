@@ -1985,6 +1985,22 @@ server. Wrapping it would mean writing one of those files. That is the
 guarantee above being traded away, so it is not done, and `atenea wrap --help`
 says so by name rather than leaving a reader to discover the omission.
 
+## Desktop client profiles
+
+The optional `[[desktop_profile]]` blocks define the policy Atenea applies when
+wrapping Claude Code, ChatGPT Desktop or Codex. The built-in profiles are
+`claude`, `chatgpt` and `shared`; a user block with the same `name` replaces
+that preset completely.
+
+The profile fields are `mcp_mode`, `direct_mcp`, `enabled_tools`,
+`disabled_tools`, `startup_timeout`, `tool_timeout`, `fallback` and
+`client_flags`. `atenea_only` exposes only Atenea, while `hybrid` may expose
+declared `expose = "on"` MCPs listed by `direct_mcp`; raw MCPs are never
+exposed directly. Tool allowlists run before denylists and are enforced both
+when listing and calling tools. `startup_timeout` and `tool_timeout` cap the
+session and call durations, and `fallback` is either `diagnostic` or `none`.
+Client flags are added only when the installed client advertises them.
+
 ## Arguments handed to the client, and `--auto`
 
 Everything after the client name is passed to the client untouched. For
