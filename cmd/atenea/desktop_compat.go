@@ -435,7 +435,7 @@ func claudeUserConfigPath() string {
 }
 
 func claudeMCPGet(binary string) (string, bool) {
-	output, err := exec.Command(binary, "mcp", "get", "atenea").CombinedOutput()
+	output, err := runClaudeMCPCommand(binary, "mcp", "get", "atenea")
 	if err != nil {
 		return string(output), false
 	}
@@ -443,74 +443,11 @@ func claudeMCPGet(binary string) (string, bool) {
 }
 
 func installClaudeMCP(self string, profile config.DesktopProfile, replace bool) error {
-	binary, err := exec.LookPath("claude")
-	if err != nil {
-		return err
-	}
-	output, exists := claudeMCPGet(binary)
-	if exists && strings.Contains(output, self) && strings.Contains(output, profile.Name) {
-		return nil
-	}
-	if exists && !replace {
-		return errors.New("el MCP atenea de Claude ya existe y difiere; usa --replace")
-	}
-	path := claudeUserConfigPath()
-	var original []byte
-	var mode os.FileMode = 0o600
-	if path != "" {
-		if info, statErr := os.Stat(path); statErr == nil {
-			mode = info.Mode().Perm()
-			original, err = os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	if len(original) > 0 {
-		if err := os.WriteFile(backupPath(path), original, mode); err != nil {
-			return err
-		}
-	}
-	if exists {
-		if _, err := exec.Command(binary, "mcp", "remove", "--scope", "user", "atenea").CombinedOutput(); err != nil {
-			return fmt.Errorf("claude MCP remove: %v", err)
-		}
-	}
-	args := []string{"mcp", "add", "--scope", "user", "atenea", "--", self, "mcp", "--desktop-profile", profile.Name}
-	if _, err := exec.Command(binary, args...).CombinedOutput(); err != nil {
-		if len(original) > 0 && path != "" {
-			_ = atomicDesktopWrite(path, original, mode)
-		}
-		return fmt.Errorf("claude MCP install: %v", err)
-	}
-	return nil
+	return installClaudeMCPWithProject(self, profile, replace, false)
 }
 
 func removeClaudeMCP() error {
-	binary, err := exec.LookPath("claude")
-	if err != nil {
-		return err
-	}
-	_, exists := claudeMCPGet(binary)
-	if !exists {
-		return nil
-	}
-	path := claudeUserConfigPath()
-	if path != "" {
-		if original, readErr := os.ReadFile(path); readErr == nil {
-			mode := os.FileMode(0o600)
-			if info, statErr := os.Stat(path); statErr == nil {
-				mode = info.Mode().Perm()
-			}
-			if err := os.WriteFile(backupPath(path), original, mode); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := exec.Command(binary, "mcp", "remove", "--scope", "user", "atenea").CombinedOutput(); err != nil {
-		return fmt.Errorf("claude MCP remove: %v", err)
-	}
-	return nil
+	return removeManagedClaudeMCP()
 }
 
 func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
@@ -523,7 +460,7 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 			return errors.New("desktop install requiere cliente")
 		}
 		client := args[1]
-		profileName, launch, replace := "", false, false
+		profileName, launch, replace, replaceProject := "", false, false, false
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
 			case "--profile":
@@ -535,9 +472,17 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 				launch = true
 			case "--replace":
 				replace = true
+			case "--replace-project":
+				replaceProject = true
 			default:
 				return fmt.Errorf("opción desconocida: %s", args[i])
 			}
+		}
+		if replaceProject && client != "claude" {
+			return errors.New("--replace-project solo aplica a Claude")
+		}
+		if replaceProject && !replace {
+			return errors.New("--replace-project requiere --replace")
 		}
 		cfg, err := config.Load(settingsPath)
 		if err != nil {
@@ -557,7 +502,7 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 		}
 		switch client {
 		case "claude":
-			if err := installClaudeMCP(self, profile, replace); err != nil {
+			if err := installClaudeMCPWithProject(self, profile, replace, replaceProject); err != nil {
 				return err
 			}
 		case "chatgpt", "codex":
@@ -743,22 +688,6 @@ func installedChatGPTState(profile config.DesktopProfile) string {
 	return "missing"
 }
 
-func installedClaudeState(profile config.DesktopProfile) string {
-	binary, err := exec.LookPath("claude")
-	if err != nil {
-		return "missing"
-	}
-	output, exists := claudeMCPGet(binary)
-	if !exists {
-		return "missing"
-	}
-	self, _ := os.Executable()
-	if self != "" && strings.Contains(output, self) && strings.Contains(output, profile.Name) {
-		return "managed_match"
-	}
-	return "unmanaged_collision"
-}
-
 func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 	client, profileName, asJSON := "", "", false
 	for i := 0; i < len(args); i++ {
@@ -817,11 +746,17 @@ func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 			appendDoctorCheck(&report, "config.installed", "ok", report.Config["state"], "")
 		}
 	} else {
-		report.Config["state"] = installedClaudeState(profile)
-		if report.Config["state"] == "unmanaged_collision" {
-			appendDoctorCheck(&report, "config.installed", "degraded", "el MCP atenea de Claude existe y no coincide", "Usa desktop install claude --replace para reemplazarlo explícitamente.")
+		state, inspection := claudeMCPState(profile)
+		report.Config["state"] = state
+		report.Config["scopes"] = strings.Join(inspection.Scopes, ",")
+		if state == "missing" || state == "managed_match" {
+			appendDoctorCheck(&report, "config.installed", "ok", state, "")
 		} else {
-			appendDoctorCheck(&report, "config.installed", "ok", report.Config["state"], "")
+			remedy := "Usa desktop install claude --profile " + profile.Name + " --replace para reemplazarlo explícitamente."
+			if claudeScopePresent(inspection, "project") {
+				remedy = "Usa desktop install claude --profile " + profile.Name + " --replace --replace-project para adoptar también .mcp.json."
+			}
+			appendDoctorCheck(&report, "config.installed", "degraded", state, remedy)
 		}
 	}
 	if resolved.Path != "" && (client != "chatgpt" || resolved.AppInstalled) {
