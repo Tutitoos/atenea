@@ -36,6 +36,38 @@ sign() {
 	echo "  signed $(basename "$1") as $2"
 }
 
+backup_file() {
+	local path="$1"
+	if [ ! -f "$path" ]; then
+		return 0
+	fi
+	local backup="${path}.atenea-backup.$(date +%Y%m%d%H%M%S)"
+	cp -p "$path" "$backup"
+	echo "  backup $(basename "$path") -> $(basename "$backup")" >&2
+	echo "$backup"
+}
+
+previous_bin=""
+previous_helper=""
+rollback() {
+	local status=$?
+	if [ "$status" -eq 0 ]; then
+		return
+	fi
+	echo "installation failed; restoring the previous Atenea binaries" >&2
+	if [ -n "$previous_bin" ]; then
+		cp -p "$previous_bin" "$bin" || true
+	fi
+	if [ -n "$previous_helper" ]; then
+		cp -p "$previous_helper" "$helper" || true
+	fi
+	if [ "$(uname -s)" = "Darwin" ] && [ -x "$bin" ]; then
+		"$bin" service install >/dev/null 2>&1 || true
+	fi
+	exit "$status"
+}
+trap rollback EXIT
+
 echo "building"
 cd "$root"
 go build -trimpath -o /tmp/atenea-install ./cmd/atenea
@@ -52,6 +84,10 @@ fi
 
 echo "installing"
 mkdir -p "$(dirname "$bin")" "$(dirname "$helper")"
+previous_bin="$(backup_file "$bin")"
+if [ "$(uname -s)" = "Darwin" ]; then
+	previous_helper="$(backup_file "$helper")"
+fi
 cp /tmp/atenea-install "$bin"
 sign "$bin" com.tutitoos.atenea
 if [ "$(uname -s)" = "Darwin" ]; then

@@ -14,7 +14,8 @@ atenea desktop install chatgpt --profile chatgpt --launch
 atenea doctor --client chatgpt
 ```
 
-For Claude Code, use an ephemeral profile-scoped configuration:
+For Claude Code, use an ephemeral profile-scoped configuration when only the
+MCP server is wanted:
 
 ```text
 atenea wrap claude --profile claude
@@ -26,6 +27,24 @@ For a persistent user-scope installation, use:
 ```text
 atenea desktop install claude --profile claude
 ```
+
+That command also installs the user skill `~/.claude/skills/atenea/SKILL.md`,
+which provides the literal `/atenea status` style alias. The skill is
+user-invoked only and routes every command to the typed `atenea.command` MCP
+tool. A pre-existing skill is never overwritten without `--replace`.
+
+Claude Desktop should use the packaged MCPB rather than a second direct
+Computer Use server:
+
+```text
+bash scripts/build-claude-mcpb.sh
+```
+
+Install the resulting `dist/atenea-<version>.mcpb` from `Settings ->
+Extensions -> Advanced settings -> Install Extension`. The extension runs the
+same `atenea mcp` bridge and exposes Markdown plus MCP Prompts. Restart Claude
+Desktop after installing or updating the extension. It does not create the
+literal Claude Code skill because Claude Desktop owns its own prompt picker.
 
 If Claude already defines `atenea` in local or user scope, adoption requires
 `--replace`. A project-scope definition in `.mcp.json` is shared with the
@@ -100,10 +119,10 @@ tool arguments, results, prompts, tokens, headers, or environment values.
 
 The automated suite covers configuration loading, profile propagation, MCP
 normalization, fallback diagnostics, atomic installation, and compatibility
-log aggregation. The live three-client matrix is intentionally deferred while
-Claude Code, ChatGPT Desktop, or Codex chats are active: it requires an
-authorized maintenance window to restart clients and temporarily adopt their
-real configuration entries.
+log aggregation. The first activation exposes `atenea.command` and all
+read-only Prompts; desktop interaction remains denied by the profile. Enabling
+mutations is a separate per-client/per-application policy change and still
+requires `device`, with `write` and `external` for the mutating categories.
 
 During that window, use this sequence:
 

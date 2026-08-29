@@ -502,7 +502,14 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 		}
 		switch client {
 		case "claude":
+			skillChanged, err := installClaudeSkill(replace)
+			if err != nil {
+				return err
+			}
 			if err := installClaudeMCPWithProject(self, profile, replace, replaceProject); err != nil {
+				if skillChanged {
+					_ = removeClaudeSkill()
+				}
 				return err
 			}
 		case "chatgpt", "codex":
@@ -510,7 +517,11 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 				return err
 			}
 		}
-		fmt.Fprintf(out, "Atenea instalada para %s con perfil %s\n", client, profile.Name)
+		if client == "claude" {
+			fmt.Fprintf(out, "Atenea instalada para %s con perfil %s y skill /atenea\n", client, profile.Name)
+		} else {
+			fmt.Fprintf(out, "Atenea instalada para %s con perfil %s\n", client, profile.Name)
+		}
 		if launch {
 			if client != "chatgpt" {
 				return errors.New("--launch solo está disponible para ChatGPT Desktop")
@@ -533,6 +544,9 @@ func cmdDesktopMCP(settingsPath string, args []string, out io.Writer) error {
 		switch client {
 		case "claude":
 			err = removeClaudeMCP()
+			if err == nil {
+				err = removeClaudeSkill()
+			}
 		case "chatgpt", "codex":
 			err = removeChatGPTMCP()
 		default:

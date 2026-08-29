@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -34,6 +35,7 @@ const (
 	MethodInitialize = "initialize"
 	MethodToolsList  = "tools/list"
 	MethodToolsCall  = "tools/call"
+	MethodCommand    = "atenea/command"
 
 	// notificationPrefix marks the messages that are owed no answer. Every
 	// notification MCP defines lives under it.
@@ -130,6 +132,9 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		return out
 	}
 	switch req.Method {
+	case MethodCommand:
+		result, rpcErr := v.command(req.Params)
+		out.Result, out.Error = result, rpcErr
 	case MethodStatus:
 		out.Result = v.core.Status()
 	case MethodDetect:
@@ -144,10 +149,49 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	case MethodToolsCall:
 		result, rpcErr := v.toolsCall(ctx, req.Params)
 		out.Result, out.Error = result, rpcErr
+	case methodPromptsList:
+		result, rpcErr := v.promptsList()
+		out.Result, out.Error = result, rpcErr
+	case methodPromptsGet:
+		result, rpcErr := v.promptsGet(req.Params)
+		out.Result, out.Error = result, rpcErr
 	default:
 		out.Error = &rpcError{Code: codeMethodUnknown, Message: "unknown method " + req.Method}
 	}
 	return out
+}
+
+func (v *conversation) command(raw json.RawMessage) (any, *rpcError) {
+	if v.session == nil {
+		return nil, notInitialized()
+	}
+	var req CommandRequest
+	if len(raw) > 0 && string(raw) != "null" {
+		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "atenea/command: " + err.Error()}
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "atenea/command: expected one JSON object"}
+		}
+	}
+	response, err := v.core.Command(context.Background(), req)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	text := response.Markdown
+	if strings.EqualFold(req.Format, "json") {
+		text = CommandJSON(response)
+	} else if strings.EqualFold(req.Format, "text") {
+		text = commandText(response.Markdown)
+	}
+	return map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": text}},
+		"structuredContent": response,
+		"isError":           false,
+	}, nil
 }
 
 // detect answers a probe request on the service's behalf, in the service's
@@ -275,7 +319,8 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 			// at startup, so it cannot change under a connected client, and
 			// promising notifications nobody will ever send is a promise a
 			// client may wait on.
-			"tools": map[string]any{},
+			"tools":   map[string]any{},
+			"prompts": map[string]any{"listChanged": false},
 			"experimental": map[string]any{
 				"atenea": map[string]any{"grant": granted},
 			},
@@ -301,7 +346,27 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		return nil, notInitialized()
 	}
 	capabilities := v.core.catalog.Capabilities()
-	tools := make([]map[string]any, 0, 3+len(capabilities))
+	tools := make([]map[string]any, 0, 4+len(capabilities))
+	tools = append(tools, map[string]any{
+		"name":        commandTool,
+		"description": "Run a closed, read-only Atenea chat command. Markdown is returned by default for desktop clients; use format=json for integrations.",
+		"inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+			"name":           map[string]any{"type": "string", "enum": readOnlyCommands, "description": "Read-only Atenea command"},
+			"format":         map[string]any{"type": "string", "enum": []string{"markdown", "json", "text"}},
+			"capability":     map[string]any{"type": "string"},
+			"implementation": map[string]any{"type": "string"},
+			"repository":     map[string]any{"type": "string", "description": "Registered Atenea repository id"},
+			"id":             map[string]any{"type": "string"},
+			"type":           map[string]any{"type": "string"},
+			"verdict":        map[string]any{"type": "string"},
+			"open":           map[string]any{"type": "boolean"},
+			"since":          map[string]any{"type": "string"},
+			"limit":          map[string]any{"type": "integer", "minimum": 0},
+			"all":            map[string]any{"type": "boolean"},
+			"client":         map[string]any{"type": "string"},
+			"profile":        map[string]any{"type": "string"},
+		}, "required": []string{"name"}},
+	})
 	tools = append(tools, v.repositoriesTool())
 	for _, tool := range v.workflowTools() {
 		// Aimed like every capability: the agents a graph spawns run at a
@@ -512,6 +577,13 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	}
 	if params.Name == toolListRepositories {
 		return v.listRepositories()
+	}
+	if params.Name == commandTool {
+		encoded, err := json.Marshal(arguments)
+		if err != nil {
+			return nil, &rpcError{Code: codeInternal, Message: "atenea.command arguments: " + err.Error()}
+		}
+		return v.command(encoded)
 	}
 	switch params.Name {
 	case toolWorkflowCreate:
