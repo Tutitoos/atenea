@@ -202,6 +202,27 @@ func TestClaudeScopeInspectionClassifiesAllScopes(t *testing.T) {
 	}
 }
 
+func TestClaudeMCPFingerprintIgnoresEmptyEnvironment(t *testing.T) {
+	withoutEnv, err := claudeMCPFingerprint(map[string]any{
+		"command": "/tmp/atenea",
+		"args":    []string{"mcp", "--desktop-profile", "claude"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEmptyEnv, err := claudeMCPFingerprint(map[string]any{
+		"command": "/tmp/atenea",
+		"args":    []string{"mcp", "--desktop-profile", "claude"},
+		"env":     map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutEnv != withEmptyEnv {
+		t.Fatalf("empty Claude env changed fingerprint: %s != %s", withoutEnv, withEmptyEnv)
+	}
+}
+
 func TestClaudeReplaceRehomesLocalAndLeavesProjectProtected(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
