@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -119,6 +120,52 @@ func TestInstalledChatGPTStateDistinguishesManagedAndCollision(t *testing.T) {
 	}
 	if got := installedChatGPTState(profile); got != "unmanaged_collision" {
 		t.Fatalf("collision state = %q", got)
+	}
+}
+
+func TestDesktopParsersRejectMalformedInputAndHandleMissingClients(t *testing.T) {
+	if _, err := parseWrapOptions([]string{"--client"}); err == nil {
+		t.Fatal("missing wrap client value was accepted")
+	}
+	if _, _, err := peelDesktopProfile([]string{"--desktop-profile"}); err == nil {
+		t.Fatal("missing MCP profile value was accepted")
+	}
+	if _, err := parseWrapOptions([]string{"claude", "--", "mcp", "list"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := commandVersion(filepath.Join(t.TempDir(), "missing")); got != "" {
+		t.Fatalf("missing client version = %q", got)
+	}
+	if resolved := resolveDesktopClient("missing-client", nil); resolved.Path != "" || resolved.Source != "" {
+		t.Fatalf("missing client resolution = %#v", resolved)
+	}
+	if err := validateTOML("[broken"); err == nil {
+		t.Fatal("invalid TOML was accepted")
+	}
+	if _, _, ok := managedBlockSpan("# BEGIN ATENEA MANAGED MCP\n"); ok {
+		t.Fatal("incomplete managed block was accepted")
+	}
+	if _, _, ok := mcpTableSpan("[mcp_servers.other]\ncommand=\"x\"\n", "[mcp_servers.atenea]"); ok {
+		t.Fatal("missing Atenea table was found")
+	}
+}
+
+func TestMCPDoctorResponseParserRejectsBadResponses(t *testing.T) {
+	if _, err := readMCPResponse(bufio.NewReader(strings.NewReader("not json\n"))); err == nil {
+		t.Fatal("invalid response was accepted")
+	}
+	if _, err := readMCPResponse(bufio.NewReader(strings.NewReader(`{"jsonrpc":"2.0","error":{"code":-1}}` + "\n"))); err == nil {
+		t.Fatal("MCP error response was accepted")
+	}
+	if _, err := readMCPResponse(bufio.NewReader(strings.NewReader(""))); err == nil {
+		t.Fatal("empty response was accepted")
+	}
+}
+
+func TestTOMLQuoteEscapesBasicStringCharacters(t *testing.T) {
+	quoted := tomlQuote("a\\b\"c\nd")
+	if quoted != `"a\\b\"c\nd"` {
+		t.Fatalf("quoted = %q", quoted)
 	}
 }
 
