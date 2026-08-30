@@ -24,12 +24,15 @@ type backend struct {
 	session  string
 	calls    []string
 	sessions int
+	listings int
 	// forget makes the server behave like one that restarted: the next call
 	// carrying a session id is answered 404 once, which is the shape a real
 	// expiry takes.
 	forget bool
 	// sse answers with an event stream instead of plain JSON.
-	sse bool
+	sse          bool
+	outputSchema bool
+	extraTool    bool
 }
 
 func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +73,17 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result string
 	switch msg.Method {
 	case "tools/list":
-		result = `{"tools":[{"name":"semgrep_scan","description":"scan","inputSchema":{"type":"object"}},{"name":"","description":"nameless"}]}`
+		b.mu.Lock()
+		b.listings++
+		b.mu.Unlock()
+		if b.outputSchema {
+			result = `{"tools":[{"name":"semgrep_scan","description":"scan","inputSchema":{"type":"object"},"outputSchema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}]}`
+		} else {
+			result = `{"tools":[{"name":"semgrep_scan","description":"scan","inputSchema":{"type":"object"}},{"name":"","description":"nameless"}]}`
+		}
+		if b.extraTool {
+			result = strings.Replace(result, "]}", ",{\"name\":\"new_tool\",\"description\":\"new\",\"inputSchema\":{\"type\":\"object\"}}]}", 1)
+		}
 	case "tools/call":
 		result = fmt.Sprintf(`{"content":[{"type":"text","text":%q}],"isError":false}`, msg.Params.Name)
 	default:
@@ -84,6 +97,36 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(body))
+}
+
+func TestOutputSchemaIsPreserved(t *testing.T) {
+	tools, err := dial(t, &backend{outputSchema: true}).Tools(t.Context())
+	if err != nil {
+		t.Fatalf("Tools: %v", err)
+	}
+	if got := string(tools[0].OutputSchema); got != `{"type":"object","properties":{"ok":{"type":"boolean"}}}` {
+		t.Fatalf("output schema = %s", got)
+	}
+}
+
+func TestCatalogDriftReportsAddedAndMissingNames(t *testing.T) {
+	b := dial(t, &backend{extraTool: true})
+	if _, err := b.Tools(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reporter, ok := b.(interface {
+		CatalogDrift() passthrough.CatalogDrift
+	})
+	if !ok {
+		t.Fatal("backend does not expose catalog drift")
+	}
+	drift := reporter.CatalogDrift()
+	if len(drift.Added) != 1 || drift.Added[0] != "new_tool" {
+		t.Fatalf("added drift = %#v", drift.Added)
+	}
+	if len(drift.Missing) != 0 {
+		t.Fatalf("missing drift = %#v", drift.Missing)
+	}
 }
 
 func dial(t *testing.T, b *backend) passthrough.Backend {
@@ -155,6 +198,9 @@ func TestTheSessionIsOpenedOnceAndShared(t *testing.T) {
 	if server.sessions != 1 {
 		t.Errorf("handshakes = %d, want 1", server.sessions)
 	}
+	if server.listings != 1 {
+		t.Errorf("tools/list calls = %d, want one cached catalog", server.listings)
+	}
 }
 
 // Two chats hitting a cold backend at the same moment is the case the lock
@@ -177,6 +223,9 @@ func TestConcurrentCallersOpenOneSession(t *testing.T) {
 	if server.sessions != 1 {
 		t.Errorf("handshakes = %d, want 1 for eight concurrent callers", server.sessions)
 	}
+	if server.listings != 1 {
+		t.Errorf("tools/list calls = %d, want one singleflight request", server.listings)
+	}
 }
 
 // A backend that restarted answers 404 to the id we are holding. That is the
@@ -192,7 +241,7 @@ func TestAForgottenSessionIsReopenedOnce(t *testing.T) {
 	server.forget = true
 	server.mu.Unlock()
 
-	if _, err := b.Tools(t.Context()); err != nil {
+	if _, err := b.Call(t.Context(), "semgrep_scan", nil); err != nil {
 		t.Fatalf("after the backend forgot the session: %v", err)
 	}
 	server.mu.Lock()

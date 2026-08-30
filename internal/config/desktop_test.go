@@ -28,8 +28,8 @@ func TestDefaultsLoadDesktopProfilesFromTheMainDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.DesktopProfiles) != 3 {
-		t.Fatalf("profiles = %d, want three presets", len(cfg.DesktopProfiles))
+	if len(cfg.DesktopProfiles) != 4 {
+		t.Fatalf("profiles = %d, want four presets", len(cfg.DesktopProfiles))
 	}
 	if cfg.DesktopProfiles[0].StartupTimeout != 10*time.Second {
 		t.Fatalf("startup timeout = %s", cfg.DesktopProfiles[0].StartupTimeout)
@@ -43,6 +43,33 @@ func TestDesktopProfilesRejectDuplicateOverrides(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("duplicate profile was accepted")
+	}
+}
+
+func TestMCPToolRuleNarrowsEffectsByArguments(t *testing.T) {
+	server, err := (fileMCPServer{
+		ID:      "agent-device",
+		Command: []string{"agent-device", "mcp"},
+		Expose:  "raw",
+		Tools:   []string{"clipboard"},
+		Effects: []string{"read", "write", "device"},
+		Tool: []fileMCPTool{{
+			Name:    "clipboard",
+			Effects: []string{"read", "write", "device"},
+			Rule: []fileMCPToolRule{{
+				When:    map[string]string{"action": "read"},
+				Effects: []string{"read", "device"},
+			}},
+		}},
+	}).build("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := server.EffectsFor("clipboard", map[string]any{"action": "read"}); len(got) != 2 {
+		t.Fatalf("read effects = %v, want read/device", got)
+	}
+	if got := server.EffectsFor("clipboard", map[string]any{"action": "write"}); len(got) != 3 {
+		t.Fatalf("write fallback = %v, want conservative union", got)
 	}
 }
 

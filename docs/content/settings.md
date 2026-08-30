@@ -1818,7 +1818,10 @@ rather than in five client configs. `tools/list` then carries that server's
 tools after Atenea's own capabilities, named `raw.<id>.<tool>`, with the
 backend's own input schema forwarded unedited -- no `repository` argument is
 added, because a raw tool has no idea what a repository is. A backend that does
-not answer is left out of the list rather than listed as broken.
+not answer is left out of the list rather than listed as broken. Output schemas
+and structured content are forwarded too. The catalog is cached for the
+lifetime of the shared backend process and concurrent `tools/list` requests
+are coalesced; a process restart invalidates that cache.
 
 What a raw call does *not* touch is the point of keeping it separate: no
 funnel, because there is nobody to choose between; no capability, so no schema
@@ -1845,6 +1848,11 @@ effects = ["read"]                                    # what they may cause
   [[mcp_server.tool]]
   name = "semgrep_scan"      # narrower than the server's, for one tool
   effects = ["read", "process"]
+  timeout = "60s"             # optional per-tool override
+
+    [[mcp_server.tool.rule]]
+    when = { action = "read" }
+    effects = ["read"]        # unmatched calls use the conservative fallback
 ```
 
 `tools` is the budget. Only the names on it are offered, and only they can be
@@ -1862,6 +1870,8 @@ them; a backend's own list can hold `execute_shell_command` beside
 with no block of its own causes what the server declared. A per-tool block
 naming a tool outside `tools` is refused -- it describes a call that is already
 refused a layer earlier, and left in it reads as coverage nobody has.
+Rules under a tool may narrow effects when the listed argument values match; if
+no rule matches, the tool's declared effects remain in force.
 
 At call time the declared effects are held against what the chat may
 authorize, through the same `Session.entitled` a capability crosses. Reading
@@ -1994,17 +2004,21 @@ says so by name rather than leaving a reader to discover the omission.
 
 The optional `[[desktop_profile]]` blocks define the policy Atenea applies when
 wrapping Claude Code, ChatGPT Desktop or Codex. The built-in profiles are
-`claude`, `chatgpt` and `shared`; a user block with the same `name` replaces
+`claude`, `chatgpt`, `shared` and `agent-device-full`; a user block with the same `name` replaces
 that preset completely.
 
 The profile fields are `mcp_mode`, `direct_mcp`, `enabled_tools`,
-`disabled_tools`, `startup_timeout`, `tool_timeout`, `fallback` and
+`disabled_tools`, `raw_catalogs`, `startup_timeout`, `tool_timeout`, `fallback` and
 `client_flags`. `atenea_only` exposes only Atenea, while `hybrid` may expose
 declared `expose = "on"` MCPs listed by `direct_mcp`; raw MCPs are never
 exposed directly. Tool allowlists run before denylists and are enforced both
 when listing and calling tools. `startup_timeout` and `tool_timeout` cap the
 session and call durations, and `fallback` is either `diagnostic` or `none`.
 Client flags are added only when the installed client advertises them.
+
+`raw_catalogs` selects a named catalog for a raw MCP server. The
+`agent-device` catalog is `core` by default and `full` in the explicit
+`agent-device-full` profile; unknown catalog names or server ids are rejected.
 
 ## Arguments handed to the client, and `--auto`
 

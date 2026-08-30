@@ -45,6 +45,21 @@ const protocolVersion = "2025-06-18"
 // how much of a client's context to spend.
 const maxBody = 8 << 20
 
+type timeoutOverrideKey struct{}
+
+// WithTimeoutOverride lets Atenea apply a per-tool timeout without being
+// clamped by the backend's handshake/listing timeout.
+func WithTimeoutOverride(ctx context.Context, timeout time.Duration) context.Context {
+	return context.WithValue(ctx, timeoutOverrideKey{}, timeout)
+}
+
+func timeoutFor(ctx context.Context, fallback time.Duration) time.Duration {
+	if timeout, ok := ctx.Value(timeoutOverrideKey{}).(time.Duration); ok && timeout > 0 {
+		return timeout
+	}
+	return fallback
+}
+
 // Tool is one of a backend's own tools, as the backend described it.
 //
 // The schema is carried as raw JSON rather than a decoded map because nothing
@@ -56,6 +71,82 @@ type Tool struct {
 	Name        string
 	Description string
 	InputSchema json.RawMessage
+	// OutputSchema is optional in MCP. Keep it raw and forward it unchanged.
+	OutputSchema json.RawMessage
+}
+
+// CatalogDrift reports names observed upstream that differ from the declared
+// allow-list. Added names remain hidden until reviewed.
+type CatalogDrift struct {
+	Missing []string
+	Added   []string
+}
+
+func cloneCatalogDrift(d CatalogDrift) CatalogDrift {
+	return CatalogDrift{Missing: slices.Clone(d.Missing), Added: slices.Clone(d.Added)}
+}
+
+// catalogCache snapshots tools/list for one backend process generation and
+// coalesces concurrent readers into one upstream request.
+type catalogCache struct {
+	mu         sync.Mutex
+	tools      []Tool
+	generation uint64
+	loaded     bool
+	wait       chan struct{}
+}
+
+func cloneTools(tools []Tool) []Tool {
+	out := make([]Tool, len(tools))
+	for i, tool := range tools {
+		out[i] = tool
+		out[i].InputSchema = append(json.RawMessage(nil), tool.InputSchema...)
+		out[i].OutputSchema = append(json.RawMessage(nil), tool.OutputSchema...)
+	}
+	return out
+}
+
+func (c *catalogCache) invalidate() {
+	c.mu.Lock()
+	c.loaded = false
+	c.tools = nil
+	c.mu.Unlock()
+}
+
+func (c *catalogCache) get(ctx context.Context, generation uint64, load func() ([]Tool, error)) ([]Tool, error) {
+	for {
+		c.mu.Lock()
+		if c.loaded && c.generation == generation {
+			out := cloneTools(c.tools)
+			c.mu.Unlock()
+			return out, nil
+		}
+		if c.wait != nil {
+			wait := c.wait
+			c.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		wait := make(chan struct{})
+		c.wait = wait
+		c.mu.Unlock()
+
+		tools, err := load()
+		c.mu.Lock()
+		if err == nil {
+			c.tools = cloneTools(tools)
+			c.generation = generation
+			c.loaded = true
+		}
+		c.wait = nil
+		close(wait)
+		c.mu.Unlock()
+		return tools, err
+	}
 }
 
 // Backend is one server Atenea keeps a session with, shared by every chat.
@@ -142,7 +233,11 @@ type httpBackend struct {
 	open    bool
 	// seq numbers requests. It is atomic rather than under mu because the
 	// handshake numbers its own messages while holding mu.
-	seq atomic.Int64
+	seq        atomic.Int64
+	generation atomic.Uint64
+	catalog    catalogCache
+	driftMu    sync.RWMutex
+	drift      CatalogDrift
 }
 
 func newHTTP(spec Spec) *httpBackend {
@@ -211,11 +306,34 @@ func Split(name string) (server, tool string, ok bool) {
 // lunchtime and wrong in the direction that hides tools rather than the one
 // that fails loudly.
 func (b *httpBackend) Tools(ctx context.Context) ([]Tool, error) {
-	raw, err := b.request(ctx, "tools/list", map[string]any{})
-	if err != nil {
+	if err := b.ensure(ctx); err != nil {
+		b.catalog.invalidate()
 		return nil, err
 	}
-	return toolsFrom(raw, b.allowed, b.fail)
+	generation := b.generation.Load()
+	return b.catalog.get(ctx, generation, func() ([]Tool, error) {
+		raw, err := b.request(ctx, "tools/list", map[string]any{})
+		if err != nil {
+			b.catalog.invalidate()
+			return nil, err
+		}
+		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail)
+		b.setCatalogDrift(drift)
+		return tools, err
+	})
+}
+
+func (b *httpBackend) setCatalogDrift(drift CatalogDrift) {
+	b.driftMu.Lock()
+	b.drift = cloneCatalogDrift(drift)
+	b.driftMu.Unlock()
+}
+
+// CatalogDrift returns the last observed catalog difference.
+func (b *httpBackend) CatalogDrift() CatalogDrift {
+	b.driftMu.RLock()
+	defer b.driftMu.RUnlock()
+	return cloneCatalogDrift(b.drift)
 }
 
 // toolsFrom reads a tools/list answer and keeps only what the budget allows.
@@ -224,28 +342,51 @@ func (b *httpBackend) Tools(ctx context.Context) ([]Tool, error) {
 // being a declaration and starts being the list a chat sees, and a second
 // copy of it is a second place a tool could leak through.
 func toolsFrom(raw json.RawMessage, allowed []string, fail failer) ([]Tool, error) {
+	tools, _, err := toolsFromReport(raw, allowed, fail)
+	return tools, err
+}
+
+func toolsFromReport(raw json.RawMessage, allowed []string, fail failer) ([]Tool, CatalogDrift, error) {
 	var body struct {
 		Tools []struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			InputSchema json.RawMessage `json:"inputSchema"`
+			Name         string          `json:"name"`
+			Description  string          `json:"description"`
+			InputSchema  json.RawMessage `json:"inputSchema"`
+			OutputSchema json.RawMessage `json:"outputSchema"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, fail(contract.FailureUnavailable, "listing tools: %v", err)
+		return nil, CatalogDrift{}, fail(contract.FailureUnavailable, "listing tools: %v", err)
 	}
 	out := make([]Tool, 0, min(len(body.Tools), len(allowed)))
+	observed := make([]string, 0, len(body.Tools))
 	for _, t := range body.Tools {
+		name := strings.TrimSpace(t.Name)
+		if name != "" {
+			observed = append(observed, name)
+		}
 		// Filtered against the declaration, not against what the server
 		// wishes it offered. A backend that grows a tool overnight grows
 		// nothing here: the list an operator wrote is the list a chat sees,
 		// and a new tool arrives when somebody decides it may.
-		if !slices.Contains(allowed, strings.TrimSpace(t.Name)) {
+		if !slices.Contains(allowed, name) {
 			continue
 		}
-		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, OutputSchema: t.OutputSchema})
 	}
-	return out, nil
+	missing := make([]string, 0)
+	for _, name := range allowed {
+		if name != "" && !slices.Contains(observed, name) {
+			missing = append(missing, name)
+		}
+	}
+	added := make([]string, 0)
+	for _, name := range observed {
+		if !slices.Contains(allowed, name) && !slices.Contains(added, name) {
+			added = append(added, name)
+		}
+	}
+	return out, CatalogDrift{Missing: missing, Added: added}, nil
 }
 
 // failer is a backend's own error constructor, passed to the shared helpers so
@@ -312,6 +453,9 @@ func (b *httpBackend) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.session, b.open = "", false
+	b.generation.Add(1)
+	b.catalog.invalidate()
+	b.setCatalogDrift(CatalogDrift{})
 }
 
 // request sends one call, opening the session first when there is not one.
@@ -395,6 +539,7 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 		return err
 	}
 	b.open = true
+	b.generation.Add(1)
 	return nil
 }
 
@@ -472,7 +617,7 @@ type reply struct {
 }
 
 func (b *httpBackend) post(ctx context.Context, body []byte, session string) (reply, error) {
-	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeoutFor(ctx, b.timeout))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.url, bytes.NewReader(body))
 	if err != nil {

@@ -10,12 +10,15 @@ import (
 // desktop agent. The profile is intentionally independent from the client
 // configuration format so it can be rendered as JSON or TOML.
 type DesktopProfile struct {
-	Name           string
-	Clients        []string
-	MCPMode        string
-	DirectMCP      []string
-	EnabledTools   []string
-	DisabledTools  []string
+	Name          string
+	Clients       []string
+	MCPMode       string
+	DirectMCP     []string
+	EnabledTools  []string
+	DisabledTools []string
+	// RawCatalogs selects a named catalog for raw MCP servers. It keeps the
+	// normal desktop profile small while allowing an explicit full catalog.
+	RawCatalogs    map[string]string
 	StartupTimeout time.Duration
 	ToolTimeout    time.Duration
 	Fallback       string
@@ -25,12 +28,13 @@ type DesktopProfile struct {
 type fileDesktopProfile struct {
 	Name           string
 	Clients        []string
-	MCPMode        string   `toml:"mcp_mode"`
-	DirectMCP      []string `toml:"direct_mcp"`
-	EnabledTools   []string `toml:"enabled_tools"`
-	DisabledTools  []string `toml:"disabled_tools"`
-	StartupTimeout string   `toml:"startup_timeout"`
-	ToolTimeout    string   `toml:"tool_timeout"`
+	MCPMode        string            `toml:"mcp_mode"`
+	DirectMCP      []string          `toml:"direct_mcp"`
+	EnabledTools   []string          `toml:"enabled_tools"`
+	DisabledTools  []string          `toml:"disabled_tools"`
+	RawCatalogs    map[string]string `toml:"raw_catalogs"`
+	StartupTimeout string            `toml:"startup_timeout"`
+	ToolTimeout    string            `toml:"tool_timeout"`
 	Fallback       string
 	ClientFlags    []string `toml:"client_flags"`
 }
@@ -49,6 +53,7 @@ func (f fileDesktopProfile) build() (DesktopProfile, error) {
 		MCPMode: f.MCPMode, DirectMCP: append([]string(nil), f.DirectMCP...),
 		EnabledTools:   append([]string(nil), f.EnabledTools...),
 		DisabledTools:  append([]string(nil), f.DisabledTools...),
+		RawCatalogs:    cloneStringMap(f.RawCatalogs),
 		StartupTimeout: startup, ToolTimeout: tool, Fallback: f.Fallback,
 		ClientFlags: append([]string(nil), f.ClientFlags...),
 	}, nil
@@ -70,10 +75,22 @@ func parseDesktopDuration(raw string, fallback time.Duration) (time.Duration, er
 
 func defaultDesktopProfiles() []fileDesktopProfile {
 	return []fileDesktopProfile{
-		{Name: "claude", Clients: []string{"claude"}, MCPMode: "atenea_only", Fallback: "diagnostic", ClientFlags: []string{"--strict-mcp-config"}},
-		{Name: "chatgpt", Clients: []string{"chatgpt", "codex"}, MCPMode: "atenea_only", Fallback: "diagnostic"},
-		{Name: "shared", Clients: []string{"claude", "chatgpt", "codex", "opencode", "omp"}, MCPMode: "hybrid", DirectMCP: []string{"*"}, Fallback: "diagnostic"},
+		{Name: "claude", Clients: []string{"claude"}, MCPMode: "atenea_only", RawCatalogs: map[string]string{"agent-device": "core"}, Fallback: "diagnostic", ClientFlags: []string{"--strict-mcp-config"}},
+		{Name: "chatgpt", Clients: []string{"chatgpt", "codex"}, MCPMode: "atenea_only", RawCatalogs: map[string]string{"agent-device": "core"}, Fallback: "diagnostic"},
+		{Name: "shared", Clients: []string{"claude", "chatgpt", "codex", "opencode", "omp"}, MCPMode: "hybrid", DirectMCP: []string{"*"}, RawCatalogs: map[string]string{"agent-device": "core"}, Fallback: "diagnostic"},
+		{Name: "agent-device-full", Clients: []string{"claude", "chatgpt", "codex", "opencode", "omp"}, MCPMode: "atenea_only", RawCatalogs: map[string]string{"agent-device": "full"}, Fallback: "diagnostic"},
 	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func validateDesktopProfiles(defaults, overrides []fileDesktopProfile) ([]DesktopProfile, error) {
@@ -177,6 +194,23 @@ func ValidateDesktopProfiles(profiles []DesktopProfile, servers []MCPServer) err
 			}
 			if server.Expose != "on" {
 				return fmt.Errorf("desktop_profile %q: direct_mcp %q must use expose = \"on\"", profile.Name, id)
+			}
+		}
+		for id, catalog := range profile.RawCatalogs {
+			server, ok := serverByID[id]
+			if !ok {
+				// The built-in profiles are portable and may be loaded before an
+				// installation declares its optional agent-device backend.
+				if id == "agent-device" {
+					continue
+				}
+				return fmt.Errorf("desktop_profile %q: raw_catalogs references unknown MCP %q", profile.Name, id)
+			}
+			if server.Expose != ExposeRaw {
+				return fmt.Errorf("desktop_profile %q: raw_catalogs %q requires expose = %q", profile.Name, id, ExposeRaw)
+			}
+			if catalog != "core" && catalog != "full" {
+				return fmt.Errorf("desktop_profile %q: raw_catalogs[%q] must be core or full", profile.Name, id)
 			}
 		}
 	}

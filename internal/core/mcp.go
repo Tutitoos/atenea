@@ -419,6 +419,14 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		if err != nil {
 			continue
 		}
+		if reporter, ok := backend.Backend.(interface {
+			CatalogDrift() passthrough.CatalogDrift
+		}); ok {
+			drift := reporter.CatalogDrift()
+			if len(drift.Missing) > 0 || len(drift.Added) > 0 {
+				v.core.recordBackendListingNote(id, fmt.Sprintf("catalog drift: missing=%d added=%d", len(drift.Missing), len(drift.Added)))
+			}
+		}
 		for _, tool := range offered {
 			entry := map[string]any{
 				"name":        passthrough.Name(id, tool.Name),
@@ -429,6 +437,12 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			// Atenea's own question about which repository a capability
 			// runs in, and a raw tool has no idea what a repository is.
 			entry["inputSchema"] = normalizeDesktopSchema(tool.InputSchema)
+			if len(tool.OutputSchema) > 0 && string(tool.OutputSchema) != "null" {
+				var output any
+				if err := json.Unmarshal(tool.OutputSchema, &output); err == nil && output != nil {
+					entry["outputSchema"] = output
+				}
+			}
 			tools = append(tools, entry)
 		}
 	}
@@ -544,8 +558,6 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if v.session == nil {
 		return nil, notInitialized()
 	}
-	ctx, cancel := v.policy.withToolTimeout(ctx)
-	defer cancel()
 	var params toolsCallParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: "tools/call: " + err.Error()}
@@ -575,6 +587,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		}
 		return result, rpcErr
 	}
+	ctx, cancel := v.policy.withToolTimeout(ctx)
+	defer cancel()
 	if params.Name == toolListRepositories {
 		return v.listRepositories()
 	}
@@ -695,7 +709,15 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
 	}
+	if timeout := backend.declared.ToolTimeoutOf(tool); timeout > 0 {
+		ctx = passthrough.WithTimeoutOverride(ctx, timeout)
+	}
 	started := time.Now()
+	arguments, err := params.argumentMap()
+	if err != nil {
+		return desktopDiagnostic("invalid_arguments", params.Name, params.Name, false,
+			"tool arguments must be a JSON object", "Retry with arguments or input as a JSON object."), nil
+	}
 	// What this tool was declared to cause, held against what this chat may
 	// authorize -- the same rule a capability crosses in Session.entitled,
 	// applied at the same boundary. Not a gate of its own: a second gate on
@@ -705,16 +727,11 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	// authorize is refused whether or not it was ever on the allow list. A
 	// refusal is filed like any other answer, because an attempt that was
 	// stopped is exactly what an audit is looking for.
-	effects := backend.declared.EffectsOf(tool)
+	effects := backend.declared.EffectsFor(tool, arguments)
 	if err := v.session.entitled(effects); err != nil {
 		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 		return desktopDiagnostic("permission_denied", params.Name, params.Name, false,
 			err.Error(), "Request the required permission before retrying."), nil
-	}
-	arguments, err := params.argumentMap()
-	if err != nil {
-		return desktopDiagnostic("invalid_arguments", params.Name, params.Name, false,
-			"tool arguments must be a JSON object", "Retry with arguments or input as a JSON object."), nil
 	}
 	result, err := backend.Call(ctx, tool, arguments)
 	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
