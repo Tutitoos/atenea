@@ -130,6 +130,11 @@ const (
 	defaultHost = "127.0.0.1"
 	// probeEvery is how often a spawn attempt polls for readiness.
 	probeEvery = 150 * time.Millisecond
+	// handshakeExitGrace gives a child that closed its MCP stream a bounded
+	// moment for cmd.Wait to publish the real exit status. It is deliberately
+	// independent from probeEvery: the latter is a polling cadence, while this
+	// is only the handoff between a failed handshake and the process result.
+	handshakeExitGrace = 500 * time.Millisecond
 )
 
 // idleCheckEvery is how often the reaper looks for an on_demand server that
