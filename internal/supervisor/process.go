@@ -542,7 +542,7 @@ func (p *process) waitForHandshake(cmd *exec.Cmd, exited chan error, stopCh chan
 		select {
 		case exitErr := <-exited:
 			return readyNeverCame, fmt.Errorf("exited before answering ready: %w", exitErr)
-		case <-time.After(probeEvery):
+		case <-time.After(handshakeExitGrace):
 		}
 		_ = procgroup.Kill(cmd)
 		<-exited
