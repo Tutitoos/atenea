@@ -33,6 +33,27 @@ func TestDesktopPolicyFiltersTools(t *testing.T) {
 	}
 }
 
+func TestRawCatalogSelectsCoreAndFull(t *testing.T) {
+	corePolicy := desktopPolicyFromProfile(config.DesktopProfile{
+		Name: "chatgpt", RawCatalogs: map[string]string{"agent-device": "core"},
+	})
+	tools := []map[string]any{
+		{"name": "raw.agent-device.devices"},
+		{"name": "raw.agent-device.record"},
+		{"name": "catalog.repositories"},
+	}
+	filtered := corePolicy.filterTools(tools)
+	if len(filtered) != 2 || filtered[0]["name"] != "raw.agent-device.devices" || filtered[1]["name"] != "catalog.repositories" {
+		t.Fatalf("core tools = %#v", filtered)
+	}
+	fullPolicy := desktopPolicyFromProfile(config.DesktopProfile{
+		Name: "agent-device-full", RawCatalogs: map[string]string{"agent-device": "full"},
+	})
+	if len(fullPolicy.filterTools(tools)) != 3 {
+		t.Fatalf("full catalog unexpectedly filtered: %#v", fullPolicy.filterTools(tools))
+	}
+}
+
 func TestReadCompatibilitySummaryIsSanitizedAndAggregated(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

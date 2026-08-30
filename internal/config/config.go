@@ -157,8 +157,17 @@ type MCPServer struct {
 	// it for the tools that differ. A tool absent from ToolEffects causes
 	// Effects; there is no third answer, because an undeclared effect is
 	// the thing this pair exists to make impossible.
-	Effects     []contract.Effect
-	ToolEffects map[string][]contract.Effect
+	Effects      []contract.Effect
+	ToolEffects  map[string][]contract.Effect
+	ToolTimeouts map[string]time.Duration
+	ToolRules    map[string][]EffectRule
+}
+
+// EffectRule narrows a tool's conservative fallback when its arguments make
+// the actual operation unambiguous.
+type EffectRule struct {
+	When    map[string]string
+	Effects []contract.Effect
 }
 
 // EffectsOf reports what one of this backend's tools is authorized to cause.
@@ -173,6 +182,30 @@ func (m MCPServer) EffectsOf(tool string) []contract.Effect {
 		return narrowed
 	}
 	return m.Effects
+}
+
+// ToolTimeoutOf returns the explicit timeout for a tool, or zero when the
+// profile/backend timeout should be used.
+func (m MCPServer) ToolTimeoutOf(tool string) time.Duration {
+	return m.ToolTimeouts[tool]
+}
+
+// EffectsFor applies the first matching argument rule, falling back to the
+// tool or server declaration when no rule matches.
+func (m MCPServer) EffectsFor(tool string, args map[string]any) []contract.Effect {
+	for _, rule := range m.ToolRules[tool] {
+		matches := true
+		for key, wanted := range rule.When {
+			if fmt.Sprint(args[key]) != wanted {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return rule.Effects
+		}
+	}
+	return m.EffectsOf(tool)
 }
 
 // Probe describes this declaration the way internal/mcpprobe wants it, and is
@@ -703,6 +736,9 @@ type ScraplingAdapter struct {
 // omission, and omission is not a statement -- it is what happens when
 // somebody adds an entry in a hurry.
 type Desktop struct {
+	// VisualFeedback controls the native macOS overlay and cursor feedback.
+	// Retained for compatibility with the pending local configuration.
+	VisualFeedback bool
 	// Applications is the allow-list, by bundle identifier. EMPTY MEANS DENY
 	// ALL, which is the opposite of the usual reading and is the whole point:
 	// a capability that could read every window on somebody's machine must
@@ -1578,8 +1614,15 @@ type fileMCPServer struct {
 }
 
 type fileMCPTool struct {
-	Name    string   `toml:"name"`
-	Effects []string `toml:"effects"`
+	Name    string            `toml:"name"`
+	Effects []string          `toml:"effects"`
+	Timeout string            `toml:"timeout"`
+	Rule    []fileMCPToolRule `toml:"rule"`
+}
+
+type fileMCPToolRule struct {
+	When    map[string]string `toml:"when"`
+	Effects []string          `toml:"effects"`
 }
 
 // build validates one declared endpoint. The rules are all one rule: a
@@ -1740,6 +1783,34 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 			out.ToolEffects = make(map[string][]contract.Effect, len(m.Tool))
 		}
 		out.ToolEffects[name] = narrowed
+		if strings.TrimSpace(tool.Timeout) != "" {
+			d, err := time.ParseDuration(strings.TrimSpace(tool.Timeout))
+			if err != nil || d <= 0 {
+				if err == nil {
+					err = fmt.Errorf("must be positive")
+				}
+				return fail("mcp_server %s: tool %s: timeout %q: %v", id, name, tool.Timeout, err)
+			}
+			if out.ToolTimeouts == nil {
+				out.ToolTimeouts = make(map[string]time.Duration, len(m.Tool))
+			}
+			out.ToolTimeouts[name] = d
+		}
+		for _, rawRule := range tool.Rule {
+			if len(rawRule.When) == 0 || len(rawRule.Effects) == 0 {
+				return fail("mcp_server %s: tool %s: each rule needs when and effects", id, name)
+			}
+			ruleEffects, err := namedEffects(rawRule.Effects)
+			if err != nil {
+				return fail("mcp_server %s: tool %s rule: %v", id, name, err)
+			}
+			if out.ToolRules == nil {
+				out.ToolRules = make(map[string][]EffectRule, len(m.Tool))
+			}
+			out.ToolRules[name] = append(out.ToolRules[name], EffectRule{
+				When: maps.Clone(rawRule.When), Effects: ruleEffects,
+			})
+		}
 	}
 	return out, nil
 }

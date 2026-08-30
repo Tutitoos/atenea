@@ -72,9 +72,13 @@ type stdioBackend struct {
 	// delivers the handshake's own answer through pending, which carries its
 	// own lock, so the round trip inside the critical section can complete
 	// without the deliverer ever needing the lock its waiter is holding.
-	mu   sync.Mutex
-	proc *process
-	seq  atomic.Int64
+	mu         sync.Mutex
+	proc       *process
+	seq        atomic.Int64
+	generation atomic.Uint64
+	catalog    catalogCache
+	driftMu    sync.RWMutex
+	drift      CatalogDrift
 }
 
 // process is one live child. It is replaced wholesale on a respawn rather than
@@ -178,11 +182,34 @@ func (b *stdioBackend) Allows(tool string) bool { return slices.Contains(b.allow
 func (b *stdioBackend) Allowed() []string       { return slices.Clone(b.allowed) }
 
 func (b *stdioBackend) Tools(ctx context.Context) ([]Tool, error) {
-	raw, err := b.request(ctx, "tools/list", map[string]any{})
-	if err != nil {
+	if _, err := b.ensure(ctx); err != nil {
+		b.catalog.invalidate()
 		return nil, err
 	}
-	return toolsFrom(raw, b.allowed, b.fail)
+	generation := b.generation.Load()
+	return b.catalog.get(ctx, generation, func() ([]Tool, error) {
+		raw, err := b.request(ctx, "tools/list", map[string]any{})
+		if err != nil {
+			b.catalog.invalidate()
+			return nil, err
+		}
+		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail)
+		b.setCatalogDrift(drift)
+		return tools, err
+	})
+}
+
+func (b *stdioBackend) setCatalogDrift(drift CatalogDrift) {
+	b.driftMu.Lock()
+	b.drift = cloneCatalogDrift(drift)
+	b.driftMu.Unlock()
+}
+
+// CatalogDrift returns the last observed catalog difference.
+func (b *stdioBackend) CatalogDrift() CatalogDrift {
+	b.driftMu.RLock()
+	defer b.driftMu.RUnlock()
+	return cloneCatalogDrift(b.drift)
 }
 
 func (b *stdioBackend) Call(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
@@ -193,7 +220,11 @@ func (b *stdioBackend) Call(ctx context.Context, tool string, args map[string]an
 	if args == nil {
 		args = map[string]any{}
 	}
-	return b.request(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	raw, err := b.request(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	if errors.Is(err, errBackendGone) {
+		b.catalog.invalidate()
+	}
+	return raw, err
 }
 
 // Close stops the child.
@@ -208,6 +239,9 @@ func (b *stdioBackend) Close() {
 	proc := b.proc
 	b.proc = nil
 	b.mu.Unlock()
+	b.generation.Add(1)
+	b.catalog.invalidate()
+	b.setCatalogDrift(CatalogDrift{})
 	if proc != nil {
 		proc.stop()
 	}
@@ -324,6 +358,7 @@ func (b *stdioBackend) ensure(ctx context.Context) (*process, error) {
 		return nil, err
 	}
 	b.proc = proc
+	b.generation.Add(1)
 	return proc, nil
 }
 
@@ -502,7 +537,7 @@ func (b *stdioBackend) refuse(proc *process, id json.RawMessage, method string) 
 // send writes one request and waits for its answer, its timeout, or the death
 // of the process.
 func (b *stdioBackend) send(ctx context.Context, proc *process, method string, params any) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeoutFor(ctx, b.timeout))
 	defer cancel()
 
 	id := b.seq.Add(1)

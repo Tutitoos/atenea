@@ -11,7 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/agentdevice"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/platform"
 )
 
@@ -20,6 +22,7 @@ type desktopPolicy struct {
 	Fallback      string
 	EnabledTools  map[string]bool
 	DisabledTools map[string]bool
+	RawCatalogs   map[string]string
 	ToolTimeout   time.Duration
 }
 
@@ -29,6 +32,7 @@ func desktopPolicyFromProfile(profile config.DesktopProfile) desktopPolicy {
 		Fallback:      profile.Fallback,
 		EnabledTools:  desktopSet(profile.EnabledTools),
 		DisabledTools: desktopSet(profile.DisabledTools),
+		RawCatalogs:   cloneCatalogs(profile.RawCatalogs),
 		ToolTimeout:   profile.ToolTimeout,
 	}
 }
@@ -50,15 +54,34 @@ func desktopSet(raw []string) map[string]bool {
 	return values
 }
 
+func cloneCatalogs(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for server, catalog := range raw {
+		out[server] = catalog
+	}
+	return out
+}
+
 func (p desktopPolicy) allows(tool string) bool {
+	if p.DisabledTools[tool] {
+		return false
+	}
+	if server, raw, ok := passthrough.Split(tool); ok {
+		if catalog, selected := p.RawCatalogs[server]; selected {
+			return agentdevice.CatalogAllows(catalog, raw)
+		}
+	}
 	if len(p.EnabledTools) > 0 && !p.EnabledTools[tool] {
 		return false
 	}
-	return !p.DisabledTools[tool]
+	return true
 }
 
 func (p desktopPolicy) filterTools(tools []map[string]any) []map[string]any {
-	if len(p.EnabledTools) == 0 && len(p.DisabledTools) == 0 {
+	if len(p.EnabledTools) == 0 && len(p.DisabledTools) == 0 && len(p.RawCatalogs) == 0 {
 		return tools
 	}
 	filtered := make([]map[string]any, 0, len(tools))

@@ -270,6 +270,10 @@ func (c *Core) recordBackendListing(id string, err error) {
 	c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error()})
 }
 
+func (c *Core) recordBackendListingNote(id, note string) {
+	c.readings.record(id, backendReading{State: BackendOK, At: time.Now(), Reason: note})
+}
+
 // recordBackendCall remembers what a tools/call proved about the backend, and
 // deliberately stays quiet about calls that prove nothing.
 //

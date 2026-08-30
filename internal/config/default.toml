@@ -4227,6 +4227,7 @@ name = "claude"
 clients = ["claude"]
 mcp_mode = "atenea_only"
 direct_mcp = []
+raw_catalogs = { agent-device = "core" }
 enabled_tools = []
 disabled_tools = []
 startup_timeout = "10s"
@@ -4239,6 +4240,7 @@ name = "chatgpt"
 clients = ["chatgpt", "codex"]
 mcp_mode = "atenea_only"
 direct_mcp = []
+raw_catalogs = { agent-device = "core" }
 enabled_tools = []
 disabled_tools = []
 startup_timeout = "10s"
@@ -4250,6 +4252,19 @@ name = "shared"
 clients = ["claude", "chatgpt", "codex", "opencode", "omp"]
 mcp_mode = "hybrid"
 direct_mcp = ["*"]
+raw_catalogs = { agent-device = "core" }
+startup_timeout = "10s"
+tool_timeout = "60s"
+fallback = "diagnostic"
+
+[[desktop_profile]]
+name = "agent-device-full"
+clients = ["claude", "chatgpt", "codex", "opencode", "omp"]
+mcp_mode = "atenea_only"
+direct_mcp = []
+raw_catalogs = { agent-device = "full" }
+enabled_tools = []
+disabled_tools = []
 startup_timeout = "10s"
 tool_timeout = "60s"
 fallback = "diagnostic"
