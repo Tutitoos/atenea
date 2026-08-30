@@ -28,6 +28,13 @@ import (
 // echoing the client's own version back would not be.
 const mcpVersion = "2025-06-18"
 
+// rawCatalogTimeout keeps one unavailable raw backend from stalling the
+// complete desktop catalog. A client needs the tools that are ready now; a
+// server that does not answer its own tools/list is reported as unavailable
+// and can be retried on the next connection without holding every other raw
+// server hostage.
+const rawCatalogTimeout = 1 * time.Second
+
 // The MCP surface. `atenea/status` is not part of it: that one is Atenea's own
 // CLI asking after the service, it needs no chat behind it, and gating it on a
 // handshake would mean `atenea status` had to pretend to be a model.
@@ -406,11 +413,23 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 	// mentioning it, and `atenea wrap` already reports a server that is down
 	// where an operator will read it.
 	for _, id := range slices.Sorted(maps.Keys(v.core.backends)) {
+		// A named raw catalog is an explicit desktop selection. Do not make a
+		// focused agent-device profile wait for unrelated raw servers (for
+		// example a diagram backend that is down); those servers remain
+		// available to profiles without a catalog selection or through their
+		// own direct MCP entries.
+		if len(v.policy.RawCatalogs) > 0 {
+			if _, selected := v.policy.RawCatalogs[id]; !selected {
+				continue
+			}
+		}
 		backend, ok := v.rawBackend(id)
 		if !ok || backend.Backend == nil {
 			continue
 		}
-		offered, err := backend.Tools(ctx)
+		catalogCtx, cancel := context.WithTimeout(ctx, rawCatalogTimeout)
+		offered, err := backend.Tools(catalogCtx)
+		cancel()
 		// The client is still told nothing -- see the paragraph above, which
 		// has not changed. What changed is that the Core now remembers why,
 		// so `atenea status` can name this server and this cause instead of

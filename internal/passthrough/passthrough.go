@@ -336,16 +336,6 @@ func (b *httpBackend) CatalogDrift() CatalogDrift {
 	return cloneCatalogDrift(b.drift)
 }
 
-// toolsFrom reads a tools/list answer and keeps only what the budget allows.
-//
-// Shared by both transports on purpose: this is where the allow list stops
-// being a declaration and starts being the list a chat sees, and a second
-// copy of it is a second place a tool could leak through.
-func toolsFrom(raw json.RawMessage, allowed []string, fail failer) ([]Tool, error) {
-	tools, _, err := toolsFromReport(raw, allowed, fail)
-	return tools, err
-}
-
 func toolsFromReport(raw json.RawMessage, allowed []string, fail failer) ([]Tool, CatalogDrift, error) {
 	var body struct {
 		Tools []struct {
