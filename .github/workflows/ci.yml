@@ -31,9 +31,9 @@ jobs:
           - os: macos-15-intel
             arch: amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -57,6 +57,9 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Test
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
@@ -99,6 +102,7 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: |
           set -eu
+          swift test --package-path helper -Xswiftc -strict-concurrency=complete
           swift build -c release --package-path helper
           # A real handshake. Started with no stdin the helper exits zero
           # having done nothing, so merely running it would pass for a binary
@@ -122,12 +126,32 @@ jobs:
       - name: Declared provider matrix
         run: bash scripts/provider-matrix-check.sh
 
+      - name: Validate the Scrapling Spider helper
+        run: bash scripts/scrapling-spider-check.sh
+
       - name: Upload coverage
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}
           path: coverage.out
           if-no-files-found: error
+
+  # go.mod carries the minimum supported toolchain. Keep one additional gate
+  # on the current stable release so a language/runtime change is caught before
+  # users who track stable see it, without multiplying every native matrix leg.
+  stable:
+    name: stable Go compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./...
 
   # The three widgets Atenea installs into opencode's screen are 1,173 lines of
   # TSX embedded in the binary, and nothing in a Go suite can tell whether they
@@ -143,9 +167,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -154,7 +178,7 @@ jobs:
           set -eu
           for widget in internal/statusline/opencode/*.tsx; do
             echo "== $widget"
-            npx --yes esbuild@0.25.0 --jsx=automatic --log-level=warning "$widget" >/dev/null
+            npx --yes esbuild@0.28.2 --jsx=automatic --log-level=warning "$widget" >/dev/null
           done
 
   # Two runners, because a Go build tag decides which files exist and the
@@ -177,13 +201,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-14]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.2

@@ -74,8 +74,14 @@ type indexDocument struct {
 	Passed       bool   `json:"passed"`
 	GenerationID string `json:"generation_id"`
 	Counts       struct {
-		Symbols int `json:"symbols"`
-		Edges   int `json:"edges"`
+		Symbols                     int `json:"symbols"`
+		Edges                       int `json:"edges"`
+		RustWorkspacesNotLoaded     int `json:"rust_workspaces_not_loaded"`
+		GoModulesNotLoaded          int `json:"go_modules_not_loaded"`
+		PythonRepositoriesNotLoaded int `json:"python_repositories_not_loaded"`
+		DartRepositoriesNotLoaded   int `json:"dart_repositories_not_loaded"`
+		JavaRepositoriesNotLoaded   int `json:"java_repositories_not_loaded"`
+		CSharpRepositoriesNotLoaded int `json:"csharp_repositories_not_loaded"`
 	} `json:"counts"`
 	Error string `json:"error,omitempty"`
 }
@@ -126,7 +132,13 @@ func (r *Runner) runIndex(ctx context.Context, sess Session, req contract.RunReq
 	if report.Generation != "" {
 		note += fmt.Sprintf(" (generation %s)", report.Generation)
 	}
-	return result, []string{note}, nil
+	notes := []string{note}
+	for _, language := range []string{"go", "rust", "python", "dart", "java", "csharp"} {
+		if count := report.NotLoaded[language]; count > 0 {
+			notes = append(notes, fmt.Sprintf("kivgraph index warning: %d %s workspace(s) were not loaded", count, language))
+		}
+	}
+	return result, notes, nil
 }
 
 // runImpact maps a baseline diff to declaration roots and then asks the
@@ -184,7 +196,9 @@ func (r *Runner) runImpact(ctx context.Context, sess Session, status *statusResu
 			notes = append(notes, fmt.Sprintf("%s changed but no longer exists in the current working tree", relative))
 			continue
 		}
-		text, err := sess.Call(ctx, toolOutline, map[string]any{"repository": kivgraphRepo, "path": relative})
+		text, err := sess.Call(ctx, toolOutline, map[string]any{
+			"repository": kivgraphRepo, "path": relative, "view": "full", "response_format": "detailed",
+		})
 		if err != nil {
 			// A baseline can contain a newly added or currently unindexed file.
 			// That is an incomplete graph answer, not a dead provider: retain the
@@ -201,6 +215,11 @@ func (r *Runner) runImpact(ctx context.Context, sess Session, status *statusResu
 			return nil, nil, contract.Fail(contract.FailureUnavailable,
 				"kivgraph code.impact: unreadable outline for %s: %v", relative, err)
 		}
+		metadataNotes, err := outlineMetadata(text)
+		if err != nil {
+			return nil, nil, err
+		}
+		notes = append(notes, metadataNotes...)
 		found := 0
 		unaddressed := 0
 		for _, decl := range outline.declarations() {
@@ -268,6 +287,11 @@ func (r *Runner) runImpact(ctx context.Context, sess Session, status *statusResu
 		if err := json.Unmarshal([]byte(text), &answer); err != nil {
 			return nil, nil, fmt.Errorf("kivgraph %s: unreadable answer: %w", toolBlast, err)
 		}
+		metadataNotes, err := queryMetadata(toolBlast, text, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		notes = append(notes, metadataNotes...)
 		radius := answer.blastRadius
 		if answer.Results != nil {
 			radius = *answer.Results
@@ -667,12 +691,25 @@ func finishIndexReport(report *indexDocument) (IndexReport, error) {
 	// downstream treats them as anything but sizes. Refusing here says which
 	// field was wrong, where letting it through hands a negative size to a
 	// caller with no way to trace it back.
+	notLoaded := map[string]int{
+		"go":     report.Counts.GoModulesNotLoaded,
+		"rust":   report.Counts.RustWorkspacesNotLoaded,
+		"python": report.Counts.PythonRepositoriesNotLoaded,
+		"dart":   report.Counts.DartRepositoriesNotLoaded,
+		"java":   report.Counts.JavaRepositoriesNotLoaded,
+		"csharp": report.Counts.CSharpRepositoriesNotLoaded,
+	}
 	if report.Counts.Symbols < 0 || report.Counts.Edges < 0 {
 		return IndexReport{}, fmt.Errorf(
 			"kivgraph index --full reported %d symbols and %d edges, and a count cannot be negative",
 			report.Counts.Symbols, report.Counts.Edges)
 	}
-	return IndexReport{Generation: report.GenerationID, Nodes: report.Counts.Symbols, Edges: report.Counts.Edges}, nil
+	for language, count := range notLoaded {
+		if count < 0 {
+			return IndexReport{}, fmt.Errorf("kivgraph index --full reported a negative not_loaded count for %s", language)
+		}
+	}
+	return IndexReport{Generation: report.GenerationID, Nodes: report.Counts.Symbols, Edges: report.Counts.Edges, NotLoaded: notLoaded}, nil
 }
 
 type limitedTail struct {

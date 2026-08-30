@@ -103,6 +103,9 @@ func runFakeServer() int {
 			http.Error(w, "not ready yet", http.StatusServiceUnavailable)
 			return
 		}
+		if delay := envMillis("FAKE_RESPONSE_DELAY_MS"); delay > 0 {
+			time.Sleep(delay)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",

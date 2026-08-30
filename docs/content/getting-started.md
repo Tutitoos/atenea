@@ -7,7 +7,7 @@ weight: 1
 
 ## Requirements
 
-Go 1.24 or newer. Nothing else: Atenea is a single binary and its settings file.
+Go 1.25 or newer. Nothing else: Atenea is a single binary and its settings file.
 
 ## Build and run
 
@@ -63,6 +63,11 @@ release on a machine where someone builds in worktrees.
 ```sh
 ./bin/atenea status
 ```
+
+The shipped catalog contains 28 public contracts and 38 implementation edges.
+That count is intentionally not copied into MCP examples: clients should use
+`tools/list` and `catalog` at runtime. A declared contract without an attached
+implementation is kept for discovery but is not offered as a callable tool.
 
 Dispatching real work needs the `omp` CLI on `PATH`: that is the client adapter
 the defaults attach. Without it Atenea still plans and chooses — the step fails
@@ -417,8 +422,8 @@ live in the one service — so a client that connects sees exactly what
 }
 ```
 
-Every capability becomes a tool, described by the declaration in your settings
-file. Every tool takes a `repository`, because that is Atenea's unit of work —
+Every offered capability becomes a tool, described by the declaration in your
+settings file. Every tool takes a `repository`, because that is Atenea's unit of work —
 required only when you have more than one registered, exactly like `--repo` on
 the command line.
 
@@ -429,8 +434,9 @@ reason:
 ```text
 $ atenea mcp --check
 atenea 1.1.0 is listening at ~/.local/state/atenea/run/core.sock
-13 capability(ies) would be offered as tools
-2 chat(s) open right now
+Only declared capabilities with an attached implementation are offered as tools;
+dormant contracts remain visible in `catalog` but are not advertised over MCP.
+<n> chat(s) open right now
 ```
 
 Each connected client is a chat, named by the client itself, and `atenea status`

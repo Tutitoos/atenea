@@ -3,10 +3,12 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // decodeProbe reads the two shapes a streamable-HTTP MCP server may answer
@@ -88,6 +90,36 @@ func TestProbeReadySendsAnInitializeRequest(t *testing.T) {
 	if !strings.Contains(gotAccept, "application/json") || !strings.Contains(gotAccept, "text/event-stream") {
 		t.Fatalf("Accept header = %q, want both mcp response moods advertised", gotAccept)
 	}
+}
+
+func TestProbeReadyReturnsFirstSSEFrameWithoutWaitingForStreamClose(t *testing.T) {
+	closed := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = fmt.Fprint(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+		close(closed)
+	}))
+
+	started := time.Now()
+	if err := probeReady(context.Background(), srv.Client(), srv.URL); err != nil {
+		t.Fatalf("probeReady failed against an open SSE response: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("probeReady waited %s for the SSE stream to close", elapsed)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("probeReady did not close the SSE response")
+	}
+	srv.Close()
 }
 
 func TestProbeReadyFailsOnHTTPError(t *testing.T) {

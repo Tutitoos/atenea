@@ -237,8 +237,9 @@ func TestANotificationIsNotAnswered(t *testing.T) {
 	}
 }
 
-// Every capability Atenea ships is a tool a client can call, described by the
-// declaration in the settings file rather than by anything written twice.
+// Every offered capability Atenea ships is a tool a client can call, described
+// by the declaration in the settings file rather than by anything written
+// twice.
 func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 	atenea := buildService(t, mcpSettings(t))
 	defer serve(t, atenea)()

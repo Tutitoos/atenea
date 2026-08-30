@@ -30,6 +30,7 @@ package desktop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,10 +83,10 @@ var mutations = map[string]struct {
 	tool           string
 	fields         []string
 }{
-	"desktop.click":  {"macos.click", "click", []string{"x", "y", "clicks"}},
-	"desktop.move":   {"macos.move", "move", []string{"x", "y"}},
-	"desktop.drag":   {"macos.drag", "drag", []string{"from_x", "from_y", "to_x", "to_y"}},
-	"desktop.scroll": {"macos.scroll", "scroll", []string{"x", "y", "dx", "dy"}},
+	"desktop.click":  {"macos.click", "click", []string{"x", "y", "clicks", "frame_id"}},
+	"desktop.move":   {"macos.move", "move", []string{"x", "y", "frame_id"}},
+	"desktop.drag":   {"macos.drag", "drag", []string{"from_x", "from_y", "to_x", "to_y", "frame_id"}},
+	"desktop.scroll": {"macos.scroll", "scroll", []string{"x", "y", "dx", "dy", "frame_id"}},
 	"desktop.type":   {"macos.type", "type", []string{"text"}},
 	"desktop.key":    {"macos.key", "key", []string{"key", "modifiers"}},
 }
@@ -162,6 +163,9 @@ type Options struct {
 	// a machine that is not a Mac -- and so a caller that knows better than
 	// UnderLaunchd can say so.
 	Responsible func() bool
+	// VisualFeedback enables the helper's ephemeral overlay and miniature.
+	// It never disables target validation or the allow-list.
+	VisualFeedback bool
 }
 
 // Runner is the far side of the desktop capabilities.
@@ -172,6 +176,7 @@ type Runner struct {
 	responsible     func() bool
 	signature       func() (bool, string)
 	allowed, denied []string
+	visualFeedback  bool
 }
 
 // New prepares the adapter. Nothing is dialed here: the helper is started by
@@ -212,6 +217,7 @@ func New(opts Options) (*Runner, error) {
 		signature:       signature,
 		allowed:         slices.Clone(opts.Allowed),
 		denied:          slices.Clone(opts.Denied),
+		visualFeedback:  opts.VisualFeedback,
 	}, nil
 }
 
@@ -258,6 +264,22 @@ func (r *Runner) Capabilities() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// Health returns the helper's current graphical, permission and visual
+// feedback state for `atenea doctor`. It is intentionally opt-in and does not
+// prompt for permissions or start a capture.
+func (r *Runner) Health(ctx context.Context) (map[string]any, error) {
+	text, err := r.call(ctx, "health", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"desktop: the helper's health answer is not the shape this expects: %v", err)
+	}
+	return out, nil
 }
 
 // Run executes one step.
@@ -369,6 +391,8 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 	var state struct {
 		Accessibility   bool   `json:"accessibility"`
 		ScreenRecording bool   `json:"screen_recording"`
+		InputMonitor    bool   `json:"input_monitor_active"`
+		InputMonitorErr string `json:"input_monitor_error"`
 		Missing         string `json:"missing"`
 	}
 	if err := json.Unmarshal([]byte(text), &state); err != nil {
@@ -392,6 +416,15 @@ func (r *Runner) granted(ctx context.Context, capability string) error {
 			"desktop: %s needs %s, which Atenea does not have -- grant it in System Settings > "+
 				"Privacy & Security > %s, to Atenea itself and not to a terminal",
 			capability, strings.Join(missing, " and "), missing[0])
+	}
+	if r.visualFeedback && capability != CapabilityListApps && capability != CapabilityInspect && capability != CapabilityScreenshot && !state.InputMonitor {
+		reason := state.InputMonitorErr
+		if reason == "" {
+			reason = "the helper could not create its passive human-input monitor"
+		}
+		return contract.Fail(contract.FailurePermissionDenied,
+			"desktop: %s is blocked while visual_feedback is enabled because %s; grant Input Monitoring/Accessibility or disable visual_feedback",
+			capability, reason)
 	}
 	return nil
 }
@@ -469,6 +502,9 @@ func (r *Runner) call(ctx context.Context, tool string, args map[string]any) (st
 	}
 	text, err := session.Call(ctx, tool, args)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return "", contract.Fail(contract.FailureCanceled, "desktop: %s: canceled", tool)
+		}
 		return "", helperFailure(tool, err)
 	}
 	if text == "" {
@@ -570,13 +606,14 @@ func (r *Runner) inspect(ctx context.Context, req contract.RunRequest) (contract
 	// adapter's to set even when the caller named none, because a call with
 	// no ceiling is the one that hangs.
 	args := map[string]any{
-		"pid":       pid,
-		"bundle_id": bundleID,
-		"app":       name,
-		"budget_ms": int(defaultBudget / time.Millisecond),
-		"max_nodes": defaultMaxNodes,
-		"max_bytes": defaultMaxBytes,
-		"max_depth": defaultMaxDepth,
+		"pid":             pid,
+		"bundle_id":       bundleID,
+		"app":             name,
+		"visual_feedback": r.visualFeedback,
+		"budget_ms":       int(defaultBudget / time.Millisecond),
+		"max_nodes":       defaultMaxNodes,
+		"max_bytes":       defaultMaxBytes,
+		"max_depth":       defaultMaxDepth,
 	}
 	if roles, ok := req.Payload["roles"].([]any); ok && len(roles) > 0 {
 		filter := make([]string, 0, len(roles))
@@ -629,20 +666,28 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 	if err != nil {
 		return contract.Outcome{}, err
 	}
-	text, err := r.call(ctx, "screenshot", map[string]any{"pid": pid})
+	text, err := r.call(ctx, "screenshot", map[string]any{
+		"pid": pid, "bundle_id": bundleID, "app": name,
+		"visual_feedback": r.visualFeedback,
+	})
 	if err != nil {
 		return contract.Outcome{}, err
 	}
 	var answer struct {
-		PNG    string  `json:"png_base64"`
-		Width  int     `json:"width"`
-		Height int     `json:"height"`
-		Scale  float64 `json:"scale"`
-		Bytes  int     `json:"bytes"`
+		PNG     string  `json:"png_base64"`
+		Width   int     `json:"width"`
+		Height  int     `json:"height"`
+		Scale   float64 `json:"scale"`
+		Bytes   int     `json:"bytes"`
+		FrameID string  `json:"frame_id"`
 	}
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"desktop: the helper's answer to screenshot is not the shape this expects: %v", err)
+	}
+	if answer.FrameID == "" {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: screenshot did not return a frame_id; a fresh capture is required before acting")
 	}
 	return contract.Outcome{
 		Result: map[string]any{
@@ -663,6 +708,7 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 			"application": name,
 			"bundle_id":   bundleID,
 			"untrusted":   true,
+			"frame_id":    answer.FrameID,
 		},
 		Verdict:       contract.VerdictOK,
 		Spent:         contract.Sample{Duration: time.Since(started)},
@@ -702,6 +748,8 @@ func helperFailure(tool string, err error) error {
 		return contract.Fail(contract.FailureNotFound, "desktop: %s: %s", tool, answer.Error)
 	case "invalid":
 		return contract.Fail(contract.FailureInvalidInput, "desktop: %s: %s", tool, answer.Error)
+	case "canceled":
+		return contract.Fail(contract.FailureCanceled, "desktop: %s: %s", tool, answer.Error)
 	}
 	return contract.Fail(contract.FailureUnavailable, "desktop: %s: %v", tool, err)
 }
@@ -752,7 +800,10 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 		return contract.Outcome{}, err
 	}
 
-	args := map[string]any{}
+	args := map[string]any{
+		"pid": pid, "bundle_id": bundleID, "app": name,
+		"visual_feedback": r.visualFeedback,
+	}
 	for _, field := range spec.fields {
 		value, present := req.Payload[field]
 		if !present {

@@ -81,9 +81,10 @@ func Resolve(servers []config.MCPServer, id string) (Entry, error) {
 }
 
 // ResolveConfig includes dashboards owned by an orchestrator as well as
-// ordinary [[mcp_server]] declarations. Kivgraph's MCP endpoint is stdio, so
-// its viewer is represented by the orchestrator configuration instead of a
-// second fake MCP declaration.
+// ordinary [[mcp_server]] declarations. Kivgraph's MCP endpoint is normally
+// authenticated HTTP in 0.9.2 (with stdio as an explicit alternative), so its
+// viewer is represented by the orchestrator configuration instead of a second
+// fake MCP declaration.
 func ResolveConfig(cfg config.Config, id string) (Entry, error) {
 	entry, err := Resolve(cfg.MCPServers, id)
 	if err == nil || id != KivgraphID {

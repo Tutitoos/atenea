@@ -34,12 +34,12 @@ jobs:
     env:
       HUGO_VERSION: 0.165.0
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Hugo modules are fetched with the Go toolchain, so the theme needs no
       # vendored copy and no git submodule. docs/ is its own Go module with its
       # own toolchain requirement, independent from the core.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: docs/go.mod
 

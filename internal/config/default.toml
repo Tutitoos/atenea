@@ -255,6 +255,9 @@ runners = ["omp"]
   # reached one way, and declaring both is refused at load rather than
   # silently preferring one.
   endpoint = "http://127.0.0.1:7788/mcp"
+  # The daemon handles reads; repository.index invokes this official CLI
+  # explicitly and never starts a second MCP server.
+  binary = "kivgraph"
   # The daemon refuses every request without this (401 otherwise). It is
   # stable across daemon restarts but generated per install, so unlike
   # endpoint above there is no value a shipped repo default could bake in --
@@ -272,12 +275,14 @@ runners = ["omp"]
     "kivgraph.overview",
     "kivgraph.cross_repo_consumers",
     "kivgraph.get",
-    "kivgraph.unresolved_references",
+    "kivgraph.intent_search",
+    "kivgraph.dependencies",
     "kivgraph.status",
     "kivgraph.impact",
     "kivgraph.index",
   ]
   timeout = "90s"             # opens a graph db cold, same class as serena
+  index_timeout = "10m"       # a full workspace rebuild is intentionally slower than a read
 
   # Kivgraph's optional web viewer is a separate HTTP process. If enabled,
   # dashboard must use a fixed port matching dashboard_process.port; the
@@ -380,12 +385,11 @@ runners = ["omp"]
   # unless `runners` names it, like every adapter that can cause an effect
   # beyond reading this disk.
   #
-  # Three implementations rather than one with a `mode` input, because they
-  # are the same question at very different prices -- a plain HTTP request, a
-  # real browser render, and a stealth render that defeats anti-bot
-  # interstitials -- and ranking equivalent work by measured cost is the whole
-  # job of the funnel. A `mode` input would move that decision to whoever
-  # wrote the prompt.
+  # Eight implementations rather than one with a `mode` input, grouped across
+  # fetch, extract and crawl. Each group has plain HTTP, browser and stealth
+  # levels where the far side supports them, and ranking equivalent work by
+  # measured cost is the whole job of the funnel. A `mode` input would move
+  # that decision to whoever wrote the prompt.
   #
   # WHERE it may reach is not declared here. That lives in [web], so a reader
   # looking for the destination gate finds it without having to know which
@@ -650,6 +654,9 @@ denied = [
 # desktop.type, and the receipts, which keep the target application and the
 # redacted arguments of every device call.
 look_then_act = false
+# Show the native Atenea border, cursor and live miniature while desktop use
+# is active. This affects presentation only; window-safety checks remain on.
+visual_feedback = true
 
 [web]
 # Where the web capabilities may reach.
@@ -1065,6 +1072,317 @@ effects = ["read"]
     type = "int"
     required = true
     summary = "Stable rank, where 1 is the strongest match."
+
+[[capability]]
+id = "symbol.intent_search"
+version = "1.0.0"
+summary = "Find declarations from a plain-language description when their names are unknown."
+semantics = """
+Intent retrieval ranks lexical candidates from a description and optional code
+vocabulary. It is neither literal code.search nor structural symbol.search:
+the match class and term diagnostics remain visible so callers do not mistake
+lexical similarity for a resolved graph edge. Results are always confined to
+the requested repository.
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "intent"
+  type = "string"
+  required = true
+  summary = "Plain-language description, up to 400 characters."
+
+  [[capability.input]]
+  name = "keywords"
+  type = "string_list"
+  required = false
+  summary = "Optional code vocabulary, up to 16 terms."
+
+  [[capability.input]]
+  name = "path_prefix"
+  type = "string"
+  required = false
+  summary = "Repository-relative path prefix that narrows candidate retrieval."
+
+  [[capability.input]]
+  name = "kind"
+  type = "string"
+  required = false
+  summary = "Optional provider symbol kind."
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Page size from 1 to 50; defaults to 10."
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+  summary = "Opaque cursor returned by the previous page."
+
+  [[capability.output]]
+  name = "matches"
+  type = "record_list"
+  required = true
+  summary = "Lexical candidates in provider order."
+
+    [[capability.output.field]]
+    name = "rank"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "qualified_name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "end_line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "match"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "terms"
+    type = "int"
+    required = true
+
+  [[capability.output]]
+  name = "term_diagnostics"
+  type = "record_list"
+  required = true
+
+    [[capability.output.field]]
+    name = "term"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "symbols"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "frequency"
+    type = "string"
+    required = true
+
+  [[capability.output]]
+  name = "unmatched_terms"
+  type = "string_list"
+  required = true
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = true
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+
+[[capability]]
+id = "symbol.dependencies"
+version = "1.0.0"
+summary = "Trace bounded outgoing dependencies from a symbol, optionally to one destination."
+semantics = """
+Position-first dependency traversal. Without a destination it returns a bounded
+fan-out; with to and optional to_path it returns the witness route in hop order.
+The answer preserves traversal metrics, the edge that reached each symbol and
+Kivgraph's completeness verdict. This is not code.impact, which starts from a
+Git diff and walks incoming consumers.
+"""
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "to"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "to_path"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+  summary = "Maximum hop depth from 0 to 5; defaults to 3."
+
+  [[capability.input]]
+  name = "max_nodes"
+  type = "int"
+  required = false
+  summary = "Traversal budget from 1 to 25000; defaults to 5000."
+
+  [[capability.input]]
+  name = "edge_kinds"
+  type = "string_list"
+  required = false
+
+  [[capability.input]]
+  name = "confidence"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "include_derived"
+  type = "bool"
+  required = false
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Page size from 1 to 500; unavailable for witness routes."
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+
+  [[capability.output]]
+  name = "dependencies"
+  type = "record_list"
+  required = true
+
+    [[capability.output.field]]
+    name = "repository"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "qualified_name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "end_line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "reached_from"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "via_kind"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "via_confidence"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "via_provenance"
+    type = "string"
+    required = true
+
+  [[capability.output]]
+  name = "reached"
+  type = "int"
+  required = true
+
+  [[capability.output]]
+  name = "deepest_depth"
+  type = "int"
+  required = true
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = true
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+
+  [[capability.output]]
+  name = "witness_to"
+  type = "string"
+  required = false
+
+  [[capability.output]]
+  name = "witness_hops"
+  type = "int"
+  required = false
 
 [[capability]]
 id = "symbol.definition"
@@ -1610,18 +1928,12 @@ effects = ["write", "process"]
   required = true
 
 # ---------------------------------------------------------------------------
-# Kivgraph capabilities. Cross-repository consumers, graph identity, impact
-# and explicit indexing are backed by the official Kivgraph adapter.
-#
-# Why Kivgraph does NOT appear under symbol.definition / references /
-# implementations / overview / calls: serena and other graph providers already
-# answer those, and a second implementation would not
-# add an answer -- it would rank two providers for one the funnel already has,
-# and cost +1,688 tok in every fixed-prefix client's request, forever, for a
-# duplicate. Kivgraph is declared ONLY for what it alone resolves: consumers
-# across repositories (a real edge, not a path-shape match), the stable-key
-# identity retrieval the position-first family cannot do, the graph's own
-# unresolved-reference blind spots, and the published graph's provenance.
+# Kivgraph capabilities. The adapter exposes position resolution, references,
+# overview, cross-repository consumers, stable-key retrieval, intent retrieval,
+# dependency traversal, impact, graph identity and explicit indexing. It does
+# not claim symbol.unresolved because Kivgraph 0.9.2 deliberately removed the
+# raw get_unresolved_references MCP tool; completeness now travels with the
+# queries whose absences it qualifies.
 # ---------------------------------------------------------------------------
 
 [[capability]]
@@ -2043,7 +2355,7 @@ effects = ["read", "device"]
 
 [[capability]]
 id = "desktop.screenshot"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Capture one application's frontmost window."
 semantics = """
 One window, never the whole screen. A full-screen grab carries whatever else \
@@ -2114,9 +2426,15 @@ effects = ["read", "device"]
   required = true
   summary = "Always true: this is whatever that window chose to display."
 
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "Opaque capture frame token required to safely target a later coordinate action."
+
 [[capability]]
 id = "desktop.click"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Click inside one application's window."
 semantics = """
 A button may delete something or send something, and nothing can know which before it is pressed. \
@@ -2152,6 +2470,12 @@ effects = ["read", "device", "write", "external"]
   required = false
   summary = "1 for a single click, 2 for a double. Defaults to 1."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2172,7 +2496,7 @@ effects = ["read", "device", "write", "external"]
 
 [[capability]]
 id = "desktop.move"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Move the pointer without pressing anything."
 semantics = """
 Moves the pointer and changes nothing else; it is here because hover reveals interface that is otherwise invisible. \
@@ -2202,6 +2526,12 @@ effects = ["read", "device"]
   required = true
   summary = "Vertical position, in the image's space."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2222,7 +2552,7 @@ effects = ["read", "device"]
 
 [[capability]]
 id = "desktop.drag"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Press at one point, drag to another, release."
 semantics = """
 Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
@@ -2264,6 +2594,12 @@ effects = ["read", "device", "write"]
   required = true
   summary = "Where the release happens, vertically."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2284,7 +2620,7 @@ effects = ["read", "device", "write"]
 
 [[capability]]
 id = "desktop.scroll"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Scroll at a point."
 semantics = """
 Changes what is visible rather than what is there, which is why it declares no external effect. \
@@ -2325,6 +2661,12 @@ effects = ["read", "device", "write"]
   type = "int"
   required = false
   summary = "Vertical pixels. Negative scrolls down."
+
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
 
   [[capability.output]]
   name = "did"
@@ -2591,7 +2933,7 @@ capability = "symbol.search"
   estimated_duration = "1s"
   estimated_tokens = 1300
 
-# The nine kivgraph implementations share one provider and one server (see
+# The ten kivgraph implementations share one provider and one server (see
 # [orchestrator.kivgraph] above -- either its own daemon over streamable
 # HTTP or a supervised stdio child, never both): a handful of tools called
 # against it over the same wire, no second index to build.
@@ -2684,17 +3026,30 @@ capability = "symbol.get"
   estimated_tokens = 300
 
 [[implementation]]
-id = "kivgraph.unresolved_references"
+id = "kivgraph.intent_search"
 provider = "kivgraph"
-capability = "symbol.unresolved"
+capability = "symbol.intent_search"
 
   [implementation.constraints]
   languages = []
   requires_index = true
 
   [implementation.cost]
-  estimated_duration = "25ms"
-  estimated_tokens = 1200
+	estimated_duration = "20ms"
+	estimated_tokens = 800
+
+[[implementation]]
+id = "kivgraph.dependencies"
+provider = "kivgraph"
+capability = "symbol.dependencies"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+	estimated_duration = "40ms"
+	estimated_tokens = 1600
 
 [[implementation]]
 id = "kivgraph.status"

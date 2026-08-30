@@ -381,6 +381,9 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
 			continue
 		}
+		if !v.core.capabilityOffered(capability.ID) {
+			continue
+		}
 		input, err := capability.InputSchema()
 		if err != nil {
 			return nil, &rpcError{Code: codeInternal,
@@ -606,6 +609,11 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, capability.ID) {
 		return desktopDiagnostic("profile_denied", requestedTool, params.Name, fallbackUsed,
 			fmt.Sprintf("capability %q is not exposed to MCP clients", capability.ID),
+			"Call tools/list and retry with an advertised tool name."), nil
+	}
+	if !v.core.capabilityOffered(capability.ID) {
+		return desktopDiagnostic("not_offered", requestedTool, params.Name, fallbackUsed,
+			fmt.Sprintf("capability %q is declared but has no reachable implementation", capability.ID),
 			"Call tools/list and retry with an advertised tool name."), nil
 	}
 	// Before the permission gate rather than after it, so a chat that may not

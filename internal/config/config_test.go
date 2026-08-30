@@ -47,7 +47,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.get", "symbol.implementations", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
+		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -123,13 +123,14 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"codex.search",
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
+		"kivgraph.dependencies",
 		"kivgraph.get",
 		"kivgraph.impact",
 		"kivgraph.index",
+		"kivgraph.intent_search",
 		"kivgraph.overview",
 		"kivgraph.references",
 		"kivgraph.status",
-		"kivgraph.unresolved_references",
 		"macos.apps",
 		"macos.click",
 		"macos.drag",
@@ -409,7 +410,7 @@ lifecycle = "persistent"
 	}
 }
 
-// endpoint and process are the two ways to reach kivgraph now that 0.7.0
+// endpoint and process are the two ways to reach kivgraph now that 0.9.2
 // ships a daemon alongside the stdio child, and a config declaring both has
 // two answers to "where is this server" -- the same failure fileMCPServer's
 // own url-vs-command refusal exists to catch.
@@ -443,6 +444,9 @@ func TestAnEmptyDesktopAllowListStillDeniesEverything(t *testing.T) {
 	if cfg.Desktop.LookThenAct {
 		t.Error("look_then_act shipped enabled; the default has to be the control")
 	}
+	if !cfg.Desktop.VisualFeedback {
+		t.Error("visual_feedback is disabled by default; it should make desktop actions observable")
+	}
 	if len(cfg.Desktop.Denied) == 0 {
 		t.Error("the seeded deny list is empty; the password managers are the point")
 	}
@@ -465,6 +469,20 @@ look_then_act = true
 	}
 	if !cfg.Desktop.LookThenAct {
 		t.Error("look_then_act was written true and did not survive the load")
+	}
+}
+
+func TestVisualFeedbackCanBeDisabledExplicitly(t *testing.T) {
+	body := minimal + `
+[desktop]
+visual_feedback = false
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Desktop.VisualFeedback {
+		t.Fatal("visual_feedback = false was not honored")
 	}
 }
 

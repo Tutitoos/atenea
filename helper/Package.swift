@@ -19,6 +19,9 @@ let package = Package(
     name: "atenea-desktop-helper",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "atenea-desktop-helper", path: "Sources/atenea-desktop-helper")
+        .executableTarget(name: "atenea-desktop-helper", path: "Sources/atenea-desktop-helper"),
+        .testTarget(name: "atenea-desktop-helperTests",
+                    dependencies: ["atenea-desktop-helper"],
+                    path: "Tests/atenea-desktop-helperTests")
     ]
 )

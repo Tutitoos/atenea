@@ -105,7 +105,7 @@ Commands:
   config path            Print where settings are read from
   config show            Print the settings that apply here, and from where
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
-                         moment ago; dead ones are named and left out
+                         moment ago; --via-headroom composes Headroom too
   statusline install [WIDGET]
                          Put Atenea's status line on opencode's screen;
                          'uninstall' takes it off, 'status' says whether the
@@ -271,7 +271,10 @@ Do one thing on this machine's screen or keyboard.
 
 Actions: click, move, drag, scroll, type, key. Coordinates are in the space of
 the image desktop.screenshot returned -- nothing needs to be multiplied by
-anything.
+anything. Coordinate actions may pass --set frame_id=TOKEN from that capture;
+stale or moved windows are refused and require a fresh screenshot. The helper
+draws a virtual Atenea cursor and border when visual_feedback is enabled; it
+is not a second native pointer.
 
 It always shows what is about to happen and waits for you to type yes. There is
 no flag to skip that, deliberately: a flag to skip it is the whole point of the
@@ -293,7 +296,7 @@ Serve one MCP client over stdin and stdout, relaying to the running service.
 Meant to be launched by the client, not by hand: put it in the client's MCP
 configuration as the command to run.
 
-Every capability becomes a tool, and every tool takes a repository because
+Every offered capability becomes a tool, and every tool takes a repository because
 that is Atenea's unit of work. The connection is one chat, named after the
 client that opened it and visible in 'atenea status' while it lasts.
 
@@ -612,8 +615,8 @@ and never removed from it). Every other key is refused by name: a file
 that arrives with a git clone may not hand this machine a command to run.
 Set ATENEA_LOCAL_CONFIG=0 to ignore the layer entirely.
 `,
-	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [--emit-config] [client args...]
-	       atenea wrap --client CLIENT [--profile NAME] [--emit-config]
+	"wrap": `Usage: atenea wrap CLIENT [--profile NAME] [--via-headroom] [client args...]
+	       atenea wrap --client CLIENT [--profile NAME] [--via-headroom]
 
 Launches CLIENT with MCP configuration Atenea generated from the
 [[mcp_server]] blocks in the settings file, having checked every one of
@@ -637,6 +640,8 @@ to undo.
 
 Flags:
   --profile NAME     desktop policy profile
+  --via-headroom     compose Headroom's proxy wrapper with Atenea's MCP overlay
+  --headroom-port N   Headroom proxy port (default 8787)
   --emit-config      print the generated client configuration without launching
 
 Arguments after CLIENT are passed through untouched.
@@ -653,6 +658,11 @@ OMP is a pass-through alias for now. Its MCP servers are read from
 ephemeral MCP overlay that wrap can use without writing one of those files.
 The wrapper therefore preserves OMP's own configuration and arguments while
 still checking and reporting Atenea's declared servers.
+
+With --via-headroom, Headroom launches the same client through its proxy and
+Atenea's checked MCP overlay is merged immediately before the real binary.
+Headroom's Serena and retrieve MCP entries are disabled in that mode because
+the corresponding Atenea entries remain the single advertised copy.
 `,
 }
 
@@ -861,6 +871,8 @@ func run(args []string, out io.Writer) error {
 				"agent-exec takes one built-in agent name")
 		}
 		return cmdAgentRun(commandArgs[0], os.Stdin, out)
+	case headroomReentryCommand:
+		return cmdHeadroomReentry(commandArgs)
 	case "workflow":
 		return cmdWorkflow(settingsPath, commandArgs, out)
 	case "traces":
@@ -1144,7 +1156,9 @@ func printStatus(out io.Writer, status core.Status) error {
 	for _, capability := range status.Capabilities {
 		fmt.Fprintf(out, "  %-24s [%s]\n", capability.ID, strings.Join(capability.Effects, " "))
 		if len(capability.Implementations) == 0 {
-			fmt.Fprintf(out, "      (no provider registered)\n")
+			fmt.Fprintf(out, "      (declared, not offered: no implementation registered)\n")
+		} else if !capability.Offered {
+			fmt.Fprintf(out, "      (declared, not offered: no attached runner)\n")
 		}
 		for _, impl := range capability.Implementations {
 			line := fmt.Sprintf("      %-6s %-24s provider=%-18s health=%s",
@@ -1266,7 +1280,7 @@ func printProcesses(out io.Writer, status core.Status) {
 		line := fmt.Sprintf("  %-6s %-10s state=%-11s endpoint=%-34s pid=%-8s up=%-10s restarts=%d",
 			p.Light, p.ID, p.State, p.Endpoint, pid, up, p.Restarts)
 		if p.LastReason != "" {
-			line += "  (" + p.LastReason + ")"
+			line += "  (" + clip(oneLine(p.LastReason)) + ")"
 		}
 		fmt.Fprintln(out, line)
 	}
@@ -3627,6 +3641,11 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		return contract.Fail(contract.FailureNotFound,
 			"%s no está disponible en PATH ni en el bundle de ChatGPT", name)
 	}
+	if options.ViaHeadroom && !options.EmitConfig {
+		if _, err := resolveHeadroomBinary(); err != nil {
+			return contract.Fail(contract.FailureNotFound, "headroom no está disponible en PATH: %v", err)
+		}
+	}
 
 	// Settings only. A Core would open the measurement base and may start a
 	// managed Serena, and this command holds no lock and asks no provider
@@ -3694,7 +3713,11 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 		fmt.Fprintf(os.Stdout, "%s %s\n", name, strings.Join(flags, " "))
 		return nil
 	}
-	return launch(binary, clientArgv(name, flags, rest, client.variadic), env)
+	argv := clientArgv(name, flags, rest, client.variadic)
+	if options.ViaHeadroom {
+		return launchViaHeadroom(name, binary, self, argv[1:], env, options.HeadroomPort)
+	}
+	return launch(binary, argv, env)
 }
 
 // clientArgv puts Atenea's flags in front of the user's own arguments, with a

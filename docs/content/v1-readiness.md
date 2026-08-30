@@ -315,6 +315,20 @@ is now refused rather than silently given no ceiling, and a service whose
 catalog declares a repository by a relative path is refused rather than
 resolving it against whatever directory the unit file left it in.
 
+## Current post-Kivgraph audit — 2026-08-29
+
+The tables and measurements above are retained as historical snapshots. This
+dated entry is the active status after the Kivgraph 0.9.2 integration:
+
+| Area | Current state | Disposition |
+| --- | --- | --- |
+| MCP offering | `symbol.unresolved` stays in the catalog but is not announced or callable because it has no provider; every capability without an attached runner follows the same rule | Closed in runtime and contract tests |
+| Supervisor readiness | Poll cadence remains 150 ms while each HTTP probe may use up to 5 s, bounded by the 20 s global Serena deadline and cancellation | Closed; slow handshakes no longer become `ClientDisconnect` failures |
+| Checkpoint IDs | 128-bit cryptographic suffix; PID, nanoseconds and atomic counter are the entropy fallback | Closed; 5,000-ID collision campaign is covered |
+| Web surface | Scrapling extract and crawl implementations plus the Python 3.12 Spider helper are declared in the active configuration | Closed in configuration and provider gates |
+| Kivgraph | 0.9.2 daemon is supported over authenticated HTTP, with stdio retained as an explicit alternative | Replaced the old stdio-only snapshot |
+| Remaining debt | `task` planning still emits only `code.search`; out-of-scope ranking, redirect/provider limits remain explicit | Open by design; not part of this hardening pass |
+
 ## Deliberately deferred
 
 These are not hidden failures in the current product. They are explicit v1.0

@@ -179,7 +179,7 @@ func TestRunIndexUsesExplicitIndexerAndPostcondition(t *testing.T) {
 		Session: func(context.Context) (Session, error) { return sess, nil },
 		Index: func(_ context.Context, root, mode string) (IndexReport, error) {
 			gotRoot, gotMode = root, mode
-			return IndexReport{Generation: "next", Nodes: 3074, Edges: 11460}, nil
+			return IndexReport{Generation: "next", Nodes: 3074, Edges: 11460, NotLoaded: map[string]int{"java": 2}}, nil
 		},
 	})
 	if err != nil {
@@ -202,6 +202,9 @@ func TestRunIndexUsesExplicitIndexerAndPostcondition(t *testing.T) {
 	if !strings.Contains(strings.Join(notes, "\n"), "generation next") {
 		t.Fatal("index result did not preserve the authoritative generation")
 	}
+	if !strings.Contains(strings.Join(notes, "\n"), "2 java workspace(s) were not loaded") {
+		t.Fatal("index result hid the not_loaded warning")
+	}
 }
 
 func TestRunIndexRejectsUnsupportedMode(t *testing.T) {
@@ -223,12 +226,15 @@ func TestRunIndexRejectsUnsupportedMode(t *testing.T) {
 
 func TestParseIndexReportUsesFinalResultEvent(t *testing.T) {
 	report, err := parseIndexReport(`{"event":"progress","progress":{"phase":"scan"}}
-{"event":"result","result":{"passed":true,"generation_id":"000009","counts":{"symbols":12,"edges":34}}}`)
+{"event":"result","result":{"passed":true,"generation_id":"000009","counts":{"symbols":12,"edges":34,"java_repositories_not_loaded":2,"csharp_repositories_not_loaded":1}}}`)
 	if err != nil {
 		t.Fatalf("parseIndexReport: %v", err)
 	}
 	if report.Generation != "000009" || report.Nodes != 12 || report.Edges != 34 {
 		t.Fatalf("report = %#v, want generation 000009 and 12/34", report)
+	}
+	if report.NotLoaded["java"] != 2 || report.NotLoaded["csharp"] != 1 {
+		t.Fatalf("not_loaded = %#v, want java=2 csharp=1", report.NotLoaded)
 	}
 }
 

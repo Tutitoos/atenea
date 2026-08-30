@@ -601,7 +601,7 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 // buildKivgraphRunner builds the kivgraph adapter, over whichever transport the
 // settings file named.
 //
-// kivgraph 0.7.0 serves the same tool surface two ways: `kivgraph serve` over
+// kivgraph 0.9.2 serves the same tool surface two ways: `kivgraph serve` over
 // stdio, which Atenea spawns and supervises, and `kivgraph daemon` over
 // streamable HTTP at a URL that answers 401 without its bearer token. The
 // settings file admits exactly one of the two (config refuses a block naming
@@ -619,6 +619,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 		Implementations: graph.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         graph.Timeout,
+		IndexTimeout:    graph.IndexTimeout,
 		Session: func(ctx context.Context) (kivgraph.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
@@ -649,12 +650,9 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 // both every time. mcphttp.Client is the same wire format Serena talks, so the
 // bearer token rides on every request the handshake included.
 //
-// repository.index is refused rather than attempted. Building a graph means
-// running the kivgraph BINARY over a checkout, and an endpoint is an address,
-// not a command -- with no process block there is nothing here to run, and the
-// daemon exposes no tool that would do it. Left as a refusal naming what is
-// missing, because silently answering "indexed" for a graph nobody rebuilt is
-// the failure this adapter exists to prevent.
+// repository.index remains an explicit local process boundary. Binary is
+// separate from the daemon endpoint so indexing does not require a second,
+// supervised stdio MCP server merely to recover the command name.
 func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (contract.Runner, error) {
 	headers := map[string]string{}
 	if graph.Token != "" {
@@ -672,13 +670,16 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 		Implementations: graph.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         graph.Timeout,
+		IndexTimeout:    graph.IndexTimeout,
 		Session: func(context.Context) (kivgraph.Session, error) {
 			return client, nil
 		},
-		Index: func(context.Context, string, string) (kivgraph.IndexReport, error) {
-			return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
-				"settings %s: kivgraph is reached at %s, which is an address and not a command: repository.index needs an orchestrator.kivgraph.process block to run the binary with",
-				cfg.Source, graph.Endpoint)
+		Index: func(ctx context.Context, root, mode string) (kivgraph.IndexReport, error) {
+			if strings.TrimSpace(graph.Binary) == "" {
+				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
+					"settings %s: orchestrator.kivgraph.binary is required for repository.index", cfg.Source)
+			}
+			return kivgraph.RunConfiguredIndex(ctx, graph.Binary, nil, root, mode)
 		},
 	})
 }
@@ -728,6 +729,7 @@ func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contra
 		Timeout:         cfg.Orchestrator.Desktop.Timeout,
 		Allowed:         cfg.Desktop.Applications,
 		Denied:          cfg.Desktop.Denied,
+		VisualFeedback:  cfg.Desktop.VisualFeedback,
 		Session: func(context.Context) (*mcpstdio.Session, error) {
 			return procs.Session(config.RunnerDesktop)
 		},
@@ -868,7 +870,9 @@ func checkDispatch(source string, impls []contract.Implementation, runners []con
 // hand-written catalog uses, and an id the catalog never names can never be
 // chosen. Neither half holds here: the card is compiled in, so a capability
 // outside it is unanswerable on every machine rather than merely unused on
-// this one, and it is offered to clients whether or not anything implements it.
+// this one; the shared capabilityOffered check now keeps an unimplemented
+// contract off the MCP surface, but the catalog/card mismatch is still a
+// startup error because no client could ever ask it successfully.
 func checkAskable(source string, caps []contract.Capability, card contract.Agent) error {
 	var missing []string
 	for _, capability := range caps {
@@ -881,9 +885,27 @@ func checkAskable(source string, caps []contract.Capability, card contract.Agent
 	}
 	return contract.Fail(contract.FailureInvalidInput,
 		"settings %s: the catalog declares %s, which agent %s may not ask for: "+
-			"a capability the card does not name is offered to clients as a tool and "+
-			"refused on every call",
+			"the capability is outside the agent's declared askable surface",
 		source, strings.Join(missing, ", "), card.ID)
+}
+
+// capabilityOffered is the one shared definition of what can appear on the
+// MCP surface. A capability may remain in the catalog as a contract before a
+// provider is attached, but advertising it as a tool would promise a call the
+// funnel can never route. Reachability is deliberately the only condition
+// here: an attached provider that is currently down is still a real option and
+// must remain visible so the client can distinguish outage from absence.
+func (c *Core) capabilityOffered(capabilityID string) bool {
+	implementations, err := c.catalog.ImplementationsFor(capabilityID)
+	if err != nil {
+		return false
+	}
+	for _, implementation := range implementations {
+		if c.serves(implementation.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 // fanOut is the one runner the orchestrator sees when several are attached.

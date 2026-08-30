@@ -724,6 +724,7 @@ only ever be used to make it lose the entry it exists to keep.
 applications = []           # bundle identifiers that may be looked at; EMPTY DENIES ALL
 denied = ["com.apple.keychainaccess", "com.1password.1password"]  # always wins
 look_then_act = false       # may a chat act on the screen it just read?
+visual_feedback = true      # show the ephemeral Atenea overlay and miniature
 ```
 
 `applications` is the one list in this file where empty means *nothing* rather
@@ -767,6 +768,20 @@ is nothing left between a window's text and the pointer. What still stands is
 `desktop.type`, and the receipts. `atenea status` prints a line whenever it is
 on, because a control that is off gets remembered and one that is on gets
 forgotten.
+
+`visual_feedback` is enabled by default on macOS 14 and later. It shows a
+click-through Atenea border, a virtual cursor and a movable live miniature while
+Computer Use is active. The cursor is visual only, not a second hardware
+pointer; a guarded fallback may briefly focus the target window. The miniature
+is blurred after a short idle period, closes after 30 seconds and never writes
+frames, video or an interaction history to disk. Set it to `false` to hide the
+visuals while retaining frame validation and cross-window safety checks.
+
+If human mouse or keyboard activity is detected, the current action is
+cancelled and the preview shows `Paused` with a `Resume` button. Resume enables
+future actions but never retries the interrupted one. Coordinate actions may
+include the opaque `frame_id` returned by `desktop.screenshot`; stale or moved
+windows are refused until a fresh screenshot is taken.
 
 Neither list is a permission on its own. The capabilities behind them cause the
 `device` effect, which no floor grants by default, and the adapter refuses them
@@ -865,12 +880,22 @@ places — see [what is not built yet](not-built-yet.md).
 
 ```toml
 [orchestrator.scrapling]
-implementations = ["scrapling.fetch", "scrapling.request", "scrapling.stealth"]
+implementations = ["scrapling.fetch", "scrapling.request", "scrapling.stealth",
+                   "scrapling.extract_fetch", "scrapling.extract_request",
+                   "scrapling.extract_stealth", "scrapling.crawl",
+                   "scrapling.crawl_stealth"]
 timeout = "30s"
 
   [orchestrator.scrapling.process]
   command = "/absolute/path/to/scrapling-mcp"
   instance = "shared"       # a fetcher holds no per-repository state
+  lifecycle = "on_demand"
+  ready_timeout = "30s"
+
+  [orchestrator.scrapling.spider]
+  command = "/absolute/path/to/python3.12"
+  args = ["/absolute/path/to/helper/scrapling-spider/atenea_spider.py"]
+  instance = "shared"
   lifecycle = "on_demand"
   ready_timeout = "30s"
 ```
@@ -900,12 +925,11 @@ the first time, after which the funnel goes straight to stealth for as long as
 the health record stands — `health_stale_after` under `[selector]`, 24 hours as
 shipped.
 
-That record is per implementation and not per host, which is the sharp edge:
-one protected site marks `scrapling.request` down for *every* site, so the
-cheap path stays skipped even for the pages that would have answered over plain
-HTTP. Shorten `health_stale_after` to shrink the window. It is written up in
-full under "One blocked site downgrades every site" on the [what is not built
-yet](not-built-yet.md) page.
+Health is isolated by host for these web implementations. One protected site
+does not mark `scrapling.request` down for unrelated sites, while cost samples
+remain shared because they describe the same far-side operation. The health
+subject is derived from `url` (or `start_url` for a crawl), and can be inspected
+per host in the structured status output.
 
 `timeout` is sized for that last level rather than for the average: a plain
 request is milliseconds, and a stealth render starts a browser and waits a
@@ -1766,12 +1790,18 @@ the current working directory. Serena instances are warmed sequentially so
 their dashboard port selection cannot collide; their browser opening remains
 manual.
 
-Kivgraph has two separate processes: its stdio MCP server and its optional
-read-only graph viewer. The viewer must be built with Kivgraph's `webassets`
-tag and can be supervised independently:
+Kivgraph 0.9.2 has two separate processes: its native daemon, which serves MCP
+over authenticated streamable HTTP (stdio `kivgraph serve` remains an explicit
+alternative), and its optional read-only graph viewer. Install the daemon with
+`kivgraph daemon install`, then copy its endpoint and token from
+`~/.local/state/kivgraph/daemon.json` into Atenea. The viewer remains independent:
 
 ```toml
 [orchestrator.kivgraph]
+endpoint = "http://127.0.0.1:7788/mcp"
+token = "token from ~/.local/state/kivgraph/daemon.json"
+binary = "kivgraph"
+index_timeout = "10m" # separate from the shorter read timeout
 dashboard = "http://127.0.0.1:7777"
 
 [orchestrator.kivgraph.dashboard_process]
@@ -1932,6 +1962,11 @@ wrap opencode  4 checked: 3 declared, 0 refused, 1 held
 
   Declared means it answered an MCP handshake, not that its tools work.
 ```
+
+`atenea wrap --via-headroom opencode` composes the same Atenea overlay with
+Headroom's provider and transport configuration. The two JSON payloads are
+deep-merged by key; malformed payloads or incompatible key collisions stop the
+launch instead of silently dropping an MCP server or changing the route.
 
 ## What `declared` promises, and what it does not
 

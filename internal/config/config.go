@@ -575,7 +575,7 @@ type SerenaAdapter struct {
 // externally managed instance to assume was already running, so the only
 // child was a persistent stdio-MCP server Atenea itself spawned and
 // supervised -- see Process below and supervisor.TransportStdio. Kivgraph
-// 0.7.0 changed that: `kivgraph daemon` serves the same MCP tool surface over
+// 0.9.2 changed that: `kivgraph daemon` serves the same MCP tool surface over
 // streamable HTTP at a fixed local URL, refuses every request without a
 // bearer token (401), and is ordinarily already running under its own
 // systemd user unit before Atenea starts, the same "assume it is there"
@@ -592,12 +592,17 @@ type KivgraphAdapter struct {
 	// answers 401 without one. Meaningless without Endpoint, so build refuses
 	// a Token with no Endpoint to send it to.
 	Token string
+	// Binary is Kivgraph's official CLI, used only by repository.index. It is
+	// independent from Endpoint and does not supervise another MCP server.
+	Binary string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Timeout caps one call. It sits at Serena's own
 	// ceiling: opening a graph database cold is slow long before it is
 	// stuck.
 	Timeout time.Duration
+	// IndexTimeout caps a full repository.index rebuild separately from reads.
+	IndexTimeout time.Duration
 	// Dashboard is the optional read-only web viewer exposed by a separate
 	// Kivgraph UI process. The viewer is deliberately a different process and
 	// transport from whichever one of Endpoint or Process reaches the MCP
@@ -738,6 +743,10 @@ type Desktop struct {
 	// Denied above, the hard refusal to type into a secure field, credential
 	// redaction in desktop.type, and the audit receipts.
 	LookThenAct bool
+	// VisualFeedback controls the native macOS overlay, cursor and live
+	// miniature. It is enabled by default so a person can see where an action
+	// is being sent; disabling it never disables the window-safety checks.
+	VisualFeedback bool
 }
 
 // AllApplications is the token that widens the desktop allow-list to every
@@ -749,7 +758,8 @@ const AllApplications = desktop.AllApplications
 // hazards refused even if somebody allows them later.
 func DefaultDesktop() Desktop {
 	return Desktop{
-		Applications: nil,
+		Applications:   nil,
+		VisualFeedback: true,
 		Denied: []string{
 			"com.apple.keychainaccess",
 			"com.1password.1password",
@@ -1397,8 +1407,10 @@ type fileSerenaAdapter struct {
 type fileKivgraphAdapter struct {
 	Endpoint         string              `toml:"endpoint"`
 	Token            string              `toml:"token"`
+	Binary           string              `toml:"binary"`
 	Implementations  *[]string           `toml:"implementations"`
 	Timeout          string              `toml:"timeout"`
+	IndexTimeout     string              `toml:"index_timeout"`
 	Dashboard        string              `toml:"dashboard"`
 	DashboardProcess *fileManagedProcess `toml:"dashboard_process"`
 	Process          *fileManagedProcess `toml:"process"`
@@ -1458,9 +1470,10 @@ type fileSecurity struct {
 }
 
 type fileDesktop struct {
-	Applications *[]string `toml:"applications"`
-	Denied       *[]string `toml:"denied"`
-	LookThenAct  *bool     `toml:"look_then_act"`
+	Applications   *[]string `toml:"applications"`
+	Denied         *[]string `toml:"denied"`
+	LookThenAct    *bool     `toml:"look_then_act"`
+	VisualFeedback *bool     `toml:"visual_feedback"`
 }
 
 // fileWeb is [web] as written. Pointers, so an omitted list inherits the
@@ -2130,8 +2143,10 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		},
 		Kivgraph: KivgraphAdapter{
 			Endpoint:        kivgraph.DefaultEndpoint,
+			Binary:          kivgraph.DefaultBinary,
 			Implementations: kivgraph.DefaultImplementations(),
 			Timeout:         kivgraph.DefaultTimeout,
+			IndexTimeout:    kivgraph.DefaultIndexTimeout,
 		},
 		Tokensave: TokensaveAdapter{
 			Implementations: tokensave.DefaultImplementations(),
@@ -2618,6 +2633,13 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 		}
 		out.Token = strings.TrimSpace(l.Token)
 	}
+	if l.Binary != "" {
+		out.Binary = strings.TrimSpace(l.Binary)
+		if out.Binary == "" {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.binary must not be blank", source)
+		}
+	}
 	if l.Implementations != nil {
 		out.Implementations = *l.Implementations
 	}
@@ -2632,6 +2654,14 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 				"settings %s: orchestrator.kivgraph.timeout must be above 0, got %s", source, timeout)
 		}
 		out.Timeout = timeout
+	}
+	if l.IndexTimeout != "" {
+		timeout, err := time.ParseDuration(l.IndexTimeout)
+		if err != nil || timeout <= 0 {
+			return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.kivgraph.index_timeout %q must be a positive duration", source, l.IndexTimeout)
+		}
+		out.IndexTimeout = timeout
 	}
 	if strings.TrimSpace(l.Dashboard) != "" {
 		validated, err := validateDashboardURL(source, "orchestrator.kivgraph", "kivgraph", l.Dashboard)
@@ -2945,6 +2975,9 @@ func (d fileDesktop) build(source string) (Desktop, error) {
 	}
 	if d.LookThenAct != nil {
 		out.LookThenAct = *d.LookThenAct
+	}
+	if d.VisualFeedback != nil {
+		out.VisualFeedback = *d.VisualFeedback
 	}
 	// "everything, and also these two" is not a wider list than "everything":
 	// it is two sentences that disagree about which one is in force. Refused

@@ -123,7 +123,9 @@ const contextCapability = "code.context"
 // this card does not name.
 const (
 	symbolSearchCapability    = "symbol.search"
+	intentSearchCapability    = "symbol.intent_search"
 	definitionCapability      = "symbol.definition"
+	dependenciesCapability    = "symbol.dependencies"
 	referencesCapability      = "symbol.references"
 	implementationsCapability = "symbol.implementations"
 	overviewCapability        = "symbol.overview"
@@ -240,7 +242,9 @@ var card = contract.Agent{
 		contextCapability,
 		searchCapability,
 		symbolSearchCapability,
+		intentSearchCapability,
 		definitionCapability,
+		dependenciesCapability,
 		referencesCapability,
 		implementationsCapability,
 		overviewCapability,
@@ -1345,7 +1349,33 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		}
 		return a.close(out, runErr)
 	}
+	// The same probe cuts both ways. A later successful, unscoped call must
+	// clear an earlier unavailable verdict; otherwise the registry permanently
+	// drops an implementation even after its configuration is repaired.
+	if out.Subject == "" {
+		observed := a.catalog.Observed(repository.ID, []contract.Implementation{decision.Chosen})
+		if len(observed) == 1 {
+			if recovered, ok := healthAfterSuccessfulProbe(observed[0].Health); ok {
+				_ = a.catalog.SetHealth(repository.ID, decision.Chosen.ID, recovered)
+			}
+		}
+	}
 	return a.close(out, nil)
+}
+
+// healthAfterSuccessfulProbe turns a runtime down observation into the
+// evidence the successful call just supplied. A zero ObservedAt belongs to
+// declarative settings: a call may report newer runtime evidence, but it must
+// not silently rewrite the operator's starting verdict through this recovery
+// path.
+func healthAfterSuccessfulProbe(previous contract.Health) (contract.Health, bool) {
+	if previous.State != contract.HealthDown || previous.ObservedAt.IsZero() {
+		return contract.Health{}, false
+	}
+	return contract.Health{
+		State:  contract.HealthAlive,
+		Reason: "a later call here worked, clearing the earlier unavailable verdict",
+	}, true
 }
 
 // priced fills the candidates with what the base measured for this repository

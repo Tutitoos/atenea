@@ -1,8 +1,11 @@
 package core_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Tutitoos/atenea/internal/core"
 )
 
 func desktopMCPSettings(t *testing.T) string {
@@ -10,6 +13,16 @@ func desktopMCPSettings(t *testing.T) string {
 	settings := strings.Replace(mcpSettings(t), "[orchestrator]\n",
 		"[orchestrator]\nclient_effects = [\"device\"]\n"+
 			"client_denied_capabilities = [\"desktop.move\"]\n", 1)
+	settings = strings.Replace(settings, `runners = ["local"]`, `runners = ["local", "desktop"]`, 1)
+	settings += `
+
+[orchestrator.desktop]
+implementations = ["macos.inspect", "macos.move"]
+
+  [orchestrator.desktop.process]
+  command = "/bin/true"
+  lifecycle = "on_demand"
+`
 	return settings + `
 
 [[capability]]
@@ -34,6 +47,95 @@ id = "macos.move"
 provider = "desktop"
 capability = "desktop.move"
 `
+}
+
+func TestMCPHidesDeclaredCapabilityWithoutAttachedRunner(t *testing.T) {
+	settings := mcpSettings(t) + `
+
+[[capability]]
+id = "symbol.unresolved"
+version = "1.0.0"
+summary = "Find unresolved references."
+effects = ["read"]
+`
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	status := atenea.Status()
+	for _, capability := range status.Capabilities {
+		if capability.ID == "symbol.unresolved" {
+			if capability.Offered {
+				t.Fatal("symbol.unresolved was marked offered without an implementation")
+			}
+			if status.Light == core.LightRed {
+				t.Fatal("a dormant capability degraded the global status to red")
+			}
+			goto statusChecked
+		}
+	}
+	t.Fatal("symbol.unresolved was missing from status")
+
+statusChecked:
+
+	c := dial(t)
+	c.handshake("codex")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	for _, raw := range listed["tools"].([]any) {
+		tool, _ := raw.(map[string]any)
+		if tool["name"] == "symbol.unresolved" {
+			t.Fatal("symbol.unresolved was advertised without an implementation")
+		}
+	}
+	answer := result(t, c.call("tools/call", map[string]any{
+		"name": "symbol.unresolved", "arguments": map[string]any{},
+	}), "symbol.unresolved")
+	if answer["isError"] != true {
+		t.Fatalf("unoffered capability was not returned as a tool error: %v", answer)
+	}
+	content, _ := answer["content"].([]any)
+	if len(content) == 0 || !strings.Contains(fmt.Sprint(content[0]), "no reachable implementation") {
+		t.Fatalf("unoffered diagnostic did not explain the wiring: %v", answer)
+	}
+}
+
+func TestMCPHidesCapabilityWhoseRunnerIsNotAttached(t *testing.T) {
+	settings := mcpSettings(t) + `
+
+[[capability]]
+id = "symbol.unresolved"
+version = "1.0.0"
+summary = "Find unresolved references."
+effects = ["read"]
+
+[[implementation]]
+id = "ghost.unresolved"
+provider = "ghost"
+capability = "symbol.unresolved"
+`
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	status := atenea.Status()
+	for _, capability := range status.Capabilities {
+		if capability.ID == "symbol.unresolved" && capability.Offered {
+			t.Fatal("symbol.unresolved was offered without an attached runner")
+		}
+	}
+
+	c := dial(t)
+	c.handshake("codex")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	for _, raw := range listed["tools"].([]any) {
+		tool, _ := raw.(map[string]any)
+		if tool["name"] == "symbol.unresolved" {
+			t.Fatal("capability without an attached runner was advertised")
+		}
+	}
+	answer := result(t, c.call("tools/call", map[string]any{
+		"name": "symbol.unresolved", "arguments": map[string]any{},
+	}), "symbol.unresolved")
+	if answer["isError"] != true {
+		t.Fatalf("capability without an attached runner was not rejected: %v", answer)
+	}
 }
 
 func conservativeDesktopMCPSettings(t *testing.T) string {
