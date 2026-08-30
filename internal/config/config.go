@@ -736,9 +736,6 @@ type ScraplingAdapter struct {
 // omission, and omission is not a statement -- it is what happens when
 // somebody adds an entry in a hurry.
 type Desktop struct {
-	// VisualFeedback controls the native macOS overlay and cursor feedback.
-	// Retained for compatibility with the pending local configuration.
-	VisualFeedback bool
 	// Applications is the allow-list, by bundle identifier. EMPTY MEANS DENY
 	// ALL, which is the opposite of the usual reading and is the whole point:
 	// a capability that could read every window on somebody's machine must
