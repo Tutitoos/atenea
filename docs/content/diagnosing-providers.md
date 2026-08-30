@@ -28,20 +28,21 @@ and broken are different findings, and only the second is worth debugging.
 
 ```text
 serves     ripgrep
-no runner  claude.search, codex.search,
-           kivgraph.cross_repo_consumers, kivgraph.definition, kivgraph.get,
-           kivgraph.dependencies, kivgraph.impact, kivgraph.index,
-           kivgraph.intent_search, kivgraph.overview,
-           kivgraph.references, kivgraph.status,
-           serena.definition, serena.implementations, serena.overview,
-           serena.references, serena.symbol_search,
-           tokensave.calls, tokensave.context, tokensave.overview
+no runner  claude.search, codex.search, kivgraph.*, serena.*, tokensave.*
+declared   symbol.unresolved (not offered: no implementation)
 ```
 
-That is the stock catalogue: twenty-one implementations across fifteen
-capabilities, exactly one reachable, because `runners = ["omp"]` attaches a
-single adapter and `[orchestrator.omp]` declares exactly `ripgrep`. Attaching
-Serena — the configuration this write-up is about — makes it six:
+The current stock catalogue is 38 implementations across 28 capabilities.
+With only the local runner attached, one implementation is reachable and
+`symbol.unresolved` remains deliberately dormant: it is a useful catalog
+contract, but Kivgraph no longer exposes the old unresolved-reference MCP
+tool. The MCP surface applies the same rule to every unoffered implementation:
+it is absent from `tools/list`, and a direct call returns a clear
+`not_offered` diagnostic. An attached runner that is temporarily down is still
+offered, so health remains an outage rather than a wiring error.
+
+Attaching Serena — the configuration this write-up is about — adds its five
+implementations:
 
 | Capability | Reachable with Serena attached | Over |
 | --- | --- | --- |
@@ -52,7 +53,7 @@ Serena — the configuration this write-up is about — makes it six:
 | `symbol.overview` | `serena.overview` | **local HTTP** |
 | `symbol.search` | `serena.symbol_search` | **local HTTP** |
 
-Note what the other fifteen implementations do *not* buy you here.
+The remaining implementations do *not* buy you here.
 `code.search` declares three — `claude.search`, `codex.search` and `ripgrep` —
 and Serena is in none of them: the Serena adapter's fifth implementation is
 `serena.symbol_search`, and it answers `symbol.search`, a structural query

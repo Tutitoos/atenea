@@ -10,6 +10,7 @@ package checkpoint
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -215,13 +217,25 @@ func DefaultDir() string { return filepath.Join(platform.StateDir(), "runs") }
 
 var runID = regexp.MustCompile(`^[0-9a-zA-Z._-]+$`)
 
+var (
+	randomRead      = rand.Read
+	fallbackCounter atomic.Uint64
+)
+
 // NewID mints a run id that sorts by time and does not collide between two
 // Atenea processes started in the same second.
 func NewID(now time.Time) string {
-	var suffix [3]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		// Unreachable in practice; a timestamp alone is still a usable id.
-		return now.UTC().Format("20060102T150405")
+	var suffix [16]byte
+	if _, err := randomRead(suffix[:]); err != nil {
+		// The operating system entropy source should not fail, but falling back
+		// to a timestamp alone would make two processes overwrite one another
+		// during the exact outage this id protects against. Keep the fallback
+		// unique within a process with an atomic counter and distinguish
+		// concurrent processes by PID; nanoseconds make independently started
+		// processes even less likely to share the same tuple.
+		binary.BigEndian.PutUint64(suffix[:8], uint64(os.Getpid()))
+		counter := fallbackCounter.Add(1)
+		binary.BigEndian.PutUint64(suffix[8:], uint64(now.UnixNano())^counter)
 	}
 	return now.UTC().Format("20060102T150405") + "-" + hex.EncodeToString(suffix[:])
 }

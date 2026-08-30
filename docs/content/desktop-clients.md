@@ -22,6 +22,17 @@ atenea wrap claude --profile claude
 atenea doctor --client claude
 ```
 
+For a terminal session that also needs Headroom compression, use the composed
+wrapper (the same form works for `codex`, `opencode` and `omp`):
+
+```text
+atenea wrap --via-headroom claude
+```
+
+This keeps Atenea's checked MCP overlay and routes model requests through the
+local Headroom proxy. `claude-direct`, `codex-direct`, `opencode-direct` and
+`omp-direct` remain explicit bypass aliases in the shell configuration.
+
 For a persistent user-scope installation, use:
 
 ```text

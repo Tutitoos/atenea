@@ -13,9 +13,16 @@
 // scaling lives in one file and this is not it.
 import Foundation
 import ApplicationServices
-import CoreGraphics
+@preconcurrency import CoreGraphics
 
 enum Input {
+	static let marker: Int64 = 0x4154454E4541
+    private static let eventSource: CGEventSource? = {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        source?.userData = marker
+        return source
+    }()
+
     /// Refuses when the focused element takes a password.
     ///
     /// macOS marks these itself -- AXSecureTextField -- so this is a fact the
@@ -42,88 +49,214 @@ enum Input {
     }
 
     private static func post(_ event: CGEvent?) {
-        event?.post(tap: .cghidEventTap)
+        guard let event else { return }
+        event.setIntegerValueField(.eventSourceUserData, value: marker)
+        event.post(tap: .cghidEventTap)
     }
 
-    static func move(to point: CGPoint) {
-        post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                     mouseCursorPosition: point, mouseButton: .left))
-    }
-
-    static func click(at point: CGPoint, clicks: Int) {
-        for n in 1...max(1, clicks) {
-            for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-                guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
-                                          mouseCursorPosition: point, mouseButton: .left) else { continue }
-                // Without the click count a double click is two single
-                // clicks, which is a different gesture: a file opens on one
-                // and is renamed on the other.
-                event.setIntegerValueField(.mouseEventClickState, value: Int64(n))
-                event.post(tap: .cghidEventTap)
-            }
+    static func move(to point: CGPoint, visualFeedback: Bool = true) async throws {
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            try await ActionGate.shared.checkpoint()
+            post(CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                         mouseCursorPosition: point, mouseButton: .left))
+            try await ActionGate.shared.checkpoint()
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
         }
     }
 
-    static func drag(from start: CGPoint, to end: CGPoint) {
-        post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
-                     mouseCursorPosition: start, mouseButton: .left))
-        // One intermediate move: an application watching for a drag needs to
-        // see the pointer travel, and a down followed immediately by an up at
-        // another point reads as a click in the wrong place.
-        post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
-                     mouseCursorPosition: CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2),
-                     mouseButton: .left))
-        post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged,
-                     mouseCursorPosition: end, mouseButton: .left))
-        post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
-                     mouseCursorPosition: end, mouseButton: .left))
+    static func click(at point: CGPoint, clicks: Int, visualFeedback: Bool = true) async throws {
+        let original = CGEvent(source: nil)?.location
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            try await ActionGate.shared.checkpoint()
+            for n in 1...max(1, clicks) {
+                for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+                    guard let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                                              mouseCursorPosition: point, mouseButton: .left) else { continue }
+                    // Without the click count a double click is two single
+                    // clicks, which is a different gesture: a file opens on one
+                    // and is renamed on the other.
+                    event.setIntegerValueField(.mouseEventClickState, value: Int64(n))
+                    post(event)
+                }
+            }
+            if let original, !(await ActionGate.shared.wasInterrupted()) {
+                post(CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                             mouseCursorPosition: original, mouseButton: .left))
+            }
+            try await ActionGate.shared.checkpoint()
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
+        }
     }
 
-    static func scroll(at point: CGPoint, dx: Int, dy: Int) {
-        move(to: point)
-        post(CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                     wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0))
+    /// Prefer the Accessibility action so a normal button can be activated
+    /// without moving the user's real pointer. Canvas and emulator surfaces
+    /// return false and use the guarded CGEvent fallback in the caller.
+    static func semanticClick(pid: pid_t, at point: CGPoint, visualFeedback: Bool = true) async throws -> Bool {
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            try await ActionGate.shared.checkpoint()
+            let system = AXUIElementCreateSystemWide()
+            var raw: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &raw) == .success,
+                  let element = raw else {
+                await ActionGate.shared.finish()
+                return false
+            }
+            var owner: pid_t = 0
+            guard AXUIElementGetPid(element, &owner) == .success, owner == pid else {
+                await ActionGate.shared.finish()
+                return false
+            }
+            var actions: CFArray?
+            guard AXUIElementCopyActionNames(element, &actions) == .success,
+                  let names = actions as? [String], names.contains(kAXPressAction as String) else {
+                await ActionGate.shared.finish()
+                return false
+            }
+            let pressed = AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+            try await ActionGate.shared.checkpoint()
+            await ActionGate.shared.finish()
+            return pressed
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
+        }
+    }
+
+    static func drag(from start: CGPoint, to end: CGPoint, visualFeedback: Bool = true) async throws {
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        var buttonDown = false
+        defer {
+            if buttonDown {
+                post(CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
+                             mouseCursorPosition: end, mouseButton: .left))
+            }
+        }
+        do {
+            try await ActionGate.shared.checkpoint()
+            post(CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown,
+                         mouseCursorPosition: start, mouseButton: .left))
+            buttonDown = true
+            // A continuous, bounded path keeps canvas/emulator surfaces from
+            // reading the gesture as a teleport. The same points update the
+            // local cursor, so the preview never gets ahead of the real drag.
+            for step in 1...18 {
+                try await ActionGate.shared.checkpoint()
+                let progress = CGFloat(step) / 18
+                let point = CGPoint(x: start.x + (end.x - start.x) * progress,
+                                    y: start.y + (end.y - start.y) * progress)
+                post(CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged,
+                             mouseCursorPosition: point, mouseButton: .left))
+                if visualFeedback {
+                    await MainActor.run { VisualFeedbackController.shared.setCursor(globalPoint: point) }
+                    try await Task.sleep(nanoseconds: 16_000_000)
+                }
+            }
+            try await ActionGate.shared.checkpoint()
+            post(CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp,
+                         mouseCursorPosition: end, mouseButton: .left))
+            buttonDown = false
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
+        }
+    }
+
+    static func scroll(at point: CGPoint, dx: Int, dy: Int, visualFeedback: Bool = true) async throws {
+        let original = CGEvent(source: nil)?.location
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            try await ActionGate.shared.checkpoint()
+            post(CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                         mouseCursorPosition: point, mouseButton: .left))
+            post(CGEvent(scrollWheelEvent2Source: eventSource, units: .pixel,
+                         wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0))
+            if let original, !(await ActionGate.shared.wasInterrupted()) {
+                post(CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                             mouseCursorPosition: original, mouseButton: .left))
+            }
+            try await ActionGate.shared.checkpoint()
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
+        }
     }
 
     /// Types literal text. Unicode goes in as a string rather than as
     /// keycodes: a keycode table is per-layout, and somebody on a Spanish
     /// keyboard would otherwise get a different character than they asked for.
-    static func type(_ text: String) throws {
+    static func type(_ text: String, visualFeedback: Bool = true) async throws {
         try refuseIfSecureFieldFocused()
-        for chunk in text.chunked(20) {
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-            else { continue }
-            var utf16 = Array(chunk.utf16)
-            down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-            up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            var sent = 0
+            for chunk in text.chunked(20) {
+                do { try await ActionGate.shared.checkpoint() }
+                catch _ as RPCError where sent > 0 {
+                    throw RPCError.canceled("interrupted by human input after \(sent) characters; typing may have been partially applied")
+                }
+                guard let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true),
+                      let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false)
+                else { continue }
+                var utf16 = Array(chunk.utf16)
+                down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+                up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+                post(down)
+                post(up)
+                sent += chunk.count
+            }
+            do { try await ActionGate.shared.checkpoint() }
+            catch _ as RPCError {
+                throw RPCError.canceled("interrupted by human input after (sent) characters; typing may have been partially applied")
+            }
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
         }
     }
 
     /// Presses one key, with modifiers. Named keys rather than numbers so a
     /// caller never has to know this machine's keycode table.
-    static func key(_ name: String, modifiers: [String]) throws {
+    static func key(_ name: String, modifiers: [String], visualFeedback: Bool = true) async throws {
         try refuseIfSecureFieldFocused()
-        guard let code = keyCodes[name.lowercased()] else {
-            throw RPCError.invalidParams("unknown key \(name); known: \(keyCodes.keys.sorted().joined(separator: ", "))")
-        }
-        var flags = CGEventFlags()
-        for modifier in modifiers {
-            switch modifier.lowercased() {
-            case "cmd", "command": flags.insert(.maskCommand)
-            case "shift": flags.insert(.maskShift)
-            case "alt", "option": flags.insert(.maskAlternate)
-            case "ctrl", "control": flags.insert(.maskControl)
-            default: throw RPCError.invalidParams("unknown modifier \(modifier)")
+        try await ActionGate.shared.begin(visualFeedback: visualFeedback)
+        do {
+            try await ActionGate.shared.checkpoint()
+            guard let code = keyCodes[name.lowercased()] else {
+                throw RPCError.invalidParams("unknown key \(name); known: \(keyCodes.keys.sorted().joined(separator: ", "))")
             }
-        }
-        for isDown in [true, false] {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: isDown)
-            else { continue }
-            event.flags = flags
-            event.post(tap: .cghidEventTap)
+            var flags = CGEventFlags()
+            for modifier in modifiers {
+                switch modifier.lowercased() {
+                case "cmd", "command": flags.insert(.maskCommand)
+                case "shift": flags.insert(.maskShift)
+                case "alt", "option": flags.insert(.maskAlternate)
+                case "ctrl", "control": flags.insert(.maskControl)
+                default: throw RPCError.invalidParams("unknown modifier \(modifier)")
+                }
+            }
+            for isDown in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: code, keyDown: isDown)
+                else { continue }
+                event.flags = flags
+                post(event)
+            }
+            try await ActionGate.shared.checkpoint()
+            await ActionGate.shared.finish()
+        } catch {
+            await ActionGate.shared.finish()
+            throw error
         }
     }
 

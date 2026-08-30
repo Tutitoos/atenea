@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,14 +24,16 @@ import (
 )
 
 type wrapOptions struct {
-	Client     string
-	Profile    string
-	EmitConfig bool
-	ClientArgs []string
+	Client       string
+	Profile      string
+	EmitConfig   bool
+	ViaHeadroom  bool
+	HeadroomPort int
+	ClientArgs   []string
 }
 
 func parseWrapOptions(args []string) (wrapOptions, error) {
-	var options wrapOptions
+	options := wrapOptions{HeadroomPort: 8787}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--":
@@ -48,6 +51,17 @@ func parseWrapOptions(args []string) (wrapOptions, error) {
 			options.Profile, i = args[i+1], i+1
 		case "--emit-config":
 			options.EmitConfig = true
+		case "--via-headroom":
+			options.ViaHeadroom = true
+		case "--headroom-port":
+			if i+1 >= len(args) {
+				return wrapOptions{}, errors.New("--headroom-port requires a value")
+			}
+			port, err := strconv.Atoi(args[i+1])
+			if err != nil || port < 1 || port > 65535 {
+				return wrapOptions{}, errors.New("--headroom-port must be between 1 and 65535")
+			}
+			options.HeadroomPort, i = port, i+1
 		default:
 			if options.Client == "" && !strings.HasPrefix(args[i], "-") {
 				options.Client = args[i]
@@ -177,6 +191,12 @@ func resolveDesktopClient(client string, flags []string) desktopClientResolution
 	} else {
 		path, err := exec.LookPath(client)
 		if err == nil {
+			// LookPath can return a relative path when PATH contains a relative
+			// entry. The composed launcher must hand Headroom an absolute binary
+			// so a later cwd change cannot redirect the real client.
+			if absolute, absErr := filepath.Abs(path); absErr == nil {
+				path = absolute
+			}
 			result.Path, result.Source = path, "path"
 		}
 	}

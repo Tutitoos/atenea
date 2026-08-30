@@ -1231,12 +1231,12 @@ type outlineAnswer struct {
 }
 
 // outlineFile is one file's declarations. Which field carries them depends
-// on the server: "symbols" on kivgraph 0.2.1, and "at" on 0.7.0, whose
+// on the server: "symbols" on kivgraph 0.2.1, and "at" on 0.9.2, whose
 // get_file_outline weighs the grouped encoding against the flat one and
 // ships whichever is smaller. Grouping only wins when a (kind, visibility)
 // pair repeats enough to pay for its own header, so the flat shape below is
 // not an edge case -- it is what a file of mixed declarations produces.
-// Measured against 0.7.0: lib/main.dart came back flat with 19 declarations
+// Measured against the 0.9.2 wire shape: lib/main.dart came back flat with 19 declarations
 // and read as empty, while a file whose kinds repeated came back grouped and
 // read fine, which is why this looked intermittent rather than broken.
 type outlineFile struct {

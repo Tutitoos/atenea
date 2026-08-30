@@ -56,6 +56,44 @@ func TestProcessEnsureReadyStartsAndReportsReady(t *testing.T) {
 	}
 }
 
+// A ready response can take longer than the polling cadence. The request
+// timeout must be independent from that cadence: otherwise every 150ms probe
+// abandons a server that is already listening and a healthy process is marked
+// down despite answering inside its configured readiness window.
+func TestProcessReadyProbeAllowsResponseLongerThanPollInterval(t *testing.T) {
+	spec := fakeSpec("slow-response", OnDemand, map[string]string{
+		"FAKE_RESPONSE_DELAY_MS": "300",
+	})
+	spec.ReadyTimeout = time.Second
+	spec.RestartLimit = 0
+	p := newTestProcess(t, spec)
+
+	if _, err := p.ensureReady(context.Background()); err != nil {
+		t.Fatalf("ensureReady: %v", err)
+	}
+	if got := p.status().State; got != StateReady {
+		t.Fatalf("state = %v, want %v", got, StateReady)
+	}
+}
+
+func TestProcessReadyProbeTimeoutIsBoundedByGlobalDeadline(t *testing.T) {
+	spec := fakeSpec("hung-response", OnDemand, map[string]string{
+		"FAKE_ACCEPT_AND_HANG": "1",
+	})
+	spec.ReadyTimeout = 400 * time.Millisecond
+	spec.RestartLimit = 0
+	p := newTestProcess(t, spec)
+
+	started := time.Now()
+	_, err := p.ensureReady(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "is down") {
+		t.Fatalf("ensureReady = %v, want a bounded down error", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("hung readiness took %s, want it bounded by the 400ms global deadline", elapsed)
+	}
+}
+
 // Two callers racing ensureReady on a cold process must not each spawn their
 // own child: both would try to bind the one port New already fixed for this
 // process, and only one could win. Restarts staying at zero is the evidence

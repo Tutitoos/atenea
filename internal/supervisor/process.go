@@ -462,8 +462,28 @@ func (p *process) waitForReady(cmd *exec.Cmd, exited chan error, stopCh chan str
 			<-exited
 			return readyStopRequested, nil
 		case <-ticker.C:
-			if p.readyNow() {
-				return readyReached, nil
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				_ = procgroup.Kill(cmd)
+				<-exited
+				return readyNeverCame, fmt.Errorf("did not answer ready within %s", p.spec.ReadyTimeout)
+			}
+			probeTimeout := min(DefaultProbeTimeout, remaining)
+			probeCtx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+			probeDone := make(chan bool, 1)
+			go func() { probeDone <- p.readyNow(probeCtx) }()
+			select {
+			case ready := <-probeDone:
+				cancel()
+				if ready {
+					return readyReached, nil
+				}
+			case <-stopCh:
+				cancel()
+				<-probeDone
+				_ = procgroup.Kill(cmd)
+				<-exited
+				return readyStopRequested, nil
 			}
 			if time.Now().After(deadline) {
 				_ = procgroup.Kill(cmd)
@@ -534,23 +554,12 @@ func (p *process) waitForHandshake(cmd *exec.Cmd, exited chan error, stopCh chan
 	}
 }
 
-// readyNow asks, once, whether this http attempt is ready. Bounded to one
-// tick rather than the whole ready_timeout so a child that accepts the
-// connection but never answers does not itself starve waitForReady's own
-// ability to notice stopCh or ready_timeout in the meantime. The stdio
-// counterpart is waitForHandshake, which cannot work this way: see there.
-func (p *process) readyNow() bool {
-	// One tick, on both branches. Neither was bounded: they passed
-	// context.Background() to a client whose default has no Timeout either,
-	// so a child that accepted the TCP connection and then went quiet blocked
-	// this call forever. That is inside waitForReady's `case <-ticker.C`, so
-	// ready_timeout and stopCh stopped being evaluated at all -- and with
-	// run() parked there, waitStopped polled a state that could never change,
-	// Supervisor.Stop never returned, and Core.Shutdown hung behind it. A
-	// connection that is merely refused fails instantly and is unaffected,
-	// which is why the ordinary case never showed this.
-	ctx, cancel := context.WithTimeout(context.Background(), probeEvery)
-	defer cancel()
+// readyNow asks, once, whether this http attempt is ready. The caller owns the
+// deadline: it is longer than the polling interval so a server that needs a few
+// hundred milliseconds to finish its MCP startup can answer, but it is still
+// canceled when the spawn is stopped or the readiness ceiling expires. The
+// stdio counterpart is waitForHandshake, which cannot poll this way: see there.
+func (p *process) readyNow(ctx context.Context) bool {
 	if p.spec.Readiness == ReadinessHTTP {
 		return probeHTTP(ctx, p.spec.HTTP, p.endpoint) == nil
 	}

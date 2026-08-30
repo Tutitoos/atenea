@@ -156,13 +156,12 @@ const maxRedirects = 5
 
 // Capability and implementation ids this adapter answers.
 //
-// Two capabilities, three prices each. The capability says WHAT -- one page,
-// or named fields out of one page -- and the implementations say HOW MUCH,
-// which is why they are named for the machinery rather than for the question.
-// Six implementations rather than three with a flag, because an implementation
-// answers exactly one capability and contract.RunRequest.Validate refuses any
-// other reading. One word per dotted segment, matching every capability
-// already shipped.
+// Three capabilities, with eight implementations across their available
+// price levels. The capability says WHAT -- one page, named fields out of one
+// page, or a bounded walk -- and the implementations say HOW MUCH, which is
+// why they are named for the machinery rather than for the question. Separate
+// implementations rather than a mode flag keep each answer tied to exactly
+// one capability; contract.RunRequest.Validate refuses any other reading.
 const (
 	CapabilityFetch   = "web.fetch"
 	CapabilityExtract = "web.extract"

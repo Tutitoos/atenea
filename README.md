@@ -84,6 +84,9 @@ Symbols include `symbol.search`, `symbol.definition`, `symbol.references`,
 and `symbol.unresolved`. Serena answers the
 language-server symbol operations over MCP; Kivgraph and Tokensave provide the
 graph-backed operations where an indexed repository is required.
+`symbol.unresolved` remains a catalog contract for completeness diagnostics, but
+has no provider in the current Kivgraph surface and is therefore not advertised
+by `tools/list`; direct calls receive a `not_offered` diagnostic.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \

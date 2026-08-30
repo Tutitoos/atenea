@@ -16,7 +16,7 @@ runners = ["omp", "claudecode"]
 
   [orchestrator.claudecode]
   source = "auto"
-  terminal_binary = "claude"
+  terminal_binary = "/opt/homebrew/bin/claude"
   implementations = ["claude.search"]
   timeout = "90s"
 ```
@@ -30,6 +30,10 @@ not the headless `claude -p` contract.
 Use `atenea wrap claude ...` when Claude Code should consume Atenea's checked
 MCP configuration. The wrapper is ephemeral and does not rewrite the client's
 configuration files.
+
+Use `atenea wrap --via-headroom claude ...` to compose that MCP overlay with
+Headroom's HTTP proxy. Headroom handles model traffic and Atenea remains the
+single MCP bridge; the command fails closed if Headroom is unavailable.
 
 ## Current audit status
 

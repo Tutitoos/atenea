@@ -20,6 +20,16 @@ This page is a historical design ledger: several entries record decisions that
 were later implemented or deliberately narrowed, while the readiness page is the
 acceptance source for the shipped tree.
 
+## Current snapshot — 2026-08-29
+
+The entries below preserve their original measurements and decisions; they are
+not a current bug list. The Kivgraph 0.9.2 HTTP/stdio integration, dormant
+capability offering rule, long HTTP readiness probes, 128-bit checkpoint IDs and
+the five Scrapling web implementations are now closed. The remaining debt is
+deliberate: task planning still emits only `code.search`, ranking outside the
+requested scope is not implemented, and redirect/provider limits remain bounded
+and documented rather than silently expanded.
+
 ## A capability the command line could not call — 2026-08-26, closed 2026-08-27
 
 `web.extract` takes its selectors as a `record_list`, the first input of that

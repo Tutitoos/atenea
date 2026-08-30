@@ -278,9 +278,14 @@ type IncidentStatus struct {
 
 // CapabilityStatus is one capability and the providers behind it.
 type CapabilityStatus struct {
-	ID              string
-	Summary         string
-	Effects         []string
+	ID      string
+	Summary string
+	Effects []string
+	// Offered is true when at least one declared implementation is served by
+	// an attached runner. A declared contract can intentionally be dormant;
+	// keeping that distinction prevents a providerless capability from being
+	// mistaken for an outage.
+	Offered         bool
 	Implementations []ImplementationStatus
 }
 
@@ -356,10 +361,15 @@ type OrchestratorStatus struct {
 	// screen content reaching the pointer, so the machine has to say so
 	// somewhere its operator already looks, rather than only in the file they
 	// edited once.
-	LookThenAct  bool
-	DesktopScope string
-	Checkpoints  string
-	Light        Light
+	LookThenAct    bool
+	VisualFeedback bool
+	// VisualFeedbackState is the operator-facing presentation state. The
+	// helper may refine it to active/paused/degraded at runtime; the service
+	// snapshot always at least reports whether the feature is configured.
+	VisualFeedbackState string
+	DesktopScope        string
+	Checkpoints         string
+	Light               Light
 }
 
 // desktopScope describes the allow-list in one phrase, counting rather than
@@ -533,6 +543,7 @@ func (c *Core) Status() Status {
 		entry := CapabilityStatus{
 			ID:      capability.ID,
 			Summary: capability.Summary,
+			Offered: c.capabilityOffered(capability.ID),
 		}
 		for _, effect := range capability.Effects {
 			entry.Effects = append(entry.Effects, effect.String())
@@ -579,9 +590,10 @@ func (c *Core) Status() Status {
 			}
 			status.Light = worst(status.Light, light)
 		}
-		// A capability nobody can answer is a red light regardless of how
-		// healthy the rest of the catalog looks.
-		if usable == 0 {
+		// A capability with a real attached implementation nobody can answer
+		// is a red light. A dormant contract (no implementation or no attached
+		// runner) is not an outage and must not poison the whole screen.
+		if entry.Offered && usable == 0 {
 			status.Light = LightRed
 		}
 		status.Capabilities = append(status.Capabilities, entry)
@@ -772,6 +784,12 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 	orchestrator := c.settings.Orchestrator
 	out.ClientFloorInherited = orchestrator.ClientEffectsInherited
 	out.LookThenAct = c.settings.Desktop.LookThenAct
+	out.VisualFeedback = c.settings.Desktop.VisualFeedback
+	if out.VisualFeedback {
+		out.VisualFeedbackState = "enabled"
+	} else {
+		out.VisualFeedbackState = "disabled"
+	}
 	out.DesktopScope = desktopScope(c.settings.Desktop)
 	for _, effect := range orchestrator.StandingEffects {
 		out.Standing = append(out.Standing, effect.String())

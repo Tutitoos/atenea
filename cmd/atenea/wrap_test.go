@@ -2,9 +2,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -145,6 +152,177 @@ func TestWrapChecksTheBinaryBeforeItProbesAnything(t *testing.T) {
 	}
 	if got := report.String(); strings.Contains(got, "declared") || strings.Contains(got, "refused") {
 		t.Errorf("a report was printed before the binary was resolved:\n%s", got)
+	}
+}
+
+func TestWrapParsesHeadroomCompositionOptions(t *testing.T) {
+	options, err := parseWrapOptions([]string{"claude", "--via-headroom", "--headroom-port", "9876", "--", "-p", "hello"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if options.Client != "claude" || !options.ViaHeadroom || options.HeadroomPort != 9876 {
+		t.Fatalf("options = %+v", options)
+	}
+	if !slices.Equal(options.ClientArgs, []string{"-p", "hello"}) {
+		t.Fatalf("client args = %q", options.ClientArgs)
+	}
+}
+
+func TestWrapRejectsInvalidHeadroomPort(t *testing.T) {
+	for _, value := range []string{"0", "65536", "not-a-port"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseWrapOptions([]string{"claude", "--headroom-port", value}); err == nil {
+				t.Fatal("invalid port accepted")
+			}
+		})
+	}
+}
+
+func TestOpenCodeHeadroomAndAteneaPayloadsMerge(t *testing.T) {
+	got, err := mergeOpenCodeConfig(
+		`{"provider":{"headroom":{"options":{"baseURL":"http://127.0.0.1:8787/v1"}}},"mcp":{"headroom":{"type":"local"}},"plugin":["/tmp/headroom.js"]}`,
+		`{"mcp":{"atenea":{"type":"local","command":["atenea","mcp"]}}}`,
+	)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("merged payload is invalid JSON: %v", err)
+	}
+	mcp, ok := payload["mcp"].(map[string]any)
+	if !ok || mcp["headroom"] == nil || mcp["atenea"] == nil {
+		t.Fatalf("mcp = %#v, want both entries", payload["mcp"])
+	}
+	if payload["plugin"] == nil || payload["provider"] == nil {
+		t.Fatalf("Headroom keys were lost: %s", got)
+	}
+}
+
+func TestOpenCodePayloadCollisionFailsClosed(t *testing.T) {
+	_, err := mergeOpenCodeConfig(`{"mcp":{"same":{"type":"local"}}}`, `{"mcp":{"same":{"type":"remote","url":"http://example.test"}}}`)
+	if err == nil || !strings.Contains(err.Error(), "colisión incompatible") {
+		t.Fatalf("err = %v, want incompatible collision", err)
+	}
+}
+
+func TestOpenCodePayloadCorruptionFailsClosed(t *testing.T) {
+	_, err := mergeOpenCodeConfig(`{"provider":`, `{"mcp":{}}`)
+	if err == nil {
+		t.Fatal("corrupt Headroom payload accepted")
+	}
+}
+
+func TestHeadroomReentryRequiresActiveShim(t *testing.T) {
+	t.Setenv(headroomReentryPath, "")
+	t.Setenv(headroomClientName, "")
+	t.Setenv(headroomRealClient, "")
+	err := cmdHeadroomReentry([]string{"claude", "/bin/echo"})
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable: %v", contract.KindOf(err), err)
+	}
+}
+
+func TestVerifyHeadroomPortRejectsNonHeadroomListener(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHeadroomPort(port); contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable: %v", contract.KindOf(err), err)
+	}
+}
+
+func TestVerifyHeadroomPortAcceptsHealthyProxy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"service":"headroom-proxy","status":"healthy","ready":true}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	_, portText, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHeadroomPort(port); err != nil {
+		t.Fatalf("healthy proxy rejected: %v", err)
+	}
+}
+
+// The real Headroom process is deliberately not replaced in the unit suite.
+// This subprocess fixture exercises the exact argv/env boundary where Atenea
+// hands control to it, including the private shim that prevents recursion.
+func TestLaunchViaHeadroomUsesAbsoluteShimAndPreservesArgs(t *testing.T) {
+	if os.Getenv("ATENEA_HEADROOM_TEST_HELPER") == "1" {
+		err := launchViaHeadroom(
+			"claude", "/tmp/real-claude", "/tmp/atenea",
+			[]string{"-p", "hello"},
+			[]string{"OPENCODE_CONFIG_CONTENT={\"mcp\":{}}"}, 9911,
+		)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(97)
+		}
+		os.Exit(0)
+	}
+
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "capture")
+	headroom := filepath.Join(dir, "headroom")
+	script := "#!/bin/sh\n" +
+		"i=0\n" +
+		"for arg in \"$@\"; do printf 'arg%d=%s\\n' \"$i\" \"$arg\"; i=$((i+1)); done > \"$CAPTURE\"\n" +
+		"printf 'path=%s\\nreentry=%s\\nclient=%s\\nreal=%s\\n' \"$PATH\" \"$ATENEA_HEADROOM_REENTRY\" \"$ATENEA_HEADROOM_CLIENT\" \"$ATENEA_HEADROOM_REAL_CLIENT\" >> \"$CAPTURE\"\n" +
+		"shim=\"${PATH%%:*}/claude\"\n" +
+		"printf 'shim=%s\\n' \"$shim\" >> \"$CAPTURE\"\n" +
+		"/usr/bin/sed -n '1,20p' \"$shim\" >> \"$CAPTURE\"\n" +
+		"exit 23\n"
+	if err := os.WriteFile(headroom, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestLaunchViaHeadroomUsesAbsoluteShimAndPreservesArgs")
+	cmd.Env = append(os.Environ(),
+		"ATENEA_HEADROOM_TEST_HELPER=1",
+		"CAPTURE="+capture,
+		"PATH="+dir,
+	)
+	err := cmd.Run()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 23 {
+		t.Fatalf("helper exit = %v, want Headroom's 23", err)
+	}
+	payload, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(payload)
+	for _, want := range []string{
+		"arg0=wrap", "arg1=claude", "arg2=--port", "arg3=9911",
+		"arg4=--no-mcp", "arg5=--code-memory", "arg6=none",
+		"arg7=--", "arg8=-p", "arg9=hello",
+		"reentry=/tmp/atenea", "client=claude", "real=/tmp/real-claude",
+		"__headroom-reentry", "ATENEA_HEADROOM_REAL_CLIENT",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("capture missing %q:\n%s", want, got)
+		}
 	}
 }
 

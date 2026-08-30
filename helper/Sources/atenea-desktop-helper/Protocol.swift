@@ -16,7 +16,10 @@ struct RPCError: Error {
     /// DOWN when a call fails as unavailable, so "that window is not open" --
     /// an answer about the request -- would take screenshots out of service
     /// for everybody until the health went stale.
-    var kind: String { code == -32000 ? "denied" : "invalid" }
+    var kind: String {
+        if code == -32800 { return "canceled" }
+        return code == -32000 ? "denied" : "invalid"
+    }
     static func invalidParams(_ m: String) -> RPCError { .init(code: -32602, message: m) }
     static func internalError(_ m: String) -> RPCError { .init(code: -32603, message: m) }
     /// Refusals that are the caller's answer rather than a protocol fault. The
@@ -24,10 +27,11 @@ struct RPCError: Error {
     /// what lets a model read why something did not work instead of seeing a
     /// dead connection.
     static func denied(_ m: String) -> RPCError { .init(code: -32000, message: m) }
+    static func canceled(_ m: String) -> RPCError { .init(code: -32800, message: m) }
 }
 
 /// One tool this helper offers, as MCP describes it.
-struct Tool {
+struct Tool: @unchecked Sendable {
     let name: String
     let description: String
     let inputSchema: [String: Any]
