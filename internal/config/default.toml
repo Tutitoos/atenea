@@ -385,12 +385,11 @@ runners = ["omp"]
   # unless `runners` names it, like every adapter that can cause an effect
   # beyond reading this disk.
   #
-  # Three implementations rather than one with a `mode` input, because they
-  # are the same question at very different prices -- a plain HTTP request, a
-  # real browser render, and a stealth render that defeats anti-bot
-  # interstitials -- and ranking equivalent work by measured cost is the whole
-  # job of the funnel. A `mode` input would move that decision to whoever
-  # wrote the prompt.
+  # Eight implementations rather than one with a `mode` input, grouped across
+  # fetch, extract and crawl. Each group has plain HTTP, browser and stealth
+  # levels where the far side supports them, and ranking equivalent work by
+  # measured cost is the whole job of the funnel. A `mode` input would move
+  # that decision to whoever wrote the prompt.
   #
   # WHERE it may reach is not declared here. That lives in [web], so a reader
   # looking for the destination gate finds it without having to know which
@@ -655,6 +654,9 @@ denied = [
 # desktop.type, and the receipts, which keep the target application and the
 # redacted arguments of every device call.
 look_then_act = false
+# Show the native Atenea border, cursor and live miniature while desktop use
+# is active. This affects presentation only; window-safety checks remain on.
+visual_feedback = true
 
 [web]
 # Where the web capabilities may reach.
@@ -2353,7 +2355,7 @@ effects = ["read", "device"]
 
 [[capability]]
 id = "desktop.screenshot"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Capture one application's frontmost window."
 semantics = """
 One window, never the whole screen. A full-screen grab carries whatever else \
@@ -2424,9 +2426,15 @@ effects = ["read", "device"]
   required = true
   summary = "Always true: this is whatever that window chose to display."
 
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "Opaque capture frame token required to safely target a later coordinate action."
+
 [[capability]]
 id = "desktop.click"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Click inside one application's window."
 semantics = """
 A button may delete something or send something, and nothing can know which before it is pressed. \
@@ -2462,6 +2470,12 @@ effects = ["read", "device", "write", "external"]
   required = false
   summary = "1 for a single click, 2 for a double. Defaults to 1."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2482,7 +2496,7 @@ effects = ["read", "device", "write", "external"]
 
 [[capability]]
 id = "desktop.move"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Move the pointer without pressing anything."
 semantics = """
 Moves the pointer and changes nothing else; it is here because hover reveals interface that is otherwise invisible. \
@@ -2512,6 +2526,12 @@ effects = ["read", "device"]
   required = true
   summary = "Vertical position, in the image's space."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2532,7 +2552,7 @@ effects = ["read", "device"]
 
 [[capability]]
 id = "desktop.drag"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Press at one point, drag to another, release."
 semantics = """
 Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
@@ -2574,6 +2594,12 @@ effects = ["read", "device", "write"]
   required = true
   summary = "Where the release happens, vertically."
 
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+
   [[capability.output]]
   name = "did"
   type = "string"
@@ -2594,7 +2620,7 @@ effects = ["read", "device", "write"]
 
 [[capability]]
 id = "desktop.scroll"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Scroll at a point."
 semantics = """
 Changes what is visible rather than what is there, which is why it declares no external effect. \
@@ -2635,6 +2661,12 @@ effects = ["read", "device", "write"]
   type = "int"
   required = false
   summary = "Vertical pixels. Negative scrolls down."
+
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = false
+  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
 
   [[capability.output]]
   name = "did"
@@ -2901,7 +2933,7 @@ capability = "symbol.search"
   estimated_duration = "1s"
   estimated_tokens = 1300
 
-# The nine kivgraph implementations share one provider and one server (see
+# The ten kivgraph implementations share one provider and one server (see
 # [orchestrator.kivgraph] above -- either its own daemon over streamable
 # HTTP or a supervised stdio child, never both): a handful of tools called
 # against it over the same wire, no second index to build.

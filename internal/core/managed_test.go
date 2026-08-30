@@ -35,7 +35,7 @@ func startupFor(t *testing.T, runners, extra string) error {
 // Refused at startup rather than at the first call, because the first call is
 // somebody's real work and the settings file is the thing that is wrong.
 //
-// kivgraph used to be in this list and no longer belongs in it: 0.7.0 serves
+// kivgraph used to be in this list and no longer belongs in it: 0.9.2 serves
 // the same tools from `kivgraph daemon` over HTTP, so a file naming that runner
 // with no process block means the daemon, not a mistake. See
 // TestKivgraphWithNoProcessBlockDialsTheDaemonInstead.

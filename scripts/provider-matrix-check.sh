@@ -11,16 +11,29 @@ trap 'rm -rf "$build_dir"' EXIT
 
 cd "$root"
 go build -trimpath -buildvcs=false -o "$build_dir/atenea" ./cmd/atenea
-catalog="$("$build_dir/atenea" catalog)"
+catalog="$("$build_dir/atenea" --config "$root/internal/config/default.toml" catalog)"
 
 required=(
-	"code.search|codex.search"
-	"code.search|claude.search"
 	"code.search|ripgrep"
+	"code.search|claude.search"
+	"code.search|codex.search"
 	"code.context|tokensave.context"
 	"code.impact|kivgraph.impact"
-	"symbol.definition|kivgraph.definition"
 	"symbol.definition|serena.definition"
+	"symbol.definition|kivgraph.definition"
+	"symbol.references|serena.references"
+	"symbol.references|kivgraph.references"
+	"symbol.implementations|serena.implementations"
+	"symbol.overview|serena.overview"
+	"symbol.overview|kivgraph.overview"
+	"symbol.overview|tokensave.overview"
+	"symbol.calls|tokensave.calls"
+	"symbol.search|serena.symbol_search"
+	"symbol.intent_search|kivgraph.intent_search"
+	"symbol.dependencies|kivgraph.dependencies"
+	"symbol.consumers|kivgraph.cross_repo_consumers"
+	"symbol.get|kivgraph.get"
+	"graph.status|kivgraph.status"
 	"repository.index|kivgraph.index"
 	# The desktop edges. Checked here for the reason the gate exists at all: an
 	# implementation registered against the wrong capability is the one mistake
@@ -30,8 +43,19 @@ required=(
 	"desktop.inspect|macos.inspect"
 	"desktop.screenshot|macos.screenshot"
 	"desktop.click|macos.click"
+	"desktop.move|macos.move"
+	"desktop.drag|macos.drag"
+	"desktop.scroll|macos.scroll"
 	"desktop.type|macos.type"
 	"desktop.key|macos.key"
+	"web.fetch|scrapling.fetch"
+	"web.fetch|scrapling.request"
+	"web.fetch|scrapling.stealth"
+	"web.extract|scrapling.extract_fetch"
+	"web.extract|scrapling.extract_request"
+	"web.extract|scrapling.extract_stealth"
+	"web.crawl|scrapling.crawl"
+	"web.crawl|scrapling.crawl_stealth"
 )
 
 # The edge, not just its right-hand side. The loop used to search the whole
@@ -52,7 +76,20 @@ done
 # usually lost more than one, and one run should name them all.
 test "$missing" -eq 0 || exit 1
 
-"$build_dir/atenea" config show >/dev/null
+if [[ "${#required[@]}" -ne 38 ]]; then
+	echo "provider matrix must cover all 38 declared implementations (listed ${#required[@]})" >&2
+	exit 1
+fi
+
+# The only intentionally dormant public contract is symbol.unresolved. Keep
+# this explicit so a future provider addition cannot silently turn a typo or a
+# missing runner into an MCP tool that the funnel cannot route.
+if grep -Fqx 'symbol.unresolved|' <<<"$edges"; then
+	echo "symbol.unresolved unexpectedly has a provider edge" >&2
+	exit 1
+fi
+
+"$build_dir/atenea" --config "$root/internal/config/default.toml" config show >/dev/null
 # Counted, not typed. The message said "8 required edges" as a literal, so a
 # ninth edge added to the list above would still have been announced as eight.
 echo "declared provider matrix passed (${#required[@]} required edges)"

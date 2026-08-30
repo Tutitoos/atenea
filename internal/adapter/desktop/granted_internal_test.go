@@ -178,6 +178,9 @@ func TestAHelpersRefusalDoesNotMarkTheProviderDown(t *testing.T) {
 		{"unknown key",
 			`{"error":"unknown key frobnicate","kind":"invalid"}`,
 			contract.FailureInvalidInput},
+		{"human interruption",
+			`{"error":"interrupted by human input","kind":"canceled"}`,
+			contract.FailureCanceled},
 		// Unlabeled: nobody classified it, so it is the provider's own and
 		// marking it down is right.
 		{"the transport broke", "write |1: broken pipe", contract.FailureUnavailable},

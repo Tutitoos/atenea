@@ -38,6 +38,30 @@ control. It needs Screen Recording for window captures. Atenea reports a
 missing permission as a typed refusal and does not retry a mutating operation
 after the helper exits or loses its graphical session.
 
+## Visual tracking on macOS
+
+With `[desktop] visual_feedback = true` (the default), the helper shows a
+3-point Atenea gradient border around the captured window, a virtual cursor in
+that window and in a movable 360×240 preview. The preview is local and
+ephemeral: it adapts between observation and action rates, blurs after idle,
+closes after 30 seconds, and never records video, screenshots or event history
+on disk. Closing it suppresses only the visuals; Atenea continues working.
+
+`desktop.screenshot` returns an opaque `frame_id`. Pass that token to
+coordinate actions when available. Atenea validates the PID, bundle, window
+ID, geometry, scale and visibility again before sending an event, and refuses
+stale frames or a point covered by another application. Accessible controls use
+their Accessibility action first; canvas and emulator surfaces use a guarded
+foreground CGEvent fallback, so a target may briefly take focus.
+
+The event monitor ignores Atenea's marked synthetic events. Human movement,
+clicks, scrolling or keys pause the current action and show `Paused`; `Resume`
+unblocks future actions without replaying the interrupted one. If the monitor
+permission is unavailable, observations remain usable but mutating operations
+are refused while visual feedback is enabled. Set `visual_feedback = false` to
+hide the border, cursor and preview while keeping all frame and window safety
+checks.
+
 ## Enabling interaction deliberately
 
 To enable the second phase, add the required application bundle ID, grant

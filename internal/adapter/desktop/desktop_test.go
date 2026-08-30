@@ -626,7 +626,7 @@ func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
 				"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 			"screenshot": map[string]any{
 				"png_base64": "iVBORw0KGgo=", "width": 1568, "height": 980,
-				"scale": tc.scale, "bytes": 4096},
+				"scale": tc.scale, "bytes": 4096, "frame_id": "test-frame"},
 		})
 		runner, err := desktop.New(desktop.Options{
 			Session: session, Responsible: func() bool { return true },
@@ -685,6 +685,58 @@ func TestATruncatedWalkSaysSo(t *testing.T) {
 	}
 }
 
+func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
+	session := fakeHelper(t, map[string]any{
+		"health": map[string]any{"accessibility": true, "screen_recording": true, "input_monitor_active": true},
+		"list_apps": map[string]any{"apps": []any{map[string]any{
+			"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
+		"click": map[string]any{"clicked": true},
+	})
+	runner, err := desktop.New(desktop.Options{
+		Session: session, Responsible: func() bool { return true },
+		Allowed: []string{"com.apple.Notes"}, VisualFeedback: false,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	capability := contract.Capability{
+		ID: desktop.CapabilityScreenshot, Version: contract.Version{Major: 1},
+	}
+	capability.ID = "desktop.click"
+	capability.Effects = []contract.Effect{contract.EffectRead, contract.EffectDevice}
+	capability.Inputs = []contract.Field{
+		{Name: "application", Type: contract.TypeString, Required: true},
+		{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
+		{Name: "frame_id", Type: contract.TypeString},
+	}
+	capability.Outputs = []contract.Field{{Name: "did", Type: contract.TypeString, Required: true},
+		{Name: "application", Type: contract.TypeString, Required: true}, {Name: "bundle_id", Type: contract.TypeString, Required: true}}
+	out, err := runner.Run(t.Context(), contract.RunRequest{
+		Capability:     capability,
+		Implementation: contract.Implementation{ID: "macos.click", Capability: capability.ID},
+		Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+		Payload:        map[string]any{"application": "com.apple.Notes", "x": 3, "y": 4, "frame_id": "frame-1"},
+		Permission:     contract.Permission{Task: "click", Effects: capability.Effects},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out.Result["bundle_id"] != "com.apple.Notes" {
+		t.Fatalf("result = %+v", out.Result)
+	}
+	var clickArgs map[string]any
+	for range 3 {
+		params := <-callsSeen
+		if params["name"] == "click" {
+			clickArgs, _ = params["arguments"].(map[string]any)
+			break
+		}
+	}
+	if clickArgs == nil || clickArgs["frame_id"] != "frame-1" || clickArgs["bundle_id"] != "com.apple.Notes" {
+		t.Fatalf("click args = %+v", clickArgs)
+	}
+}
+
 // Nothing platform-shaped crosses the seam. The helper owns every macOS type
 // and every pixel ratio; what arrives here is numbers and strings, and a
 // result that started carrying something else would mean the scaling had
@@ -695,7 +747,7 @@ func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 		"screenshot": map[string]any{"png_base64": "iVBOR", "width": 800,
-			"height": 600, "scale": 0.5, "bytes": 12},
+			"height": 600, "scale": 0.5, "bytes": 12, "frame_id": "test-frame"},
 	})
 	runner, err := desktop.New(desktop.Options{
 		Session: session, Responsible: func() bool { return true },

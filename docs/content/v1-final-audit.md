@@ -14,6 +14,11 @@ cobertura de código ni una promesa de compatibilidad universal.
 > El estado vigente de la rama y las comprobaciones posteriores se mantienen en
 > [v1 readiness]({{< relref "v1-readiness" >}}), actualmente para 1.1.0.
 
+El contenido de esta auditoría es un snapshot histórico. El estado fechado
+posterior a la integración de Kivgraph 0.9.2 (incluidos contratos dormidos,
+supervisor, Scrapling y deudas abiertas) está en la sección **Current
+post-Kivgraph audit — 2026-08-29** de [v1 readiness]({{< relref "v1-readiness" >}}).
+
 ## Matriz de cierre
 
 | Área | Código/configuración del repositorio | Evidencia ejecutada | Cierre | Pendiente |

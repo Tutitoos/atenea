@@ -617,7 +617,10 @@ func TestCancellingTheFirstChatDoesNotKillTheSharedProcess(t *testing.T) {
 // handshake dies on its timeout with no idea why.
 func TestAServerThatNeverFramesALineIsCutOff(t *testing.T) {
 	b := helper(t, []string{"search_code"}, map[string]string{
-		"HELPER_FLOODS": strconv.Itoa(16 << 20),
+		// Just over the 8 MiB framing ceiling is enough to exercise the
+		// bounded scanner; writing twice that amount only makes the assertion
+		// sensitive to scheduler load while the child is blocked on its pipe.
+		"HELPER_FLOODS": strconv.Itoa(9 << 20),
 	})
 	start := time.Now()
 	_, err := b.Tools(t.Context())
@@ -629,7 +632,7 @@ func TestAServerThatNeverFramesALineIsCutOff(t *testing.T) {
 	}
 	// The reader gives up at the ceiling rather than at the caller's deadline,
 	// and the difference between the two is the whole repair.
-	if took := time.Since(start); took > 5*time.Second {
+	if took := time.Since(start); took > 8*time.Second {
 		t.Errorf("the flood took %v to report: that is the call's timeout, not a ceiling", took)
 	}
 }

@@ -73,6 +73,7 @@ go mod tidy -diff
 
 echo "[5/9] static validation"
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 echo "[6/9] build"
 go build -trimpath -buildvcs=false -o "$build_dir/atenea" ./cmd/atenea
@@ -91,6 +92,7 @@ scripts/v1-policy-check.sh
 scripts/benchmark-check.sh
 scripts/load-check.sh
 scripts/provider-matrix-check.sh
+scripts/scrapling-spider-check.sh
 "$build_dir/atenea" version
 
 echo "v1 readiness gate passed"

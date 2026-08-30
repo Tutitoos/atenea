@@ -24,11 +24,59 @@ let version = "0.1.0"
 // equivalent of AppKit's NSApplicationLoad. It puts no window on screen, and
 // LSUIElement keeps it out of the Dock.
 _ = NSApplication.shared
+NSApplication.shared.setActivationPolicy(.accessory)
+InputMonitor.shared.start()
+
+struct TargetArguments {
+    let pid: pid_t
+    let bundleID: String
+    let appName: String
+    let visualFeedback: Bool
+}
+
+func targetArguments(_ args: [String: Any]) throws -> TargetArguments {
+    guard let pid = args["pid"] as? Int,
+          let bundle = args["bundle_id"] as? String,
+          let app = args["app"] as? String else {
+        throw RPCError.invalidParams("pid, bundle_id and app are required")
+    }
+    return TargetArguments(pid: pid_t(pid), bundleID: bundle, appName: app,
+                           visualFeedback: args["visual_feedback"] as? Bool ?? true)
+}
+
+@MainActor
+func checkedPoint(_ args: [String: Any]) async throws -> (CGPoint, CaptureFrame, TargetArguments) {
+    let target = try targetArguments(args)
+    try await ensureInputMonitor(target.visualFeedback)
+    guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
+        throw RPCError.invalidParams("x and y are required")
+    }
+    let frameID = args["frame_id"] as? String
+    let (point, frame) = try await Capture.globalPoint(pid: target.pid, bundleID: target.bundleID,
+                                                       appName: target.appName, frameID: frameID,
+                                                       x: x, y: y)
+    try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
+    await MainActor.run {
+        VisualFeedbackController.shared.setEnabled(target.visualFeedback)
+    }
+    guard target.visualFeedback else { return (point, frame, target) }
+    await MainActor.run {
+        VisualFeedbackController.shared.show(target: frame.target, state: .acting)
+    }
+    await VisualFeedbackController.shared.animateCursor(globalPoint: point)
+    return (point, frame, target)
+}
+
+func ensureInputMonitor(_ visualFeedback: Bool) async throws {
+    guard visualFeedback, !InputMonitor.shared.active else { return }
+    throw RPCError.denied(InputMonitor.shared.failure ??
+        "human input monitoring is unavailable; grant Input Monitoring or disable visual_feedback")
+}
 
 // Immutable once built and read only from the serial loop at the bottom, which
 // is what makes this safe rather than merely quiet. The annotation says the
 // compiler cannot see that and this file can.
-nonisolated(unsafe) let tools: [Tool] = [
+let tools: [Tool] = [
     Tool(
         name: "health",
         description: "Report whether this machine can be driven: permissions and graphical session.",
@@ -36,6 +84,16 @@ nonisolated(unsafe) let tools: [Tool] = [
         run: { _ in
             var out: [String: Any] = ["version": version, "pid": ProcessInfo.processInfo.processIdentifier]
             out.merge(Permissions.current().asDictionary()) { a, _ in a }
+            let visual = await MainActor.run {
+                (VisualFeedbackController.shared.enabled, VisualFeedbackController.shared.healthState,
+                 NSApp != nil && !NSScreen.screens.isEmpty)
+            }
+            out["visual_feedback_supported"] = visual.2
+            out["visual_feedback_enabled"] = visual.0
+            out["input_monitor_active"] = InputMonitor.shared.active
+            out["input_monitor_error"] = InputMonitor.shared.failure ?? ""
+            out["overlay_state"] = visual.1
+            out["graphical_session"] = visual.2
             return out
         }
     ),
@@ -43,7 +101,11 @@ nonisolated(unsafe) let tools: [Tool] = [
         name: "request_access",
         description: "Ask macOS to show the Accessibility prompt for this process.",
         inputSchema: ["type": "object", "properties": [:] as [String: Any]],
-        run: { _ in Permissions.request() }
+        run: { _ in
+            let answer = Permissions.request()
+            InputMonitor.shared.start()
+            return answer
+        }
     ),
     Tool(
         name: "list_apps",
@@ -66,6 +128,7 @@ nonisolated(unsafe) let tools: [Tool] = [
                 "max_nodes": ["type": "integer"],
                 "max_bytes": ["type": "integer"],
                 "max_depth": ["type": "integer"],
+                "visual_feedback": ["type": "boolean"],
             ] as [String: Any],
         ],
         run: { args in
@@ -84,6 +147,13 @@ nonisolated(unsafe) let tools: [Tool] = [
             let roles = Set((args["roles"] as? [String]) ?? [])
             let (rows, stopped) = Tree.walk(pid: pid_t(pid), bundleID: bundle,
                                             appName: app, roles: roles, limits: limits)
+            if args["visual_feedback"] as? Bool ?? true,
+               let target = try? await Capture.currentTarget(pid: pid_t(pid), bundleID: bundle, appName: app) {
+                await MainActor.run {
+                    VisualFeedbackController.shared.setEnabled(true)
+                    VisualFeedbackController.shared.show(target: target, state: .observing)
+                }
+            }
             var out: [String: Any] = ["nodes": rows, "count": rows.count]
             // Said out loud rather than inferred from a suspiciously round
             // count. A truncation nobody is told about is a lie by omission
@@ -97,20 +167,31 @@ nonisolated(unsafe) let tools: [Tool] = [
         description: "Capture one application's frontmost window as a PNG.",
         inputSchema: [
             "type": "object",
-            "required": ["pid"],
-            "properties": ["pid": ["type": "integer"]] as [String: Any],
+            "required": ["pid", "bundle_id", "app"],
+            "properties": ["pid": ["type": "integer"],
+                           "bundle_id": ["type": "string"], "app": ["type": "string"],
+                           "visual_feedback": ["type": "boolean"]] as [String: Any],
         ],
         run: { args in
-            guard let pid = args["pid"] as? Int else {
-                throw RPCError.invalidParams("pid is required")
+            guard let pid = args["pid"] as? Int,
+                  let bundle = args["bundle_id"] as? String,
+                  let app = args["app"] as? String else {
+                throw RPCError.invalidParams("pid, bundle_id and app are required")
             }
-            let shot = try await Capture.window(pid: pid_t(pid))
+            await MainActor.run {
+                VisualFeedbackController.shared.setEnabled(args["visual_feedback"] as? Bool ?? true)
+            }
+            let shot = try await Capture.window(pid: pid_t(pid), bundleID: bundle, appName: app)
+            await MainActor.run {
+                VisualFeedbackController.shared.show(target: shot.target, imageData: shot.png, state: .observing)
+            }
             return [
                 "png_base64": shot.png.base64EncodedString(),
                 "width": shot.width,
                 "height": shot.height,
                 "scale": shot.scale,
                 "bytes": shot.png.count,
+                "frame_id": shot.frameID,
             ]
         }
     ),
@@ -123,70 +204,112 @@ nonisolated(unsafe) let tools: [Tool] = [
     Tool(
         name: "click",
         description: "Click at a point, once or twice.",
-        inputSchema: ["type": "object", "required": ["x", "y"],
-                      "properties": ["x": ["type": "number"], "y": ["type": "number"],
-                                     "clicks": ["type": "integer"]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
+                                     "app": ["type": "string"], "x": ["type": "number"], "y": ["type": "number"],
+                                     "clicks": ["type": "integer"], "frame_id": ["type": "string"],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
-                throw RPCError.invalidParams("x and y are required")
+            let (point, frame, target) = try await checkedPoint(args)
+            await MainActor.run { VisualFeedbackController.shared.setState(.clicking) }
+            let semantic = (args["clicks"] as? Int ?? 1) == 1
+                ? try await Input.semanticClick(pid: target.pid, at: point, visualFeedback: target.visualFeedback) : false
+            if !semantic {
+                // AX hit-testing can decline a canvas or emulator surface. It
+                // may also have yielded while the window changed, so repeat
+                // the foreground/coverage check immediately before the real
+                // pointer fallback.
+                try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
+                try await Input.click(at: point, clicks: args["clicks"] as? Int ?? 1, visualFeedback: target.visualFeedback)
             }
-            Input.click(at: CGPoint(x: x, y: y), clicks: args["clicks"] as? Int ?? 1)
+            await MainActor.run { VisualFeedbackController.shared.setState(.observing) }
+            let x = args["x"] as? Double ?? 0; let y = args["y"] as? Double ?? 0
             return ["clicked": ["x": x, "y": y]]
         }
     ),
     Tool(
         name: "move",
         description: "Move the pointer without clicking.",
-        inputSchema: ["type": "object", "required": ["x", "y"],
-                      "properties": ["x": ["type": "number"], "y": ["type": "number"]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
+                                     "app": ["type": "string"], "x": ["type": "number"], "y": ["type": "number"],
+                                     "frame_id": ["type": "string"], "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
-                throw RPCError.invalidParams("x and y are required")
-            }
-            Input.move(to: CGPoint(x: x, y: y))
+            let (point, frame, _) = try await checkedPoint(args)
+            await MainActor.run { VisualFeedbackController.shared.setState(.moving) }
+            let target = try targetArguments(args)
+            try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
+            try await Input.move(to: point, visualFeedback: target.visualFeedback)
+            let x = args["x"] as? Double ?? 0; let y = args["y"] as? Double ?? 0
             return ["moved": ["x": x, "y": y]]
         }
     ),
     Tool(
         name: "drag",
         description: "Press at one point, drag to another, release.",
-        inputSchema: ["type": "object", "required": ["from_x", "from_y", "to_x", "to_y"],
-                      "properties": ["from_x": ["type": "number"], "from_y": ["type": "number"],
-                                     "to_x": ["type": "number"], "to_y": ["type": "number"]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "from_x", "from_y", "to_x", "to_y"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"], "app": ["type": "string"],
+                                     "from_x": ["type": "number"], "from_y": ["type": "number"],
+                                     "to_x": ["type": "number"], "to_y": ["type": "number"], "frame_id": ["type": "string"],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
+            let identity = try targetArguments(args)
+            try await ensureInputMonitor(identity.visualFeedback)
             guard let fx = args["from_x"] as? Double, let fy = args["from_y"] as? Double,
                   let tx = args["to_x"] as? Double, let ty = args["to_y"] as? Double else {
                 throw RPCError.invalidParams("from_x, from_y, to_x and to_y are required")
             }
-            Input.drag(from: CGPoint(x: fx, y: fy), to: CGPoint(x: tx, y: ty))
+            let (start, frame) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
+                appName: identity.appName, frameID: args["frame_id"] as? String, x: fx, y: fy)
+            let (end, _) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
+                appName: identity.appName, frameID: frame.id, x: tx, y: ty)
+            if identity.visualFeedback {
+                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .dragging) }
+                await VisualFeedbackController.shared.animateCursor(globalPoint: start)
+            }
+            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID, point: start)
+            try await Input.drag(from: start, to: end, visualFeedback: identity.visualFeedback)
             return ["dragged": true]
         }
     ),
     Tool(
         name: "scroll",
         description: "Scroll at a point.",
-        inputSchema: ["type": "object", "required": ["x", "y"],
-                      "properties": ["x": ["type": "number"], "y": ["type": "number"],
-                                     "dx": ["type": "integer"], "dy": ["type": "integer"]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"], "app": ["type": "string"],
+                                     "x": ["type": "number"], "y": ["type": "number"],
+                                     "dx": ["type": "integer"], "dy": ["type": "integer"], "frame_id": ["type": "string"],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
-            guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
-                throw RPCError.invalidParams("x and y are required")
-            }
-            Input.scroll(at: CGPoint(x: x, y: y),
-                         dx: args["dx"] as? Int ?? 0, dy: args["dy"] as? Int ?? 0)
+            let (point, frame, _) = try await checkedPoint(args)
+            await MainActor.run { VisualFeedbackController.shared.setState(.scrolling) }
+            let target = try targetArguments(args)
+            try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
+            try await Input.scroll(at: point, dx: args["dx"] as? Int ?? 0, dy: args["dy"] as? Int ?? 0,
+                                   visualFeedback: target.visualFeedback)
             return ["scrolled": true]
         }
     ),
     Tool(
         name: "type",
         description: "Type literal text into whatever has keyboard focus.",
-        inputSchema: ["type": "object", "required": ["text"],
-                      "properties": ["text": ["type": "string"]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "text"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
+                                     "app": ["type": "string"], "text": ["type": "string"],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
+            let identity = try targetArguments(args)
+            try await ensureInputMonitor(identity.visualFeedback)
             guard let text = args["text"] as? String else {
                 throw RPCError.invalidParams("text is required")
             }
-            try Input.type(text)
+            if identity.visualFeedback {
+                let target = try await Capture.currentTarget(pid: identity.pid, bundleID: identity.bundleID, appName: identity.appName)
+                try WindowSafety.ensure(pid: identity.pid, windowID: target.windowID,
+                                        point: CGPoint(x: target.frame.midX, y: target.frame.midY))
+                await MainActor.run { VisualFeedbackController.shared.show(target: target, state: .typing) }
+            }
+            try await Input.type(text, visualFeedback: identity.visualFeedback)
             // The length and not the text. A helper that echoed what it typed
             // would put it in a log, a receipt and a model's context, which is
             // three copies of something somebody may have meant to keep.
@@ -196,14 +319,25 @@ nonisolated(unsafe) let tools: [Tool] = [
     Tool(
         name: "key",
         description: "Press one key, with optional modifiers.",
-        inputSchema: ["type": "object", "required": ["key"],
-                      "properties": ["key": ["type": "string"],
-                                     "modifiers": ["type": "array", "items": ["type": "string"]]] as [String: Any]],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "key"],
+                      "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
+                                     "app": ["type": "string"], "key": ["type": "string"],
+                                     "modifiers": ["type": "array", "items": ["type": "string"]],
+                                     "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
+            let identity = try targetArguments(args)
+            try await ensureInputMonitor(identity.visualFeedback)
             guard let name = args["key"] as? String else {
                 throw RPCError.invalidParams("key is required")
             }
-            try Input.key(name, modifiers: (args["modifiers"] as? [String]) ?? [])
+            if identity.visualFeedback {
+                let target = try await Capture.currentTarget(pid: identity.pid, bundleID: identity.bundleID, appName: identity.appName)
+                try WindowSafety.ensure(pid: identity.pid, windowID: target.windowID,
+                                        point: CGPoint(x: target.frame.midX, y: target.frame.midY))
+                await MainActor.run { VisualFeedbackController.shared.show(target: target, state: .typing) }
+            }
+            try await Input.key(name, modifiers: (args["modifiers"] as? [String]) ?? [],
+                                visualFeedback: identity.visualFeedback)
             return ["pressed": name]
         }
     ),
@@ -310,12 +444,38 @@ func handle(_ message: [String: Any]) async {
 //
 // Anything added below that returns before its work is finished breaks this,
 // and nothing above would notice.
-while let line = readLine(strippingNewline: true) {
-    if line.isEmpty { continue }
-    guard let data = line.data(using: .utf8),
-          let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-        log("skipping a line that is not a JSON object")
-        continue
+let incoming = AsyncStream<String> { continuation in
+    DispatchQueue.global(qos: .userInitiated).async {
+        while let line = readLine(strippingNewline: true) {
+            if let data = line.data(using: .utf8),
+               let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               message["method"] as? String == "$/cancelRequest" {
+                // Cancellation is acted on by the producer immediately, even
+                // while the serial RPC consumer is inside a capture or drag.
+                Task { await ActionGate.shared.interrupt() }
+            }
+            if !line.isEmpty { continuation.yield(line) }
+        }
+        Task { await ActionGate.shared.interrupt() }
+        continuation.finish()
     }
-    await handle(message)
 }
+
+Task {
+    for await line in incoming {
+        guard let data = line.data(using: .utf8),
+              let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            log("skipping a line that is not a JSON object")
+            continue
+        }
+        if message["method"] as? String == "$/cancelRequest" { continue }
+        await handle(message)
+    }
+    await MainActor.run {
+        InputMonitor.shared.stop()
+        VisualFeedbackController.shared.hide()
+        NSApplication.shared.terminate(nil)
+    }
+}
+
+NSApplication.shared.run()

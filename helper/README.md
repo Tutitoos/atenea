@@ -83,3 +83,15 @@ reason. A `.app` bundle does not change this -- only launchd does.
 What follows is that the grant has to belong to `atenea` itself, which happens
 when launchd starts it as a LaunchAgent. `internal/adapter/desktop` refuses
 the device effect otherwise rather than succeeding on a terminal's permission.
+
+## Visual feedback and safety
+
+On macOS 14+, the helper owns an ephemeral click-through border and a floating
+preview with an Atenea virtual cursor. The preview is composed locally from the
+window-only ScreenCaptureKit image; no overlay pixels or cursor metadata are
+sent back in `desktop.screenshot`, and no frames are written to disk. It pauses
+when the passive session event tap sees human input and exposes `Resume` only
+to clear that pause (the interrupted action is never retried). If input
+monitoring cannot be created, observations still work but mutating calls are
+refused while visual feedback is enabled. Set `[desktop] visual_feedback =
+false` to hide the UI while retaining frame and window safety validation.

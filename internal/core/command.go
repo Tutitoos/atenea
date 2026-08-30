@@ -178,9 +178,10 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 			"client_effects":             effects,
 			"client_denied_capabilities": settings.Orchestrator.ClientDeniedCapabilities,
 			"desktop_scope": map[string]any{
-				"applications":  len(settings.Desktop.Applications),
-				"denied":        len(settings.Desktop.Denied),
-				"look_then_act": settings.Desktop.LookThenAct,
+				"applications":    len(settings.Desktop.Applications),
+				"denied":          len(settings.Desktop.Denied),
+				"look_then_act":   settings.Desktop.LookThenAct,
+				"visual_feedback": settings.Desktop.VisualFeedback,
 			},
 			"repositories": len(settings.Repositories),
 			"capabilities": len(settings.Capabilities),
@@ -195,6 +196,23 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 			"client":    client,
 			"profile":   req.Profile,
 			"telemetry": ReadCompatibilitySummaryFor(client, req.Profile),
+		}
+		for _, runner := range c.runners {
+			candidate := runner
+			if unwrapped, ok := runner.(interface{ Unwrap() contract.Runner }); ok {
+				candidate = unwrapped.Unwrap()
+			}
+			if health, ok := candidate.(interface {
+				Health(context.Context) (map[string]any, error)
+			}); ok {
+				if desktopHealth, err := health.Health(ctx); err == nil {
+					response.Data.(map[string]any)["desktop"] = desktopHealth
+				} else {
+					response.Data.(map[string]any)["desktop"] = map[string]any{
+						"status": "degraded", "error": err.Error(),
+					}
+				}
+			}
 		}
 	case "intent":
 		if req.Repository == "" {

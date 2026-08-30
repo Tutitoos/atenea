@@ -165,7 +165,13 @@ func mcpProbe(out io.Writer) error {
 			"no atenea service is listening at %s", core.SocketPath())
 	}
 	fmt.Fprintf(out, "atenea %s is listening at %s\n", status.Version, core.SocketPath())
-	fmt.Fprintf(out, "%d capability(ies) would be offered as tools\n", len(status.Capabilities))
+	offered := 0
+	for _, capability := range status.Capabilities {
+		if capability.Offered {
+			offered++
+		}
+	}
+	fmt.Fprintf(out, "%d capability(ies) would be offered as tools\n", offered)
 	fmt.Fprintf(out, "%d chat(s) open right now\n", len(status.Chats))
 	return nil
 }

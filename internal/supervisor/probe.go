@@ -10,6 +10,7 @@ package supervisor
 // to watch it, which is the wrong direction for that dependency to point.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -94,15 +95,50 @@ func probeReady(ctx context.Context, client *http.Client, endpoint string) error
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	text, err := io.ReadAll(resp.Body)
+	text, err := readProbePayload(resp)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("answered %s: %s", resp.Status, clipText(string(text)))
+		return fmt.Errorf("answered %s: %s", resp.Status, clipText(text))
 	}
-	_, err = decodeProbe(string(text))
+	_, err = decodeProbe(text)
 	return err
+}
+
+// readProbePayload reads one response document without waiting for a
+// streamable-HTTP session to close. Serena and other MCP servers keep an SSE
+// response open for the life of the session; io.ReadAll would therefore turn a
+// successful initialize into a timeout, cancel the request, and make the
+// server report ClientDisconnect. A readiness probe only needs the first
+// JSON-RPC frame.
+func readProbePayload(resp *http.Response) (string, error) {
+	limited := io.LimitReader(resp.Body, 64<<10)
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		scanner := bufio.NewScanner(limited)
+		var data strings.Builder
+		for scanner.Scan() {
+			line := strings.TrimSuffix(scanner.Text(), "\r")
+			if after, ok := strings.CutPrefix(line, "data:"); ok {
+				data.WriteString(strings.TrimSpace(after))
+				// A complete JSON frame can be returned before the server emits
+				// the event's blank-line terminator; this is the normal one-line
+				// shape and avoids holding the stream open unnecessarily.
+				if _, err := decodeProbe(data.String()); err == nil {
+					return data.String(), nil
+				}
+			}
+			if line == "" && data.Len() > 0 {
+				return data.String(), nil
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return "", err
+		}
+		return data.String(), nil
+	}
+	body, err := io.ReadAll(limited)
+	return string(body), err
 }
 
 // decodeProbe reads one JSON-RPC response out of either transport framing,

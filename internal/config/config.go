@@ -575,7 +575,7 @@ type SerenaAdapter struct {
 // externally managed instance to assume was already running, so the only
 // child was a persistent stdio-MCP server Atenea itself spawned and
 // supervised -- see Process below and supervisor.TransportStdio. Kivgraph
-// 0.7.0 changed that: `kivgraph daemon` serves the same MCP tool surface over
+// 0.9.2 changed that: `kivgraph daemon` serves the same MCP tool surface over
 // streamable HTTP at a fixed local URL, refuses every request without a
 // bearer token (401), and is ordinarily already running under its own
 // systemd user unit before Atenea starts, the same "assume it is there"
@@ -743,6 +743,10 @@ type Desktop struct {
 	// Denied above, the hard refusal to type into a secure field, credential
 	// redaction in desktop.type, and the audit receipts.
 	LookThenAct bool
+	// VisualFeedback controls the native macOS overlay, cursor and live
+	// miniature. It is enabled by default so a person can see where an action
+	// is being sent; disabling it never disables the window-safety checks.
+	VisualFeedback bool
 }
 
 // AllApplications is the token that widens the desktop allow-list to every
@@ -754,7 +758,8 @@ const AllApplications = desktop.AllApplications
 // hazards refused even if somebody allows them later.
 func DefaultDesktop() Desktop {
 	return Desktop{
-		Applications: nil,
+		Applications:   nil,
+		VisualFeedback: true,
 		Denied: []string{
 			"com.apple.keychainaccess",
 			"com.1password.1password",
@@ -1465,9 +1470,10 @@ type fileSecurity struct {
 }
 
 type fileDesktop struct {
-	Applications *[]string `toml:"applications"`
-	Denied       *[]string `toml:"denied"`
-	LookThenAct  *bool     `toml:"look_then_act"`
+	Applications   *[]string `toml:"applications"`
+	Denied         *[]string `toml:"denied"`
+	LookThenAct    *bool     `toml:"look_then_act"`
+	VisualFeedback *bool     `toml:"visual_feedback"`
 }
 
 // fileWeb is [web] as written. Pointers, so an omitted list inherits the
@@ -2969,6 +2975,9 @@ func (d fileDesktop) build(source string) (Desktop, error) {
 	}
 	if d.LookThenAct != nil {
 		out.LookThenAct = *d.LookThenAct
+	}
+	if d.VisualFeedback != nil {
+		out.VisualFeedback = *d.VisualFeedback
 	}
 	// "everything, and also these two" is not a wider list than "everything":
 	// it is two sentences that disagree about which one is in force. Refused
