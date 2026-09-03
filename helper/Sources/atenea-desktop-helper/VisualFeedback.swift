@@ -78,17 +78,17 @@ final class VisualFeedbackController: NSObject {
         blurTimer?.invalidate()
         closeTimer?.invalidate()
         blurTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.idleBlurred() }
+            Task { @MainActor [weak self] in self?.idleBlurred() }
         }
         closeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.suppressed = false
                 self?.hide()
             }
         }
         followTimer?.invalidate()
         followTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.followTargetWindow() }
+            Task { @MainActor [weak self] in self?.followTargetWindow() }
         }
     }
 
@@ -188,7 +188,7 @@ final class VisualFeedbackController: NSObject {
         state = .suppressedByUser
         suppressionTimer?.invalidate()
         suppressionTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.suppressed = false
                 self?.suppressionTimer = nil
             }
