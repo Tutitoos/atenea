@@ -75,8 +75,8 @@ func (g guardedRunner) Unwrap() contract.Runner { return g.Runner }
 // also probes, silently reported no index for a graph it was holding. The
 // alternative, giving guardedRunner a ProbeIndex of its own, is worse: it
 // would make every guarded runner satisfy IndexProber, dragging in the ones
-// that opted out deliberately (serena's own comment explains why it must
-// not answer this). Deciding at construction keeps both truths.
+// that deliberately do not probe indexes. Deciding at construction preserves
+// the wrapped runner's optional interface.
 type guardedProber struct {
 	guardedRunner
 	prober contract.IndexProber
@@ -195,9 +195,6 @@ func guardFailure(err error, ctx context.Context, id string) *contract.Failure {
 // boot.
 func buildSupervisor(cfg config.Config) (*supervisor.Supervisor, error) {
 	var specs []supervisor.Spec
-	if p := cfg.Orchestrator.Serena.Process; p != nil {
-		specs = append(specs, serenaSpecs(*p, cfg.Repositories)...)
-	}
 	if p := cfg.Orchestrator.Kivgraph.Process; p != nil {
 		added, err := kivgraphSpecs(cfg.Source, *p)
 		if err != nil {
@@ -260,71 +257,8 @@ func kivgraphDashboardSpec(p config.ManagedProcess) supervisor.Spec {
 	}
 }
 
-// serenaSpecs turns one declaration into the servers it means: one, or one per
-// repository.
-//
-// The supervisor is not told which of the two happened, and that is the point
-// of doing the expansion here. It has no idea what a repository is; it owns
-// processes with ids, ports and lifecycles. A policy that had to be understood
-// twice -- once as a declaration and once as a supervisor concept -- is a
-// policy with two places to disagree about what it means.
-func serenaSpecs(p config.ManagedProcess, repos []contract.Repository) []supervisor.Spec {
-	if p.Instance != config.InstancePerRepository {
-		return []supervisor.Spec{serenaSpec(config.RunnerSerena, p, p.Args)}
-	}
-	// A machine that declared this policy and no repositories gets no
-	// servers, which is the honest answer: there is nothing to be per. It is
-	// not an error, because the repository list is the thing that will change
-	// tomorrow, and a settings file that stops loading when the last
-	// repository is commented out would be surprising in the wrong direction.
-	specs := make([]supervisor.Spec, 0, len(repos))
-	for _, repo := range repos {
-		args := make([]string, len(p.Args))
-		for i, arg := range p.Args {
-			if arg == config.ProjectPlaceholder {
-				args[i] = repo.Path
-				continue
-			}
-			args[i] = arg
-		}
-		specs = append(specs, serenaSpec(serenaInstanceID(repo.ID), p, args))
-	}
-	return specs
-}
-
-// serenaInstanceID names one repository's Serena. The separator is one the
-// repository id cannot contain -- ids are lowercase slugs -- so the id round
-// trips and a status screen listing `serena@atenea` beside `serena@web` says
-// which is which without a lookup.
-func serenaInstanceID(repoID string) string {
-	return config.RunnerSerena + "@" + repoID
-}
-
-// serenaSpec turns the settings file's declaration into what the supervisor
-// package needs to launch and watch it. ID and EndpointPath are not the
-// user's to set: they are what makes this specifically the Serena adapter's
-// process rather than a detail the settings file should carry alongside the
-// ones that actually vary between installs.
-func serenaSpec(id string, p config.ManagedProcess, args []string) supervisor.Spec {
-	return supervisor.Spec{
-		ID:           id,
-		Command:      p.Command,
-		Args:         args,
-		Env:          p.Env,
-		Lifecycle:    p.Lifecycle,
-		Port:         p.Port,
-		EndpointPath: "/mcp",
-		RestartLimit: p.RestartLimit,
-		RestartDelay: p.RestartDelay,
-		StableAfter:  p.StableAfter,
-		ReadyTimeout: p.ReadyTimeout,
-		IdleTimeout:  p.IdleTimeout,
-		StopGrace:    p.StopGrace,
-	}
-}
-
 // kivgraphSpecs turns the settings file's kivgraph declaration into the
-// one supervisor.Spec it launches. Unlike Serena there is only ever one:
+// one supervisor.Spec it launches. There is only ever one:
 // the graph is one global corpus, published by atomic generation and read
 // by every repository alike (see the adapter's own package doc comment),
 // so per_repository has no meaning here and is refused loudly rather than
@@ -343,9 +277,7 @@ func kivgraphSpecs(source string, p config.ManagedProcess) ([]supervisor.Spec, e
 // package needs to launch and watch it. Transport is TransportStdio, and
 // Host, Port and EndpointPath are left zero: a stdio server listens on
 // nothing, and the supervisor package itself refuses a spec that sets any of
-// them rather than silently ignoring a likely config mistake -- the same
-// discipline serenaSpec applies to EndpointPath by hand, just enforced one
-// layer further in for this transport.
+// them rather than silently ignoring a likely config mistake.
 //
 // Shared by both stdio far sides (kivgraph and tokensave) because the spec is
 // the same shape for either: only the id and the command differ, and those are

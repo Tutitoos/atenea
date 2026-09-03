@@ -381,7 +381,7 @@ func ParseScopeGuarantee(s string) (ScopeGuarantee, error) {
 	return 0, Fail(FailureInvalidInput, "unknown scope guarantee %q: want filtered or confined", s)
 }
 
-// Implementation is the "who and how" behind a capability: ripgrep, Serena, a
+// Implementation is the "who and how" behind a capability: ripgrep, MCP server, a
 // language server.
 //
 // Four blocks: the capability it answers, its constraints, its cost and its
@@ -414,7 +414,7 @@ var slugID = regexp.MustCompile(`^[a-z][a-z0-9]*([._-][a-z0-9]+)*$`)
 func (i Implementation) Validate() error {
 	if !slugID.MatchString(i.ID) {
 		return Fail(FailureInvalidInput,
-			"implementation id %q must be lowercase, e.g. ripgrep or serena.search", i.ID)
+			"implementation id %q must be lowercase, e.g. ripgrep or kivgraph.definition", i.ID)
 	}
 	if firstSegment(i.ID) == ReservedNamespace {
 		return Fail(FailureInvalidInput,

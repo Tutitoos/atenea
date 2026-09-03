@@ -215,7 +215,7 @@ func TestRunStopsBeforeModelForMissingOrFailedSubjects(t *testing.T) {
 // spawned the real CLI and billed a real turn to assert a refusal.
 func TestRunWithNoModelConfiguredDoesNotInventOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	settings := "contract = \"3.0.0\"\n\n[model]\nbinary = " +
+	settings := "contract = \"4.0.0\"\n\n[model]\nbinary = " +
 		strconv.Quote(filepath.Join(t.TempDir(), "no-such-cli")) + "\nexplore = \"\"\nplan = \"\"\n"
 	if err := os.WriteFile(path, []byte(settings), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)

@@ -3,6 +3,9 @@ title: v1 readiness
 weight: 7
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # v1 readiness
 
 This page is the acceptance record for the published releases. The evidence below the

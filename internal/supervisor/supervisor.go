@@ -1,7 +1,7 @@
 // Package supervisor keeps an MCP server alive on Atenea's own behalf.
 //
 // Until now every MCP adapter has assumed something else already started its
-// far side: Serena behind a hand-run proxy, reachable at a fixed endpoint.
+// far side: a server behind a hand-run proxy, reachable at a fixed endpoint.
 // That is still the default and still works unchanged. This package is for
 // the alternative -- Atenea launches the server itself, as a bare process,
 // watches it, and revives it a couple of times if it falls over, exactly as
@@ -32,7 +32,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -56,7 +55,7 @@ type Transport string
 
 const (
 	// TransportHTTP is streamable-HTTP: the server listens on Host:Port and
-	// speaks the wire format internal/adapter/serena/mcp.go and this
+	// speaks the wire format internal/mcphttp/mcphttp.go and this
 	// package's own probe already speak. It is the zero value, so every
 	// Spec written before stdio existed keeps behaving exactly as it did.
 	TransportHTTP Transport = "http"
@@ -83,7 +82,7 @@ const (
 
 // The defaults every zero-valued Spec field falls back to. They live here
 // rather than only in internal/config for the same reason
-// internal/adapter/serena keeps its own DefaultTimeout: a caller building a
+// internal/mcphttp keeps its own DefaultTimeout: a caller building a
 // Spec by hand -- a test, or some future caller that is not the settings
 // file -- gets a working server without having to know these numbers too.
 const (
@@ -148,7 +147,7 @@ var idleCheckEvery = 30 * time.Second
 // Spec describes one MCP server Atenea may launch and keep alive.
 type Spec struct {
 	// ID names the server for the status screen and for EnsureReady. It
-	// matches the runner name it backs, e.g. "serena".
+	// matches the runner name it backs, e.g. "kivgraph".
 	ID string
 	// Command and Args launch the server. A bare Command is looked up on
 	// PATH. An element of Args equal to "{{port}}" is replaced with the
@@ -434,20 +433,11 @@ func (s *Supervisor) Release(id string) {
 	}
 }
 
-// WarmUp starts every Persistent server. Independent servers still start in
-// parallel, but Serena's per-repository instances are started in declaration
-// order. Serena chooses its dashboard port by scanning for the first free
-// port; parallel starts can all observe the same free port before any Flask
-// thread binds it, leaving some dashboards missing or pointing at another
-// repository. Waiting only within that family makes the dashboard allocation
-// deterministic without serializing unrelated MCPs.
+// WarmUp starts every persistent server independently in parallel.
 func (s *Supervisor) WarmUp(ctx context.Context) {
-	// Start independent persistent servers first. Serena is the exception:
-	// its per-repository children must be warmed in declaration order because
-	// each one claims the first free dashboard port.
 	for _, id := range s.order {
 		p := s.procs[id]
-		if p.spec.Lifecycle != Persistent || strings.HasPrefix(id, "serena@") {
+		if p.spec.Lifecycle != Persistent {
 			continue
 		}
 		s.warming.Add(1)
@@ -455,12 +445,6 @@ func (s *Supervisor) WarmUp(ctx context.Context) {
 			defer s.warming.Done()
 			_, _ = p.ensureReady(ctx)
 		}(p)
-	}
-	for _, id := range s.order {
-		p := s.procs[id]
-		if p.spec.Lifecycle == Persistent && strings.HasPrefix(id, "serena@") {
-			_, _ = p.ensureReady(ctx)
-		}
 	}
 }
 

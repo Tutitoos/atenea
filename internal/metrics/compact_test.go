@@ -304,7 +304,7 @@ func TestABucketThatWasNeverWeighedStaysUnknown(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Hour)
 	for i := range 2 {
 		m := attempt(now.Add(-2*time.Hour).Add(time.Duration(i)*time.Minute),
-			"symbol.definition", "serena.definition")
+			"symbol.definition", "fixture.definition")
 		m.Spent.PeakRSS = 0
 		s.Record(m)
 	}

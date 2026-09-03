@@ -61,13 +61,13 @@ func TestHealthCarriesTheNewestRawText(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
 	for i := range 3 {
-		m := broke(now.Add(time.Duration(i)*time.Second), "serena.implementations",
-			"unavailable", "serena did not answer")
+		m := broke(now.Add(time.Duration(i)*time.Second), "fixture.implementations",
+			"unavailable", "fixture did not answer")
 		m.Raw = fmt.Sprintf("attempt %d: no symbol matching found", i)
 		s.Record(m)
 	}
 
-	fault := faultOf(t, s, "serena.implementations")
+	fault := faultOf(t, s, "fixture.implementations")
 	if fault.Raw != "attempt 2: no symbol matching found" {
 		t.Fatalf("fault.Raw = %q, want the newest attempt's text", fault.Raw)
 	}
@@ -87,11 +87,11 @@ func TestHealthCarriesTheNewestRawText(t *testing.T) {
 func TestFailuresWithNoSingleCauseDegradeRatherThanDrop(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
-	s.Record(broke(now, "serena.definition", "timeout", "took too long"))
-	s.Record(broke(now.Add(time.Second), "serena.definition", "unavailable", "no language server"))
-	s.Record(broke(now.Add(2*time.Second), "serena.definition", "unspecified", "the adapter did not sort this"))
+	s.Record(broke(now, "fixture.definition", "timeout", "took too long"))
+	s.Record(broke(now.Add(time.Second), "fixture.definition", "unavailable", "no language server"))
+	s.Record(broke(now.Add(2*time.Second), "fixture.definition", "unspecified", "the adapter did not sort this"))
 
-	fault := faultOf(t, s, "serena.definition")
+	fault := faultOf(t, s, "fixture.definition")
 	if fault.Streak != 3 {
 		t.Fatalf("streak = %d, want 3", fault.Streak)
 	}
@@ -173,12 +173,12 @@ func TestAFreshSameKindRunOutweighsAnOldMixedHistory(t *testing.T) {
 func TestAShortSameKindTailIsStillNotAnOutage(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
-	s.Record(broke(now, "serena.search", "timeout", "timeout: took too long"))
-	s.Record(broke(now.Add(time.Second), "serena.search", "unspecified", "unspecified: the adapter did not sort this"))
-	s.Record(broke(now.Add(2*time.Second), "serena.search", "unavailable", "unavailable: no server"))
-	s.Record(broke(now.Add(3*time.Second), "serena.search", "unavailable", "unavailable: no server"))
+	s.Record(broke(now, "fixture.search", "timeout", "timeout: took too long"))
+	s.Record(broke(now.Add(time.Second), "fixture.search", "unspecified", "unspecified: the adapter did not sort this"))
+	s.Record(broke(now.Add(2*time.Second), "fixture.search", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(3*time.Second), "fixture.search", "unavailable", "unavailable: no server"))
 
-	fault := faultOf(t, s, "serena.search")
+	fault := faultOf(t, s, "fixture.search")
 	if fault.Streak != 4 {
 		t.Fatalf("streak = %d, want 4", fault.Streak)
 	}
@@ -230,12 +230,12 @@ func TestARequestShapedRefusalNeverCondemnsTheProvider(t *testing.T) {
 func TestARefusalDoesNotBreakAGenuineOutage(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
-	s.Record(broke(now, "serena.overview", "unavailable", "unavailable: no server"))
-	s.Record(broke(now.Add(time.Second), "serena.overview", "unavailable", "unavailable: no server"))
-	s.Record(broke(now.Add(2*time.Second), "serena.overview", "not_found", "not_found: no such file"))
-	s.Record(broke(now.Add(3*time.Second), "serena.overview", "unavailable", "unavailable: no server"))
+	s.Record(broke(now, "fixture.overview", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(time.Second), "fixture.overview", "unavailable", "unavailable: no server"))
+	s.Record(broke(now.Add(2*time.Second), "fixture.overview", "not_found", "not_found: no such file"))
+	s.Record(broke(now.Add(3*time.Second), "fixture.overview", "unavailable", "unavailable: no server"))
 
-	fault := faultOf(t, s, "serena.overview")
+	fault := faultOf(t, s, "fixture.overview")
 	if fault.SameKindStreak != 3 {
 		t.Fatalf("same-kind streak = %d, want 3: the not_found is invisible, not a break",
 			fault.SameKindStreak)
@@ -361,12 +361,12 @@ func TestFoldedFailuresAreStillNotAPrice(t *testing.T) {
 // milder verdict computed from a handful of rows must not overwrite it.
 func TestTheRecordNeverPromotesAProviderSomebodyProbedDown(t *testing.T) {
 	now := time.Now().UTC()
-	base := map[string]Baseline{"serena.search": {
+	base := map[string]Baseline{"fixture.search": {
 		Attempts: 3, Failures: 3,
 		Fault: Fault{Streak: 3, Latest: now, Reason: "mixed"},
 	}}
 	candidates := []contract.Implementation{{
-		ID:     "serena.search",
+		ID:     "fixture.search",
 		Health: contract.Health{State: contract.HealthDown, Reason: "probed down"},
 	}}
 

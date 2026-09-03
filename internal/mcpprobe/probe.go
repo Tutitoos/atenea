@@ -12,7 +12,7 @@
 //
 // Deliberately not a general MCP client. It opens a connection, sends
 // `initialize`, reads one answer and leaves; it never calls a tool, never
-// reuses a session, and never retries. internal/adapter/serena has the real
+// reuses a session, and never retries. internal/adapter/MCP server has the real
 // client, and it is not shared with this one on purpose: that one owns a
 // long-lived session whose lifecycle is most of its code, and a probe that
 // borrowed it would inherit a session it has no use for and would have to

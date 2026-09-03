@@ -23,7 +23,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/scrapling"
-	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
@@ -537,8 +536,6 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			Sensitive:       cfg.Security.Sensitive,
 			Timeout:         cfg.Orchestrator.Codex.Timeout,
 		})
-	case config.RunnerSerena:
-		return buildSerenaRunner(cfg, procs)
 	case config.RunnerKivgraph:
 		return buildKivgraphRunner(cfg, procs)
 	case config.RunnerTokensave:
@@ -559,64 +556,6 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 	}
 }
 
-// buildSerenaRunner builds the Serena adapter. Unmanaged, it is reached at
-// whatever Endpoint the settings file declared, unchanged from before
-// Process existed. Managed, the real far side is whatever port the
-// supervisor actually chose -- never the settings file's Endpoint, which a
-// managed process does not need and might not even agree with -- and every
-// call is guarded so the process is running before the adapter ever sees it.
-func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
-	endpoint := cfg.Orchestrator.Serena.Endpoint
-	managed := cfg.Orchestrator.Serena.Process
-	if managed != nil {
-		// Checked before it is discarded. The supervisor's address is the one
-		// that gets dialed, but a written endpoint that could never work is
-		// still a mistake, and letting a process table excuse it would mean
-		// deleting that table later turns a file that always loaded into one
-		// that suddenly does not.
-		if err := serena.ValidateEndpoint(endpoint); err != nil {
-			return nil, err
-		}
-	}
-	// One function answers both halves, because they are one question asked
-	// twice: which process serves this repository. The guard wakes it and the
-	// adapter dials it, and if those two ever disagreed the adapter would be
-	// talking to a server nobody had started.
-	instanceID := func(contract.Repository) string { return config.RunnerSerena }
-	if managed != nil && managed.Instance == config.InstancePerRepository {
-		instanceID = func(repo contract.Repository) string { return serenaInstanceID(repo.ID) }
-	}
-	opts := serena.Options{
-		Endpoint:        endpoint,
-		Implementations: cfg.Orchestrator.Serena.Implementations,
-		Sensitive:       cfg.Security.Sensitive,
-		Timeout:         cfg.Orchestrator.Serena.Timeout,
-	}
-	if managed != nil {
-		if managed.Instance == config.InstancePerRepository {
-			// There is no single address to hand over: each repository has
-			// its own, and the adapter asks per call.
-			opts.EndpointFor = func(repo contract.Repository) (string, error) {
-				return procs.Endpoint(instanceID(repo))
-			}
-		} else {
-			resolved, err := procs.Endpoint(config.RunnerSerena)
-			if err != nil {
-				return nil, err
-			}
-			opts.Endpoint = resolved
-		}
-	}
-	runner, err := serena.New(opts)
-	if err != nil {
-		return nil, err
-	}
-	if managed == nil {
-		return runner, nil
-	}
-	return guard(runner, procs, instanceID), nil
-}
-
 // buildKivgraphRunner builds the kivgraph adapter, over whichever transport the
 // settings file named.
 //
@@ -626,7 +565,7 @@ func buildSerenaRunner(cfg config.Config, procs *supervisor.Supervisor) (contrac
 // settings file admits exactly one of the two (config refuses a block naming
 // both), so this reads as one branch and not a merge.
 //
-// An endpoint is returned UNGUARDED, the same as an unmanaged Serena: there is
+// An endpoint is returned UNGUARDED, the same as an unmanaged MCP server: there is
 // no process of Atenea's to wake before the call, and guarding a runner against
 // a supervisor that owns nothing would report a health state nobody is keeping.
 func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contract.Runner, error) {
@@ -657,7 +596,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 	// The declaration is instance = "shared" only (see kivgraphSpecs in
 	// guard.go, which refuses per_repository before a Supervisor is ever
 	// built), so the instance id every call guards against is the one
-	// constant name, never a per-repository lookup the way Serena needs.
+	// constant name, never a per-repository lookup.
 	instanceID := func(contract.Repository) string { return config.RunnerKivgraph }
 	return guard(runner, procs, instanceID), nil
 }
@@ -666,8 +605,8 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 //
 // One client for the whole runner, not one per call: the MCP handshake is a
 // round trip and a session id, and re-running it per commission would pay for
-// both every time. mcphttp.Client is the same wire format Serena talks, so the
-// bearer token rides on every request the handshake included.
+// both every time. mcphttp.Client handles the wire format and sends the
+// bearer token on every request, including the handshake.
 //
 // repository.index remains an explicit local process boundary. Binary is
 // separate from the daemon endpoint so indexing does not require a second,
@@ -1530,15 +1469,7 @@ func (c *Core) Run(ctx context.Context) error {
 	c.beats.Start(ctx)
 	go c.accept(ctx, listener)
 	if c.processes != nil {
-		// WarmUp only touches Persistent servers, and it waits for some of
-		// them. The ordinary ones are started in parallel and not waited on,
-		// so a slow one never holds up the rest of Run. The serena@* family
-		// is the exception WarmUp documents: those are warmed in declaration
-		// order, one at a time, with each ensureReady waited out, because
-		// each child claims the first free dashboard port and a parallel
-		// start would hand the ports out in whatever order the goroutines
-		// happened to run. That makes Run's start time include the readiness
-		// of every declared serena instance.
+		// Persistent servers warm independently, without delaying service startup.
 		// Start begins the idle reaper for OnDemand servers. Neither call
 		// cares which kind, if either, the settings file actually declared
 		// -- both methods already treat "nothing of that kind is registered"

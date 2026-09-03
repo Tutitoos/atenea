@@ -17,8 +17,8 @@ import (
 // -- Load answers, with a configuration or with a refusal, whatever it is
 // handed.
 func FuzzLoadNeverPanics(f *testing.F) {
-	f.Add("contract = \"3.2.0\"\n")
-	f.Add("contract = \"3.2.0\"\n[core]\nshutdown_grace = \"10s\"\n")
+	f.Add("contract = \"4.0.0\"\n")
+	f.Add("contract = \"4.0.0\"\n[core]\nshutdown_grace = \"10s\"\n")
 	f.Add("[[repository]]\nid = \"x\"\npath = \"/tmp\"\n")
 	f.Add("[[capability]]\nid = \"code.search\"\nversion = \"1.0.0\"\n")
 	f.Add("[[agent]]\nname = \"x\"\nruns = \"y\"\n")

@@ -348,7 +348,7 @@ func TestSessionCallFailsTimeoutWhenContextDeadlineExceeded(t *testing.T) {
 		t.Errorf("kind = %v, want %v", got, contract.FailureTimeout)
 	}
 	// The quoted ceiling has to come from ctx's own deadline, the same way
-	// serena.go's failureFor quotes its Runner's r.timeout: a Session has
+	// fixture.go's failureFor quotes its Runner's r.timeout: a Session has
 	// no fixed timeout of its own, so silence here would mean nothing ever
 	// proved the deadline -- not some unrelated elapsed-time number -- is
 	// what ends up in the message.

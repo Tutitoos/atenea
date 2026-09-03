@@ -137,7 +137,7 @@ func rawSettings(t *testing.T, endpoint string) string {
 	// execute. It exists so the funnel has somebody to drop: a trace whose
 	// stages never discard anyone proves the field is written, not that it
 	// records what it claims to.
-	settings += "\n[[implementation]]\nid = \"serena.search\"\nprovider = \"serena\"\ncapability = \"code.search\"\n"
+	settings += "\n[[implementation]]\nid = \"fixture.search\"\nprovider = \"fixture\"\ncapability = \"code.search\"\n"
 	// The budget the backend is held to: two of the three tools it offers,
 	// and one of those two costs more than reading.
 	return settings + fmt.Sprintf("\n[[mcp_server]]\nid = \"semgrep\"\nurl = %q\nexpose = \"raw\"\n"+

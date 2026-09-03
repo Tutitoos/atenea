@@ -370,7 +370,7 @@ func (r *Registry) Repositories() []contract.Repository {
 // owns the value. Everything else in the catalog is declarative.
 //
 // It is keyed by repository because a provider is not up or down in the
-// abstract. Serena with no TypeScript language server is down for a
+// abstract. MCP server with no TypeScript language server is down for a
 // TypeScript repository and perfectly alive for a Go one, and under a
 // per-repository instance policy the two are not even the same process. A
 // single global verdict would let one repository's missing language server

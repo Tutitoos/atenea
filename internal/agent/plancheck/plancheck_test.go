@@ -16,7 +16,7 @@ import (
 // naming anything else is the unknown-type case, which is one of the refusals
 // under test.
 const settings = `
-contract = "3.0.0"
+contract = "4.0.0"
 
 [[agent]]
 name = "reader"

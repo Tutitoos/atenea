@@ -10,7 +10,7 @@ import (
 )
 
 // The kivgraph and tokensave wiring in this package had no test at all, while
-// the serena code it sits beside was fully covered -- so the four refusals
+// the fixture code it sits beside was fully covered -- so the four refusals
 // below, each of which the source argues for at length, were only ever
 // exercised by somebody editing a settings file by hand. What makes them worth
 // pinning is that every one of them is a refusal: the code's opinion is that

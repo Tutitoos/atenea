@@ -37,7 +37,7 @@ func based(t *testing.T) string {
 		})
 		store.Record(metrics.Measurement{
 			At: now.Add(time.Duration(i) * time.Second), RunID: "r", StepID: "s",
-			Capability: "code.search", Implementation: "serena.search", Provider: "serena",
+			Capability: "code.search", Implementation: "fixture.search", Provider: "fixture",
 			Repository: "api", ToolVersion: "1.28.1",
 			Spent:       contract.Sample{Duration: 20 * time.Millisecond},
 			FailureKind: string(contract.FailureUnavailable),
@@ -58,7 +58,7 @@ func TestTheBaseCanBeRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
-	for _, want := range []string{"ripgrep", "serena.search", "tries", "failed", "priced"} {
+	for _, want := range []string{"ripgrep", "fixture.search", "tries", "failed", "priced"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the base reads without %q:\n%s", want, out)
 		}
@@ -66,11 +66,11 @@ func TestTheBaseCanBeRead(t *testing.T) {
 	// The provider that only refused must show its record and no price, or the
 	// screen is telling the same lie the funnel used to.
 	for _, line := range strings.Split(out, "\n") {
-		if !strings.Contains(line, "serena.search") {
+		if !strings.Contains(line, "fixture.search") {
 			continue
 		}
 		if !strings.Contains(line, "3        3        0") {
-			t.Errorf("serena.search reads %q, want three tries, three failed, none priced", line)
+			t.Errorf("fixture.search reads %q, want three tries, three failed, none priced", line)
 		}
 		if !strings.Contains(line, "-") {
 			t.Errorf("a provider with no successful call was given an average: %q", line)
@@ -98,11 +98,11 @@ func TestClearingEverythingHasToBeSaidOutLoud(t *testing.T) {
 // both.
 func TestClearingOneImplementationLeavesTheRest(t *testing.T) {
 	cfg := based(t)
-	out, err := cli(t, "--config", cfg, "metrics", "clear", "--implementation", "serena.search")
+	out, err := cli(t, "--config", cfg, "metrics", "clear", "--implementation", "fixture.search")
 	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if !strings.Contains(out, "serena.search") || !strings.Contains(out, "3 attempt") {
+	if !strings.Contains(out, "fixture.search") || !strings.Contains(out, "3 attempt") {
 		t.Errorf("the clear does not say what went: %q", out)
 	}
 
@@ -110,8 +110,8 @@ func TestClearingOneImplementationLeavesTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics: %v", err)
 	}
-	if strings.Contains(after, "serena.search") {
-		t.Errorf("serena.search survived its own clear:\n%s", after)
+	if strings.Contains(after, "fixture.search") {
+		t.Errorf("fixture.search survived its own clear:\n%s", after)
 	}
 	if !strings.Contains(after, "ripgrep") {
 		t.Errorf("clearing one implementation took the others with it:\n%s", after)

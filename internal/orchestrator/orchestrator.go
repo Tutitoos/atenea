@@ -117,7 +117,7 @@ const contextCapability = "code.context"
 // funnel and a runner are all ready for it.
 //
 // symbol.search is here because it was once not. It shipped complete in every
-// other respect -- declared in default.toml, bound to serena.symbol_search,
+// other respect -- declared in default.toml, bound to MCP server.symbol_search,
 // answered by runSearch, chosen by the funnel -- and every call was refused at
 // this list. Warning about the trap in a comment turned out not to be the same
 // as closing it, so core.checkAskable now refuses at load a catalog capability

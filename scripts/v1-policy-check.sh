@@ -54,7 +54,6 @@ required_files=(
 	"scripts/opencode-matrix.sh"
 	"internal/agent/reviewer/citations.go"
 	"internal/agent/review_integration_test.go"
-	"internal/adapter/serena/serena.go"
 )
 for file in "${required_files[@]}"; do
 	test -f "$file" || { echo "missing v1 policy anchor: $file" >&2; exit 1; }

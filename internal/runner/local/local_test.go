@@ -371,7 +371,7 @@ func TestUnservedImplementationIsUnavailable(t *testing.T) {
 	root := fixture(t)
 	req := request(t, root, map[string]any{"query": "login"})
 	req.Implementation = contract.Implementation{
-		ID: "serena.search", Provider: "serena", Capability: "code.search",
+		ID: "fixture.search", Provider: "fixture", Capability: "code.search",
 	}
 	_, err := newRunner(t).Run(t.Context(), req)
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
@@ -490,7 +490,7 @@ func TestRunnerDescribesItself(t *testing.T) {
 	if runner.ID() != "local" {
 		t.Errorf("ID = %q, want local", runner.ID())
 	}
-	if !runner.Serves("ripgrep") || runner.Serves("serena.search") {
+	if !runner.Serves("ripgrep") || runner.Serves("fixture.search") {
 		t.Errorf("Serves is wrong: %v", runner.Implementations())
 	}
 	if got := runner.Sensitive(); len(got) != 2 {

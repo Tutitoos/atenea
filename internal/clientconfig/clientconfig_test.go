@@ -81,10 +81,10 @@ func TestNoCommandSurvivesTheParse(t *testing.T) {
 func TestReadsBothClients(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, ".mcp.json", `{"mcpServers": {
-	  "serena": {"type": "stdio", "command": "serena"},
+	  "fixture": {"type": "stdio", "command": "fixture"},
 	  "dart":   {"type": "stdio", "command": "dart"}
 	}}`)
-	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["serena"]}`)
+	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["fixture"]}`)
 	write(t, root, "opencode.json", `{"mcp": {"context7": {"type": "local", "enabled": false}}}`)
 	write(t, root, ".claude/skills/deploying/SKILL.md",
 		"---\nname: deploying\ndescription: >\n  How this service reaches\n  production.\n---\n\n# Deploying\n")
@@ -103,8 +103,8 @@ func TestReadsBothClients(t *testing.T) {
 	for _, server := range reading.Servers() {
 		state[server.Name] = server.Enabled
 	}
-	if !state["serena"] {
-		t.Error("serena is listed in enabledMcpjsonServers and came back off")
+	if !state["fixture"] {
+		t.Error("fixture is listed in enabledMcpjsonServers and came back off")
 	}
 	if state["dart"] {
 		t.Error("dart is absent from enabledMcpjsonServers and came back on")
@@ -239,9 +239,9 @@ func TestBothJSONCCommentFormsAreStripped(t *testing.T) {
 // change this test on purpose rather than discover the rule by accident.
 func TestTheTwoClaudeSettingsFilesAreJoinedAndOffWins(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, ".mcp.json", `{"mcpServers": {"serena": {"type": "stdio"}, "ripgrep": {"type": "stdio"}}}`)
-	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["serena"]}`)
-	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["serena"]}`)
+	write(t, root, ".mcp.json", `{"mcpServers": {"fixture": {"type": "stdio"}, "ripgrep": {"type": "stdio"}}}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["fixture"]}`)
+	write(t, root, ".claude/settings.local.json", `{"enabledMcpjsonServers": ["fixture"]}`)
 
 	reading, err := clientconfig.Read(root)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestTheTwoClaudeSettingsFilesAreJoinedAndOffWins(t *testing.T) {
 	if len(byName) != 2 {
 		t.Fatalf("servers = %+v, want both", reading.Servers())
 	}
-	if byName["serena"].Enabled {
+	if byName["fixture"].Enabled {
 		t.Error("the later file switched a server back on; the lists are joined, so off wins")
 	}
 	// And the allowlist half of the join still bites: once either file names
@@ -267,8 +267,8 @@ func TestTheTwoClaudeSettingsFilesAreJoinedAndOffWins(t *testing.T) {
 func catalog() clientconfig.Catalog {
 	return clientconfig.Catalog{
 		Implementations: []contract.Implementation{
-			{ID: "serena.definition", Provider: "serena", Capability: "symbol.definition"},
-			{ID: "serena.references", Provider: "serena", Capability: "symbol.references"},
+			{ID: "fixture.definition", Provider: "fixture", Capability: "symbol.definition"},
+			{ID: "fixture.references", Provider: "fixture", Capability: "symbol.references"},
 			{ID: "ripgrep", Provider: "ripgrep", Capability: "code.search"},
 		},
 		Vouched: []string{"context7", "semgrep"},
@@ -279,7 +279,7 @@ func catalog() clientconfig.Catalog {
 func TestTranslationNamesEveryOutcome(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, ".mcp.json", `{"mcpServers": {
-	  "serena":   {"type": "stdio"},
+	  "fixture":   {"type": "stdio"},
 	  "context7": {"type": "stdio"},
 	  "dart":     {"type": "stdio"}
 	}}`)
@@ -296,7 +296,7 @@ func TestTranslationNamesEveryOutcome(t *testing.T) {
 		answers[match.Request.Name] = match.Answer
 	}
 	for name, want := range map[string]clientconfig.Answer{
-		"serena":    clientconfig.AnswerFunnel,
+		"fixture":   clientconfig.AnswerFunnel,
 		"context7":  clientconfig.AnswerVouched,
 		"dart":      clientconfig.AnswerNone,
 		"deploying": clientconfig.AnswerNotACapability,
@@ -308,10 +308,10 @@ func TestTranslationNamesEveryOutcome(t *testing.T) {
 
 	// The funnel match has to say what it actually buys, not just "yes".
 	for _, match := range report.Matches {
-		if match.Request.Name != "serena" {
+		if match.Request.Name != "fixture" {
 			continue
 		}
-		if match.Provider != "serena" {
+		if match.Provider != "fixture" {
 			t.Errorf("provider = %q", match.Provider)
 		}
 		want := []string{"symbol.definition", "symbol.references"}
@@ -355,14 +355,14 @@ func TestUnmatchedRequestsAreCarriedNotDropped(t *testing.T) {
 // clients, and one name is one backend.
 func TestPackagingSuffixesDoNotSplitABackend(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, ".mcp.json", `{"mcpServers": {"serena-mcp": {"type": "stdio"}}}`)
+	write(t, root, ".mcp.json", `{"mcpServers": {"fixture-mcp": {"type": "stdio"}}}`)
 	reading, err := clientconfig.Read(root)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	report := clientconfig.Translate(reading, catalog())
 	if report.Matches[0].Answer != clientconfig.AnswerFunnel {
-		t.Errorf("serena-mcp = %q, want the same backend as serena", report.Matches[0].Answer)
+		t.Errorf("fixture-mcp = %q, want the same backend as fixture", report.Matches[0].Answer)
 	}
 }
 
@@ -480,9 +480,9 @@ func TestTwoDeclarationsThatDisagreeSaySo(t *testing.T) {
 // describe a machine nobody is running.
 func TestEnabledIsAUnionAcrossClients(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, ".mcp.json", `{"mcpServers": {"serena": {"type": "stdio"}}}`)
-	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["serena"]}`)
-	write(t, root, "opencode.json", `{"mcp": {"serena": {"type": "local", "enabled": true}}}`)
+	write(t, root, ".mcp.json", `{"mcpServers": {"fixture": {"type": "stdio"}}}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["fixture"]}`)
+	write(t, root, "opencode.json", `{"mcp": {"fixture": {"type": "local", "enabled": true}}}`)
 
 	reading, err := clientconfig.Read(root)
 	if err != nil {
@@ -534,8 +534,8 @@ func TestFoldingTheEnabledUnionKeepsANoteThatIsNotAboutBeingOff(t *testing.T) {
 // reported rather than used to hide the row.
 func TestADisabledServerIsStillTranslated(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, ".mcp.json", `{"mcpServers": {"serena": {"type": "stdio"}}}`)
-	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["serena"]}`)
+	write(t, root, ".mcp.json", `{"mcpServers": {"fixture": {"type": "stdio"}}}`)
+	write(t, root, ".claude/settings.json", `{"disabledMcpjsonServers": ["fixture"]}`)
 
 	reading, err := clientconfig.Read(root)
 	if err != nil {
@@ -557,8 +557,8 @@ func TestADisabledServerIsStillTranslated(t *testing.T) {
 // Reading must not touch anything. The repository is somebody else's.
 func TestReadingWritesNothing(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, ".mcp.json", `{"mcpServers": {"serena": {"type": "stdio"}}}`)
-	write(t, root, ".claude/settings.json", `{"enabledMcpjsonServers": ["serena"]}`)
+	write(t, root, ".mcp.json", `{"mcpServers": {"fixture": {"type": "stdio"}}}`)
+	write(t, root, ".claude/settings.json", `{"enabledMcpjsonServers": ["fixture"]}`)
 	write(t, root, ".claude/skills/deploying/SKILL.md", "---\nname: deploying\n---\n")
 
 	before := snapshot(t, root)

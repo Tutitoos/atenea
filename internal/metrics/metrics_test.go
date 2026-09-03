@@ -258,7 +258,7 @@ func TestWanderingOutOfScopeNeverDemotesAProvider(t *testing.T) {
 func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {
 	s := store(t, Options{})
 	weighed := attempt(time.Now(), "code.search", "ripgrep")
-	unweighed := attempt(time.Now(), "symbol.definition", "serena.definition")
+	unweighed := attempt(time.Now(), "symbol.definition", "fixture.definition")
 	unweighed.Spent.PeakRSS = 0
 	s.Record(weighed)
 	s.Record(unweighed)
@@ -286,7 +286,7 @@ func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {
 	}
 	for _, r := range rows {
 		want := int64(1)
-		if r.Implementation == "serena.definition" {
+		if r.Implementation == "fixture.definition" {
 			want = 0
 		}
 		if r.RSSSamples != want {
@@ -449,7 +449,7 @@ func TestTwoFastProvidersStayDistinguishable(t *testing.T) {
 	s := store(t, Options{})
 	quick := attempt(time.Now(), "code.search", "ripgrep")
 	quick.Spent.Duration = 40 * time.Microsecond
-	slow := attempt(time.Now(), "code.search", "serena.search")
+	slow := attempt(time.Now(), "code.search", "fixture.search")
 	slow.Spent.Duration = 900 * time.Microsecond
 	s.Record(quick)
 	s.Record(slow)
@@ -462,8 +462,8 @@ func TestTwoFastProvidersStayDistinguishable(t *testing.T) {
 	for _, row := range rows {
 		means[row.Implementation] = row.Mean
 	}
-	if means["ripgrep"] >= means["serena.search"] {
-		t.Fatalf("ripgrep %v is not below serena %v", means["ripgrep"], means["serena.search"])
+	if means["ripgrep"] >= means["fixture.search"] {
+		t.Fatalf("ripgrep %v is not below fixture %v", means["ripgrep"], means["fixture.search"])
 	}
 }
 
@@ -477,7 +477,7 @@ func TestAClearThatCannotOpenTheBaseKeepsTheBuffer(t *testing.T) {
 	// spending LockWait on it.
 	s := &Store{path: t.TempDir(), limit: DefaultBufferLimit, lockWait: 50 * time.Millisecond}
 	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
-	s.Record(attempt(time.Now(), "code.search", "serena.search"))
+	s.Record(attempt(time.Now(), "code.search", "fixture.search"))
 
 	if _, err := s.Clear(context.Background(), Filter{}); err == nil {
 		t.Fatal("clearing a base that cannot be opened reported success")
@@ -494,7 +494,7 @@ func TestAClearThatCannotOpenTheBaseKeepsTheBuffer(t *testing.T) {
 func TestANarrowedClearLeavesTheOtherImplementationsBuffered(t *testing.T) {
 	s := store(t, Options{})
 	s.Record(attempt(time.Now(), "code.search", "ripgrep"))
-	s.Record(attempt(time.Now(), "code.search", "serena.search"))
+	s.Record(attempt(time.Now(), "code.search", "fixture.search"))
 
 	cleared, err := s.Clear(context.Background(), Filter{Implementation: "ripgrep"})
 	if err != nil {
@@ -504,15 +504,15 @@ func TestANarrowedClearLeavesTheOtherImplementationsBuffered(t *testing.T) {
 		t.Errorf("cleared %d attempts, want the 1 buffered row the filter names", cleared.Attempts)
 	}
 	if pending := s.Pending(); pending != 1 {
-		t.Fatalf("pending = %d, want 1: serena's measurement was not what the caller asked to be rid of", pending)
+		t.Fatalf("pending = %d, want 1: fixture's measurement was not what the caller asked to be rid of", pending)
 	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Implementation != "serena.search" {
-		t.Fatalf("summary = %+v, want serena's attempt alone", rows)
+	if len(rows) != 1 || rows[0].Implementation != "fixture.search" {
+		t.Fatalf("summary = %+v, want fixture's attempt alone", rows)
 	}
 }
 

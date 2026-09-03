@@ -911,7 +911,7 @@ func run(args []string, out io.Writer) error {
 // load reads the settings file and builds a Core for a one-shot subcommand.
 // Every caller must eventually stop what it built: a command that only reads
 // status today might still launch a managed process to answer honestly --
-// Serena on first use, if the settings file opted it in -- and a bare return
+// MCP server on first use, if the settings file opted it in -- and a bare return
 // would leak it as an orphan the moment this process exits. defer Shutdown
 // right after checking the error, the same as any other acquired resource.
 //
@@ -988,16 +988,6 @@ func cmdDashboard(settingsPath string, args []string, out io.Writer) error {
 			"dashboard %s takes only --check", args[0])
 	}
 	entry, err := dashboard.ResolveConfig(cfg, args[0])
-	if err != nil {
-		if args[0] == "serena" && (errors.Is(err, dashboard.ErrNotDeclared) || errors.Is(err, dashboard.ErrNotFound)) {
-			cwd, cwdErr := os.Getwd()
-			if cwdErr == nil {
-				if discovered, discoverErr := dashboard.DiscoverSerena(context.Background(), cwd); discoverErr == nil {
-					entry, err = discovered, nil
-				}
-			}
-		}
-	}
 	if err != nil {
 		if errors.Is(err, dashboard.ErrNotFound) || errors.Is(err, dashboard.ErrNotDeclared) {
 			return contract.Fail(contract.FailureNotFound, "%v", err)
@@ -3725,7 +3715,7 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	}
 
 	// Settings only. A Core would open the measurement base and may start a
-	// managed Serena, and this command holds no lock and asks no provider
+	// managed MCP server, and this command holds no lock and asks no provider
 	// anything -- it reads a list and launches a process that will outlive
 	// it, so holding a DuckDB file open for the length of a chat session is
 	// a cost with nothing on the other side of it.

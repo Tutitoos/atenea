@@ -10,7 +10,7 @@ import (
 
 func TestKindOfSortsWrappedFailures(t *testing.T) {
 	err := fmt.Errorf("while selecting: %w",
-		contract.Fail(contract.FailureUnavailable, "serena is down"))
+		contract.Fail(contract.FailureUnavailable, "fixture is down"))
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
 		t.Fatalf("KindOf = %v, want unavailable", got)
 	}
@@ -57,7 +57,7 @@ func TestWithRawKeepsTheOriginalMessage(t *testing.T) {
 // means.
 func TestRawOfRecoversWrappedRawText(t *testing.T) {
 	err := fmt.Errorf("while selecting: %w",
-		contract.Fail(contract.FailureUnavailable, "serena is down").
+		contract.Fail(contract.FailureUnavailable, "fixture is down").
 			WithRaw("connection refused"))
 	if got := contract.RawOf(err); got != "connection refused" {
 		t.Fatalf("RawOf = %q, want %q", got, "connection refused")

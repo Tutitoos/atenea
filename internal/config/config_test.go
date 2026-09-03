@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
-	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
@@ -149,11 +148,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"scrapling.fetch",
 		"scrapling.request",
 		"scrapling.stealth",
-		"serena.definition",
-		"serena.implementations",
-		"serena.overview",
-		"serena.references",
-		"serena.symbol_search",
 		"tokensave.calls",
 		"tokensave.context",
 		"tokensave.overview",
@@ -175,33 +169,6 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			if impl.ScopeGuarantee != contract.ScopeFiltered {
 				t.Errorf("claude.search ships with scope_guarantee=%s, want filtered", impl.ScopeGuarantee)
 			}
-		case "serena.symbol_search":
-			if impl.ScopeGuarantee != contract.ScopeUnspecified {
-				t.Errorf("%s ships with scope_guarantee=%s, want unspecified: structural scope is filtered after the provider query",
-					impl.ID, impl.ScopeGuarantee)
-			}
-		}
-	}
-	// A capability is only reachable if the runner that owns its provider is
-	// told to serve it. That wiring lives in the settings file while the code
-	// behind it lives in the adapter, so the two drift silently: shipping
-	// symbol.overview without adding serena.overview here left the whole
-	// capability answering "no runner" on a fresh install, and every other
-	// test still passed. Each adapter publishes what it actually has code
-	// for; the shipped whitelist has to be exactly that.
-	for _, tc := range []struct {
-		runner  string
-		shipped []string
-		want    []string
-	}{
-		{config.RunnerSerena, cfg.Orchestrator.Serena.Implementations, serena.DefaultImplementations()},
-	} {
-		got, want := slices.Clone(tc.shipped), slices.Clone(tc.want)
-		slices.Sort(got)
-		slices.Sort(want)
-		if !slices.Equal(got, want) {
-			t.Errorf("%s ships implementations %v, want %v: the settings whitelist and the adapter's own code disagree",
-				tc.runner, got, want)
 		}
 	}
 	// Nothing has been probed on a cold start, and pretending otherwise would
@@ -305,7 +272,7 @@ func write(t *testing.T, body string) string {
 }
 
 const minimal = `
-contract = "3.0.0"
+contract = "4.0.0"
 
 [[capability]]
 id = "code.search"
@@ -354,8 +321,8 @@ func TestLoadReadsAFile(t *testing.T) {
 // repository at a time and pointed at a process Atenea did not own.
 func TestAPerRepositoryProcessIsReadBack(t *testing.T) {
 	body := minimal + `
-[orchestrator.serena.process]
-command = "serena"
+[orchestrator.kivgraph.process]
+command = "fixture"
 args = ["start-mcp-server", "--port", "{{port}}", "--project", "{{project}}"]
 lifecycle = "on_demand"
 instance = "per_repository"
@@ -364,7 +331,7 @@ instance = "per_repository"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Orchestrator.Serena.Process.Instance; got != config.InstancePerRepository {
+	if got := cfg.Orchestrator.Kivgraph.Process.Instance; got != config.InstancePerRepository {
 		t.Errorf("instance = %q, want %q", got, config.InstancePerRepository)
 	}
 }
@@ -612,7 +579,7 @@ lifecycle = "on_demand"
 
 // A file that never mentions orchestrator.kivgraph at all leaves Endpoint at
 // the compiled fallback -- the same "assume the daemon is already there"
-// shape Serena's own Endpoint has always had -- and Token/Process exactly as
+// shape Fixture's own Endpoint has always had -- and Token/Process exactly as
 // unconfigured as before either key existed.
 func TestKivgraphIsUnconfiguredByDefault(t *testing.T) {
 	cfg, err := config.Load(write(t, minimal))
@@ -634,8 +601,8 @@ func TestKivgraphIsUnconfiguredByDefault(t *testing.T) {
 // existed. A file that never mentions it must not change behavior.
 func TestTheInstancePolicyDefaultsToShared(t *testing.T) {
 	body := minimal + `
-[orchestrator.serena.process]
-command = "serena"
+[orchestrator.kivgraph.process]
+command = "fixture"
 args = ["start-mcp-server", "--port", "{{port}}"]
 lifecycle = "on_demand"
 `
@@ -643,7 +610,7 @@ lifecycle = "on_demand"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Orchestrator.Serena.Process.Instance; got != config.InstanceShared {
+	if got := cfg.Orchestrator.Kivgraph.Process.Instance; got != config.InstanceShared {
 		t.Errorf("instance = %q, want %q", got, config.InstanceShared)
 	}
 }
@@ -654,7 +621,7 @@ lifecycle = "on_demand"
 // that is already bound.
 func TestAnUnworkableInstancePolicyIsRefused(t *testing.T) {
 	process := func(extra string) string {
-		return minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\n" + extra
+		return minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n" + extra
 	}
 	cases := map[string]string{
 		"unknown policy": process("instance = \"per_chat\"\n"),
@@ -699,9 +666,9 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 
 func TestContractVersionIsEnforced(t *testing.T) {
 	cases := map[string]string{
-		"missing":     strings.Replace(minimal, `contract = "3.0.0"`, "", 1),
-		"unparseable": strings.Replace(minimal, `contract = "3.0.0"`, `contract = "one"`, 1),
-		"too new":     strings.Replace(minimal, `contract = "3.0.0"`, `contract = "9.0.0"`, 1),
+		"missing":     strings.Replace(minimal, `contract = "4.0.0"`, "", 1),
+		"unparseable": strings.Replace(minimal, `contract = "4.0.0"`, `contract = "one"`, 1),
+		"too new":     strings.Replace(minimal, `contract = "4.0.0"`, `contract = "9.0.0"`, 1),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -720,7 +687,7 @@ func TestContractVersionIsEnforced(t *testing.T) {
 // newer binary and no edit at all. Telling the second case to edit the line
 // would buy it a second, more confusing failure.
 func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
-	behind := strings.Replace(minimal, `contract = "3.0.0"`, `contract = "1.0.0"`, 1)
+	behind := strings.Replace(minimal, `contract = "4.0.0"`, `contract = "1.0.0"`, 1)
 	_, err := config.Load(write(t, behind))
 	if err == nil {
 		t.Fatal("a file from the previous major was accepted")
@@ -733,7 +700,7 @@ func TestARefusedContractNamesTheEditThatFixesIt(t *testing.T) {
 		t.Errorf("err = %v, want %s", err, wantFix)
 	}
 
-	ahead := strings.Replace(minimal, `contract = "3.0.0"`, `contract = "9.0.0"`, 1)
+	ahead := strings.Replace(minimal, `contract = "4.0.0"`, `contract = "9.0.0"`, 1)
 	_, err = config.Load(write(t, ahead))
 	if err == nil {
 		t.Fatal("a file from the future was accepted")
@@ -853,7 +820,7 @@ func TestADuplicateMCPServerIDIsRefused(t *testing.T) {
 // The happy path, and the one thing about it worth pinning: a url is
 // normalized once here rather than at every point of use.
 func TestADeclaredMCPServerIsReadBack(t *testing.T) {
-	body := minimal + "\n[[mcp_server]]\nid = \"serena\"\nurl = \"http://127.0.0.1:40010/mcp\"\ndashboard = \"http://127.0.0.1:40010/ui\"\ntimeout = \"3s\"\n" +
+	body := minimal + "\n[[mcp_server]]\nid = \"fixture\"\nurl = \"http://127.0.0.1:40010/mcp\"\ndashboard = \"http://127.0.0.1:40010/ui\"\ntimeout = \"3s\"\n" +
 		"\n[[mcp_server]]\nid = \"local\"\ncommand = [\"sh\", \"-c\", \"true\"]\n\n[mcp_server.env]\nK = \"v\"\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
@@ -1194,7 +1161,7 @@ func TestTheRunnersCommentNamesEveryRunnerTheLoaderAccepts(t *testing.T) {
 	comment := strings.Join(lines[first:at], "\n")
 
 	for _, runner := range []string{
-		config.RunnerOMP, config.RunnerClaudeCode, config.RunnerCodex, config.RunnerSerena,
+		config.RunnerOMP, config.RunnerClaudeCode, config.RunnerCodex,
 		config.RunnerKivgraph, config.RunnerTokensave, config.RunnerLocal,
 	} {
 		if !strings.Contains(comment, `"`+runner+`"`) {
@@ -1345,7 +1312,7 @@ runners = []
 checkpoint_dir = "/tmp/receipts"
 
   [orchestrator.local]
-  implementations = ["ripgrep", "serena.search"]
+  implementations = ["ripgrep", "fixture.search"]
   skip_dirs = ["vendor"]
 
 [security]
@@ -1705,7 +1672,7 @@ func TestTheOMPBlockIsRead(t *testing.T) {
 
   [orchestrator.omp]
   binary = "/opt/omp/bin/omp"
-  implementations = ["ripgrep", "serena.search"]
+  implementations = ["ripgrep", "fixture.search"]
   match_limit = 25
   timeout = "90s"
 `
@@ -2046,13 +2013,13 @@ func TestTheShippedEndpointsNameAnAddressAndNeverAName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Defaults: %v", err)
 	}
-	endpoint := cfg.Orchestrator.Serena.Endpoint
+	endpoint := cfg.Orchestrator.Kivgraph.Endpoint
 	host, err := hostOf(endpoint)
 	if err != nil {
-		t.Fatalf("serena endpoint %q: %v", endpoint, err)
+		t.Fatalf("fixture endpoint %q: %v", endpoint, err)
 	}
 	if net.ParseIP(host) == nil {
-		t.Fatalf("serena endpoint %q reaches the proxy by the name %q; pin the address it binds", endpoint, host)
+		t.Fatalf("fixture endpoint %q reaches the proxy by the name %q; pin the address it binds", endpoint, host)
 	}
 }
 
@@ -2065,28 +2032,28 @@ func hostOf(raw string) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Serena as a managed process
+// Fixture as a managed process
 // ---------------------------------------------------------------------------
 
-// A file that says nothing about orchestrator.serena.process must leave
-// Serena exactly as unmanaged as it has always been: reached over Endpoint,
+// A file that says nothing about orchestrator.kivgraph.process must leave
+// Fixture exactly as unmanaged as it has always been: reached over Endpoint,
 // started by whatever started it.
-func TestSerenaProcessIsNilByDefault(t *testing.T) {
+func TestManagedProcessIsNilByDefault(t *testing.T) {
 	cfg, err := config.Load(write(t, minimal))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Serena.Process != nil {
-		t.Errorf("Process = %+v, want nil when the file never mentions it", cfg.Orchestrator.Serena.Process)
+	if cfg.Orchestrator.Kivgraph.Process != nil {
+		t.Errorf("Process = %+v, want nil when the file never mentions it", cfg.Orchestrator.Kivgraph.Process)
 	}
 }
 
-func TestTheSerenaProcessBlockIsRead(t *testing.T) {
+func TestTheManagedProcessBlockIsRead(t *testing.T) {
 	body := minimal + `
-[orchestrator.serena.process]
-command = "serena"
+[orchestrator.kivgraph.process]
+command = "fixture"
 args = ["start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"]
-env = ["SERENA_LOG_LEVEL=INFO"]
+env = ["FIXTURE_LOG_LEVEL=INFO"]
 lifecycle = "on_demand"
 port = 9121
 restart_limit = 5
@@ -2100,14 +2067,14 @@ stop_grace = "15s"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := cfg.Orchestrator.Serena.Process
+	got := cfg.Orchestrator.Kivgraph.Process
 	if got == nil {
 		t.Fatal("Process = nil, want the table the file declared")
 	}
 	want := config.ManagedProcess{
-		Command:      "serena",
+		Command:      "fixture",
 		Args:         []string{"start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"},
-		Env:          []string{"SERENA_LOG_LEVEL=INFO"},
+		Env:          []string{"FIXTURE_LOG_LEVEL=INFO"},
 		Lifecycle:    supervisor.OnDemand,
 		Port:         9121,
 		RestartLimit: 5,
@@ -2140,13 +2107,13 @@ stop_grace = "15s"
 // restart_limit is the exception and is asserted separately below: zero is a
 // legitimate value there, so the supervisor cannot tell it from an omitted key
 // and config has to resolve it while the pointer still says which it was.
-func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
-	body := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n"
+func TestManagedProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
+	body := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := cfg.Orchestrator.Serena.Process
+	got := cfg.Orchestrator.Kivgraph.Process
 	if got == nil {
 		t.Fatal("Process = nil, want the table the file declared")
 	}
@@ -2164,7 +2131,7 @@ func TestSerenaProcessOptionalTimingsStayZeroWhenOmitted(t *testing.T) {
 // skips persistent servers, so the key is inert for a reason that lives in
 // the supervisor and appears nowhere in the file. Refused at load instead.
 func TestIdleTimeoutIsRefusedForAPersistentServer(t *testing.T) {
-	const table = "\n[orchestrator.serena.process]\ncommand = \"serena\"\n"
+	const table = "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\n"
 
 	_, err := config.Load(write(t, minimal+table+
 		"lifecycle = \"persistent\"\nidle_timeout = \"30s\"\n"))
@@ -2200,16 +2167,16 @@ func TestIdleTimeoutIsRefusedForAPersistentServer(t *testing.T) {
 // times" before a crashed server is given up on. Nothing was applying it: the
 // supervisor documents the choice as the Spec builder's, config left the field
 // at its zero, and zero means never retry. A settings file that opted into a
-// managed Serena without naming restart_limit therefore got a server that was
+// managed Fixture without naming restart_limit therefore got a server that was
 // marked down on its first crash, and the constant was referenced nowhere.
-func TestSerenaProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *testing.T) {
-	table := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"persistent\"\n"
+func TestManagedProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *testing.T) {
+	table := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"persistent\"\n"
 
 	omitted, err := config.Load(write(t, table))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := omitted.Orchestrator.Serena.Process.RestartLimit; got != supervisor.DefaultRestartLimit {
+	if got := omitted.Orchestrator.Kivgraph.Process.RestartLimit; got != supervisor.DefaultRestartLimit {
 		t.Errorf("omitted restart_limit = %d, want the supervisor default %d",
 			got, supervisor.DefaultRestartLimit)
 	}
@@ -2220,7 +2187,7 @@ func TestSerenaProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *test
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := off.Orchestrator.Serena.Process.RestartLimit; got != 0 {
+	if got := off.Orchestrator.Kivgraph.Process.RestartLimit; got != 0 {
 		t.Errorf("explicit restart_limit = 0 became %d; never retry must stay sayable", got)
 	}
 }
@@ -2228,8 +2195,8 @@ func TestSerenaProcessRestartLimitIsResolvedWhereZeroStillMeansSomething(t *test
 // A process table present without a command is an operator who opted in and
 // then left out the one thing that makes the opt-in mean anything -- not the
 // same as never having written the table at all.
-func TestSerenaProcessRequiresACommand(t *testing.T) {
-	_, err := config.Load(write(t, minimal+"\n[orchestrator.serena.process]\nlifecycle = \"on_demand\"\n"))
+func TestManagedProcessRequiresACommand(t *testing.T) {
+	_, err := config.Load(write(t, minimal+"\n[orchestrator.kivgraph.process]\nlifecycle = \"on_demand\"\n"))
 	if got := contract.KindOf(err); got != contract.FailureInvalidInput {
 		t.Fatalf("KindOf = %v, want invalid_input", got)
 	}
@@ -2242,12 +2209,12 @@ func TestSerenaProcessRequiresACommand(t *testing.T) {
 // warm, or stopped when idle -- and there is no default to guess between
 // them: a Process with Command set and Lifecycle empty or unrecognized must
 // be refused rather than silently picking one.
-func TestSerenaProcessLifecycleMustBeValid(t *testing.T) {
+func TestManagedProcessLifecycleMustBeValid(t *testing.T) {
 	for _, body := range []string{
-		"\n[orchestrator.serena.process]\ncommand = \"serena\"\n",
-		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"\"\n",
-		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"always\"\n",
-		"\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"Persistent\"\n",
+		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\n",
+		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"\"\n",
+		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"always\"\n",
+		"\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"Persistent\"\n",
 	} {
 		_, err := config.Load(write(t, minimal+body))
 		if got := contract.KindOf(err); got != contract.FailureInvalidInput {
@@ -2256,8 +2223,8 @@ func TestSerenaProcessLifecycleMustBeValid(t *testing.T) {
 	}
 }
 
-func TestSerenaProcessNumbersAreValidated(t *testing.T) {
-	const header = "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\n"
+func TestManagedProcessNumbersAreValidated(t *testing.T) {
+	const header = "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\n"
 	for _, body := range []string{
 		header + "port = -1\n",
 		header + "port = 70000\n",
@@ -2280,14 +2247,14 @@ func TestSerenaProcessNumbersAreValidated(t *testing.T) {
 // A zero port is not an omission here -- it is the explicit "ask the OS for
 // a free one" that most of these should use -- so it must be accepted even
 // though every other number in this block treats zero as unset.
-func TestSerenaProcessPortZeroIsAccepted(t *testing.T) {
-	body := minimal + "\n[orchestrator.serena.process]\ncommand = \"serena\"\nlifecycle = \"on_demand\"\nport = 0\n"
+func TestManagedProcessPortZeroIsAccepted(t *testing.T) {
+	body := minimal + "\n[orchestrator.kivgraph.process]\ncommand = \"fixture\"\nlifecycle = \"on_demand\"\nport = 0\n"
 	cfg, err := config.Load(write(t, body))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Orchestrator.Serena.Process.Port != 0 {
-		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Serena.Process.Port)
+	if cfg.Orchestrator.Kivgraph.Process.Port != 0 {
+		t.Errorf("Port = %d, want 0", cfg.Orchestrator.Kivgraph.Process.Port)
 	}
 }
 
@@ -2466,7 +2433,7 @@ func TestTheShippedRepositoryClassifiesNothing(t *testing.T) {
 				continue
 			}
 			// A capability with nothing left is not this test's business: the
-			// shipped file leaves indexed_by empty on purpose, and serena has
+			// shipped file leaves indexed_by empty on purpose, and fixture has
 			// no probe that could fill it in, so an empty funnel is the
 			// documented state of a fresh install. Select hands back the trace
 			// either way, and the trace is what is under test.

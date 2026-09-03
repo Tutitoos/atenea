@@ -3,6 +3,9 @@ title: When a provider looks flaky
 weight: 5
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # When a provider looks flaky
 
 A report that reads *"Serena is unstable"* is almost never about Serena.

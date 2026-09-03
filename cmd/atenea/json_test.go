@@ -251,8 +251,8 @@ func TestDetectionJSONCarriesSourceAndProbeDetails(t *testing.T) {
 		}, {
 			ID: "broken", Transport: "stdio", Where: "local", Reason: "not found", Took: 2 * time.Millisecond,
 		}},
-		Indexes: []core.IndexReport{{Repository: "api", Provider: "serena", Ready: true}, {
-			Repository: "web", Provider: "serena", Hint: "index missing", Err: "probe failed",
+		Indexes: []core.IndexReport{{Repository: "api", Provider: "fixture", Ready: true}, {
+			Repository: "web", Provider: "fixture", Hint: "index missing", Err: "probe failed",
 		}},
 	}
 	var out bytes.Buffer

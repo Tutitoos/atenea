@@ -3,6 +3,9 @@ title: auditoría final 1.0.0
 weight: 6
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # Auditoría final 1.0.0
 
 Fecha de corte: 2026-08-22. Esta página distingue el estado del repositorio,

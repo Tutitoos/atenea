@@ -19,16 +19,11 @@ required=(
 	"code.search|codex.search"
 	"code.context|tokensave.context"
 	"code.impact|kivgraph.impact"
-	"symbol.definition|serena.definition"
 	"symbol.definition|kivgraph.definition"
-	"symbol.references|serena.references"
 	"symbol.references|kivgraph.references"
-	"symbol.implementations|serena.implementations"
-	"symbol.overview|serena.overview"
 	"symbol.overview|kivgraph.overview"
 	"symbol.overview|tokensave.overview"
 	"symbol.calls|tokensave.calls"
-	"symbol.search|serena.symbol_search"
 	"symbol.intent_search|kivgraph.intent_search"
 	"symbol.dependencies|kivgraph.dependencies"
 	"symbol.consumers|kivgraph.cross_repo_consumers"
@@ -76,16 +71,20 @@ done
 # usually lost more than one, and one run should name them all.
 test "$missing" -eq 0 || exit 1
 
-if [[ "${#required[@]}" -ne 38 ]]; then
-	echo "provider matrix must cover all 38 declared implementations (listed ${#required[@]})" >&2
+if [[ "${#required[@]}" -ne 33 ]]; then
+	echo "provider matrix must cover all 33 declared implementations (listed ${#required[@]})" >&2
 	exit 1
 fi
 
-# The only intentionally dormant public contract is symbol.unresolved. Keep
-# this explicit so a future provider addition cannot silently turn a typo or a
-# missing runner into an MCP tool that the funnel cannot route.
-if grep -Fqx 'symbol.unresolved|' <<<"$edges"; then
-	echo "symbol.unresolved unexpectedly has a provider edge" >&2
+# Retired-provider guard: the neutral contracts remain, but have no edges.
+for capability in symbol.implementations symbol.search symbol.unresolved; do
+	if grep -q "^$capability|" <<<"$edges"; then
+		echo "$capability unexpectedly has a provider edge" >&2
+		exit 1
+	fi
+done
+if grep -qi serena <<<"$catalog"; then
+	echo "retired Serena provider reappeared in the catalog" >&2
 	exit 1
 fi
 

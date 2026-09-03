@@ -20,7 +20,7 @@ import (
 // genuinely different constraints, and two repositories that pull the funnel in
 // opposite directions.
 const catalog = `
-contract = "3.0.0"
+contract = "4.0.0"
 
 [core]
 shutdown_grace = "2s"
@@ -33,7 +33,7 @@ shutdown_grace = "2s"
 runners = ["local"]
 
   [orchestrator.local]
-  implementations = ["ripgrep", "serena.search", "graph.search"]
+  implementations = ["ripgrep", "fixture.search", "graph.search"]
 
 [[capability]]
 id = "code.search"
@@ -88,8 +88,8 @@ capability = "code.search"
   score = 0.9
 
 [[implementation]]
-id = "serena.search"
-provider = "serena"
+id = "fixture.search"
+provider = "fixture"
 capability = "code.search"
 
   [implementation.constraints]
@@ -114,7 +114,7 @@ id = "api"
 path = "/srv/api"
 languages = ["go"]
 scale = "small"
-indexed_by = ["serena"]
+indexed_by = ["fixture"]
 
 [[repository]]
 id = "scripts"
@@ -198,8 +198,8 @@ effects = ["read"]
     required = true
 
 [[implementation]]
-id = "serena.definition"
-provider = "serena"
+id = "fixture.definition"
+provider = "fixture"
 capability = "symbol.definition"
 `
 
@@ -210,9 +210,9 @@ capability = "symbol.definition"
 // before it.
 func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
 	body := strings.Replace(catalog,
-		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
-		`implementations = ["ripgrep", "serena.search", "graph.search", "serena.definition"]`, 1)
-	if !strings.Contains(body, "serena.definition") {
+		`implementations = ["ripgrep", "fixture.search", "graph.search"]`,
+		`implementations = ["ripgrep", "fixture.search", "graph.search", "fixture.definition"]`, 1)
+	if !strings.Contains(body, "fixture.definition") {
 		t.Fatal("fixture drifted: the served list this test edits is no longer there")
 	}
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -236,8 +236,8 @@ func TestARunnerToldToServeACapabilityItCannotRunIsRefused(t *testing.T) {
 // more than that catalog uses -- a real configuration, not a hypothetical.
 func TestAnUndeclaredImplementationInAServedListIsTolerated(t *testing.T) {
 	body := strings.Replace(catalog,
-		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
-		`implementations = ["ripgrep", "serena.search", "graph.search", "nothing.declares.this"]`, 1)
+		`implementations = ["ripgrep", "fixture.search", "graph.search"]`,
+		`implementations = ["ripgrep", "fixture.search", "graph.search", "nothing.declares.this"]`, 1)
 	atenea := build(t, body)
 	if _, err := atenea.Select("code.search", "api"); err != nil {
 		t.Fatalf("Select: %v", err)
@@ -249,17 +249,17 @@ func TestAnUndeclaredImplementationInAServedListIsTolerated(t *testing.T) {
 func TestEndToEndSelectionFollowsTheFunnel(t *testing.T) {
 	atenea := build(t, catalog)
 
-	// On the Go repository with a warm Serena index, both Serena and ripgrep
-	// fit, and Serena wins on health score.
+	// On the Go repository with a warm Fixture index, both Fixture and ripgrep
+	// fit, and Fixture wins on health score.
 	decision, err := atenea.Select("code.search", "api")
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if decision.Chosen.ID != "serena.search" {
-		t.Fatalf("chosen = %s, want serena.search", decision.Chosen.ID)
+	if decision.Chosen.ID != "fixture.search" {
+		t.Fatalf("chosen = %s, want fixture.search", decision.Chosen.ID)
 	}
 
-	// On the Bash repository Serena does not speak the language and the graph
+	// On the Bash repository Fixture does not speak the language and the graph
 	// has neither the index nor the size, so ripgrep is the only survivor.
 	decision, err = atenea.Select("code.search", "scripts")
 	if err != nil {
@@ -279,11 +279,11 @@ func TestSelectionFollowsHealthAtRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if before.Chosen.ID != "serena.search" {
+	if before.Chosen.ID != "fixture.search" {
 		t.Fatalf("chosen = %s", before.Chosen.ID)
 	}
 
-	err = atenea.Registry().SetHealth("api", "serena.search", contract.Health{
+	err = atenea.Registry().SetHealth("api", "fixture.search", contract.Health{
 		State:  contract.HealthDown,
 		Reason: "container exited",
 	})
@@ -298,7 +298,7 @@ func TestSelectionFollowsHealthAtRuntime(t *testing.T) {
 	if after.Chosen.ID != "ripgrep" {
 		t.Fatalf("chosen = %s, want the fallback", after.Chosen.ID)
 	}
-	if !strings.Contains(traceReason(after.Stages, "health", "serena.search"), "container exited") {
+	if !strings.Contains(traceReason(after.Stages, "health", "fixture.search"), "container exited") {
 		t.Errorf("the trace does not explain the drop: %+v", after.Stages)
 	}
 }
@@ -481,7 +481,7 @@ func TestStatusReportsTheWholeCatalogue(t *testing.T) {
 	// repository finding a provider down is still the operator's problem, so
 	// it has to reach the light rather than hide behind the repository that
 	// is fine.
-	for _, id := range []string{"ripgrep", "serena.search", "graph.search"} {
+	for _, id := range []string{"ripgrep", "fixture.search", "graph.search"} {
 		if err := atenea.Registry().SetHealth("api", id,
 			contract.Health{State: contract.HealthDown}); err != nil {
 			t.Fatalf("SetHealth: %v", err)
@@ -514,8 +514,8 @@ func TestTheAttachedRunnersAreWhateverTheSettingsName(t *testing.T) {
 				// The two adapters would otherwise both claim ripgrep, which
 				// is refused before either of them runs anything.
 				body = strings.Replace(body,
-					`implementations = ["ripgrep", "serena.search", "graph.search"]`,
-					`implementations = ["serena.search", "graph.search"]`, 1)
+					`implementations = ["ripgrep", "fixture.search", "graph.search"]`,
+					`implementations = ["fixture.search", "graph.search"]`, 1)
 			}
 			atenea := build(t, body)
 			if got := atenea.Status().Orchestrator.Runners; !slices.Equal(got, want) {
@@ -544,14 +544,14 @@ func TestTwoRunnersClaimingOneImplementationIsRefused(t *testing.T) {
 func TestReachIsSharedBetweenTheAttachedRunners(t *testing.T) {
 	body := strings.Replace(catalog, `runners = ["local"]`, `runners = ["omp", "local"]`, 1)
 	body = strings.Replace(body,
-		`implementations = ["ripgrep", "serena.search", "graph.search"]`,
-		`implementations = ["serena.search"]`, 1)
+		`implementations = ["ripgrep", "fixture.search", "graph.search"]`,
+		`implementations = ["fixture.search"]`, 1)
 	atenea := build(t, body)
 	status := atenea.Status().Orchestrator
 
-	// ripgrep comes from the omp adapter's own defaults, serena from the
+	// ripgrep comes from the omp adapter's own defaults, fixture from the
 	// stand-in: neither runner reaches both.
-	if !slices.Contains(status.Serves, "ripgrep") || !slices.Contains(status.Serves, "serena.search") {
+	if !slices.Contains(status.Serves, "ripgrep") || !slices.Contains(status.Serves, "fixture.search") {
 		t.Errorf("serves = %v, want both halves of the union", status.Serves)
 	}
 	if !slices.Contains(status.Unreachable, "graph.search") {

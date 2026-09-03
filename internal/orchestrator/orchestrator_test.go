@@ -60,7 +60,7 @@ func catalog(t testHelper) *registry.Registry {
 			Health: contract.Health{State: contract.HealthAlive, Score: 0.8},
 		},
 		{
-			ID: "serena.search", Provider: "serena", Capability: "code.search",
+			ID: "fixture.search", Provider: "fixture", Capability: "code.search",
 			Constraints: contract.Constraints{RequiresIndex: true},
 			Health:      contract.Health{State: contract.HealthAlive, Score: 1},
 		},
@@ -71,7 +71,7 @@ func catalog(t testHelper) *registry.Registry {
 		}
 	}
 	repos := []contract.Repository{
-		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"serena"}),
+		contract.NewRepository("api", "/srv/api", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"fixture"}),
 		contract.NewRepository("web", "/srv/web", []string{"typescript"}, contract.ScaleSmall, contract.VCSUnspecified, nil),
 	}
 	for _, repo := range repos {
@@ -795,7 +795,7 @@ func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
 	runner := &fakeRunner{
 		answer: func(contract.RunRequest) (contract.Outcome, error) {
 			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
-				"serena did not answer").WithRaw("no symbol matching 'Frame/consistent' found")
+				"fixture did not answer").WithRaw("no symbol matching 'Frame/consistent' found")
 		},
 	}
 	agent, reg := build(t, runner, 0, "")
@@ -820,19 +820,19 @@ func TestAFailureCarriesItsRawTextOntoTheStepAndTheCatalog(t *testing.T) {
 // One repository finding a provider unusable must not refuse the next
 // repository.
 //
-// Found live: Serena has no TypeScript language server on this machine, so a
+// Found live: Fixture has no TypeScript language server on this machine, so a
 // call on a TypeScript repository came back unavailable -- and the Go
-// repository next door, whose own Serena process had answered three seconds
+// repository next door, whose own Fixture process had answered three seconds
 // earlier, was then refused with "every implementation is down". A provider
 // is not up or down in the abstract, and under a per-repository instance
 // policy the two repositories are not even talking to the same process.
 func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	runner := &fakeRunner{
-		serves: []string{"serena.search"},
+		serves: []string{"fixture.search"},
 		answer: func(req contract.RunRequest) (contract.Outcome, error) {
 			if req.Repository.ID == "web" {
 				return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
-					"serena has no working language server for this request")
+					"fixture has no working language server for this request")
 			}
 			return hits("cmd/api/main.go"), nil
 		},
@@ -840,7 +840,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 	agent, reg := build(t, runner, 0, "")
 	// Both repositories must reach the same implementation, or the failure on
 	// one could never have reached the other and the test proves nothing.
-	if err := reg.SetIndexed("web", "serena", true); err != nil {
+	if err := reg.SetIndexed("web", "fixture", true); err != nil {
 		t.Fatalf("SetIndexed: %v", err)
 	}
 	// web first, so its verdict is on the books before api is ever asked.
@@ -865,7 +865,7 @@ func TestOneRepositorysFailureDoesNotBlindAnother(t *testing.T) {
 
 	// And the record says which repository found it, so the status screen can
 	// name the one that is actually broken.
-	if _, where, ok := reg.Observations("serena.search"); !ok || where != "web" {
+	if _, where, ok := reg.Observations("fixture.search"); !ok || where != "web" {
 		t.Errorf("observation = %q (recorded=%v), want it against web", where, ok)
 	}
 
@@ -901,10 +901,10 @@ func TestTheFunnelIsConsultedPerRepository(t *testing.T) {
 	for _, step := range result.Steps {
 		chosen[step.Step.Repository] = step.Decision.Chosen.ID
 	}
-	// api has a warm Serena index and Serena scores higher; web has none, so
-	// Serena is dropped on constraints and ripgrep is left.
-	if chosen["api"] != "serena.search" {
-		t.Errorf("api chose %s, want serena.search", chosen["api"])
+	// api has a warm Fixture index and Fixture scores higher; web has none, so
+	// Fixture is dropped on constraints and ripgrep is left.
+	if chosen["api"] != "fixture.search" {
+		t.Errorf("api chose %s, want fixture.search", chosen["api"])
 	}
 	if chosen["web"] != "ripgrep" {
 		t.Errorf("web chose %s, want ripgrep", chosen["web"])

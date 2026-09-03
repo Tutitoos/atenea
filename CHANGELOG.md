@@ -7,12 +7,21 @@ Two numbers are versioned here and they move independently:
 
 - **Atenea**, the product, at stable `1.x.y` after the `1.0.0` release.
 - **`pkg/contract`**, the wire format client adapters compile against, currently
-  at `3.6.0`. It is a commitment from the first release: an adapter is code
+  at `4.0.0`. It is a commitment from the first release: an adapter is code
   somebody else builds against, and alpha is not a licence to break it weekly.
 
 A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
+
+### Removed
+
+Serena is retired as an adapter, runner, managed process and MCP provider.
+Contract **4.0.0** requires removing its configuration before migrating from 3.x;
+see [the migration guide](docs/content/migration-4.md). The catalog retains
+`symbol.implementations`, `symbol.search` and `symbol.unresolved` without providers,
+so they are not exposed in `tools/list`. Negative Headroom registration guards
+remain; benchmark snapshots and historical reports are preserved.
 
 ### Fixed
 

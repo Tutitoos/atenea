@@ -4,6 +4,9 @@ weight: 1
 dashboard: metrics
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # Metrics de tests
 
 | Package | Ejecutados | Pasados | Fallidos | Omitidos | Pass rate | Cobertura | Estado |

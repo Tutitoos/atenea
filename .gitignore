@@ -33,11 +33,6 @@
 .env
 .DS_Store
 
-# Serena writes a project config into whatever repository it is pointed at,
-# holding a language-server setup and a memories folder that describe one
-# machine and belong to nobody else.
-/.serena/
-
 # TokenSave keeps a project-local semantic index and token ledger here.
 /.tokensave/
 

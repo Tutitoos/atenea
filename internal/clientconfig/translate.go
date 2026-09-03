@@ -1,6 +1,6 @@
 package clientconfig
 
-// Translation turns "the project asks for serena" into "these capabilities,
+// Translation turns "the project asks for MCP server" into "these capabilities,
 // behind the funnel, answered by these implementations" -- or into a refusal
 // that names what is missing.
 //

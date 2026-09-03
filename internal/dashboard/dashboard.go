@@ -6,7 +6,6 @@ package dashboard
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +16,6 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -185,50 +183,6 @@ func (commandLauncher) Open(rawURL string) error {
 // HostsPath is injectable for tests. Production callers should pass
 // "/etc/hosts" explicitly rather than hiding a privileged path in tests.
 const HostsPath = "/etc/hosts"
-
-// SerenaDashboardBasePort is Serena's documented dashboard API base port.
-// Serena chooses the first free port from this base for every process.
-const SerenaDashboardBasePort = 0x5EDA
-
-// DiscoverSerena finds the dashboard whose active project is root. Serena's
-// dashboard port is process-local and cannot be represented by one static MCP
-// URL when Atenea keeps one Serena process per repository.
-func DiscoverSerena(ctx context.Context, root string) (Entry, error) {
-	return discoverSerena(ctx, root, SerenaDashboardBasePort, 128)
-}
-
-func discoverSerena(ctx context.Context, root string, base, count int) (Entry, error) {
-	want := filepath.Clean(root)
-	client := &http.Client{Timeout: 120 * time.Millisecond}
-	for port := base; port < base+count; port++ {
-		apiURL := "http://127.0.0.1:" + strconv.Itoa(port) + "/get_config_overview"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-		if err != nil {
-			continue
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		var overview struct {
-			ActiveProject struct {
-				Name string `json:"name"`
-				Path string `json:"path"`
-			} `json:"active_project"`
-		}
-		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&overview)
-		_ = resp.Body.Close()
-		if decodeErr != nil || filepath.Clean(overview.ActiveProject.Path) != want {
-			continue
-		}
-		return Entry{
-			ID:    "serena",
-			Alias: "serena",
-			URL:   "http://127.0.0.1:" + strconv.Itoa(port) + "/dashboard/index.html",
-		}, nil
-	}
-	return Entry{}, fmt.Errorf("%w: no active Serena dashboard for %s", ErrNotDeclared, root)
-}
 
 // HostsPlan contains a proposed managed block replacement.
 type HostsPlan struct {

@@ -2,14 +2,11 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -95,56 +92,6 @@ func TestCheckRejectsServerErrorsAndMalformedURLs(t *testing.T) {
 	}
 	if err := Check(context.Background(), "://bad"); err == nil {
 		t.Fatal("malformed URL unexpectedly passed")
-	}
-}
-
-func TestDiscoverSerenaMatchesTheActiveProject(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "atenea")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/get_config_overview" {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"active_project": map[string]string{"name": "atenea", "path": root},
-		})
-	}))
-	defer server.Close()
-	parsed, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry, err := discoverSerena(context.Background(), root, port, 1)
-	if err != nil {
-		t.Fatalf("discoverSerena: %v", err)
-	}
-	if entry.URL != "http://127.0.0.1:"+strconv.Itoa(port)+"/dashboard/index.html" {
-		t.Fatalf("entry = %+v", entry)
-	}
-}
-
-func TestDiscoverSerenaSkipsOtherProjects(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "atenea")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"active_project": map[string]string{"name": "other", "path": filepath.Join(t.TempDir(), "other")},
-		})
-	}))
-	defer server.Close()
-	parsed, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := discoverSerena(context.Background(), root, port, 1); err == nil || !strings.Contains(err.Error(), "no active Serena") {
-		t.Fatalf("missing project error = %v", err)
 	}
 }
 

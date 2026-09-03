@@ -48,7 +48,7 @@ func base(t *testing.T, root string) Config {
 	first, err := fileRepository{
 		ID: "decoy", Path: "/somewhere/else",
 		Languages: []string{"rust"}, Scale: "large", VCS: "present",
-		IndexedBy: []string{"serena"},
+		IndexedBy: []string{"fixture"},
 	}.build("global")
 	if err != nil {
 		t.Fatalf("decoy: %v", err)
@@ -65,7 +65,7 @@ func base(t *testing.T, root string) Config {
 		Source:       "global",
 		Repositories: []contract.Repository{first, second},
 		Implementations: []contract.Implementation{
-			{ID: "ripgrep"}, {ID: "serena.search"},
+			{ID: "ripgrep"}, {ID: "fixture.search"},
 		},
 		Security: Security{Sensitive: []string{".env", "*.pem"}},
 		Agents:   []AgentType{shipped(t, "reviewer"), shipped(t, "plan")},
@@ -596,7 +596,7 @@ func TestSelectorRulesAreScopedAndChecked(t *testing.T) {
 // otherwise the overlay would turn a preference into a refused boot.
 func TestALocalRuleReplacesTheGlobalOneForTheSamePair(t *testing.T) {
 	root := repo(t, t.TempDir(),
-		"[[repository]]\nscale = \"small\"\n\n[[selector.rule]]\ncapability = \"code.search\"\nprefer = \"serena.search\"\n")
+		"[[repository]]\nscale = \"small\"\n\n[[selector.rule]]\ncapability = \"code.search\"\nprefer = \"fixture.search\"\n")
 	cfg := base(t, root)
 	cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
 		Capability: "code.search", Repository: "workspace", Prefer: "ripgrep",
@@ -609,7 +609,7 @@ func TestALocalRuleReplacesTheGlobalOneForTheSamePair(t *testing.T) {
 	if len(merged.Selector.Rules) != 1 {
 		t.Fatalf("rules = %+v, want the global one replaced, not joined", merged.Selector.Rules)
 	}
-	if merged.Selector.Rules[0].Prefer != "serena.search" {
+	if merged.Selector.Rules[0].Prefer != "fixture.search" {
 		t.Errorf("prefer = %q, want the local value", merged.Selector.Rules[0].Prefer)
 	}
 }

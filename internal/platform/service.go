@@ -124,7 +124,7 @@ func NewService(exec string, stopGrace time.Duration) (Service, error) {
 // net.Listen, ListenAndServe and Accept turns up nothing outside two
 // httptest stubs in _test.go files, which never enter the binary. Atenea
 // accepts a connection from nobody. But it dials out constantly.
-// The Serena adapter posts JSON-RPC to an MCP proxy on 127.0.0.1:40010 and the
+// The MCP server adapter posts JSON-RPC to an MCP proxy on 127.0.0.1:40010 and the
 // Claude Code adapter reaches a paid model over the internet; denying egress
 // takes both providers down, and the failure would read as two broken adapters
 // rather than as one line in a unit file. Not exposed is a claim about

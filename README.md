@@ -18,7 +18,7 @@ records the evidence and the remaining provider-dependent limits. What landed is
 selector are in place, and so is the orchestrator: it takes one sentence, looks
 at the repositories in scope, splits the work into a graph of steps, dispatches
 them in waves and reviews every answer. Six native adapters ship: `omp`, Claude
-Code and Codex for client CLIs, Serena over MCP for symbols, and Kivgraph and
+Code and Codex for client CLIs, and Kivgraph and
 Tokensave for graph/context operations. OpenCode is an optional model backend,
 not a native adapter. Every
 attempt is measured — time, tokens and peak memory, per capability and per
@@ -81,12 +81,10 @@ one more to a single commission.
 Symbols include `symbol.search`, `symbol.definition`, `symbol.references`,
 `symbol.implementations`, `symbol.overview`, `symbol.calls`,
 `symbol.consumers`, `symbol.get`, `symbol.intent_search`, `symbol.dependencies`
-and `symbol.unresolved`. Serena answers the
-language-server symbol operations over MCP; Kivgraph and Tokensave provide the
-graph-backed operations where an indexed repository is required.
-`symbol.unresolved` remains a catalog contract for completeness diagnostics, but
-has no provider in the current Kivgraph surface and is therefore not advertised
-by `tools/list`; direct calls receive a `not_offered` diagnostic.
+and `symbol.unresolved`. Kivgraph and Tokensave provide graph-backed operations.
+`symbol.implementations`, `symbol.search` and `symbol.unresolved` remain declared
+contracts without providers. They are absent from `tools/list`; direct calls
+receive a `not_offered` diagnostic.
 
 ```sh
 ./bin/atenea ask symbol.definition --repo current \
@@ -95,9 +93,7 @@ by `tools/list`; direct calls receive a `not_offered` diagnostic.
 
 `ask` is one capability against one repository — the atomic unit a workflow is
 built out of, and the way a client that already has a cursor hands it over.
-Atenea's contract names a *position* because that is what an editor has;
-Serena's API names a *symbol*. Reading the word under the cursor is the
-adapter's job, and the trace says which name it resolved to.
+Adapters translate the capability's position into the provider's symbol model.
 
 ```text
 run       20260808T172133-fcb614
@@ -188,7 +184,6 @@ internal/               the brain, not importable from outside
   adapter/codex/            the client adapter: translates for the Codex CLI
   adapter/kivgraph/         graph adapter: impact, indexing and structural queries
   adapter/omp/              the client adapter: translates for the omp CLI
-  adapter/serena/           the symbol adapter: MCP over HTTP, positions to names and back
   adapter/tokensave/        context and call adapter for the indexed repository
   agent/                    one declared agent as one real process
   agent/filereader/         the minimal agent: one file, no model, no key
@@ -263,7 +258,6 @@ published release is `v1.1.0`.
 Atenea leans on work other people did first. A thank-you, with a link to each:
 
 - [ripgrep](https://github.com/BurntSushi/ripgrep) — the search engine behind the first capability
-- [Serena](https://github.com/oraios/serena) — symbol-level navigation and editing
 - Graph providers — repository symbol and relationship indexes exposed through MCP
 - [Semgrep](https://github.com/semgrep/semgrep) — static analysis
 - [Context7](https://github.com/upstash/context7) — version-accurate library documentation
@@ -276,3 +270,10 @@ Atenea leans on work other people did first. A thank-you, with a link to each:
 That list is a human thank-you. The Go dependencies imported by Atenea are in
 [`go.mod`](go.mod); external CLIs, MCP servers and documentation tools are
 configured or installed separately.
+
+### Contract 4.0 migration
+
+Serena is retired. Before loading a 3.x configuration with this version, remove
+its runner, adapter/process tables, MCP declaration, implementation IDs and
+`indexed_by` entries, then set `contract = "4.0.0"`.
+See [the migration guide](docs/content/migration-4.md).

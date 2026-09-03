@@ -3,6 +3,9 @@ title: When the instrument is the bug
 weight: 6
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # When the instrument is the bug
 
 Three defects were reported against this project on 2026-08-09, with numbers

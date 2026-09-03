@@ -119,7 +119,7 @@ func TestRoundTripKeepsTheFailureAndItsRawText(t *testing.T) {
 	failed.Verdict = "failed"
 	failed.Steps[0].Verdict = "failed"
 	failed.Steps[0].Review = ""
-	failed.Steps[0].Failure = "serena did not answer"
+	failed.Steps[0].Failure = "fixture did not answer"
 	failed.Steps[0].Raw = "no symbol matching 'Frame/consistent' found"
 	if err := store.Save(failed); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -131,7 +131,7 @@ func TestRoundTripKeepsTheFailureAndItsRawText(t *testing.T) {
 	if len(read.Steps) != 1 {
 		t.Fatalf("steps did not survive the round trip: %v", read.Steps)
 	}
-	if read.Steps[0].Failure != "serena did not answer" {
+	if read.Steps[0].Failure != "fixture did not answer" {
 		t.Errorf("failure = %q, want the summarized reason", read.Steps[0].Failure)
 	}
 	if read.Steps[0].Raw != "no symbol matching 'Frame/consistent' found" {

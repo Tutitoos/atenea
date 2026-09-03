@@ -14,13 +14,13 @@ func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 		t.Fatalf("newBackendMemory: %v", err)
 	}
 	at := time.Now().UTC().Truncate(time.Second)
-	first.record("serena", backendReading{State: BackendFailed, At: at, Reason: "connection refused"})
+	first.record("fixture", backendReading{State: BackendFailed, At: at, Reason: "connection refused"})
 
 	second, err := newBackendMemory(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	reading, ok := second.reading("serena")
+	reading, ok := second.reading("fixture")
 	if !ok {
 		t.Fatal("persisted reading was not restored")
 	}
@@ -44,7 +44,7 @@ func TestAnUnchangedReadingIsNotWrittenAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newBackendMemory: %v", err)
 	}
-	memory.record("serena", backendReading{State: BackendOK, At: time.Now()})
+	memory.record("fixture", backendReading{State: BackendOK, At: time.Now()})
 	stamp := func() time.Time {
 		t.Helper()
 		info, err := os.Stat(path)
@@ -59,7 +59,7 @@ func TestAnUnchangedReadingIsNotWrittenAgain(t *testing.T) {
 	// resolution of the field being compared.
 	time.Sleep(20 * time.Millisecond)
 	for range 20 {
-		memory.record("serena", backendReading{State: BackendOK, At: time.Now()})
+		memory.record("fixture", backendReading{State: BackendOK, At: time.Now()})
 	}
 	if again := stamp(); !again.Equal(first) {
 		t.Errorf("twenty identical readings rewrote the file at %s, first written at %s", again, first)
@@ -67,7 +67,7 @@ func TestAnUnchangedReadingIsNotWrittenAgain(t *testing.T) {
 
 	// A reading that does say something new is still written, which is the
 	// half of this that the file exists for.
-	memory.record("serena", backendReading{State: BackendFailed, At: time.Now(), Reason: "connection refused"})
+	memory.record("fixture", backendReading{State: BackendFailed, At: time.Now(), Reason: "connection refused"})
 	if changed := stamp(); changed.Equal(first) {
 		t.Fatal("a backend going from ok to failed was never written down")
 	}
@@ -75,7 +75,7 @@ func TestAnUnchangedReadingIsNotWrittenAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	if got, ok := reopened.reading("serena"); !ok || got.State != BackendFailed || got.Reason != "connection refused" {
+	if got, ok := reopened.reading("fixture"); !ok || got.State != BackendFailed || got.Reason != "connection refused" {
 		t.Errorf("reloaded reading = %+v, %v, want the failure and its reason", got, ok)
 	}
 }

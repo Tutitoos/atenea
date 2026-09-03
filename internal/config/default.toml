@@ -14,7 +14,7 @@
 # included, is in English.
 
 # Version of the core<->adapter contract this file is written against.
-contract = "3.6.0"
+contract = "4.0.0"
 
 [core]
 # How long a shutdown waits for in-flight work before walking away.
@@ -89,7 +89,7 @@ checkpoints = true
 checkpoint_dir = ""
 
 # Who actually executes a step: any of "omp", "claudecode", "codex",
-# "serena", "kivgraph", "tokensave" and "local" -- the same seven the loader
+# "kivgraph", "tokensave", "desktop", "scrapling" and "local" -- the same eight the loader
 # accepts, in the order it lists them when it refuses a name it does not know.
 #
 # Atenea decides and delegates, so execution always happens on the far side of
@@ -100,9 +100,7 @@ checkpoint_dir = ""
 #
 # "omp" is the adapter that ships. "claudecode" drives the Claude Code CLI and
 # "codex" drives the native Codex CLI; both are off by default because they
-# cost money per call. "serena" is not a CLI at all: it is an MCP server,
-# attached the same way because a capability does not care whether its provider
-# is a command or a server.
+# cost money per call.
 # "tokensave" is a graph-backed provider that speaks MCP over stdio only:
 # there is no endpoint to fall back on, so it is launched from its own
 # [orchestrator.tokensave.process] table and naming it without that table is
@@ -176,82 +174,12 @@ runners = ["omp"]
   implementations = ["codex.search"]
   timeout = "120s"
 
-  [orchestrator.serena]
-  # Where Serena is listening. It runs as an MCP server behind a local proxy
-  # rather than as a command, so this is a URL and not a binary. The port is
-  # whatever the proxy was told to bind; leaving it unpinned is how you end up
-  # with a URL that works until the next restart.
-  #
-  # The host is a literal address and NOT `localhost`, deliberately. The proxy
-  # binds 127.0.0.1 -- IPv4, and only IPv4 -- while `localhost` is a name whose
-  # answer belongs to the machine, not to Atenea. The day it resolves ::1 first,
-  # which is the default nearly everywhere and arrives on its own with a
-  # resolver update, a name here would start refusing connections with nothing
-  # on this side having changed. An address cannot be reinterpreted.
-  # See docs/content/diagnosing-providers.md.
-  endpoint = "http://127.0.0.1:40010/mcp"
-  # Implementations the adapter answers for. serena.search is deliberately NOT
-  # here: this adapter is wired for the symbol capabilities, and claiming a
-  # text search it has no code for would make the funnel promise an answer
-  # nobody can give.
-  implementations = ["serena.definition", "serena.references", "serena.implementations", "serena.overview", "serena.symbol_search"]
-  # How long one call may take. A language server that has to index a cold
-  # repository is slow long before it is stuck, so this sits above omp's
-  # ceiling and well below a model turn's.
-  timeout = "90s"
-
-  # [orchestrator.serena.process]
-  # Uncomment to have Atenea launch and supervise Serena itself as a bare
-  # process instead of assuming it is already running at endpoint above --
-  # no ToolHive, no container, no proxy started by hand. Atenea starts it,
-  # watches it over the same MCP wire it serves on, and restarts it a
-  # bounded number of times if it crashes, exactly like the break-in
-  # rotation this design already applies to providers.
-  #
-  # command = "serena"
-  # args = ["start-mcp-server", "--transport", "streamable-http", "--port", "{{port}}"]
-  # {{port}} is replaced with the chosen port before every spawn.
-  #
-  # "persistent" warms it up with Atenea and keeps it running throughout;
-  # "on_demand" starts it on first use and stops it once nothing has asked
-  # for it in a while. There is no default -- pick the one that matches how
-  # steadily this machine actually uses Serena.
-  # lifecycle = "on_demand"
-  #
-  # Port 0 (the default, and generally the right choice) asks the OS for a
-  # free one; a fixed number is only worth pinning if something else on this
-  # machine needs to find Serena at a stable address.
-  # port = 0
-  #
-  # The rest tune crash recovery and all take the supervisor package's own
-  # defaults when left out: restart_limit, restart_delay, stable_after,
-  # ready_timeout, stop_grace.
-  #
-  # idle_timeout is the exception: it is how long an idle server may sit
-  # before it is stopped, so it belongs to "on_demand" alone. Writing it
-  # beside "persistent" is refused rather than ignored -- nothing about a
-  # persistent server would ever have shown you it was doing nothing.
-  #
-  # instance says how many copies of this server there should be. "shared"
-  # (the default) is one for the whole machine, retargeted with
-  # activate_project whenever a call arrives for a different repository.
-  # "per_repository" is one process per [[repository]] below, each started
-  # with its own project and never retargeted -- worth its memory exactly
-  # when work alternates between repositories often enough that the
-  # retargeting is what you are waiting for.
-  #
-  # per_repository requires {{project}} somewhere in args, which is replaced
-  # with the repository's path, and forbids a fixed port: each copy needs its
-  # own, so leave port unset and let Atenea pick them.
-  # instance = "shared"
-
   [orchestrator.kivgraph]
   # Where kivgraph's own daemon is listening. `kivgraph daemon` serves the
   # same MCP tool surface as the supervised stdio child further down, over
   # streamable HTTP at a fixed local port, and is ordinarily already running
-  # under its own systemd user unit before Atenea starts -- the same "assume
-  # it is there" shape [orchestrator.serena]'s own endpoint above assumes for
-  # its proxy. Mutually exclusive with process further down: a server is
+  # under its own systemd user unit before Atenea starts.
+  # Mutually exclusive with process further down: a server is
   # reached one way, and declaring both is refused at load rather than
   # silently preferring one.
   endpoint = "http://127.0.0.1:7788/mcp"
@@ -281,7 +209,7 @@ runners = ["omp"]
     "kivgraph.impact",
     "kivgraph.index",
   ]
-  timeout = "90s"             # opens a graph db cold, same class as serena
+  timeout = "90s"             # opens a graph db cold, a cold graph read
   index_timeout = "10m"       # a full workspace rebuild is intentionally slower than a read
 
   # Kivgraph's optional web viewer is a separate HTTP process. If enabled,
@@ -300,11 +228,11 @@ runners = ["omp"]
     # companion: the two are mutually exclusive, and leaving endpoint active
     # while uncommenting this block is refused at load, so comment out (or
     # blank) endpoint above first. Same shape as
-    # [orchestrator.serena.process] above but over a stdio transport instead
+    # other managed process declarations but over a stdio transport instead
     # of http: Spec.Transport = stdio carries this over the same
     # restart-limit / on_demand / idle-timeout machinery every http-transport
     # process block already uses. Left commented for the same reason
-    # serena's own process block above is: `command` below is a path that
+    # an HTTP endpoint is: `command` below is a path that
     # exists on this machine and no other, and a shipped repo default must
     # never bake in one operator's filesystem. Uncommenting is a per-machine
     # decision, not a compiled default.
@@ -2842,107 +2770,6 @@ scope_guarantee = "filtered"   # Codex is instructed to stay inside the reposito
   estimated_duration = "12s"
   estimated_tokens = 20000
 
-# The five Serena symbol implementations share a provider, and therefore share an
-# index and a language list. Serena drives a language server per language: it
-# understands only the ones it has a server for, and it is useless on a
-# repository it has not indexed. Both facts are constraints, so both live here
-# and not in the capability -- a capability that grew a language list would
-# stop being swappable, which is the whole point of having one.
-#
-# The position-first implementations cost one activation plus their own round
-# trips: the adapter
-# turns the position the capability speaks into the name path Serena speaks,
-# and it asks Serena itself to do it rather than parsing code on its own.
-
-[[implementation]]
-id = "serena.definition"
-provider = "serena"
-capability = "symbol.definition"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "700ms"
-  estimated_tokens = 500
-
-[[implementation]]
-id = "serena.references"
-provider = "serena"
-capability = "symbol.references"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  # Dearer than a definition: one answer versus every use site in the scope.
-  estimated_duration = "1.5s"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "serena.implementations"
-provider = "serena"
-capability = "symbol.implementations"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "1.5s"
-  estimated_tokens = 1200
-
-[[implementation]]
-id = "serena.overview"
-provider = "serena"
-capability = "symbol.overview"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  # One overview call plus one find_symbol per name it reports, capped at 16
-  # in flight together. Measured against this repository's own largest file
-  # at nested depth (91 symbols): 392-630ms across eighteen live runs in two
-  # independent sessions, returning ~6.5-7.5KB depending on JSON spacing
-  # (~1700-1900 tokens); the estimate below rounds to the top of both ranges
-  # rather than the middle, because a funnel that under-promises cost picks
-  # this over a cheaper provider it should have lost to. Explicitly checked
-  # for the cold tax other implementations on this page only guess at: two
-  # serena.service restarts, each followed immediately by a call against the
-  # same file, showed no measurable gap against calls already warm (514ms
-  # and 502ms cold, inside the ordinary spread) -- for a repository this
-  # size, get_symbols_overview and find_symbol are cheap enough that
-  # gopls's own indexing is not the bottleneck this estimate needs to cover.
-  estimated_duration = "700ms"
-  estimated_tokens = 1900
-
-[[implementation]]
-id = "serena.symbol_search"
-provider = "serena"
-capability = "symbol.search"
-
-  [implementation.constraints]
-  languages = ["go", "typescript", "javascript", "python", "java", "rust", "php", "csharp"]
-  requires_index = true
-  min_scale = ""
-  max_scale = ""
-
-  [implementation.cost]
-  estimated_duration = "1s"
-  estimated_tokens = 1300
-
 # The ten kivgraph implementations share one provider and one server (see
 # [orchestrator.kivgraph] above -- either its own daemon over streamable
 # HTTP or a supervised stdio child, never both): a handful of tools called
@@ -3588,13 +3415,6 @@ max_tokens = 200000
 # which. A raw backend is also kept out of `atenea wrap`, since pointing a
 # client straight at it would route around both.
 # ---------------------------------------------------------------------------
-# [[mcp_server]]
-# id = "serena"                        # the name the client will see
-# url = "http://127.0.0.1:40010/mcp"   # http endpoint; ToolHive proxies live here
-# dashboard = "http://127.0.0.1:40010"  # optional web UI; never opened automatically
-# timeout = "5s"                       # bounds the check; omitted takes the default
-# expose = "off"                       # off | raw
-
 # [[mcp_server]]
 # id = "semgrep"
 # url = "http://127.0.0.1:40020/mcp"

@@ -13,20 +13,11 @@ operativa completa está en [v1.0 policy]({{< relref "v1-policy" >}}).
 
 ## Structural search
 
-`symbol.search` is the language-aware counterpart to `code.search`:
-
-- `code.search` remains literal or regex text search and keeps its existing
-  output contract;
-- `symbol.search` asks Serena's indexed `find_symbol` surface for declarations;
-- results include qualified `name`, provider `kind`, relative `path`,
-  `line`, `end_line` and deterministic `rank`;
-- `scope`, `kind` and `limit` are applied by Atenea after the provider answer;
-- sensitive paths are removed before the result crosses the adapter boundary;
-- `serena.search` is not an alias for text search; the shipped implementation
-  is `serena.symbol_search`.
-
-This keeps structural ranking from changing the meaning of the established
-text-search capability.
+`symbol.search` retains its language-aware declaration search contract, including
+qualified names, kinds, source ranges and ranks. It currently has no provider,
+as do `symbol.implementations` and `symbol.unresolved`. These three capabilities
+are not advertised by `tools/list`; direct calls return `not_offered`.
+`code.search` remains literal or regex text search.
 
 ## Security and permissions
 

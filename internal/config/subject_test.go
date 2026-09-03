@@ -16,7 +16,7 @@ import (
 func withCapability(t *testing.T, body string) (config.Config, error) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "atenea.toml")
-	file := "contract = \"" + contract.Version{Major: 3, Minor: 5}.String() + "\"\n\n" + body
+	file := "contract = \"" + contract.Current.String() + "\"\n\n" + body
 	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}

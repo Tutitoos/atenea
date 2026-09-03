@@ -107,7 +107,7 @@ func TestDetectIndexesCorrectsTheCatalog(t *testing.T) {
 func TestDetectIndexesSkipsRunnersWithoutIndexProber(t *testing.T) {
 	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleSmall, contract.VCSUnspecified, nil)
 	prober := &fakeProber{id: "graph", answers: ready(repo.Path)}
-	plain := &fakeRunner{id: "serena"}
+	plain := &fakeRunner{id: "fixture"}
 	c := coreWithRepos(t, []contract.Runner{plain, prober}, repo)
 
 	reports, err := c.DetectIndexes(context.Background(), "")

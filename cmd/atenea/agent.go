@@ -29,7 +29,7 @@ import (
 //
 // It deliberately does not go through core.New. An agent run needs the
 // settings and a trace database and nothing else; booting the funnel would
-// start managed processes -- Serena, on a machine that opted in -- for a
+// start managed processes -- MCP server, on a machine that opted in -- for a
 // dispatch that never touches them.
 func cmdAgent(settingsPath string, args []string, out io.Writer) error {
 	// The type name comes off first, before the flag set sees anything.

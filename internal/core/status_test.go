@@ -34,8 +34,8 @@ func TestStatusReportsAnOnDemandProcessBeforeAndAfterItGoesDown(t *testing.T) {
 	if len(before) != 1 {
 		t.Fatalf("processes = %+v, want exactly one entry", before)
 	}
-	if before[0].ID != "serena" || before[0].State != "stopped" || before[0].Light != core.LightGreen {
-		t.Errorf("idle process = %+v, want serena/stopped/green", before[0])
+	if before[0].ID != "kivgraph" || before[0].State != "stopped" || before[0].Light != core.LightGreen {
+		t.Errorf("idle process = %+v, want kivgraph/stopped/green", before[0])
 	}
 
 	// One dispatch is enough to force the guard to try, fail, and mark the

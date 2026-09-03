@@ -38,7 +38,7 @@ Kivgraph web viewer remain optional external provider surfaces. The
 landed.
 
 The core, the Capability Registry and the funnel run on all four stages. The
-shipped adapters include OMP, Claude Code, Codex and Serena, with graph
+shipped adapters include OMP, Claude Code and Codex, with graph
 providers available through MCP. It installs as a background service that
 keeps its own history in shape, proven now against a live language server
 on this repository: `symbol.definition` and `symbol.references` resolve

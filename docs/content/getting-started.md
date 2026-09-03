@@ -101,36 +101,12 @@ through a tool than through a model. Claude Code wins when the cheaper
 providers cannot work on that repository or are down — and a `[[selector.rule]]`
 will hand it the work outright when you want it.
 
-### Attaching Serena for symbols
+### Symbol providers
 
-Serena answers `symbol.definition`, `symbol.references`,
-`symbol.implementations`, `symbol.overview` and `symbol.search`. It is not a CLI:
-it runs as an MCP server behind a local proxy, so the setting is a URL rather
-than a binary.
-
-```toml
-[orchestrator]
-runners = ["omp", "serena"]
-
-  [orchestrator.serena]
-  endpoint = "http://127.0.0.1:40010/mcp"
-```
-
-Two things have to be true for the funnel to reach it. Serena drives one
-language server per language, so the repository's `languages` must be among the
-ones the implementation declares; and it is useless on a repository it has not
-indexed, so name it in `indexed_by`:
-
-```toml
-[[repository]]
-id = "current"
-path = "."
-languages = ["go"]
-indexed_by = ["serena"]
-```
-
-Miss either and the funnel drops it at `reach` or `constraints` and says which
-— a provider nobody wired up is not a provider that is broken.
+Kivgraph and Tokensave offer the supported graph-backed symbol capabilities.
+Configure the provider and mark a repository indexed only after indexing succeeds.
+`symbol.implementations`, `symbol.search` and `symbol.unresolved` currently have
+no provider and are absent from `tools/list`.
 
 ## Write your own settings
 
@@ -322,7 +298,7 @@ spent     158ms of tool time over 1 step(s), 207ms elapsed
 
 discovered
   [repository] position internal/selector/selector.go:167:20 names "Select", which is symbol Select
-  [repository] serena answered symbol.definition for current with 1 location(s)
+  [repository] kivgraph answered symbol.definition for current with 1 location(s)
 
 run with --trace for the plan, the funnel and every review
 
@@ -358,7 +334,7 @@ is the mode to parse; the prose layout above is not a format anything should
 depend on.
 
 The trace names the symbol the position resolved to. That is not decoration:
-Atenea speaks positions and Serena speaks symbols, so the answer cannot be
+Atenea speaks positions and graph providers speak symbols, so the answer cannot be
 checked against the question without it.
 
 ## Run it as a service

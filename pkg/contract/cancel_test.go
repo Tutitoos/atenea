@@ -58,7 +58,7 @@ func TestACanceledCallNeverQuotesTheCeiling(t *testing.T) {
 // And the other way, because a timeout IS about the provider and the limit it
 // missed is the useful part of saying so.
 func TestATimeoutStillNamesTheLimitItMissed(t *testing.T) {
-	failure := contract.Stopped(context.DeadlineExceeded, "serena", 90*time.Second)
+	failure := contract.Stopped(context.DeadlineExceeded, "fixture", 90*time.Second)
 
 	if failure.Kind != contract.FailureTimeout {
 		t.Errorf("kind = %v, want timeout", failure.Kind)
