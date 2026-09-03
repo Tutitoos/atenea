@@ -18,7 +18,7 @@ func TestCleanKeepsTheFirstRealLine(t *testing.T) {
 	}{
 		{"a bare number", "14.1.0\n", "14.1.0"},
 		{"a name and a number", "ripgrep 14.1.0\n\nfeatures: +pcre2\n", "ripgrep 14.1.0"},
-		{"leading blank lines", "\n\n  serena 0.1.4  \n", "serena 0.1.4"},
+		{"leading blank lines", "\n\n  fixture 0.1.4  \n", "fixture 0.1.4"},
 		{"a paragraph", "go version go1.24.4 linux/amd64\nbuilt with gc\n", "go version go1.24.4 linux/amd64"},
 		{"nothing at all", "", ""},
 		{"only whitespace", "\n \t\n", ""},

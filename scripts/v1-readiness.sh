@@ -60,6 +60,8 @@ case "$legacy_status" in
 	;;
 esac
 
+bash scripts/serena-retirement-check.sh
+
 echo "[3/9] formatting"
 unformatted="$(gofmt -l .)"
 test -z "$unformatted" || {

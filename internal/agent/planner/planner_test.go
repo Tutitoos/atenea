@@ -374,6 +374,8 @@ func TestAnUngrantedRunPassesNoCeiling(t *testing.T) {
 // A share of nothing is not freedom. run refuses it before it builds a client,
 // so the two readings of zero never collapse into one.
 func TestAShareOfNothingIsRefusedAndNoModelIsCalled(t *testing.T) {
+	// Never read the developer's live provider configuration.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	in := exploreAssignment()
 	in.BudgetUSD = usd(0)
 	raw, err := json.Marshal(in)

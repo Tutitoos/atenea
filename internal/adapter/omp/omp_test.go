@@ -564,7 +564,7 @@ func TestTheAdapterAnnouncesWhoItIsAndWhatItServes(t *testing.T) {
 	if runner.ID() != "omp" {
 		t.Errorf("ID = %q, want omp", runner.ID())
 	}
-	if !runner.Serves("ripgrep") || runner.Serves("serena.search") {
+	if !runner.Serves("ripgrep") || runner.Serves("fixture.search") {
 		t.Errorf("Serves is wrong: %v", runner.Implementations())
 	}
 	if got := runner.Sensitive(); len(got) != 3 {
@@ -599,7 +599,7 @@ func TestARequestThisAdapterCannotAnswerIsSortedNotAttempted(t *testing.T) {
 	}{
 		{
 			name: "an implementation it does not serve",
-			bend: func(r *contract.RunRequest) { r.Implementation.ID = "serena.search" },
+			bend: func(r *contract.RunRequest) { r.Implementation.ID = "fixture.search" },
 			want: contract.FailureUnavailable,
 		},
 		// The commission's own effects are not in this table: the gate that

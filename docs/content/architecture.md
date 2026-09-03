@@ -22,7 +22,7 @@ weight: 3
        |       |       |       |       |       |
     adapter adapter adapter adapter adapter adapter <- dumb translators
        |       |       |       |       |       |
-      omp   Claude   Codex  Serena Kivgraph Tokensave
+      omp   Claude   Codex  Kivgraph Tokensave
 ```
 
 ## Capability vs implementation
@@ -31,7 +31,7 @@ A **capability** is the stable half: an action, described without naming a
 single tool. `code.search` says what it resolves, what it takes in and what it
 gives back, and nothing about how.
 
-An **implementation** is the variable half: ripgrep, Serena, a language server.
+An **implementation** is the variable half: ripgrep, a graph provider, a language server.
 Everything that varies by tool lives here, in four blocks.
 
 | Block | Holds |
@@ -60,7 +60,7 @@ is forty separate answers. One global index over all of them was the
 alternative, refused for being slow to build and impossible to keep fresh.
 
 An index belongs to the **provider** that built it, not to one implementation of
-it, so two implementations of Serena share one warm index.
+it, so two implementations of a provider share one warm index.
 
 ## The funnel
 
@@ -348,7 +348,7 @@ writing and reaching outside the machine are not.
 
 `contract.Runner` is where deciding ends and doing begins. Everything on the
 far side belongs to somebody else: an adapter. OMP, Claude Code, Codex and
-Serena use the same seam, and a local stand-in sits in the same place for a
+graph providers use the same seam, and a local stand-in sits in the same place for a
 machine where nothing is installed. One interface,
 several possible far sides, and swapping them changes nothing above the line.
 
@@ -363,8 +363,7 @@ model turn, so the adapter has to ask precisely — the capability's own output
 shape becomes a JSON Schema the turn is held to — and then check the answer
 again, because a far side that thinks can report a file it was told to leave
 alone. Trusting the instruction alone would make the security design advisory.
-Serena is not a command at all: it is a server, so that adapter holds a session
-instead of spawning a process, and the difference stops at the seam.
+Graph adapters speak MCP over an HTTP or stdio session.
 
 A runner that cannot reach a provider says so, and that is not a bug: it is a
 provider that is not reachable from here. The funnel drops it at the `reach`
@@ -854,7 +853,10 @@ this side ends the wait, which is why there is a deadline on the wait as well
 as a kill on the tree. Both halves are load-bearing; removing either one puts
 a canceled call back to waiting out a helper nobody can see.
 
-### What that costs in practice: the Serena adapter
+### Historical design: the retired Serena adapter
+
+> Historical record only. Serena was removed in contract 4.0.0; this section
+> describes the former adapter and is not an installation or configuration guide.
 
 The third far side is not a command line at all. Serena is an MCP server behind
 a local proxy, so this adapter opens a session and speaks JSON-RPC over HTTP
@@ -899,7 +901,7 @@ rather than a distinct exit path of its own.
 | Encodes every column the same way, so a number that started life as an integer property can come back as a quoted string rather than a bare one | Accepts both shapes reading a line number out of a graph row, instead of trusting the query to always agree with itself |
 | Can only ever answer from a graph it built ahead of time, which may already be behind the working tree | Attaches a best-effort `notice` — an `index_status` call plus `git status --porcelain`, together cheaper than the answer they are checking — when HEAD has moved or the tree holds changes the graph never saw; a failed check reports nothing rather than refusing an answer that already succeeded |
 
-It answers two capabilities neither omp nor Serena can: `symbol.calls` walks
+It answers two capabilities omp cannot: `symbol.calls` walks
 the call graph the backend already built from the repository, and
 the graph impact query asks that same graph what a git diff reaches. Both need a call
 graph, which is the one thing neither a grep nor a language server keeps.

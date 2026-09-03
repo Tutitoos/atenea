@@ -91,12 +91,12 @@ func TestALapsedStreakDoesNotBecomeHealthByWaiting(t *testing.T) {
 // file, which is somebody's opinion about the provider in general.
 func TestAStreakStillOutranksADeclaredAlive(t *testing.T) {
 	now := time.Now().UTC()
-	base := map[string]Baseline{"serena.search": {
+	base := map[string]Baseline{"fixture.search": {
 		Attempts: 3, Failures: 3,
 		Fault: Fault{Streak: 3, SameKindStreak: 3, Kind: "unavailable", Reason: "unavailable: no server", Latest: now},
 	}}
 	candidates := []contract.Implementation{{
-		ID:     "serena.search",
+		ID:     "fixture.search",
 		Health: contract.Health{State: contract.HealthAlive, Score: 0.9, Reason: "declared"},
 	}}
 

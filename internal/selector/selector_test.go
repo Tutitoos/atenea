@@ -155,7 +155,7 @@ func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
 			impl("dart.analyzer", withLanguages("dart")),
-			impl("serena.search", provider("serena"), needsIndex()),
+			impl("fixture.search", provider("fixture"), needsIndex()),
 			impl("graph.search", scaleRange(contract.ScaleMedium, contract.ScaleUnspecified)),
 		},
 	})
@@ -171,9 +171,9 @@ func TestConstraintsDropOnLanguageIndexAndScale(t *testing.T) {
 		reasons[drop.Implementation] = drop.Reason
 	}
 	for id, want := range map[string]string{
-		"dart.analyzer": "speaks dart",
-		"serena.search": "needs an index from provider serena",
-		"graph.search":  "needs a medium repository or bigger",
+		"dart.analyzer":  "speaks dart",
+		"fixture.search": "needs an index from provider fixture",
+		"graph.search":   "needs a medium repository or bigger",
 	} {
 		if !strings.Contains(reasons[id], want) {
 			t.Errorf("%s dropped for %q, want it to mention %q", id, reasons[id], want)
@@ -292,7 +292,7 @@ func TestMissingIndexReasonNamesTheFix(t *testing.T) {
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
-			impl("serena.search", provider("serena"), needsIndex()),
+			impl("fixture.search", provider("fixture"), needsIndex()),
 		},
 	})
 	if err != nil {
@@ -303,9 +303,9 @@ func TestMissingIndexReasonNamesTheFix(t *testing.T) {
 	for _, drop := range constraints.Dropped {
 		drops[drop.Implementation] = drop.Reason
 	}
-	reason, ok := drops["serena.search"]
+	reason, ok := drops["fixture.search"]
 	if !ok {
-		t.Fatalf("serena.search was not dropped: %+v", constraints.Dropped)
+		t.Fatalf("fixture.search was not dropped: %+v", constraints.Dropped)
 	}
 	for _, want := range []string{"atenea detect", "indexed externally"} {
 		if !strings.Contains(reason, want) {
@@ -319,13 +319,13 @@ func TestMissingIndexReasonNamesTheFix(t *testing.T) {
 func TestIndexConstraintIsSatisfiedByTheProviderIndex(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
-		Repository: smallGoRepo("serena"),
-		Candidates: []contract.Implementation{impl("serena.search", provider("serena"), needsIndex())},
+		Repository: smallGoRepo("fixture"),
+		Candidates: []contract.Implementation{impl("fixture.search", provider("fixture"), needsIndex())},
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if decision.Chosen.ID != "serena.search" {
+	if decision.Chosen.ID != "fixture.search" {
 		t.Fatalf("chosen = %s", decision.Chosen.ID)
 	}
 }
@@ -530,7 +530,7 @@ func TestUserRuleOutranksTheAutomaticChoice(t *testing.T) {
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep", health(contract.HealthDegraded, 0)),
-			impl("serena.search", health(contract.HealthAlive, 1)),
+			impl("fixture.search", health(contract.HealthAlive, 1)),
 		},
 	})
 	if err != nil {
@@ -547,17 +547,17 @@ func TestUserRuleOutranksTheAutomaticChoice(t *testing.T) {
 func TestRepositoryScopedRuleBeatsTheGlobalOne(t *testing.T) {
 	s := mustSelector(t,
 		selector.Rule{Capability: "code.search", Prefer: "ripgrep"},
-		selector.Rule{Capability: "code.search", Repository: "api", Prefer: "serena.search"},
+		selector.Rule{Capability: "code.search", Repository: "api", Prefer: "fixture.search"},
 	)
 	decision, err := s.Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
-		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("fixture.search")},
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if decision.Chosen.ID != "serena.search" {
+	if decision.Chosen.ID != "fixture.search" {
 		t.Fatalf("chosen = %s, want the repository-scoped rule to win", decision.Chosen.ID)
 	}
 }
@@ -566,13 +566,13 @@ func TestRepositoryScopedRuleBeatsTheGlobalOne(t *testing.T) {
 // stopping. Changing it in silence would betray what the user asked for, so it
 // has to be announced.
 func TestFallbackFromADeadPreferenceIsAnnounced(t *testing.T) {
-	s := mustSelector(t, selector.Rule{Capability: "code.search", Prefer: "serena.search"})
+	s := mustSelector(t, selector.Rule{Capability: "code.search", Prefer: "fixture.search"})
 	decision, err := s.Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep", health(contract.HealthAlive, 1)),
-			impl("serena.search", health(contract.HealthDown, 0)),
+			impl("fixture.search", health(contract.HealthDown, 0)),
 		},
 	})
 	if err != nil {
@@ -581,7 +581,7 @@ func TestFallbackFromADeadPreferenceIsAnnounced(t *testing.T) {
 	if decision.Chosen.ID != "ripgrep" {
 		t.Fatalf("chosen = %s", decision.Chosen.ID)
 	}
-	if len(decision.Notices) != 1 || !strings.Contains(decision.Notices[0], "serena.search") {
+	if len(decision.Notices) != 1 || !strings.Contains(decision.Notices[0], "fixture.search") {
 		t.Fatalf("notices = %v, want the skipped preference announced", decision.Notices)
 	}
 }
@@ -677,7 +677,7 @@ func TestTheMostUsefulReasonWins(t *testing.T) {
 		Repository: smallGoRepo(),
 		Candidates: []contract.Implementation{
 			impl("ripgrep"),
-			impl("serena.search", provider("serena"), needsIndex()),
+			impl("fixture.search", provider("fixture"), needsIndex()),
 		},
 		Reachable: []string{"ripgrep"},
 	})
@@ -713,7 +713,7 @@ func TestNothingReachableIsUnavailable(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
-		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("fixture.search")},
 		Reachable:  []string{},
 	})
 	if got := contract.KindOf(err); got != contract.FailureUnavailable {
@@ -733,10 +733,10 @@ func TestAProviderOutOfScopeSaysSoRatherThanReadingAsUnwired(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
-		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("fixture.search")},
 		Reachable:  []string{"ripgrep"},
 		Unreachable: map[string]string{
-			"serena.search": "serves only /elsewhere, repository is outside it",
+			"fixture.search": "serves only /elsewhere, repository is outside it",
 		},
 	})
 	if err != nil {
@@ -745,7 +745,7 @@ func TestAProviderOutOfScopeSaysSoRatherThanReadingAsUnwired(t *testing.T) {
 	var reason string
 	for _, stage := range decision.Stages {
 		for _, drop := range stage.Dropped {
-			if drop.Implementation == "serena.search" {
+			if drop.Implementation == "fixture.search" {
 				reason = drop.Reason
 			}
 		}
@@ -765,7 +765,7 @@ func TestAnOrdinaryUnreachableKeepsTheWiringReason(t *testing.T) {
 	decision, err := mustSelector(t).Select(selector.Request{
 		Capability: "code.search",
 		Repository: smallGoRepo(),
-		Candidates: []contract.Implementation{impl("ripgrep"), impl("serena.search")},
+		Candidates: []contract.Implementation{impl("ripgrep"), impl("fixture.search")},
 		Reachable:  []string{"ripgrep"},
 	})
 	if err != nil {
@@ -773,7 +773,7 @@ func TestAnOrdinaryUnreachableKeepsTheWiringReason(t *testing.T) {
 	}
 	for _, stage := range decision.Stages {
 		for _, drop := range stage.Dropped {
-			if drop.Implementation == "serena.search" && !strings.Contains(drop.Reason, "no attached runner") {
+			if drop.Implementation == "fixture.search" && !strings.Contains(drop.Reason, "no attached runner") {
 				t.Errorf("reason = %q, want the wiring default", drop.Reason)
 			}
 		}
@@ -952,7 +952,7 @@ func TestNewRejectsBrokenRules(t *testing.T) {
 		"missing preference": {{Capability: "code.search"}},
 		"two rules for the same scope": {
 			{Capability: "code.search", Prefer: "ripgrep"},
-			{Capability: "code.search", Prefer: "serena.search"},
+			{Capability: "code.search", Prefer: "fixture.search"},
 		},
 	}
 	for name, rules := range cases {

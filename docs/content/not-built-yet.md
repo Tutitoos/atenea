@@ -3,6 +3,9 @@ title: What is not built yet
 weight: 6
 ---
 
+> Historical design journal. Serena was retired in contract 4.0.0; references
+> below document past decisions and must not be used to configure a current install.
+
 # What is not built yet
 
 The design was written before the code, in twenty-eight sheets, and it ordered the

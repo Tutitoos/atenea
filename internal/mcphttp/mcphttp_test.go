@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-// This package used to be part of the Serena adapter, written and tested
+// This package used to be part of the Fixture adapter, written and tested
 // against one far side. These tests are the wire behavior that adapter
 // measured, kept here because the wire format is what moved: framing, the
-// handshake, session handling. What is not here any more is Serena's own
+// handshake, session handling. What is not here any more is Fixture's own
 // meaning -- which tool means what, how its answer becomes a location --
 // because none of that ever belonged to the wire in the first place.
 //
@@ -155,7 +155,7 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteHTTPURL(t *testing.T) {
 // One connection opens one session, however many callers arrive at once.
 //
 // A caller may fan concurrent Calls out against one Client -- Atenea's own
-// Serena adapter does exactly this for symbol.overview, up to sixteen
+// Fixture adapter does exactly this for symbol.overview, up to sixteen
 // find_symbol calls inside one held lock -- and every one of them begins by
 // asking whether a session exists. Written as "read the field, release the
 // lock, then initialize", that check decides nothing: several callers each
@@ -300,7 +300,7 @@ func TestAFailedCallDropsTheSessionSoTheNextCallReestablishesIt(t *testing.T) {
 }
 
 // Options.Headers is the whole point of this package existing apart from
-// Serena's old private client: it is how a caller reaches a server that
+// Fixture's old private client: it is how a caller reaches a server that
 // requires authentication, such as kivgraph's daemon answering 401 without
 // "Authorization: Bearer <token>". A header set only on tools/call and
 // missing from initialize would still get the handshake rejected before any

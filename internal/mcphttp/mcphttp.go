@@ -4,15 +4,9 @@
 // once by an initialize handshake and carried on every request after it as
 // Mcp-Session-Id.
 //
-// This is the wire format shared by every streamable-HTTP MCP server this
-// process talks to. It used to live inside the Serena adapter, written for
-// that one far side; moving it here is what let a second far side --
-// kivgraph's own daemon, reached with a bearer token instead of Serena's
-// open localhost proxy -- use the same client instead of growing a second
-// copy of the same framing rules. What is still specific to a caller is not
-// here: which tool to call, how to read what comes back, what a caller's own
-// session state means. That is the adapter's job; this package only gets one
-// far side to answer at all.
+// This transport is shared by HTTP MCP providers. Adapters decide which tools
+// to call and how to interpret their results; this package handles framing,
+// authentication and session lifecycle only.
 package mcphttp
 
 import (
@@ -87,7 +81,7 @@ type Client struct {
 	// no session yet, so an established connection never touches it.
 	handshakeMu sync.Mutex
 	// wireMu guards session, nextID and version below. A caller may run many
-	// calls concurrently against one Client -- Atenea's own Serena adapter
+	// calls concurrently against one Client -- Atenea's own MCP server adapter
 	// fans out up to sixteen at once inside a single held commission lock --
 	// and every one of them touches these fields, so they get their own,
 	// finer lock rather than whatever coarser lock the caller holds.
@@ -483,7 +477,7 @@ func normalizeNewlines(text string) string {
 
 // Clip keeps an error message readable when a server answers with a page
 // instead of a sentence. Exported because a caller parsing a server's own
-// answers directly -- Serena's adapter reads find_symbol's JSON, say --
+// answers directly -- a provider adapter decodes its own tool payload --
 // wants the same truncation this package already applies to its own error
 // text, rather than growing a second copy of it.
 func Clip(s string) string {

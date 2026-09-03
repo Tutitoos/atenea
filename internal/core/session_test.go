@@ -37,7 +37,7 @@ func chatsGranting(t *testing.T, effects ...string) *core.Core {
 		t.Fatalf("write: %v", err)
 	}
 	return build(t, fmt.Sprintf(`
-contract = "3.0.0"
+contract = "4.0.0"
 
 [core]
 shutdown_grace = "2s"

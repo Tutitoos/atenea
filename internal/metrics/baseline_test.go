@@ -61,22 +61,22 @@ func TestOnlyTheRunningVersionCounts(t *testing.T) {
 	now := time.Now().UTC()
 	// The old, slow binary, measured many times.
 	for i := range 6 {
-		s.Record(call(now.Add(time.Duration(i)*time.Second), "serena.search", "1.0.0",
+		s.Record(call(now.Add(time.Duration(i)*time.Second), "fixture.search", "1.0.0",
 			2*time.Second, 900, true))
 	}
 	// Then the upgrade, measured once.
-	s.Record(call(now.Add(time.Minute), "serena.search", "2.0.0", 50*time.Millisecond, 10, true))
+	s.Record(call(now.Add(time.Minute), "fixture.search", "2.0.0", 50*time.Millisecond, 10, true))
 
 	got := costsOf(t, s, "code.search", "current")
-	serena := got["serena.search"]
-	if serena.ToolVersion != "2.0.0" {
-		t.Errorf("version = %q, want 2.0.0", serena.ToolVersion)
+	fixture := got["fixture.search"]
+	if fixture.ToolVersion != "2.0.0" {
+		t.Errorf("version = %q, want 2.0.0", fixture.ToolVersion)
 	}
-	if serena.Attempts != 1 {
-		t.Errorf("attempts = %d, want 1: the old version's six must not carry over", serena.Attempts)
+	if fixture.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1: the old version's six must not carry over", fixture.Attempts)
 	}
-	if serena.Spent.Duration != 50*time.Millisecond {
-		t.Errorf("mean = %v, want 50ms: the old numbers dragged the average", serena.Spent.Duration)
+	if fixture.Spent.Duration != 50*time.Millisecond {
+		t.Errorf("mean = %v, want 50ms: the old numbers dragged the average", fixture.Spent.Duration)
 	}
 }
 
@@ -172,17 +172,17 @@ func TestAProviderThatOnlyRefusesHasNoPrice(t *testing.T) {
 func TestCostIsAskedPerRepository(t *testing.T) {
 	s := store(t, Options{})
 	now := time.Now().UTC()
-	warm := call(now, "serena.search", "1.0.0", 20*time.Millisecond, 5, true)
+	warm := call(now, "fixture.search", "1.0.0", 20*time.Millisecond, 5, true)
 	warm.Repository = "api"
-	cold := call(now, "serena.search", "1.0.0", 4*time.Second, 800, true)
+	cold := call(now, "fixture.search", "1.0.0", 4*time.Second, 800, true)
 	cold.Repository = "scripts"
 	s.Record(warm)
 	s.Record(cold)
 
-	if got := costsOf(t, s, "code.search", "api")["serena.search"]; got.Spent.Duration != 20*time.Millisecond {
+	if got := costsOf(t, s, "code.search", "api")["fixture.search"]; got.Spent.Duration != 20*time.Millisecond {
 		t.Errorf("api mean = %v, want 20ms", got.Spent.Duration)
 	}
-	if got := costsOf(t, s, "code.search", "scripts")["serena.search"]; got.Spent.Duration != 4*time.Second {
+	if got := costsOf(t, s, "code.search", "scripts")["fixture.search"]; got.Spent.Duration != 4*time.Second {
 		t.Errorf("scripts mean = %v, want 4s", got.Spent.Duration)
 	}
 	if got := costsOf(t, s, "code.search", "nowhere"); len(got) != 0 {
@@ -198,7 +198,7 @@ func TestNeverMeasuredIsAbsentRatherThanZero(t *testing.T) {
 	s.Record(call(time.Now().UTC(), "ripgrep", "14.1.0", time.Millisecond, 0, true))
 
 	got := costsOf(t, s, "code.search", "current")
-	if _, ok := got["serena.search"]; ok {
+	if _, ok := got["fixture.search"]; ok {
 		t.Error("an implementation nobody measured came back with a figure")
 	}
 	if _, ok := got["ripgrep"]; !ok {
@@ -289,19 +289,19 @@ func TestTheRunningVersionSurvivesTheFold(t *testing.T) {
 	s := store(t, Options{})
 	// Two hours back, so the hour is closed and Compact folds it whole.
 	hour := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
-	s.Record(call(hour.Add(10*time.Minute), "serena.search", "9.9.0",
+	s.Record(call(hour.Add(10*time.Minute), "fixture.search", "9.9.0",
 		2*time.Second, 900, true))
-	s.Record(call(hour.Add(20*time.Minute), "serena.search", "10.0.0",
+	s.Record(call(hour.Add(20*time.Minute), "fixture.search", "10.0.0",
 		50*time.Millisecond, 10, true))
 	if err := s.Compact(context.Background(), time.Now().UTC()); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
 
-	serena := costsOf(t, s, "code.search", "current")["serena.search"]
-	if serena.ToolVersion != "10.0.0" {
-		t.Errorf("version = %q, want 10.0.0: the newest attempt decides, not the higher string", serena.ToolVersion)
+	fixture := costsOf(t, s, "code.search", "current")["fixture.search"]
+	if fixture.ToolVersion != "10.0.0" {
+		t.Errorf("version = %q, want 10.0.0: the newest attempt decides, not the higher string", fixture.ToolVersion)
 	}
-	if serena.Spent.Duration != 50*time.Millisecond {
-		t.Errorf("mean = %v, want 50ms: the replaced binary's numbers came back out of the rollup", serena.Spent.Duration)
+	if fixture.Spent.Duration != 50*time.Millisecond {
+		t.Errorf("mean = %v, want 50ms: the replaced binary's numbers came back out of the rollup", fixture.Spent.Duration)
 	}
 }

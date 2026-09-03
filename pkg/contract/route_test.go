@@ -111,7 +111,7 @@ func TestRouteCloneDoesNotShareState(t *testing.T) {
 	copied.Fallbacks[0] = "something-else"
 	copied.Capabilities[0] = "symbol.definition"
 	copied.Tools[0] = "write"
-	copied.Providers["code.search"] = "serena"
+	copied.Providers["code.search"] = "fixture"
 
 	if original.Fallbacks[0] != "claude-sonnet-4" {
 		t.Fatal("clone shares the fallbacks array")

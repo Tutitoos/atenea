@@ -44,7 +44,7 @@ Design notes, so the next reader does not mistake a choice for an accident:
   - It never shells out to `claude mcp list`. Measured 2026-08-10: any claude
     start rewrites ~/.claude.json, and in an untrusted project it PRUNES the
     approval keys. A check must not damage what it inspects.
-  - `--live` handshakes atenea, headroom and serena over stdio. That spawns
+  - `--live` handshakes atenea and headroom over stdio. That spawns
     nothing a client would not spawn anyway, and writes nothing. It sees only
     the servers it launches itself, which is why it is not allowed to speak for
     the whole surface.
@@ -72,12 +72,6 @@ import subprocess
 import sys
 import tomllib
 
-try:
-    import yaml
-except ImportError:  # serena's config is yaml; guessing at it is worse than stopping
-    sys.exit("mcp-agree: falta pyyaml, y sin el no puedo verificar las "
-             "exclusiones de serena. `uv tool install pyyaml` o `pip install pyyaml`")
-
 HOME = os.path.expanduser("~")
 BIN = os.path.join(HOME, ".local", "bin")
 
@@ -86,7 +80,7 @@ BIN = os.path.join(HOME, ".local", "bin")
 # therefore named differently in every one of them - the count can be unified,
 # the name cannot.
 CORE = {"atenea", "headroom"}
-BACKENDS = {"serena", "context7", "semgrep"}  # atenea owns these
+BACKENDS = {"context7", "semgrep"} | {"serena"}  # retired Serena must never reappear
 OMP_SUPPRESSED = {"chrome-devtools", "claude-mem",
                   "context7", "semgrep", "serena"}
 KENA_WS = os.path.join(HOME, "kena-workspace")
@@ -218,101 +212,21 @@ def check_opencode():
         fail("toggle", f"opencode ha perdido {name}", "borrado del fichero")
 
 
-# ---------------------------------------------------------------- serena
-# Two tools that must never reach a client: arbitrary shell execution and
-# file creation. They are withheld in ~/.serena/serena_config.yml, which is
-# where ToolHive's --tools filter went when the containers were retired.
-WITHHELD = {"execute_shell_command", "create_text_file"}
-SERENA_CFG = os.path.join(HOME, ".serena", "serena_config.yml")
-
-
-def serena_launch_context():
-    """The --context atenea starts serena with, read from atenea's own settings."""
-    cfg = load_toml(os.path.join(HOME, ".config", "atenea", "atenea.toml"))
-    for srv in cfg.get("mcp_server", []) or []:
-        if srv.get("id") != "serena":
-            continue
-        cmd = srv.get("command") or []
-        if "--context" in cmd:
-            return cmd[cmd.index("--context") + 1]
-        return "agent"  # serena's own default
-    return None
-
-
-def context_is_single_project(name):
-    """True if that context lets a project's .serena/project.yml add tools back.
-
-    Returns None when the context file cannot be found - unknown is not safe,
-    and the caller says so out loud rather than assuming.
-    """
-    import glob as _glob
-    candidates = [os.path.join(HOME, ".serena", "contexts", f"{name}.yml")]
-    candidates += _glob.glob(os.path.join(
-        HOME, ".local", "share", "uv", "tools", "serena-agent", "lib", "python*",
-        "site-packages", "serena", "resources", "config", "contexts", f"{name}.yml"))
-    for path in candidates:
-        if os.path.isfile(path):
-            with open(path) as fh:
-                return bool((yaml.safe_load(fh) or {}).get("single_project"))
-    return None
-
-
+# ---------------------------------------------------- retired-provider guard
 def check_serena():
-    """Serena's dangerous tools stay withheld - by the file AND by the context.
-
-    Measured 2026-08-10 with one hostile ~/.serena/project.yml and one global
-    config: `--context agent` served 23 tools with neither dangerous tool,
-    `--context claude-code` served 24 WITH BOTH. Same exclusions, both times.
-    So the file is only half the guarantee: in a single-project context the
-    project config is folded into the exposed tool set and its
-    `included_optional_tools` adds excluded tools straight back
-    (serena/agent.py:810 feeding ToolSet.apply at :168).
-    """
-    if not os.path.isfile(SERENA_CFG):
-        fail("serena", "no existe ~/.serena/serena_config.yml",
-             "sin ese fichero serena sirve las 29 herramientas, incluidas "
-             "execute_shell_command y create_text_file. `kena agent setup` NO lo "
-             "escribe: en una maquina recien montada esto es el estado por defecto")
-        return
-    with open(SERENA_CFG) as fh:
-        cfg = yaml.safe_load(fh) or {}
-
-    if cfg.get("fixed_tools"):
-        fail("serena", f"serena tiene fixed_tools: {cfg['fixed_tools']}",
-             "fixed_tools REEMPLAZA el conjunto entero e ignora excluded_tools "
-             "(serena/agent.py:158). Revisa que no reintroduzca lo retirado")
-
-    excluded = set(cfg.get("excluded_tools") or ())
-    exposed = WITHHELD - excluded
-    if exposed:
-        fail("serena", f"serena ya no retiene {sorted(exposed)}",
-             "ejecucion de shell y/o escritura de ficheros arbitraria, servidas a "
-             "cualquier cliente que llegue a serena")
-    readded = WITHHELD & set(cfg.get("included_optional_tools") or ())
-    if readded:
-        fail("serena", f"serena reincluye {sorted(readded)} como opcional",
-             "included_optional_tools se aplica ANTES que las exclusiones y las "
-             "deshace para ese nombre")
-
-    ctx = serena_launch_context()
-    if ctx is None:
-        fail("serena", "atenea.toml ya no declara el backend serena",
-             "o cambio de forma; sin saber con que contexto arranca no puedo "
-             "afirmar que las exclusiones aguanten")
-        return
-    single = context_is_single_project(ctx)
-    if single is None:
-        fail("serena", f"no encuentro el contexto '{ctx}' de serena",
-             "desconocido no es seguro: si fuera single-project, cualquier repo "
-             "con .serena/project.yml podria reexponer lo retirado")
-    elif single:
-        fail("serena", f"atenea arranca serena con --context {ctx}, que es single-project",
-             "en ese modo la config del proyecto entra en el conjunto EXPUESTO y su "
-             "included_optional_tools reañade lo excluido. Medido: 23 tools con "
-             "`agent`, 24 con `claude-code` y las dos peligrosas dentro")
+    """Serena is retired: reject any declaration capable of bringing it back."""
+    cfg = load_toml(os.path.join(HOME, ".config", "atenea", "atenea.toml"))
+    orchestrator = cfg.get("orchestrator", {})
+    present = "serena" in orchestrator or "serena" in orchestrator.get("runners", [])
+    present |= any(s.get("id") == "serena" for s in cfg.get("mcp_server", []))
+    present |= any(i.get("provider") == "serena" or i.get("id", "").startswith("serena.")
+                   for i in cfg.get("implementation", []))
+    present |= any("serena" in r.get("indexed_by", []) for r in cfg.get("repository", []))
+    if present:
+        fail("serena", "proveedor retirado declarado en atenea.toml",
+             "elimina runner, adaptador, MCP, implementaciones e indices Serena")
     else:
-        notes.append(f"serena: {len(excluded)} exclusiones, contexto '{ctx}' "
-                     "no single-project (un .serena/project.yml no puede ampliarla)")
+        notes.append("Serena: ausente de la configuracion operativa")
 
 # ---------------------------------------------------------------- wire
 # What actually reaches the model, read off a real request body instead of a
@@ -808,7 +722,7 @@ def check_live():
     never the account connectors - so "atenea 28, headroom 3" was a green light
     for 31 tools out of a 77-tool surface. Counting is now the wire's job
     (WIRE_INVARIANTS); what stays here is the thing a handshake can prove and a
-    file cannot: which tools serena is serving right now.
+    file cannot: whether the declared core servers answer their handshake.
     """
     counts = {}
     n = handshake("atenea", os.path.join(BIN, "atenea"), ["mcp"])
@@ -819,19 +733,6 @@ def check_live():
     if n is not None:
         counts["headroom"] = n
 
-    # The declaration is not the surface: ask serena what it actually serves,
-    # launched exactly as atenea launches it.
-    ctx = serena_launch_context() or "agent"
-    served = handshake("serena", os.path.join(BIN, "serena"),
-                       ["start-mcp-server", "--transport", "stdio", "--project-from-cwd",
-                        "--context", ctx, "--open-web-dashboard", "False"],
-                       {"SERENA_LOG_LEVEL": "WARNING"}, want_names=True)
-    if served is not None:
-        counts["serena"] = len(served)
-        leaked = WITHHELD & set(served)
-        if leaked:
-            fail("serena", f"serena SIRVE {sorted(leaked)} ahora mismo",
-                 f"medido por handshake desde {os.getcwd()}, no leido de un fichero")
     notes.append("handshake: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
 
 

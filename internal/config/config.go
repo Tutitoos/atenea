@@ -33,7 +33,6 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/adapter/omp"
 	"github.com/Tutitoos/atenea/internal/adapter/scrapling"
-	"github.com/Tutitoos/atenea/internal/adapter/serena"
 	"github.com/Tutitoos/atenea/internal/adapter/tokensave"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
@@ -395,7 +394,6 @@ type Orchestrator struct {
 	OMP        OMPAdapter
 	ClaudeCode ClaudeCodeAdapter
 	Codex      CodexAdapter
-	Serena     SerenaAdapter
 	Kivgraph   KivgraphAdapter
 	Tokensave  TokensaveAdapter
 	Desktop    DesktopAdapter
@@ -514,13 +512,8 @@ type CodexAdapter struct {
 // Instance is how many copies of a managed server there should be, and what
 // distinguishes one from another.
 //
-// It exists because of one measured thing. Serena's `activate_project` is
-// process-wide: a second chat pointing the same process at a different
-// repository takes the first one's language server down with it, so two
-// projects cannot stay warm in one process. This machine already solved that
-// by hand -- two systemd units, identical but for a port and a `--project`,
-// one per repository -- which is a policy typed out per repository in a place
-// Atenea could not see. Naming it here makes it a rule instead.
+// It separates machine-wide state from session- or repository-scoped state.
+// Each adapter validates which instance policies it can actually support.
 //
 // The set is deliberately small and closed. Unknown values are refused rather
 // than read as the default, for the reason every other refusal in this file
@@ -596,28 +589,6 @@ type ManagedProcess struct {
 	Instance Instance
 }
 
-// SerenaAdapter configures the Serena adapter.
-//
-// Serena is the first far side that is not a CLI: it is an MCP server behind a
-// local proxy. Nothing above this line changes because of that -- a capability
-// does not care whether its provider is a command or a server, which is the
-// point of having the seam at all.
-type SerenaAdapter struct {
-	// Endpoint is where the MCP server is listening. Ignored once Process is
-	// set: a managed server's real endpoint is whatever port the supervisor
-	// actually chose, never this one.
-	Endpoint string
-	// Implementations the adapter answers for.
-	Implementations []string
-	// Timeout caps one call. A language server indexing a cold repository is
-	// slow long before it is stuck.
-	Timeout time.Duration
-	// Process is set when Atenea should launch and supervise Serena itself.
-	// nil means Serena is assumed already running at Endpoint, unchanged
-	// from before this existed.
-	Process *ManagedProcess
-}
-
 // KivgraphAdapter configures the Kivgraph adapter.
 //
 // Kivgraph is the second far side that is not a CLI. For most of this
@@ -629,7 +600,7 @@ type SerenaAdapter struct {
 // streamable HTTP at a fixed local URL, refuses every request without a
 // bearer token (401), and is ordinarily already running under its own
 // systemd user unit before Atenea starts, the same "assume it is there"
-// shape Serena's own Endpoint assumes for its proxy. Endpoint and Token name
+// externally managed endpoint model. Endpoint and Token name
 // that server; Process remains for the stdio child, now one of two ways to
 // reach Kivgraph rather than the only one.
 type KivgraphAdapter struct {
@@ -647,9 +618,7 @@ type KivgraphAdapter struct {
 	Binary string
 	// Implementations the adapter answers for.
 	Implementations []string
-	// Timeout caps one call. It sits at Serena's own
-	// ceiling: opening a graph database cold is slow long before it is
-	// stuck.
+	// Timeout caps one call, allowing for a cold graph database to open.
 	Timeout time.Duration
 	// IndexTimeout caps a full repository.index rebuild separately from reads.
 	IndexTimeout time.Duration
@@ -670,7 +639,7 @@ type KivgraphAdapter struct {
 // TokensaveAdapter configures the tokensave adapter.
 //
 // Same transport as Kivgraph -- a stdio MCP server Atenea spawns and
-// supervises -- and one field neither Kivgraph nor Serena needs: Root.
+// supervises -- and one field Kivgraph does not need: Root.
 // Kivgraph publishes one corpus addressed by repository NAME, while
 // tokensave serves ONE project rooted at a directory and speaks paths
 // relative to it, so the adapter cannot translate a repository-relative path
@@ -956,14 +925,13 @@ func DefaultLocalAgents() LocalAgents {
 	}
 }
 
-// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
+// RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
 // RunnerTokensave, RunnerDesktop, RunnerScrapling and RunnerLocal are the
 // values orchestrator.runners accepts.
 const (
 	RunnerOMP        = "omp"
 	RunnerClaudeCode = "claudecode"
 	RunnerCodex      = "codex"
-	RunnerSerena     = "serena"
 	RunnerKivgraph   = "kivgraph"
 	RunnerTokensave  = "tokensave"
 	RunnerDesktop    = "desktop"
@@ -1406,7 +1374,6 @@ type fileOrchestrator struct {
 	OMP        fileOMPAdapter        `toml:"omp"`
 	ClaudeCode fileClaudeCodeAdapter `toml:"claudecode"`
 	Codex      fileCodexAdapter      `toml:"codex"`
-	Serena     fileSerenaAdapter     `toml:"serena"`
 	Kivgraph   fileKivgraphAdapter   `toml:"kivgraph"`
 	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
 	Desktop    fileDesktopAdapter    `toml:"desktop"`
@@ -1455,13 +1422,6 @@ type fileCodexAdapter struct {
 	Timeout         string    `toml:"timeout"`
 }
 
-type fileSerenaAdapter struct {
-	Endpoint        string              `toml:"endpoint"`
-	Implementations *[]string           `toml:"implementations"`
-	Timeout         string              `toml:"timeout"`
-	Process         *fileManagedProcess `toml:"process"`
-}
-
 // fileKivgraphAdapter is the TOML shape of KivgraphAdapter. It reuses
 // fileManagedProcess for its own .process table: the shape a supervised
 // server takes in the settings file does not depend on which transport it
@@ -1506,7 +1466,7 @@ type fileTokensaveAdapter struct {
 }
 
 // fileManagedProcess uses a pointer on the field above so an omitted
-// [orchestrator.serena.process] table and a present-but-empty one are
+// [orchestrator.kivgraph.process] table and a present-but-empty one are
 // different: the first leaves Process nil (unmanaged, unchanged behavior),
 // the second is a user who opted in without a command, which is an error
 // worth naming rather than silently doing nothing.
@@ -2043,12 +2003,18 @@ func parse(raw []byte, source string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+		if impl.Provider == "serena" || strings.HasPrefix(impl.ID, "serena.") {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove implementation %s", source, impl.ID)
+		}
 		cfg.Implementations = append(cfg.Implementations, impl)
 	}
 	for _, raw := range decoded.Repositories {
 		repo, err := raw.build(source)
 		if err != nil {
 			return Config{}, err
+		}
+		if repo.IndexedBy("serena") {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove indexed_by entry from %s", source, repo.ID)
 		}
 		cfg.Repositories = append(cfg.Repositories, repo)
 	}
@@ -2101,6 +2067,9 @@ func parse(raw []byte, source string) (Config, error) {
 		server, err := raw.build(source)
 		if err != nil {
 			return Config{}, err
+		}
+		if server.ID == "serena" {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: Serena is retired; remove its MCP declaration", source)
 		}
 		if seen[server.ID] {
 			return Config{}, contract.Fail(contract.FailureInvalidInput,
@@ -2173,10 +2142,8 @@ var defaultClaudeImplementations = []string{"claude.search"}
 
 var defaultCodexImplementations = []string{"codex.search"}
 
-// Los defaults de kivgraph y tokensave se leen de sus propios paquetes, como
-// ya hace serena: un numero declarado dos veces es un
-// numero que puede discrepar. Ninguno de los dos adapters importa
-// internal/config, asi que no hay ciclo posible.
+// Kivgraph and Tokensave defaults come from their own packages so they cannot
+// drift from the adapters. Neither adapter imports internal/config.
 
 // contractRemedy names the edit that fixes a refused settings file, because
 // the two numbers alone do not say which of them is meant to move.
@@ -2205,7 +2172,7 @@ var clientDeniedCapabilitiesDefault = []string{
 // that produces a second, more confusing failure.
 func contractRemedy(declared contract.Version) string {
 	if declared.Major < contract.Current.Major {
-		return fmt.Sprintf("change the contract line to %q; no other key moves", contract.Current)
+		return fmt.Sprintf("remove Serena runner, adapter/process, MCP, implementations and indexed_by entries, then change the contract line to %q", contract.Current)
 	}
 	return "this file was written for a newer core; upgrade atenea"
 }
@@ -2236,11 +2203,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			AppBinary:       codex.DefaultAppBinary,
 			Implementations: defaultCodexImplementations,
 			Timeout:         codex.DefaultTimeout,
-		},
-		Serena: SerenaAdapter{
-			Endpoint:        serena.DefaultEndpoint,
-			Implementations: serena.DefaultImplementations(),
-			Timeout:         serena.DefaultTimeout,
 		},
 		Kivgraph: KivgraphAdapter{
 			Endpoint:        kivgraph.DefaultEndpoint,
@@ -2324,12 +2286,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		list := make([]string, 0, len(*o.Runners))
 		for _, name := range *o.Runners {
 			switch name {
-			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena, RunnerKivgraph,
+			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
 				RunnerTokensave, RunnerDesktop, RunnerScrapling, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s, %s",
-					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerSerena,
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
+					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex,
 					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerScrapling, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
@@ -2375,11 +2337,6 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Codex = codexAdapter
-	symbols, err := o.Serena.build(source, out.Serena)
-	if err != nil {
-		return Orchestrator{}, err
-	}
-	out.Serena = symbols
 	graph, err := o.Kivgraph.build(source, out.Kivgraph)
 	if err != nil {
 		return Orchestrator{}, err
@@ -2728,42 +2685,12 @@ func (c fileCodexAdapter) build(source string, out CodexAdapter) (CodexAdapter, 
 	return out, nil
 }
 
-func (s fileSerenaAdapter) build(source string, out SerenaAdapter) (SerenaAdapter, error) {
-	if strings.TrimSpace(s.Endpoint) != "" {
-		out.Endpoint = strings.TrimSpace(s.Endpoint)
-	}
-	if s.Implementations != nil {
-		out.Implementations = *s.Implementations
-	}
-	if s.Timeout != "" {
-		timeout, err := time.ParseDuration(s.Timeout)
-		if err != nil {
-			return SerenaAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.timeout %q: %v", source, s.Timeout, err)
-		}
-		if timeout <= 0 {
-			return SerenaAdapter{}, contract.Fail(contract.FailureInvalidInput,
-				"settings %s: orchestrator.serena.timeout must be above 0, got %s", source, timeout)
-		}
-		out.Timeout = timeout
-	}
-	if s.Process != nil {
-		process, err := s.Process.build(source, "orchestrator.serena.process")
-		if err != nil {
-			return SerenaAdapter{}, err
-		}
-		out.Process = &process
-	}
-	return out, nil
-}
-
 // build is additive over the passed-in defaults, never zeroing: an omitted
 // key keeps whatever the caller already put in out (the compiled-in
 // defaults), the same shape every other adapter's build follows -- with one
 // exception. A file that leaves the whole orchestrator.kivgraph table
 // untouched is left exactly as out already was, kivgraph.DefaultEndpoint and
-// all: the same "assume the daemon is already there" fallback Serena's own
-// compiled endpoint gives it. The moment any field in this table IS written,
+// all: the daemon is assumed already available at the compiled endpoint. The moment any field in this table IS written,
 // though, the operator has started answering "where is this server" for
 // themselves, and endpoint and process are the two answers TOML can give:
 // naming both, or naming neither, is refused here instead of discovered
@@ -2999,9 +2926,9 @@ func (t fileTokensaveAdapter) build(source string, out TokensaveAdapter) (Tokens
 
 // build turns the file shape of a process table into a ManagedProcess.
 // section is the settings key path this table lives at (e.g.
-// "orchestrator.serena.process"), used to name it in every error below --
+// "orchestrator.kivgraph.process"), used to name it in every error below --
 // this one function backs every supervised-process table in the file, and a
-// serena-shaped error naming kivgraph's own mistake would send the reader
+// provider-specific error naming kivgraph's own mistake would send the reader
 // to the wrong block.
 func (p fileManagedProcess) build(source, section string) (ManagedProcess, error) {
 	if strings.TrimSpace(p.Command) == "" {

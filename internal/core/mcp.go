@@ -876,9 +876,8 @@ func (v *conversation) repositoriesTool() map[string]any {
 		"description": "List every repository registered with Atenea: name, absolute path on disk, " +
 			"languages present, and which providers hold a ready index. " +
 			"Call this before any code or symbol tool when you do not already know the repository name. " +
-			"Symbol tools (symbol.*) require serena and a language server for the repo's languages; " +
-			"Dart does not currently have a serena language server, so symbol tools are refused for " +
-			"Dart-only repositories. Code-search and impact tools require the repository to be " +
+			"Symbol tools require a compatible provider and ready index. Check tools/list for offered capabilities. " +
+			"Code-search and impact tools require the repository to be " +
 			"indexed by the provider (check indexed_by).",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 	}

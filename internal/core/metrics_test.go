@@ -211,11 +211,11 @@ func TestAProviderThatKeepsFailingLeavesTheFunnel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if before.Chosen.ID != "serena.search" {
-		t.Fatalf("chosen = %s before any failure, want serena.search", before.Chosen.ID)
+	if before.Chosen.ID != "fixture.search" {
+		t.Fatalf("chosen = %s before any failure, want fixture.search", before.Chosen.ID)
 	}
 
-	poison(t, base, "serena.search", "serena", metrics.FaultStreak)
+	poison(t, base, "fixture.search", "fixture", metrics.FaultStreak)
 
 	after, err := atenea.Select("code.search", "api")
 	if err != nil {
@@ -233,13 +233,13 @@ func TestAProviderThatKeepsFailingLeavesTheFunnel(t *testing.T) {
 			continue
 		}
 		for _, dropped := range stage.Dropped {
-			if dropped.Implementation == "serena.search" {
+			if dropped.Implementation == "fixture.search" {
 				reason = dropped.Reason
 			}
 		}
 	}
 	if reason == "" {
-		t.Fatalf("the health stage never mentions serena.search: %+v", after.Stages)
+		t.Fatalf("the health stage never mentions fixture.search: %+v", after.Stages)
 	}
 	if !strings.Contains(reason, "in a row") || !strings.Contains(reason, "not logged in") {
 		t.Errorf("reason %q does not say how many failed nor what the provider said", reason)
@@ -262,8 +262,8 @@ func TestAStaleOutageStopsCountingSoTheProviderIsTriedAgain(t *testing.T) {
 			RunID:          "audit",
 			StepID:         "ask",
 			Capability:     "code.search",
-			Implementation: "serena.search",
-			Provider:       "serena",
+			Implementation: "fixture.search",
+			Provider:       "fixture",
 			Repository:     "api",
 			ToolVersion:    "1.0.0",
 			FailureKind:    string(contract.FailureUnavailable),
@@ -278,8 +278,8 @@ func TestAStaleOutageStopsCountingSoTheProviderIsTriedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if decision.Chosen.ID != "serena.search" {
-		t.Errorf("chosen = %s, want serena.search: an hour-old outage still had it banned",
+	if decision.Chosen.ID != "fixture.search" {
+		t.Errorf("chosen = %s, want fixture.search: an hour-old outage still had it banned",
 			decision.Chosen.ID)
 	}
 }

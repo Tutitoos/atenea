@@ -35,7 +35,7 @@ func seeded(t *testing.T) *registry.Registry {
 	if err := reg.AddCapability(codeSearch()); err != nil {
 		t.Fatalf("AddCapability: %v", err)
 	}
-	for _, i := range []contract.Implementation{impl("serena.search", "serena"), impl("ripgrep", "ripgrep")} {
+	for _, i := range []contract.Implementation{impl("fixture.search", "fixture"), impl("ripgrep", "ripgrep")} {
 		if err := reg.AddImplementation(i); err != nil {
 			t.Fatalf("AddImplementation %s: %v", i.ID, err)
 		}
@@ -92,7 +92,7 @@ func TestImplementationsForIsSortedAndComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImplementationsFor: %v", err)
 	}
-	if len(impls) != 2 || impls[0].ID != "ripgrep" || impls[1].ID != "serena.search" {
+	if len(impls) != 2 || impls[0].ID != "fixture.search" || impls[1].ID != "ripgrep" {
 		t.Fatalf("got %v", impls)
 	}
 }
@@ -229,13 +229,13 @@ func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 		}
 	}
 	want := contract.Health{State: contract.HealthDown, Reason: "no language server"}
-	if err := reg.SetHealth("web", "serena.search", want); err != nil {
+	if err := reg.SetHealth("web", "fixture.search", want); err != nil {
 		t.Fatalf("SetHealth: %v", err)
 	}
 
 	// The declaration itself never moves: it is what the operator wrote, and
 	// the status screen still has to be able to show it.
-	declared, err := reg.Implementation("serena.search")
+	declared, err := reg.Implementation("fixture.search")
 	if err != nil {
 		t.Fatalf("Implementation: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 		{"api", declared.Health.State},
 	} {
 		for _, got := range reg.Observed(tc.repository, slices.Clone(impls)) {
-			if got.ID != "serena.search" {
+			if got.ID != "fixture.search" {
 				continue
 			}
 			if got.Health.State != tc.want {
@@ -267,7 +267,7 @@ func TestSetHealthRecordsWhatOneRepositoryFound(t *testing.T) {
 	if err := reg.SetHealth("web", "nope", want); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("unknown implementation: kind = %v", contract.KindOf(err))
 	}
-	if err := reg.SetHealth("nope", "serena.search", want); contract.KindOf(err) != contract.FailureNotFound {
+	if err := reg.SetHealth("nope", "fixture.search", want); contract.KindOf(err) != contract.FailureNotFound {
 		t.Errorf("unknown repository: kind = %v", contract.KindOf(err))
 	}
 	if err := reg.SetHealth("web", "ripgrep", contract.Health{Score: 2}); err == nil {
@@ -361,16 +361,16 @@ func TestReadsAreDefensiveCopies(t *testing.T) {
 	if err := reg.AddCapability(codeSearch()); err != nil {
 		t.Fatalf("AddCapability: %v", err)
 	}
-	serena := impl("serena.search", "serena")
-	serena.Constraints.Languages = []string{"go"}
-	if err := reg.AddImplementation(serena); err != nil {
+	fixture := impl("fixture.search", "fixture")
+	fixture.Constraints.Languages = []string{"go"}
+	if err := reg.AddImplementation(fixture); err != nil {
 		t.Fatalf("AddImplementation: %v", err)
 	}
 
 	// Mutating the value we registered must not reach the registry either.
-	serena.Constraints.Languages[0] = "rust"
+	fixture.Constraints.Languages[0] = "rust"
 
-	got, err := reg.Implementation("serena.search")
+	got, err := reg.Implementation("fixture.search")
 	if err != nil {
 		t.Fatalf("Implementation: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestReadsAreDefensiveCopies(t *testing.T) {
 	}
 	got.Constraints.Languages[0] = "php"
 
-	again, err := reg.Implementation("serena.search")
+	again, err := reg.Implementation("fixture.search")
 	if err != nil {
 		t.Fatalf("Implementation: %v", err)
 	}

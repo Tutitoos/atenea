@@ -1,5 +1,5 @@
 // Package contract defines the wire contract shared by the Atenea core and its
-// adapters: omp, Claude Code and Codex for client CLIs, Serena for symbols,
+// adapters: omp, Claude Code and Codex for client CLIs,
 // and Kivgraph and Tokensave for graph and context operations. OpenCode is an
 // opt-in model backend rather than an adapter, and does not compile against
 // this package.
@@ -344,7 +344,9 @@ type Version struct {
 // error for anything it cannot read: a call nobody can key is filed the way
 // every call was filed before this existed, which is a worse baseline and not
 // a wrong answer.
-var Current = Version{Major: 3, Minor: 6, Patch: 0}
+// 4.0.0 retires Serena configuration, runners and implementations. Remove
+// Serena declarations and indexes before migrating a 3.x settings file.
+var Current = Version{Major: 4, Minor: 0, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

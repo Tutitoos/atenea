@@ -265,7 +265,7 @@ func TestNothingDeclaredStillHandsTheClientTheDoor(t *testing.T) {
 
 // The defect this phase existed to fix, pinned so it cannot come back.
 //
-// `serena` carries every relevant capability on the machine this
+// `fixture` carries every relevant capability on the machine this
 // was measured on, and wrap put both in the payload. The client then reached
 // the funnel's own backends without going through the funnel: no allow list,
 // no effect check, no receipt. The command that exists to point a client at
@@ -273,13 +273,13 @@ func TestNothingDeclaredStillHandsTheClientTheDoor(t *testing.T) {
 func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
 	url := live(t)
 	plan := wrap.Check(t.Context(), []config.MCPServer{
-		{ID: "serena", URL: url},
+		{ID: "fixture", URL: url},
 		{ID: "headroom", URL: url},
-	}, map[string]bool{"serena": true})
+	}, map[string]bool{"fixture": true})
 
 	servers := payload(t, plan)
-	if _, ok := servers["serena"]; ok {
-		t.Error("serena is in the payload; a capability's backend must be reached through the capability")
+	if _, ok := servers["fixture"]; ok {
+		t.Error("fixture is in the payload; a capability's backend must be reached through the capability")
 	}
 	// The other half of the same rule: holding back everything would be a
 	// different bug wearing this one's clothes. A backend nobody implements
@@ -287,13 +287,13 @@ func TestABackendBehindACapabilityIsNotHandedToTheClient(t *testing.T) {
 	if _, ok := servers["headroom"]; !ok {
 		t.Error("headroom is missing; a backend no capability uses is the client's to declare")
 	}
-	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "serena" {
-		t.Errorf("held = %v, want serena held", plan.Held)
+	if len(plan.Held) != 1 || plan.Held[0].Server.ID != "fixture" {
+		t.Errorf("held = %v, want fixture held", plan.Held)
 	}
 }
 
 // A held backend is still reported. Dropping it from the report would make
-// "my client cannot see serena" a silent outcome, and the operator would go
+// "my client cannot see fixture" a silent outcome, and the operator would go
 // looking in the settings file for something that is working as designed.
 func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 	plan := wrap.Check(t.Context(), []config.MCPServer{
@@ -313,22 +313,22 @@ func TestAHeldBackendIsStillNamedInTheReport(t *testing.T) {
 // because capabilities run on it is not re-offered at all.
 //
 // Measured on this machine on 2026-08-09, against the binary as shipped: wrap
-// announced raw.serena.<tool>, and `atenea mcp`
+// announced raw.fixture.<tool>, and `atenea mcp`
 // served neither -- 19 raw tools, every one of them chrome-devtools, context7
 // or semgrep, the three that carry expose. The check that exists to stop a
 // client believing an unverified claim was making two of its own.
 func TestOnlyARawBackendIsAnnouncedAsRaw(t *testing.T) {
 	url := live(t)
 	plan := wrap.Check(t.Context(), []config.MCPServer{
-		{ID: "serena", URL: url},
+		{ID: "fixture", URL: url},
 		{ID: "context7", URL: url, Expose: config.ExposeRaw},
-	}, map[string]bool{"serena": true})
+	}, map[string]bool{"fixture": true})
 
 	var report strings.Builder
 	plan.Report(&report, "opencode")
 	got := report.String()
-	if strings.Contains(got, "raw.serena.<tool>") {
-		t.Errorf("report announces a raw surface serena does not have:\n%s", got)
+	if strings.Contains(got, "raw.fixture.<tool>") {
+		t.Errorf("report announces a raw surface fixture does not have:\n%s", got)
 	}
 	// The other half, or the fix is just a deletion: a backend that really
 	// is re-offered must still say so, under the name it answers to.

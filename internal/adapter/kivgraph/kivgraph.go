@@ -11,7 +11,7 @@
 // The graph itself is one global corpus, not one per repository. kivgraph
 // indexes a whole workspace (`kivgraph index --full`) and publishes a single snapshot every
 // reader shares by atomic generation; there is no per-repository index to
-// warm or retarget the way Serena's active project has to be, which is why
+// warm or retarget the way MCP server's active project has to be, which is why
 // the declared instance policy is "shared" and only "shared" -- see
 // internal/core's wiring for the refusal when a settings file asks for
 // anything else.
@@ -207,7 +207,7 @@ const defaultSnippetLines = 3
 const repositoryKeyPrefix = "repository:"
 
 // DefaultTimeout caps one call. kivgraph opens a published graph snapshot
-// and walks it, which sits at the same class of cost Serena and
+// and walks it, which sits at the same class of cost MCP server and
 // graph providers already pay for a cold cache -- slow long before it is
 // stuck -- so this matches their own ceiling rather than inventing a new
 // one.
@@ -219,7 +219,7 @@ const DefaultIndexTimeout = 10 * time.Minute
 
 // DefaultEndpoint is where kivgraph's own daemon listens when nothing else
 // is configured: `kivgraph daemon` serves streamable-HTTP MCP at a fixed
-// local port, the same "assume it's already running" shape Serena's own
+// local port, the same "assume it's already running" shape MCP server's own
 // DefaultEndpoint assumes for its proxy.
 const DefaultEndpoint = "http://127.0.0.1:7788/mcp"
 
@@ -456,7 +456,7 @@ func (r *Runner) outcome(started time.Time, result map[string]any, notes []strin
 	outcome := contract.Outcome{
 		Result:  result,
 		Verdict: contract.VerdictOK,
-		// No memory figure: like Serena, kivgraph runs in a process the
+		// No memory figure: like MCP server, kivgraph runs in a process the
 		// supervisor owns, not one this call spawned, so there is nothing
 		// here to weigh.
 		Spent: contract.Sample{Duration: time.Since(started)},

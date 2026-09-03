@@ -2,7 +2,7 @@ package supervisor
 
 // probe speaks just enough MCP to answer one question: is a real MCP server
 // listening and willing to open a session. It is a second, small
-// implementation of the same wire format internal/adapter/serena/mcp.go
+// implementation of the same wire format internal/mcphttp/mcphttp.go
 // already speaks, kept apart on purpose -- that file is the adapter's own
 // connection, held open and reused across calls; this one is a health check
 // that opens a session, learns the answer, and throws it away. Sharing code
@@ -38,7 +38,7 @@ func probeHTTP(ctx context.Context, client *http.Client, endpoint string) error 
 }
 
 // protocolVersion is the MCP revision the probe declares in its handshake.
-// It matches internal/adapter/serena/mcp.go's own constant: a server that
+// It matches internal/mcphttp/mcphttp.go's own constant: a server that
 // cannot answer this revision should say so at the handshake, which is
 // exactly the failure this probe exists to catch before a real call does.
 const protocolVersion = "2025-06-18"
@@ -107,7 +107,7 @@ func probeReady(ctx context.Context, client *http.Client, endpoint string) error
 }
 
 // readProbePayload reads one response document without waiting for a
-// streamable-HTTP session to close. Serena and other MCP servers keep an SSE
+// streamable-HTTP session to close. MCP server and other MCP servers keep an SSE
 // response open for the life of the session; io.ReadAll would therefore turn a
 // successful initialize into a timeout, cancel the request, and make the
 // server report ClientDisconnect. A readiness probe only needs the first

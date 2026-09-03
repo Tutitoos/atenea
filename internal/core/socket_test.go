@@ -244,7 +244,7 @@ func ask(t *testing.T, line string) string {
 }
 
 const socketSettings = `
-contract = "3.0.0"
+contract = "4.0.0"
 
 [core]
 shutdown_grace = "2s"

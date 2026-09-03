@@ -63,9 +63,8 @@ from an explicitly empty one, deliberately:
 | nothing | the built-in list stands |
 | `[]` | genuinely nothing: dispatch nowhere, skip no directory, treat no file as sensitive |
 
-Strip `implementations` out of `[orchestrator.serena]` and Serena still answers
-for all five symbol capabilities. Write `implementations = []` in the same
-place and it answers for none, while every other key in the block keeps working.
+Strip `implementations` out of `[orchestrator.kivgraph]` and its built-in list stands.
+Write `implementations = []` to disable all of that adapter's implementations.
 
 `effects` is the one list that does not play by this rule, because a grant
 nobody wrote down is a grant nobody made. Leave it out and you have none, not
@@ -136,7 +135,7 @@ budget_usd = 0.90           # what ONE COMMISSION may spend, across every step
 effects = ["process"]       # granted standing to every commission and question
 client_effects = ["process"] # the same, for a chat a client opened; also its ceiling
 client_denied_capabilities = ["desktop.move", "desktop.click"] # MCP kill switch
-  runners = ["omp"]           # any of omp, claudecode, codex, serena, kivgraph, tokensave, local; [] dispatches nowhere
+  runners = ["omp"]           # any of omp, claudecode, codex, kivgraph, tokensave, desktop, scrapling, local; [] dispatches nowhere
 checkpoints = true          # false is the only way to stop writing run receipts
 checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
 
@@ -165,35 +164,12 @@ checkpoint_dir = ""         # "" uses $XDG_STATE_HOME/atenea/runs
   implementations = ["codex.search"]
   timeout = "90s"
 
-  [orchestrator.serena]
-  endpoint = "http://127.0.0.1:40010/mcp"   # a server, not a binary
-  implementations = ["serena.definition", "serena.references", "serena.implementations",
-                     "serena.overview", "serena.symbol_search"]
-  timeout = "90s"                      # a language server indexing cold is slow, not stuck
-
-  # Optional. Present means Atenea launches and watches the server itself,
-  # instead of expecting one already listening at the `endpoint` above.
-  [orchestrator.serena.process]
-  command = "serena"                   # required once this table exists
-  args = ["start-mcp-server", "--transport", "streamable-http",
-          "--host", "127.0.0.1", "--port", "{{port}}", "--project", "{{project}}"]
-  env = ["SERENA_LOG_LEVEL=WARNING"]   # added to the inherited environment
-  lifecycle = "on_demand"              # required: "persistent" or "on_demand"
-  instance = "per_repository"          # "shared" (default) or one copy per repository
-  port = 0                             # 0 lets the OS choose; {{port}} receives it
-  ready_timeout = "15s"                # one spawn's window to answer the handshake
-  restart_limit = 2                    # retries after a crash; 0 never retries
-  restart_delay = "2s"                 # pause between a crash and the next try
-  stable_after = "30s"                 # uptime that earns a fresh restart budget
-  idle_timeout = "5m"                  # on_demand only; refused beside persistent
-  stop_grace = "5s"                    # SIGTERM, then SIGKILL
-
   [orchestrator.tokensave]
   root = "/srv/workspace"              # required, and ABSOLUTE: every path is relative to it
   implementations = ["tokensave.context", "tokensave.calls", "tokensave.overview"]
   timeout = "90s"                      # re-syncs its own index first: kivgraph's class, not omp's
 
-    # Not optional the way Serena's is: a stdio child has no address to dial.
+    # Required: a stdio child has no address to dial.
     [orchestrator.tokensave.process]
     command = "tokensave"              # required once this table exists
     args = ["serve", "--path", "/srv/workspace"]
@@ -219,14 +195,7 @@ smaller one.
 `runners` names the far sides of the contract, and it is a list because several
 can be attached at once. `omp` is the client adapter that ships attached.
 `claudecode` drives the Claude Code CLI and is off by default, because it is
-the only far side that costs money per call. `serena` is not a CLI at all: it
-is an MCP server, which is why its block takes a URL instead of a binary, and
-it answers the five symbol capabilities rather than a text search.
-`kivgraph` and `tokensave` are graph-backed MCP providers. `local` is a
-stand-in that searches the disk directly, for a machine with no client
-installed. An empty list leaves the core able to plan and choose but unable to
-dispatch — a working core with nobody attached, and the status screen says so
-rather than failing halfway through a commission.
+the only far side that costs money per call. Graph providers speak MCP rather than a client CLI.
 
 `local` and `omp` both answer for `ripgrep`, so attaching both is refused by the
 rule below and the choice between them is exclusive. It is worth making
@@ -389,93 +358,22 @@ than blanking it: `checkpoint_dir = ""` keeps writing, to
 wins over an explicit path written beside it. `atenea status` reports which
 way it went on its `runs` line — a directory, or `off`.
 
-### A far side Atenea launches itself
+### Managed processes
 
-`serena` is the one far side that is a server rather than a command, so it is
-the only one that can be already running, or not running at all, before Atenea
-starts. Leaving `[orchestrator.serena.process]` out keeps that arrangement: an
-externally managed server, taken on faith at whatever `endpoint` names.
-Declaring the table hands the job to Atenea instead — which is what retires a
-hand-written systemd unit or a terminal nobody may close.
-
-Declaring it also settles the address. `endpoint` is not what gets dialed and
-not what the status screen reports — that is the supervisor's own address:
-`127.0.0.1`, the port below, and Serena's MCP path. The written one is still
-checked, though, so a file means the same thing whether or not a process table
-happens to sit beside it: an `endpoint` that could never work is refused
-either way, and deleting the table later cannot turn a file that always loaded
-into one that suddenly does not.
-
-`command` and `lifecycle` are the two required keys once the table exists;
-every other knob has a default. `persistent` is launched at startup and kept
-alive. `on_demand` waits for the first call that needs it and is stopped again
-after `idle_timeout` — which is why writing `idle_timeout` beside
-`persistent` is refused rather than ignored. The idle reaper skips persistent
-servers, so the key would sit there doing nothing with nothing anywhere to say
-so. That is the test the whole file is held to: a knob that stops applying has
-to have something visible explaining why. `enabled = false` and
-`restart_limit = 0` pass it — they sit in the same table as what they switch
-off, and `atenea status` reports the result as `off`. This one had no such
-witness, so it is a load error instead.
-
-An omitted `port`, or `0`, has the OS pick a free one — and Atenea then has to
-tell the server which port it picked, which is what `{{port}}` is for: every
-occurrence in `args` becomes the chosen port, the same one the readiness probe
-then dials. Pin a port instead when something outside Atenea also has to find
-the server; `{{port}}` receives it either way. `env` is added to the
-environment Atenea already has rather than replacing it, so `PATH` survives
-and a named key overrides.
-
-`restart_limit` counts retries after a crash, not attempts: `2`, the default,
-means three spawns before the server is marked down for good, and `0` means
-the first crash is final. It is the one knob here where zero is a real
-setting rather than a key nobody wrote, which is why leaving it out gives you
-`2` and not nothing.
-
-A server that never comes up fails at the guard rather than at the adapter,
-because the guard is what waits for it: the call comes back `unavailable`
-saying `serena did not come up`, with the reason it did not carried alongside
-untranslated.
-
-### One Serena, or one per repository
-
-`instance` says how many copies of the server should exist. `shared`, the
-default and what every managed server did before the key existed, is one
-process for the machine: whichever repository calls first activates its
-project, and a call for a second repository retargets it with
-`activate_project`. That retarget is the cost — a language server torn down
-and reindexed — and it is paid on every alternation, so work that moves
-between two repositories pays it twice per round trip.
-
-`per_repository` spends memory to remove it: one process per `[[repository]]`,
-each started against its own project and never retargeted. They are named
-after the repository they serve, so `atenea status` lists `serena@api` beside
-`serena@web` rather than one row that could be either. Each gets its own port
-and its own session, and the funnel reaches whichever one belongs to the
-repository in the request.
-
-Two things are refused rather than accepted and quietly broken. `{{project}}`
-has to appear in `args` — it is replaced with the repository's path, and
-without it every copy would be launched against the same project, which is N
-identical servers wearing different names. And `port` cannot be fixed: the
-second copy would fail to bind, so the port is Atenea's to pick per process.
-The same two rules run the other way too — `{{project}}` under `shared` is
-refused, because there is no repository to substitute and the placeholder
-would reach the server literally.
-
-Health follows the same split. A provider is not up or down in the abstract:
-Serena with no TypeScript language server is down for a TypeScript repository
-and alive for a Go one, and under this policy the two are not even the same
-process. So what probing finds is recorded per repository, the funnel filters
-on what the repository in front of it found, and `atenea status` names the
-repository that found the failure — `health=down (on web: ...)`. A verdict
-from one repository never refuses work on another.
+A managed process requires `command` and `lifecycle`. `persistent` starts at
+service startup; `on_demand` starts on first use and stops after `idle_timeout`.
+`restart_limit` defaults to 2 retries; 0 disables retries. `restart_delay`,
+`stable_after`, `ready_timeout` and `stop_grace` bound recovery and shutdown.
+`env` adds variables to the inherited environment. For HTTP processes, `port = 0`
+allocates a free port and substitutes `{{port}}` in `args`.
+Kivgraph uses a shared corpus; Tokensave serves one root. Neither adapter accepts
+`instance = "per_repository"`. MCP stdio declarations support `shared` and `per_chat`.
 
 ### The far side that serves one root
 
 `tokensave` is a stdio server rather than an HTTP one, so there is no
 `endpoint` for it to fall back on and `[orchestrator.tokensave.process]` is
-not the optional table Serena's is. Naming `tokensave` in `runners` without
+required. Naming `tokensave` in `runners` without
 one is refused at startup — `tokensave has no process to launch -- a stdio
 server has no address to dial without one` — because there is nothing else in
 the block that could say where the far side is.
@@ -1161,8 +1059,8 @@ in particular.
 
 ```toml
 [[implementation]]
-id = "serena.search"
-provider = "serena"         # who owns the index; several implementations may share one
+id = "fixture.search"
+provider = "fixture"         # illustrative provider, not a shipped adapter
 capability = "code.search"
 scope_guarantee = ""        # "", filtered, confined -- see below
 
@@ -1210,7 +1108,7 @@ The graph provider ships `{ depth = 0 }`: its graph holds what a file
 declares at its own top level and nothing nested inside those declarations, so
 a deeper ask would return the same list and read as a complete answer.
 At `depth = 0` both providers are candidates and the funnel ranks them; at
-`depth = 1` it is dropped in the constraints stage and Serena, which descends
+`depth = 1` it is dropped in the constraints stage and the fixture provider, which descends
 properly, is the one left. The drop names both numbers.
 
 A bound on an input the capability does not declare, or declares as anything
@@ -1237,19 +1135,14 @@ path = "/srv/api"
 languages = ["go"]
 scale = "small"             # "", small, medium, large
 vcs = "present"             # "", present, absent -- whether the root sits under version control
-indexed_by = ["serena"]     # providers with a ready index HERE
+indexed_by = ["fixture"]     # providers with a ready index HERE
 ```
 
 An unclassified `scale` or an unspecified `vcs` never disqualifies anyone: an
 unknown fact is not a proven mismatch, and dropping candidates over it would
 silently empty the funnel.
 
-There is no per-repository Serena URL here. Pinning one repository to its own
-Serena is a question about how many copies of that server should exist, and it
-is answered once for the machine by `[orchestrator.serena.process].instance`
-rather than one repository at a time -- see [Serena](#serena). The key that
-used to sit here named a process Atenea did not start, watch or stop, so a
-repository could point at an address that had nothing behind it.
+Repository indexes identify providers with a ready index; they do not launch processes.
 
 `path` has to be a directory that is really there. Every adapter makes it the
 working directory of the tool it launches, and a missing one used to come back
@@ -1783,7 +1676,7 @@ Tailscale Serve command; `--apply` is required to change Serve.
 
 ```toml
 [[mcp_server]]
-id = "serena"                        # the name the client will see
+id = "fixture"                        # the name the client will see
 url = "http://127.0.0.1:40010/mcp"   # http endpoint
 dashboard = "http://127.0.0.1:40010/dashboard"  # optional web UI; opened only by `atenea dashboard <id>`
 timeout = "5s"                       # bounds the check; omitted takes the default
@@ -1809,12 +1702,7 @@ URL is reachable first. `atenea dashboard hosts --dry-run` previews the
 idempotent, Atenea-managed block in `/etc/hosts`; writing that file requires
 the explicit `atenea dashboard hosts` command and appropriate permissions.
 
-Serena is the exception to a static `dashboard` URL: Atenea launches one
-instance per repository and Serena assigns each web dashboard a dynamic port.
-`atenea dashboard serena` discovers the dashboard whose active project matches
-the current working directory. Serena instances are warmed sequentially so
-their dashboard port selection cannot collide; their browser opening remains
-manual.
+Dashboards use the explicitly configured URL. No retired-provider discovery is performed.
 
 Kivgraph 0.9.2 has two separate processes: its native daemon, which serves MCP
 over authenticated streamable HTTP (stdio `kivgraph serve` remains an explicit
@@ -1992,7 +1880,7 @@ wrap opencode  4 checked: 3 declared, 0 refused, 1 held
 
   declared  chrome-devtools  http   http://127.0.0.1:40021/mcp  chrome_devtools 1.6.0 (2ms)
   declared  context7         http   http://127.0.0.1:40011/mcp  Context7 4.0.0 (478ms)
-  declared  serena           http   http://127.0.0.1:40010/mcp  Serena 1.28.1 (27ms)
+  declared  fixture           http   http://127.0.0.1:40010/mcp  the fixture provider 1.28.1 (27ms)
   held      semgrep          http   http://127.0.0.1:40020/mcp  Semgrep 1.23.3 (3ms)
                              served as raw.semgrep.<tool>; opencode is not pointed at it
 
@@ -2188,7 +2076,7 @@ repository api  /home/you/work/api
   global   languages   go
   local    scale       medium
   global   vcs         present
-  global   indexed_by  serena
+  global   indexed_by  fixture
 ```
 
 ### Which file applies
@@ -2357,9 +2245,9 @@ asks for, what happens here?
 
 ```
 asked for
-  funnel     serena (local)
-             -> provider serena: code.search, symbol.definition, symbol.references
-                via serena.definition, serena.references, serena.search
+  funnel     fixture (local)
+             -> provider fixture: code.search, symbol.definition, symbol.references
+                via fixture.definition, fixture.references, fixture.search
   vouched    context7 (local)
              declared by Atenea and handed to clients by `atenea wrap`
   unmatched  dart (local, off in the project's settings)

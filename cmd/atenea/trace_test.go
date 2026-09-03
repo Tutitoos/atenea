@@ -25,7 +25,7 @@ func drop(id, reason string) selector.Drop {
 // lines per step were the same three sentences, which buries the drops that
 // did vary -- the only ones worth reading a trace for.
 func TestDropsThatNeverVaryAreReportedOnce(t *testing.T) {
-	shared := drop("serena.search", "no attached runner serves it")
+	shared := drop("fixture.search", "no attached runner serves it")
 	steps := []orchestrator.StepResult{
 		stepWithDrops("explore", shared, drop("claude.search", "over budget")),
 		stepWithDrops("work", shared),
@@ -33,10 +33,10 @@ func TestDropsThatNeverVaryAreReportedOnce(t *testing.T) {
 
 	everywhere, static := staticDrops(steps)
 
-	if len(static) != 1 || static[0].implementation != "serena.search" {
-		t.Fatalf("static = %+v, want only serena.search", static)
+	if len(static) != 1 || static[0].implementation != "fixture.search" {
+		t.Fatalf("static = %+v, want only fixture.search", static)
 	}
-	if !everywhere[dropKey{"serena.search", "no attached runner serves it", ""}] {
+	if !everywhere[dropKey{"fixture.search", "no attached runner serves it", ""}] {
 		t.Error("the shared drop was not marked for collapsing")
 	}
 	// The one that appeared in a single step is the finding. Collapsing it
@@ -50,7 +50,7 @@ func TestDropsThatNeverVaryAreReportedOnce(t *testing.T) {
 // ask the drops are the whole story of that single funnel and belong inline.
 func TestASingleStepKeepsItsDropsInline(t *testing.T) {
 	everywhere, static := staticDrops([]orchestrator.StepResult{
-		stepWithDrops("ask", drop("serena.search", "no attached runner serves it")),
+		stepWithDrops("ask", drop("fixture.search", "no attached runner serves it")),
 	})
 	if len(everywhere) != 0 || len(static) != 0 {
 		t.Errorf("collapsed %+v on a one-step run", static)
@@ -61,7 +61,7 @@ func TestASingleStepKeepsItsDropsInline(t *testing.T) {
 // about any provider. Counting it as a step that "did not drop" would stop
 // every real repetition from ever collapsing.
 func TestAStepWithNoFunnelDecisionDoesNotBlockCollapsing(t *testing.T) {
-	shared := drop("serena.search", "no attached runner serves it")
+	shared := drop("fixture.search", "no attached runner serves it")
 	steps := []orchestrator.StepResult{
 		stepWithDrops("explore", shared),
 		stepWithDrops("work", shared),

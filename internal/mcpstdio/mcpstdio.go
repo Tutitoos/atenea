@@ -63,7 +63,7 @@ const maxFrame = 8 << 20
 type Options struct {
 	// ClientName and ClientVersion identify Atenea to the far side, the
 	// way every MCP client introduces itself. Default "atenea" / "0", the
-	// same identity internal/adapter/serena/mcp.go's own handshake uses.
+	// same identity internal/mcphttp/mcphttp.go's own handshake uses.
 	ClientName    string
 	ClientVersion string
 	// ProtocolVersion is the MCP revision this session declares. Default
@@ -195,7 +195,7 @@ func (s *Session) Version() string {
 }
 
 // Call runs one tool and returns the concatenated text of every text-typed
-// content entry, mirroring internal/adapter/serena/mcp.go's own call. A
+// content entry, mirroring internal/mcphttp/mcphttp.go's own call. A
 // result with isError=true becomes an error carrying that text, or the raw
 // frame clipped to 300 chars when the far side flagged a failure and then
 // said nothing about it.
@@ -409,16 +409,14 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 		return nil, s.deadReason()
 	case <-ctx.Done():
 		// The bin has to say which of the two this was -- a deadline this
-		// call ran into, or somebody upstream changing their mind -- the
-		// same distinction internal/adapter/serena/serena.go's failureFor
-		// makes with the same helper.
+		// call ran into, or somebody upstream changing their mind.
 		return nil, contract.Stopped(ctx.Err(), "mcpstdio", ceiling(ctx, start)).WithRaw(method)
 	}
 }
 
 // ceiling reports how long ctx allotted this call, the number
 // contract.Stopped quotes back to whoever reads the failure later. Unlike
-// serena.Runner's own r.timeout, a Session carries no fixed timeout of its
+// a runner's fixed timeout, a Session carries no fixed timeout of its
 // own -- the ceiling is whatever ctx each caller happens to bring to this
 // one call -- so it has to be read off ctx itself: the time still on its
 // deadline when this attempt started. A ctx with no deadline at all, only a
@@ -519,7 +517,7 @@ func (p *pending) clear() {
 
 // rpcRequest is one JSON-RPC call. ID is omitted for notifications, which is
 // what distinguishes them on the wire -- the same shape
-// internal/adapter/serena/mcp.go's own rpcRequest uses.
+// internal/mcphttp/mcphttp.go's own rpcRequest uses.
 type rpcRequest struct {
 	Version string `json:"jsonrpc"`
 	ID      int64  `json:"id,omitempty"`

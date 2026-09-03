@@ -8,11 +8,11 @@ import (
 )
 
 func TestNewRepositoryNormalisesInput(t *testing.T) {
-	repo := contract.NewRepository("web", "/srv/web", []string{" TypeScript ", "CSS"}, contract.ScaleMedium, contract.VCSUnspecified, []string{"Serena"})
+	repo := contract.NewRepository("web", "/srv/web", []string{" TypeScript ", "CSS"}, contract.ScaleMedium, contract.VCSUnspecified, []string{"Fixture"})
 	if !slices.Equal(repo.Languages, []string{"typescript", "css"}) {
 		t.Fatalf("languages = %v", repo.Languages)
 	}
-	if !repo.IndexedBy("serena") {
+	if !repo.IndexedBy("fixture") {
 		t.Fatal("provider index should be found case-insensitively")
 	}
 	if repo.IndexedBy("graph") {
@@ -23,9 +23,9 @@ func TestNewRepositoryNormalisesInput(t *testing.T) {
 // An index belongs to the tool that built it, not to one implementation of it:
 // two implementations of the same provider share the same warm index.
 func TestIndexesAreKeyedByProvider(t *testing.T) {
-	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleLarge, contract.VCSUnspecified, []string{"serena", "graph"})
+	repo := contract.NewRepository("api", "/srv/api", nil, contract.ScaleLarge, contract.VCSUnspecified, []string{"fixture", "graph"})
 	got := repo.Indexes()
-	if !slices.Equal(got, []string{"graph", "serena"}) {
+	if !slices.Equal(got, []string{"fixture", "graph"}) {
 		t.Fatalf("Indexes() = %v, want sorted providers", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestRepositoryValidate(t *testing.T) {
 }
 
 func TestRepositoryCloneDoesNotShareState(t *testing.T) {
-	original := contract.NewRepository("web", "/srv/web", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"serena"})
+	original := contract.NewRepository("web", "/srv/web", []string{"go"}, contract.ScaleSmall, contract.VCSUnspecified, []string{"fixture"})
 	clone := original.Clone()
 	clone.Languages[0] = "rust"
 	if original.Languages[0] != "go" {

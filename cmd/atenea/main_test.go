@@ -66,7 +66,7 @@ func TestMain(m *testing.M) {
 }
 
 const settings = `
-contract = "3.0.0"
+contract = "4.0.0"
 
 [[capability]]
 id = "code.search"
@@ -88,8 +88,8 @@ capability = "code.search"
   state = "alive"
 
 [[implementation]]
-id = "serena.search"
-provider = "serena"
+id = "fixture.search"
+provider = "fixture"
 capability = "code.search"
 
   [implementation.constraints]
@@ -217,7 +217,7 @@ func TestStatusShowsEveryProviderWithItsLight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	for _, want := range []string{"code.search", "ripgrep", "serena.search", "AMBER", "repositories", "api"} {
+	for _, want := range []string{"code.search", "ripgrep", "fixture.search", "AMBER", "repositories", "api"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output is missing %q:\n%s", want, out)
 		}
@@ -582,7 +582,7 @@ func TestSelectPrintsTheChoiceAndTheFunnel(t *testing.T) {
 	for _, want := range []string{
 		"chosen      ripgrep",
 		"2 in -> 1 out: ripgrep",
-		"dropped serena.search: needs an index from provider serena",
+		"dropped fixture.search: needs an index from provider fixture",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("select output is missing %q:\n%s", want, out)
@@ -1141,9 +1141,9 @@ func TestReadOnlyStatusAndIndexRenderers(t *testing.T) {
 	}
 	out.Reset()
 	printIndexReports(&out, []core.IndexReport{
-		{Repository: "api", Provider: "serena", Err: "probe failed"},
-		{Repository: "web", Provider: "serena", Ready: true},
-		{Repository: "docs", Provider: "serena", Hint: "index missing"},
+		{Repository: "api", Provider: "fixture", Err: "probe failed"},
+		{Repository: "web", Provider: "fixture", Ready: true},
+		{Repository: "docs", Provider: "fixture", Hint: "index missing"},
 	})
 	for _, want := range []string{"could not tell: probe failed", "ready", "not ready: index missing"} {
 		if !strings.Contains(out.String(), want) {

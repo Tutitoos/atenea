@@ -4,6 +4,9 @@ weight: 2
 dashboard: inventory
 ---
 
+> Historical evidence: any Serena references below describe a provider retired in
+> contract 4.0.0. They are not operational setup instructions.
+
 # Test inventory
 
 | Paquete | Descubiertos | Ejecutados | Pasados | Fallidos | Omitidos |
