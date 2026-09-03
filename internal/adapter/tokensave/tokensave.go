@@ -467,6 +467,10 @@ type statusAnswer struct {
 // Measured against v7.9.0 on every tool this adapter calls.
 const metricsPrefix = "tokensave_metrics:"
 
+// The update notice is a separate MCP text block, concatenated without a
+// newline by the transport. Only this known notice may precede a JSON answer.
+var updateNotice = regexp.MustCompile("^⚠️ tokensave v[0-9]+\\.[0-9]+\\.[0-9]+ is installed, but v[0-9]+\\.[0-9]+\\.[0-9]+ is available\\. Run `tokensave upgrade` to update\\.")
+
 // payloadOf is the JSON of one tool result, with that trailing report cut off.
 //
 // It is not decoration that can be ignored: json.Unmarshal on the whole text
@@ -476,10 +480,20 @@ const metricsPrefix = "tokensave_metrics:"
 // about the client's context window, not about the answer, so nothing here
 // forwards it.
 func payloadOf(text string) []byte {
-	if at := strings.Index(text, metricsPrefix); at >= 0 {
-		text = text[:at]
+	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(updateNotice.ReplaceAllString(text, ""))
+	// Decode the JSON boundary before looking for metrics: the marker may
+	// legitimately appear inside a JSON string. Unknown decoration stays an
+	// error for the caller's json.Unmarshal, rather than hiding corruption.
+	decoder := json.NewDecoder(strings.NewReader(text))
+	var payload json.RawMessage
+	if err := decoder.Decode(&payload); err == nil {
+		tail := strings.TrimSpace(text[decoder.InputOffset():])
+		if tail == "" || strings.HasPrefix(tail, metricsPrefix) {
+			return payload
+		}
 	}
-	return []byte(strings.TrimSpace(text))
+	return []byte(text)
 }
 
 // checkGraphReady is the guard every capability shares. tokensave answers a

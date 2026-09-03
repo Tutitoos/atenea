@@ -104,10 +104,35 @@ def load_toml(path):
         return tomllib.load(fh)
 
 
+def load_jsonc(path):
+    """JSONC comments/trailing commas, without rewriting quoted URLs or text."""
+    with open(path) as fh:
+        text = fh.read()
+    token = r'"(?:[^"\\]|\\.)*"'
+    text = re.sub(token + r'|//[^\r\n]*|/\*[\s\S]*?\*/',
+                  lambda m: m[0] if m[0].startswith('"') else ' ', text)
+    text = re.sub(token + r'|,(?=\s*[}\]])',
+                  lambda m: m[0] if m[0].startswith('"') else '', text)
+    return json.loads(text)
+
+
+def opencode_configs():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
+    return [os.path.join(base, "opencode", "opencode." + ext)
+            for ext in ("json", "jsonc")]
+
+
 # ---------------------------------------------------------------- omp
 def check_omp():
-    path = os.path.join(HOME, ".omp", "agent", "mcp.json")
-    d = load_json(path)
+    path = os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or
+                        os.path.join(HOME, ".omp", "agent"), "mcp.json")
+    try:
+        d = load_json(path)
+    except FileNotFoundError:
+        # OMP permits an absent user file and discovers other sources. This
+        # audit cannot infer that discovery from config.yml (not MCP config).
+        d = {}
+        notes.append("omp: sin MCP de usuario; descubrimiento/proyecto sin verificar")
     servers = d.get("mcpServers", {}) or {}
     names = set(servers)
     rows.append(("omp", sorted(names), path.replace(HOME, "~")))
@@ -123,13 +148,14 @@ def check_omp():
         fail("toggle", f"omp declara un servidor inesperado: {name}",
              "no estaba en el acuerdo; alguien lo anadio")
     for name in sorted(CORE - names):
-        fail("toggle", f"omp ha perdido {name}", "borrado del fichero")
+        fail("declaration", f"omp no declara {name} a nivel usuario",
+             "no demuestra ausencia en runtime: descubrimiento y wrappers fuera de esta comprobacion")
 
     for name in sorted(CORE & names):
         s = servers[name]
-        if s.get("enabled") is not True:
+        if s.get("enabled", True) is not True or name in (d.get("disabledServers") or []):
             fail("toggle", f"omp tiene {name} con enabled={s.get('enabled')!r}",
-                 "`/mcp disable` escribe esto sin avisar; sin enabled:true no arranca")
+                 "servidor deshabilitado por entrada o disabledServers")
         cmd = s.get("command", "")
         if not os.path.isabs(cmd):
             fail("toggle", f"omp lanza {name} con un comando no absoluto: {cmd!r}",
@@ -200,10 +226,19 @@ def check_codex():
 
 # ---------------------------------------------------------------- opencode
 def check_opencode():
-    path = os.path.join(HOME, ".config", "opencode", "opencode.json")
-    d = load_json(path)
-    names = set(d.get("mcp", {}) or {})
-    rows.append(("opencode", sorted(names), "~/.config/opencode/opencode.json"))
+    paths = [p for p in opencode_configs() if os.path.exists(p)]
+    if not paths:
+        raise FileNotFoundError(2, "OpenCode config missing", opencode_configs()[0])
+    # Audit every global declaration, so a second file cannot hide a backend.
+    servers = {}
+    for path in paths:
+        for name, server in (load_jsonc(path).get("mcp", {}) or {}).items():
+            servers.setdefault(name, {}).update(server)
+    names = set(servers)
+    rows.append(("opencode", sorted(names), ", ".join(p.replace(HOME, "~") for p in paths)))
+    for name in sorted(CORE & names):
+        if servers[name].get("enabled", True) is not True:
+            fail("toggle", f"opencode tiene {name} deshabilitado", "enabled:false")
 
     reintroduced = names & BACKENDS
     if reintroduced:
@@ -528,7 +563,8 @@ STAT_INPUTS = [
     os.path.join(HOME, ".config", "opencode", "opencode.json"),
     os.path.join(HOME, ".config", "atenea", "atenea.toml"),
     CLAUDE_BIN,
-]
+] + opencode_configs() + [os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or
+                                     os.path.join(HOME, ".omp", "agent"), "mcp.json")]
 
 
 SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"}
@@ -839,6 +875,7 @@ def main():
     if fails:
         print()
         print("  NO COINCIDEN  ".center(74, "="))
+        print("  Solo declaraciones en disco; no verifica inyeccion de wrappers ni sesiones.")
         for case, what, why in fails:
             print(f"\n  [{case}] {what}")
             print(f"          {why}")

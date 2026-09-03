@@ -784,15 +784,31 @@ func TestPayloadOfCutsTheTrailingMetricsLine(t *testing.T) {
 	}
 }
 
+func TestPayloadOfUpdateNotice(t *testing.T) {
+	const notice = "⚠️ tokensave v7.10.0 is installed, but v7.11.0 is available. Run `tokensave upgrade` to update."
+	const body = `{"node_count":1,"message":"tokensave_metrics: is data"}`
+	for _, text := range []string{body, notice + body, notice + "\n" + body, notice + body + "\ntokensave_metrics: before=1 after=1 saved=0"} {
+		if got := string(payloadOf(text)); got != body {
+			t.Errorf("payloadOf(%q) = %q", text, got)
+		}
+	}
+	for _, text := range []string{"warning " + body, notice + `{"broken":`, body + " junk", body + body} {
+		if json.Valid(payloadOf(text)) {
+			t.Errorf("corrupt answer accepted: %q", text)
+		}
+	}
+}
+
 // The guard has to survive that same line, or every capability comes back
 // unavailable against the real server while every fake-backed test passes.
 func TestRunSurvivesTheMetricsLineOnEveryCall(t *testing.T) {
 	root, repo := workspace(t)
 	writeFile(t, filepath.Join(repo.Path, "internal", "client.go"), "package redis\n\nfunc NewClient() {}\n")
 	const metrics = "\n\ntokensave_metrics: before=812 after=660 saved=152"
+	const notice = "⚠️ tokensave v7.10.0 is installed, but v7.11.0 is available. Run `tokensave upgrade` to update."
 	fake, sess := newFakeTokensave(t)
-	fake.on(toolStatus, readyStatus+metrics, false)
-	fake.on(toolEntities, `{"symbols":[{"kind":"function","name":"NewClient","line":3,"end_line":3}]}`+metrics, false)
+	fake.on(toolStatus, notice+readyStatus+metrics, false)
+	fake.on(toolEntities, notice+`{"symbols":[{"kind":"function","name":"NewClient","line":3,"end_line":3}]}`+metrics, false)
 
 	out, err := newTestRunner(t, root, sess).Run(context.Background(),
 		request(t, repo, CapabilityOverview, map[string]any{"file": "internal/client.go"}))

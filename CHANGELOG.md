@@ -25,6 +25,13 @@ remain; benchmark snapshots and historical reports are preserved.
 
 ### Fixed
 
+Tokensave JSON results tolerate its known update notice without confusing it
+with the payload. Metrics markers inside JSON strings are preserved.
+`mcp-agree` reads OpenCode JSONC (including comments and trailing commas),
+fingerprints both global formats, and continues its audit when OMP has no user
+MCP file. Missing declarations do not establish which servers a wrapper injects
+at runtime; no client settings are changed by this audit.
+
 Timing assertions that only failed on somebody else's machine. CI's Intel macOS
 leg had gone down twice in a fortnight on two unrelated tests that pass locally
 every time, and neither failure was about the code under test.

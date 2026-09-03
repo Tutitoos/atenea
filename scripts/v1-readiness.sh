@@ -74,6 +74,7 @@ echo "[4/9] module graph"
 go mod tidy -diff
 
 echo "[5/9] static validation"
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p 'test_mcp_agree.py'
 go vet ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
