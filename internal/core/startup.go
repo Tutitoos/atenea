@@ -15,6 +15,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/trace"
@@ -183,8 +184,8 @@ func openCopies(cfg config.Backup, source, configPath string) (*backup.Store, er
 // runs on a beat has nobody waiting on its return value -- that is the whole
 // point of a beat -- so without the wrapper a backup failing every six hours
 // for a week looks exactly like a backup succeeding every six hours for a week.
-func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, receipts *checkpoint.Store, book *notebook.Notebook, health func(context.Context) error) (*clock.Clock, error) {
-	watch := &maintenance{book: book, store: store}
+func buildLanes(cfg config.Config, store *metrics.Store, copies *backup.Store, receipts *checkpoint.Store, book *notebook.Notebook, health func(context.Context) error, events *observability.Hub) (*clock.Clock, error) {
+	watch := &maintenance{book: book, store: store, events: events}
 	jobs := make([]clock.Job, 0, 5)
 	if store != nil {
 		jobs = append(jobs,

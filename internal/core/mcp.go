@@ -225,7 +225,16 @@ type initializeParams struct {
 	ProtocolVersion string `json:"protocolVersion"`
 	Meta            struct {
 		Atenea struct {
-			Profile string `json:"profile"`
+			Profile   string `json:"profile"`
+			Workspace string `json:"workspace"`
+			Origin    struct {
+				Surface   string `json:"surface"`
+				Transport string `json:"transport"`
+			} `json:"origin"`
+			Session struct {
+				Title      string `json:"title"`
+				ExternalID string `json:"external_id"`
+			} `json:"session"`
 		} `json:"atenea"`
 	} `json:"_meta"`
 	ClientInfo struct {
@@ -298,7 +307,12 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 		policy = desktopPolicyFromProfile(profile)
 	}
 	v.close()
-	session, err := v.core.Open(SessionOptions{Client: name, Grant: asked})
+	session, err := v.core.Open(SessionOptions{
+		Client: name, Grant: asked,
+		Title: params.Meta.Atenea.Session.Title, ExternalID: params.Meta.Atenea.Session.ExternalID,
+		Workspace: params.Meta.Atenea.Workspace,
+		Origin:    SessionOrigin{Surface: params.Meta.Atenea.Origin.Surface, Transport: params.Meta.Atenea.Origin.Transport},
+	})
 	if err != nil {
 		code := codeInternal
 		if contract.KindOf(err) == contract.FailurePermissionDenied {

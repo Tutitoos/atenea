@@ -29,6 +29,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -200,6 +201,8 @@ type Config struct {
 	// Notebook is where a panic goes on its way out. Nil records nothing,
 	// which is what a hand-assembled test wants; the core always attaches one.
 	Notebook *notebook.Notebook
+	// Events is an optional metadata-only live stream for observers.
+	Events *observability.Hub
 	// MaxParallel caps how many steps of one wave run at a time. Zero means no
 	// ceiling. The ceiling belongs in the settings because the real limit is
 	// the machine, and the machine is not the same one everywhere.
@@ -226,6 +229,7 @@ type Agent struct {
 	meter           Meter
 	base            Base
 	notebook        *notebook.Notebook
+	events          *observability.Hub
 	maxParallel     int
 	budget          float64
 	standingEffects []contract.Effect
@@ -317,10 +321,39 @@ func New(cfg Config) (*Agent, error) {
 		meter:           meter,
 		base:            cfg.Base,
 		notebook:        cfg.Notebook,
+		events:          cfg.Events,
 		maxParallel:     cfg.MaxParallel,
 		budget:          cfg.BudgetUSD,
 		standingEffects: slices.Clone(cfg.StandingEffects),
 	}, nil
+}
+
+func (a *Agent) emit(event observability.Event) {
+	if a != nil && a.events != nil {
+		a.events.Publish(event)
+	}
+}
+
+type observabilityContextKey struct{}
+
+type observabilityContext struct {
+	runID, sessionID string
+}
+
+func withObservabilityContext(ctx context.Context, runID, sessionID string) context.Context {
+	return context.WithValue(ctx, observabilityContextKey{}, observabilityContext{runID: runID, sessionID: sessionID})
+}
+
+func (a *Agent) emitContext(ctx context.Context, event observability.Event) {
+	if meta, ok := ctx.Value(observabilityContextKey{}).(observabilityContext); ok {
+		if event.RunID == "" {
+			event.RunID = meta.runID
+		}
+		if event.SessionID == "" {
+			event.SessionID = meta.sessionID
+		}
+	}
+	a.emit(event)
 }
 
 // Card returns the agent's contract.
@@ -363,7 +396,14 @@ type Task struct {
 	// Session is the chat that commissioned this, when there is one. It buys
 	// the run nothing: it is written to the receipt so a shared history stays
 	// attributable to the isolated chat that produced it.
-	Session string
+	Session                 string
+	SessionClient           string
+	SessionName             string
+	SessionNameBasis        string
+	SessionPrimaryProject   string
+	SessionOriginSurface    string
+	SessionOriginTransport  string
+	SessionExternalObserved bool
 	// Floor is the standing grant this commission composes from. The zero
 	// value is the settings file's, which is what a command at a terminal
 	// runs on; a chat opened by a client fills it in with the client floor
@@ -454,6 +494,10 @@ type StepResult struct {
 	// ones to the back. Read beside Spent.Duration this is an interval, and
 	// two intervals are how a reader sees that two steps overlapped.
 	ClosedAt time.Time
+	// These fields are internal correlation metadata and never cross the
+	// runner/checkpoint boundary.
+	runID     string
+	sessionID string
 }
 
 // Review is the parent's audit of a child that just finished.
@@ -505,8 +549,12 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
+	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID, SessionID: task.Session})
 	record := checkpoint.Run{
-		ID: result.RunID, Kind: checkpoint.KindTask, Session: task.Session, Task: task.Text,
+		ID: result.RunID, Kind: checkpoint.KindTask, Session: task.Session, SessionClient: task.SessionClient,
+		SessionName: task.SessionName, SessionNameBasis: task.SessionNameBasis,
+		SessionPrimaryProject: task.SessionPrimaryProject, SessionOriginSurface: task.SessionOriginSurface,
+		SessionOriginTransport: task.SessionOriginTransport, SessionExternalObserved: task.SessionExternalObserved, Task: task.Text,
 		Started: started, Repositories: task.Repositories, Effects: task.Effects,
 		BudgetUSD: budgetUSD, ContractVersion: contract.Current.String(),
 	}
@@ -534,6 +582,7 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
 			err = saveErr
 		}
+		a.emit(observability.Event{Kind: "run.closed", SessionID: task.Session, RunID: result.RunID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
 	}()
 
 	// The first plan is light on purpose: look, and decide the rest afterwards.
@@ -606,6 +655,7 @@ func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float
 	plan = plan.Clone()
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: plan.Task, Plan: plan}
+	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID})
 	record := checkpoint.Run{
 		ID: result.RunID, Kind: checkpoint.KindPlan, Task: plan.Task,
 		Started: started, BudgetUSD: budgetUSD,
@@ -633,6 +683,7 @@ func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float
 		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
 			err = saveErr
 		}
+		a.emit(observability.Event{Kind: "run.closed", RunID: result.RunID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
 	}()
 
 	_, err = a.dispatch(ctx, plan, PhaseWork, result, &record, newGrant(budgetUSD), nil)
@@ -670,7 +721,14 @@ type Question struct {
 	// one step, not a cheaper kind of thing.
 	BudgetUSD float64
 	// Session is the chat that asked, written to the receipt.
-	Session string
+	Session                 string
+	SessionClient           string
+	SessionName             string
+	SessionNameBasis        string
+	SessionPrimaryProject   string
+	SessionOriginSurface    string
+	SessionOriginTransport  string
+	SessionExternalObserved bool
 	// Floor is the standing grant this question composes from, and carries
 	// the same meaning it does on Task: zero is the settings file's own.
 	Floor Floor
@@ -712,8 +770,12 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	budgetUSD := cmp.Or(q.BudgetUSD, a.budget)
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: text}
+	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID, SessionID: q.Session, Capability: q.Capability, Repository: q.Repository})
 	record := checkpoint.Run{
-		ID: result.RunID, Kind: checkpoint.KindAsk, Session: q.Session, Task: text,
+		ID: result.RunID, Kind: checkpoint.KindAsk, Session: q.Session, SessionClient: q.SessionClient,
+		SessionName: q.SessionName, SessionNameBasis: q.SessionNameBasis,
+		SessionPrimaryProject: q.SessionPrimaryProject, SessionOriginSurface: q.SessionOriginSurface,
+		SessionOriginTransport: q.SessionOriginTransport, SessionExternalObserved: q.SessionExternalObserved, Task: text,
 		Started: started, Repositories: []string{repositories[0].ID}, Effects: q.Effects,
 		BudgetUSD: budgetUSD, ContractVersion: contract.Current.String(),
 	}
@@ -730,6 +792,7 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
 			err = saveErr
 		}
+		a.emit(observability.Event{Kind: "run.closed", SessionID: q.Session, RunID: result.RunID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
 	}()
 
 	plan := contract.Plan{Task: text, Steps: []contract.Step{{
@@ -845,6 +908,7 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 	// what this process took is what the screen in front of somebody is about.
 	started := time.Now()
 	result = &Result{RunID: record.ID, Task: record.Task, Plan: record.Plan}
+	a.emit(observability.Event{Kind: "retry.started", SessionID: record.Session, RunID: record.ID, State: "retrying"})
 	// Captured before anything below can add to record.Steps, so this is
 	// exactly what passed review in an earlier process: the steps this
 	// attempt will never redispatch, and whose only surviving discoveries
@@ -867,6 +931,7 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 		record.Closed = true
 		record.Verdict = result.Verdict.String()
 		record.Updated = time.Now()
+		a.emit(observability.Event{Kind: "retry.completed", SessionID: record.Session, RunID: record.ID, State: result.Verdict.String(), DurationMS: result.Elapsed.Milliseconds(), Tokens: int64(result.Spent.Tokens)})
 		if saveErr := a.checkpoints.Save(record); saveErr != nil && err == nil {
 			err = saveErr
 		}
@@ -1072,6 +1137,7 @@ func (a *Agent) hint(payload map[string]any, field string, value any) {
 // them, only the id and the fact that it passed review once, so they are
 // kept out of result.Steps rather than represented there with blanks.
 func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, result *Result, record *checkpoint.Run, purse *grant, alreadyOK []string) ([]StepResult, error) {
+	ctx = withObservabilityContext(ctx, record.ID, record.Session)
 	finished := make([]string, 0, len(result.Steps)+len(alreadyOK))
 	failed := make(map[string]struct{})
 	for _, step := range result.Steps {
@@ -1128,10 +1194,12 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 		done := make([]StepResult, 0, len(wave))
 		for _, step := range wave {
 			if culprit, stuck := blockedBy(step, failed); stuck {
-				done = append(done, StepResult{Step: step, Review: Review{
+				blocked := StepResult{Step: step, Review: Review{
 					Parent: contract.VerdictFailed,
 					Reason: "blocked: " + culprit + " did not pass review",
-				}})
+				}}
+				done = append(done, blocked)
+				a.emitContext(ctx, observability.Event{Kind: "step.closed", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, State: "blocked", Reason: blocked.Review.Reason})
 				continue
 			}
 			runnable = append(runnable, step)
@@ -1256,6 +1324,10 @@ func (a *Agent) runWave(ctx context.Context, runID string, wave []contract.Step,
 // then reviews what came back.
 func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	out := StepResult{Step: step}
+	if meta, ok := ctx.Value(observabilityContextKey{}).(observabilityContext); ok {
+		out.runID, out.sessionID = meta.runID, meta.sessionID
+	}
+	a.emitContext(ctx, observability.Event{Kind: "step.started", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, State: "running"})
 	if !a.card.CanAsk(step.Capability) {
 		return a.close(out, contract.Fail(contract.FailureInvalidInput,
 			"agent %s may not ask for %s", a.card.ID, step.Capability))
@@ -1289,6 +1361,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision
+	a.emitContext(ctx, observability.Event{Kind: "selector.completed", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, Count: len(decision.Stages)})
 	if err != nil {
 		return a.close(out, err)
 	}
@@ -1311,6 +1384,8 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	// a measurement of that is a real measurement.
 	out.Dispatched = true
 	started := time.Now()
+	a.emitContext(ctx, observability.Event{Kind: "tool.started", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: "running"})
+	a.emitContext(ctx, observability.Event{Kind: "provider.started", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: "running"})
 	outcome, runErr := a.runner.Run(ctx, request)
 	out.Outcome = outcome
 	// The core's clock is the one that counts. An adapter sees only its own
@@ -1320,6 +1395,18 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	// are the two things the core has no way to see.
 	out.Spent = outcome.Spent
 	out.Spent.Duration = time.Since(started)
+	providerState := "ok"
+	if runErr != nil {
+		providerState = "failed"
+	}
+	providerEvent := observability.Event{Kind: "provider.completed", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: providerState, DurationMS: out.Spent.Duration.Milliseconds(), Tokens: int64(out.Spent.Tokens)}
+	if runErr != nil {
+		providerEvent.Reason = runErr.Error()
+	}
+	a.emitContext(ctx, providerEvent)
+	toolEvent := providerEvent
+	toolEvent.Kind = "tool.completed"
+	a.emitContext(ctx, toolEvent)
 	if runErr != nil {
 		// A provider reporting itself unusable is news the catalog needs: the
 		// funnel filters on health, and health is owned by whoever probed last.
@@ -1402,6 +1489,13 @@ func (a *Agent) priced(ctx context.Context, capability, repository, subject stri
 
 // close is the parent's review. It runs for every child, always.
 func (a *Agent) close(out StepResult, err error) StepResult {
+	defer func() {
+		state := out.Review.Parent.String()
+		if err != nil && state == contract.VerdictUnspecified.String() {
+			state = contract.VerdictFailed.String()
+		}
+		a.emit(observability.Event{Kind: "step.closed", SessionID: out.sessionID, RunID: out.runID, StepID: out.Step.ID, Capability: out.Step.Capability, Implementation: out.Decision.Chosen.ID, Provider: out.Decision.Chosen.Provider, Repository: out.Step.Repository, State: state, Reason: out.Failure, Attempt: 1, DurationMS: out.Spent.Duration.Milliseconds(), Tokens: int64(out.Spent.Tokens)})
+	}()
 	// Every exit from a step arrives here, which makes this the one place the
 	// clock means what the field says. Read at the recorder instead it would
 	// be the wave's end for all of them, and beside a duration that turns the
@@ -1745,6 +1839,11 @@ func snapshot(step StepResult) checkpoint.StepState {
 		Inputs:         auditableInputs(step.Step),
 		Discoveries:    step.Outcome.Discoveries,
 		DurationMS:     step.Spent.Duration.Milliseconds(),
+		Tokens:         int64(step.Spent.Tokens),
+		TokensKnown:    step.Spent.Tokens > 0,
+		PeakRSS:        step.Spent.PeakRSS,
+		RSSKnown:       step.Spent.PeakRSS > 0,
+		ToolVersion:    step.Outcome.ToolVersion,
 		SpentUSD:       step.Outcome.SpentUSD,
 		SpentUSDKnown:  step.Outcome.SpentUSDKnown,
 		OverspendUSD:   Overspend(step),

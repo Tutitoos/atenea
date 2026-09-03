@@ -12,33 +12,33 @@ import (
 // The key includes the tool version because that is the point of recording it:
 // yesterday's numbers for yesterday's binary are history, not a baseline.
 type Row struct {
-	Capability     string
-	Implementation string
-	Provider       string
-	Repository     string
-	ToolVersion    string
+	Capability     string `json:"capability"`
+	Implementation string `json:"implementation"`
+	Provider       string `json:"provider"`
+	Repository     string `json:"repository"`
+	ToolVersion    string `json:"tool_version"`
 
-	Attempts int64
-	Failures int64
+	Attempts int64 `json:"attempts"`
+	Failures int64 `json:"failures"`
 	// Successes is how many attempts worked, and the only count Mean divides
 	// by. It is printed beside the other two because the gap between them is
 	// the whole diagnosis: a provider with attempts and no successes has a
 	// long record and no price at all.
-	Successes int64
+	Successes int64 `json:"successes"`
 	// Mean is the average SUCCESSFUL call -- the figure the funnel ranks on.
 	// Failures are counted above and priced nowhere: a tool that refuses
 	// instantly is not the cheapest thing on the machine.
-	Mean time.Duration
+	Mean time.Duration `json:"mean"`
 	// Slowest is the worst single call seen, successful or not. This one does
 	// span the failures on purpose: a provider that hangs for thirty seconds
 	// before giving up has still cost somebody thirty seconds, and that is
 	// worth seeing even though it is not a price.
-	Slowest time.Duration
-	Tokens  int64
+	Slowest time.Duration `json:"slowest"`
+	Tokens  int64         `json:"tokens"`
 	// PeakRSS is the largest the far side ever grew, in bytes. Zero with
 	// RSSSamples at zero means nobody could weigh it.
-	PeakRSS    int64
-	RSSSamples int64
+	PeakRSS    int64 `json:"peak_rss"`
+	RSSSamples int64 `json:"rss_samples"`
 	// Wandered is how many results these attempts returned that fell outside
 	// the scope they were asked for, and which the adapter dropped before
 	// answering.
@@ -48,7 +48,7 @@ type Row struct {
 	// column would hand a silent advantage to any provider that hides its
 	// overreach instead of reporting it. It is evidence for a person deciding
 	// where to point a capability, not an input to the funnel.
-	Wandered int64
+	Wandered int64 `json:"out_of_scope"`
 }
 
 // summarize reads the attempt table and the rollups together.

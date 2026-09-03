@@ -10,6 +10,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -733,7 +734,7 @@ func (c *Core) processStatus() []ProcessStatus {
 	live := c.processes.Status()
 	out := make([]ProcessStatus, 0, len(live))
 	for _, p := range live {
-		out = append(out, ProcessStatus{
+		entry := ProcessStatus{
 			ID:         p.ID,
 			Light:      processLight(p.State),
 			State:      p.State.String(),
@@ -743,7 +744,12 @@ func (c *Core) processStatus() []ProcessStatus {
 			Started:    p.Started,
 			Restarts:   p.Restarts,
 			LastReason: p.LastReason,
-		})
+		}
+		out = append(out, entry)
+		if c.events != nil {
+			event := observability.Event{Kind: "process.status", Provider: entry.ID, State: entry.State, Count: entry.Restarts, Reason: entry.LastReason}
+			c.events.Publish(event)
+		}
 	}
 	return out
 }

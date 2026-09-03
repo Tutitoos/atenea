@@ -30,12 +30,14 @@ import (
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/clock"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/dashboard"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/notebook"
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/platform"
@@ -108,6 +110,8 @@ type Core struct {
 	// this existed, reached at whatever Endpoint it was given.
 	processes *supervisor.Supervisor
 	agent     *orchestrator.Agent
+	events    *observability.Hub
+	dashboard *dashboard.Server
 
 	started time.Time
 	// role is what this process is allowed to maintain. It is kept so the
@@ -303,7 +307,8 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			return probeDeclaredServers(ctx, cfg.MCPServers, readings)
 		}
 	}
-	beats, err := buildLanes(cfg, store, copies, checkpoints, book, health)
+	events := observability.New(observability.DefaultCapacity)
+	beats, err := buildLanes(cfg, store, copies, checkpoints, book, health, events)
 	if err != nil {
 		return nil, err
 	}
@@ -340,6 +345,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		MaxParallel:     cfg.Orchestrator.MaxParallel,
 		BudgetUSD:       cfg.Orchestrator.BudgetUSD,
 		StandingEffects: cfg.Orchestrator.StandingEffects,
+		Events:          events,
 	})
 	if err != nil {
 		return nil, err
@@ -394,6 +400,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		beats:        beats,
 		processes:    procs,
 		agent:        agent,
+		events:       events,
 		sessions:     make(map[string]*Session),
 		started:      time.Now(),
 		role:         role,
@@ -409,8 +416,9 @@ func New(cfg config.Config, role Role) (*Core, error) {
 // baseline being quietly falsified, and it is the one thing here worth waking
 // up for.
 type maintenance struct {
-	book  *notebook.Notebook
-	store *metrics.Store
+	book   *notebook.Notebook
+	store  *metrics.Store
+	events *observability.Hub
 	// reported is the drop count already written down, so a ceiling that
 	// stays breached does not file the same incident on every beat.
 	reported atomic.Int64
@@ -419,12 +427,23 @@ type maintenance struct {
 func (m *maintenance) wrap(op string, run func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
 		err := run(ctx)
+		if m.events != nil {
+			event := observability.Event{Kind: "maintenance.completed", State: "ok"}
+			if err != nil {
+				event.State = "failed"
+				event.Reason = err.Error()
+			}
+			m.events.Publish(event)
+		}
 		if err != nil {
 			_ = m.book.Record(notebook.Incident{
 				Op:      op,
 				Detail:  err.Error(),
 				Version: buildinfo.Full(),
 			})
+			if m.events != nil {
+				m.events.Publish(observability.Event{Kind: "incident", State: "open", Reason: err.Error()})
+			}
 		}
 		m.checkDrops()
 		return err
@@ -1150,13 +1169,26 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 		verdict, failure = contract.VerdictFailed.String(), callErr.Error()
 	}
 	chat := ""
+	client, sessionName, sessionBasis, sessionProject := "", "", "", ""
+	origin := SessionOrigin{}
+	externalObserved := false
 	if session != nil {
 		chat = session.ID()
+		client = session.Client()
+		session.deriveName(name, "")
+		sessionName, sessionBasis, sessionProject, origin, externalObserved = session.DashboardMetadata()
 	}
 	run := checkpoint.Run{
-		ID:      checkpoint.NewID(now),
-		Kind:    checkpoint.KindRaw,
-		Session: chat,
+		ID:                      checkpoint.NewID(now),
+		Kind:                    checkpoint.KindRaw,
+		Session:                 chat,
+		SessionClient:           client,
+		SessionName:             sessionName,
+		SessionNameBasis:        sessionBasis,
+		SessionPrimaryProject:   sessionProject,
+		SessionOriginSurface:    origin.Surface,
+		SessionOriginTransport:  origin.Transport,
+		SessionExternalObserved: externalObserved,
 		// The tool's public name is the whole commission: there is no task
 		// text behind a raw call, and a reader looking for what happened
 		// wants the name a client would have typed.
@@ -1303,6 +1335,17 @@ func (c *Core) DetectIndexes(ctx context.Context, repositoryID string) ([]IndexR
 				Hint:       hint,
 				Err:        errText,
 			})
+			if c.events != nil {
+				event := observability.Event{Kind: "health.index", Repository: repo.ID, Provider: runner.ID(), State: "ready"}
+				if !ready {
+					event.State = "not_ready"
+				}
+				if errText != "" {
+					event.State = "failed"
+					event.Reason = errText
+				}
+				c.events.Publish(event)
+			}
 		}
 	}
 	slices.SortFunc(reports, func(a, b IndexReport) int {
@@ -1391,6 +1434,14 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 			entry.Reason = results[i].Err.Error()
 		}
 		out = append(out, entry)
+		if c.events != nil {
+			event := observability.Event{Kind: "health.server", Provider: entry.ID, State: "ok", DurationMS: entry.Took.Milliseconds()}
+			if !entry.OK {
+				event.State = "failed"
+				event.Reason = entry.Reason
+			}
+			c.events.Publish(event)
+		}
 	}
 	return out, nil
 }
@@ -1458,6 +1509,20 @@ func (c *Core) Run(ctx context.Context) error {
 	listener, err := c.listen()
 	if err != nil {
 		return err
+	}
+	dashboard, err := c.newDashboard()
+	if err != nil {
+		_ = listener.Close()
+		return err
+	}
+	if dashboard != nil {
+		if err := dashboard.Start(ctx); err != nil {
+			_ = listener.Close()
+			return err
+		}
+		c.mu.Lock()
+		c.dashboard = dashboard
+		c.mu.Unlock()
 	}
 	// The rhythms only exist while something is holding the core up. A CLI
 	// command lives for a second and settles its batch on the way out; a
@@ -1548,6 +1613,12 @@ func (c *Core) Shutdown() error {
 	// The door shuts first: the flag above already refuses new work, and this
 	// stops new callers from getting as far as being refused.
 	c.closeSocket()
+	c.mu.Lock()
+	dashboard := c.dashboard
+	c.mu.Unlock()
+	if dashboard != nil {
+		_ = dashboard.Close(context.Background())
+	}
 
 	// Connection handlers and in-flight work wait together, under the one
 	// margin. They were two waits before this, and only the second of them

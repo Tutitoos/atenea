@@ -555,6 +555,16 @@ compact = "1h"
 # knowing that you did. Empty means 10000.
 # buffer_limit = 10000
 
+# Embedded read-only observability panel. Disabled until explicitly enabled.
+# The primary listener is loopback so it can be published privately with
+# `tailscale serve`; LAN access additionally requires TLS and a token file.
+[dashboard]
+enabled = false
+listen = "127.0.0.1:8788"
+access = "tailscale"
+page_limit = 100
+session_ttl = "12h"
+
 [retention]
 # How long the record of what Atenea did is kept: the run receipts on disk and
 # the agent traces beside them. The measurement base is NOT covered here -- it

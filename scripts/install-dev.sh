@@ -70,6 +70,7 @@ trap rollback EXIT
 
 echo "building"
 cd "$root"
+bash "$root/scripts/dashboard-build.sh"
 go build -trimpath -o /tmp/atenea-install ./cmd/atenea
 if [ "$(uname -s)" = "Darwin" ]; then
 	swift build -c release --package-path helper >/dev/null

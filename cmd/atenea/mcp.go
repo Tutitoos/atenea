@@ -79,6 +79,11 @@ func relayMCPClient(dst io.Writer, src io.Reader, direction, profile string) err
 }
 
 func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
+	workspace, _ := os.Getwd()
+	return injectMCPContext(line, profile, workspace)
+}
+
+func injectMCPContext(line []byte, profile, workspace string) ([]byte, bool) {
 	var message map[string]json.RawMessage
 	if err := json.Unmarshal(line, &message); err != nil {
 		return line, false
@@ -99,8 +104,34 @@ func injectMCPProfile(line []byte, profile string) ([]byte, bool) {
 			return line, false
 		}
 	}
-	delete(meta, "atenea")
-	atenea, _ := json.Marshal(map[string]string{"profile": profile})
+	// Preserve only the optional, untrusted display identity. Profile, origin
+	// and workspace always come from this local bridge.
+	var session struct {
+		Title      string `json:"title,omitempty"`
+		ExternalID string `json:"external_id,omitempty"`
+	}
+	hasSession := false
+	if raw, ok := meta["atenea"]; ok {
+		var supplied struct {
+			Session struct {
+				Title      string `json:"title"`
+				ExternalID string `json:"external_id"`
+			} `json:"session"`
+		}
+		if json.Unmarshal(raw, &supplied) == nil && (supplied.Session.Title != "" || supplied.Session.ExternalID != "") {
+			session.Title, session.ExternalID = supplied.Session.Title, supplied.Session.ExternalID
+			hasSession = true
+		}
+	}
+	ateneaFields := map[string]any{
+		"profile":   profile,
+		"workspace": workspace,
+		"origin":    map[string]string{"surface": profile, "transport": "mcp-stdio"},
+	}
+	if hasSession {
+		ateneaFields["session"] = session
+	}
+	atenea, _ := json.Marshal(ateneaFields)
 	meta["atenea"] = atenea
 	encodedMeta, err := json.Marshal(meta)
 	if err != nil {

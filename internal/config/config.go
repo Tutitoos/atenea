@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -68,9 +69,10 @@ type Config struct {
 	// agents, explore and plan, by role.
 	Model Model
 	// Workflow is how a graph of agent steps is scheduled.
-	Workflow Workflow
-	Metrics  Metrics
-	Backup   Backup
+	Workflow  Workflow
+	Metrics   Metrics
+	Dashboard Dashboard
+	Backup    Backup
 	// Retention is how long receipts and traces are kept. See the type.
 	Retention Retention
 	Security  Security
@@ -275,6 +277,21 @@ type Metrics struct {
 	// takes the store's own ceiling here, so the value downstream is always
 	// the one the status screen shows.
 	BufferLimit int
+}
+
+// Dashboard configures the embedded, read-only observability panel. It is
+// disabled by default; listeners are explicit so upgrading Atenea cannot open
+// a new network surface unexpectedly.
+type Dashboard struct {
+	Enabled      bool
+	Listen       string
+	Access       string
+	LANListen    string
+	LANCertFile  string
+	LANKeyFile   string
+	LANTokenFile string
+	PageLimit    int
+	SessionTTL   time.Duration
 }
 
 // Retention is how long the record of what Atenea did is kept.
@@ -1300,6 +1317,7 @@ type file struct {
 	Model           fileModel            `toml:"model"`
 	Workflow        fileWorkflow         `toml:"workflow"`
 	Metrics         fileMetrics          `toml:"metrics"`
+	Dashboard       fileDashboard        `toml:"dashboard"`
 	Retention       fileRetention        `toml:"retention"`
 	Backup          fileBackup           `toml:"backup"`
 	Security        fileSecurity         `toml:"security"`
@@ -1337,6 +1355,18 @@ type fileMetrics struct {
 	Flush       string `toml:"flush"`
 	Compact     string `toml:"compact"`
 	BufferLimit *int   `toml:"buffer_limit"`
+}
+
+type fileDashboard struct {
+	Enabled      *bool  `toml:"enabled"`
+	Listen       string `toml:"listen"`
+	Access       string `toml:"access"`
+	LANListen    string `toml:"lan_listen"`
+	LANCertFile  string `toml:"lan_cert_file"`
+	LANKeyFile   string `toml:"lan_key_file"`
+	LANTokenFile string `toml:"lan_token_file"`
+	PageLimit    *int   `toml:"page_limit"`
+	SessionTTL   string `toml:"session_ttl"`
 }
 
 type fileRetention struct {
@@ -1972,6 +2002,9 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Dashboard, err = decoded.Dashboard.build(source); err != nil {
+		return Config{}, err
+	}
 	if cfg.Retention, err = decoded.Retention.build(source); err != nil {
 		return Config{}, err
 	}
@@ -2467,6 +2500,69 @@ func (m fileMetrics) build(source string) (Metrics, error) {
 				source, *m.BufferLimit)
 		}
 		out.BufferLimit = *m.BufferLimit
+	}
+	return out, nil
+}
+
+const defaultDashboardListen = "127.0.0.1:8788"
+
+func (d fileDashboard) build(source string) (Dashboard, error) {
+	out := Dashboard{Listen: defaultDashboardListen, Access: "tailscale", PageLimit: 100, SessionTTL: 12 * time.Hour}
+	if d.Enabled != nil {
+		out.Enabled = *d.Enabled
+	}
+	if strings.TrimSpace(d.Listen) != "" {
+		host, _, err := net.SplitHostPort(d.Listen)
+		if err != nil {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen %q: %v", source, d.Listen, err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen must bind a loopback IP", source)
+		}
+		out.Listen = d.Listen
+	}
+	if strings.TrimSpace(d.Access) != "" {
+		out.Access = strings.ToLower(strings.TrimSpace(d.Access))
+	}
+	if out.Access != "tailscale" && out.Access != "loopback" {
+		return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.access must be tailscale or loopback", source)
+	}
+	if d.PageLimit != nil {
+		if *d.PageLimit <= 0 || *d.PageLimit > 1000 {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.page_limit must be 1..1000", source)
+		}
+		out.PageLimit = *d.PageLimit
+	}
+	if d.SessionTTL != "" {
+		ttl, err := time.ParseDuration(d.SessionTTL)
+		if err != nil || ttl <= 0 {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.session_ttl must be positive", source)
+		}
+		out.SessionTTL = ttl
+	}
+	var err error
+	out.LANListen = strings.TrimSpace(d.LANListen)
+	if out.LANListen != "" {
+		host, _, splitErr := net.SplitHostPort(out.LANListen)
+		ip := net.ParseIP(host)
+		if splitErr != nil || ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.lan_listen must bind an explicit private IP", source)
+		}
+		for key, raw := range map[string]string{"dashboard.lan_cert_file": d.LANCertFile, "dashboard.lan_key_file": d.LANKeyFile, "dashboard.lan_token_file": d.LANTokenFile} {
+			if strings.TrimSpace(raw) == "" {
+				return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: %s is required with dashboard.lan_listen", source, key)
+			}
+		}
+		if out.LANCertFile, err = settingsPath(source, "dashboard.lan_cert_file", d.LANCertFile); err != nil {
+			return Dashboard{}, err
+		}
+		if out.LANKeyFile, err = settingsPath(source, "dashboard.lan_key_file", d.LANKeyFile); err != nil {
+			return Dashboard{}, err
+		}
+		if out.LANTokenFile, err = settingsPath(source, "dashboard.lan_token_file", d.LANTokenFile); err != nil {
+			return Dashboard{}, err
+		}
 	}
 	return out, nil
 }

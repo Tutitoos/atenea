@@ -104,3 +104,45 @@ func TestDashboardHostsDryRunPreservesForeignLines(t *testing.T) {
 		t.Fatalf("dry-run modified hosts: %q", got)
 	}
 }
+
+func TestAteneaDashboardPublishIsDryRunUnlessApplied(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "atenea.toml")
+	body := settings + `
+[dashboard]
+enabled = true
+listen = "127.0.0.1:8799"
+access = "tailscale"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := dashboardPublishRun
+	var calls [][]string
+	dashboardPublishRun = func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return []byte("applied\n"), nil
+	}
+	t.Cleanup(func() { dashboardPublishRun = old })
+
+	out, err := cli(t, "--config", path, "dashboard", "publish", "tailscale")
+	if err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+	if len(calls) != 0 || !strings.Contains(out, "dry-run") || !strings.Contains(out, "127.0.0.1:8799") {
+		t.Fatalf("dry-run calls=%v out=%q", calls, out)
+	}
+	out, err = cli(t, "--config", path, "dashboard", "publish", "tailscale", "--apply")
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(calls) != 1 || calls[0][0] != "tailscale" || !strings.Contains(out, "applied") {
+		t.Fatalf("apply calls=%v out=%q", calls, out)
+	}
+}
+
+func TestAteneaDashboardCheckRefusesDisabledPanel(t *testing.T) {
+	path := dashboardSettings(t, "http://127.0.0.1:1")
+	if _, err := cli(t, "--config", path, "dashboard", "atenea", "--check"); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("disabled panel error = %v", err)
+	}
+}

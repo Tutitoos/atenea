@@ -32,6 +32,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Verify embedded dashboard
+        run: |
+          bun ci --cwd dashboard
+          bun run --cwd dashboard check
+          bun run --cwd dashboard build
+          git diff --exit-code -- internal/dashboard/web/dist
+
       - name: The tag must be the version the binary reports
         run: |
           set -eu

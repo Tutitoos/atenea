@@ -37,8 +37,17 @@ type Run struct {
 	// Session is the chat this run belongs to, when one owns it. History is
 	// common property across chats; knowing whose it was is what keeps it
 	// readable rather than a pile.
-	Session string `json:"session,omitempty"`
-	Task    string `json:"task"`
+	Session       string `json:"session,omitempty"`
+	SessionClient string `json:"session_client,omitempty"`
+	// Safe display metadata. Workspace paths and external identifiers are
+	// deliberately not part of the receipt.
+	SessionName             string `json:"session_name,omitempty"`
+	SessionNameBasis        string `json:"session_name_basis,omitempty"`
+	SessionPrimaryProject   string `json:"session_primary_project,omitempty"`
+	SessionOriginSurface    string `json:"session_origin_surface,omitempty"`
+	SessionOriginTransport  string `json:"session_origin_transport,omitempty"`
+	SessionExternalObserved bool   `json:"session_external_observed,omitempty"`
+	Task                    string `json:"task"`
 	// Repositories is the commission's own narrowing, kept so a resumed run
 	// can rebuild the exploration it lost rather than guessing at it from
 	// the catalog as it stands today. Empty means every repository, exactly
@@ -126,6 +135,19 @@ type StepState struct {
 	// closed, not just the ones still to come.
 	Discoveries []contract.Discovery `json:"discoveries,omitempty"`
 	DurationMS  int64                `json:"duration_ms"`
+	// Runtime measurements are copied onto the durable receipt so session
+	// history remains useful after the metrics attempt retention window folds.
+	// The Known flags are intentional: zero is a valid value, but absence is
+	// not evidence of zero.
+	InputTokens      int64  `json:"input_tokens,omitempty"`
+	OutputTokens     int64  `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
+	Tokens           int64  `json:"tokens,omitempty"`
+	TokensKnown      bool   `json:"tokens_known,omitempty"`
+	PeakRSS          int64  `json:"peak_rss,omitempty"`
+	RSSKnown         bool   `json:"rss_known,omitempty"`
+	ToolVersion      string `json:"tool_version,omitempty"`
 	// SpentUSD is what this step was charged, when anything was. It is here
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a

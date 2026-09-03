@@ -164,6 +164,38 @@ func TestTheBridgeOwnsTheDesktopProfileInInitialize(t *testing.T) {
 	}
 }
 
+func TestTheBridgePreservesOnlyOptionalSessionIdentity(t *testing.T) {
+	line, ok := injectMCPContext([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"atenea":{"profile":"attacker","workspace":"/secret","origin":{"surface":"attacker"},"session":{"title":"QA dashboard","external_id":"codex:1"}}}}}`), "codex", "/trusted/workspace")
+	if !ok {
+		t.Fatal("initialize was not transformed")
+	}
+	var message struct {
+		Params struct {
+			Meta struct {
+				Atenea struct {
+					Profile   string `json:"profile"`
+					Workspace string `json:"workspace"`
+					Origin    struct {
+						Surface   string `json:"surface"`
+						Transport string `json:"transport"`
+					} `json:"origin"`
+					Session struct {
+						Title      string `json:"title"`
+						ExternalID string `json:"external_id"`
+					} `json:"session"`
+				} `json:"atenea"`
+			} `json:"_meta"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(line, &message); err != nil {
+		t.Fatal(err)
+	}
+	got := message.Params.Meta.Atenea
+	if got.Profile != "codex" || got.Workspace != "/trusted/workspace" || got.Origin.Surface != "codex" || got.Origin.Transport != "mcp-stdio" || got.Session.Title != "QA dashboard" || got.Session.ExternalID != "codex:1" {
+		t.Fatalf("bridge metadata = %+v", got)
+	}
+}
+
 // The isolation is a claim until somebody can see it. A connected client is a
 // row on the status screen, and a screen that cannot show one makes every
 // statement about per-chat grants unfalsifiable from the outside.

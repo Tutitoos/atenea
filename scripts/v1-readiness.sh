@@ -76,6 +76,7 @@ go vet ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
 echo "[6/9] build"
+bash scripts/dashboard-build.sh
 go build -trimpath -buildvcs=false -o "$build_dir/atenea" ./cmd/atenea
 
 echo "[7/9] race suite"

@@ -15,14 +15,22 @@ import (
 func run(id string) checkpoint.Run {
 	task := "find every TODO"
 	return checkpoint.Run{
-		ID:              id,
-		Kind:            checkpoint.KindTask,
-		Task:            task,
-		Repositories:    []string{"api"},
-		Effects:         []contract.Effect{contract.EffectWrite},
-		BudgetUSD:       0.5,
-		ContractVersion: contract.Current.String(),
-		Started:         time.Now(),
+		ID:                      id,
+		Kind:                    checkpoint.KindTask,
+		Session:                 "chat-1",
+		SessionClient:           "codex",
+		SessionName:             "Improve dashboard",
+		SessionNameBasis:        "provided",
+		SessionPrimaryProject:   "atenea",
+		SessionOriginSurface:    "codex",
+		SessionOriginTransport:  "mcp-stdio",
+		SessionExternalObserved: true,
+		Task:                    task,
+		Repositories:            []string{"api"},
+		Effects:                 []contract.Effect{contract.EffectWrite},
+		BudgetUSD:               0.5,
+		ContractVersion:         contract.Current.String(),
+		Started:                 time.Now(),
 		Plan: contract.Plan{Task: task, Steps: []contract.Step{{
 			ID:         "explore-api",
 			Capability: "code.search",
@@ -63,6 +71,9 @@ func TestRoundTripKeepsWhatIsNeededToPickUpAgain(t *testing.T) {
 	}
 	if read.Kind != checkpoint.KindTask {
 		t.Errorf("kind = %q, want %q", read.Kind, checkpoint.KindTask)
+	}
+	if read.SessionName != "Improve dashboard" || read.SessionNameBasis != "provided" || read.SessionPrimaryProject != "atenea" || read.SessionOriginSurface != "codex" || read.SessionOriginTransport != "mcp-stdio" || !read.SessionExternalObserved {
+		t.Errorf("session metadata did not survive: %+v", read)
 	}
 	if len(read.Steps) != 1 || read.Steps[0].ID != "explore-api" {
 		t.Fatalf("steps did not survive the round trip: %v", read.Steps)

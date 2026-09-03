@@ -103,6 +103,19 @@ Supported compatibility normalizations are intentionally small: missing or
 null arguments become `{}`, `input` is accepted as an argument alias, and
 `raw/<server>/<tool>` is accepted as an alias for `raw.<server>.<tool>`.
 
+A compatible client may optionally provide a display identity during
+`initialize`:
+
+```json
+{"_meta":{"atenea":{"session":{"title":"Review checkout flow","external_id":"codex:opaque-id"}}}}}
+```
+
+The title is untrusted display text and is redacted and bounded before it is
+stored. The external identifier is never returned or written to a checkpoint;
+the dashboard records only that one was observed. Profile, transport and the
+workspace used to resolve a repository id are supplied by the local bridge,
+not accepted from the client. Local paths are discarded after resolution.
+
 ## Compatibility matrix
 
 | Capability | Claude Code | ChatGPT Desktop | Codex CLI |

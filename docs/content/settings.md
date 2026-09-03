@@ -1753,6 +1753,32 @@ rather than `aborted` (nobody cut anything) or `finished`. A rejected
 and finishes, because that graph is one somebody did approve.
 
 
+## Observability dashboard
+
+The built-in read-only observability panel is disabled unless this section is
+explicitly enabled. The default listener is loopback-only and is intended to
+be published through Tailscale Serve; no CORS or Funnel mode is enabled by
+this setting.
+
+```toml
+[dashboard]
+enabled = false
+listen = "127.0.0.1:8788"
+access = "tailscale"          # tailscale or loopback
+lan_listen = ""                # explicit private IP:port, opt-in
+lan_cert_file = ""              # required with lan_listen
+lan_key_file = ""               # required with lan_listen
+lan_token_file = ""              # required with lan_listen; file mode 0600
+page_limit = 100
+session_ttl = "12h"
+```
+
+LAN publication requires an explicit private (non-loopback) address, a TLS
+certificate and key, and a token file. The service rejects an incomplete or
+non-TLS LAN configuration. `atenea dashboard atenea --check` checks the
+loopback panel, while `atenea dashboard publish tailscale` only previews the
+Tailscale Serve command; `--apply` is required to change Serve.
+
 ## MCP servers
 
 ```toml

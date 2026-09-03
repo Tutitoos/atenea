@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -97,6 +98,9 @@ func (v *conversation) workflowCreate(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
+	if v.core.events != nil {
+		v.core.events.Publish(observability.Event{Kind: "gate.waiting", RunID: run.ID, State: "waiting", Count: len(gate.Proposal.Steps)})
+	}
 	steps := make([]map[string]any, 0, len(gate.Proposal.Steps))
 	for _, step := range gate.Proposal.Steps {
 		entry := map[string]any{
@@ -163,6 +167,13 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 	}
 
 	run, runErr := engine.Launch(ctx, id)
+	if v.core.events != nil && run.ID != "" {
+		state := "approved"
+		if runErr != nil {
+			state = "failed"
+		}
+		v.core.events.Publish(observability.Event{Kind: "gate.completed", RunID: run.ID, State: state, Reason: errorText(runErr)})
+	}
 	if run.ID == "" {
 		// A run with no id is a launch that never started, and the reason is
 		// runErr. The nil check is not defensive noise: the two returns are
@@ -190,6 +201,13 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 		out["stopped"] = runErr.Error()
 	}
 	return toolResult(out)
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // authorize holds a workflow's effects against what this chat may grant.

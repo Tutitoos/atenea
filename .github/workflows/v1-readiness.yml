@@ -33,6 +33,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
       - name: Run reproducible pre-v1 gate
         run: bash scripts/v1-readiness.sh
 

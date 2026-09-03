@@ -3,11 +3,15 @@ package core
 import (
 	"cmp"
 	"context"
+	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/checkpoint"
+	"github.com/Tutitoos/atenea/internal/observability"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -38,9 +42,23 @@ type Session struct {
 	// levels are the context heights this chat may read. A discovery above
 	// them is not withheld as a punishment -- the chat simply has no business
 	// with it, and handing it over would be the leak.
-	levels []contract.ContextLevel
-	opened time.Time
-	runs   atomic.Int64
+	levels           []contract.ContextLevel
+	opened           time.Time
+	runs             atomic.Int64
+	metaMu           sync.RWMutex
+	name             string
+	nameBasis        string
+	namePriority     int
+	primaryProject   string
+	origin           SessionOrigin
+	externalObserved bool
+}
+
+// SessionOrigin describes where a session entered Atenea without identifying
+// a host, device, user or local path.
+type SessionOrigin struct {
+	Surface   string `json:"surface,omitempty"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // SessionOptions describe the chat asking to be let in.
@@ -52,6 +70,14 @@ type SessionOptions struct {
 	// exists so the status screen can show two clients at once, which is the
 	// only way anybody sees the isolation working.
 	Client string
+	// Title and ExternalID are optional client hints. The title is treated as
+	// untrusted display text; the identifier is never persisted or exposed.
+	Title      string
+	ExternalID string
+	// Workspace is supplied by the local bridge and is used once to resolve a
+	// configured repository id. The path itself is discarded.
+	Workspace string
+	Origin    SessionOrigin
 	// Grant is what this chat asks to hold beyond reading, and it may only
 	// ever ask for LESS than the settings file grants clients. Nil is the
 	// common case -- a chat that says nothing holds whatever
@@ -156,6 +182,17 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"session %s is already open", id)
 	}
+	project := c.projectForWorkspace(opts.Workspace)
+	name := safeDashboardText(opts.Title, 120)
+	basis := "unknown"
+	priority := 0
+	if name != "" {
+		basis, priority = "provided", 4
+	} else if opts.Origin.Surface != "" || project != "" {
+		surface := cmp.Or(safeDashboardText(opts.Origin.Surface, 40), safeDashboardText(opts.Client, 40), "cliente")
+		projectName := cmp.Or(project, "proyecto desconocido")
+		name, basis, priority = "Sesión de "+surface+" · "+projectName, "derived", 1
+	}
 	session := &Session{
 		id:     id,
 		client: opts.Client,
@@ -164,8 +201,15 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 		floor:  floor,
 		levels: levels,
 		opened: time.Now(),
+		name:   name, nameBasis: basis, namePriority: priority,
+		primaryProject:   project,
+		origin:           SessionOrigin{Surface: safeDashboardText(opts.Origin.Surface, 40), Transport: safeDashboardText(opts.Origin.Transport, 40)},
+		externalObserved: strings.TrimSpace(opts.ExternalID) != "",
 	}
 	c.sessions[id] = session
+	if c.events != nil {
+		c.events.Publish(observability.Event{Kind: "session.opened", SessionID: id})
+	}
 	return session, nil
 }
 
@@ -173,8 +217,12 @@ func (c *Core) Open(opts SessionOptions) (*Session, error) {
 // caller wanted it gone and it is gone.
 func (c *Core) Close(id string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	_, existed := c.sessions[id]
 	delete(c.sessions, id)
+	c.mu.Unlock()
+	if existed && c.events != nil {
+		c.events.Publish(observability.Event{Kind: "session.closed", SessionID: id})
+	}
 }
 
 // Sessions lists the chats currently open, oldest first, for the status
@@ -206,6 +254,14 @@ func (s *Session) Opened() time.Time { return s.opened }
 
 // Runs reports how many commissions this chat has made.
 func (s *Session) Runs() int64 { return s.runs.Load() }
+
+// DashboardMetadata returns only the safe, persisted subset of session
+// identity. It intentionally has no workspace or external identifier field.
+func (s *Session) DashboardMetadata() (string, string, string, SessionOrigin, bool) {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	return s.name, s.nameBasis, s.primaryProject, s.origin, s.externalObserved
+}
 
 // Grant reports what this chat may authorize beyond reading.
 func (s *Session) Grant() []contract.Effect { return slices.Clone(s.grant) }
@@ -240,6 +296,9 @@ func (s *Session) Do(ctx context.Context, task orchestrator.Task) (*orchestrator
 		return nil, err
 	}
 	task.Session = s.id
+	task.SessionClient = s.client
+	s.deriveName(task.Text, first(task.Repositories))
+	s.decorateTask(&task)
 	// The floor travels with the commission rather than being looked up at
 	// dispatch, because the orchestrator has exactly one standing grant and
 	// it is the operator's. A chat that did not say which floor it runs on
@@ -269,11 +328,84 @@ func (s *Session) Ask(ctx context.Context, q orchestrator.Question) (*orchestrat
 		return nil, err
 	}
 	q.Session = s.id
+	q.SessionClient = s.client
+	derived := strings.TrimSpace(q.Capability)
+	if project := strings.TrimSpace(q.Repository); project != "" {
+		derived += " · " + project
+	}
+	s.deriveName(derived, q.Repository)
+	s.decorateQuestion(&q)
 	q.Floor = s.floor
 	s.runs.Add(1)
 	result, err := s.core.Ask(ctx, q)
 	s.told(result)
 	return result, err
+}
+
+func (c *Core) projectForWorkspace(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" || c.catalog == nil {
+		return ""
+	}
+	workspace, err := filepath.Abs(filepath.Clean(workspace))
+	if err != nil {
+		return ""
+	}
+	best, bestLen := "", -1
+	for _, repo := range c.catalog.Repositories() {
+		root, err := filepath.Abs(filepath.Clean(repo.Path))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(root, workspace)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > bestLen {
+			best, bestLen = repo.ID, len(root)
+		}
+	}
+	return best
+}
+
+func (s *Session) deriveName(objective, project string) {
+	objective = safeDashboardText(objective, 120)
+	project = safeDashboardText(project, 80)
+	if objective == "" {
+		return
+	}
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	if s.namePriority >= 3 {
+		return
+	}
+	if s.primaryProject == "" {
+		s.primaryProject = project
+	}
+	s.name, s.nameBasis, s.namePriority = objective, "derived", 3
+}
+
+func (s *Session) decorateTask(task *orchestrator.Task) {
+	name, basis, project, origin, external := s.DashboardMetadata()
+	task.SessionName, task.SessionNameBasis = name, basis
+	task.SessionPrimaryProject = project
+	task.SessionOriginSurface, task.SessionOriginTransport = origin.Surface, origin.Transport
+	task.SessionExternalObserved = external
+}
+
+func (s *Session) decorateQuestion(q *orchestrator.Question) {
+	name, basis, project, origin, external := s.DashboardMetadata()
+	q.SessionName, q.SessionNameBasis = name, basis
+	q.SessionPrimaryProject = project
+	q.SessionOriginSurface, q.SessionOriginTransport = origin.Surface, origin.Transport
+	q.SessionExternalObserved = external
+}
+
+func first(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // entitled refuses an effect this chat was not granted.
