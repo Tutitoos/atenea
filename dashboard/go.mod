@@ -2,4 +2,4 @@
 // dependencies that contain incidental Go examples (for example flatted).
 module github.com/Tutitoos/atenea-dashboard
 
-go 1.25.0
+go 1.25.13

@@ -1,5 +1,5 @@
 module github.com/Tutitoos/atenea/docs
 
-go 1.25
+go 1.25.13
 
 require github.com/alex-shpak/hugo-book v0.14.0 // indirect
