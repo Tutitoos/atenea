@@ -142,6 +142,8 @@ type Request struct {
 type Drop struct {
 	Implementation string
 	Reason         string
+	// Code is safe metadata for clients; Reason/Raw may contain provider text.
+	Code string
 	// Raw is the provider's own text behind Reason, when the record that
 	// produced this drop kept one. Most drops come from the core's own
 	// bookkeeping -- a language it does not speak, an index it lacks -- and
@@ -178,6 +180,12 @@ func (s *Selector) Select(req Request) (Decision, error) {
 	decision := Decision{
 		Capability: req.Capability,
 		Repository: req.Repository.ID,
+	}
+	if preferred := strings.TrimSpace(req.Prefer); preferred != "" {
+		if !slices.ContainsFunc(req.Candidates, func(i contract.Implementation) bool { return i.ID == preferred || i.Provider == preferred }) {
+			return decision, contract.Fail(contract.FailureInvalidInput,
+				"preference %q does not identify a provider or implementation of %s; available implementations: %s; use catalog.repositories for repository availability", preferred, req.Capability, strings.Join(ids(req.Candidates), ", "))
+		}
 	}
 	if len(req.Candidates) == 0 {
 		return decision, contract.Fail(contract.FailureNotFound,
@@ -229,12 +237,15 @@ func filterReach(req Request, candidates []contract.Implementation) ([]contract.
 	for _, impl := range candidates {
 		if !slices.Contains(req.Reachable, impl.ID) {
 			reason := "no attached runner serves it"
+			code := "not_attached"
 			if scoped, ok := req.Unreachable[impl.ID]; ok && scoped != "" {
 				reason = scoped
+				code = "repository_scope"
 			}
 			stage.Dropped = append(stage.Dropped, Drop{
 				Implementation: impl.ID,
 				Reason:         reason,
+				Code:           code,
 			})
 			continue
 		}
@@ -408,10 +419,20 @@ func inBreakIn(impl contract.Implementation) bool {
 func (s *Selector) choose(req Request, survivors []contract.Implementation) (contract.Implementation, string, []string) {
 	var notices []string
 	if preferred := strings.TrimSpace(req.Prefer); preferred != "" {
-		if idx := slices.IndexFunc(survivors, func(i contract.Implementation) bool {
-			return i.ID == preferred
-		}); idx >= 0 {
-			return survivors[idx], fmt.Sprintf("one-call preference selects %s", preferred), nil
+		exact := slices.ContainsFunc(req.Candidates, func(i contract.Implementation) bool { return i.ID == preferred })
+		var preferredSurvivors []contract.Implementation
+		for _, i := range survivors {
+			if i.ID == preferred || (!exact && i.Provider == preferred) {
+				preferredSurvivors = append(preferredSurvivors, i)
+			}
+		}
+		if len(preferredSurvivors) > 0 {
+			// Rank multiple implementations of the requested provider using
+			// the usual policy, never by catalog iteration order.
+			withoutPreference := req
+			withoutPreference.Prefer = ""
+			chosen, _, _ := s.choose(withoutPreference, preferredSurvivors)
+			return chosen, fmt.Sprintf("one-call preference selects %s via %s", chosen.ID, preferred), nil
 		}
 		notices = append(notices, fmt.Sprintf(
 			"one-call preference selects %s, which did not survive the funnel; falling back", preferred))

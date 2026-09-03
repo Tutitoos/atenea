@@ -28,6 +28,12 @@ required=(
 	"symbol.dependencies|kivgraph.dependencies"
 	"symbol.consumers|kivgraph.cross_repo_consumers"
 	"symbol.get|kivgraph.get"
+	"symbol.search|kivgraph.search"
+	"symbol.source|kivgraph.source"
+	"symbol.impact|kivgraph.symbol_impact"
+	"graph.repositories|kivgraph.repositories"
+	"graph.ensure_fresh|kivgraph.ensure_fresh"
+	"code.context|kivgraph.context"
 	"graph.status|kivgraph.status"
 	"repository.index|kivgraph.index"
 	# The desktop edges. Checked here for the reason the gate exists at all: an
@@ -71,13 +77,13 @@ done
 # usually lost more than one, and one run should name them all.
 test "$missing" -eq 0 || exit 1
 
-if [[ "${#required[@]}" -ne 33 ]]; then
-	echo "provider matrix must cover all 33 declared implementations (listed ${#required[@]})" >&2
+if [[ "$(wc -l <<<"$edges" | tr -d ' ')" -ne "${#required[@]}" ]]; then
+	echo "provider matrix must cover every declared implementation (listed ${#required[@]})" >&2
 	exit 1
 fi
 
 # Retired-provider guard: the neutral contracts remain, but have no edges.
-for capability in symbol.implementations symbol.search symbol.unresolved; do
+for capability in symbol.implementations symbol.unresolved; do
 	if grep -q "^$capability|" <<<"$edges"; then
 		echo "$capability unexpectedly has a provider edge" >&2
 		exit 1

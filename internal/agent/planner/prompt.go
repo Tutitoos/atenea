@@ -31,8 +31,13 @@ anything.
 `)
 	if s.Capabilities {
 		b.WriteString(`Use the atenea tools you have been given. They are the point. Your FIRST move
-for a task stated only in prose is code.context: it finds the declarations,
-relationships and (in plan mode) tests the task is actually about. After that,
+for a task stated only in prose is code.context, preferring Kivgraph for structural
+questions. It retrieves relevant declarations; only report relationships or test
+coverage when the provider actually establishes them. symbol.intent_search finds
+unknown names, symbol.search finds known declarations, symbol.dependencies follows
+outgoing reach, symbol.consumers finds cross-repository users, symbol.impact inspects
+incoming impact and symbol.source retrieves bounded source. Honor freshness,
+LOWER_BOUND and pagination evidence; never infer absence from partial results.
 code.search finds literal text; symbol.definition and symbol.references answer
 questions about a named symbol; symbol.overview lists what a file declares; and
 catalog.repositories says what is registered on this machine. Grep-by-eye over

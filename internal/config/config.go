@@ -604,6 +604,8 @@ type ManagedProcess struct {
 // that server; Process remains for the stdio child, now one of two ways to
 // reach Kivgraph rather than the only one.
 type KivgraphAdapter struct {
+	IndexEnv              []string
+	AutoReindexRegistered bool
 	// Endpoint is where the kivgraph daemon's MCP server is listening.
 	// Mutually exclusive with Process: a server is reached one way, and
 	// declaring both leaves an operator's later "the other one" edit
@@ -1428,15 +1430,17 @@ type fileCodexAdapter struct {
 // talks over, only fileManagedProcess.build's caller does (see the section
 // parameter it takes below).
 type fileKivgraphAdapter struct {
-	Endpoint         string              `toml:"endpoint"`
-	Token            string              `toml:"token"`
-	Binary           string              `toml:"binary"`
-	Implementations  *[]string           `toml:"implementations"`
-	Timeout          string              `toml:"timeout"`
-	IndexTimeout     string              `toml:"index_timeout"`
-	Dashboard        string              `toml:"dashboard"`
-	DashboardProcess *fileManagedProcess `toml:"dashboard_process"`
-	Process          *fileManagedProcess `toml:"process"`
+	IndexEnv              *[]string           `toml:"index_env"`
+	AutoReindexRegistered *bool               `toml:"auto_reindex_registered"`
+	Endpoint              string              `toml:"endpoint"`
+	Token                 string              `toml:"token"`
+	Binary                string              `toml:"binary"`
+	Implementations       *[]string           `toml:"implementations"`
+	Timeout               string              `toml:"timeout"`
+	IndexTimeout          string              `toml:"index_timeout"`
+	Dashboard             string              `toml:"dashboard"`
+	DashboardProcess      *fileManagedProcess `toml:"dashboard_process"`
+	Process               *fileManagedProcess `toml:"process"`
 }
 
 // fileTokensaveAdapter is the TOML shape of TokensaveAdapter. `root` is the
@@ -2205,6 +2209,7 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Timeout:         codex.DefaultTimeout,
 		},
 		Kivgraph: KivgraphAdapter{
+			IndexEnv:        []string{},
 			Endpoint:        kivgraph.DefaultEndpoint,
 			Binary:          kivgraph.DefaultBinary,
 			Implementations: kivgraph.DefaultImplementations(),
@@ -2753,6 +2758,18 @@ func (l fileKivgraphAdapter) build(source string, out KivgraphAdapter) (Kivgraph
 				"settings %s: orchestrator.kivgraph.index_timeout %q must be a positive duration", source, l.IndexTimeout)
 		}
 		out.IndexTimeout = timeout
+	}
+	if l.AutoReindexRegistered != nil {
+		out.AutoReindexRegistered = *l.AutoReindexRegistered
+	}
+	if l.IndexEnv != nil {
+		for _, value := range *l.IndexEnv {
+			key, _, ok := strings.Cut(value, "=")
+			if !ok || strings.TrimSpace(key) == "" {
+				return KivgraphAdapter{}, contract.Fail(contract.FailureInvalidInput, "kivgraph.index_env entries must be KEY=value")
+			}
+		}
+		out.IndexEnv = slices.Clone(*l.IndexEnv)
 	}
 	if strings.TrimSpace(l.Dashboard) != "" {
 		validated, err := validateDashboardURL(source, "orchestrator.kivgraph", "kivgraph", l.Dashboard)

@@ -163,6 +163,18 @@ const (
 	CapabilityGraphStatus  = "graph.status"
 	CapabilityImpact       = "code.impact"
 	CapabilityIndex        = "repository.index"
+	CapabilitySearch       = "symbol.search"
+	ImplSearch             = "kivgraph.search"
+	CapabilitySource       = "symbol.source"
+	CapabilitySymbolImpact = "symbol.impact"
+	CapabilityRepositories = "graph.repositories"
+	CapabilityEnsureFresh  = "graph.ensure_fresh"
+	CapabilityContext      = "code.context"
+	ImplSource             = "kivgraph.source"
+	ImplSymbolImpact       = "kivgraph.symbol_impact"
+	ImplRepositories       = "kivgraph.repositories"
+	ImplEnsureFresh        = "kivgraph.ensure_fresh"
+	ImplContext            = "kivgraph.context"
 
 	ImplDefinition   = "kivgraph.definition"
 	ImplReferences   = "kivgraph.references"
@@ -215,7 +227,7 @@ const DefaultTimeout = 90 * time.Second
 
 // DefaultIndexTimeout is separate because a full workspace rebuild is a
 // mutation measured in minutes, while snapshot reads should still fail fast.
-const DefaultIndexTimeout = 10 * time.Minute
+const DefaultIndexTimeout = 30 * time.Minute
 
 // DefaultEndpoint is where kivgraph's own daemon listens when nothing else
 // is configured: `kivgraph daemon` serves streamable-HTTP MCP at a fixed
@@ -232,7 +244,7 @@ const DefaultBinary = "kivgraph"
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplIntent, ImplDependencies, ImplStatus, ImplImpact, ImplIndex}
+	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplIntent, ImplDependencies, ImplStatus, ImplImpact, ImplIndex, ImplSearch, ImplSource, ImplSymbolImpact, ImplRepositories, ImplEnsureFresh, ImplContext}
 }
 
 // IndexReport is the authoritative result of Kivgraph's full index command.
@@ -265,6 +277,10 @@ type Session interface {
 
 // Options configure the adapter.
 type Options struct {
+	// RequireFresh is enabled by core for every production graph read.
+	RequireFresh          bool
+	AutoReindexRegistered bool
+	MaintenanceDirectory  string
 	// Implementations the adapter answers for.
 	Implementations []string
 	// Sensitive holds the path patterns that carry secrets. kivgraph's own
@@ -291,12 +307,15 @@ type Options struct {
 
 // Runner is the kivgraph far side of contract.Runner.
 type Runner struct {
-	implementations []string
-	sensitive       []string
-	timeout         time.Duration
-	indexTimeout    time.Duration
-	session         func(ctx context.Context) (Session, error)
-	index           Indexer
+	requireFresh          bool
+	autoReindexRegistered bool
+	maintenanceDirectory  string
+	implementations       []string
+	sensitive             []string
+	timeout               time.Duration
+	indexTimeout          time.Duration
+	session               func(ctx context.Context) (Session, error)
+	index                 Indexer
 }
 
 // New validates the options and returns the adapter.
@@ -335,12 +354,15 @@ func New(opts Options) (*Runner, error) {
 	}
 	slices.Sort(impls)
 	return &Runner{
-		implementations: impls,
-		sensitive:       slices.Clone(opts.Sensitive),
-		timeout:         timeout,
-		indexTimeout:    indexTimeout,
-		session:         opts.Session,
-		index:           opts.Index,
+		requireFresh:          opts.RequireFresh,
+		autoReindexRegistered: opts.AutoReindexRegistered,
+		maintenanceDirectory:  opts.MaintenanceDirectory,
+		implementations:       impls,
+		sensitive:             slices.Clone(opts.Sensitive),
+		timeout:               timeout,
+		indexTimeout:          indexTimeout,
+		session:               opts.Session,
+		index:                 opts.Index,
 	}, nil
 }
 
@@ -363,14 +385,20 @@ func (r *Runner) Capabilities() []string {
 	return []string{
 		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
 		CapabilityConsumers, CapabilityGet, CapabilityIntent, CapabilityDependencies, CapabilityGraphStatus,
-		CapabilityImpact, CapabilityIndex,
+		CapabilityImpact, CapabilityIndex, CapabilitySearch,
+		CapabilitySource, CapabilitySymbolImpact, CapabilityRepositories, CapabilityEnsureFresh, CapabilityContext,
 	}
 }
 
 // Run executes one step.
-func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
+func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, runErr error) {
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
+	}
+	if req.Capability.ID == CapabilityEnsureFresh || req.Capability.ID == CapabilityIndex {
+		if effect, ok := req.Allowed(); !ok {
+			return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied, "graph maintenance requires %s", effect)
+		}
 	}
 	if !r.Serves(req.Implementation.ID) {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
@@ -379,7 +407,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 
 	started := time.Now()
 	timeout := r.timeout
-	if req.Capability.ID == CapabilityIndex {
+	if req.Capability.ID == CapabilityIndex || req.Capability.ID == CapabilityEnsureFresh || r.autoReindexRegistered {
 		timeout = r.indexTimeout
 	}
 	call, cancel := context.WithTimeout(ctx, timeout)
@@ -389,6 +417,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
+	collector := &evidenceSession{Session: sess}
+	sess = collector
+	defer func() { out.Evidence = collector.evidence }()
 	// Session declares only Call: an MCP handshake, if one is even needed
 	// on this transport, is whatever a Call implementation does before its
 	// first request answers -- mcpstdio.Session.Call performs it lazily and
@@ -412,6 +443,17 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
+	if req.Capability.ID == CapabilityEnsureFresh || (r.requireFresh && req.Capability.ID != CapabilityGraphStatus && req.Capability.ID != CapabilityRepositories) {
+		var rebuilt bool
+		status, rebuilt, err = r.ensureFresh(call, sess, status, req)
+		if err != nil {
+			return contract.Outcome{}, err
+		}
+		if req.Capability.ID == CapabilityEnsureFresh {
+			result := map[string]any{"status": "fresh", "generation": status.SnapshotID, "rebuilt": rebuilt}
+			return r.outcome(started, result, nil), req.Capability.ValidateOutput(result)
+		}
+	}
 	repository, err := r.repositoryInPlay(req)
 	if err != nil {
 		return contract.Outcome{}, err
@@ -423,6 +465,16 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	var result map[string]any
 	var notes []string
 	switch req.Capability.ID {
+	case CapabilitySource:
+		result, notes, err = r.runSource(call, sess, status, req)
+	case CapabilitySymbolImpact:
+		result, notes, err = r.runSymbolImpact(call, sess, status, req)
+	case CapabilityRepositories:
+		result, notes, err = r.runRepositories(call, sess, req)
+	case CapabilityContext:
+		result, notes, err = r.runContext(call, sess, status, req)
+	case CapabilitySearch:
+		result, notes, err = r.runSearch(call, sess, status, req)
 	case CapabilityDefinition:
 		result, notes, err = r.runDefinition(call, sess, status, req)
 	case CapabilityReferences:
@@ -448,7 +500,15 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
-
+	if r.requireFresh && req.Capability.ID != CapabilityGraphStatus && req.Capability.ID != CapabilityRepositories {
+		verified, verifyErr := r.fetchStatus(call, sess)
+		if verifyErr != nil {
+			return contract.Outcome{}, r.failureFor(verifyErr, call)
+		}
+		if verified == nil || verified.SnapshotID != status.SnapshotID || !contentFresh(verified) {
+			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable, "graph changed during query; results withheld")
+		}
+	}
 	return r.outcome(started, result, notes), nil
 }
 
@@ -481,7 +541,7 @@ func (r *Runner) outcome(started time.Time, result map[string]any, notes []strin
 // -- it has no structural repository to check and nothing in its payload to
 // read, so an unscoped call is satisfied by the graph existing at all.
 func (r *Runner) repositoryInPlay(req contract.RunRequest) (string, error) {
-	if req.Capability.ID == CapabilityGraphStatus {
+	if req.Capability.ID == CapabilityGraphStatus || req.Capability.ID == CapabilityRepositories {
 		return "", nil
 	}
 	root, err := filepath.Abs(req.Repository.Path)
@@ -499,6 +559,7 @@ func (r *Runner) repositoryInPlay(req contract.RunRequest) (string, error) {
 // published snapshot rather than opening the database itself, so keying
 // readiness on them would be a permanent false negative, not a real signal.
 type statusResult struct {
+	ContentFreshness    *contentFreshness     `json:"content_freshness"`
 	Status              string                `json:"status"`
 	SnapshotID          int                   `json:"snapshot_id"`
 	SnapshotBuiltAt     string                `json:"snapshot_built_at"`
@@ -1102,6 +1163,17 @@ func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusRe
 		return nil, nil, err
 	}
 	args := map[string]any{"repository": kivgraphRepo, "path": relative, "view": "full", "response_format": "detailed"}
+	for _, key := range []string{"cursor", "kind"} {
+		if value, ok := req.Payload[key]; ok {
+			args[key] = value
+		}
+	}
+	if limit, ok := intAt(req.Payload, "limit"); ok {
+		if limit < 1 || limit > 500 {
+			return nil, nil, contract.Fail(contract.FailureInvalidInput, "overview limit must be between 1 and 500")
+		}
+		args["limit"] = limit
+	}
 	if depth > 0 {
 		args["include_members"] = true
 	}
@@ -1125,11 +1197,25 @@ func (r *Runner) runOverview(ctx context.Context, sess Session, status *statusRe
 		if decl.Name == "" || decl.StartLine <= 0 {
 			continue
 		}
+		rowLines := lines
+		if decl.Path != "" {
+			filename, err := within(root, decl.Path)
+			if err != nil {
+				return nil, nil, err
+			}
+			if r.isSensitive(decl.Path) {
+				return nil, nil, contract.Fail(contract.FailurePermissionDenied, "outline source path is sensitive")
+			}
+			rowLines = readLines(filename)
+		}
 		record := map[string]any{
 			"name":   decl.Name,
 			"kind":   decl.Kind,
 			"line":   decl.StartLine,
-			"column": columnOf(lines, decl.StartLine, decl.Name),
+			"column": columnOf(rowLines, decl.StartLine, decl.Name),
+		}
+		if decl.Path != "" {
+			record["path"] = decl.Path
 		}
 		// end_line only when it says something line does not.
 		if decl.EndLine > decl.StartLine {
@@ -1187,6 +1273,7 @@ func parentOf(decl outlineDeclaration) (string, bool) {
 // outlineDeclaration is one row of get_file_outline: a declaration's span
 // and the stable_key that names it, measured live against Kivgraph v0.5.1.
 type outlineDeclaration struct {
+	Path          string `json:"path"`
 	Name          string `json:"name"`
 	QualifiedName string `json:"qualified_name"`
 	Kind          string `json:"kind"`
@@ -1240,6 +1327,7 @@ type outlineAnswer struct {
 // and read as empty, while a file whose kinds repeated came back grouped and
 // read fine, which is why this looked intermittent rather than broken.
 type outlineFile struct {
+	Path    string               `json:"path"`
 	File    string               `json:"file"`
 	Symbols []outlineDeclaration `json:"symbols"`
 	At      []json.RawMessage    `json:"at"`
@@ -1264,7 +1352,13 @@ type outlineGroup struct {
 func (a outlineAnswer) declarations() []outlineDeclaration {
 	out := a.Results.Symbols
 	for _, file := range a.Results.Files {
-		out = append(out, file.Symbols...)
+		for _, decl := range file.Symbols {
+			decl.Path = file.Path
+			if decl.Path == "" {
+				decl.Path = file.File
+			}
+			out = append(out, decl)
+		}
 		// The page-level kind is the only one a flat row carries; grouped
 		// rows get theirs from the group instead.
 		out = append(out, compactDeclarations(a.Results.Kind, file.At)...)
@@ -1660,6 +1754,10 @@ func (r *Runner) runGraphStatus(status *statusResult, req contract.RunRequest) (
 		"unresolved":        status.Unresolved,
 	}
 	result := map[string]any{"snapshot": []any{record}}
+	if status.ContentFreshness != nil {
+		record["content_state"] = status.ContentFreshness.State
+		record["content_generation"] = status.ContentFreshness.Generation
+	}
 	if err := req.Capability.ValidateOutput(result); err != nil {
 		return nil, nil, err
 	}

@@ -3752,7 +3752,7 @@ func cmdWrap(settingsPath string, args []string, out io.Writer) error {
 	if err != nil {
 		return contract.Fail(contract.FailureUnavailable, "cannot locate the running atenea: %v", err)
 	}
-	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp", "--desktop-profile", profile.Name}}
+	core := wrap.Core{ID: "atenea", Command: []string{self, "mcp", "--desktop-profile", profile.Name}, ToolTimeout: profile.ToolTimeout}
 
 	var flags, env []string
 	if client.flags != nil {

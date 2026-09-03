@@ -208,9 +208,18 @@ runners = ["omp"]
     "kivgraph.status",
     "kivgraph.impact",
     "kivgraph.index",
+    "kivgraph.search",
+    "kivgraph.source",
+    "kivgraph.symbol_impact",
+    "kivgraph.repositories",
+    "kivgraph.ensure_fresh",
+    "kivgraph.context",
   ]
   timeout = "90s"             # opens a graph db cold, a cold graph read
-  index_timeout = "10m"       # a full workspace rebuild is intentionally slower than a read
+  index_timeout = "30m"
+  # Narrow standing authorization; never grants registration or general writes.
+  auto_reindex_registered = false
+  index_env = [] # Explicit environment for the full-index child only.
 
   # Kivgraph's optional web viewer is a separate HTTP process. If enabled,
   # dashboard must use a fixed port matching dashboard_process.port; the
@@ -946,6 +955,27 @@ deterministic rank. Use code.search when the question is about literal text.
 effects = ["read"]
 
   [[capability.input]]
+  name = "mode"
+  type = "string"
+  enum = ["exact", "qualified_exact", "prefix", "substring"]
+  summary = "Name matching mode; defaults to substring."
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  summary = "Continue the same structural query from its previous page."
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  summary = "Whether additional matching declarations remain."
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  summary = "Continuation token for the same query."
+
+  [[capability.input]]
   name = "query"
   type = "string"
   required = true
@@ -1010,6 +1040,11 @@ effects = ["read"]
     type = "int"
     required = true
     summary = "Stable rank, where 1 is the strongest match."
+
+    [[capability.output.field]]
+    name = "stable_key"
+    type = "string"
+    summary = "Provider identity accepted by symbol.get."
 
 [[capability]]
 id = "symbol.intent_search"
@@ -1575,6 +1610,21 @@ line, because no provider behind this capability ever reports one itself.\
 effects = ["read"]
 
   [[capability.input]]
+  name = "limit"
+  type = "int"
+  summary = "Maximum declarations, from 1 to 500."
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  summary = "Continue the same outline query."
+
+  [[capability.input]]
+  name = "kind"
+  type = "string"
+  summary = "Filter declarations by kind."
+
+  [[capability.input]]
   name = "file"
   type = "string"
   required = true
@@ -1591,6 +1641,11 @@ effects = ["read"]
   type = "record_list"
   required = true
   summary = "Every symbol the file declares, in the order the provider found them."
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    summary = "Repository-relative file, including when outlining a directory."
 
     [[capability.output.field]]
     name = "name"
@@ -2085,6 +2140,16 @@ effects = ["read"]
   type = "record_list"
   required = true
   summary = "The published snapshot's provenance, counts and dependency health."
+
+    [[capability.output.field]]
+    name = "content_state"
+    type = "string"
+    summary = "Content freshness: fresh, stale, unverified or unavailable."
+
+    [[capability.output.field]]
+    name = "content_generation"
+    type = "int"
+    summary = "Generation checked by the source inventory."
 
     [[capability.output.field]]
     name = "status"
@@ -2863,6 +2928,19 @@ capability = "symbol.get"
   estimated_tokens = 300
 
 [[implementation]]
+id = "kivgraph.search"
+provider = "kivgraph"
+capability = "symbol.search"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "20ms"
+  estimated_tokens = 800
+
+[[implementation]]
 id = "kivgraph.intent_search"
 provider = "kivgraph"
 capability = "symbol.intent_search"
@@ -2930,6 +3008,299 @@ scope_guarantee = "confined"
   estimated_tokens = 300
 
 # ---------------------------------------------------------------------------
+[[capability]]
+id = "symbol.source"
+version = "1.0.0"
+summary = "Read current source for a bounded batch of graph declarations."
+semantics = "Read current source for a bounded batch of graph declarations."
+effects = ["read"]
+
+  [[capability.input]]
+  name = "symbols"
+  type = "record_list"
+  required = true
+  summary = "One to twenty declarations in the bound repository."
+
+    [[capability.input.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.input.field]]
+    name = "qualified_name"
+    type = "string"
+    required = true
+
+  [[capability.input]]
+  name = "context_lines"
+  type = "int"
+  required = false
+  summary = "Surrounding lines, from zero to 100."
+
+  [[capability.output]]
+  name = "source"
+  type = "string"
+  required = true
+  summary = "Provider source blocks, including drift or unavailable notices."
+
+[[capability]]
+id = "symbol.impact"
+version = "1.0.0"
+summary = "Inspect bounded incoming impact while retaining cross-repository identities."
+semantics = "Inspect bounded incoming impact while retaining cross-repository identities."
+effects = ["read"]
+
+  [[capability.input]]
+  name = "file"
+  type = "string"
+  required = true
+
+  [[capability.input]]
+  name = "line"
+  type = "int"
+  required = true
+
+  [[capability.input]]
+  name = "column"
+  type = "int"
+  required = true
+
+  [[capability.input]]
+  name = "name"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "depth"
+  type = "int"
+  required = false
+
+  [[capability.input]]
+  name = "max_nodes"
+  type = "int"
+  required = false
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "edge_kinds"
+  type = "string_list"
+  required = false
+
+  [[capability.input]]
+  name = "confidence"
+  type = "string"
+  required = false
+
+  [[capability.input]]
+  name = "include_derived"
+  type = "bool"
+  required = false
+
+  [[capability.output]]
+  name = "symbols"
+  type = "record_list"
+  required = true
+  summary = "Affected declarations."
+
+    [[capability.output.field]]
+    name = "repository"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "line"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = true
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+
+[[capability]]
+id = "graph.repositories"
+version = "1.0.0"
+summary = "List the repositories present in the published graph."
+semantics = "List the repositories present in the published graph."
+effects = ["read"]
+
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+
+  [[capability.output]]
+  name = "repositories"
+  type = "record_list"
+  required = true
+  summary = "Graph inventory, not Atenea configuration."
+
+    [[capability.output.field]]
+    name = "name"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "path"
+    type = "string"
+    required = true
+
+    [[capability.output.field]]
+    name = "derived"
+    type = "bool"
+    required = true
+
+    [[capability.output.field]]
+    name = "indexed_commit"
+    type = "string"
+    required = false
+
+    [[capability.output.field]]
+    name = "current_commit"
+    type = "string"
+    required = false
+
+    [[capability.output.field]]
+    name = "moved"
+    type = "bool"
+    required = true
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = true
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+
+[[capability]]
+id = "graph.ensure_fresh"
+version = "1.0.0"
+summary = "Verify the graph and rebuild only registered repositories under explicit authorization."
+semantics = "Verify the graph and rebuild only registered repositories under explicit authorization."
+effects = ["read", "write", "process"]
+
+  [[capability.output]]
+  name = "status"
+  type = "string"
+  required = true
+
+  [[capability.output]]
+  name = "generation"
+  type = "int"
+  required = true
+
+  [[capability.output]]
+  name = "rebuilt"
+  type = "bool"
+  required = true
+
+[[implementation]]
+id = "kivgraph.source"
+provider = "kivgraph"
+capability = "symbol.source"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "30ms"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "kivgraph.symbol_impact"
+provider = "kivgraph"
+capability = "symbol.impact"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "30ms"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "kivgraph.repositories"
+provider = "kivgraph"
+capability = "graph.repositories"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+
+  [implementation.cost]
+  estimated_duration = "30ms"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "kivgraph.ensure_fresh"
+provider = "kivgraph"
+capability = "graph.ensure_fresh"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+
+  [implementation.cost]
+  estimated_duration = "5m"
+  estimated_tokens = 1200
+
+[[implementation]]
+id = "kivgraph.context"
+provider = "kivgraph"
+capability = "code.context"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "30ms"
+  estimated_tokens = 1200
+
 # tokensave: the syntactic call graph of ONE rooted project.
 #
 # It answers the cold-start capability code.context first, then two of the same

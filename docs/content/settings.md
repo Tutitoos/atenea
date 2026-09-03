@@ -1715,7 +1715,9 @@ alternative), and its optional read-only graph viewer. Install the daemon with
 endpoint = "http://127.0.0.1:7788/mcp"
 token = "token from ~/.local/state/kivgraph/daemon.json"
 binary = "kivgraph"
-index_timeout = "10m" # separate from the shorter read timeout
+index_timeout = "30m" # separate from the shorter read timeout
+auto_reindex_registered = false # explicit, narrow standing authorization
+index_env = [] # KEY=value entries for the index child, e.g. its toolchain PATH
 dashboard = "http://127.0.0.1:7777"
 
 [orchestrator.kivgraph.dashboard_process]

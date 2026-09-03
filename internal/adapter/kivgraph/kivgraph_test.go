@@ -321,6 +321,7 @@ func overviewCapability() contract.Capability {
 					{Name: "kind", Type: contract.TypeString, Required: true},
 					{Name: "line", Type: contract.TypeInt, Required: true},
 					{Name: "column", Type: contract.TypeInt, Required: true},
+					{Name: "path", Type: contract.TypeString},
 					{Name: "end_line", Type: contract.TypeInt, Required: false},
 					{Name: "parent", Type: contract.TypeString, Required: false},
 				},
