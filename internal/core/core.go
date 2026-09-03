@@ -333,6 +333,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		Catalog:     catalog,
 		Chooser:     chooser,
 		Runner:      attach(runners, book),
+		Reach:       func(repo contract.Repository) ([]string, map[string]string) { return reachRunners(runners, repo) },
 		Checkpoints: checkpoints,
 		Meter:       collector,
 		// The same store on both seams, which is the point: what a step cost
@@ -574,10 +575,13 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 		return buildKivgraphOverHTTP(cfg, graph)
 	}
 	runner, err := kivgraph.New(kivgraph.Options{
-		Implementations: graph.Implementations,
-		Sensitive:       cfg.Security.Sensitive,
-		Timeout:         graph.Timeout,
-		IndexTimeout:    graph.IndexTimeout,
+		RequireFresh:          true,
+		AutoReindexRegistered: graph.AutoReindexRegistered,
+		MaintenanceDirectory:  kivgraphMaintenanceDirectory(),
+		Implementations:       graph.Implementations,
+		Sensitive:             cfg.Security.Sensitive,
+		Timeout:               graph.Timeout,
+		IndexTimeout:          graph.IndexTimeout,
 		Session: func(ctx context.Context) (kivgraph.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
@@ -587,7 +591,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
 					"settings %s: kivgraph index has no process declaration", cfg.Source)
 			}
-			return kivgraph.RunConfiguredIndex(ctx, process.Command, process.Env, root, mode)
+			return kivgraph.RunConfiguredIndex(ctx, process.Command, append(slices.Clone(process.Env), graph.IndexEnv...), root, mode)
 		},
 	})
 	if err != nil {
@@ -625,10 +629,13 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 		return nil, err
 	}
 	return kivgraph.New(kivgraph.Options{
-		Implementations: graph.Implementations,
-		Sensitive:       cfg.Security.Sensitive,
-		Timeout:         graph.Timeout,
-		IndexTimeout:    graph.IndexTimeout,
+		RequireFresh:          true,
+		AutoReindexRegistered: graph.AutoReindexRegistered,
+		MaintenanceDirectory:  kivgraphMaintenanceDirectory(),
+		Implementations:       graph.Implementations,
+		Sensitive:             cfg.Security.Sensitive,
+		Timeout:               graph.Timeout,
+		IndexTimeout:          graph.IndexTimeout,
 		Session: func(context.Context) (kivgraph.Session, error) {
 			return client, nil
 		},
@@ -637,7 +644,7 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 				return kivgraph.IndexReport{}, contract.Fail(contract.FailureUnavailable,
 					"settings %s: orchestrator.kivgraph.binary is required for repository.index", cfg.Source)
 			}
-			return kivgraph.RunConfiguredIndex(ctx, graph.Binary, nil, root, mode)
+			return kivgraph.RunConfiguredIndex(ctx, graph.Binary, graph.IndexEnv, root, mode)
 		},
 	})
 }
@@ -1059,9 +1066,13 @@ func (c *Core) priced(ctx context.Context, capability, repository, subject strin
 // serves this at all". Nil when every runner reached, which is the ordinary
 // machine.
 func (c *Core) reach(repo contract.Repository) ([]string, map[string]string) {
+	return reachRunners(c.runners, repo)
+}
+
+func reachRunners(runners []contract.Runner, repo contract.Repository) ([]string, map[string]string) {
 	var out []string
 	var scoped map[string]string
-	for _, runner := range c.runners {
+	for _, runner := range runners {
 		reason, reaches := reachesRepository(runner, repo)
 		if !reaches {
 			if reason == "" {

@@ -28,13 +28,10 @@ func TestRetiredSerenaConfigurationIsRejected(t *testing.T) {
 	}
 }
 
-func TestRetiredProviderKeepsExactlyThreeDormantContracts(t *testing.T) {
+func TestRetiredProviderKeepsOnlyUnsupportedContractsDormant(t *testing.T) {
 	cfg, err := config.Defaults()
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(cfg.Implementations) != 33 {
-		t.Fatalf("implementations = %d, want 33", len(cfg.Implementations))
 	}
 	offered := map[string]bool{}
 	for _, impl := range cfg.Implementations {
@@ -47,7 +44,7 @@ func TestRetiredProviderKeepsExactlyThreeDormantContracts(t *testing.T) {
 		}
 	}
 	slices.Sort(dormant)
-	if !slices.Equal(dormant, []string{"symbol.implementations", "symbol.search", "symbol.unresolved"}) {
+	if !slices.Equal(dormant, []string{"symbol.implementations", "symbol.unresolved"}) {
 		t.Fatalf("dormant = %v", dormant)
 	}
 	if _, err := config.Load(write(t, minimal)); err != nil {

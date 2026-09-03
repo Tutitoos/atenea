@@ -16,6 +16,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
+	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -353,7 +354,7 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 		"instructions": "Atenea decides and delegates: each tool is a capability, " +
 			"and the implementation that answers it is chosen per call. Most tools " +
 			"take a repository. Call catalog.repositories first to discover what is " +
-			"registered, the absolute path of each, and what each can answer.",
+			"registered, the absolute path of each, and what each can answer.\n\n" + toolVisibilityInstructions + "\n\n" + routingVisibilityInstructions,
 	}, nil
 }
 
@@ -495,7 +496,7 @@ func (v *conversation) aimable(schema map[string]any) map[string]any {
 	properties, _ := out["properties"].(map[string]any)
 	properties[routePreferArg] = map[string]any{
 		"type":        "string",
-		"description": "Optional implementation preference stamped by the decision router; it is honored only if it survives the selector.",
+		"description": "Optional exact implementation ID (kivgraph.overview) or provider name (kivgraph). Must implement this capability. Valid but unavailable preferences may fall back, reported in atenea_usage. See catalog.repositories for per-repository availability.",
 	}
 	return out
 }
@@ -702,6 +703,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		Prefer:     prefer,
 		Payload:    payload,
 	})
+	// Receipts describe dispatch, not selection, and survive failed calls too.
+	defer func() { appendToolUsage(result, runResult) }()
 	if runErr != nil {
 		code := "tool_failure"
 		recommendation := "Inspect the tool error and retry if appropriate."
@@ -874,7 +877,7 @@ func (v *conversation) repositoriesTool() map[string]any {
 	return map[string]any{
 		"name": toolListRepositories,
 		"description": "List every repository registered with Atenea: name, absolute path on disk, " +
-			"languages present, and which providers hold a ready index. " +
+			"languages present, indexed providers, and per-capability implementations with availability and exclusion categories. " +
 			"Call this before any code or symbol tool when you do not already know the repository name. " +
 			"Symbol tools require a compatible provider and ready index. Check tools/list for offered capabilities. " +
 			"Code-search and impact tools require the repository to be " +
@@ -895,13 +898,52 @@ func (v *conversation) listRepositories() (any, *rpcError) {
 			abs = repo.Path
 		}
 		entries = append(entries, map[string]any{
-			"id":         repo.ID,
-			"path":       abs,
-			"languages":  repo.Languages,
-			"indexed_by": repo.Indexes(),
+			"id":           repo.ID,
+			"path":         abs,
+			"languages":    repo.Languages,
+			"indexed_by":   repo.Indexes(),
+			"capabilities": v.repositoryCapabilities(repo),
 		})
 	}
 	return toolResult(map[string]any{"repositories": entries})
+}
+
+// Availability is a declaration/health snapshot, not a probe or permission
+// grant. Use the very same reach filter as diagnosis and actual execution.
+func (v *conversation) repositoryCapabilities(repo contract.Repository) []map[string]any {
+	reachable, unreachable := v.core.reach(repo)
+	entries := make([]map[string]any, 0)
+	for _, cap := range v.core.catalog.Capabilities() {
+		if !v.policy.allows(cap.ID) || slices.Contains(v.core.settings.Orchestrator.ClientDeniedCapabilities, cap.ID) || !v.core.capabilityOffered(cap.ID) {
+			continue
+		}
+		impls, err := v.core.catalog.ImplementationsFor(cap.ID)
+		if err != nil {
+			continue
+		}
+		impls = v.core.catalog.Observed(repo.ID, impls)
+		routes := make([]map[string]any, 0, len(impls))
+		for _, impl := range impls {
+			decision, err := v.core.chooser.Select(selector.Request{
+				Capability: cap.ID, Repository: repo, Candidates: []contract.Implementation{impl}, Reachable: reachable, Unreachable: unreachable,
+			})
+			reason := "available"
+			if err != nil {
+				reason = "unavailable"
+				for _, stage := range decision.Stages {
+					if len(stage.Dropped) > 0 {
+						reason = stage.Name
+					}
+				}
+			}
+			if _, scoped := unreachable[impl.ID]; scoped {
+				reason = "repository_scope"
+			}
+			routes = append(routes, map[string]any{"implementation": impl.ID, "provider": impl.Provider, "available": err == nil, "reason": reason})
+		}
+		entries = append(entries, map[string]any{"capability": cap.ID, "implementations": routes})
+	}
+	return entries
 }
 
 // toolResult is the shape every tools/call answer takes: the text a client

@@ -19,9 +19,12 @@ Unknown adapter tables, the retired runner, MCP ID, implementation IDs and index
 markers are rejected rather than silently ignored. Keep `--no-serena` in
 Headroom/OpenCode wrappers: it prevents automatic registration of this retired provider.
 
-The capability contracts are unchanged. `symbol.implementations`, `symbol.search`
-and `symbol.unresolved` have no provider; they remain in the catalog/status but
-are absent from `tools/list`. Direct calls return `not_offered`.
+At the original retirement, `symbol.implementations`, `symbol.search` and
+`symbol.unresolved` had no provider. The subsequent Kivgraph integration restores
+`symbol.search` with a structural declaration search. The other two remain in
+the catalog/status but absent from `tools/list`; direct calls return
+`not_offered`. New source, symbol-impact and graph-maintenance capabilities are
+additive to contract 4.0 and do not revive the retired provider.
 
 Kivgraph, Tokensave and generic MCP transports/supervision remain available.
 Historical benchmarks, incident reports and Git history are not runtime configuration

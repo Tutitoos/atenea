@@ -149,8 +149,9 @@ type openCodeServer struct {
 // the running binary rather than a configured path so that a wrap can only
 // ever point at the Atenea that performed it.
 type Core struct {
-	ID      string
-	Command []string
+	ToolTimeout time.Duration
+	ID          string
+	Command     []string
 }
 
 // OpenCodePayload renders what goes in OPENCODE_CONFIG_CONTENT.
@@ -272,6 +273,9 @@ func (p Plan) CodexArgs(core Core) ([]string, error) {
 		args = append(args, "-c", "mcp_servers."+tomlKey(id)+"="+tomlTable(s))
 	}
 	add(core.ID, mcpprobe.Server{Command: core.Command})
+	if core.ToolTimeout > 0 {
+		args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.tool_timeout_sec=%d", tomlKey(core.ID), int(core.ToolTimeout.Seconds())))
+	}
 	for _, entry := range p.Declared {
 		add(entry.Server.ID, entry.Server)
 	}

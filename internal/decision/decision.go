@@ -552,11 +552,14 @@ func selectedToolExists(tools []ToolChoice, requested string) bool {
 
 func (p Planner) capabilitiesFor(kind Kind) []string {
 	wanted := []string{"code.context"}
+	if kind == KindUnderstand || kind == KindPlan || kind == KindChange {
+		wanted = []string{"symbol.intent_search", "code.context", "symbol.search", "symbol.overview", "symbol.dependencies", "symbol.consumers"}
+	}
 	if kind == KindSearch || kind == KindUnderstand || kind == KindChange || kind == KindPlan {
 		wanted = append(wanted, "code.search")
 	}
 	if kind == KindPlan || kind == KindChange {
-		wanted = append(wanted, "symbol.definition", "symbol.references")
+		wanted = append(wanted, "symbol.definition", "symbol.references", "symbol.impact", "symbol.source")
 	}
 	available := make(map[string]bool, len(p.Config.Capabilities))
 	for _, cap := range p.Config.Capabilities {

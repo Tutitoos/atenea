@@ -187,9 +187,12 @@ const probeContextLines = 0
 
 // Config wires the agent to the pieces around it.
 type Config struct {
-	Catalog     Catalog
-	Chooser     Chooser
-	Runner      contract.Runner
+	Catalog Catalog
+	Chooser Chooser
+	Runner  contract.Runner
+	// Reach shares the core's repository-scoped wiring with real dispatch.
+	// Nil retains global reach for standalone runners.
+	Reach       func(contract.Repository) ([]string, map[string]string)
 	Checkpoints *checkpoint.Store
 	// Meter collects what each step cost. Nil means nobody is collecting,
 	// which is a working core, just one that never learns.
@@ -225,6 +228,7 @@ type Agent struct {
 	catalog         Catalog
 	chooser         Chooser
 	runner          contract.Runner
+	reach           func(contract.Repository) ([]string, map[string]string)
 	checkpoints     *checkpoint.Store
 	meter           Meter
 	base            Base
@@ -259,6 +263,7 @@ var card = contract.Agent{
 		symbolGetCapability,
 		unresolvedCapability,
 		graphStatusCapability,
+		"graph.repositories", "graph.ensure_fresh", "symbol.source", "symbol.impact",
 		desktopAppsCapability,
 		desktopInspectCapability,
 		desktopScreenshotCapability,
@@ -317,6 +322,7 @@ func New(cfg Config) (*Agent, error) {
 		catalog:         cfg.Catalog,
 		chooser:         cfg.Chooser,
 		runner:          cfg.Runner,
+		reach:           cfg.Reach,
 		checkpoints:     store,
 		meter:           meter,
 		base:            cfg.Base,
@@ -588,11 +594,11 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	// The first plan is light on purpose: look, and decide the rest afterwards.
 	plan := contract.Plan{Task: task.Text}
 	for _, repo := range repositories {
-		payload := map[string]any{"query": task.Text}
-		a.hint(payload, "context_lines", probeContextLines)
+		capability, payload, prefer := a.exploration(task.Text, repo)
 		plan.Steps = append(plan.Steps, contract.Step{
 			ID:         "explore-" + repo.ID,
-			Capability: searchCapability,
+			Capability: capability,
+			Prefer:     prefer,
 			Repository: repo.ID,
 			Payload:    payload,
 			Permission: permission,
@@ -970,11 +976,11 @@ func (a *Agent) Resume(ctx context.Context, runID string, opts ResumeOptions) (r
 
 		explorePlan := contract.Plan{Task: record.Task}
 		for _, repo := range repositories {
-			payload := map[string]any{"query": record.Task}
-			a.hint(payload, "context_lines", probeContextLines)
+			capability, payload, prefer := a.exploration(record.Task, repo)
 			explorePlan.Steps = append(explorePlan.Steps, contract.Step{
 				ID:         "explore-" + repo.ID,
-				Capability: searchCapability,
+				Capability: capability,
+				Prefer:     prefer,
 				Repository: repo.ID,
 				Payload:    payload,
 				Permission: permission,
@@ -1090,15 +1096,16 @@ func (a *Agent) split(permission contract.Permission, repositories []contract.Re
 	}
 	steps := make([]contract.Step, 0, len(repositories))
 	for _, repo := range repositories {
-		payload := map[string]any{"query": permission.Task}
+		capability, payload, prefer := a.exploration(permission.Task, repo)
 		// An empty scope means the whole repository. Narrowing to the areas the
 		// look found is the whole return on having looked.
-		if scope := areas[repo.ID]; len(scope) > 0 {
+		if scope := areas[repo.ID]; len(scope) > 0 && capability == searchCapability {
 			a.hint(payload, "scope", scope)
 		}
 		steps = append(steps, contract.Step{
 			ID:         "search-" + repo.ID,
-			Capability: searchCapability,
+			Capability: capability,
+			Prefer:     prefer,
 			Repository: repo.ID,
 			Payload:    payload,
 			Needs:      []string{"explore-" + repo.ID},
@@ -1350,14 +1357,32 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	// this step ranks on and the row it writes describe the same thing.
 	out.Subject = capability.Subject(step.Payload)
 	measuring, notices := a.priced(ctx, step.Capability, repository.ID, out.Subject, candidates)
+	// Explicit repair remains callable after a failed repair. Never override
+	// an operator-declared outage, and permissions are still checked below.
+	if step.Capability == "graph.ensure_fresh" {
+		declared, _ := a.catalog.ImplementationsFor(step.Capability)
+		for i := range candidates {
+			for _, impl := range declared {
+				if impl.ID == candidates[i].ID && impl.Provider == "kivgraph" && impl.Health.State != contract.HealthDown {
+					candidates[i].Health = contract.Health{State: contract.HealthUnknown, Reason: "explicit graph maintenance may retry"}
+				}
+			}
+		}
+	}
+	reachable := a.runner.Implementations()
+	var unreachable map[string]string
+	if a.reach != nil {
+		reachable, unreachable = a.reach(repository)
+	}
 	decision, err := a.chooser.Select(selector.Request{
-		Capability: step.Capability,
-		Repository: repository,
-		Candidates: candidates,
-		Reachable:  a.runner.Implementations(),
-		Measuring:  measuring,
-		Payload:    step.Payload,
-		Prefer:     step.Prefer,
+		Capability:  step.Capability,
+		Repository:  repository,
+		Candidates:  candidates,
+		Reachable:   reachable,
+		Unreachable: unreachable,
+		Measuring:   measuring,
+		Payload:     step.Payload,
+		Prefer:      step.Prefer,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision
@@ -1447,7 +1472,26 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 			}
 		}
 	}
+	if decision.Chosen.Provider == "kivgraph" && step.Capability == "graph.ensure_fresh" {
+		a.reopenGraphQueries(repository.ID)
+	}
 	return a.close(out, nil)
+}
+
+// Verified maintenance permits a new query probe, not an assertion that every
+// operation works. Keep this scoped to this repository and runtime observations.
+func (a *Agent) reopenGraphQueries(repository string) {
+	for _, capability := range []string{"symbol.search", "symbol.intent_search", "symbol.get", "symbol.source", "symbol.overview", "symbol.references", "symbol.calls", "symbol.definition", "symbol.dependencies", "symbol.consumers", "symbol.impact", "code.context", "code.impact"} {
+		impls, err := a.catalog.ImplementationsFor(capability)
+		if err != nil {
+			continue
+		}
+		for _, impl := range a.catalog.Observed(repository, impls) {
+			if impl.Provider == "kivgraph" && impl.Health.State == contract.HealthDown && !impl.Health.ObservedAt.IsZero() {
+				_ = a.catalog.SetHealth(repository, impl.ID, contract.Health{State: contract.HealthUnknown, Reason: "graph maintenance verified; query requires a new probe"})
+			}
+		}
+	}
 }
 
 // healthAfterSuccessfulProbe turns a runtime down observation into the

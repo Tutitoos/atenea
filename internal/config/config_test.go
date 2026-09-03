@@ -46,7 +46,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(ids)
 	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
-		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
+		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
 	}
@@ -67,6 +67,8 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectProcess}
 		case "repository.index":
 			want = []contract.Effect{contract.EffectWrite, contract.EffectProcess}
+		case "graph.ensure_fresh":
+			want = []contract.Effect{contract.EffectRead, contract.EffectWrite, contract.EffectProcess}
 		case "desktop.apps", "desktop.inspect", "desktop.screenshot", "desktop.move":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
 		// Rearranges what is there or what is visible, without sending.
@@ -120,16 +122,22 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	want := []string{
 		"claude.search",
 		"codex.search",
+		"kivgraph.context",
 		"kivgraph.cross_repo_consumers",
 		"kivgraph.definition",
 		"kivgraph.dependencies",
+		"kivgraph.ensure_fresh",
 		"kivgraph.get",
 		"kivgraph.impact",
 		"kivgraph.index",
 		"kivgraph.intent_search",
 		"kivgraph.overview",
 		"kivgraph.references",
+		"kivgraph.repositories",
+		"kivgraph.search",
+		"kivgraph.source",
 		"kivgraph.status",
+		"kivgraph.symbol_impact",
 		"macos.apps",
 		"macos.click",
 		"macos.drag",

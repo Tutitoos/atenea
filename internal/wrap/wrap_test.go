@@ -23,6 +23,18 @@ const okResult = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-1
 // it is the process doing the checking.
 var testCore = wrap.Core{ID: "atenea", Command: []string{"/nonexistent/atenea", "mcp"}}
 
+func TestCodexOverlayPreservesProfileToolTimeout(t *testing.T) {
+	core := testCore
+	core.ToolTimeout = 31 * time.Minute
+	args, err := (wrap.Plan{}).CodexArgs(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, " "), "mcp_servers.atenea.tool_timeout_sec=1860") {
+		t.Fatalf("lost timeout: %v", args)
+	}
+}
+
 // live returns the URL of a server that completes the handshake.
 func live(t *testing.T) string {
 	t.Helper()

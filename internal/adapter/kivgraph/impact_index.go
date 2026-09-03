@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/Tutitoos/atenea/internal/pidlock"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -95,6 +99,30 @@ func (r *Runner) runIndex(ctx context.Context, sess Session, req contract.RunReq
 		return nil, nil, contract.Fail(contract.FailureUnavailable,
 			"kivgraph repository.index: no official index command is configured")
 	}
+	var previous int
+	if r.requireFresh {
+		if r.maintenanceDirectory == "" {
+			return nil, nil, contract.Fail(contract.FailureUnavailable, "graph maintenance directory missing")
+		}
+		for {
+			release, err := pidlock.Claim(filepath.Join(r.maintenanceDirectory, "index.lock"))
+			if err == nil {
+				defer release()
+				break
+			}
+			if !errors.Is(err, pidlock.ErrHeld) {
+				return nil, nil, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		if before, err := r.fetchStatus(ctx, sess); err == nil && before != nil {
+			previous = before.SnapshotID
+		}
+	}
 	root, err := filepath.Abs(req.Repository.Path)
 	if err != nil {
 		return nil, nil, contract.Fail(contract.FailureInvalidInput,
@@ -115,6 +143,26 @@ func (r *Runner) runIndex(ctx context.Context, sess Session, req contract.RunReq
 	status, err := r.fetchStatus(ctx, sess)
 	if err != nil {
 		return nil, nil, err
+	}
+	if r.requireFresh {
+		generation, err := strconv.Atoi(report.Generation)
+		if err != nil || generation <= previous {
+			return nil, nil, contract.Fail(contract.FailureUnavailable, "index did not advance generation")
+		}
+		for status != nil && status.SnapshotID < generation {
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(time.Second):
+			}
+			status, err = r.fetchStatus(ctx, sess)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if !contentFresh(status) || status.SnapshotID != generation {
+			return nil, nil, contract.Fail(contract.FailureUnavailable, "published generation freshness is not verified")
+		}
 	}
 	if err := checkGraphReady(status, root); err != nil {
 		return nil, nil, err

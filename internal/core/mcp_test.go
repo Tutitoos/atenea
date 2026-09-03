@@ -156,6 +156,51 @@ func TestTheHandshakeNamesTheProtocolAndTheTools(t *testing.T) {
 	}
 }
 
+func TestAllClientsReceiveToolVisibilityInstructions(t *testing.T) {
+	atenea := buildService(t, mcpSettings(t))
+	defer serve(t, atenea)()
+	for _, name := range []string{"codex", "claude-code", "opencode", "omp", "claude-desktop"} {
+		t.Run(name, func(t *testing.T) {
+			got := result(t, dial(t).handshake(name), "initialize")
+			instructions, _ := got["instructions"].(string)
+			for _, phrase := range []string{"catalog.repositories", "Before every", "user-visible chat preamble", "<target>: <purpose>", "parallel calls", "repeated calls", "Kivgraph is requested, not confirmed", "atenea_kivgraph_usage", "not individual upstream MCP calls", "consent", "atenea_usage", "symbol.intent_search", "composes code.context", "current source bytes", "invoked=false", "LOWER_BOUND", "verified content freshness"} {
+				if !strings.Contains(instructions, phrase) {
+					t.Errorf("instructions missing %q", phrase)
+				}
+			}
+		})
+	}
+}
+
+// A local fixture carries the Kivgraph provider label to exercise the complete
+// response path without depending on an installed graph or calling an agent.
+func TestMCPReturnsKivgraphReceiptWithoutChangingStructuredAnswer(t *testing.T) {
+	settings := strings.Replace(mcpSettings(t), `provider = "ripgrep"`, `provider = "kivgraph"`, 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	c.handshake("codex")
+	for i := 0; i < 2; i++ {
+		got := result(t, c.call("tools/call", map[string]any{
+			"name": "code.search", "arguments": map[string]any{"repository": "work", "query": "TODO"},
+		}), "tools/call")
+		content, _ := got["content"].([]any)
+		if got["isError"] != false || len(content) != 2 {
+			t.Fatalf("expected answer and receipt on each call: %v", got)
+		}
+		var textAnswer any
+		if err := json.Unmarshal([]byte(content[0].(map[string]any)["text"].(string)), &textAnswer); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(textAnswer, got["structuredContent"]) {
+			t.Fatal("text answer and structured answer differ")
+		}
+		if !strings.Contains(fmt.Sprint(content[1]), "atenea_kivgraph_usage") {
+			t.Fatalf("missing receipt: %v", content[1])
+		}
+	}
+}
+
 func TestAteneaPromptsExposeTheReadOnlyCommandSurface(t *testing.T) {
 	atenea := buildService(t, mcpSettings(t))
 	defer serve(t, atenea)()

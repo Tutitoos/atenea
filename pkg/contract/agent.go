@@ -247,6 +247,8 @@ type Discovery struct {
 // learn the same thing again. Spent rides along because the core is the only
 // writer of metrics: agents report their numbers upwards, they never write.
 type Outcome struct {
+	// Evidence contains validated provider observations, never instructions.
+	Evidence    []QueryEvidence
 	Result      map[string]any
 	Verdict     Verdict
 	Discoveries []Discovery
@@ -324,4 +326,21 @@ type Outcome struct {
 	// on results nobody could use -- and waste belongs to cost, which is the
 	// funnel stage that decides between providers that all work.
 	OutOfScope int
+}
+
+// QueryEvidence keeps bounded graph answers distinct from exhaustive results.
+// It lives outside Result so existing capability output contracts stay intact.
+type QueryEvidence struct {
+	Freshness         string `json:"freshness,omitempty"`
+	Tool              string `json:"tool"`
+	SnapshotID        int    `json:"snapshot_id,omitempty"`
+	Completeness      string `json:"completeness,omitempty"`
+	Truncated         bool   `json:"truncated"`
+	NextCursor        string `json:"next_cursor,omitempty"`
+	Exact             int    `json:"exact"`
+	Candidate         int    `json:"candidate"`
+	UnresolvedRelated int    `json:"unresolved_related"`
+	PackageLevel      int    `json:"package_level"`
+	BlindSpots        int    `json:"blind_spots"`
+	InvisibleScopes   int    `json:"invisible_scopes"`
 }
