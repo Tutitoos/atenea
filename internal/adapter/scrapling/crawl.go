@@ -3,6 +3,8 @@ package scrapling
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -10,23 +12,10 @@ import (
 
 // crawl answers web.crawl: one site walked from a starting page.
 //
-// # Why the gate only sees the seed, and why that is enough
-//
-// mayReach resolves a host and judges the address, because a name is somebody
-// else's claim about where it points. A crawler's frontier is discovered as it
-// goes, and it is discovered in the helper -- so gating every URL would mean
-// either a round trip to Go per link, or a second copy of the gate in Python.
-//
-// The second is refused outright. A security control with two implementations
-// has two behaviors, and the one nobody is looking at is the one that drifts.
-// It is the same objection that kept a CSS engine out of web.extract, with
-// more at stake.
-//
-// So the frontier is made unable to leave the host the gate already approved:
-// the helper pins allowed_domains to the seed's host and the link extractor to
-// the same. A crawl here is single-host BY CONSTRUCTION, which is a real limit
-// on the capability and the honest way to hold the line -- Atenea gates the
-// seed, and nothing the helper fetches can be anywhere else.
+// The seed is gated before dispatch and returned pages are gated before release.
+// The external crawler's allowed_domains limits discovery, not every network
+// connection: DNS changes, redirects and browser subresources require a network
+// sandbox in the process making requests. Output validation cannot undo a fetch.
 //
 // # Two levels rather than three
 //
@@ -95,7 +84,16 @@ func (r *Runner) crawl(ctx context.Context, req contract.RunRequest) (contract.O
 	}
 
 	rows := make([]map[string]any, 0, len(answer.Pages))
+	seedURL, _ := url.Parse(seed)
 	for _, page := range answer.Pages {
+		pageURL, parseErr := url.Parse(page.URL)
+		if parseErr != nil || !strings.EqualFold(pageURL.Hostname(), seedURL.Hostname()) {
+			return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied, "spider returned a page outside the seed host")
+		}
+		if err := r.mayReach(ctx, page.URL); err != nil {
+			return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied, "spider page destination refused")
+		}
+
 		rows = append(rows, map[string]any{
 			"url":     page.URL,
 			"depth":   page.Depth,

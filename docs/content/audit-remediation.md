@@ -17,3 +17,9 @@ Workflow dispatch now carries the exact step effects, including an explicit empt
 Claims reserve the whole requested step share in SQLite before dispatch. A retry that cannot fund that share is refused instead of silently increasing the grant or gambling on a smaller share. Reservations survive restart, include archived attempts, and retain unknown charges at their granted ceiling. Observed charges settle the hold; provider overspend remains visible rather than being clipped. The additive reservation table reconstructs older attempts from their existing trace IDs and grants.
 
 Codex and OpenCode preserve reported usage on failure. OpenCode finalization uses only the remaining budget/tokens. Fallback subtracts cumulative spend from the original grant exactly once. A child killed before emitting any charge remains unknown; Atenea cannot reconstruct an unreported bill.
+
+## 04: Files and web (B05, B09, B13, R05)
+
+Explicit local scopes resolve symlink components before traversal and file reads use an OS-rooted handle. Extract and crawl reject prohibited returned destinations without returning content. Crawl also rejects pages outside the seed hostname. Malformed helper requests receive Invalid Request and do not terminate the protocol loop.
+
+R05 remains an external network-isolation limitation: allowed_domains filters discovery but is not a DNS/redirect/browser-network sandbox. The output gate cannot undo requests already made by Scrapling. Tests use controlled resolver/session responses; upstream browser subresources are not certified. Use a network-isolated provider environment when pre-connection denial is required.

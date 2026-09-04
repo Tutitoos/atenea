@@ -606,10 +606,7 @@ func (r *Runner) extract(ctx context.Context, req contract.RunRequest, tool stri
 	started := time.Now()
 
 	target, _ := req.Payload["url"].(string)
-	// Gated once rather than per field: it is the same URL every time, and a
-	// second resolution would be a second answer to a question already asked
-	// -- one that could differ from the first and leave half the fields read
-	// under a verdict the other half never got.
+	// Gate the seed before dispatch; each returned destination is checked below.
 	if err := r.mayReach(ctx, target); err != nil {
 		return contract.Outcome{}, err
 	}
@@ -632,6 +629,11 @@ func (r *Runner) extract(ctx context.Context, req contract.RunRequest, tool stri
 		answer, err := answerOf(tool, text)
 		if err != nil {
 			return contract.Outcome{}, err
+		}
+		if answer.finalURL != "" {
+			if err := r.mayReach(ctx, answer.finalURL); err != nil {
+				return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied, "scrapling extraction destination refused")
+			}
 		}
 		if escalates && blocked(answer.status, answer.content) {
 			// Stop at the first blocked field rather than finishing the

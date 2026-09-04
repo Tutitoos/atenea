@@ -235,6 +235,13 @@ def main():
         try:
             message = json.loads(line)
         except ValueError:
+            message = None
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+            try:
+                sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}) + "\n")
+                sys.stdout.flush()
+            except (BrokenPipeError, ValueError):
+                break
             continue
         if "id" not in message:
             continue  # a notification answers nobody
