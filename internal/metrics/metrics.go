@@ -120,13 +120,14 @@ type Measurement struct {
 	ToolVersion string
 	Spent       contract.Sample
 	OK          bool
-	// FailureKind is the shared bin and Failure the untranslated reason. Both
-	// empty on success.
+	// FailureKind is the shared bin. Failure is redacted before buffering. Both
+	// are empty on success.
 	FailureKind string
 	Failure     string
 	// Raw is the provider's own text behind Failure, kept verbatim so a
 	// human can search for it later instead of re-triggering the same
-	// failure just to see what it actually said. Empty on success, and empty
+	// failure just to see what it actually said. It is redacted before buffering.
+	// Empty on success, and empty
 	// on a failure the core raised itself with nothing to quote.
 	Raw string
 	// OutOfScope is how many results this attempt returned that fell outside

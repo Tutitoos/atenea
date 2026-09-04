@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,8 +317,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (eventStream, error) {
 	var stream eventStream
 	version := r.version.Version(ctx)
-	var major, minor, patch int
-	if n, _ := fmt.Sscanf(strings.TrimPrefix(version, "v"), "%d.%d.%d", &major, &minor, &patch); n != 3 || major != 1 || minor < 18 || (minor == 18 && patch < 20) {
+	if !stableFinalizationVersion(version) {
 		return stream, contract.Fail(contract.FailureUnavailable, "tool-free finalization requires verified OpenCode 1.18.20 or newer 1.x; got %q", version)
 	}
 	prompt, err := finalizationPrompt(req.Schema)
@@ -386,6 +386,9 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 	if scanErr != nil {
 		return stream, contract.Fail(contract.FailureUnavailable,
 			"opencode event stream could not be read: %v", scanErr).WithRaw(strings.TrimSpace(stderr.String()))
+	}
+	if len(stream.toolCalls) > 0 {
+		return stream, contract.Fail(contract.FailurePermissionDenied, "opencode finalization emitted a forbidden tool call")
 	}
 	if stream.errText != "" {
 		return stream, failureFor(stream.errText, waitErr)
@@ -977,4 +980,21 @@ func finalizationEnvironment(env []string, dir string) []string {
 		env = appendWithout(env, key, value)
 	}
 	return env
+}
+
+// stableFinalizationVersion accepts only complete stable versions in the verified 1.x range.
+func stableFinalizationVersion(version string) bool {
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	var values [3]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || strconv.Itoa(n) != part {
+			return false
+		}
+		values[i] = n
+	}
+	return values[0] == 1 && (values[1] > 18 || values[1] == 18 && values[2] >= 20)
 }

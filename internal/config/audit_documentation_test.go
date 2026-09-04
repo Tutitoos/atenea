@@ -8,6 +8,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 )
 
+// TestDocumentedSymbolSearchMatchesCatalog checks the regression scenario: documented symbol search matches catalog.
 func TestDocumentedSymbolSearchMatchesCatalog(t *testing.T) {
 	cfg, err := config.Defaults()
 	if err != nil {

@@ -66,12 +66,11 @@ type Fault struct {
 	// provider breaking differently right now, even when older attempts
 	// further back happened to share a cause too.
 	Kind string
-	// Reason is the untranslated message of the newest failure, for whoever
-	// has to read it.
+	// Reason is the redacted message loaded from the newest persisted failure.
 	Reason string
 	// Raw is the newest failure's own provider text, beneath Reason the same
-	// way it sits beneath a live Failure. A streak long enough to trip the
-	// funnel is exactly the streak an operator has no fresh call left to
+	// way it sits beneath a live Failure. It is redacted when loaded from the
+	// persisted measurement. A streak long enough to trip the funnel is exactly the streak an operator has no fresh call left to
 	// inspect -- the record is the only place this evidence still exists.
 	Raw string
 	// Latest is when that newest failure happened.
