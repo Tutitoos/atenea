@@ -126,8 +126,10 @@ func TestOnlyANotStartedStepMayBeReplanned(t *testing.T) {
 func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "second-ran")
+	ready, release := filepath.Join(dir, "ready"), filepath.Join(dir, "release")
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
 	h := newHarnessOver(t, dir, noCeiling(),
-		declared("slow", stub(t, dir, "slow", "sleep 1\n"+
+		declared("slow", stub(t, dir, "slow", "touch "+ready+"\nwhile [ ! -f "+release+" ]; do sleep 0.01; done\n"+
 			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
 		declared("eager", stub(t, dir, "eager", "touch "+marker+"\n"+
 			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
@@ -141,12 +143,6 @@ func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 	}
 	approve(t, h, run.ID)
 
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		_, _ = h.state.Ask(context.Background(), run.ID, workflow.KindApprove,
-			workflow.Proposal{Steps: []workflow.Step{step("added", "eager", nil)}}, time.Now())
-	}()
-
 	// On t.Context(), not on a private four-second budget. `go test` already
 	// bounds this with its own -timeout, and the second, much smaller clock
 	// bounded the machine rather than the property: the freeze either holds or
@@ -157,6 +153,24 @@ func TestAnOpenGateFreezesDispatchAndLetsTheRunningLand(t *testing.T) {
 		out, _ := h.engine.Run(t.Context(), gate.RunID)
 		done <- out
 	}()
+
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatal("worker never started")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if _, err := h.state.Ask(t.Context(), run.ID, workflow.KindApprove,
+		workflow.Proposal{Steps: []workflow.Step{step("added", "eager", nil)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	// Wait for the observable condition rather than sleeping a fixed amount.
 	// Under the full benchmark suite the process can be delayed by unrelated

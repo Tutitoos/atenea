@@ -206,7 +206,9 @@ func (p Proposal) AllocatedUSD() float64 {
 
 // Gate is one question put to a person, and its answer.
 type Gate struct {
-	RunID string
+	// applied is nil only for gates written before application was recorded.
+	applied *bool
+	RunID   string
 	// Ordinal counts gates within a run from 0, which is always the launch.
 	Ordinal  int
 	Kind     Kind
