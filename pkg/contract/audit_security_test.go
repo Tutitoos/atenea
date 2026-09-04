@@ -7,6 +7,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// TestDiagnosticSecretsAreRedacted covers nested and quoted credential diagnostics.
 func TestDiagnosticSecretsAreRedacted(t *testing.T) {
 	for _, raw := range []string{`{"nested":[{"token":"SYNTHETIC secret with spaces"}]}`, `error: "password": "SYNTHETIC\" secret"`, `api_key=SYNTHETIC`, `{"api_key":{"nested":"SYNTHETIC"}}`} {
 		got := contract.RedactRaw(raw)
@@ -16,6 +17,7 @@ func TestDiagnosticSecretsAreRedacted(t *testing.T) {
 	}
 }
 
+// TestRedactionPreservesNumbersAndTrailingData guards identifier precision and complete-input parsing.
 func TestRedactionPreservesNumbersAndTrailingData(t *testing.T) {
 	for _, raw := range []string{`{"id":9007199254740993,"token":"SYNTHETIC"}`, `{"id":9007199254740993} trailing-marker`} {
 		got := contract.RedactRaw(raw)
