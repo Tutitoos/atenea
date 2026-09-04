@@ -105,3 +105,31 @@ func TestCanonicalAliasesShareExclusion(t *testing.T) {
 		t.Fatalf("alias bypassed lock: %v", err)
 	}
 }
+
+// TestConnectionsQueueWithinProcess prevents concurrent DuckDB handles for one file.
+func TestConnectionsQueueWithinProcess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	first, err := AcquireConnection(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if second, err := AcquireConnection(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
+		if second != nil {
+			_ = second()
+		}
+		t.Fatalf("concurrent in-process lease bypassed queue: %v", err)
+	}
+
+	if err = first(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := AcquireConnection(t.Context(), path)
+	if err != nil {
+		t.Fatalf("lease remained blocked after release: %v", err)
+	}
+	_ = second()
+}
