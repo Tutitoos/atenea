@@ -8,6 +8,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// BenchmarkRecord measures record.
 func BenchmarkRecord(b *testing.B) {
 	s := &Store{limit: DefaultBufferLimit}
 	m := Measurement{
@@ -33,6 +34,7 @@ func BenchmarkRecord(b *testing.B) {
 	}
 }
 
+// BenchmarkFlushMeasurement measures flush measurement.
 func BenchmarkFlushMeasurement(b *testing.B) {
 	s, err := Open(b.TempDir()+"/metrics.duckdb", Options{})
 	if err != nil {
