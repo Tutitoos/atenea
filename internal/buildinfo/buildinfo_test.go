@@ -102,12 +102,11 @@ func TestEveryDeclaredVersionIsThisOne(t *testing.T) {
 		// The Claude Desktop extension manifest, which the packer copies
 		// verbatim and whose number the build script compares the binary to.
 		{"../../packaging/claude-desktop/manifest.json", regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)},
-		// The installer URL a reader copies out of the README. A stale one
-		// downloads a real release that is not this one, which is the worst
-		// shape of this error: it works.
-		{"../../README.md", regexp.MustCompile(`releases/download/v([0-9]+\.[0-9]+\.[0-9]+)/`)},
-		// And the version that installer is then told to pin.
-		{"../../README.md", regexp.MustCompile(`atenea-install\.sh --version ([0-9]+\.[0-9]+\.[0-9]+)`)},
+		// The README describes the source version independently of published
+		// artifacts. Its installer asks the reader for an existing release:
+		// requiring a URL for this constant would advertise a missing asset
+		// whenever the checkout is ahead of the last publication.
+		{"../../README.md", regexp.MustCompile("(?m)^\\*\\*Source version:\\*\\* `([0-9]+\\.[0-9]+\\.[0-9]+)`")},
 		// The status line as getting-started draws it. A reader compares their
 		// own screen against this, so a stale number reads as their install
 		// being wrong.

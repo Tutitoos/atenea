@@ -1,286 +1,384 @@
 # Atenea
 
-An orchestration core for agents and MCP tooling that lives **outside** the CLIs
-it serves. omp, Claude Code, Codex and OpenCode all connect to the same core.
+A local orchestration core that connects agents, CLI clients and MCP tools through
+one capability catalog. omp, Claude Code, Codex and OpenCode can share the same
+service, provider configuration and execution history.
 
-> **Atenea decides and delegates, it does not execute.**
-> The flow is always `goal -> capability -> implementation`.
+> **Atenea decides and delegates.** A request names a capability; Atenea selects
+> an implementation, dispatches it through an adapter and reviews the result.
 
-**Documentation: https://tutitoos.github.io/atenea/** — architecture, settings
-reference and getting started. The sources live in [`docs/`](docs/) and travel
-in the same pull request as the code.
+```text
+goal → capability → provider selection → implementation → reviewed result
+```
 
-Version `1.1.0`, speaking contract `3.6.0` — stable core with optional external
-providers. The release is published with checksum-verified installers for
-Linux and macOS on `amd64` and `arm64`; the [final audit](docs/content/v1-final-audit.md)
-records the evidence and the remaining provider-dependent limits. What landed is in the
-[changelog](CHANGELOG.md). The core, the Capability Registry and the funnel
-selector are in place, and so is the orchestrator: it takes one sentence, looks
-at the repositories in scope, splits the work into a graph of steps, dispatches
-them in waves and reviews every answer. Six native adapters ship: `omp`, Claude
-Code and Codex for client CLIs, and Kivgraph and
-Tokensave for graph/context operations. OpenCode is an optional model backend,
-not a native adapter. Every
-attempt is measured — time, tokens and peak memory, per capability and per
-implementation — into an embedded DuckDB base, and the funnel ranks on it:
-what a step cost on the way out is what decides who answers next time in.
-When Atenea itself breaks — a panic in a step, a background job failing where
-nobody was listening — the fault is on disk before the process dies, and
-`atenea incidents` reads it back.
+[Documentation](https://tutitoos.github.io/atenea/) ·
+[Releases](https://github.com/Tutitoos/atenea/releases) ·
+[Changelog](CHANGELOG.md) ·
+[Configuration reference](docs/content/settings.md)
 
-## Tool activity
+**Source version:** `1.1.0` · **Adapter contract:** `4.0.0`
 
-Use `atenea stats --today`, `--week`, or `--month` for calendar-period activity.
-`atenea stats` shows all retained history; add `--used --watch` for a live terminal
-view. Requests, provider attempts, refusals and failures are counted separately.
-See [the stats guide](docs/content/stats.md) for filters and historical coverage.
+This README describes the current checkout, including unreleased changes.
+The product version in the source does not establish that a matching release
+has been published. For an installed binary, check `atenea version` and use the
+documentation at its release tag. Contract 3.x configurations require the
+[4.0 migration](#migrating-from-contract-3x) before this source version can load them.
 
-## Why
+## What it does
 
-Tooling changes constantly. A workflow written against `ripgrep` breaks the day
-`ripgrep` is replaced. A workflow written against `code.search` does not: the
-capability is stable, and which tool answers it is a decision Atenea makes from
-what it knows about the repository in front of it.
+- Routes capabilities such as `code.search` through repository constraints,
+  attached runners, provider health and measured time, tokens and memory.
+- Runs one capability with `ask`, or explores, plans, dispatches and reviews
+  a commission with `task`. Declared agents and dependency graphs are available
+  through `agent` and `workflow`.
+- Exposes configured capabilities and explicitly declared raw MCP tools through
+  one MCP connection. Clients discover the actual tool surface at runtime.
+- Applies effect permissions and spending grants, records attempts and run
+  receipts, and supports diagnostics, resumable work and state backups.
+- Provides terminal activity reports and an optional embedded dashboard.
 
-## Try it
+The [architecture guide](docs/content/architecture.md) explains the selector,
+orchestrator and adapter boundaries. [Current limits](docs/content/not-built-yet.md)
+describe behavior that is still unavailable or depends on external providers.
+
+## Install
+
+### Build the current source
+
+Use Linux or macOS with Go **1.25.13 or newer** and a C/C++ toolchain for DuckDB's
+cgo bindings. The supported release targets are `amd64` and `arm64` on both
+systems. External providers are installed separately.
 
 ```sh
+git clone https://github.com/Tutitoos/atenea.git
+cd atenea
 go build -o bin/atenea ./cmd/atenea
-./bin/atenea status
-./bin/atenea select code.search --repo current
-./bin/atenea task "ValidateOutput"
+export PATH="$PWD/bin:$PATH"
+atenea version
 ```
 
-No setup needed: with no settings file present, Atenea boots on its built-in
-defaults. `atenea config init` writes them out so you can edit them.
+The generated dashboard assets are committed, so building the Go binary does
+not require Bun. Bun is needed when changing the dashboard; Swift and the macOS
+permissions setup are needed for the optional desktop helper.
 
-`task` dispatches to `omp`, so it needs that CLI on `PATH`. Without it the step
-fails as `unavailable`, the report says which binary it looked for, and the
-command exits `6` — a commission that failed, not a crash. On a machine with no
-client installed, set `runners = ["local"]` for the stand-in that searches the
-disk directly.
+### Install a published release
 
-Claude Code and Codex are optional client adapters and are off by default because
-they may incur provider-side cost; `runners = ["omp", "claudecode", "codex"]`
-attaches them, and the funnel ranks the available implementations on cost and
-health, so a flat text search can still go to `ripgrep` when that is the best
-choice.
-
-Money is a permission, granted per commission and split between its steps:
-`budget_usd` under `[orchestrator]` is what one `task` may spend in total, not
-per call, so four steps share one quarter rather than spending four. `--budget`
-funds one commission above it. A commission that runs out gets
-`permission_denied` on the paid steps and keeps going through whoever charges
-nothing.
-
-The core also verifies the provider's reported charge at the boundary, so an
-adapter cannot return a successful result above its stamped share. This is a
-postcondition, not a promise that every provider can cancel an already-running
-turn at the exact cent. Use `--confirm` on `task` or `ask` when a human
-should review the budget and effects in a TTY before dispatch.
-
-Effects work the same way: `code.search` causes `read` and `process` at once,
-because every implementation of it is a binary. `[orchestrator] effects =
-["process"]` grants that standing to every commission and question, on by
-default so the P0 capability works out of the box; `--allow EFFECT` grants
-one more to a single commission.
-
-Symbols include `symbol.search`, `symbol.definition`, `symbol.references`,
-`symbol.implementations`, `symbol.overview`, `symbol.calls`,
-`symbol.consumers`, `symbol.get`, `symbol.intent_search`, `symbol.dependencies`
-and `symbol.unresolved`. Kivgraph and Tokensave provide graph-backed operations.
-`symbol.implementations`, `symbol.search` and `symbol.unresolved` remain declared
-contracts without providers. They are absent from `tools/list`; direct calls
-receive a `not_offered` diagnostic.
+Choose an existing version from [Releases](https://github.com/Tutitoos/atenea/releases).
+Enter its number without the leading `v` below. The installer downloads that
+specific artifact and verifies it against the release's `SHA256SUMS`.
 
 ```sh
-./bin/atenea ask symbol.definition --repo current \
-  --set file=internal/selector/selector.go --set line=167 --set column=20
+printf 'Published version (without v): '
+read -r atenea_release
+curl -fsSL "https://github.com/Tutitoos/atenea/releases/download/v${atenea_release}/atenea-install.sh" \
+  -o /tmp/atenea-install.sh &&
+bash /tmp/atenea-install.sh --version "$atenea_release"
+export PATH="$HOME/.local/bin:$PATH"
+atenea version
 ```
 
-`ask` is one capability against one repository — the atomic unit a workflow is
-built out of, and the way a client that already has a cursor hands it over.
-Adapters translate the capability's position into the provider's symbol model.
+Installation writes `~/.local/bin/atenea`. Add `--service` to register the
+background service. Updating keeps the previous binary at
+`~/.local/bin/atenea.previous`; `bash /tmp/atenea-install.sh --rollback` restores
+it. Service recovery and removal are covered in the
+[operations guide](docs/content/operations.md).
 
-```text
-run       20260808T172133-fcb614
-task      ValidateOutput
-verdict   ok
-matches   30
-spent     1.205s of tool time over 2 step(s), 1.276s elapsed
-  explore  1 step(s), 778ms in 797ms
-  work     1 step(s), 426ms in 442ms
+The examples below target the current source and its contract. An older release
+may have different commands, configuration and available capabilities.
 
-discovered
-  [repository] current: 30 hit(s) for "ValidateOutput"
+## First run
 
-run with --trace for the plan, the funnel and every review
-```
-
-Look before you split: the light first pass finds *where* the commission lands,
-and the work that follows is narrowed to those areas. Every decision and every
-review carries its trace — a choice nobody can explain is a choice nobody can
-trust.
-
-That run is this repository, and it shows the one case that cannot be narrowed:
-this README quotes the search term, a hit with no directory above it has no area
-to narrow to, and so the work ran wide rather than quietly dropping it. The
-timings are omp's, the runner the shipped settings attach.
-
-## Leave it running
-
-Atenea is a core, not a command: the commands are how you talk to it, and the
-background rhythms are what keep it worth talking to. Install it and it is
-there after a reboot.
+From the repository you want Atenea to work on, inspect and initialize settings:
 
 ```sh
-go build -o ~/.local/bin/atenea ./cmd/atenea
-~/.local/bin/atenea service install     # systemd user unit or macOS launchd agent
-# Linux:
+atenea config path
+atenea config init
+```
+
+`config init` writes the built-in catalog and records that directory as the
+absolute path of repository `current`. It refuses to overwrite an existing file;
+use `atenea config show` to inspect your current settings instead.
+
+The default runner is `omp`, which requires its CLI on `PATH`. For a first run
+without an external client or model, edit the **existing** `[orchestrator]`
+table in the generated file, keeping the rest of the catalog:
+
+```toml
+[orchestrator]
+runners = ["local"]
+```
+
+The local runner provides filesystem text search. It is a development stand-in:
+it skips configured sensitive paths and directories, but does not interpret
+`.gitignore` like ripgrep.
+
+From the Atenea checkout, try:
+
+```sh
+atenea status
+atenea select code.search --repo current
+atenea ask code.search --repo current \
+  --set query=ValidateOutput --set scope=pkg
+atenea task "ValidateOutput" --repo current --trace
+```
+
+`select` explains who would answer without dispatching the capability. `ask`
+executes one request; `task` performs the exploration and work steps. Change
+the query and scope for a different repository. Add `--json` to `ask` or `task`
+for structured output.
+
+### Configuration
+
+Global settings are resolved in this order:
+
+1. `--config PATH`
+2. `$ATENEA_CONFIG`
+3. `$XDG_CONFIG_HOME/atenea/atenea.toml`, or `~/.config/atenea/atenea.toml`
+4. Built-in defaults when no default settings file exists
+
+An explicitly requested file must exist. Without a file, repository `current`
+refers to the working directory. A background service requires absolute
+repository paths, so initialize settings before starting it.
+
+A global file replaces the capability and implementation catalog; it is not a
+small patch to the embedded catalog. Edit the generated file rather than using
+the runner fragment above as a complete configuration. Repository-local
+`.atenea/config.toml` files provide a restricted overlay.
+
+See the [settings reference](docs/content/settings.md) and
+[embedded defaults](internal/config/default.toml) for repository declarations,
+provider processes, selector rules and permission settings.
+
+## Providers and capabilities
+
+Only configured runners and their reachable implementations can answer work.
+The source includes these adapters and the local stand-in:
+
+| Runner | Role | Setup |
+| --- | --- | --- |
+| `omp` | Text search through the omp CLI | Default runner; requires `omp` on `PATH` |
+| `claudecode` | `code.search` through Claude Code | Optional; authenticated `claude` CLI and a spending grant |
+| `codex` | `code.search` through Codex | Optional; authenticated `codex` CLI and a spending grant |
+| `kivgraph` | Structural search, source, references, dependencies, impact, context and graph maintenance | Configured MCP transport and registered, indexed repositories |
+| `tokensave` | Context, symbol calls and overview | Configured stdio process and repository scope |
+| `desktop` | macOS application inspection, screenshots and interaction | Local Swift helper and macOS permissions |
+| `scrapling` | Web fetching, extraction and crawling | Configured MCP provider; crawling also needs the Python Spider helper |
+| `local` | Filesystem `code.search` | No external client; intended for local development and smoke tests |
+
+OpenCode is a supported client and optional model backend for agents; it is not
+a native capability adapter. Generic MCP servers can also be declared for
+supervision and raw tool exposure through `[[mcp_server]]` settings.
+
+Use `atenea catalog` for declared contracts, implementations and repositories.
+MCP clients should read `catalog.repositories` and `tools/list` for their actual
+surface, which also depends on attached runners and client policy.
+
+Kivgraph now implements **`symbol.search`** through `kivgraph.search`.
+**`symbol.implementations` and `symbol.unresolved` have no implementation**:
+they remain declared but are absent from `tools/list`; direct calls return
+`not_offered`. A text search is not evidence of semantic implementations.
+
+Graph queries require verified content freshness. Automatic rebuilding is off
+by default; `graph.ensure_fresh` is an explicit maintenance capability with
+read/write/process effects. `atenea detect` probes providers and indexes without
+building an index. See [graph freshness](docs/content/kivgraph-freshness.md) and
+[routing and usage receipts](docs/content/tool-visibility.md).
+
+### Permissions and budgets
+
+`orchestrator.effects` controls the standing grant for CLI work;
+`orchestrator.client_effects` controls connected clients. The defaults grant
+`process` in addition to read access. Interactive desktop capabilities are also
+blocked for MCP clients by the default `client_denied_capabilities` list.
+
+`budget_usd` is a grant for the whole commission, shared across its steps.
+`--budget` sets a grant for one run, `--allow EFFECT` adds an effect to one CLI
+request, and `--confirm` requests human review in a TTY before `ask` or `task`
+dispatches. Provider-reported spending is checked after execution; this is not
+a guarantee that every external provider can stop at the exact monetary limit.
+
+For desktop setup and interaction rules, see
+[Computer Use](docs/content/computer-use.md) and the [helper guide](helper/README.md).
+For web crawling prerequisites, see the
+[Scrapling Spider helper](helper/scrapling-spider/README.md).
+
+## Run the service and connect clients
+
+After initializing settings, run the service in a terminal:
+
+```sh
+atenea run
+```
+
+In another terminal, check the bridge:
+
+```sh
+atenea mcp --check
+```
+
+The bridge speaks MCP over stdin/stdout and forwards requests to the running
+core through a private Unix socket. It does not start the service itself.
+
+### Background service
+
+Install the binary at a stable path first. For a source build:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+go build -o "$HOME/.local/bin/atenea" ./cmd/atenea
+"$HOME/.local/bin/atenea" service install
+```
+
+Start it using the command for your system:
+
+```sh
+# Linux: systemd user service
 systemctl --user start atenea.service
-# macOS:
-launchctl kickstart -k gui/$(id -u)/com.tutitoos.atenea
+
+# macOS: per-user launchd agent
+launchctl kickstart -k "gui/$(id -u)/com.tutitoos.atenea"
 ```
 
-A per-user service, never a system one, and no port: the only thing it listens
-on is a Unix socket in your own state root, `0600` in a `0700` directory, with every
-caller checked against the kernel's answer for who they are before a byte is
-read. Atenea holds no privilege worth borrowing, so `sudo` would only widen
-what a bug could reach. `atenea status` asks the running service, because the
-uptime and the chats open right now are only true of the process that keeps
-them; with nothing running it falls back to disk and says so.
+Use `atenea service status` and `atenea mcp --check` to inspect it. The service
+runs as your user. Its MCP socket is mode `0600` inside a `0700` directory.
+The optional dashboard has a separate HTTP listener.
 
-### Install a release
+For an installation using macOS desktop control, use
+`bash scripts/install-dev.sh` from the checkout. It rebuilds the dashboard,
+builds Atenea and the Swift helper, signs them when an identity is available,
+installs them and restarts the service. See the
+[helper guide](helper/README.md) for signing and permission requirements.
 
-Published Linux and macOS releases can be installed with the checksum-verified installer:
+### MCP clients
+
+For clients using the `mcpServers` JSON format, configure an absolute path to
+the installed binary, replacing `/absolute/path/to/atenea`:
+
+```json
+{
+  "mcpServers": {
+    "atenea": {
+      "command": "/absolute/path/to/atenea",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For CLI clients, `atenea wrap claude`, `atenea wrap codex`,
+`atenea wrap opencode` and `atenea wrap omp` launch the client with checked MCP
+configuration. Persistent desktop setup, profiles, Codex configuration and
+Claude Desktop packaging are covered in the
+[desktop client guide](docs/content/desktop-clients.md).
+
+Reconnect clients after changing the offered tool surface. Atenea provides
+per-call routing receipts and asks the client to display tool activity; whether
+the notice is rendered depends on the client/model. See
+[tool visibility](docs/content/tool-visibility.md) and
+[chat commands](docs/content/commands.md).
+
+## Observe and troubleshoot
 
 ```sh
-curl -fsSL https://github.com/Tutitoos/atenea/releases/download/v1.1.0/atenea-install.sh \
-  -o /tmp/atenea-install.sh
-bash /tmp/atenea-install.sh --version 1.1.0
+atenea status
+atenea detect --repo current
+atenea stats --today
+atenea stats --week --provider kivgraph
+atenea stats --today --used --watch
+atenea metrics
+atenea traces --open
+atenea incidents
+atenea backup list
 ```
 
-The installer supports Linux and macOS on `amd64` and `arm64`, writes to
-`~/.local/bin`, and never enables a service unless `--service` is passed
-explicitly. Linux uses a systemd user unit; macOS uses a per-user launchd
-agent. Other systems require a source build.
+`status` reports service state or a labeled disk fallback. `detect` performs
+provider probes; a successful handshake does not prove every tool works.
+`stats` separates requests, provider attempts, refusals and failures.
+Calendar periods, filters and historical limits are in the
+[stats guide](docs/content/stats.md).
 
-Re-running it with a different pinned version updates the binary and keeps the
-previous one as `~/.local/bin/atenea.previous`. Use
-`bash /tmp/atenea-install.sh --rollback` to restore that copy, or
-`--uninstall --service` to remove the binary and its background service.
+The optional dashboard displays service activity, runs, sessions, metrics,
+catalog and incidents. It is disabled by default and listens on
+`127.0.0.1:8788` when enabled. Configure `[dashboard]` and its access settings,
+restart the service, then open it with `atenea dashboard atenea`.
+`atenea dashboard publish tailscale` previews private publication;
+`--apply` performs it. See the [settings reference](docs/content/settings.md).
 
-What runs on its own: the measurement batch reaches disk every 30s, the history
-is folded hourly, and every six hours a hard-linked copy of everything Atenea
-has learned is taken, five kept in rotation. A start after a power cut repairs
-what the cut left half-written *before* accepting any work, and says so.
+Measurements are stored in DuckDB; run receipts, agent traces and incidents
+provide separate execution evidence. State normally lives under
+`$XDG_STATE_HOME/atenea` or `~/.local/state/atenea`. See
+[operations](docs/content/operations.md) for recovery and backups, and
+[provider diagnosis](docs/content/diagnosing-providers.md) for dispatch failures.
 
-```text
-background
-  rhythms      metrics.flush 30s, metrics.compact 1h, backup 6h
-  copies       1 of 5 kept in ~/.local/state/atenea-backups
-```
+## Migrating from contract 3.x
 
-## Layout
+Contract `4.0.0` retires Serena and rejects 3.x configuration files. Remove its
+runner, adapter/process tables, MCP declaration, implementation blocks,
+selector references and repository `indexed_by` entries before setting
+`contract = "4.0.0"`. Changing only the header is insufficient.
 
-```text
-cmd/atenea/             entry point: the service and the operator commands
-cmd/atenea-benchmark/   the evidence run: profiles, raw output and summaries
-internal/               the brain, not importable from outside
-  adapter/claudecode/       the client adapter: translates for the Claude Code CLI
-  adapter/codex/            the client adapter: translates for the Codex CLI
-  adapter/kivgraph/         graph adapter: impact, indexing and structural queries
-  adapter/omp/              the client adapter: translates for the omp CLI
-  adapter/tokensave/        context and call adapter for the indexed repository
-  agent/                    one declared agent as one real process
-  agent/filereader/         the minimal agent: one file, no model, no key
-  agent/model/              the seam an agent calls its own model through
-  agent/opencode/           the isolated model runner for OpenCode's CLI
-  agent/plancheck/          the planner's TOML checked against the engine
-  agent/planner/            explore and plan, two runs so a retry is cheap
-  agent/reviewer/           the auditor: only claims it can prove on the spot
-  agent/semanticreviewer/   does the conclusion follow from the evidence
-  allowance/                money-to-reading arithmetic, in one place
-  backup/                   five complete copies in rotation, never a chain
-  benchmark/                the evidence format for reproducible runs
-  buildinfo/                the version of the running binary
-  checkpoint/               run receipts on disk
-  clientconfig/             reads a repository's .mcp.json, never runs it
-  clock/                    the one lane every background rhythm runs in
-  config/                   the single settings file
-  core/                     wiring, status and clean shutdown
-  dashboard/                the optional web UI beside an MCP declaration
-  decision/                 a commission in prose to an explainable plan
-  floor/                    what a turn costs before it has done anything
-  ipc/                      the door a client knocks on: one unix socket
-  mcpprobe/                 asks an MCP server if it is really there
-  mcpstdio/                 JSON-RPC over a child's own stdin and stdout
-  metrics/                  the measurement base: DuckDB, batched, one writer
-  notebook/                 the crash notebook: Atenea's own faults, synced on write
-  orchestrator/             the agent: explore, split, dispatch, review
-  passthrough/              somebody else's tools, re-offered under a raw. id
-  pidlock/                  one named right at a time, held by a pid file
-  platform/                 where data lives and how Atenea starts, per OS
-  procgroup/                making a canceled child and its helpers stop
-  procstat/                 weighing a finished child process, per platform
-  registry/                 the Capability Registry
-  runner/local/             stand-in far side, for a machine with no client installed
-  selector/                 the funnel
-  statusline/               Atenea's traffic light on a client's screen
-  supervisor/               the MCP servers Atenea launches and keeps alive
-  testroot/                 short test paths, so a unix socket still fits
-  toolpath/                 a client's binary, not one installation path
-  toolversion/              asking a tool who it is, once per process
-  trace/                    which agents ran, when, and how they ended
-  workflow/                 a DAG of agent steps: waves, ceilings, failure
-  wrap/                     launching a client on configuration Atenea checked
-pkg/contract/           the contract shared by the core and its adapters
-docs/                   documentation sources, served by Hugo on GitHub Pages
-benchmarks/             the recorded evidence a report is audited against
-tools/                  standalone scripts: MCP drift check, loopback recorder
-```
+Validate the result with `atenea config show`. Follow the
+[migration guide](docs/content/migration-4.md) for the complete checklist and
+the distinction between retired configuration and historical records.
 
 ## Development
 
+The main Go module builds the core and CLI. Install
+[Lefthook](https://github.com/evilmartians/lefthook) and the repository's linter
+version before enabling the Git hooks:
+
 ```sh
-lefthook install        # do this first: installs the pre-commit and pre-push hooks
-go test -race ./...     # the suite
-air                     # hot reload, local development only
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+lefthook install
+go build ./...
+go vet ./...
+go test -race ./...
 ```
 
-**Run `lefthook install` after cloning.** Git never clones hooks, so a fresh
-checkout has none and unformatted code commits without complaint. One command
-installs both: pre-commit runs `gofmt`, `go vet` and `golangci-lint`;
-pre-push runs the suite with `-race`.
+Pre-commit checks Go formatting, vet, lint and host-footer compatibility;
+pre-push runs the race suite. [CI](.github/workflows/ci.yml) also checks the
+dashboard, native platform builds, dependencies, provider contracts and helper
+code. The [release workflow](.github/workflows/release.yml) validates a tagged
+tree before publishing its artifacts. Passing local checks does not publish a
+release.
 
-The hooks are a convenience, not the guarantee. **The enforced gate is the
-release workflow**, which re-runs the linter and the full suite at tag time and
-refuses to publish if either fails — it is the only check nobody can skip by
-forgetting a setup step. The historical `v0.6.0` tag has no release behind it
-for exactly that reason; the [changelog](CHANGELOG.md) says why. The current
-published release is `v1.1.0`.
+For dashboard changes, use Bun **1.4.0** from the repository root:
+
+```sh
+bun ci --cwd dashboard
+bun run --cwd dashboard check
+bun run --cwd dashboard build
+```
+
+Commit the generated `internal/dashboard/web/dist/` assets with the source
+changes. [Dashboard development](dashboard/README.md) describes the dev server
+and API proxy. Optional Go hot reload uses [Air](https://github.com/air-verse/air)
+and the checked-in [.air.toml](.air.toml), which starts `atenea run`.
+
+### Repository layout
+
+| Path | Contents |
+| --- | --- |
+| [`cmd/`](cmd/) | CLI and benchmark entry points |
+| [`internal/`](internal/) | Core, adapters, runners, agents, workflows, storage and transports |
+| [`pkg/contract/`](pkg/contract/) | Versioned capability and adapter contracts |
+| [`dashboard/`](dashboard/) | React dashboard source, built with Bun and embedded in Go |
+| [`helper/`](helper/) | Swift desktop helper and Python Scrapling Spider helper |
+| [`docs/`](docs/) | Hugo documentation sources and configuration |
+| [`benchmarks/`](benchmarks/) | Recorded runs and reproducible benchmark evidence |
+| [`scripts/`](scripts/) | Build, installation, validation and smoke-test scripts |
+| [`packaging/`](packaging/) | Client extension packaging |
+| [`tools/`](tools/) | Standalone MCP auditing and diagnostic tools |
 
 ## Credits
 
-Atenea leans on work other people did first. A thank-you, with a link to each:
+Atenea builds on [ripgrep](https://github.com/BurntSushi/ripgrep),
+[Kivgraph](https://github.com/Luqueee/kivgraph),
+[Scrapling](https://github.com/D4Vinci/Scrapling) and
+[DuckDB](https://github.com/duckdb/duckdb), along with the CLIs and MCP providers
+configured by its users. Documentation uses [Hugo](https://github.com/gohugoio/hugo)
+and [hugo-book](https://github.com/alex-shpak/hugo-book).
 
-- [ripgrep](https://github.com/BurntSushi/ripgrep) — the search engine behind the first capability
-- Graph providers — repository symbol and relationship indexes exposed through MCP
-- [Semgrep](https://github.com/semgrep/semgrep) — static analysis
-- [Context7](https://github.com/upstash/context7) — version-accurate library documentation
-- [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) — browser diagnostics
-- [claude-mem](https://github.com/thedotmack/claude-mem) — persistent memory across sessions
-- [DuckDB](https://github.com/duckdb/duckdb) — the analytical store the measurement base runs on
-- [Hugo](https://github.com/gohugoio/hugo) and [hugo-book](https://github.com/alex-shpak/hugo-book) — these docs
-- [lefthook](https://github.com/evilmartians/lefthook) and [Air](https://github.com/air-verse/air) — the development loop
-
-That list is a human thank-you. The Go dependencies imported by Atenea are in
-[`go.mod`](go.mod); external CLIs, MCP servers and documentation tools are
-configured or installed separately.
-
-### Contract 4.0 migration
-
-Serena is retired. Before loading a 3.x configuration with this version, remove
-its runner, adapter/process tables, MCP declaration, implementation IDs and
-`indexed_by` entries, then set `contract = "4.0.0"`.
-See [the migration guide](docs/content/migration-4.md).
+Imported Go dependencies are listed in [go.mod](go.mod); dashboard dependencies
+are in [dashboard/package.json](dashboard/package.json). External CLIs, MCP
+servers and helper runtimes are installed separately.
