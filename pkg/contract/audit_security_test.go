@@ -15,3 +15,15 @@ func TestDiagnosticSecretsAreRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactionPreservesNumbersAndTrailingData(t *testing.T) {
+	for _, raw := range []string{`{"id":9007199254740993,"token":"SYNTHETIC"}`, `{"id":9007199254740993} trailing-marker`} {
+		got := contract.RedactRaw(raw)
+		if !strings.Contains(got, "9007199254740993") || strings.Contains(got, "SYNTHETIC") {
+			t.Fatal(got)
+		}
+		if strings.Contains(raw, "trailing-marker") && !strings.Contains(got, "trailing-marker") {
+			t.Fatal("trailing data discarded", got)
+		}
+	}
+}

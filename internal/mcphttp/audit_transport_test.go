@@ -95,7 +95,7 @@ func TestAuditHandshakeWaitIgnoresDeadline(t *testing.T) {
 	close(release)
 	<-one
 }
-func TestAuditSSEWaitsForEOF(t *testing.T) {
+func TestSSECompletesBeforeEOF(t *testing.T) {
 	sent := make(chan struct{})
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,24 +122,35 @@ func TestAuditSSEWaitsForEOF(t *testing.T) {
 		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{}}`, v.ID)
 	}))
 	defer srv.Close()
+	defer close(release)
 	c, _ := New(Options{Endpoint: srv.URL})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, e := c.Call(ctx, "tool", nil); done <- e }()
+	done := make(chan struct {
+		text string
+		err  error
+	}, 1)
+	go func() {
+		text, err := c.Call(ctx, "tool", nil)
+		done <- struct {
+			text string
+			err  error
+		}{text, err}
+	}()
+	// Keep the server stream open until after the client returns. Either channel
+	// can become ready first; successful completion is the behavior under test.
+	select {
+	case result := <-done:
+		if result.err != nil || result.text != "done" {
+			t.Fatalf("SSE response: %q %v", result.text, result.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("client waited for EOF instead of returning the complete SSE response")
+	}
 	select {
 	case <-sent:
-	case e := <-done:
-		close(release)
-		t.Fatalf("call failed before SSE fixture: %v", e)
-	case <-time.After(6 * time.Second):
-		close(release)
-		t.Fatal("fixture never reached")
-	}
-	e := <-done
-	close(release)
-	if e != nil {
-		t.Fatal(e)
+	case <-ctx.Done():
+		t.Fatal("fixture did not flush its response")
 	}
 }
 func TestAuditStatelessServerRejected(t *testing.T) {

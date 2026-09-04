@@ -824,6 +824,9 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 // Finish writes what a step ended as, together with the answer it gave.
 func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 	report contract.Report, at time.Time) error {
+	if err := report.Spent.Validate(); err != nil {
+		return err
+	}
 	result, err := jsonMap(report.Result)
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput,
