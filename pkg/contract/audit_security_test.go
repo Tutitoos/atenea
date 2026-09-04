@@ -37,6 +37,7 @@ func TestRedactStructuredPrefixes(t *testing.T) {
 		`{"token":["SYNTHETIC"]} trailing-marker`,
 		`{"id":9007199254740993} {"token":{"value":"SYNTHETIC"}} trailing-marker`,
 		`{"ok":true} trailing-marker {"token":["SYNTHETIC"`,
+		`{"ok":true} trailing-marker {"token":"SYNTHETIC secret with spaces`,
 	} {
 		out := contract.RedactRaw(input)
 		if strings.Contains(out, "SYNTHETIC") || !strings.Contains(out, "trailing-marker") {
