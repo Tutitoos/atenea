@@ -17,6 +17,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/toolstats"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -142,6 +143,9 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	switch req.Method {
 	case MethodCommand:
 		result, rpcErr := v.command(req.Params)
+		out.Result, out.Error = result, rpcErr
+	case MethodStats:
+		result, rpcErr := v.statsQuery(ctx, req.Params)
 		out.Result, out.Error = result, rpcErr
 	case MethodStatus:
 		out.Result = v.core.Status()
@@ -464,6 +468,11 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 				v.core.recordBackendListingNote(id, fmt.Sprintf("catalog drift: missing=%d added=%d", len(drift.Missing), len(drift.Added)))
 			}
 		}
+		statsNames := make([]string, 0, len(offered))
+		for _, tool := range offered {
+			statsNames = append(statsNames, passthrough.Name(id, tool.Name))
+		}
+		v.core.stats.Remember(id, statsNames)
 		for _, tool := range offered {
 			entry := map[string]any{
 				"name":        passthrough.Name(id, tool.Name),
@@ -586,6 +595,31 @@ func (p toolsCallParams) argumentMap() (map[string]any, error) {
 func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (result any, rpcErr *rpcError) {
 	started := time.Now()
 	requestedTool := "unknown"
+	var statsErr error
+	ctx = context.WithValue(ctx, statsErrorKey{}, &statsErr)
+	var incoming toolsCallParams
+	_ = json.Unmarshal(raw, &incoming)
+	statsName, _ := normalizeDesktopToolName(incoming.Name)
+	if statsName == "" {
+		statsName = "unknown"
+	}
+	statsRepo := ""
+	if args, e := incoming.argumentMap(); e == nil {
+		statsRepo, _ = args[repositoryArg].(string)
+	}
+	provider := "atenea"
+	if server, _, ok := passthrough.Split(statsName); ok {
+		provider = server
+	}
+	ctx, statsCall := v.core.stats.Begin(ctx, toolstats.Event{Level: "request", Tool: statsName, Provider: provider, Repository: statsRepo})
+	defer func() {
+		if statsErr != nil {
+			statsCall.End(statsErr)
+		} else {
+			outcome, code, reason := statsMCPResult(result, rpcErr)
+			statsCall.Finish(outcome, code, reason)
+		}
+	}()
 	fallbackUsed := false
 	outcomeHint := ""
 	defer func() {
@@ -696,6 +730,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		}
 		repository = repos[0].ID
 	}
+	statsCall.Event.Repository = repository
 
 	runResult, runErr := v.session.Ask(ctx, orchestrator.Question{
 		Capability: capability.ID,
@@ -703,6 +738,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		Prefer:     prefer,
 		Payload:    payload,
 	})
+	statsErr = resultError(runResult, runErr)
 	// Receipts describe dispatch, not selection, and survive failed calls too.
 	defer func() { appendToolUsage(result, runResult) }()
 	if runErr != nil {
@@ -742,7 +778,18 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 // it does keep is the receipt: a call that reached somebody else's server on
 // this machine's behalf is exactly the kind of thing an operator later needs
 // to find, and "it was only a passthrough" is how a trail grows holes.
-func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (any, *rpcError) {
+func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (answer any, rpcFailure *rpcError) {
+	var callErr error
+	_, statsCall := v.core.stats.Begin(ctx, toolstats.Event{Level: "attempt", Tool: params.Name, Provider: server, Repository: statsRepository(params)})
+	defer func() {
+		if callErr != nil {
+			setStatsError(ctx, callErr)
+			statsCall.End(callErr)
+		} else {
+			outcome, code, reason := statsMCPResult(answer, rpcFailure)
+			statsCall.Finish(outcome, code, reason)
+		}
+	}()
 	backend, ok := v.rawBackend(server)
 	if !ok {
 		if v.policy.Fallback == "diagnostic" {
@@ -773,11 +820,13 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	// stopped is exactly what an audit is looking for.
 	effects := backend.declared.EffectsFor(tool, arguments)
 	if err := v.session.entitled(effects); err != nil {
+		callErr = err
 		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 		return desktopDiagnostic("permission_denied", params.Name, params.Name, false,
 			err.Error(), "Request the required permission before retrying."), nil
 	}
 	result, err := backend.Call(ctx, tool, arguments)
+	callErr = err
 	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 	// A call is the other place a backend's state becomes known for free.
 	// Only an unavailable or timed-out one counts against it; see

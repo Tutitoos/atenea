@@ -44,6 +44,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
+	"github.com/Tutitoos/atenea/internal/toolstats"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -86,6 +87,7 @@ type Core struct {
 	// measurements is the baseline, and the core is its only writer. It is nil
 	// when the settings turned measuring off.
 	measurements *metrics.Store
+	stats        *toolstats.Store
 	// notebook is the crash notebook. Always present: it needs no settings and
 	// there is no state of the world in which not having one is better.
 	notebook *notebook.Notebook
@@ -329,10 +331,11 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		// comes up either way and the next one tries again.
 		_ = beats.Do(context.Background(), jobCompact)
 	}
+	stats := toolstats.New(toolstats.Path(statsBasePath(cfg)))
 	agent, err := orchestrator.New(orchestrator.Config{
 		Catalog:     catalog,
 		Chooser:     chooser,
-		Runner:      attach(runners, book),
+		Runner:      statsRunner{Runner: attach(runners, book), store: stats},
 		Reach:       func(repo contract.Repository) ([]string, map[string]string) { return reachRunners(runners, repo) },
 		Checkpoints: checkpoints,
 		Meter:       collector,
@@ -394,6 +397,7 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		runners:      runners,
 		checkpoints:  checkpoints,
 		measurements: store,
+		stats:        stats,
 		notebook:     book,
 		copies:       copies,
 		recovered:    found,
@@ -1184,7 +1188,9 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 // it: somebody standing at the terminal is the user, not a chat acting for
 // one, and there is nobody above them to ask. A client speaking for a chat
 // opens a Session and goes through that.
-func (c *Core) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Result, error) {
+func (c *Core) Do(ctx context.Context, task orchestrator.Task) (result *orchestrator.Result, err error) {
+	ctx, call := c.StartStatsRequest(ctx, "orchestrator.task", first(task.Repositories))
+	defer func() { call.End(resultError(result, err)) }()
 	if err := c.enter(); err != nil {
 		return nil, err
 	}
@@ -1194,7 +1200,9 @@ func (c *Core) Do(ctx context.Context, task orchestrator.Task) (*orchestrator.Re
 
 // Ask dispatches one capability against one repository, with the same
 // in-flight bookkeeping a commission gets: a clean stop waits for it too.
-func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (*orchestrator.Result, error) {
+func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (result *orchestrator.Result, err error) {
+	ctx, call := c.StartStatsRequest(ctx, q.Capability, q.Repository)
+	defer func() { call.End(resultError(result, err)) }()
 	if err := c.enter(); err != nil {
 		return nil, err
 	}
@@ -1634,6 +1642,7 @@ func (c *Core) closeBackends() {
 // path leaves the file behind with a pid that no longer exists, which the next
 // claim clears.
 func (c *Core) settle() error {
+	defer func() { _ = c.stats.Close() }()
 	c.beats.Stop()
 	if c.upkeep != nil {
 		c.upkeep()

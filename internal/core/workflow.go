@@ -81,7 +81,7 @@ func (v *conversation) workflowCreate(ctx context.Context, args map[string]any) 
 	// Before the engine, because Create writes the run. A chat that may not
 	// authorize these effects should not leave a plan on disk it can never
 	// launch, and the refusal is more useful here than after the id exists.
-	if refusal := v.authorize(toolWorkflowCreate, graph.Effects()); refusal != nil {
+	if refusal := v.authorize(ctx, toolWorkflowCreate, graph.Effects()); refusal != nil {
 		return refusal, nil
 	}
 	repository, aimErr := v.workflowRepository(toolWorkflowCreate, args)
@@ -162,11 +162,12 @@ func (v *conversation) workflowLaunch(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
-	if refusal := v.authorize(toolWorkflowLaunch, effects); refusal != nil {
+	if refusal := v.authorize(ctx, toolWorkflowLaunch, effects); refusal != nil {
 		return refusal, nil
 	}
 
 	run, runErr := engine.Launch(ctx, id)
+	setStatsError(ctx, runErr)
 	if v.core.events != nil && run.ID != "" {
 		state := "approved"
 		if runErr != nil {
@@ -222,11 +223,12 @@ func errorText(err error) string {
 //
 // A refusal is an answer, not a protocol error, for the same reason rawCall's
 // is: the caller asked for something real and can read why it did not work.
-func (v *conversation) authorize(tool string, effects []contract.Effect) any {
+func (v *conversation) authorize(ctx context.Context, tool string, effects []contract.Effect) any {
 	if len(effects) == 0 {
 		return nil
 	}
 	if err := v.session.entitled(effects); err != nil {
+		setStatsError(ctx, err)
 		return toolFailure(tool + ": " + err.Error())
 	}
 	return nil
