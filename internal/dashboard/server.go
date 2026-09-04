@@ -586,18 +586,34 @@ func remoteIP(raw string) net.IP {
 	return net.ParseIP(strings.TrimSpace(raw))
 }
 
+// listenerContextKey binds authorization to the accepting server, not Host.
+type listenerContextKey struct{}
+
+// listenerForRequest selects trusted connection metadata. Direct single-listener
+// handlers retain their declared mode; ambiguous requests fail closed.
 func (s *Server) listenerForRequest(r *http.Request) Listener {
+	if listener, ok := r.Context().Value(listenerContextKey{}).(Listener); ok {
+		return listener
+	}
+	if local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		host, port, err := net.SplitHostPort(local.String())
+		if err == nil {
+			for _, listener := range s.cfg.Listeners {
+				h, p, e := net.SplitHostPort(listener.Addr)
+				if e == nil && p == port && net.ParseIP(host).Equal(net.ParseIP(h)) {
+					return listener
+				}
+			}
+		}
+		return Listener{}
+	}
 	if len(s.cfg.Listeners) == 0 {
 		return Listener{Mode: "loopback"}
 	}
-	host, port, _ := net.SplitHostPort(r.Host)
-	for _, listener := range s.cfg.Listeners {
-		_, p, _ := net.SplitHostPort(listener.Addr)
-		if p == port && host != "" {
-			return listener
-		}
+	if len(s.cfg.Listeners) == 1 {
+		return s.cfg.Listeners[0]
 	}
-	return s.cfg.Listeners[0]
+	return Listener{}
 }
 
 func (s *Server) checkToken(path, token string) bool {
@@ -628,7 +644,7 @@ func (s *Server) Start(ctx context.Context) error {
 			_ = s.Close(context.Background())
 			return fmt.Errorf("dashboard: listen %s: %w", cfg.Addr, err)
 		}
-		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
+		server := &http.Server{BaseContext: func(net.Listener) context.Context { return context.WithValue(ctx, listenerContextKey{}, cfg) }, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
 		if strings.EqualFold(cfg.Mode, "lan") {
 			cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 			if err != nil {
