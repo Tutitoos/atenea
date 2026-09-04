@@ -297,6 +297,7 @@ func readSearch(payload map[string]any) (search, error) {
 	return out, nil
 }
 
+// invoke runs one bounded Codex search and returns its decoded response and peak memory use.
 func (r *Runner) invoke(ctx context.Context, root string, req contract.RunRequest, ask search) (answer response, peak int64, err error) {
 	resolved, err := r.resolve()
 	if err != nil {
