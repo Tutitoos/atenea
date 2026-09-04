@@ -33,6 +33,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -174,6 +175,8 @@ func (r *Runner) Declared() []string {
 // they are set by the caller that knows about it -- an agent never declares
 // itself a retry or a review of anything.
 type Dispatch struct {
+	// Effects is the explicit grant; nil preserves the declared default for direct callers.
+	Effects  []contract.Effect
 	TypeName string
 	Task     contract.Task
 	// Route carries the decision-router's selected execution surface. A child
@@ -232,6 +235,14 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	declared, err := r.resolve(d.TypeName)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
+	}
+	if d.Effects != nil {
+		for _, effect := range d.Effects {
+			if !slices.Contains(declared.Effects, effect) {
+				return contract.Report{}, contract.Assignment{}, contract.Fail(contract.FailurePermissionDenied, "dispatch effect %s exceeds declared type", effect)
+			}
+		}
+		declared.Effects = slices.Clone(d.Effects)
 	}
 	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID, d.BudgetUSD)
 	if err != nil {
@@ -298,7 +309,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 			contract.VerdictIncomplete, death, report.Discovered); err != nil {
 			return contract.Report{}, assignment, err
 		}
-		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death},
+		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death, Spent: report.Spent},
 			assignment, contract.Fail(death.Kind, "agent %s (%s): %s",
 				assignment.ID, d.TypeName, death.Text)
 	}
@@ -309,6 +320,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	return report, assignment, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve(name string) (config.AgentType, error) {
 	declared, ok := r.types[name]
 	if ok {
@@ -387,39 +399,51 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	// running and Wait blocks on pipes they still hold.
 	procgroup.Contain(cmd)
 
-	stdout, runErr := cmd.Output()
+	stdout, runErr := procgroup.Output(cmd)
 	var stderr string
 	var exit *exec.ExitError
 	if errors.As(runErr, &exit) {
 		stderr = strings.TrimSpace(string(exit.Stderr))
 	}
 
+	observed := observedCharge(stdout)
+
 	// The clock and the cancel are checked before the output, because a
 	// truncated answer from a killed process can still parse, and reading it
 	// as an answer would turn a death into a verdict.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Report{}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
+		return contract.Report{Spent: observed}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
+	}
+	if errors.Is(runErr, procgroup.ErrOutputLimit) {
+		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
+			"%v%s", runErr, note(stderr))
 	}
 
 	report, parseErr := decodeReport(stdout)
 	if parseErr != nil {
-		return contract.Report{}, deathf(contract.FailureUnavailable,
+		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
 			"%s%s", contract.MessageOf(parseErr), note(stderr))
 	}
 	if runErr != nil {
 		// A report AND a non-zero exit. The report is discarded: a process
 		// that answered and then failed to exit cleanly has not established
 		// which of the two to believe.
-		return contract.Report{}, deathf(contract.FailureUnavailable,
+		if report.Spent.Validate() != nil {
+			report.Spent = contract.Charge{}
+		}
+		return contract.Report{Spent: report.Spent}, deathf(contract.FailureUnavailable,
 			"answered and then exited badly: %v%s", runErr, note(stderr))
 	}
 
+	if err := report.Spent.Validate(); err != nil {
+		return contract.Report{}, deathf(contract.FailureInvalidInput, "invalid reported charge: %v", err)
+	}
 	report = report.Normalize()
 	if err := report.Validate(declared.Spec); err != nil {
 		// A well-formed answer in the wrong shape is not a death of the
 		// process -- but it is a death of the ANSWER, and the same rule
 		// applies: nobody may read a result that was never checked.
-		return contract.Report{}, deathf(contract.FailureInvalidInput,
+		return contract.Report{Spent: report.Spent}, deathf(contract.FailureInvalidInput,
 			"the answer does not match the declared shape: %v", err)
 	}
 	return report, nil
@@ -574,6 +598,7 @@ func clip(text string) string {
 	return text[:cut] + "..."
 }
 
+// firstLine returns the first diagnostic line.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

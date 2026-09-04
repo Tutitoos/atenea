@@ -607,6 +607,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if len(candidates) == 1 {
 		return c.turnOnce(ctx, req)
 	}
+	originalBudget := req.BudgetUSD
 	var total contract.Charge
 	var notices []string
 	for index, candidate := range candidates {
@@ -648,7 +649,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		case spentUSD <= 0:
 			provenance = "the failed attempt reported no spend"
 		default:
-			remaining = req.BudgetUSD - spentUSD
+			remaining = originalBudget - spentUSD
 			if remaining <= 0 {
 				// The original failure's raw provider text survives the
 				// rewording: this sentence explains why the chain stopped,
@@ -1070,8 +1071,8 @@ func (c *Client) observe(ctx context.Context, dir string, timeout time.Duration,
 		return nil, envelope{}, contract.Fail(contract.FailureUnavailable,
 			"cannot read claude code's event stream: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, envelope{}, failureFor("", err)
 	}
@@ -1345,7 +1346,7 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	if err != nil {
 		return envelope{}, err
 	}
-	stdout, runErr := cmd.Output()
+	stdout, runErr := procgroup.Output(cmd)
 
 	var stderr string
 	var exit *exec.ExitError
@@ -1354,6 +1355,10 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return envelope{}, contract.Stopped(ctxErr, "claude code", timeout).WithRaw(stderr)
+	}
+
+	if errors.Is(runErr, procgroup.ErrOutputLimit) {
+		return envelope{}, contract.Fail(contract.FailureUnavailable, "claude code output exceeds 8 MiB").WithRaw(stderr)
 	}
 
 	out, parseErr := parse(stdout)
@@ -1445,8 +1450,8 @@ func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration
 	// Collected rather than inherited, and read only after Wait -- the one
 	// point os/exec guarantees its own copier has finished. This is where a
 	// CLI that refused a flag or died without framing an event says so.
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return Answer{}, failureFor("", err)
 	}

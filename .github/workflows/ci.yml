@@ -14,6 +14,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  omp-integration:
+    name: OMP / isolated real integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install the pinned OMP client
+        run: bun add --global @oh-my-pi/pi-coding-agent@18.0.11
+      - name: Run isolated OMP integrations
+        run: bash scripts/omp-integration-check.sh
+
   dashboard:
     name: dashboard / frontend
     runs-on: ubuntu-latest

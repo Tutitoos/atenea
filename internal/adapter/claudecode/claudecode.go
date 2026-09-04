@@ -23,6 +23,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -161,6 +162,7 @@ func New(opts Options) (*Runner, error) {
 	return runner, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve() (toolpath.Resolved, error) {
 	if r.binary != "" {
 		return toolpath.Resolve("explicit", []toolpath.Candidate{{Source: "explicit", Binary: r.binary}})
@@ -503,8 +505,8 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return envelope{}, 0, contract.Fail(contract.FailureUnavailable,
 			"claude code output stream could not be opened")
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return envelope{}, 0, contract.Stopped(ctxErr, "claude code", r.timeout)
@@ -514,7 +516,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	var out envelope
 	hasOutput := false
 	budgetStopped := false
-	var legacyOutput strings.Builder
+	legacyOutput := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), maxStreamLine)
 	for scanner.Scan() {
@@ -522,8 +524,11 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		if line == "" {
 			continue
 		}
-		legacyOutput.WriteString(line)
-		legacyOutput.WriteByte('\n')
+		_, _ = legacyOutput.WriteString(line)
+		_ = legacyOutput.WriteByte('\n')
+		if legacyOutput.Err() != nil {
+			break
+		}
 		event, ok, err := parseStreamLine(line)
 		if err != nil {
 			continue
@@ -547,7 +552,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 			}
 		}
 	}
-	scanErr := scanner.Err()
+	scanErr := errors.Join(scanner.Err(), legacyOutput.Err())
 	if scanErr != nil {
 		// Drained before Wait, always: the scan stopped and Wait waits for the
 		// child, so a child still writing into a pipe nobody empties would
@@ -556,6 +561,9 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	}
 	runErr := cmd.Wait()
 	peak := procstat.PeakRSS(cmd.ProcessState)
+	if errors.Is(scanErr, procgroup.ErrOutputLimit) || stderr.Err() != nil {
+		return out, peak, contract.Fail(contract.FailureUnavailable, "claude code output exceeds 8 MiB")
+	}
 	if scanErr != nil {
 		// A stream this adapter could not finish reading is only fatal when
 		// nothing usable arrived before it broke. One line over the buffer

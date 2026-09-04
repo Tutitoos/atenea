@@ -34,9 +34,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Tutitoos/atenea/internal/agent/readscope"
 )
 
 // assignment is the half of the wire this agent reads.
@@ -159,7 +160,7 @@ func check(in assignment, s *subject) (findings, error) {
 	if root := repositoryRoot(in); root != "" && !filepath.IsAbs(name) {
 		name = filepath.Join(root, name)
 	}
-	body, err := os.ReadFile(name)
+	body, err := readscope.ReadFile(repositoryRoot(in), name, in.Task.Files)
 	if err != nil {
 		// The file the answer is about cannot be opened by the reviewer.
 		// That is the reviewer's shortfall, not proof the answer is wrong:
@@ -205,6 +206,7 @@ func number(result map[string]any, key string) (int, bool) {
 	return 0, false
 }
 
+// refuse builds a permission refusal report.
 func refuse(text string) report {
 	return report{
 		Result:  map[string]any{"checked": 0},
@@ -213,6 +215,7 @@ func refuse(text string) report {
 	}
 }
 
+// incomplete builds an incomplete report with a diagnostic.
 func incomplete(text string) report {
 	return report{
 		Result:  map[string]any{"checked": 0},
@@ -221,6 +224,7 @@ func incomplete(text string) report {
 	}
 }
 
+// reasonText extracts the subject diagnostic.
 func reasonText(s *subject) string {
 	if s.Reason == nil || strings.TrimSpace(s.Reason.Text) == "" {
 		return "no reason given"
@@ -228,6 +232,7 @@ func reasonText(s *subject) string {
 	return s.Reason.Text
 }
 
+// repositoryRoot reads the repository root from assigned context.
 func repositoryRoot(in assignment) string {
 	raw, ok := in.Context["repository"]
 	if !ok {
@@ -242,6 +247,7 @@ func repositoryRoot(in assignment) string {
 	return repo.Root
 }
 
+// countLines counts logical lines in the supplied content.
 func countLines(body []byte) int {
 	if len(body) == 0 {
 		return 0

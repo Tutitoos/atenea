@@ -2,10 +2,10 @@ package metrics
 
 import (
 	"context"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +14,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// store opens an isolated metrics store for the test.
 func store(t *testing.T, opts Options) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "metrics.duckdb"), opts)
@@ -24,6 +25,7 @@ func store(t *testing.T, opts Options) *Store {
 	return s
 }
 
+// attempt builds a synthetic measurement.
 func attempt(at time.Time, capability, impl string) Measurement {
 	return Measurement{
 		At:             at,
@@ -158,6 +160,9 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	if raw != "rg: operation timed out after 30s" {
 		t.Fatalf("stored raw = %q, want the provider's own text", raw)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close inspection connection: %v", err)
+	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
@@ -168,6 +173,7 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	}
 }
 
+// TestPersistedRawMeasurementIsRedacted checks the regression scenario: persisted raw measurement is redacted.
 func TestPersistedRawMeasurementIsRedacted(t *testing.T) {
 	s := store(t, Options{})
 	bad := attempt(time.Now(), "code.search", "ripgrep")
@@ -278,6 +284,9 @@ func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {
 	}
 	if nulls != 1 {
 		t.Fatalf("%d rows have no memory figure, want exactly the unweighed one", nulls)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close inspection connection: %v", err)
 	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
@@ -413,6 +422,7 @@ func TestAFastCallIsNotRecordedAsFree(t *testing.T) {
 	}
 }
 
+// TestFilterAndClearDescribeAndRemoveOnlyTheirRows checks the regression scenario: filter and clear describe and remove only their rows.
 func TestFilterAndClearDescribeAndRemoveOnlyTheirRows(t *testing.T) {
 	if (Filter{}).Empty() == false {
 		t.Fatal("zero filter is not empty")
@@ -548,57 +558,62 @@ func TestAFlushWaitsForTheOneAlreadyWriting(t *testing.T) {
 	}
 }
 
-// Record is on the hot path of real work, and past the buffer ceiling it used
-// to discard the oldest entry by copying every surviving one down a slot:
-// measured at 74us per call with the default limit of 10000, against roughly
-// 40ns before the buffer filled. The cost was proportional to the ceiling,
-// which is the shape this asserts is gone -- a ring moves an index instead of
-// the rows, so a store with a hundred times the ceiling pays the same.
-func TestRecordCostsTheSameWhateverTheCeiling(t *testing.T) {
-	const (
-		small  = 200
-		large  = 20000
-		sample = 5000
-	)
-	cost := func(limit int) time.Duration {
-		s := &Store{limit: limit}
-		m := attempt(time.Now(), "code.search", "ripgrep")
-		for range limit {
-			s.Record(m)
-		}
-		// The fastest of several rounds, because the machine running this is
-		// also running everything else and only the floor is about the code.
-		best := time.Duration(math.MaxInt64)
-		for range 5 {
-			start := time.Now()
-			for range sample {
+// Overflow must overwrite the oldest slot without shifting surviving entries.
+// Verify the ring and its chronological drain directly; wall-clock ratios at
+// nanosecond scale depend on runner scheduling and cache behavior. Performance
+// remains covered by BenchmarkRecord and scripts/benchmark-check.sh.
+func TestRecordOverflowKeepsSurvivorsInPlace(t *testing.T) {
+	for _, limit := range []int{1, 200, 20000} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			s := &Store{limit: limit}
+			measurement := func(id int) Measurement {
+				m := attempt(time.Unix(1, 0), "code.search", "ripgrep")
+				m.StepID = strconv.Itoa(id)
+				return m
+			}
+			expected := make([]string, limit)
+			for i := range limit {
+				m := measurement(i)
 				s.Record(m)
+				expected[i] = m.StepID
 			}
-			if spent := time.Since(start); spent < best {
-				best = spent
+			backing := &s.buf[0]
+			capacity := cap(s.buf)
+			// Cross a full rotation and keep going to exercise wrapped heads.
+			for i := range limit + 3 {
+				m := measurement(limit + i)
+				s.Record(m)
+				expected[i%limit] = m.StepID
+				if len(s.buf) != limit || cap(s.buf) != capacity || &s.buf[0] != backing {
+					t.Fatal("overflow changed the backing array or buffer size")
+				}
+				if s.Pending() != limit || s.Dropped() != i+1 {
+					t.Fatalf("overflow %d: pending=%d dropped=%d", i+1, s.Pending(), s.Dropped())
+				}
+				if i == 0 || i == limit-1 || i == limit+2 {
+					for slot, want := range expected {
+						if got := s.buf[slot].StepID; got != want {
+							t.Fatalf("overflow %d moved slot %d: got %s, want %s", i+1, slot, got, want)
+						}
+					}
+				}
 			}
-		}
-		return best / sample
-	}
-
-	cheap, dear := cost(small), cost(large)
-	// A hundredfold ceiling against a fivefold budget: generous enough to
-	// survive a noisy machine, and nowhere near the hundredfold difference a
-	// per-call copy of the whole buffer produces.
-	if dear > 5*cheap {
-		t.Errorf("a Record costs %v at a ceiling of %d and %v at %d: the discard is copying the buffer, not moving an index",
-			cheap, small, dear, large)
+			batch := s.drain()
+			if len(batch) != limit || s.Pending() != 0 {
+				t.Fatalf("drain: batch=%d pending=%d", len(batch), s.Pending())
+			}
+			for i, m := range batch {
+				if want := strconv.Itoa(limit + 3 + i); m.StepID != want {
+					t.Fatalf("drain row %d: got %s, want %s", i, m.StepID, want)
+				}
+			}
+		})
 	}
 }
 
-// Several goroutines of one runWave ask for a baseline at the same moment.
-//
-// The exclusive lock DuckDB takes belongs to the process, not to the handle:
-// connections opened from one Atenea share its instance and all answer, which
-// is why nothing here serializes connect and why the funnel does not have to
-// take turns with itself. That is a property of the driver rather than of this
-// package, so it is asserted rather than assumed -- the day it stops holding,
-// every parallel wave starts failing on a message match in isLocked.
+// Several goroutines of one runWave ask for a baseline at the same moment. The
+// connection leases queue within Atenea so DuckDB never receives overlapping
+// handles, while every waiting reader still completes.
 func TestConcurrentReadersQueueForTheFile(t *testing.T) {
 	s := store(t, Options{LockWait: 100 * time.Millisecond})
 	s.Record(attempt(time.Now(), "code.search", "ripgrep"))

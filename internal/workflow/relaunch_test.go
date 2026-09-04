@@ -64,6 +64,7 @@ func cards(t *testing.T, path string) []map[string]any {
 	return out
 }
 
+// TestARefusedStepRunsAgainAndTheSecondAnswerIsAccepted checks the regression scenario: arefused step runs again and the second answer is accepted.
 func TestARefusedStepRunsAgainAndTheSecondAnswerIsAccepted(t *testing.T) {
 	dir := t.TempDir()
 	work, log := countingWork(t, dir, "work")
@@ -229,8 +230,9 @@ func TestTheRefusedAttemptsChargeStaysOnTheReceipt(t *testing.T) {
 		declared("judge", refusesOnce(t, dir, "judge", "wrong"), config.PoolReview),
 	)
 
-	run, err := h.engine.Start(t.Context(),
-		graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w")))
+	g := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	g.GrantUSD = 1 // Both charged attempts must be funded.
+	run, err := h.engine.Start(t.Context(), g)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -307,8 +309,9 @@ func TestARefusedReviewIsOnDiskBeforeTheRedispatch(t *testing.T) {
 		declared("judge", refusesOnce(t, dir, "judge", "wrong"), config.PoolReview),
 	)
 
-	run, err := h.engine.Start(t.Context(),
-		graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w")))
+	g := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	g.GrantUSD = 1 // Both charged attempts must be funded.
+	run, err := h.engine.Start(t.Context(), g)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

@@ -18,35 +18,15 @@
 // with no rsync, no borg and possibly no cron, so Atenea backs itself up with
 // what the standard library gives it, wherever it happens to be running.
 //
-// # Live databases are settled by the caller, not by the copier
+// # Live databases
 //
-// The tree this walks is the state root, and two of the files in it are open
-// databases: metrics.duckdb, which DuckDB holds under an exclusive lock while
-// any Atenea is flushing, and traces.db, which the workflow service keeps open
-// in WAL mode. Both are read here the same way every other file is -- opened
-// and streamed with io.Copy, one file at a time, in whatever order WalkDir
-// hands them over. A write-ahead log is a separate file, so the two halves of
-// one database are reached at two different instants.
-//
-// Left alone that produces a crash-consistent copy and not a consistent one:
-// it opens, each engine recovers it the way it recovers from a power cut, and
-// it is missing whatever had not been folded in. Restoring it loses
-// transactions nobody knows are missing, which is worse than losing them
-// loudly.
-//
-// So SnapshotIfDue takes a settle: a function the caller supplies that puts
-// the tree in order immediately before the copy, and whose failure stops the
-// copy. internal/core passes one that flushes the measurement batch, issues a
-// DuckDB CHECKPOINT and runs `PRAGMA wal_checkpoint(TRUNCATE)` against the
-// trace store. It is a parameter rather than something this package does
-// because this package copies a directory and deliberately has no idea which
-// files in it are databases; whoever commissions a snapshot holds the handles.
-//
-// It runs after the dueness check, not before: a checkpoint on every beat of a
-// rhythm that copies once every six hours is five wasted checkpoints out of
-// six. And Snapshot itself, called directly, settles nothing -- a caller
-// asking for a copy right now is a caller who has decided what state it wants
-// copied.
+// SQLite and DuckDB files are copied through their engines into self-contained
+// snapshots. Their mutable journals are excluded and databases are never
+// shared using hard links based on main-file modification time. Caller checkpointing still
+// flushes buffered measurements, but is not the consistency boundary. Each
+// database has its own consistent point; the directory is not a distributed
+// transaction across databases. Publication and rotation happen only after all
+// copies and durability checks succeed.
 package backup
 
 import (
@@ -777,6 +757,9 @@ func (s *Store) copyTree(ctx context.Context, root, target, base string) (Snapsh
 			snapshot.Bytes += written
 			return nil
 		}
+		if databaseSidecar(name) {
+			return nil
+		}
 		if !entry.Type().IsRegular() {
 			// A socket, a fifo or a device node is not data. There is nothing
 			// in one to restore.
@@ -786,11 +769,11 @@ func (s *Store) copyTree(ctx context.Context, root, target, base string) (Snapsh
 		if err != nil {
 			return err
 		}
-		if base != "" && link(filepath.Join(base, relative), destination, info) {
+		if base != "" && databaseKind(name) == "" && link(filepath.Join(base, relative), destination, info) {
 			snapshot.Linked++
 			return nil
 		}
-		written, err := copyFile(name, destination, info)
+		written, err := copyFile(name, destination, info, ctx)
 		if err != nil {
 			return err
 		}
@@ -863,13 +846,13 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 	// one syncs its own way back up to the snapshot root: a hard-linked extra
 	// writes nothing but a directory entry, and a directory created for it
 	// here needs its own name in its parent on the disk as well.
-	if base != "" && link(filepath.Join(base, extra.Dest), destination, info) {
+	if base != "" && databaseKind(extra.Source) == "" && link(filepath.Join(base, extra.Dest), destination, info) {
 		if err := syncUpTo(filepath.Dir(destination), target); err != nil {
 			return Snapshot{}, err
 		}
 		return Snapshot{Files: 1, Linked: 1}, nil
 	}
-	written, err := copyFile(extra.Source, destination, info)
+	written, err := copyFile(extra.Source, destination, info, ctx)
 	if err != nil {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot copy %s: %v", extra.Source, err)
@@ -954,7 +937,36 @@ func link(previous, destination string, info fs.FileInfo) bool {
 // The time is not cosmetic. The next run compares size and time against this
 // copy, so a file left carrying the time of the copy would look changed for
 // ever after and nothing would be shared again.
-func copyFile(source, destination string, info fs.FileInfo) (int64, error) {
+func copyFile(source, destination string, info fs.FileInfo, contexts ...context.Context) (int64, error) {
+	if kind := databaseKind(source); kind != "" {
+		ctx := context.Background()
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		if err := snapshotDatabase(ctx, kind, source, destination); err != nil {
+			return 0, err
+		}
+		file, err := os.OpenFile(destination, os.O_RDWR, info.Mode().Perm())
+		if err != nil {
+			return 0, err
+		}
+		if err = file.Sync(); err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		if err = file.Close(); err != nil {
+			return 0, err
+		}
+		if err = os.Chmod(destination, info.Mode().Perm()); err != nil {
+			return 0, err
+		}
+		result, err := os.Stat(destination)
+		if err != nil {
+			return 0, err
+		}
+		return result.Size(), nil
+	}
+
 	from, err := os.Open(source)
 	if err != nil {
 		return 0, err

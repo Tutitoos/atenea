@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
 // eventFilter applies dimensions in SQLite before aggregation or percentile sorting.
@@ -110,7 +112,7 @@ func readEvents(ctx context.Context, tx *sql.Tx, q Query, grouped map[string]*Ro
 		}
 		d.At = time.UnixMicro(at)
 		d.Code = Clean(d.Code, 80)
-		d.Reason = Clean(d.Reason, 240)
+		d.Reason = Clean(contract.RedactRaw(d.Reason), 240)
 		out.Errors = append(out.Errors, d)
 	}
 	err = rows.Err()

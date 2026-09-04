@@ -184,6 +184,22 @@ func TestFailedExitKeepsStderr(t *testing.T) {
 	}
 }
 
+// TestOversizedOutputReportsTheLimitBeforeDecode keeps a truncated stream from
+// being misreported as malformed JSON.
+func TestOversizedOutputReportsTheLimitBeforeDecode(t *testing.T) {
+	r, _ := runner(t, declared(stub(t, "cat >/dev/null\nhead -c 9000000 /dev/zero | tr '\\0' x")))
+	report, _, err := r.Run(t.Context(), "reader", task(), nil)
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable: %v", contract.KindOf(err), err)
+	}
+	if !strings.Contains(contract.MessageOf(err), "output exceeds 8 MiB") {
+		t.Fatalf("error = %v, want the output limit before a decode error", err)
+	}
+	if report.Verdict != contract.VerdictIncomplete {
+		t.Fatalf("verdict = %v, want incomplete", report.Verdict)
+	}
+}
+
 // The trace base is a durable store, and what a child prints on its way out
 // reaches it through the reason. internal/metrics and internal/checkpoint
 // both redact provider text at that boundary; this one did not, so a
@@ -442,6 +458,7 @@ func TestChildNarrowsAndDepthIsCapped(t *testing.T) {
 	}
 }
 
+// TestDeclaredListsEveryType checks the regression scenario: declared lists every type.
 func TestDeclaredListsEveryType(t *testing.T) {
 	r, _ := runner(t, declared("/bin/true"))
 	if got := r.Declared(); len(got) != 1 || got[0] != "reader" {
@@ -678,5 +695,47 @@ func TestNoCommissionOutsideAWorkflow(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "commission_usd") {
 		t.Errorf("a dispatch outside a workflow carried a commission:\n%s", raw)
+	}
+}
+
+// TestInvalidChargeDoesNotSurviveRejection checks the regression scenario: invalid charge does not survive rejection.
+func TestInvalidChargeDoesNotSurviveRejection(t *testing.T) {
+	for _, spent := range []string{`{"usd":-10,"priced_by":"fixture"}`, `{"usd":0.2}`, `{"input_tokens":-1}`} {
+		for _, exit := range []string{"", "\nexit 1"} {
+			command := stub(t, "cat >/dev/null\necho '{\"result\":{\"path\":\"x\"},\"verdict\":\"ok\",\"spent\":"+spent+"}'"+exit)
+			r, _ := runner(t, declared(command))
+			report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task()})
+			if err == nil {
+				t.Fatal("invalid charge accepted")
+			}
+			if report.Spent.Measured() || report.Spent.Validate() != nil {
+				t.Fatalf("invalid charge survived rejection: %+v %v", report.Spent, err)
+			}
+		}
+	}
+}
+
+// TestValidChargeSurvivesInvalidResult checks the regression scenario: valid charge survives invalid result.
+func TestValidChargeSurvivesInvalidResult(t *testing.T) {
+	r, _ := runner(t, declared(answers(t, `{"result":{"wrong":"x"},"verdict":"ok","spent":{"usd":0.2,"priced_by":"fixture"}}`)))
+	report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task()})
+	if err == nil || report.Spent.USD == nil || *report.Spent.USD != 0.2 {
+		t.Fatalf("valid charge lost: %+v %v", report.Spent, err)
+	}
+}
+
+// TestDecodeFailurePreservesObservedCharge meters syntactically valid rejected envelopes.
+func TestDecodeFailurePreservesObservedCharge(t *testing.T) {
+	for _, body := range []string{
+		`{"verdict":"not-a-verdict","spent":{"usd":0.2,"priced_by":"fixture"}}`,
+		`{"verdict":"ok","unknown":true,"spent":{"usd":0.2,"priced_by":"fixture"}}`,
+	} {
+		for _, exit := range []string{"", "\nexit 2"} {
+			r, _ := runner(t, declared(stub(t, "cat >/dev/null\necho '"+body+"'"+exit)))
+			report, _, err := r.Run(t.Context(), "reader", task(), nil)
+			if err == nil || report.Spent.USD == nil || *report.Spent.USD != 0.2 {
+				t.Fatalf("charge lost: %+v %v", report, err)
+			}
+		}
 	}
 }

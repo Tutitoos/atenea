@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/agent/readscope"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -191,6 +192,7 @@ func (r *Runner) search(ctx context.Context, req contract.RunRequest) ([]any, er
 	return matches, nil
 }
 
+// walk searches a validated repository subtree while preserving cancellation and scope errors.
 func (r *Runner) walk(ctx context.Context, root, start string, q query) ([]any, error) {
 	// The root is checked before the walk begins, and only the root. WalkDir
 	// hands a missing start to the callback below like any other unreadable
@@ -239,7 +241,7 @@ func (r *Runner) walk(ctx context.Context, root, start string, q query) ([]any, 
 		if tooBig(entry) {
 			return nil
 		}
-		matches = append(matches, scanFile(name, relative, q)...)
+		matches = append(matches, scanFile(name, relative, q, root)...)
 		return nil
 	})
 	if err != nil {
@@ -297,8 +299,12 @@ func relativeTo(root, name string) (string, bool) {
 // an error a search can act on: from the caller's side it is indistinguishable
 // from a file with no matches, and reporting it would abort a whole commission
 // over one unreadable path.
-func scanFile(name, relative string, q query) []any {
-	raw, err := os.ReadFile(name)
+func scanFile(name, relative string, q query, roots ...string) []any {
+	root := filepath.Dir(name)
+	if len(roots) > 0 {
+		root = roots[0]
+	}
+	raw, err := readscope.ReadFile(root, name, nil)
 	if err != nil {
 		return nil
 	}
@@ -352,6 +358,15 @@ func scopeRoots(root string, scope []string, repositoryID string) ([]string, err
 		if _, err := os.Stat(joined); err != nil {
 			return nil, contract.Fail(contract.FailureNotFound,
 				"scope %q: %v", entry, err)
+		}
+		realRoot, rootErr := filepath.EvalSymlinks(root)
+		realPath, pathErr := filepath.EvalSymlinks(joined)
+		if rootErr != nil || pathErr != nil {
+			return nil, contract.Fail(contract.FailureNotFound, "scope cannot be resolved")
+		}
+		relative, err = filepath.Rel(realRoot, realPath)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return nil, contract.Fail(contract.FailurePermissionDenied, "scope %q leaves repository %s through a link", entry, repositoryID)
 		}
 		roots = append(roots, joined)
 	}

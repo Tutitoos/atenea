@@ -271,11 +271,8 @@ func TestExtractRefusesAnEmptyOrMalformedFieldList(t *testing.T) {
 	}
 }
 
-// The gate is the same gate, and it runs before any field is read rather than
-// once per field: the url does not change between them, and a second
-// resolution could disagree with the first and leave half the fields fetched
-// under a verdict the other half never got.
-func TestTheGateRunsOnceAndBeforeAnyField(t *testing.T) {
+// Validate the seed before dispatch and revalidate each returned destination.
+func TestTheGateChecksSeedAndEveryReturnedField(t *testing.T) {
 	resolutions := 0
 	runner := newRunner(t, scrapling.Options{
 		Session: fakeServer(t, map[string]any{
@@ -293,8 +290,8 @@ func TestTheGateRunsOnceAndBeforeAnyField(t *testing.T) {
 		})); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if resolutions != 1 {
-		t.Errorf("resolved %d times, want once for the whole extraction", resolutions)
+	if resolutions != 3 {
+		t.Errorf("resolved %d times, want seed plus both returned fields", resolutions)
 	}
 }
 

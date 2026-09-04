@@ -7,6 +7,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/dbaccess"
+
 	_ "github.com/marcboeker/go-duckdb/v2"
 )
 
@@ -30,6 +32,16 @@ func Legacy(ctx context.Context, path string, out *Snapshot) error {
 	} else if err != nil {
 		return err
 	}
+	releaseLocal, err := dbaccess.AcquireConnection(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseLocal() }()
+	releaseFile, err := dbaccess.Acquire(ctx, path, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseFile() }()
 	db, err := sql.Open("duckdb", path+"?access_mode=read_only")
 	if err != nil {
 		return err

@@ -26,6 +26,7 @@ proc = subprocess.Popen(
 )
 
 def request(message):
+    """Send one MCP request and return its validated result payload."""
     proc.stdin.write(json.dumps(message) + "\n")
     proc.stdin.flush()
     line = proc.stdout.readline()
@@ -56,3 +57,5 @@ finally:
         proc.wait()
 print("Scrapling Spider helper parsed and answered initialize/tools/list")
 PY
+
+python3 "$root/helper/scrapling-spider/test_protocol.py"

@@ -8,7 +8,6 @@ package opencode
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -201,8 +201,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if err != nil {
 		return Answer{}, contract.Fail(contract.FailureUnavailable, "opencode stdout: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return Answer{}, failureFor(strings.TrimSpace(stderr.String()), err)
 	}
@@ -210,9 +210,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	var stream eventStream
 	var limitErr error
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), procgroup.MaxOutput+2)
+	scanner.Split(scanEventFrame)
 	for scanner.Scan() {
-		if err := stream.accept(scanner.Bytes()); err != nil {
+		if err := stream.acceptFrame(scanner.Bytes()); err != nil {
 			// The charge, on this path too. An event this adapter cannot read
 			// says nothing about the steps that arrived before it, and those
 			// steps carried real tokens and a real cost: every other failing
@@ -249,7 +250,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	}
 	waitErr := cmd.Wait()
 	if ctxErr := turnCtx.Err(); ctxErr != nil {
-		return Answer{}, contract.Stopped(ctxErr, "opencode", limit).WithRaw(strings.TrimSpace(stderr.String()))
+		return Answer{Spent: stream.charge()}, contract.Stopped(ctxErr, "opencode", limit).WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if limitErr != nil {
 		return Answer{Spent: stream.charge()}, limitErr
@@ -271,7 +272,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	passes := 1
 	toolCalls := append([]string(nil), stream.toolCalls...)
 	if !stream.finished && stream.stopped && stream.sessionID != "" {
-		finalStream, finalErr := r.finalize(turnCtx, req, stream.sessionID)
+		remaining := req
+		if req.BudgetUSD > 0 && charge.USD != nil {
+			remaining.BudgetUSD -= *charge.USD
+		}
+		if req.MaxTokens > 0 {
+			remaining.MaxTokens -= charge.Tokens()
+		}
+		if (req.BudgetUSD > 0 && remaining.BudgetUSD <= 0) || (req.MaxTokens > 0 && remaining.MaxTokens <= 0) {
+			return Answer{Spent: charge}, contract.Fail(contract.FailurePermissionDenied, "no allowance remains for finalization")
+		}
+		finalStream, finalErr := r.finalize(turnCtx, remaining, stream.sessionID)
 		charge = charge.Plus(finalStream.charge())
 		if finalErr != nil {
 			return Answer{Spent: charge}, finalErr
@@ -282,7 +293,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 		passes++
 	}
 	if !stream.finished {
-		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
+		return Answer{Spent: charge}, contract.Fail(contract.FailureUnavailable,
 			"opencode ended without a step_finish event").WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if text == "" {
@@ -306,14 +317,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 // paid for. The prompt deliberately has no permission to call another tool.
 func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (eventStream, error) {
 	var stream eventStream
+	version := r.version.Version(ctx)
+	if !stableFinalizationVersion(version) {
+		return stream, contract.Fail(contract.FailureUnavailable, "tool-free finalization requires verified OpenCode 1.18.20 or newer 1.x; got %q", version)
+	}
 	prompt, err := finalizationPrompt(req.Schema)
 	if err != nil {
 		return stream, err
 	}
-	argv := []string{"run", "--format", "json", "--session", sessionID}
-	// Finalization is deliberately tool-free by prompt. Do not re-inject MCP
-	// config: the persisted session already has its context and the model must
-	// close from the evidence it collected.
+	argv := []string{"run", "--format", "json", "--session", sessionID, "--agent", "atenea-finalize"}
+	// Finalization uses an isolated configuration and a deny-all agent; the
+	// persisted session supplies evidence, not permission to execute tools.
 	if req.Dir != "" {
 		argv = append(argv, "--dir", req.Dir)
 	}
@@ -325,22 +339,39 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 			"opencode is not installed: %q is not on PATH", r.binary)
 	}
 	cmd := exec.CommandContext(ctx, binary, argv...)
+	isolated, err := os.MkdirTemp("", "atenea-finalize-")
+	if err != nil {
+		return stream, err
+	}
+	defer func() { _ = os.RemoveAll(isolated) }()
+	cmd.Env = finalizationEnvironment(os.Environ(), isolated)
 	cmd.Dir = req.Dir
 	procgroup.Contain(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return stream, contract.Fail(contract.FailureUnavailable, "opencode stdout: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return stream, failureFor(strings.TrimSpace(stderr.String()), err)
 	}
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), procgroup.MaxOutput+2)
+	scanner.Split(scanEventFrame)
 	for scanner.Scan() {
-		if err := stream.accept(scanner.Bytes()); err != nil {
+		if err := stream.acceptFrame(scanner.Bytes()); err != nil {
+			_ = procgroup.Kill(cmd)
+			_ = cmd.Wait()
+			return stream, err
+		}
+		if len(stream.toolCalls) > 0 {
+			_ = procgroup.Kill(cmd)
+			_ = cmd.Wait()
+			return stream, contract.Fail(contract.FailurePermissionDenied, "OpenCode violated tool-free finalization")
+		}
+		if err := stream.limitFailure(req); err != nil {
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
 			return stream, err
@@ -358,6 +389,9 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 		return stream, contract.Fail(contract.FailureUnavailable,
 			"opencode event stream could not be read: %v", scanErr).WithRaw(strings.TrimSpace(stderr.String()))
 	}
+	if len(stream.toolCalls) > 0 {
+		return stream, contract.Fail(contract.FailurePermissionDenied, "opencode finalization emitted a forbidden tool call")
+	}
 	if stream.errText != "" {
 		return stream, failureFor(stream.errText, waitErr)
 	}
@@ -372,6 +406,7 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 }
 
 type eventStream struct {
+	bytes        int
 	text         strings.Builder
 	textIDs      map[string]struct{}
 	finished     bool
@@ -413,7 +448,40 @@ type part struct {
 	Cost *float64 `json:"cost"`
 }
 
+// scanEventFrame preserves the bytes consumed by ScanLines so aggregate
+// accounting includes LF or CRLF delimiters removed from the JSON token.
+func scanEventFrame(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	advance, line, err := bufio.ScanLines(data, atEOF)
+	if line == nil {
+		return advance, nil, err
+	}
+	return advance, data[:advance], err
+}
+
+// accept keeps the historical test helper semantics of one LF-delimited event.
 func (s *eventStream) accept(raw []byte) error {
+	return s.acceptBytes(raw, 1)
+}
+
+func (s *eventStream) acceptFrame(frame []byte) error {
+	delimiter := 0
+	raw := frame
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		delimiter = 1
+		raw = raw[:len(raw)-1]
+		if len(raw) > 0 && raw[len(raw)-1] == '\r' {
+			delimiter++
+			raw = raw[:len(raw)-1]
+		}
+	}
+	return s.acceptBytes(raw, delimiter)
+}
+
+func (s *eventStream) acceptBytes(raw []byte, delimiter int) error {
+	if len(raw)+delimiter > procgroup.MaxOutput-s.bytes {
+		return contract.Fail(contract.FailureUnavailable, "opencode event stream exceeds 8 MiB")
+	}
+	s.bytes += len(raw) + delimiter
 	var ev event
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return contract.Fail(contract.FailureUnavailable,
@@ -442,6 +510,9 @@ func (s *eventStream) accept(raw []byte) error {
 		}
 		if s.text.Len() > 0 {
 			s.text.WriteByte('\n')
+		}
+		if s.text.Len()+len(p.Text) > procgroup.MaxOutput {
+			return contract.Fail(contract.FailureUnavailable, "opencode text exceeds 8 MiB")
 		}
 		s.text.WriteString(p.Text)
 	case "step_finish":
@@ -926,4 +997,35 @@ func firstToken(value string) string {
 		return ""
 	}
 	return fields[0]
+}
+
+// finalizationEnvironment isolates local configuration while retaining the data
+// directory needed to resume the paid session and the provider's authentication.
+func finalizationEnvironment(env []string, dir string) []string {
+	for key, value := range map[string]string{
+		"XDG_CONFIG_HOME": dir, "OPENCODE_CONFIG_DIR": dir, "OPENCODE_CONFIG": "",
+		"OPENCODE_CONFIG_CONTENT": `{"permission":{"*":"deny"},"agent":{"atenea-finalize":{"mode":"primary","permission":{"*":"deny"}}},"default_agent":"atenea-finalize"}`,
+		"OPENCODE_PERMISSION":     `{"*":"deny"}`, "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+		"OPENCODE_PURE": "1", "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1", "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+	} {
+		env = appendWithout(env, key, value)
+	}
+	return env
+}
+
+// stableFinalizationVersion accepts only complete stable versions in the verified 1.x range.
+func stableFinalizationVersion(version string) bool {
+	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	var values [3]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || strconv.Itoa(n) != part {
+			return false
+		}
+		values[i] = n
+	}
+	return values[0] == 1 && (values[1] > 18 || values[1] == 18 && values[2] >= 20)
 }

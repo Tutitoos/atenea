@@ -73,7 +73,7 @@ func TestARefusedRedoLeavesTheStepRedoableAgain(t *testing.T) {
 	// And the proof that it is really recoverable: the raise the rule does
 	// accept still works, on the same step, right after the refusal.
 	if _, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.60}}, 0.60); err != nil {
+		[]workflow.Raise{{StepID: "a", USD: 0.60}}, 1.10); err != nil {
 		if !strings.Contains(err.Error(), "incomplete") {
 			t.Fatalf("the step could not be redone after a refusal: %v", err)
 		}

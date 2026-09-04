@@ -40,6 +40,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -52,6 +53,7 @@ import (
 
 	_ "github.com/marcboeker/go-duckdb/v2" // database/sql driver "duckdb"
 
+	"github.com/Tutitoos/atenea/internal/dbaccess"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -118,13 +120,14 @@ type Measurement struct {
 	ToolVersion string
 	Spent       contract.Sample
 	OK          bool
-	// FailureKind is the shared bin and Failure the untranslated reason. Both
-	// empty on success.
+	// FailureKind is the shared bin. Failure is redacted before buffering. Both
+	// are empty on success.
 	FailureKind string
 	Failure     string
 	// Raw is the provider's own text behind Failure, kept verbatim so a
 	// human can search for it later instead of re-triggering the same
-	// failure just to see what it actually said. Empty on success, and empty
+	// failure just to see what it actually said. It is redacted before buffering.
+	// Empty on success, and empty
 	// on a failure the core raised itself with nothing to quote.
 	Raw string
 	// OutOfScope is how many results this attempt returned that fell outside
@@ -219,7 +222,7 @@ func Open(path string, opts Options) (*Store, error) {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
-	if err := migrate(context.Background(), db); err != nil {
+	if err := migrate(context.Background(), db.DB); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -239,6 +242,7 @@ func (s *Store) Record(m Measurement) {
 	// durable. Keep the diagnostic shape while removing common credentials and
 	// bounding the retained text.
 	m.Raw = contract.RedactRaw(m.Raw)
+	m.Failure = contract.RedactRaw(m.Failure)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sealed {
@@ -470,17 +474,54 @@ func (s *Store) write(ctx context.Context, batch []Measurement) error {
 // batching design asks for, the other being the end of a phase.
 func (s *Store) Close() error { return s.Flush(context.Background()) }
 
+// connection releases the database before its shared snapshot exclusion lease.
+type connection struct {
+	*sql.DB
+	release   func() error
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Close releases both resources, including when the driver close fails.
+func (c *connection) Close() error {
+	c.closeOnce.Do(func() { c.closeErr = errors.Join(c.DB.Close(), c.release()) })
+	return c.closeErr
+}
+
 // connect opens the file, waiting out another process's flush if one is in
 // progress. DuckDB allows a single writer, which is the shape the design wanted
 // anyway; the wait is what turns that from a crash into a queue.
 //
-// Nothing serializes this inside the process, on purpose. The exclusive lock
-// DuckDB takes is held by the process, not by the handle: two connections to
-// the same file from one Atenea share its instance and both answer, which is
-// what lets several goroutines of a runWave read baselines at once. The retry
-// loop below is for the other Atenea on the machine, and a mutex here could
-// not have helped with that one.
-func (s *Store) connect(ctx context.Context) (*sql.DB, error) {
+// Ordinary connections use a shared cross-process lease; snapshots require an
+// exclusive one. Package dbaccess also queues connections to the same canonical
+// path within this process because DuckDB does not reliably accept concurrent
+// handles for one file. The retry loop below waits for another Atenea process.
+func (s *Store) connect(ctx context.Context) (*connection, error) {
+	releaseLocal, err := dbaccess.AcquireConnection(ctx, s.path)
+	if err != nil {
+		return nil, err
+	}
+	localHeld := true
+	defer func() {
+		if localHeld {
+			_ = releaseLocal()
+		}
+	}()
+
+	waitCtx, cancel := context.WithTimeout(ctx, s.lockWait)
+	releaseFile, err := dbaccess.Acquire(waitCtx, s.path, false)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	acquired := false
+	defer func() {
+		if !acquired {
+			_ = releaseFile()
+		}
+	}()
+	release := func() error { return errors.Join(releaseFile(), releaseLocal()) }
+
 	deadline := time.Now().Add(s.lockWait)
 	backoff := 5 * time.Millisecond
 	for {
@@ -491,7 +532,9 @@ func (s *Store) connect(ctx context.Context) (*sql.DB, error) {
 			// holds.
 			db.SetMaxOpenConns(1)
 			if err = db.PingContext(ctx); err == nil {
-				return db, nil
+				acquired = true
+				localHeld = false
+				return &connection{DB: db, release: release}, nil
 			}
 			_ = db.Close()
 		}

@@ -2,7 +2,9 @@ package toolstats_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,5 +53,45 @@ func TestLegacyCutoffAndBoundarySummaries(t *testing.T) {
 	}
 	if !out.Coverage.Partial {
 		t.Fatal("straddling summary was silently counted")
+	}
+}
+
+// TestConcurrentLegacyReadersQueueByPath prevents overlapping DuckDB handles.
+func TestConcurrentLegacyReadersQueueByPath(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "base.duckdb")
+	store, err := metrics.Open(path, metrics.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	store.Record(metrics.Measurement{At: now, Capability: "code.search", Implementation: "impl", Provider: "p", Repository: "app", OK: true})
+	if err = store.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const readers = 8
+	var start sync.WaitGroup
+	start.Add(1)
+	errs := make(chan error, readers)
+	for range readers {
+		go func() {
+			start.Wait()
+			out := toolstats.Snapshot{Query: toolstats.Query{Since: now.Add(-time.Minute), Until: now.Add(time.Minute)}}
+			err := toolstats.Legacy(ctx, path, &out)
+			if err == nil && (len(out.Legacy) != 1 || out.Legacy[0].Calls != 1) {
+				err = fmt.Errorf("unexpected legacy rows: %+v", out.Legacy)
+			}
+			errs <- err
+		}()
+	}
+	start.Done()
+	for range readers {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent legacy reader: %v", err)
+		}
 	}
 }

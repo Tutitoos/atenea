@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1198,6 +1199,34 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 		return run, err
 	}
 
+	totalGrant := run.GrantUSD
+	if grant > 0 {
+		totalGrant = grant
+	}
+	required := 0.0
+	for _, row := range run.Steps {
+		if row.TraceID != "" {
+			if row.Spent.USD != nil {
+				required += *row.Spent.USD
+			} else {
+				required += row.Step.Permission.BudgetUSD
+			}
+		}
+	}
+	for _, row := range run.Superseded {
+		if row.Spent.USD != nil {
+			required += *row.Spent.USD
+		} else {
+			required += row.GrantUSD
+		}
+	}
+	for _, raise := range raises {
+		required += raise.USD
+	}
+	if required > totalGrant+moneyEpsilon {
+		return run, contract.Fail(contract.FailurePermissionDenied, "redo requires $%.2f including previous attempts; grant is $%.2f", required, totalGrant)
+	}
+
 	if grant > 0 {
 		if err := e.store.Regrant(ctx, id, grant); err != nil {
 			return run, err
@@ -1453,6 +1482,27 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	defer unwind(cancel, &wg, results)
 	write := context.WithoutCancel(ctx)
 
+	accountingFailure := func(cause error, first ...done) (Run, error) {
+		cancel()
+		completed := append([]done(nil), first...)
+		landed := make(chan struct{})
+		go func() { wg.Wait(); close(landed) }()
+	collect:
+		for {
+			select {
+			case item := <-results:
+				completed = append(completed, item)
+			case <-landed:
+				break collect
+			}
+		}
+		if err := e.store.reconcileAccountingFailure(write, id, completed, e.now()); err != nil {
+			return run, errors.Join(cause, err)
+		}
+		out, err := e.store.Load(write, id)
+		return out, errors.Join(cause, err)
+	}
+
 	aborted := false
 	// A refused launch is refused for good, and not only in the process that
 	// heard the refusal. Read off gate 0 rather than off the wait below: the
@@ -1574,6 +1624,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				// like it never started beside an agent that certainly did.
 				traceID := e.runner.NextID()
 				dispatch := agent.Dispatch{
+					Effects:  append([]contract.Effect{}, step.Permission.Effects...),
 					ID:       traceID,
 					TypeName: step.TypeName,
 					Task:     step.Task,
@@ -1622,8 +1673,8 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					dispatch.Rejected = &card
 				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
-					attempts[step.ID], e.now(), e.pid); err != nil {
-					return run, err
+					attempts[step.ID], e.now(), e.pid, step.Permission.BudgetUSD); err != nil {
+					return accountingFailure(err)
 				}
 				traces[step.ID] = traceID
 				lanes[pool]++
@@ -1655,6 +1706,9 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// loop: the cancel usually lands while this loop is blocked here,
 		// which is exactly when that flag is still false.
 		if finished.status == StatusInterrupted {
+			if err := e.store.Finish(write, id, finished.stepID, StatusInterrupted, finished.report, e.now()); err != nil {
+				return accountingFailure(err, finished)
+			}
 			aborted = true
 			if err := e.store.Interrupt(write, id, finished.stepID, "cut by abort", e.now()); err != nil {
 				return run, err
@@ -1664,7 +1718,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		}
 		if err := e.store.Finish(write, id, finished.stepID, finished.status,
 			finished.report, e.now()); err != nil {
-			return run, err
+			return accountingFailure(err, finished)
 		}
 		status[finished.stepID] = finished.status
 		// Kept for whoever reads this answer next. The same fields the store
@@ -1893,6 +1947,7 @@ func anyInterrupted(status map[string]Status) bool {
 	return false
 }
 
+// stepRow finds a persisted step by identifier.
 func stepRow(run Run, id string) (StepRow, bool) {
 	for _, step := range run.Steps {
 		if step.Step.ID == id {
@@ -1902,6 +1957,7 @@ func stepRow(run Run, id string) (StepRow, bool) {
 	return StepRow{}, false
 }
 
+// sortedKeys returns deterministic key ordering.
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

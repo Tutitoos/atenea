@@ -66,12 +66,11 @@ type Fault struct {
 	// provider breaking differently right now, even when older attempts
 	// further back happened to share a cause too.
 	Kind string
-	// Reason is the untranslated message of the newest failure, for whoever
-	// has to read it.
+	// Reason is the redacted message loaded from the newest persisted failure.
 	Reason string
 	// Raw is the newest failure's own provider text, beneath Reason the same
-	// way it sits beneath a live Failure. A streak long enough to trip the
-	// funnel is exactly the streak an operator has no fresh call left to
+	// way it sits beneath a live Failure. It is redacted when loaded from the
+	// persisted measurement. A streak long enough to trip the funnel is exactly the streak an operator has no fresh call left to
 	// inspect -- the record is the only place this evidence still exists.
 	Raw string
 	// Latest is when that newest failure happened.
@@ -423,7 +422,8 @@ func (s *Store) Baselines(ctx context.Context, capability, repository, subject s
 	return out, nil
 }
 
-func (s *Store) readCosts(ctx context.Context, db *sql.DB, capability, repository string,
+// readCosts loads aggregate provider costs for the requested capability and repository.
+func (s *Store) readCosts(ctx context.Context, db *connection, capability, repository string,
 	out map[string]Baseline) error {
 	rows, err := db.QueryContext(ctx, costs, capability, repository, capability, repository)
 	if err != nil {
@@ -494,10 +494,10 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 		}
 		r.Baseline.Fault = Fault{Streak: int(streak), SameKindStreak: int(sameKindStreak)}
 		if reason != nil {
-			r.Baseline.Fault.Reason = *reason
+			r.Baseline.Fault.Reason = contract.RedactRaw(*reason)
 		}
 		if raw != nil {
-			r.Baseline.Fault.Raw = *raw
+			r.Baseline.Fault.Raw = contract.RedactRaw(*raw)
 		}
 		if latest != nil {
 			r.Baseline.Fault.Latest = *latest
@@ -521,7 +521,7 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 
 // readRecency fills in each implementation's newest end for one capability on
 // one repository.
-func (s *Store) readRecency(ctx context.Context, db *sql.DB, capability, repository, subject string,
+func (s *Store) readRecency(ctx context.Context, db *connection, capability, repository, subject string,
 	out map[string]Baseline) error {
 	rows, err := db.QueryContext(ctx, recencyHere, capability, repository, subject)
 	if err != nil {
@@ -761,6 +761,7 @@ func Apply(base map[string]Baseline, candidates []contract.Implementation, now t
 	return notices
 }
 
+// plural selects singular or plural wording.
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word

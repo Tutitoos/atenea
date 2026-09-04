@@ -127,6 +127,7 @@ func New(opts Options) (*Runner, error) {
 	return runner, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve() (toolpath.Resolved, error) {
 	if r.binary != "" {
 		return toolpath.Resolve("explicit", []toolpath.Candidate{{Source: "explicit", Binary: r.binary}})
@@ -296,6 +297,7 @@ func readSearch(payload map[string]any) (search, error) {
 	return out, nil
 }
 
+// invoke runs one bounded Codex search and returns its decoded response and peak memory use.
 func (r *Runner) invoke(ctx context.Context, root string, req contract.RunRequest, ask search) (answer response, peak int64, err error) {
 	resolved, err := r.resolve()
 	if err != nil {
@@ -345,8 +347,8 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return response{}, 0, contract.Fail(contract.FailureUnavailable,
 			"codex output stream could not be opened")
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return response{}, 0, classifyFailure("", err)
 	}
@@ -368,7 +370,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	runErr := cmd.Wait()
 	peak = procstat.PeakRSS(cmd.ProcessState)
 	if scanErr != nil {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex output could not be read")
 	}
 	if budgetStopped {
@@ -377,18 +379,18 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 				"codex exceeded its monetary permission during the event stream")
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return response{}, peak, contract.Stopped(ctxErr, "codex", r.timeout)
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Stopped(ctxErr, "codex", r.timeout)
 	}
 	if runErr != nil {
-		return response{}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
 	}
 	if parsed.Message == "" {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex completed without a final JSON answer")
 	}
 	var out response
 	if err := json.Unmarshal([]byte(parsed.Message), &out.Structured); err != nil {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex returned invalid JSON")
 	}
 	out.Usage = parsed.Usage
