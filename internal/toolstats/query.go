@@ -102,6 +102,11 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 		return out, err
 	}
 	defer func() { _ = db.Close() }()
+	dead, release, err := deadOwners(ctx, db, s.Path)
+	defer release()
+	if err != nil {
+		return out, err
+	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, err
@@ -159,7 +164,7 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 			out.Catalog[i].State = "catalog_saved"
 		}
 	}
-	percentiles, err := readEvents(ctx, tx, q, grouped, &out)
+	percentiles, err := readEvents(ctx, tx, q, grouped, &out, dead)
 	if err != nil {
 		return out, err
 	}

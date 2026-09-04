@@ -14,3 +14,8 @@ func lockOwner(_ string) (*os.File, error) {
 
 // ownerBusy never treats unsupported locking as proof of a live writer.
 func ownerBusy(_ error) bool { return false }
+
+// inspectOwner cannot prove writer liveness on unsupported platforms.
+func inspectOwner(_ string) (*os.File, error) {
+	return nil, fmt.Errorf("stats writer inspection is unsupported on this platform")
+}

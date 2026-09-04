@@ -12,6 +12,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/toolstats"
 )
 
+// statsTotal retrieves one accounting-level total from a core snapshot.
 func statsTotal(t *testing.T, s toolstats.Snapshot, level string) toolstats.Row {
 	t.Helper()
 	for _, r := range s.Totals {
@@ -22,6 +23,8 @@ func statsTotal(t *testing.T, s toolstats.Snapshot, level string) toolstats.Row 
 	t.Fatalf("no total for %s", level)
 	return toolstats.Row{}
 }
+
+// TestStatsRawAliasRefusalAndReadOnlyQueries covers normalized aliases, refused calls, and routing-metric isolation.
 func TestStatsRawAliasRefusalAndReadOnlyQueries(t *testing.T) {
 	fake := &fakeBackend{}
 	backend := httptest.NewServer(fake)
@@ -77,6 +80,8 @@ func TestStatsRawAliasRefusalAndReadOnlyQueries(t *testing.T) {
 		t.Fatal("raw statistics polluted routing baseline")
 	}
 }
+
+// TestStatsCapabilityRequestIsNotCountedTwice checks request propagation through MCP dispatch.
 func TestStatsCapabilityRequestIsNotCountedTwice(t *testing.T) {
 	atenea := buildService(t, socketSettings)
 	defer serve(t, atenea)()
@@ -94,6 +99,8 @@ func TestStatsCapabilityRequestIsNotCountedTwice(t *testing.T) {
 		t.Fatalf("attempt %+v", r)
 	}
 }
+
+// TestStatsCLIInvalidCapabilityAndCancellation checks recording before capability validation.
 func TestStatsCLIInvalidCapabilityAndCancellation(t *testing.T) {
 	atenea, base := measured(t, "")
 	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
