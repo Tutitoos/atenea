@@ -28,6 +28,13 @@ When Atenea itself breaks — a panic in a step, a background job failing where
 nobody was listening — the fault is on disk before the process dies, and
 `atenea incidents` reads it back.
 
+## Tool activity
+
+Use `atenea stats --today`, `--week`, or `--month` for calendar-period activity.
+`atenea stats` shows all retained history; add `--used --watch` for a live terminal
+view. Requests, provider attempts, refusals and failures are counted separately.
+See [the stats guide](docs/content/stats.md) for filters and historical coverage.
+
 ## Why
 
 Tooling changes constantly. A workflow written against `ripgrep` breaks the day

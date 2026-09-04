@@ -89,6 +89,7 @@ Commands:
                          person launches it
   traces                 What agents ran and how they ended; filter with
                          --type, --verdict, --open, --since, --id, --limit
+  stats                  Colored activity tables; --today, --week, --month, --watch
   metrics                What the base measured, per capability and provider;
                          'clear' empties it, narrowed by --capability,
                          --implementation or --repository, or --all for the lot
@@ -128,6 +129,7 @@ Global flags:
 // their flags even see anything -- "atenea ask -h" would otherwise be
 // swallowed as the capability id, not recognized as a request for help.
 var commandHelp = map[string]string{
+	"stats": statsHelp,
 	"command": `Usage: atenea command NAME [flags]
 
 Run a closed, read-only command for chat adapters. Markdown is the default.
@@ -882,6 +884,8 @@ func run(args []string, out io.Writer) error {
 		return cmdWorkflow(settingsPath, commandArgs, out)
 	case "traces":
 		return cmdTraces(commandArgs, out)
+	case "stats":
+		return cmdStats(settingsPath, commandArgs, out)
 	case "metrics":
 		return cmdMetrics(settingsPath, commandArgs, out)
 	case "backup":
@@ -2439,7 +2443,7 @@ func commissionError(ctx context.Context, result *orchestrator.Result, runErr er
 // out of, and the only way a caller who already has a position -- an editor,
 // a client with a cursor -- can hand it over: exploring finds text, and a text
 // hit is not a cursor.
-func cmdAsk(settingsPath string, args []string, out io.Writer) error {
+func cmdAsk(settingsPath string, args []string, out io.Writer) (err error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
 			`ask needs the capability first, e.g. atenea ask symbol.definition --repo current --set file=main.go --set line=12 --set column=6`)
@@ -2483,6 +2487,8 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		return err
 	}
 	defer func() { _ = atenea.Shutdown() }()
+	statsCtx, statsCall := atenea.StartStatsRequest(context.Background(), capabilityID, repository)
+	defer func() { statsCall.Event.Repository = repository; statsCall.End(err) }()
 	capability, err := atenea.Registry().Capability(capabilityID)
 	if err != nil {
 		return err
@@ -2514,7 +2520,7 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) error {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(statsCtx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	result, runErr := atenea.Ask(ctx, orchestrator.Question{
