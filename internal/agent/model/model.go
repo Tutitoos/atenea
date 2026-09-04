@@ -1358,7 +1358,7 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	}
 
 	if errors.Is(runErr, procgroup.ErrOutputLimit) {
-		return envelope{}, failureFor(stderr, runErr)
+		return envelope{}, contract.Fail(contract.FailureUnavailable, "claude code output exceeds 8 MiB").WithRaw(stderr)
 	}
 
 	out, parseErr := parse(stdout)
