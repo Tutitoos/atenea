@@ -127,6 +127,7 @@ func New(opts Options) (*Runner, error) {
 	return runner, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve() (toolpath.Resolved, error) {
 	if r.binary != "" {
 		return toolpath.Resolve("explicit", []toolpath.Candidate{{Source: "explicit", Binary: r.binary}})

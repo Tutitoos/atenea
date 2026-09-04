@@ -406,21 +406,18 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		stderr = strings.TrimSpace(string(exit.Stderr))
 	}
 
-	partial, _ := decodeReport(stdout)
-	if partial.Spent.Validate() != nil {
-		partial.Spent = contract.Charge{}
-	}
+	observed := observedCharge(stdout)
 
 	// The clock and the cancel are checked before the output, because a
 	// truncated answer from a killed process can still parse, and reading it
 	// as an answer would turn a death into a verdict.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Report{Spent: partial.Spent}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
+		return contract.Report{Spent: observed}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
 	}
 
 	report, parseErr := decodeReport(stdout)
 	if parseErr != nil {
-		return contract.Report{}, deathf(contract.FailureUnavailable,
+		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
 			"%s%s", contract.MessageOf(parseErr), note(stderr))
 	}
 	if runErr != nil {
