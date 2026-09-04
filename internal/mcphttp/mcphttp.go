@@ -10,6 +10,7 @@
 package mcphttp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -79,7 +80,8 @@ type Client struct {
 	// a field lock across a network call would block every concurrent
 	// sibling from so much as reading nextID. Held only on the path that has
 	// no session yet, so an established connection never touches it.
-	handshakeMu sync.Mutex
+	handshakeMu chan struct{}
+	ready       bool
 	// wireMu guards session, nextID and version below. A caller may run many
 	// calls concurrently against one Client -- Atenea's own MCP server adapter
 	// fans out up to sixteen at once inside a single held commission lock --
@@ -118,10 +120,11 @@ func New(opts Options) (*Client, error) {
 		headers[k] = v
 	}
 	return &Client{
-		endpoint:   endpoint,
-		headers:    headers,
-		clientName: clientName,
-		timeout:    opts.Timeout,
+		endpoint:    endpoint,
+		handshakeMu: make(chan struct{}, 1),
+		headers:     headers,
+		clientName:  clientName,
+		timeout:     opts.Timeout,
 		// The per-call deadline is carried on the context (plus this
 		// client's own Timeout, applied in Call), so the http.Client keeps
 		// no timeout of its own: two ceilings on the same call would race,
@@ -225,7 +228,7 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (st
 // every one of them begins by asking whether a session exists.
 func (c *Client) handshake(ctx context.Context) error {
 	c.wireMu.Lock()
-	established := c.session != ""
+	established := c.ready
 	c.wireMu.Unlock()
 	if established {
 		return nil
@@ -235,10 +238,14 @@ func (c *Client) handshake(ctx context.Context) error {
 	// first read decides nothing: between the two, a sibling goroutine may
 	// have completed the whole exchange. Only one initialize per session
 	// gets sent.
-	c.handshakeMu.Lock()
-	defer c.handshakeMu.Unlock()
+	select {
+	case c.handshakeMu <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.handshakeMu }()
 	c.wireMu.Lock()
-	established = c.session != ""
+	established = c.ready
 	c.wireMu.Unlock()
 	if established {
 		return nil
@@ -260,9 +267,6 @@ func (c *Client) handshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if reply.session == "" {
-		return fmt.Errorf("mcphttp: handshake returned no session id: %s", Clip(reply.body))
-	}
 	result, err := decode(reply, handshakeID)
 	if err != nil {
 		return err
@@ -280,7 +284,6 @@ func (c *Client) handshake(ctx context.Context) error {
 	if json.Unmarshal(result, &hello) == nil {
 		c.version = toolversion.Clean(hello.ServerInfo.Version)
 	}
-	c.session = reply.session
 	c.wireMu.Unlock()
 	// The spec requires this notification before any tool call, and a
 	// server that never receives it is entitled to refuse everything
@@ -292,9 +295,14 @@ func (c *Client) handshake(ctx context.Context) error {
 	if _, err := c.post(ctx, note, reply.session); err != nil {
 		c.wireMu.Lock()
 		c.session = ""
+		c.ready = false
 		c.wireMu.Unlock()
 		return err
 	}
+	c.wireMu.Lock()
+	c.session = reply.session
+	c.ready = true
+	c.wireMu.Unlock()
 	return nil
 }
 
@@ -315,6 +323,7 @@ func (c *Client) rpc(ctx context.Context, method string, params any) (json.RawMe
 		// the next call start clean instead of failing forever.
 		c.wireMu.Lock()
 		c.session = ""
+		c.ready = false
 		c.wireMu.Unlock()
 		return nil, err
 	}
@@ -361,12 +370,48 @@ func (c *Client) post(ctx context.Context, body []byte, session string) (answer,
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+	// Protocol headers are owned by the transport, not authentication overrides.
+	var sent rpcRequest
+	_ = json.Unmarshal(body, &sent)
+	if sent.Method != "initialize" {
+		req.Header.Set("MCP-Protocol-Version", protocolVersion)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return answer{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	text, err := io.ReadAll(resp.Body)
+	var text []byte
+	if sent.ID != 0 && resp.StatusCode < 400 && isEventStream(answer{contentType: resp.Header.Get("Content-Type")}) {
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 64<<10), (8<<20)+1)
+		var event strings.Builder
+		for scanner.Scan() {
+			line := scanner.Text()
+			if event.Len()+len(line)+1 > 8<<20 {
+				return answer{}, fmt.Errorf("MCP SSE message exceeds 8 MiB")
+			}
+			event.WriteString(line)
+			event.WriteByte('\n')
+			if line == "" {
+				if payload, ok := sseReply(event.String(), sent.ID); ok {
+					return answer{session: resp.Header.Get("Mcp-Session-Id"), contentType: "application/json", body: payload}, nil
+				}
+				event.Reset()
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return answer{}, err
+		}
+		if payload, ok := sseReply(event.String(), sent.ID); ok {
+			return answer{session: resp.Header.Get("Mcp-Session-Id"), contentType: "application/json", body: payload}, nil
+		}
+		return answer{}, fmt.Errorf("MCP SSE stream ended without reply to %d", sent.ID)
+	}
+	text, err = io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if len(text) > 8<<20 {
+		return answer{}, fmt.Errorf("MCP response exceeds 8 MiB")
+	}
 	if err != nil {
 		return answer{}, err
 	}

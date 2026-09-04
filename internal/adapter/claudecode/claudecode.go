@@ -503,8 +503,8 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return envelope{}, 0, contract.Fail(contract.FailureUnavailable,
 			"claude code output stream could not be opened")
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return envelope{}, 0, contract.Stopped(ctxErr, "claude code", r.timeout)
@@ -514,7 +514,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	var out envelope
 	hasOutput := false
 	budgetStopped := false
-	var legacyOutput strings.Builder
+	legacyOutput := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), maxStreamLine)
 	for scanner.Scan() {
@@ -522,8 +522,8 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		if line == "" {
 			continue
 		}
-		legacyOutput.WriteString(line)
-		legacyOutput.WriteByte('\n')
+		_, _ = legacyOutput.WriteString(line)
+		_ = legacyOutput.WriteByte('\n')
 		event, ok, err := parseStreamLine(line)
 		if err != nil {
 			continue

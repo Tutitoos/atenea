@@ -8,7 +8,6 @@ package opencode
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -201,8 +200,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	if err != nil {
 		return Answer{}, contract.Fail(contract.FailureUnavailable, "opencode stdout: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return Answer{}, failureFor(strings.TrimSpace(stderr.String()), err)
 	}
@@ -341,8 +340,8 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 	if err != nil {
 		return stream, contract.Fail(contract.FailureUnavailable, "opencode stdout: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return stream, failureFor(strings.TrimSpace(stderr.String()), err)
 	}
@@ -457,6 +456,9 @@ func (s *eventStream) accept(raw []byte) error {
 		}
 		if s.text.Len() > 0 {
 			s.text.WriteByte('\n')
+		}
+		if s.text.Len()+len(p.Text) > procgroup.MaxOutput {
+			return contract.Fail(contract.FailureUnavailable, "opencode text exceeds 8 MiB")
 		}
 		s.text.WriteString(p.Text)
 	case "step_finish":

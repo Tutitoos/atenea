@@ -345,8 +345,8 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		return response{}, 0, contract.Fail(contract.FailureUnavailable,
 			"codex output stream could not be opened")
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return response{}, 0, classifyFailure("", err)
 	}

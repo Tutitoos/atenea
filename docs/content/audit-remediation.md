@@ -23,3 +23,9 @@ Codex and OpenCode preserve reported usage on failure. OpenCode finalization use
 Explicit local scopes resolve symlink components before traversal and file reads use an OS-rooted handle. Extract and crawl reject prohibited returned destinations without returning content. Crawl also rejects pages outside the seed hostname. Malformed helper requests receive Invalid Request and do not terminate the protocol loop.
 
 R05 remains an external network-isolation limitation: allowed_domains filters discovery but is not a DNS/redirect/browser-network sandbox. The output gate cannot undo requests already made by Scrapling. Tests use controlled resolver/session responses; upstream browser subresources are not certified. Use a network-isolated provider environment when pre-connection denial is required.
+
+## 05: MCP lifecycle and resource bounds (A01–A05, B10, R02)
+
+A session becomes ready only after initialized completes, independently of whether the server uses session IDs. Handshake waiters honor their contexts. Subsequent HTTP messages carry the supported protocol revision. SSE returns on the matching response event, with an 8 MiB per-message limit; JSON responses have the same limit.
+
+Stdio write admission is cancelable. Cancellation during a write closes the damaged session; cancellation while waiting for another writer does not. The supervisor retains process ownership, and effectful calls are not automatically retried. Process diagnostic/output capture is bounded at 8 MiB per stream and stops overflowing children.

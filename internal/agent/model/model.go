@@ -1071,8 +1071,8 @@ func (c *Client) observe(ctx context.Context, dir string, timeout time.Duration,
 		return nil, envelope{}, contract.Fail(contract.FailureUnavailable,
 			"cannot read claude code's event stream: %v", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, envelope{}, failureFor("", err)
 	}
@@ -1346,7 +1346,7 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 	if err != nil {
 		return envelope{}, err
 	}
-	stdout, runErr := cmd.Output()
+	stdout, runErr := procgroup.Output(cmd)
 
 	var stderr string
 	var exit *exec.ExitError
@@ -1446,8 +1446,8 @@ func (c *Client) converse(ctx context.Context, dir string, timeout time.Duration
 	// Collected rather than inherited, and read only after Wait -- the one
 	// point os/exec guarantees its own copier has finished. This is where a
 	// CLI that refused a flag or died without framing an event says so.
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := procgroup.NewCapture(func() { _ = procgroup.Kill(cmd) })
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return Answer{}, failureFor("", err)
 	}

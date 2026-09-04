@@ -398,7 +398,7 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	// running and Wait blocks on pipes they still hold.
 	procgroup.Contain(cmd)
 
-	stdout, runErr := cmd.Output()
+	stdout, runErr := procgroup.Output(cmd)
 	var stderr string
 	var exit *exec.ExitError
 	if errors.As(runErr, &exit) {

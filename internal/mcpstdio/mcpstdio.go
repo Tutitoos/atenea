@@ -94,9 +94,10 @@ type Session struct {
 	stdin io.WriteCloser
 	opts  Options
 
-	writeMu sync.Mutex
-	seq     atomic.Int64
-	pending pending
+	writeGate chan struct{}
+	initGate  chan struct{}
+	seq       atomic.Int64
+	pending   pending
 
 	initMu      sync.Mutex
 	initialized bool
@@ -132,9 +133,11 @@ type Session struct {
 // wants to probe liveness some other way never pays for one.
 func New(stdin io.WriteCloser, stdout io.Reader, opts Options) *Session {
 	s := &Session{
-		stdin: stdin,
-		opts:  opts.withDefaults(),
-		dead:  make(chan struct{}),
+		stdin:     stdin,
+		writeGate: make(chan struct{}, 1),
+		initGate:  make(chan struct{}, 1),
+		opts:      opts.withDefaults(),
+		dead:      make(chan struct{}),
 	}
 	go s.read(stdout)
 	return s
@@ -147,9 +150,18 @@ func New(stdin io.WriteCloser, stdout io.Reader, opts Options) *Session {
 // pays for a second round trip over the wire, and Call itself calls this
 // defensively for the same reason.
 func (s *Session) Initialize(ctx context.Context) error {
+	select {
+	case s.initGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.dead:
+		return s.deadReason()
+	}
+	defer func() { <-s.initGate }()
 	s.initMu.Lock()
-	defer s.initMu.Unlock()
-	if s.initialized {
+	ready := s.initialized
+	s.initMu.Unlock()
+	if ready {
 		return nil
 	}
 	result, err := s.rpc(ctx, "initialize", map[string]any{
@@ -172,12 +184,16 @@ func (s *Session) Initialize(ctx context.Context) error {
 		} `json:"serverInfo"`
 	}
 	if json.Unmarshal(result, &hello) == nil {
+		s.initMu.Lock()
 		s.version = toolversion.Clean(hello.ServerInfo.Version)
+		s.initMu.Unlock()
 	}
-	if err := s.notify("notifications/initialized", map[string]any{}); err != nil {
+	if err := s.notifyContext(ctx, "notifications/initialized", map[string]any{}); err != nil {
 		return err
 	}
+	s.initMu.Lock()
 	s.initialized = true
+	s.initMu.Unlock()
 	return nil
 }
 
@@ -399,7 +415,7 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 	defer s.pending.drop(id)
 
 	start := time.Now()
-	if err := s.write(body); err != nil {
+	if err := s.writeContext(ctx, body); err != nil {
 		return nil, err
 	}
 	select {
@@ -431,24 +447,55 @@ func ceiling(ctx context.Context, start time.Time) time.Duration {
 
 // notify sends a JSON-RPC notification: no id, so the far side owes no
 // answer and none is waited for.
-func (s *Session) notify(method string, params any) error {
+func (s *Session) notifyContext(ctx context.Context, method string, params any) error {
 	body, err := json.Marshal(rpcRequest{Version: "2.0", Method: method, Params: params})
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%s: %v", method, err)
 	}
-	return s.write(body)
+	return s.writeContext(ctx, body)
 }
 
 // write serializes one message onto the shared pipe. Two callers writing at
 // once would interleave their bytes and the child would read one corrupt
 // line.
 func (s *Session) write(body []byte) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if _, err := s.stdin.Write(append(body, '\n')); err != nil {
-		return contract.Fail(contract.FailureUnavailable, "writing to the child: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.writeContext(ctx, body)
+}
+
+func (s *Session) writeContext(ctx context.Context, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return nil
+	select {
+	case s.writeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.dead:
+		return s.deadReason()
+	}
+	done := make(chan error, 1)
+	go func() {
+		defer func() { <-s.writeGate }()
+		_, err := s.stdin.Write(append(body, '\n'))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			s.markDead(err)
+			return contract.Fail(contract.FailureUnavailable, "writing to the child: %v", err)
+		}
+		return nil
+	case <-ctx.Done():
+		// A partially written frame cannot be reused. Closing the owned pipe
+		// interrupts the writer; process ownership remains with the supervisor.
+		_ = s.Close()
+		return contract.Stopped(ctx.Err(), "mcpstdio", 0)
+	case <-s.dead:
+		return s.deadReason()
+	}
 }
 
 // resultOf takes the result out of a JSON-RPC answer, or turns its error
