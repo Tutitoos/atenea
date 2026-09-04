@@ -1,8 +1,10 @@
 package contract
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -11,10 +13,11 @@ import (
 const MaxPersistedRaw = 64 << 10
 
 var (
-	privateKeyRaw = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-	bearerRaw     = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-	secretRaw     = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b\s*[:=]\s*["']?)[^ \t\r\n"',;]+`)
-	queryRaw      = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|token|password)=)[^&\s]+`)
+	quotedSecretRaw = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
+	privateKeyRaw   = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	bearerRaw       = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	secretRaw       = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*["']?)[^ \t\r\n"',;]+`)
+	queryRaw        = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|token|password)=)[^&\s]+`)
 )
 
 // RedactRaw prepares provider output for durable storage. The in-memory
@@ -42,6 +45,14 @@ func RedactRaw(raw string) string {
 		!strings.Contains(text, "-----BEGIN") {
 		return boundRaw(text)
 	}
+	var value any
+	if json.Unmarshal([]byte(text), &value) == nil {
+		redactJSON(value)
+		if encoded, err := json.Marshal(value); err == nil {
+			text = string(encoded)
+		}
+	}
+	text = quotedSecretRaw.ReplaceAllString(text, `${1}"[REDACTED]"`)
 	text = privateKeyRaw.ReplaceAllString(text, "[REDACTED PRIVATE KEY]")
 	text = bearerRaw.ReplaceAllString(text, "Bearer [REDACTED]")
 	text = secretRaw.ReplaceAllString(text, "${1}[REDACTED]")
@@ -65,7 +76,32 @@ func RedactRaw(raw string) string {
 // bytes is a bounded walk rather than a scan. The bound also means text that
 // was not valid UTF-8 to begin with is truncated near the ceiling instead of
 // being unwound to nothing.
+func redactJSON(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+			switch normalized {
+			case "apikey", "accesstoken", "refreshtoken", "clientsecret", "password", "passwd", "secret", "token":
+				v[key] = "[REDACTED]"
+			default:
+				redactJSON(child)
+			}
+		}
+	case []any:
+		for _, child := range v {
+			redactJSON(child)
+		}
+	}
+}
+
 func boundRaw(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, text)
 	if len(text) <= MaxPersistedRaw {
 		return text
 	}
