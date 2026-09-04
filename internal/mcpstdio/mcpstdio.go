@@ -475,6 +475,11 @@ func (s *Session) writeContext(ctx context.Context, body []byte) error {
 	case <-s.dead:
 		return s.deadReason()
 	}
+	if err := ctx.Err(); err != nil {
+		<-s.writeGate
+		return err
+	}
+
 	done := make(chan error, 1)
 	go func() {
 		defer func() { <-s.writeGate }()

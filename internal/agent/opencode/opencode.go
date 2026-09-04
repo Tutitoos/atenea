@@ -386,6 +386,7 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 }
 
 type eventStream struct {
+	bytes        int
 	text         strings.Builder
 	textIDs      map[string]struct{}
 	finished     bool
@@ -428,6 +429,10 @@ type part struct {
 }
 
 func (s *eventStream) accept(raw []byte) error {
+	if len(raw)+1 > procgroup.MaxOutput-s.bytes {
+		return contract.Fail(contract.FailureUnavailable, "opencode event stream exceeds 8 MiB")
+	}
+	s.bytes += len(raw) + 1
 	var ev event
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return contract.Fail(contract.FailureUnavailable,

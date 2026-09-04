@@ -386,6 +386,15 @@ func (c *Client) post(ctx context.Context, body []byte, session string) (answer,
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 64<<10), (8<<20)+1)
 		var event strings.Builder
+		consumed := 0
+		scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+			advance, token, err := bufio.ScanLines(data, atEOF)
+			consumed += advance
+			if consumed > 8<<20 {
+				return 0, nil, fmt.Errorf("MCP SSE response exceeds 8 MiB")
+			}
+			return advance, token, err
+		})
 		for scanner.Scan() {
 			line := scanner.Text()
 			if event.Len()+len(line)+1 > 8<<20 {

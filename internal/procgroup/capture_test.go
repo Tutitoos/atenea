@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestCaptureBoundsOutput checks the regression scenario: capture bounds output.
 func TestCaptureBoundsOutput(t *testing.T) {
 	stopped := 0
 	c := NewCapture(func() { stopped++ })

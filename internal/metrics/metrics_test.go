@@ -14,6 +14,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// store opens an isolated metrics store for the test.
 func store(t *testing.T, opts Options) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "metrics.duckdb"), opts)
@@ -24,6 +25,7 @@ func store(t *testing.T, opts Options) *Store {
 	return s
 }
 
+// attempt builds a synthetic measurement.
 func attempt(at time.Time, capability, impl string) Measurement {
 	return Measurement{
 		At:             at,
@@ -168,6 +170,7 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	}
 }
 
+// TestPersistedRawMeasurementIsRedacted checks the regression scenario: persisted raw measurement is redacted.
 func TestPersistedRawMeasurementIsRedacted(t *testing.T) {
 	s := store(t, Options{})
 	bad := attempt(time.Now(), "code.search", "ripgrep")
@@ -413,6 +416,7 @@ func TestAFastCallIsNotRecordedAsFree(t *testing.T) {
 	}
 }
 
+// TestFilterAndClearDescribeAndRemoveOnlyTheirRows checks the regression scenario: filter and clear describe and remove only their rows.
 func TestFilterAndClearDescribeAndRemoveOnlyTheirRows(t *testing.T) {
 	if (Filter{}).Empty() == false {
 		t.Fatal("zero filter is not empty")

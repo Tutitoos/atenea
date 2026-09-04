@@ -223,7 +223,8 @@ func (s *Store) Ask(ctx context.Context, runID string, kind Kind, p Proposal, at
 				"($%.2f of $%.2f allocated)",
 			runID, p.AllocatedUSD(), left, allocated, run.GrantUSD)
 	}
-	gate := Gate{
+	pending := false
+	gate := Gate{applied: &pending,
 		RunID: runID, Ordinal: len(gates), Kind: kind,
 		Proposal: p.Clone(), Digest: p.Digest(),
 		Decision: DecisionWaiting, Asked: at.UTC(),
@@ -233,8 +234,8 @@ func (s *Store) Ask(ctx context.Context, runID string, kind Kind, p Proposal, at
 		return Gate{}, err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO workflow_gate (workflow_id, ordinal, kind, proposal, digest, decision, asked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO workflow_gate (workflow_id, ordinal, kind, proposal, digest, decision, asked_at, applied)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
 		runID, gate.Ordinal, gate.Kind.String(), encoded, gate.Digest,
 		gate.Decision.String(), stamp(gate.Asked))
 	if err != nil {
@@ -322,7 +323,7 @@ func alreadyAnswered(runID string, ordinal int, gate Gate) error {
 // Gate reads one gate back.
 func (s *Store) Gate(ctx context.Context, runID string, ordinal int) (Gate, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason
+		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason, applied
 		 FROM workflow_gate WHERE workflow_id = ? AND ordinal = ?`, runID, ordinal)
 	gate, err := scanGate(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -337,8 +338,23 @@ func (s *Store) Gate(ctx context.Context, runID string, ordinal int) (Gate, erro
 // person approve a graph built on an answer nobody gave.
 func (s *Store) OpenGate(ctx context.Context, runID string) (Gate, bool, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason
+		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason, applied
 		 FROM workflow_gate WHERE workflow_id = ? AND decision = 'waiting' ORDER BY ordinal LIMIT 1`, runID)
+	gate, err := scanGate(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Gate{}, false, nil
+	}
+	if err != nil {
+		return Gate{}, false, err
+	}
+	return gate, true, nil
+}
+
+// PendingGate includes approved expansions whose graph update has not committed.
+// OpenGate remains the public view of questions still awaiting an answer.
+func (s *Store) PendingGate(ctx context.Context, runID string) (Gate, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT workflow_id,ordinal,kind,proposal,digest,decision,asked_at,answered_at,hand,reason,applied
+ FROM workflow_gate WHERE workflow_id=? AND (decision='waiting' OR (kind='approve' AND decision='approved' AND COALESCE(applied,0)=0)) ORDER BY ordinal LIMIT 1`, runID)
 	gate, err := scanGate(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Gate{}, false, nil
@@ -352,7 +368,7 @@ func (s *Store) OpenGate(ctx context.Context, runID string) (Gate, bool, error) 
 // Gates lists every gate on a run, in the order they were asked.
 func (s *Store) Gates(ctx context.Context, runID string) ([]Gate, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason
+		`SELECT workflow_id, ordinal, kind, proposal, digest, decision, asked_at, answered_at, hand, reason, applied
 		 FROM workflow_gate WHERE workflow_id = ? ORDER BY ordinal`, runID)
 	if err != nil {
 		return nil, unavailable(err, "workflow: reading gates on %s", runID)
@@ -377,12 +393,13 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanGate(row scanner) (Gate, error) {
 	var (
+		applied                  sql.NullBool
 		out                      Gate
 		kind, proposal, decision string
 		askedAt, answeredAt      string
 	)
 	if err := row.Scan(&out.RunID, &out.Ordinal, &kind, &proposal, &out.Digest,
-		&decision, &askedAt, &answeredAt, &out.Hand, &out.Reason); err != nil {
+		&decision, &askedAt, &answeredAt, &out.Hand, &out.Reason, &applied); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Gate{}, err
 		}
@@ -397,6 +414,9 @@ func scanGate(row scanner) (Gate, error) {
 	}
 	if out.Proposal, err = decodeProposal(proposal); err != nil {
 		return Gate{}, err
+	}
+	if applied.Valid {
+		out.applied = &applied.Bool
 	}
 	out.Asked = parseStamp(askedAt)
 	out.Answered = parseStamp(answeredAt)
@@ -429,6 +449,27 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 		return unavailable(err, "workflow: applying gate %d on %s", gate.Ordinal, runID)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// Claim application in the same transaction as all graph edits. A failed
+	// edit rolls this marker back; a repeated application is a no-op.
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_gate SET applied=1 WHERE workflow_id=? AND ordinal=? AND decision='approved' AND digest=? AND COALESCE(applied,0)=0`, runID, gate.Ordinal, gate.Digest)
+	if err != nil {
+		return unavailable(err, "workflow: claiming gate application")
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return unavailable(err, "workflow: reading gate application count")
+	}
+	if n == 0 {
+		var already int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workflow_gate WHERE workflow_id=? AND ordinal=? AND decision='approved' AND digest=? AND applied=1`, runID, gate.Ordinal, gate.Digest).Scan(&already); err != nil {
+			return unavailable(err, "workflow: checking applied gate")
+		}
+		if already == 1 {
+			return nil
+		}
+		return contract.Fail(contract.FailurePermissionDenied, "workflow: gate approval does not match persisted decision")
+	}
 
 	for _, id := range gate.Proposal.Replaces {
 		// Pending is checked again, inside the transaction. The freeze means
