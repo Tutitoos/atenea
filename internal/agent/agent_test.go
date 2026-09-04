@@ -184,6 +184,22 @@ func TestFailedExitKeepsStderr(t *testing.T) {
 	}
 }
 
+// TestOversizedOutputReportsTheLimitBeforeDecode keeps a truncated stream from
+// being misreported as malformed JSON.
+func TestOversizedOutputReportsTheLimitBeforeDecode(t *testing.T) {
+	r, _ := runner(t, declared(stub(t, "cat >/dev/null\nhead -c 9000000 /dev/zero | tr '\\0' x")))
+	report, _, err := r.Run(t.Context(), "reader", task(), nil)
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("kind = %v, want unavailable: %v", contract.KindOf(err), err)
+	}
+	if !strings.Contains(contract.MessageOf(err), "output exceeds 8 MiB") {
+		t.Fatalf("error = %v, want the output limit before a decode error", err)
+	}
+	if report.Verdict != contract.VerdictIncomplete {
+		t.Fatalf("verdict = %v, want incomplete", report.Verdict)
+	}
+}
+
 // The trace base is a durable store, and what a child prints on its way out
 // reaches it through the reason. internal/metrics and internal/checkpoint
 // both redact provider text at that boundary; this one did not, so a
