@@ -72,10 +72,58 @@ func RedactRaw(raw string) string {
 // redactFragment conservatively removes malformed credential structures whose
 // end cannot be established, while preserving ordinary diagnostic suffixes.
 func redactFragment(text string) string {
-	if loc := structuredSecretRaw.FindStringIndex(text); loc != nil {
-		return redactText(text[:loc[0]]) + "[REDACTED MALFORMED CREDENTIAL]"
+	var out strings.Builder
+	for len(text) > 0 {
+		loc := structuredSecretRaw.FindStringIndex(text)
+		if loc == nil {
+			out.WriteString(redactText(text))
+			break
+		}
+		opener := loc[1] - 1
+		switch text[opener] {
+		case '"', '\'':
+			if end := quotedValueEnd(text[opener:]); end > 0 {
+				out.WriteString(redactText(text[:opener+end]))
+				text = text[opener+end:]
+				continue
+			}
+		case '{', '[':
+			decoder := json.NewDecoder(strings.NewReader(text[opener:]))
+			var value any
+			if decoder.Decode(&value) == nil {
+				out.WriteString(redactText(text[:opener]))
+				out.WriteString(`"[REDACTED]"`)
+				text = text[opener+int(decoder.InputOffset()):]
+				continue
+			}
+		}
+		out.WriteString(redactText(text[:loc[0]]))
+		out.WriteString("[REDACTED MALFORMED CREDENTIAL]")
+		break
 	}
-	return redactText(text)
+	return out.String()
+}
+
+// quotedValueEnd returns the end of one complete quoted value, including escapes.
+func quotedValueEnd(text string) int {
+	if len(text) < 2 {
+		return 0
+	}
+	quote, escaped := text[0], false
+	for i := 1; i < len(text); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if text[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if text[i] == quote {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // redactText removes credential patterns from decoded strings and plain diagnostics.
