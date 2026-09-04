@@ -21,6 +21,11 @@ func BenchmarkRecord(b *testing.B) {
 		Raw:            "provider completed successfully",
 	}
 
+	// Measure the steady full-buffer path, including overflow from the first
+	// timed call, independently of the benchmark calibration count.
+	for range s.limit {
+		s.Record(m)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
