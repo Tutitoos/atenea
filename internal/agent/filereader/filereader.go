@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/Tutitoos/atenea/internal/agent/readscope"
 )
 
 // maxFile is the ceiling on what this agent will read into a result. A file
@@ -108,7 +110,7 @@ func answer(in assignment) report {
 		}
 	}
 
-	body, err := os.ReadFile(name)
+	body, err := readscope.ReadFile(repositoryRoot(in), name, in.Task.Files)
 	if err != nil {
 		return report{
 			Verdict: "failed",

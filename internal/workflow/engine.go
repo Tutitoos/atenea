@@ -1562,6 +1562,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				// like it never started beside an agent that certainly did.
 				traceID := e.runner.NextID()
 				dispatch := agent.Dispatch{
+					Effects:  append([]contract.Effect{}, step.Permission.Effects...),
 					ID:       traceID,
 					TypeName: step.TypeName,
 					Task:     step.Task,

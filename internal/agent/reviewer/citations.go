@@ -48,12 +48,13 @@ package reviewer
 import (
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Tutitoos/atenea/internal/agent/readscope"
 )
 
 // citation is one falsifiable location claim pulled out of prose.
@@ -269,10 +270,10 @@ func checkCitation(in assignment, c citation, index map[string][]string) (citeOu
 	if root := repositoryRoot(in); root != "" && !filepath.IsAbs(name) {
 		name = filepath.Join(root, name)
 	}
-	body, err := os.ReadFile(name)
+	body, err := readscope.ReadFile(repositoryRoot(in), name, in.Task.Files)
 	if err != nil {
 		if alt, ok := resolveByBasename(c.Path, index); ok {
-			if altBody, altErr := os.ReadFile(alt); altErr == nil {
+			if altBody, altErr := readscope.ReadFile(repositoryRoot(in), alt, in.Task.Files); altErr == nil {
 				name, body, err = alt, altBody, nil
 			}
 		}

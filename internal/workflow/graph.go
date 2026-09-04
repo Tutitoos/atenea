@@ -482,6 +482,9 @@ func (p Plan) checkWriters(reach map[string]map[string]bool) error {
 		for i := range claims {
 			for j := i + 1; j < len(claims); j++ {
 				a, b := claims[i], claims[j]
+				if a.step == b.step {
+					continue
+				}
 				if !a.write && !b.write {
 					continue
 				}

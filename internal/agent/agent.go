@@ -33,6 +33,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -174,6 +175,8 @@ func (r *Runner) Declared() []string {
 // they are set by the caller that knows about it -- an agent never declares
 // itself a retry or a review of anything.
 type Dispatch struct {
+	// Effects is the explicit grant; nil preserves the declared default for direct callers.
+	Effects  []contract.Effect
 	TypeName string
 	Task     contract.Task
 	// Route carries the decision-router's selected execution surface. A child
@@ -232,6 +235,14 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	declared, err := r.resolve(d.TypeName)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
+	}
+	if d.Effects != nil {
+		for _, effect := range d.Effects {
+			if !slices.Contains(declared.Effects, effect) {
+				return contract.Report{}, contract.Assignment{}, contract.Fail(contract.FailurePermissionDenied, "dispatch effect %s exceeds declared type", effect)
+			}
+		}
+		declared.Effects = slices.Clone(d.Effects)
 	}
 	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID, d.BudgetUSD)
 	if err != nil {

@@ -34,9 +34,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Tutitoos/atenea/internal/agent/readscope"
 )
 
 // assignment is the half of the wire this agent reads.
@@ -159,7 +160,7 @@ func check(in assignment, s *subject) (findings, error) {
 	if root := repositoryRoot(in); root != "" && !filepath.IsAbs(name) {
 		name = filepath.Join(root, name)
 	}
-	body, err := os.ReadFile(name)
+	body, err := readscope.ReadFile(repositoryRoot(in), name, in.Task.Files)
 	if err != nil {
 		// The file the answer is about cannot be opened by the reviewer.
 		// That is the reviewer's shortfall, not proof the answer is wrong:
