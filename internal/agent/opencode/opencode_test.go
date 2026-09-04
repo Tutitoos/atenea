@@ -247,30 +247,29 @@ JSON
 	}
 }
 
+// TestRunKillsTheProcessAfterAnObservedCostOverrun requires termination before release.
 func TestRunKillsTheProcessAfterAnObservedCostOverrun(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "after-limit")
+	release := marker + "-release"
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
 	binary := executable(t, fmt.Sprintf(`
 cat <<'JSON'
 {"type":"text","part":{"id":"text-1","type":"text","text":"answer","time":{"end":2}}}
 {"type":"step_finish","part":{"type":"step-finish","cost":0.26}}
 JSON
-sleep 30
+while [ ! -f %s ]; do sleep 0.01; done
 printf reached > %s
-`, shellQuote(marker)))
+`, shellQuote(release), shellQuote(marker)))
 	runner, err := New(Options{Binary: binary, Timeout: time.Minute})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	started := time.Now()
 	answer, err := runner.Run(context.Background(), Request{Prompt: "answer", BudgetUSD: 0.25})
 	if contract.KindOf(err) != contract.FailureUnavailable {
 		t.Fatalf("Run error = %v, want unavailable", err)
 	}
 	if answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
 		t.Fatalf("spent = %+v, want observed cost 0.26", answer.Spent)
-	}
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
-		t.Fatalf("overrun stop took %s", elapsed)
 	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("process continued after limit; marker stat error = %v", statErr)
