@@ -414,6 +414,10 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return contract.Report{Spent: observed}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
 	}
+	if errors.Is(runErr, procgroup.ErrOutputLimit) {
+		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
+			"%v%s", runErr, note(stderr))
+	}
 
 	report, parseErr := decodeReport(stdout)
 	if parseErr != nil {
