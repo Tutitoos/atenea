@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// TestAuditPipeWriteIgnoresDeadline checks the regression scenario: audit pipe write ignores deadline.
 func TestAuditPipeWriteIgnoresDeadline(t *testing.T) {
 	read, write := io.Pipe()
 	outRead, outWrite := io.Pipe()
