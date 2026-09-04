@@ -29,3 +29,9 @@ R05 remains an external network-isolation limitation: allowed_domains filters di
 A session becomes ready only after initialized completes, independently of whether the server uses session IDs. Handshake waiters honor their contexts. Subsequent HTTP messages carry the supported protocol revision. SSE returns on the matching response event, with an 8 MiB per-message limit; JSON responses have the same limit.
 
 Stdio write admission is cancelable. Cancellation during a write closes the damaged session; cancellation while waiting for another writer does not. The supervisor retains process ownership, and effectful calls are not automatically retried. Process diagnostic/output capture is bounded at 8 MiB per stream and stops overflowing children.
+
+## 06: Historical precision and backups (A06, R01)
+
+Rollups retain a completion upper bound in an additive table. A period cutting that bound excludes the affected bucket and reports partial coverage; old summaries receive a conservative migration-time bound, and read-only older stores remain readable with unknown bounds explicitly omitted. Repeated compaction is idempotent.
+
+SQLite backups use VACUUM INTO and integrity_check, excluding WAL/SHM sidecars. DuckDB uses COPY FROM DATABASE into a fresh attached database after the caller settles and closes its metrics writer. An active DuckDB WAL makes backup fail explicitly for later retry: opening a second engine instance against a live in-process WAL produced a stale snapshot in the isolated test. Database snapshots never reuse hardlinks based on main-file mtime. Consistency is per database, not an atomic transaction across stores. Publication and rotation remain after successful copies and fsync.

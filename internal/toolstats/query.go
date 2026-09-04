@@ -176,24 +176,34 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 	if err != nil {
 		return out, err
 	}
-	folded, err := tx.QueryContext(ctx, `SELECT bucket,level,tool,provider,repository,calls,ok,refused,fail,cancel,dsum,samples,dmax,last FROM rollups WHERE bucket+86400000000>? AND bucket<=?`, q.Since.UnixMicro(), q.Until.UnixMicro())
+	var hasBounds int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='rollup_bounds'`).Scan(&hasBounds); err != nil {
+		return out, err
+	}
+	boundsColumn, boundsJoin := "NULL", ""
+	if hasBounds > 0 {
+		boundsColumn = "max_ended"
+		boundsJoin = " LEFT JOIN rollup_bounds USING(bucket,level,tool,provider,repository)"
+	}
+	folded, err := tx.QueryContext(ctx, `SELECT bucket,level,tool,provider,repository,calls,ok,refused,fail,cancel,dsum,samples,dmax,last,`+boundsColumn+` FROM rollups`+boundsJoin+` WHERE bucket+86400000000>? AND bucket<=?`, q.Since.UnixMicro(), q.Until.UnixMicro())
 	if err != nil {
 		return out, err
 	}
 	for folded.Next() {
 		var r Row
 		var bucket, last, maxDuration int64
-		if err = folded.Scan(&bucket, &r.Level, &r.Name, &r.Provider, &r.Repository, &r.Calls, &r.OK, &r.Refused, &r.Fail, &r.Cancel, &r.SumUS, &r.Samples, &maxDuration, &last); err != nil {
+		var maxEnded sql.NullInt64
+		if err = folded.Scan(&bucket, &r.Level, &r.Name, &r.Provider, &r.Repository, &r.Calls, &r.OK, &r.Refused, &r.Fail, &r.Cancel, &r.SumUS, &r.Samples, &maxDuration, &last, &maxEnded); err != nil {
 			_ = folded.Close()
 			return out, err
 		}
 		if !q.matches(r.Name, r.Provider, r.Repository) {
 			continue
 		}
-		if bucket < q.Since.UnixMicro() || bucket+86400000000 > q.Until.UnixMicro() {
+		if bucket < q.Since.UnixMicro() || bucket+86400000000 > q.Until.UnixMicro() || !maxEnded.Valid || maxEnded.Int64 > q.Until.UnixMicro() {
 			out.Coverage.Partial = true
 			rowFor(r.Tool).Summarized = true
-			out.Coverage.Notes = append(out.Coverage.Notes, fmt.Sprintf("Omitted summarized interval %s to %s: boundary detail unavailable.", time.UnixMicro(bucket).UTC().Format(time.RFC3339), time.UnixMicro(bucket+86400000000).UTC().Format(time.RFC3339)))
+			out.Coverage.Notes = append(out.Coverage.Notes, fmt.Sprintf("Omitted summarized interval %s to %s: boundary detail or completion bound unavailable.", time.UnixMicro(bucket).UTC().Format(time.RFC3339), time.UnixMicro(bucket+86400000000).UTC().Format(time.RFC3339)))
 			continue
 		}
 		r.Summarized = true

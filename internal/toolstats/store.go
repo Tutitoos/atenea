@@ -35,7 +35,13 @@ CREATE TABLE IF NOT EXISTS rollups (
  repository TEXT NOT NULL, calls INTEGER NOT NULL, ok INTEGER NOT NULL, refused INTEGER NOT NULL,
  fail INTEGER NOT NULL, cancel INTEGER NOT NULL, dsum INTEGER NOT NULL, samples INTEGER NOT NULL,
  dmax INTEGER NOT NULL, last INTEGER NOT NULL,
- PRIMARY KEY(bucket,level,tool,provider,repository));`
+ PRIMARY KEY(bucket,level,tool,provider,repository));
+CREATE TABLE IF NOT EXISTS rollup_bounds (
+ bucket INTEGER NOT NULL, level TEXT NOT NULL, tool TEXT NOT NULL, provider TEXT NOT NULL,
+ repository TEXT NOT NULL, max_ended INTEGER NOT NULL,
+ PRIMARY KEY(bucket,level,tool,provider,repository));
+INSERT OR IGNORE INTO rollup_bounds
+ SELECT bucket,level,tool,provider,repository,CAST(unixepoch('subsec')*1000000 AS INTEGER) FROM rollups;`
 
 // Store is lazy: constructing or reading it never creates a database or starts a provider.
 type Store struct {
@@ -285,6 +291,12 @@ func (s *Store) compact(db *sql.DB, now time.Time) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err = s.recoverOwners(tx, now, cut); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO rollup_bounds SELECT (at/86400000000)*86400000000,level,tool,provider,repository,max(ended)
+ FROM events WHERE at<? AND ended IS NOT NULL GROUP BY 1,2,3,4,5
+ ON CONFLICT(bucket,level,tool,provider,repository) DO UPDATE SET max_ended=max(max_ended,excluded.max_ended)`, cut)
+	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(`INSERT INTO rollups SELECT (at/86400000000)*86400000000,level,tool,provider,repository,
