@@ -37,7 +37,8 @@ func databaseKind(path string) string {
 
 // databaseSidecar excludes journals and coordination files from a standalone snapshot.
 func databaseSidecar(path string) bool {
-	if strings.HasSuffix(path, dbaccess.Suffix) {
+	if strings.HasSuffix(path, dbaccess.Suffix) &&
+		databaseKind(strings.TrimSuffix(path, dbaccess.Suffix)) != "" {
 		return true
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal", ".wal"} {

@@ -8,6 +8,8 @@ import (
 	"syscall"
 )
 
+const lockingSupported = true
+
 // tryLock acquires a nonblocking shared or exclusive descriptor lock.
 func tryLock(f *os.File, exclusive bool) (bool, error) {
 	mode := syscall.LOCK_SH

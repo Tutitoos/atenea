@@ -258,11 +258,18 @@ func TestSnapshotWaitsForDuckDBLeaseAndDoesNotPublishOnCancellation(t *testing.T
 	if err != nil || len(shots) != 1 || shots[0].Name != first.Name {
 		t.Fatalf("partial published or old copy rotated: %+v %v", shots, err)
 	}
+	userFile := "notes" + dbaccess.Suffix
+	if err = os.WriteFile(filepath.Join(source, userFile), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	second, err := s.Snapshot(t.Context(), time.Now().Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(filepath.Join(second.Path, "state.db"+dbaccess.Suffix)); !os.IsNotExist(err) {
 		t.Fatal("lock copied", err)
+	}
+	if body, readErr := os.ReadFile(filepath.Join(second.Path, userFile)); readErr != nil || string(body) != "keep" {
+		t.Fatalf("ordinary suffix file missing: %q %v", body, readErr)
 	}
 }

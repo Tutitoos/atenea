@@ -31,6 +31,9 @@ func TestLeaseProcessHelper(t *testing.T) {
 
 // TestExclusiveLeaseWaitsAcrossProcesses verifies kernel exclusion and cancellation.
 func TestExclusiveLeaseWaitsAcrossProcesses(t *testing.T) {
+	if !lockingSupported {
+		t.Skip("descriptor locking is unsupported on this platform")
+	}
 	path := filepath.Join(t.TempDir(), "db")
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestLeaseProcessHelper$")
 	cmd.Env = append(os.Environ(), "ATENEA_LEASE_FIXTURE="+path)
@@ -76,6 +79,9 @@ func TestExclusiveLeaseWaitsAcrossProcesses(t *testing.T) {
 
 // TestCanonicalAliasesShareExclusion covers goroutines opening the same file by different paths.
 func TestCanonicalAliasesShareExclusion(t *testing.T) {
+	if !lockingSupported {
+		t.Skip("descriptor locking is unsupported on this platform")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "db")
 	if err := os.WriteFile(path, nil, 0600); err != nil {
