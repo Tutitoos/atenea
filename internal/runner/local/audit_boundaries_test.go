@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestAuditScopeThroughDirectorySymlink verifies that traversal cannot escape through a directory symlink.
 func TestAuditScopeThroughDirectorySymlink(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

@@ -20,6 +20,7 @@ import (
 // clients should never fail because instrumentation delayed their first byte.
 const fixtureTimeout = 15 * time.Second
 
+// executable writes a deterministic fake OpenCode binary for adapter tests.
 func executable(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "opencode")
