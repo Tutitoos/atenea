@@ -15,6 +15,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/toolstats"
 )
 
+// TestStatsCalendarPeriods checks local day, week, month, and daylight-saving boundaries.
 func TestStatsCalendarPeriods(t *testing.T) {
 	loc, err := time.LoadLocation("Europe/Madrid")
 	if err != nil {
@@ -46,6 +47,8 @@ func TestStatsCalendarPeriods(t *testing.T) {
 		t.Fatal("watch month did not advance")
 	}
 }
+
+// TestStatsRejectsInvalidOptions rejects incompatible periods and output flags.
 func TestStatsRejectsInvalidOptions(t *testing.T) {
 	for _, args := range [][]string{{"--today", "--week"}, {"--month", "--since", "1h"}, {"--watch", "--json"}, {"--color", "bad"}, {"clear"}} {
 		if _, err := parseStats(args); err == nil {
@@ -61,6 +64,8 @@ func TestStatsRejectsInvalidOptions(t *testing.T) {
 		t.Fatal("watch accepted redirected output")
 	}
 }
+
+// TestStatsRenderingAndColors verifies table alignment, narrow layouts, and ANSI policy.
 func TestStatsRenderingAndColors(t *testing.T) {
 	at := time.Now()
 	s := toolstats.Snapshot{At: at, Query: toolstats.Query{Until: at}, Rows: []toolstats.Row{{Tool: toolstats.Tool{Level: "request", Name: strings.Repeat("long", 20), Provider: "p"}, Calls: 1, Fail: 1}, {Tool: toolstats.Tool{Level: "request", Name: "unused", Provider: "p"}}}}
@@ -87,6 +92,8 @@ func TestStatsRenderingAndColors(t *testing.T) {
 		t.Fatal("NO_COLOR ignored")
 	}
 }
+
+// TestStatsDiskAndSocketDoNotGenerateCalls checks that statistics reads do not create activity.
 func TestStatsDiskAndSocketDoNotGenerateCalls(t *testing.T) {
 	path, _ := isolated(t)
 	privateStatsFixture(t, path)
@@ -131,6 +138,8 @@ func TestStatsDiskAndSocketDoNotGenerateCalls(t *testing.T) {
 		t.Fatal("stats created new history")
 	}
 }
+
+// TestStatsJSONAndUsedFilter verifies JSON contains only observed rows when requested.
 func TestStatsJSONAndUsedFilter(t *testing.T) {
 	path, _ := isolated(t)
 	privateStatsFixture(t, path)
@@ -158,6 +167,8 @@ func TestStatsJSONAndUsedFilter(t *testing.T) {
 		t.Fatalf("%+v", out.Rows)
 	}
 }
+
+// TestStatsNoDatabaseCreation checks that querying an empty store creates no files.
 func TestStatsNoDatabaseCreation(t *testing.T) {
 	path, _ := isolated(t)
 	privateStatsFixture(t, path)
@@ -179,6 +190,7 @@ func TestStatsNoDatabaseCreation(t *testing.T) {
 	}
 }
 
+// TestStatsCountsCLIValidationWithoutDispatch records invalid capabilities without provider attempts.
 func TestStatsCountsCLIValidationWithoutDispatch(t *testing.T) {
 	path, _ := isolated(t)
 	privateStatsFixture(t, path)

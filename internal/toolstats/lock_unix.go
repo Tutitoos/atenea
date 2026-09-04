@@ -27,3 +27,24 @@ func lockOwner(path string) (*os.File, error) {
 func ownerBusy(err error) bool {
 	return errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN)
 }
+
+// inspectOwner opens only an existing lock and holds a shared lock when no writer owns it.
+func inspectOwner(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = unix.EINVAL
+	}
+	if err == nil {
+		err = unix.Flock(fd, unix.LOCK_SH|unix.LOCK_NB)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}

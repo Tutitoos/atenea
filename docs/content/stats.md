@@ -116,9 +116,13 @@ Each writer holds an exclusive operating-system lock under a unique identifier.
 Maintenance recovers unfinished events only when their writer no longer holds the
 lock. Other live service or CLI processes retain their active events regardless of
 age. Events from older versions without writer identities are recovered after the
-seven-day retention boundary. Recovery runs during normal writes, not during
-statistics queries; a stopped service's persisted snapshot may still contain
-unrecovered active events until recording resumes.
+seven-day retention boundary. Persistent recovery runs during normal writes. Statistics queries also inspect
+existing writer locks read-only: provably closed writers are classified as
+interrupted in the returned snapshot, even while the service is stopped. Queries
+never create missing lock files or persist recovery changes. Missing lock files
+cannot prove writer death, so those records retain their stored state. Shared
+inspection locks are acquired before opening the data snapshot, allowing normal
+writer completion to be observed without falsely reporting an interruption.
 
 Recovered events appear under `FAIL` with diagnostic code `recording_interrupted`.
 This describes a failure to record a result, **not proof that the underlying tool

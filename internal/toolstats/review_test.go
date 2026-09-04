@@ -92,6 +92,26 @@ func TestCrashRecoveryProtectsLiveWritersAndCompactsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = cmd.Wait()
+	// The service is not restarted and no maintenance or write runs here.
+	reader := New(s.Path)
+	for i := 0; i < 2; i++ {
+		observed := snapshot(t, reader, Query{})
+		r := total(t, observed, "request")
+		if r.Active != 0 || r.Calls != 2 || r.Fail != 1 || r.OK != 1 || r.P95US != nil || r.Samples != 1 || !observed.Coverage.Partial {
+			t.Fatalf("read-only classification: %+v %+v", r, observed.Coverage)
+		}
+		if len(observed.Errors) != 1 || observed.Errors[0].Code != "recording_interrupted" {
+			t.Fatalf("diagnostics: %+v", observed.Errors)
+		}
+		var unfinished int
+		if err = s.db.QueryRow(`SELECT count(*) FROM events WHERE tool='crashed' AND ended IS NULL AND outcome='' AND duration=0`).Scan(&unfinished); err != nil || unfinished != 1 {
+			t.Fatalf("read mutated event: %d %v", unfinished, err)
+		}
+	}
+	filtered := snapshot(t, reader, Query{Tool: "current"})
+	if r := total(t, filtered, "request"); r.Calls != 1 || r.OK != 1 || r.P95US == nil || filtered.Coverage.Partial {
+		t.Fatalf("unrelated filter contaminated: %+v", filtered)
+	}
 	for i := 0; i < 2; i++ {
 		if err = s.compact(s.db, time.Now()); err != nil {
 			t.Fatal(err)
@@ -244,5 +264,39 @@ func TestSQLiteResultCodeRetries(t *testing.T) {
 	cancel()
 	if _, err = s.Read(ctx, Query{}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel: %v", err)
+	}
+}
+
+// TestReadDoesNotCreateMissingWriterLocks preserves unknown ownership without writes.
+func TestReadDoesNotCreateMissingWriterLocks(t *testing.T) {
+	s := testStore(t)
+	s.Begin(context.Background(), Event{Level: "request", Tool: "unknown"})
+	lockPath := s.Path + "." + s.owner + ".lock"
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	out := snapshot(t, New(s.Path), Query{})
+	if r := total(t, out, "request"); r.Active != 1 || r.Calls != 0 {
+		t.Fatal(r)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatal("read created missing writer lock")
+	}
+}
+
+// TestReadFinishedWriterIsSuccessful ensures writer shutdown does not invent a failure.
+func TestReadFinishedWriterIsSuccessful(t *testing.T) {
+	s := testStore(t)
+	_, c := s.Begin(context.Background(), Event{Level: "request", Tool: "finished"})
+	c.End(nil)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := snapshot(t, New(s.Path), Query{})
+	if r := total(t, out, "request"); r.OK != 1 || r.Fail != 0 || r.Active != 0 || r.P95US == nil {
+		t.Fatal(r)
 	}
 }

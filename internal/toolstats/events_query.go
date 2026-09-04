@@ -16,10 +16,20 @@ func eventArgs(q Query) []any {
 
 // readEvents returns only grouped counters, exact percentiles, and five diagnostics.
 // SQLite sorts on disk when necessary; no per-event duration slices enter Go memory.
-func readEvents(ctx context.Context, tx *sql.Tx, q Query, grouped map[string]*Row, out *Snapshot) (map[string]*int64, error) {
+func readEvents(ctx context.Context, tx *sql.Tx, q Query, grouped map[string]*Row, out *Snapshot, dead string) (map[string]*int64, error) {
 	args := append([]any{q.Until.UnixMicro()}, eventArgs(q)...)
 	prefix := `WITH selected AS (SELECT *,ended IS NOT NULL AND ended<=? AS complete FROM events WHERE ` + eventFilter + `) `
-	// The completion timestamp precedes the filter's positional arguments.
+	if dead != "[]" {
+		args = append([]any{dead, q.Until.UnixMicro()}, eventArgs(q)...)
+		prefix = `WITH dead AS (SELECT value AS owner FROM json_each(?)), selected AS (
+ SELECT id,parent,level,tool,provider,repository,at,
+ CASE WHEN interrupted THEN -1 ELSE duration END AS duration,
+ CASE WHEN interrupted THEN 'fail' ELSE outcome END AS outcome,
+ CASE WHEN interrupted THEN 'recording_interrupted' ELSE code END AS code,
+ CASE WHEN interrupted THEN 'Writer is no longer active; execution outcome and duration are unknown. Read-only classification.' ELSE reason END AS reason,
+ interrupted OR (ended IS NOT NULL AND ended<=?) AS complete
+ FROM (SELECT *,ended IS NULL AND id IN (SELECT event FROM event_owners JOIN dead USING(owner)) AS interrupted FROM events WHERE ` + eventFilter + `)) `
+	}
 
 	rows, err := tx.QueryContext(ctx, prefix+`SELECT level,tool,provider,
  sum(complete),sum(complete AND outcome='ok'),sum(complete AND outcome='refused'),
@@ -40,6 +50,10 @@ func readEvents(ctx context.Context, tx *sql.Tx, q Query, grouped map[string]*Ro
 		stamp := time.UnixMicro(last)
 		r.Last = &stamp
 		grouped[key(r.Tool)] = &r
+		if r.Summarized && dead != "[]" {
+			out.Coverage.Partial = true
+			out.Coverage.Notes = append(out.Coverage.Notes, "Read-only writer inspection detected interrupted recording; FAIL describes the missing result, not a proven tool failure. Unknown durations are excluded; storage is unchanged.")
+		}
 	}
 	err = rows.Err()
 	_ = rows.Close()

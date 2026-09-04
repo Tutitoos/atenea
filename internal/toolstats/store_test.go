@@ -11,6 +11,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// testStore creates an isolated private database path and closes its writer after the test.
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
@@ -21,6 +22,8 @@ func testStore(t *testing.T) *Store {
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
+
+// snapshot reads activity and fails the test on storage errors.
 func snapshot(t *testing.T, s *Store, q Query) Snapshot {
 	t.Helper()
 	out, err := s.Read(context.Background(), q, nil)
@@ -29,6 +32,8 @@ func snapshot(t *testing.T, s *Store, q Query) Snapshot {
 	}
 	return out
 }
+
+// total retrieves independent request or attempt totals from a snapshot.
 func total(t *testing.T, s Snapshot, level string) Row {
 	t.Helper()
 	for _, r := range s.Totals {
@@ -39,6 +44,8 @@ func total(t *testing.T, s Snapshot, level string) Row {
 	t.Fatalf("missing %s total", level)
 	return Row{}
 }
+
+// TestCallsAreLinkedAndFinalizedOnlyOnce verifies parent identifiers and idempotent completion.
 func TestCallsAreLinkedAndFinalizedOnlyOnce(t *testing.T) {
 	s := testStore(t)
 	ctx, request := s.Begin(context.Background(), Event{Level: "request", Tool: "code.search", Provider: "atenea", Repository: "app"})
@@ -60,6 +67,8 @@ func TestCallsAreLinkedAndFinalizedOnlyOnce(t *testing.T) {
 		t.Fatalf("parents=%d err=%v", parents, err)
 	}
 }
+
+// TestOutcomesFiltersAndActive checks result categories, filters, and active-call accounting.
 func TestOutcomesFiltersAndActive(t *testing.T) {
 	s := testStore(t)
 	errors := []error{nil, contract.Fail(contract.FailurePermissionDenied, "denied"), contract.Fail(contract.FailureTimeout, "timeout"), context.Canceled}
@@ -81,6 +90,8 @@ func TestOutcomesFiltersAndActive(t *testing.T) {
 	}
 	active.End(nil)
 }
+
+// TestReadDoesNotCreateStateAndCorruptionIsAnError distinguishes empty storage from unreadable data.
 func TestReadDoesNotCreateStateAndCorruptionIsAnError(t *testing.T) {
 	s := testStore(t)
 	snapshot(t, s, Query{})
@@ -94,6 +105,8 @@ func TestReadDoesNotCreateStateAndCorruptionIsAnError(t *testing.T) {
 		t.Fatal("corruption reported as zero")
 	}
 }
+
+// TestCompactionRestartAndBoundaryCoverage checks repeated rollups and partial interval reporting.
 func TestCompactionRestartAndBoundaryCoverage(t *testing.T) {
 	s := testStore(t)
 	at := time.Now().UTC().AddDate(0, 0, -12).Truncate(24 * time.Hour).Add(time.Hour)
@@ -119,6 +132,8 @@ func TestCompactionRestartAndBoundaryCoverage(t *testing.T) {
 		t.Fatalf("partial %+v", partial)
 	}
 }
+
+// TestCatalogUnknownAndUnused verifies discovery state and zero-activity catalog entries.
 func TestCatalogUnknownAndUnused(t *testing.T) {
 	s := testStore(t)
 	s.Remember("p", []string{"raw.p.a", "raw.p.b"})
@@ -143,6 +158,8 @@ func TestCatalogUnknownAndUnused(t *testing.T) {
 		t.Fatal("unused tools present")
 	}
 }
+
+// TestPercentileAndControlCharacters checks duration means and sanitization of terminal controls.
 func TestPercentileAndControlCharacters(t *testing.T) {
 	r := Row{Calls: 4, OK: 4, Samples: 4, SumUS: 106}
 	calculate(&r)
@@ -155,6 +172,7 @@ func TestPercentileAndControlCharacters(t *testing.T) {
 	}
 }
 
+// TestConcurrentStoresAndReaders checks that parallel writers preserve counts without dropped events.
 func TestConcurrentStoresAndReaders(t *testing.T) {
 	s := testStore(t)
 	other := New(s.Path)

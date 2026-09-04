@@ -11,6 +11,7 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// TestLegacyCutoffAndBoundarySummaries verifies historical cutoffs and incomplete summary intervals.
 func TestLegacyCutoffAndBoundarySummaries(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "base.duckdb")
