@@ -492,16 +492,24 @@ func (c *connection) Close() error {
 // progress. DuckDB allows a single writer, which is the shape the design wanted
 // anyway; the wait is what turns that from a crash into a queue.
 //
-// Ordinary connections share access; snapshots require an exclusive lease.
-// The driver still coordinates concurrent ordinary connections. The exclusive lock
-// DuckDB takes is held by the process, not by the handle: two connections to
-// the same file from one Atenea share its instance and both answer, which is
-// what lets several goroutines of a runWave read baselines at once. The retry
-// loop below is for the other Atenea on the machine, and a mutex here could
-// not have helped with that one.
+// Ordinary connections use a shared cross-process lease; snapshots require an
+// exclusive one. Package dbaccess also queues connections to the same canonical
+// path within this process because DuckDB does not reliably accept concurrent
+// handles for one file. The retry loop below waits for another Atenea process.
 func (s *Store) connect(ctx context.Context) (*connection, error) {
+	releaseLocal, err := dbaccess.AcquireConnection(ctx, s.path)
+	if err != nil {
+		return nil, err
+	}
+	localHeld := true
+	defer func() {
+		if localHeld {
+			_ = releaseLocal()
+		}
+	}()
+
 	waitCtx, cancel := context.WithTimeout(ctx, s.lockWait)
-	release, err := dbaccess.Acquire(waitCtx, s.path, false)
+	releaseFile, err := dbaccess.Acquire(waitCtx, s.path, false)
 	cancel()
 	if err != nil {
 		return nil, err
@@ -509,9 +517,10 @@ func (s *Store) connect(ctx context.Context) (*connection, error) {
 	acquired := false
 	defer func() {
 		if !acquired {
-			_ = release()
+			_ = releaseFile()
 		}
 	}()
+	release := func() error { return errors.Join(releaseFile(), releaseLocal()) }
 
 	deadline := time.Now().Add(s.lockWait)
 	backoff := 5 * time.Millisecond
@@ -524,6 +533,7 @@ func (s *Store) connect(ctx context.Context) (*connection, error) {
 			db.SetMaxOpenConns(1)
 			if err = db.PingContext(ctx); err == nil {
 				acquired = true
+				localHeld = false
 				return &connection{DB: db, release: release}, nil
 			}
 			_ = db.Close()
