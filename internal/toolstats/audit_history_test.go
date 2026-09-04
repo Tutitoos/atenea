@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// TestAuditCompactionChangesHistoricalCounts checks the regression scenario: audit compaction changes historical counts.
 func TestAuditCompactionChangesHistoricalCounts(t *testing.T) {
 	s := testStore(t)
 	at := time.Now().UTC().AddDate(0, 0, -12).Truncate(24 * time.Hour).Add(23*time.Hour + 59*time.Minute)
@@ -31,5 +32,22 @@ func TestAuditCompactionChangesHistoricalCounts(t *testing.T) {
 	}
 	if total(t, snapshot(t, s, q), "request").Calls != after.Calls {
 		t.Fatal("compaction not idempotent")
+	}
+}
+
+// TestUsedFilterPreservesOmittedRollupUncertainty keeps totals honest after hiding unused rows.
+func TestUsedFilterPreservesOmittedRollupUncertainty(t *testing.T) {
+	out := Snapshot{Query: Query{Used: true}, Coverage: Coverage{Partial: true}}
+	grouped := map[string]*Row{
+		"omitted": {Tool: Tool{Level: "request", Name: "omitted"}, Summarized: true},
+		"used":    {Tool: Tool{Level: "request", Name: "used"}, Calls: 1, OK: 1},
+	}
+	finalize(&out, grouped)
+	got := total(t, out, "request")
+	if !got.Summarized || got.P95US != nil {
+		t.Fatalf("false precision: %+v", got)
+	}
+	if len(out.Rows) != 1 {
+		t.Fatal("used filter changed")
 	}
 }

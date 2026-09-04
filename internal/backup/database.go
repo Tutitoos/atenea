@@ -11,6 +11,8 @@ import (
 
 	_ "github.com/marcboeker/go-duckdb/v2"
 	_ "modernc.org/sqlite"
+
+	"github.com/Tutitoos/atenea/internal/dbaccess"
 )
 
 // databaseKind inspects a header, not an extension or arbitrary file contents.
@@ -33,8 +35,12 @@ func databaseKind(path string) string {
 	return ""
 }
 
+// databaseSidecar excludes journals and coordination files from a standalone snapshot.
 func databaseSidecar(path string) bool {
-	for _, suffix := range []string{"-wal", "-shm", ".wal"} {
+	if strings.HasSuffix(path, dbaccess.Suffix) {
+		return true
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal", ".wal"} {
 		if strings.HasSuffix(path, suffix) && databaseKind(strings.TrimSuffix(path, suffix)) != "" {
 			return true
 		}
@@ -46,8 +52,13 @@ func databaseSidecar(path string) bool {
 // hardlinks mutable databases or copies their journal at a different instant.
 func snapshotDatabase(ctx context.Context, kind, source, destination string) error {
 	if kind == "duckdb" {
+		release, err := dbaccess.Acquire(ctx, source, true)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = release() }()
 		// Separate DuckDB instances cannot safely snapshot a live in-process WAL.
-		// The service settles/closes its metrics handle before commissioning backup.
+		// The exclusive access lease prevents a new Atenea connection until the copy closes.
 		if _, err := os.Stat(source + ".wal"); err == nil {
 			return fmt.Errorf("backup: DuckDB writer is active; checkpoint and close before retrying")
 		} else if !os.IsNotExist(err) {

@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Tutitoos/atenea/internal/dbaccess"
 )
 
+// TestDatabaseSnapshotsAreSelfContained checks the regression scenario: database snapshots are self contained.
 func TestDatabaseSnapshotsAreSelfContained(t *testing.T) {
 	for _, kind := range []string{"sqlite", "duckdb"} {
 		t.Run(kind, func(t *testing.T) {
@@ -98,6 +101,7 @@ func TestDatabaseSnapshotsAreSelfContained(t *testing.T) {
 	}
 }
 
+// TestSQLiteSnapshotDuringTransactionalWrites checks the regression scenario: sqlite snapshot during transactional writes.
 func TestSQLiteSnapshotDuringTransactionalWrites(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source.db")
@@ -148,6 +152,7 @@ func TestSQLiteSnapshotDuringTransactionalWrites(t *testing.T) {
 	}
 }
 
+// TestLiveDuckDBWALIsRefused checks the regression scenario: live duck dbwalis refused.
 func TestLiveDuckDBWALIsRefused(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("duckdb", source)
@@ -160,5 +165,104 @@ func TestLiveDuckDBWALIsRefused(t *testing.T) {
 	}
 	if err = snapshotDatabase(t.Context(), "duckdb", source, filepath.Join(t.TempDir(), "copy.db")); err == nil {
 		t.Fatal("live WAL snapshot accepted")
+	}
+}
+
+// TestSQLiteRollbackJournalIsNotRestored excludes the live rollback journal from snapshots.
+func TestSQLiteRollbackJournalIsNotRestored(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "state.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`PRAGMA journal_mode=DELETE; CREATE TABLE items (value INTEGER); INSERT INTO items VALUES(1)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE items SET value=2`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(path + "-journal"); err != nil {
+		t.Fatal("fixture lacks journal", err)
+	}
+	s, err := New(Options{Source: source, Dir: filepath.Join(root, "copies"), Keep: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := s.Snapshot(t.Context(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(shot.Path, "state.db-journal")); !os.IsNotExist(err) {
+		t.Fatal("journal included", err)
+	}
+	restored, err := sql.Open("sqlite", filepath.Join(shot.Path, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var value int
+	if err = restored.QueryRow(`SELECT value FROM items`).Scan(&value); err != nil || value != 1 {
+		t.Fatalf("snapshot: %d %v", value, err)
+	}
+}
+
+// TestSnapshotWaitsForDuckDBLeaseAndDoesNotPublishOnCancellation preserves older backups.
+func TestSnapshotWaitsForDuckDBLeaseAndDoesNotPublishOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "state.db")
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE items(value INTEGER);INSERT INTO items VALUES(1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Options{Source: source, Dir: filepath.Join(root, "copies"), Keep: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Snapshot(t.Context(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := dbaccess.Acquire(t.Context(), path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, err = s.Snapshot(ctx, time.Now().Add(time.Minute))
+	_ = release()
+	if err == nil {
+		t.Fatal("snapshot ignored active writer")
+	}
+	shots, err := s.List()
+	if err != nil || len(shots) != 1 || shots[0].Name != first.Name {
+		t.Fatalf("partial published or old copy rotated: %+v %v", shots, err)
+	}
+	second, err := s.Snapshot(t.Context(), time.Now().Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(second.Path, "state.db"+dbaccess.Suffix)); !os.IsNotExist(err) {
+		t.Fatal("lock copied", err)
 	}
 }
