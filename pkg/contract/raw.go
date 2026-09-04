@@ -58,6 +58,7 @@ func RedactRaw(raw string) string {
 	return boundRaw(redactText(text))
 }
 
+// redactText removes credential patterns from decoded strings and plain diagnostics.
 func redactText(text string) string {
 	text = quotedSecretRaw.ReplaceAllString(text, `${1}"[REDACTED]"`)
 	text = privateKeyRaw.ReplaceAllString(text, "[REDACTED PRIVATE KEY]")
@@ -66,6 +67,7 @@ func redactText(text string) string {
 	return queryRaw.ReplaceAllString(text, "${1}[REDACTED]")
 }
 
+// redactJSON removes credential fields recursively from decoded diagnostic data.
 func redactJSON(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
