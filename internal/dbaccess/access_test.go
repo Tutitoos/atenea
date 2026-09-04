@@ -133,3 +133,19 @@ func TestConnectionsQueueWithinProcess(t *testing.T) {
 	}
 	_ = second()
 }
+
+// TestCanceledConnectionCannotAcquireAReadyGate covers simultaneous select cases.
+func TestCanceledConnectionCannotAcquireAReadyGate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	for range 1000 {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		release, err := AcquireConnection(ctx, path)
+		if release != nil {
+			_ = release()
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled acquisition returned %v", err)
+		}
+	}
+}

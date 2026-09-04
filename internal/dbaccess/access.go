@@ -81,6 +81,10 @@ func AcquireConnection(ctx context.Context, path string) (func() error, error) {
 		return nil, ctx.Err()
 	case <-local.gate:
 	}
+	if err := ctx.Err(); err != nil {
+		releaseLocal(true)
+		return nil, err
+	}
 	var once sync.Once
 	return func() error {
 		once.Do(func() { releaseLocal(true) })
