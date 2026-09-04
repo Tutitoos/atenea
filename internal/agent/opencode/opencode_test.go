@@ -279,8 +279,17 @@ printf reached > %s
 	if answer.Spent.USD == nil || *answer.Spent.USD != 0.26 {
 		t.Fatalf("spent = %+v, want observed cost 0.26", answer.Spent)
 	}
-	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
-		t.Fatalf("process continued after limit; marker stat error = %v", statErr)
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatalf("release child: %v", err)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(marker); statErr == nil {
+			t.Fatal("process continued after limit and reached the release marker")
+		} else if !os.IsNotExist(statErr) {
+			t.Fatalf("stat marker: %v", statErr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
