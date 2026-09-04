@@ -680,3 +680,27 @@ func TestNoCommissionOutsideAWorkflow(t *testing.T) {
 		t.Errorf("a dispatch outside a workflow carried a commission:\n%s", raw)
 	}
 }
+
+func TestInvalidChargeDoesNotSurviveRejection(t *testing.T) {
+	for _, spent := range []string{`{"usd":-10,"priced_by":"fixture"}`, `{"usd":0.2}`, `{"input_tokens":-1}`} {
+		for _, exit := range []string{"", "\nexit 1"} {
+			command := stub(t, "cat >/dev/null\necho '{\"result\":{\"path\":\"x\"},\"verdict\":\"ok\",\"spent\":"+spent+"}'"+exit)
+			r, _ := runner(t, declared(command))
+			report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task()})
+			if err == nil {
+				t.Fatal("invalid charge accepted")
+			}
+			if report.Spent.Measured() || report.Spent.Validate() != nil {
+				t.Fatalf("invalid charge survived rejection: %+v %v", report.Spent, err)
+			}
+		}
+	}
+}
+
+func TestValidChargeSurvivesInvalidResult(t *testing.T) {
+	r, _ := runner(t, declared(answers(t, `{"result":{"wrong":"x"},"verdict":"ok","spent":{"usd":0.2,"priced_by":"fixture"}}`)))
+	report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task()})
+	if err == nil || report.Spent.USD == nil || *report.Spent.USD != 0.2 {
+		t.Fatalf("valid charge lost: %+v %v", report.Spent, err)
+	}
+}
