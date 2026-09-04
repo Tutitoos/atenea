@@ -64,11 +64,11 @@ Integration review added a regression for credentials embedded inside decoded JS
 | B01, B11 | PR 02 | Exact effect grants and shipped reader scope covered |
 | B02, B03, B06–B08 | PR 03 | Reservation, retry, fallback and reported failure cost covered |
 | B05, B09, B13 | PR 04, 08 | File containment, returned web destinations and malformed protocol covered |
-| B12 | PR 07 | Isolated deny-all finalization tested; actual installed config inspected |
+| B12 | PR 07 | Catalog/documentation agreement regression |
 | R01 | PR 06 | Engine snapshots tested; live DuckDB WAL explicitly refused |
 | R02 | PR 05 | Bounded output and cancellation covered |
 | R03 | PR 02, 08 | Current guards strengthened; OS sandbox designed, runtime deferred |
-| R04 | PR 07 | Catalog/documentation agreement regression |
+| R04 | PR 07 | Isolated deny-all finalization tested; actual installed config inspected; no paid turn |
 | R05 | PR 04, 08 | Output gate strengthened; pre-connection isolation remains external |
 | R06 | PR 07 | Effects investigated and local override proposed, not applied |
 
