@@ -118,7 +118,7 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 				if err := os.WriteFile(marker, []byte(strconv.Itoa(verified.SnapshotID)), 0600); err != nil {
 					return nil, false, contract.Fail(contract.FailureUnavailable, "record failed freshness verification: %v", err)
 				}
-				return nil, false, contract.Fail(contract.FailureUnavailable, "published graph could not verify source freshness; results withheld")
+				return nil, false, contract.Fail(contract.FailureUnavailable, "published graph could not verify source freshness (expected generation %d, served %d); results withheld", generation, verified.SnapshotID)
 			}
 			if err := checkGraphReady(verified, req.Repository.Path); err != nil {
 				return nil, false, err

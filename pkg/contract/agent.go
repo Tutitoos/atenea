@@ -332,6 +332,7 @@ type Outcome struct {
 // It lives outside Result so existing capability output contracts stay intact.
 type QueryEvidence struct {
 	Freshness         string `json:"freshness,omitempty"`
+	ContentGeneration int    `json:"content_generation,omitempty"`
 	Tool              string `json:"tool"`
 	SnapshotID        int    `json:"snapshot_id,omitempty"`
 	Completeness      string `json:"completeness,omitempty"`

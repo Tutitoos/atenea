@@ -597,6 +597,28 @@ type statusAnswer struct {
 // reuses this very same decoded value as its own answer (runGraphStatus)
 // rather than calling the tool a second time.
 func (r *Runner) fetchStatus(ctx context.Context, sess Session) (*statusResult, error) {
+	// A publication can overlap the provider's inventory probe. Retry only
+	// this read, never turn mismatched evidence into another full rebuild.
+	for attempt := 0; attempt < 3; attempt++ {
+		status, err := r.fetchStatusOnce(ctx, sess)
+		if err != nil {
+			return nil, err
+		}
+		if status == nil || status.ContentFreshness == nil || status.ContentFreshness.Generation == 0 || status.ContentFreshness.Generation == status.SnapshotID {
+			return status, nil
+		}
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(25 * time.Millisecond):
+			}
+		}
+	}
+	return nil, contract.Fail(contract.FailureUnavailable, "kivgraph generation changed during freshness checks; results withheld; retry when publication settles")
+}
+
+func (r *Runner) fetchStatusOnce(ctx context.Context, sess Session) (*statusResult, error) {
 	text, err := sess.Call(ctx, toolStatus, map[string]any{})
 	if err != nil {
 		return nil, err
@@ -1859,6 +1881,8 @@ func (r *Runner) failureFor(err error, ctx context.Context) *contract.Failure {
 	}
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "source inventory changed during indexing"):
+		return contract.Fail(contract.FailureUnavailable, "kivgraph source files changed during indexing; no fresh generation published; pause edits before retrying")
 	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"),
 		strings.Contains(lower, "econnrefused"), strings.Contains(lower, "closed pipe"),
 		strings.Contains(lower, "file already closed"), strings.Contains(lower, "broken pipe"):
