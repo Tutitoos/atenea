@@ -227,6 +227,21 @@ def _version():
         return "0"
 
 
+def valid_request(message):
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+        return False
+    if "id" in message:
+        request_id = message["id"]
+        if isinstance(request_id, bool) or not isinstance(request_id, (str, int, float, type(None))):
+            return False
+    return "params" not in message or isinstance(message["params"], dict)
+
+
+def write_error(code, message):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}}) + "\n")
+    sys.stdout.flush()
+
+
 def main():
     for line in sys.stdin:
         line = line.strip()
@@ -235,11 +250,14 @@ def main():
         try:
             message = json.loads(line)
         except ValueError:
-            message = None
-        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
             try:
-                sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}) + "\n")
-                sys.stdout.flush()
+                write_error(-32700, "Parse error")
+            except (BrokenPipeError, ValueError):
+                break
+            continue
+        if not valid_request(message):
+            try:
+                write_error(-32600, "Invalid Request")
             except (BrokenPipeError, ValueError):
                 break
             continue

@@ -20,6 +20,6 @@ Codex and OpenCode preserve reported usage on failure. OpenCode finalization use
 
 ## 04: Files and web (B05, B09, B13, R05)
 
-Explicit local scopes resolve symlink components before traversal and file reads use an OS-rooted handle. Extract and crawl reject prohibited returned destinations without returning content. Crawl also rejects pages outside the seed hostname. Malformed helper requests receive Invalid Request and do not terminate the protocol loop.
+Explicit local scopes resolve symlink components before traversal and file reads use an OS-rooted handle. Extract and crawl reject prohibited returned destinations without returning content. Crawl also rejects pages outside the seed hostname. The helper distinguishes JSON parse errors from syntactically valid invalid requests, validates IDs and object-valued params before dispatch, and keeps the protocol loop alive after either error.
 
 R05 remains an external network-isolation limitation: allowed_domains filters discovery but is not a DNS/redirect/browser-network sandbox. The output gate cannot undo requests already made by Scrapling. Tests use controlled resolver/session responses; upstream browser subresources are not certified. Use a network-isolated provider environment when pre-connection denial is required.

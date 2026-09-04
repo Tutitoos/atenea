@@ -5,10 +5,23 @@ from pathlib import Path
 
 helper = Path(__file__).with_name("atenea_spider.py")
 hello = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-for malformed in ["null", "1", "true", "[]", "{", '{"jsonrpc":"2.0","method":1}']:
-    result = subprocess.run([sys.executable, str(helper)], input=malformed+"\n"+hello+"\n", text=True, capture_output=True, timeout=15)
+cases = [
+    ("{", -32700),
+    ('{"jsonrpc":', -32700),
+    ("null", -32600),
+    ("1", -32600),
+    ("true", -32600),
+    ("[]", -32600),
+    ('{"jsonrpc":"2.0","method":1}', -32600),
+    ('{"jsonrpc":"2.0","id":{},"method":"initialize","params":{}}', -32600),
+    ('{"jsonrpc":"2.0","id":true,"method":"initialize","params":{}}', -32600),
+    ('{"jsonrpc":"2.0","id":2,"method":"initialize","params":1}', -32600),
+]
+for request, code in cases:
+    result = subprocess.run([sys.executable, str(helper)], input=request+"\n"+hello+"\n", text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
     messages = [json.loads(line) for line in result.stdout.splitlines()]
-    assert messages[0]["error"]["code"] == -32600
+    assert messages[0]["error"]["code"] == code, (request, messages)
+    assert messages[0]["id"] is None
     assert messages[-1]["id"] == 1 and "result" in messages[-1]
-print("PASS: invalid requests do not kill the crawler helper")
+print("PASS: parse errors and invalid requests remain distinct and do not kill the crawler helper")
