@@ -320,6 +320,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 	return report, assignment, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve(name string) (config.AgentType, error) {
 	declared, ok := r.types[name]
 	if ok {
@@ -585,6 +586,7 @@ func clip(text string) string {
 	return text[:cut] + "..."
 }
 
+// firstLine returns the first diagnostic line.
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

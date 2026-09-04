@@ -1894,6 +1894,7 @@ func anyInterrupted(status map[string]Status) bool {
 	return false
 }
 
+// stepRow finds a persisted step by identifier.
 func stepRow(run Run, id string) (StepRow, bool) {
 	for _, step := range run.Steps {
 		if step.Step.ID == id {
@@ -1903,6 +1904,7 @@ func stepRow(run Run, id string) (StepRow, bool) {
 	return StepRow{}, false
 }
 
+// sortedKeys returns deterministic key ordering.
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

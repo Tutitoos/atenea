@@ -424,6 +424,7 @@ func judgeCitations(in assignment, s *subject) report {
 	}
 }
 
+// citationAuditResult builds the citation verification summary.
 func citationAuditResult(count, existenceOnly, contentChecked int, evidence []citationEvidence, uncitedFields []string) map[string]any {
 	if evidence == nil {
 		evidence = []citationEvidence{}
@@ -443,6 +444,7 @@ func citationAuditResult(count, existenceOnly, contentChecked int, evidence []ci
 	}
 }
 
+// sortedResultKeys returns stable result-field ordering.
 func sortedResultKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -452,6 +454,7 @@ func sortedResultKeys(m map[string]any) []string {
 	return keys
 }
 
+// plural selects singular or plural wording.
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
