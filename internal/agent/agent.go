@@ -406,6 +406,9 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	}
 
 	partial, _ := decodeReport(stdout)
+	if partial.Spent.Validate() != nil {
+		partial.Spent = contract.Charge{}
+	}
 
 	// The clock and the cancel are checked before the output, because a
 	// truncated answer from a killed process can still parse, and reading it
@@ -423,10 +426,16 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		// A report AND a non-zero exit. The report is discarded: a process
 		// that answered and then failed to exit cleanly has not established
 		// which of the two to believe.
+		if report.Spent.Validate() != nil {
+			report.Spent = contract.Charge{}
+		}
 		return contract.Report{Spent: report.Spent}, deathf(contract.FailureUnavailable,
 			"answered and then exited badly: %v%s", runErr, note(stderr))
 	}
 
+	if err := report.Spent.Validate(); err != nil {
+		return contract.Report{}, deathf(contract.FailureInvalidInput, "invalid reported charge: %v", err)
+	}
 	report = report.Normalize()
 	if err := report.Validate(declared.Spec); err != nil {
 		// A well-formed answer in the wrong shape is not a death of the
