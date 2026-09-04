@@ -285,9 +285,9 @@ func freshInstall(t *testing.T) (repo, runs string) {
 	return repo, filepath.Join(state, "atenea", "runs")
 }
 
-// The brick-5 claim, stated where it cannot be satisfied by accident: the far
-// side of the contract is the omp adapter driving the real client, and the
-// skeleton still beats through it.
+// TestTheSkeletonBeatsThroughTheRealAdapter states the brick-5 claim where it
+// cannot be satisfied by accident: the far side of the contract is the omp
+// adapter driving the real client, and the skeleton still beats through it.
 //
 // Everything else in this file would pass just as happily against the
 // stand-in, so a quiet revert of the runner would leave the suite green. This

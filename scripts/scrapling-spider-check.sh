@@ -26,6 +26,7 @@ proc = subprocess.Popen(
 )
 
 def request(message):
+    """Send one MCP request and return its validated result payload."""
     proc.stdin.write(json.dumps(message) + "\n")
     proc.stdin.flush()
     line = proc.stdout.readline()
