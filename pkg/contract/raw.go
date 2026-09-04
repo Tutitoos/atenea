@@ -63,22 +63,7 @@ func RedactRaw(raw string) string {
 	return boundRaw(text)
 }
 
-// boundRaw caps the text at MaxPersistedRaw bytes, cutting on a character
-// boundary.
-//
-// The ceiling counts bytes because what it protects is store size, but the cut
-// may not land inside a rune: slicing at a byte index splits whatever
-// multi-byte character straddles it, and what reaches the store is then a
-// replacement character in place of one the provider really sent -- invalid
-// text manufactured out of valid input. That is the exact failure
-// MaxDiscoveryLength is documented as counting runes to avoid, and provider
-// diagnostics are where non-ASCII text actually turns up: a path, a filename,
-// or a message in the operator's own language.
-//
-// A rune is at most utf8.UTFMax bytes, so stepping back off the continuation
-// bytes is a bounded walk rather than a scan. The bound also means text that
-// was not valid UTF-8 to begin with is truncated near the ceiling instead of
-// being unwound to nothing.
+// redactJSON removes credential fields recursively from decoded diagnostic data.
 func redactJSON(value any) {
 	switch v := value.(type) {
 	case map[string]any:
@@ -98,6 +83,22 @@ func redactJSON(value any) {
 	}
 }
 
+// boundRaw caps the text at MaxPersistedRaw bytes, cutting on a character
+// boundary.
+//
+// The ceiling counts bytes because what it protects is store size, but the cut
+// may not land inside a rune: slicing at a byte index splits whatever
+// multi-byte character straddles it, and what reaches the store is then a
+// replacement character in place of one the provider really sent -- invalid
+// text manufactured out of valid input. That is the exact failure
+// MaxDiscoveryLength is documented as counting runes to avoid, and provider
+// diagnostics are where non-ASCII text actually turns up: a path, a filename,
+// or a message in the operator's own language.
+//
+// A rune is at most utf8.UTFMax bytes, so stepping back off the continuation
+// bytes is a bounded walk rather than a scan. The bound also means text that
+// was not valid UTF-8 to begin with is truncated near the ceiling instead of
+// being unwound to nothing.
 func boundRaw(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && r != '\n' && r != '\t' {

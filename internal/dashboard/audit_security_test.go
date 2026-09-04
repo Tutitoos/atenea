@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// TestUntrustedHostIsRejected rejects external authorities despite forwarded local headers.
 func TestUntrustedHostIsRejected(t *testing.T) {
 	s, e := NewServer(Config{Enabled: true, Listeners: []Listener{{Addr: "127.0.0.1:7779", Mode: "loopback"}}}, Provider{Snapshot: func() (any, error) { return map[string]string{"data": "private"}, nil }})
 	if e != nil {
@@ -27,6 +28,7 @@ func TestUntrustedHostIsRejected(t *testing.T) {
 	}
 }
 
+// TestLANListenerUsesConnection preserves LAN authorization when listener ports coincide.
 func TestLANListenerUsesConnection(t *testing.T) {
 	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:7779", Mode: "loopback"}, {Addr: "192.168.1.20:7779", Mode: "lan"}}}, authSessions: map[string]time.Time{"valid": time.Now().Add(time.Hour)}}
 	req := httptest.NewRequest("GET", "https://192.168.1.20:7779/api/v1/snapshot", nil)
@@ -42,6 +44,7 @@ func TestLANListenerUsesConnection(t *testing.T) {
 	}
 }
 
+// TestListenerIgnoresHostAndFailsClosedWhenAmbiguous checks listener identity cannot be selected by Host.
 func TestListenerIgnoresHostAndFailsClosedWhenAmbiguous(t *testing.T) {
 	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:7779", Mode: "loopback"}, {Addr: "192.168.1.20:7780", Mode: "lan"}}}}
 	for _, listener := range s.cfg.Listeners {
