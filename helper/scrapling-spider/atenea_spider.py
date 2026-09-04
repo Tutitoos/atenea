@@ -37,6 +37,7 @@ asked why.
 """
 
 import json
+import math
 import sys
 from urllib.parse import urlparse
 
@@ -240,6 +241,8 @@ def valid_request(message):
     if "id" in message:
         request_id = message["id"]
         if isinstance(request_id, bool) or not isinstance(request_id, (str, int, float, type(None))):
+            return False
+        if isinstance(request_id, float) and not math.isfinite(request_id):
             return False
     return "params" not in message or isinstance(message["params"], dict)
 
