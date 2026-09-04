@@ -1646,23 +1646,50 @@ func TestATimeoutAfterAPassKeepsTheAnswer(t *testing.T) {
 	}, "", 0)
 	fake.hangs(t)
 	req := reservedRequest()
-	// Keep enough headroom for the race detector and process startup; the
-	// fixture remains far below the fake's intentionally unbounded hang.
-	req.Timeout = 2 * time.Second
-
-	started := time.Now()
-	answer, err := fake.client(t).Turn(t.Context(), req)
+	body, err := os.ReadFile(fake.binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = []byte(strings.Replace(string(body), `[ -f "$dir/hang" ] && sleep 30`, `if [ -f "$dir/hang" ]; then touch "$dir/awaiting"; sleep 30; fi`, 1))
+	if err = os.WriteFile(fake.binary, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &signaledDeadline{Context: t.Context(), expired: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-ctx.expired:
+		default:
+			close(ctx.expired)
+		}
+	})
+	client := fake.client(t)
+	type result struct {
+		answer Answer
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() { answer, err := client.Turn(ctx, req); done <- result{answer, err} }()
+	for {
+		if _, err := os.Stat(filepath.Join(fake.dir, "awaiting")); err == nil {
+			break
+		}
+		select {
+		case result := <-done:
+			t.Fatalf("turn ended before continuation: %v", result.err)
+		case <-t.Context().Done():
+			t.Fatal("fixture did not reach second pass")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(ctx.expired)
+	got := <-done
+	answer, err := got.answer, got.err
 	if err != nil {
 		t.Fatalf("a turn that answered once and then ran out of time was reported as a failure: %v", err)
 	}
 	if answer.Passes != 1 || answer.StoppedAt != "the rest" {
 		t.Errorf("Passes = %d, StoppedAt = %q, want 1 and the pass's own remainder",
 			answer.Passes, answer.StoppedAt)
-	}
-	// And the process was actually contained: a turn that had to wait out the
-	// fake's own sleep would take thirty seconds, not the timeout it was given.
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
-		t.Errorf("the turn took %s, so the hung fake was waited out rather than stopped", elapsed)
 	}
 }
 
@@ -2401,3 +2428,25 @@ func TestARoleThatIsNotAWordCannotEscapeTheLogDirectory(t *testing.T) {
 		t.Errorf("the parent holds %d entries, want only the log directory", len(outer))
 	}
 }
+
+// signaledDeadline expires only after the test observes a completed first pass.
+type signaledDeadline struct {
+	context.Context
+	expired chan struct{}
+}
+
+// Done exposes the deterministic deadline signal.
+func (c *signaledDeadline) Done() <-chan struct{} { return c.expired }
+
+// Err reports an actual deadline outcome to the child cancellation context.
+func (c *signaledDeadline) Err() error {
+	select {
+	case <-c.expired:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// Value keeps cancellation propagation on this context's own Done and Err.
+func (c *signaledDeadline) Value(key any) any { return nil }
