@@ -239,6 +239,7 @@ func (s *Store) Record(m Measurement) {
 	// durable. Keep the diagnostic shape while removing common credentials and
 	// bounding the retained text.
 	m.Raw = contract.RedactRaw(m.Raw)
+	m.Failure = contract.RedactRaw(m.Failure)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sealed {

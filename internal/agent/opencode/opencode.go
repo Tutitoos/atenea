@@ -315,14 +315,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 // paid for. The prompt deliberately has no permission to call another tool.
 func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (eventStream, error) {
 	var stream eventStream
+	version := r.version.Version(ctx)
+	var major, minor, patch int
+	if n, _ := fmt.Sscanf(strings.TrimPrefix(version, "v"), "%d.%d.%d", &major, &minor, &patch); n != 3 || major != 1 || minor < 18 || (minor == 18 && patch < 20) {
+		return stream, contract.Fail(contract.FailureUnavailable, "tool-free finalization requires verified OpenCode 1.18.20 or newer 1.x; got %q", version)
+	}
 	prompt, err := finalizationPrompt(req.Schema)
 	if err != nil {
 		return stream, err
 	}
-	argv := []string{"run", "--format", "json", "--session", sessionID}
-	// Finalization is deliberately tool-free by prompt. Do not re-inject MCP
-	// config: the persisted session already has its context and the model must
-	// close from the evidence it collected.
+	argv := []string{"run", "--format", "json", "--session", sessionID, "--agent", "atenea-finalize"}
+	// Finalization uses an isolated configuration and a deny-all agent; the
+	// persisted session supplies evidence, not permission to execute tools.
 	if req.Dir != "" {
 		argv = append(argv, "--dir", req.Dir)
 	}
@@ -334,6 +338,12 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 			"opencode is not installed: %q is not on PATH", r.binary)
 	}
 	cmd := exec.CommandContext(ctx, binary, argv...)
+	isolated, err := os.MkdirTemp("", "atenea-finalize-")
+	if err != nil {
+		return stream, err
+	}
+	defer func() { _ = os.RemoveAll(isolated) }()
+	cmd.Env = finalizationEnvironment(os.Environ(), isolated)
 	cmd.Dir = req.Dir
 	procgroup.Contain(cmd)
 	stdout, err := cmd.StdoutPipe()
@@ -353,6 +363,11 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
 			return stream, err
+		}
+		if len(stream.toolCalls) > 0 {
+			_ = procgroup.Kill(cmd)
+			_ = cmd.Wait()
+			return stream, contract.Fail(contract.FailurePermissionDenied, "OpenCode violated tool-free finalization")
 		}
 		if err := stream.limitFailure(req); err != nil {
 			_ = procgroup.Kill(cmd)
@@ -943,4 +958,18 @@ func firstToken(value string) string {
 		return ""
 	}
 	return fields[0]
+}
+
+// finalizationEnvironment isolates local configuration while retaining the data
+// directory needed to resume the paid session and the provider's authentication.
+func finalizationEnvironment(env []string, dir string) []string {
+	for key, value := range map[string]string{
+		"XDG_CONFIG_HOME": dir, "OPENCODE_CONFIG_DIR": dir, "OPENCODE_CONFIG": "",
+		"OPENCODE_CONFIG_CONTENT": `{"permission":{"*":"deny"},"agent":{"atenea-finalize":{"mode":"primary","permission":{"*":"deny"}}},"default_agent":"atenea-finalize"}`,
+		"OPENCODE_PERMISSION":     `{"*":"deny"}`, "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+		"OPENCODE_PURE": "1", "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1", "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+	} {
+		env = appendWithout(env, key, value)
+	}
+	return env
 }

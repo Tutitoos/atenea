@@ -23,7 +23,7 @@ const fixtureTimeout = 15 * time.Second
 func executable(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "opencode")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 1.18.20; exit 0; fi\n"+body), 0o700); err != nil {
 		t.Fatalf("write fake opencode: %v", err)
 	}
 	return path

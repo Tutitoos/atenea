@@ -494,10 +494,10 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 		}
 		r.Baseline.Fault = Fault{Streak: int(streak), SameKindStreak: int(sameKindStreak)}
 		if reason != nil {
-			r.Baseline.Fault.Reason = *reason
+			r.Baseline.Fault.Reason = contract.RedactRaw(*reason)
 		}
 		if raw != nil {
-			r.Baseline.Fault.Raw = *raw
+			r.Baseline.Fault.Raw = contract.RedactRaw(*raw)
 		}
 		if latest != nil {
 			r.Baseline.Fault.Latest = *latest
