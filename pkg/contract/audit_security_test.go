@@ -29,3 +29,21 @@ func TestRedactionPreservesNumbersAndTrailingData(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactStructuredPrefixes covers complete documents and malformed suffixes.
+func TestRedactStructuredPrefixes(t *testing.T) {
+	for _, input := range []string{
+		`{"outer":{"token":{"value":"SYNTHETIC"}}} trailing-marker`,
+		`{"token":["SYNTHETIC"]} trailing-marker`,
+		`{"id":9007199254740993} {"token":{"value":"SYNTHETIC"}} trailing-marker`,
+		`{"ok":true} trailing-marker {"token":["SYNTHETIC"`,
+	} {
+		out := contract.RedactRaw(input)
+		if strings.Contains(out, "SYNTHETIC") || !strings.Contains(out, "trailing-marker") {
+			t.Fatalf("unsafe or missing suffix: %s", out)
+		}
+		if strings.Contains(input, "9007199254740993") && !strings.Contains(out, "9007199254740993") {
+			t.Fatal(out)
+		}
+	}
+}

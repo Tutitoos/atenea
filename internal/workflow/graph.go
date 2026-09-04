@@ -109,6 +109,7 @@ const (
 
 var requirementNames = map[Requirement]string{OnAnswered: "answered", OnOK: "ok"}
 
+// String returns the public textual representation.
 func (r Requirement) String() string {
 	if name, ok := requirementNames[r]; ok {
 		return name
@@ -367,6 +368,7 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 // cent more than the dollar they came from.
 const moneyEpsilon = 1e-9
 
+// names returns declared agent names in stable order.
 func names(declared map[string]config.AgentType) []string {
 	out := slices.Collect(maps.Keys(declared))
 	sort.Strings(out)
