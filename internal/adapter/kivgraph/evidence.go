@@ -42,6 +42,9 @@ func (s *evidenceSession) collect(tool, text string) {
 		if json.Unmarshal([]byte(text), &status) == nil && status.Results != nil {
 			e.SnapshotID = status.Results.SnapshotID
 			if f := status.Results.ContentFreshness; f != nil {
+				if f.Generation > 0 {
+					e.ContentGeneration = f.Generation
+				}
 				switch f.State {
 				case "fresh", "stale", "unverified", "unavailable":
 					e.Freshness = f.State
