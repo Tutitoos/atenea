@@ -2,12 +2,16 @@
 package readscope
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrDirectory identifies a directory reached through the confined handle.
+var ErrDirectory = errors.New("assigned path is a directory")
 
 // ReadFile reads at most 8 MiB through a traversal-resistant directory handle.
 // Without repository context, only explicitly assigned absolute paths are allowed.
@@ -63,6 +67,13 @@ func ReadFile(root, name string, allowed []string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, ErrDirectory
+	}
 	body, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
 	if err != nil {
 		return nil, err

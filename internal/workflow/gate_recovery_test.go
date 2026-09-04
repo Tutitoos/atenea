@@ -9,8 +9,10 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/workflow"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+// TestApprovedExpansionSurvivesRestartExactlyOnce covers persisted and legacy approvals.
 func TestApprovedExpansionSurvivesRestartExactlyOnce(t *testing.T) {
 	for _, applied := range []bool{false, true} {
 		for _, legacy := range []bool{false, true} {
@@ -75,6 +77,7 @@ func TestApprovedExpansionSurvivesRestartExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestGateApplicationRollsBackWithGraph verifies atomic application and replay.
 func TestGateApplicationRollsBackWithGraph(t *testing.T) {
 	dir := t.TempDir()
 	h := newHarnessOver(t, dir, noCeiling(), declared("worker", answers(t, dir, "worker"), config.PoolAgent))
@@ -118,5 +121,40 @@ func TestGateApplicationRollsBackWithGraph(t *testing.T) {
 	}
 	if err := h.state.Apply(t.Context(), run.ID, gate, plan); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAmbiguousLegacyApprovalIsRefused preserves an unprovable replacement.
+func TestAmbiguousLegacyApprovalIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(), declared("worker", answers(t, dir, "worker"), config.PoolAgent))
+	run, _, err := h.engine.Create(t.Context(), graphOf(step("a", "worker", nil), step("b", "worker", nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, h, run.ID)
+	gate, err := h.state.Ask(t.Context(), run.ID, workflow.KindApprove, workflow.Proposal{Steps: []workflow.Step{step("a", "worker", nil), step("c", "worker", nil)}, Replaces: []string{"a", "b"}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err = h.state.Answer(t.Context(), run.ID, gate.Ordinal, workflow.DecisionApproved, "fixture", "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "traces.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`UPDATE workflow_gate SET applied=NULL WHERE workflow_id=? AND ordinal=?`, run.ID, gate.Ordinal); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.engine.Resume(t.Context(), run.ID, nil)
+	if contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("ambiguous approval: %v", err)
+	}
+	loaded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil || len(loaded.Steps) != 2 {
+		t.Fatalf("graph changed: %+v %v", loaded, err)
 	}
 }

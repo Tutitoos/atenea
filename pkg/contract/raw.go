@@ -2,7 +2,6 @@ package contract
 
 import (
 	"encoding/json"
-	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -14,11 +13,12 @@ import (
 const MaxPersistedRaw = 64 << 10
 
 var (
-	quotedSecretRaw = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
-	privateKeyRaw   = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-	bearerRaw       = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-	secretRaw       = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*["']?)[^ \t\r\n"',;]+`)
-	queryRaw        = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|token|password)=)[^&\s]+`)
+	structuredSecretRaw = regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*[\[{"']`)
+	quotedSecretRaw     = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
+	privateKeyRaw       = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	bearerRaw           = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	secretRaw           = regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|token)\b["']?\s*[:=]\s*["']?)[^ \t\r\n"',;]+`)
+	queryRaw            = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|token|password)=)[^&\s]+`)
 )
 
 // RedactRaw prepares provider output for durable storage. The in-memory
@@ -46,16 +46,36 @@ func RedactRaw(raw string) string {
 		!strings.Contains(text, "-----BEGIN") {
 		return boundRaw(text)
 	}
-	var value any
-	decoder := json.NewDecoder(strings.NewReader(text))
-	decoder.UseNumber()
-	if decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF {
-		value = redactJSON(value)
-		if encoded, err := json.Marshal(value); err == nil {
-			text = string(encoded)
+	var out strings.Builder
+	for len(text) > 0 {
+		decoder := json.NewDecoder(strings.NewReader(text))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			out.WriteString(redactFragment(text))
+			break
+		}
+		encoded, err := json.Marshal(redactJSON(value))
+		if err != nil {
+			out.WriteString("[REDACTED INVALID JSON]")
+			break
+		}
+		out.Write(encoded)
+		text = strings.TrimSpace(text[decoder.InputOffset():])
+		if text != "" {
+			out.WriteByte(' ')
 		}
 	}
-	return boundRaw(redactText(text))
+	return boundRaw(out.String())
+}
+
+// redactFragment conservatively removes malformed credential structures whose
+// end cannot be established, while preserving ordinary diagnostic suffixes.
+func redactFragment(text string) string {
+	if loc := structuredSecretRaw.FindStringIndex(text); loc != nil {
+		return redactText(text[:loc[0]]) + "[REDACTED MALFORMED CREDENTIAL]"
+	}
+	return redactText(text)
 }
 
 // redactText removes credential patterns from decoded strings and plain diagnostics.

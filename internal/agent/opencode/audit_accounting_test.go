@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// TestAuditFinalizationExceedsBudget checks the regression scenario: audit finalization exceeds budget.
 func TestAuditFinalizationExceedsBudget(t *testing.T) {
 	bin := executable(t, `case " $* " in
  *" --session "*)
@@ -26,6 +27,8 @@ func TestAuditFinalizationExceedsBudget(t *testing.T) {
 		t.Fatalf("not reproduced: %+v %v", a, err)
 	}
 }
+
+// TestAuditTimeoutDropsObservedCost checks the regression scenario: audit timeout drops observed cost.
 func TestAuditTimeoutDropsObservedCost(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "ready")
 	bin := executable(t, `echo '{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":10,"output":4},"cost":0.12}}'

@@ -458,12 +458,12 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return unavailable(err, "workflow: reading gate application count")
 	}
 	if n == 0 {
 		var already int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workflow_gate WHERE workflow_id=? AND ordinal=? AND decision='approved' AND digest=? AND applied=1`, runID, gate.Ordinal, gate.Digest).Scan(&already); err != nil {
-			return err
+			return unavailable(err, "workflow: checking applied gate")
 		}
 		if already == 1 {
 			return nil

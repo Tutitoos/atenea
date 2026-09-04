@@ -36,12 +36,15 @@ func (e *Engine) reconcileLegacyApproval(ctx context.Context, run Run, gate Gate
 	if !applied {
 		var later int
 		if err := e.store.db.QueryRowContext(ctx, `SELECT count(*) FROM workflow_gate WHERE workflow_id=? AND ordinal>? AND decision='approved'`, run.ID, gate.Ordinal).Scan(&later); err != nil {
-			return false, err
+			return false, unavailable(err, "workflow: reading legacy approval")
 		}
 		if present != 0 || len(gate.Proposal.Steps) == 0 || len(gate.Proposal.Replaces) != 0 || later != 0 {
 			return false, contract.Fail(contract.FailureUnavailable, "workflow %s gate %d: legacy application state is ambiguous; review the recorded graph before resuming", run.ID, gate.Ordinal)
 		}
 	}
 	_, err := e.store.db.ExecContext(ctx, `UPDATE workflow_gate SET applied=? WHERE workflow_id=? AND ordinal=? AND digest=? AND applied IS NULL`, applied, run.ID, gate.Ordinal, gate.Digest)
-	return applied, err
+	if err != nil {
+		return false, unavailable(err, "workflow: reconciling legacy approval")
+	}
+	return applied, nil
 }

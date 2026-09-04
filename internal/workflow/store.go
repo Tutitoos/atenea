@@ -62,6 +62,7 @@ var statusNames = map[Status]string{
 	StatusInterrupted: "interrupted",
 }
 
+// String returns the public textual representation.
 func (s Status) String() string {
 	if name, ok := statusNames[s]; ok {
 		return name
@@ -826,6 +827,22 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 // Finish writes what a step ended as, together with the answer it gave.
 func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 	report contract.Report, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: starting settlement")
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := finishStep(ctx, tx, id, stepID, status, report, at); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return unavailable(err, "workflow: committing settlement")
+	}
+	return nil
+}
+
+// finishStep atomically records an outcome and settles its reservation.
+func finishStep(ctx context.Context, tx *sql.Tx, id, stepID string, status Status, report contract.Report, at time.Time) error {
 	if err := report.Spent.Validate(); err != nil {
 		return err
 	}
@@ -839,7 +856,7 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 	if report.Completeness != nil {
 		completeness = *report.Completeness
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?,
 		     result = ?, discovered = ?, writer_pid = 0, spent_usd = ?,
@@ -856,7 +873,7 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 		return unavailable(err, "workflow: closing %s step %s", id, stepID)
 	}
 	if report.Spent.USD != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=? WHERE workflow_id=? AND trace_id=(SELECT trace_id FROM workflow_step WHERE workflow_id=? AND id=?)`, *report.Spent.USD, id, id, stepID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=? WHERE workflow_id=? AND trace_id=(SELECT trace_id FROM workflow_step WHERE workflow_id=? AND id=?)`, *report.Spent.USD, id, id, stepID); err != nil {
 			return unavailable(err, "workflow: settling reservation")
 		}
 	}

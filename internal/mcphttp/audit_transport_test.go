@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// TestAuditHandshakePublishedBeforeInitialized checks the regression scenario: audit handshake published before initialized.
 func TestAuditHandshakePublishedBeforeInitialized(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -60,6 +61,8 @@ func TestAuditHandshakePublishedBeforeInitialized(t *testing.T) {
 	<-done
 	<-done
 }
+
+// TestAuditHandshakeWaitIgnoresDeadline checks the regression scenario: audit handshake wait ignores deadline.
 func TestAuditHandshakeWaitIgnoresDeadline(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -95,6 +98,8 @@ func TestAuditHandshakeWaitIgnoresDeadline(t *testing.T) {
 	close(release)
 	<-one
 }
+
+// TestSSECompletesBeforeEOF checks the regression scenario: ssecompletes before eof.
 func TestSSECompletesBeforeEOF(t *testing.T) {
 	sent := make(chan struct{})
 	release := make(chan struct{})
@@ -153,6 +158,8 @@ func TestSSECompletesBeforeEOF(t *testing.T) {
 		t.Fatal("fixture did not flush its response")
 	}
 }
+
+// TestAuditStatelessServerRejected checks the regression scenario: audit stateless server rejected.
 func TestAuditStatelessServerRejected(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var v struct{ ID int }
@@ -166,6 +173,8 @@ func TestAuditStatelessServerRejected(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+// TestAuditProtocolVersionHeaderMissing checks the regression scenario: audit protocol version header missing.
 func TestAuditProtocolVersionHeaderMissing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
@@ -192,6 +201,7 @@ type auditTransport func(*http.Request) (*http.Response, error)
 
 func (a auditTransport) RoundTrip(r *http.Request) (*http.Response, error) { return a(r) }
 
+// TestOversizedMCPResponseIsRejected checks the regression scenario: oversized mcpresponse is rejected.
 func TestOversizedMCPResponseIsRejected(t *testing.T) {
 	for _, media := range []string{"application/json", "text/event-stream"} {
 		t.Run(media, func(t *testing.T) {
@@ -210,5 +220,28 @@ func TestOversizedMCPResponseIsRejected(t *testing.T) {
 				t.Fatal("accepted oversized reply")
 			}
 		})
+	}
+}
+
+// TestSSEAggregateLimitIncludesDiscardedEvents bounds a stream before its matching reply.
+func TestSSEAggregateLimitIncludesDiscardedEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		event := ": " + strings.Repeat("x", 1020) + "\r\n\r\n"
+		for range 9000 {
+			if _, err := io.WriteString(w, event); err != nil {
+				return
+			}
+		}
+		_, _ = io.WriteString(w, "data: {\"id\":1,\"result\":{}}\n\n")
+	}))
+	defer srv.Close()
+	c, err := New(Options{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.post(t.Context(), []byte(`{"id":1,"method":"tools/call"}`), "")
+	if err == nil || !strings.Contains(err.Error(), "exceeds 8 MiB") {
+		t.Fatalf("unbounded SSE: %v", err)
 	}
 }

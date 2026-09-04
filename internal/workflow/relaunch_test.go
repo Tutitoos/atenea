@@ -64,6 +64,7 @@ func cards(t *testing.T, path string) []map[string]any {
 	return out
 }
 
+// TestARefusedStepRunsAgainAndTheSecondAnswerIsAccepted checks the regression scenario: arefused step runs again and the second answer is accepted.
 func TestARefusedStepRunsAgainAndTheSecondAnswerIsAccepted(t *testing.T) {
 	dir := t.TempDir()
 	work, log := countingWork(t, dir, "work")

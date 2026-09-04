@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1481,6 +1482,27 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	defer unwind(cancel, &wg, results)
 	write := context.WithoutCancel(ctx)
 
+	accountingFailure := func(cause error, first ...done) (Run, error) {
+		cancel()
+		completed := append([]done(nil), first...)
+		landed := make(chan struct{})
+		go func() { wg.Wait(); close(landed) }()
+	collect:
+		for {
+			select {
+			case item := <-results:
+				completed = append(completed, item)
+			case <-landed:
+				break collect
+			}
+		}
+		if err := e.store.reconcileAccountingFailure(write, id, completed, e.now()); err != nil {
+			return run, errors.Join(cause, err)
+		}
+		out, err := e.store.Load(write, id)
+		return out, errors.Join(cause, err)
+	}
+
 	aborted := false
 	// A refused launch is refused for good, and not only in the process that
 	// heard the refusal. Read off gate 0 rather than off the wait below: the
@@ -1652,7 +1674,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
 					attempts[step.ID], e.now(), e.pid, step.Permission.BudgetUSD); err != nil {
-					return run, err
+					return accountingFailure(err)
 				}
 				traces[step.ID] = traceID
 				lanes[pool]++
@@ -1685,7 +1707,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// which is exactly when that flag is still false.
 		if finished.status == StatusInterrupted {
 			if err := e.store.Finish(write, id, finished.stepID, StatusInterrupted, finished.report, e.now()); err != nil {
-				return run, err
+				return accountingFailure(err, finished)
 			}
 			aborted = true
 			if err := e.store.Interrupt(write, id, finished.stepID, "cut by abort", e.now()); err != nil {
@@ -1696,7 +1718,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		}
 		if err := e.store.Finish(write, id, finished.stepID, finished.status,
 			finished.report, e.now()); err != nil {
-			return run, err
+			return accountingFailure(err, finished)
 		}
 		status[finished.stepID] = finished.status
 		// Kept for whoever reads this answer next. The same fields the store
@@ -1925,6 +1947,7 @@ func anyInterrupted(status map[string]Status) bool {
 	return false
 }
 
+// stepRow finds a persisted step by identifier.
 func stepRow(run Run, id string) (StepRow, bool) {
 	for _, step := range run.Steps {
 		if step.Step.ID == id {
@@ -1934,6 +1957,7 @@ func stepRow(run Run, id string) (StepRow, bool) {
 	return StepRow{}, false
 }
 
+// sortedKeys returns deterministic key ordering.
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

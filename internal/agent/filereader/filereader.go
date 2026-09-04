@@ -14,6 +14,7 @@ package filereader
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,6 +77,7 @@ func Main(stdin io.Reader, stdout io.Writer) error {
 	return json.NewEncoder(stdout).Encode(answer(in))
 }
 
+// answer builds a report from a confined assigned file read.
 func answer(in assignment) report {
 	if len(in.Task.Files) == 0 {
 		return report{
@@ -91,31 +93,16 @@ func answer(in assignment) report {
 		name = filepath.Join(root, name)
 	}
 
-	info, err := os.Stat(name)
-	switch {
-	case os.IsNotExist(err):
-		return report{
-			Verdict: "failed",
-			Reason:  &reason{Kind: "not_found", Text: "no such file: " + in.Task.Files[0]},
-		}
-	case err != nil:
-		return report{
-			Verdict: "failed",
-			Reason:  &reason{Kind: "permission_denied", Text: err.Error()},
-		}
-	case info.IsDir():
-		return report{
-			Verdict: "failed",
-			Reason:  &reason{Kind: "invalid_input", Text: in.Task.Files[0] + " is a directory"},
-		}
-	}
-
 	body, err := readscope.ReadFile(repositoryRoot(in), name, in.Task.Files)
 	if err != nil {
-		return report{
-			Verdict: "failed",
-			Reason:  &reason{Kind: "permission_denied", Text: err.Error()},
+		kind, text := "permission_denied", "read outside permitted scope or unavailable"
+		switch {
+		case os.IsNotExist(err):
+			kind, text = "not_found", "no such file: "+in.Task.Files[0]
+		case errors.Is(err, readscope.ErrDirectory):
+			kind, text = "invalid_input", in.Task.Files[0]+" is a directory"
 		}
+		return report{Verdict: "failed", Reason: &reason{Kind: kind, Text: text}}
 	}
 
 	out := report{
@@ -173,6 +160,7 @@ func repositoryRoot(in assignment) string {
 	return repo.Root
 }
 
+// countLines counts logical lines in the supplied content.
 func countLines(body []byte) int {
 	if len(body) == 0 {
 		return 0
