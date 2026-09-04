@@ -160,6 +160,9 @@ func TestFailedAttemptsAreKeptWithTheirReason(t *testing.T) {
 	if raw != "rg: operation timed out after 30s" {
 		t.Fatalf("stored raw = %q, want the provider's own text", raw)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close inspection connection: %v", err)
+	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
 	if err != nil {
@@ -281,6 +284,9 @@ func TestUnweighedAttemptsAreNullNotZero(t *testing.T) {
 	}
 	if nulls != 1 {
 		t.Fatalf("%d rows have no memory figure, want exactly the unweighed one", nulls)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close inspection connection: %v", err)
 	}
 
 	rows, err := s.Summary(context.Background(), time.Now().Add(-time.Hour))
@@ -605,14 +611,9 @@ func TestRecordOverflowKeepsSurvivorsInPlace(t *testing.T) {
 	}
 }
 
-// Several goroutines of one runWave ask for a baseline at the same moment.
-//
-// The exclusive lock DuckDB takes belongs to the process, not to the handle:
-// connections opened from one Atenea share its instance and all answer, which
-// is why nothing here serializes connect and why the funnel does not have to
-// take turns with itself. That is a property of the driver rather than of this
-// package, so it is asserted rather than assumed -- the day it stops holding,
-// every parallel wave starts failing on a message match in isLocked.
+// Several goroutines of one runWave ask for a baseline at the same moment. The
+// connection leases queue within Atenea so DuckDB never receives overlapping
+// handles, while every waiting reader still completes.
 func TestConcurrentReadersQueueForTheFile(t *testing.T) {
 	s := store(t, Options{LockWait: 100 * time.Millisecond})
 	s.Record(attempt(time.Now(), "code.search", "ripgrep"))

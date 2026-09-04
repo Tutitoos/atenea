@@ -6,28 +6,91 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 // Suffix identifies coordination files, which are not snapshot data.
 const Suffix = ".atenea-access.lock"
 
-// Acquire holds shared connection access or exclusive snapshot access until release.
-// Kernel file locks conflict across descriptors even in the same process.
-func Acquire(ctx context.Context, path string, exclusive bool) (func() error, error) {
+type localAccess struct {
+	gate chan struct{}
+	refs int
+}
+
+var localAccesses = struct {
+	sync.Mutex
+	byPath map[string]*localAccess
+}{byPath: make(map[string]*localAccess)}
+
+func reserveLocal(path string) (*localAccess, func(bool)) {
+	localAccesses.Lock()
+	access := localAccesses.byPath[path]
+	if access == nil {
+		access = &localAccess{gate: make(chan struct{}, 1)}
+		access.gate <- struct{}{}
+		localAccesses.byPath[path] = access
+	}
+	access.refs++
+	localAccesses.Unlock()
+	return access, func(held bool) {
+		if held {
+			access.gate <- struct{}{}
+		}
+		localAccesses.Lock()
+		access.refs--
+		if access.refs == 0 {
+			delete(localAccesses.byPath, path)
+		}
+		localAccesses.Unlock()
+	}
+}
+
+func canonicalPath(path string) (string, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	canonical, err := filepath.EvalSymlinks(absolute)
 	if os.IsNotExist(err) {
 		parent, e := filepath.EvalSymlinks(filepath.Dir(absolute))
 		if e != nil {
-			return nil, e
+			return "", e
 		}
 		canonical = filepath.Join(parent, filepath.Base(absolute))
 		err = nil
 	}
+	if err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+// AcquireConnection queues one in-process database connection by canonical path.
+// DuckDB cannot reliably attach the same file through concurrent handles, even
+// when both handles belong to one process.
+func AcquireConnection(ctx context.Context, path string) (func() error, error) {
+	canonical, err := canonicalPath(path)
+	if err != nil {
+		return nil, err
+	}
+	local, releaseLocal := reserveLocal(canonical)
+	select {
+	case <-ctx.Done():
+		releaseLocal(false)
+		return nil, ctx.Err()
+	case <-local.gate:
+	}
+	var once sync.Once
+	return func() error {
+		once.Do(func() { releaseLocal(true) })
+		return nil
+	}, nil
+}
+
+// Acquire holds shared connection access or exclusive snapshot access until release.
+func Acquire(ctx context.Context, path string, exclusive bool) (func() error, error) {
+	canonical, err := canonicalPath(path)
 	if err != nil {
 		return nil, err
 	}
