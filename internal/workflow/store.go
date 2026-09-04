@@ -511,6 +511,7 @@ CREATE TABLE IF NOT EXISTS workflow_attempt (
 );
 
 CREATE TABLE IF NOT EXISTS workflow_gate (
+    applied INTEGER, -- NULL means an older writer did not record application.
     workflow_id TEXT    NOT NULL,
     -- Gates are numbered within a run from 0, and 0 is always the launch.
     ordinal     INTEGER NOT NULL,
@@ -588,6 +589,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // that runs silently on open.
 func addColumns(ctx context.Context, db *sql.DB) error {
 	wanted := []struct{ table, column, ddl string }{
+		{"workflow_gate", "applied", "ALTER TABLE workflow_gate ADD COLUMN applied INTEGER"},
 		{"workflow", "repository", "ALTER TABLE workflow ADD COLUMN repository TEXT NOT NULL DEFAULT ''"},
 		{"workflow_step", "completeness", "ALTER TABLE workflow_step ADD COLUMN completeness REAL"},
 		{"workflow_step", "stopped_at", "ALTER TABLE workflow_step ADD COLUMN stopped_at TEXT NOT NULL DEFAULT ''"},

@@ -73,3 +73,9 @@ Integration review added a regression for credentials embedded inside decoded JS
 | R06 | PR 07 | Effects investigated and local override proposed, not applied |
 
 These results certify the local contracts and controlled reproductions, not every external provider's current availability. Linux/macOS Intel CI remains a separate remote validation. Merge the eight dependent branches in order, updating each following PR base after its predecessor merges. Deployment and operational actions above remain separate.
+
+## PR review corrections
+
+The CodeRabbit findings on numeric identifiers and listener selection are fixed: redaction preserves JSON numbers and strict trailing-data handling; dashboard authorization follows the accepting server's listener rather than Host. Invalid agent charges no longer survive rejection or settle reservations; valid measured charges are retained when the answer fails validation. Metrics regression coverage is deterministic and its benchmark gate is retained. SSE completion is checked without assuming an ordering between fixture and client channels.
+
+Workflow expansion approvals now carry an application marker. It commits in the same transaction as graph changes; approved pending expansions are resumed and repeated application does not duplicate steps. An interrupted transaction leaves the approval pending. Legacy records keep an unknown marker: a matching graph proves prior application, and a latest entirely absent addition can be recovered. Ambiguous historical replacements are refused with a diagnostic for operator reconciliation, rather than silently replayed. This does not modify installed service data during development.

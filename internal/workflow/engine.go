@@ -1522,7 +1522,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// it. Staleness stops being a race to detect.
 		frozen := false
 		if !aborted {
-			gate, waiting, err := e.store.OpenGate(write, id)
+			gate, waiting, err := e.store.PendingGate(write, id)
 			if err != nil {
 				return run, err
 			}
@@ -1547,6 +1547,18 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 						rejected = true
 					}
 					continue
+				}
+				if answered.Kind == KindLaunch {
+					continue
+				}
+				if answered.applied == nil {
+					applied, err := e.reconcileLegacyApproval(write, run, answered)
+					if err != nil {
+						return run, err
+					}
+					if applied {
+						continue
+					}
 				}
 				grown, err := e.grow(run, answered.Proposal)
 				if err != nil {
