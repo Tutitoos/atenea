@@ -89,6 +89,7 @@ func TestStatsRenderingAndColors(t *testing.T) {
 }
 func TestStatsDiskAndSocketDoNotGenerateCalls(t *testing.T) {
 	path, _ := isolated(t)
+	privateStatsFixture(t, path)
 	cfg, err := config.LoadEffective(path)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +133,7 @@ func TestStatsDiskAndSocketDoNotGenerateCalls(t *testing.T) {
 }
 func TestStatsJSONAndUsedFilter(t *testing.T) {
 	path, _ := isolated(t)
+	privateStatsFixture(t, path)
 	cfg, err := config.LoadEffective(path)
 	if err != nil {
 		t.Fatal(err)
@@ -158,6 +160,7 @@ func TestStatsJSONAndUsedFilter(t *testing.T) {
 }
 func TestStatsNoDatabaseCreation(t *testing.T) {
 	path, _ := isolated(t)
+	privateStatsFixture(t, path)
 	cfg, err := config.LoadEffective(path)
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +181,7 @@ func TestStatsNoDatabaseCreation(t *testing.T) {
 
 func TestStatsCountsCLIValidationWithoutDispatch(t *testing.T) {
 	path, _ := isolated(t)
+	privateStatsFixture(t, path)
 	var b bytes.Buffer
 	if err := cmdAsk(path, []string{"missing", "--repo", "work"}, &b); err == nil {
 		t.Fatal("unknown capability accepted")
@@ -196,6 +200,20 @@ func TestStatsCountsCLIValidationWithoutDispatch(t *testing.T) {
 		}
 		if r.Level == "attempt" && r.Calls != 0 {
 			t.Fatalf("validation dispatched %+v", r)
+		}
+	}
+}
+
+// privateStatsFixture makes only the isolated test's metrics directory private.
+func privateStatsFixture(t *testing.T, path string) {
+	t.Helper()
+	cfg, err := config.LoadEffective(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Metrics.Path != "" {
+		if err = os.Chmod(filepath.Dir(cfg.Metrics.Path), 0700); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

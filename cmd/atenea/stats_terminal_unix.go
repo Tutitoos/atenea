@@ -8,6 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// statsTerminalWidth returns the terminal width, or zero when unavailable.
 func statsTerminalWidth(f *os.File) int {
 	w, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
 	if err != nil {

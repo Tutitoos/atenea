@@ -1189,7 +1189,11 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 // one, and there is nobody above them to ask. A client speaking for a chat
 // opens a Session and goes through that.
 func (c *Core) Do(ctx context.Context, task orchestrator.Task) (result *orchestrator.Result, err error) {
-	ctx, call := c.StartStatsRequest(ctx, "orchestrator.task", first(task.Repositories))
+	repository := ""
+	if len(task.Repositories) == 1 {
+		repository = task.Repositories[0]
+	}
+	ctx, call := c.StartStatsRequest(ctx, "orchestrator.task", repository)
 	defer func() { call.End(resultError(result, err)) }()
 	if err := c.enter(); err != nil {
 		return nil, err

@@ -46,7 +46,6 @@ type Row struct {
 	Last       *time.Time `json:"last"`
 	SumUS      int64      `json:"-"`
 	Samples    int64      `json:"-"`
-	Durations  []int64    `json:"-"`
 	Summarized bool       `json:"-"`
 }
 
