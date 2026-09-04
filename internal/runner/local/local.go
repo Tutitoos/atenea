@@ -192,6 +192,7 @@ func (r *Runner) search(ctx context.Context, req contract.RunRequest) ([]any, er
 	return matches, nil
 }
 
+// walk searches a validated repository subtree while preserving cancellation and scope errors.
 func (r *Runner) walk(ctx context.Context, root, start string, q query) ([]any, error) {
 	// The root is checked before the walk begins, and only the root. WalkDir
 	// hands a missing start to the callback below like any other unreadable
