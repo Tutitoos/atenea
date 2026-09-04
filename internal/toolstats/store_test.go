@@ -13,7 +13,11 @@ import (
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	s := New(filepath.Join(t.TempDir(), "stats.sqlite"))
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s := New(filepath.Join(dir, "stats.sqlite"))
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
@@ -140,9 +144,9 @@ func TestCatalogUnknownAndUnused(t *testing.T) {
 	}
 }
 func TestPercentileAndControlCharacters(t *testing.T) {
-	r := Row{Calls: 4, OK: 4, Samples: 4, SumUS: 106, Durations: []int64{1, 2, 3, 100}}
+	r := Row{Calls: 4, OK: 4, Samples: 4, SumUS: 106}
 	calculate(&r)
-	if *r.P95US != 100 || *r.MeanUS != 26 {
+	if *r.MeanUS != 26 {
 		t.Fatalf("%+v", r)
 	}
 	clean := Clean("hi\x1b[31m red\x1b[0m\x1b]0;bad\x07\nthere", 100)

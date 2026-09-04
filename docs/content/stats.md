@@ -102,3 +102,44 @@ counted and reported when storage becomes accessible again.
 Installing a new CLI alone does not instrument an already running old service.
 Install the matching binary and restart the service explicitly to enable its new
 recording; until then the CLI reports unavailable live stats and any saved data.
+
+### Recording recovery and private storage
+
+The directory containing the observability database must already be private
+(mode `0700`), or Atenea must be able to create it privately. Atenea rejects shared
+directories and symbolic links instead of changing permissions on an arbitrary
+shared directory. The database is created with mode `0600` before SQLite opens it;
+existing database, WAL, and SHM files are also checked and protected. A rejected
+location produces an explicit recording diagnostic.
+
+Each writer holds an exclusive operating-system lock under a unique identifier.
+Maintenance recovers unfinished events only when their writer no longer holds the
+lock. Other live service or CLI processes retain their active events regardless of
+age. Events from older versions without writer identities are recovered after the
+seven-day retention boundary. Recovery runs during normal writes, not during
+statistics queries; a stopped service's persisted snapshot may still contain
+unrecovered active events until recording resumes.
+
+Recovered events appear under `FAIL` with diagnostic code `recording_interrupted`.
+This describes a failure to record a result, **not proof that the underlying tool
+failed**. Their execution outcome and duration are unknown. Durations are excluded
+from timing measurements, coverage is marked partial, and affected exact P95 values
+are unavailable. Recovery and compaction are transactional and do not add duplicate
+calls on subsequent runs.
+
+A maintenance failure does not block event insertion. It is reported separately
+from dropped recordings, with an hour between maintenance attempts. Multi-repository
+requests have no individual repository attribution; their implementation attempts
+retain the actual repository, while requests selecting exactly one repository keep
+that identifier.
+
+### Exact percentiles and watch cost
+
+Filters and counter aggregation execute inside SQLite. Nearest-rank P95 values are
+computed separately for each tool and accounting-level total using all eligible
+detailed samples, without sampling or averaging per-tool percentiles. SQLite uses
+file-backed temporary storage and a bounded page cache for sorting; Go receives
+aggregated rows and at most five diagnostics, rather than every recorded event.
+Exact percentile queries still process the matching detailed history, so refresh
+cost increases with activity volume. Narrowing the period or repository reduces
+that work without changing the accuracy of the result.

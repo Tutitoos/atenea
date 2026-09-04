@@ -49,6 +49,7 @@ type statsOptions struct {
 	since, repo, provider, tool, color    string
 }
 
+// parseStats validates flags and incompatible output modes.
 func parseStats(args []string) (statsOptions, error) {
 	var o statsOptions
 	f := flag.NewFlagSet("stats", flag.ContinueOnError)
@@ -88,6 +89,8 @@ func parseStats(args []string) (statsOptions, error) {
 	}
 	return o, nil
 }
+
+// query resolves calendar boundaries in the supplied local timezone on every refresh.
 func (o statsOptions) query(now time.Time) (toolstats.Query, error) {
 	q := toolstats.Query{Until: now, Repository: o.repo, Provider: o.provider, Tool: o.tool, Used: o.used}
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -117,16 +120,22 @@ func (o statsOptions) query(now time.Time) (toolstats.Query, error) {
 	}
 	return q, nil
 }
+
+// statsTTY reports whether output is an interactive terminal.
 func statsTTY(out io.Writer) bool {
 	f, ok := out.(*os.File)
 	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
 }
+
+// statsColor applies explicit color settings and the NO_COLOR convention.
 func statsColor(mode string, tty bool) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
 	}
 	return mode == "always" || (mode == "auto" && tty)
 }
+
+// cmdStats queries activity once or refreshes until interrupted, restoring terminal state.
 func cmdStats(settingsPath string, args []string, out io.Writer) error {
 	o, err := parseStats(args)
 	if err != nil {
@@ -198,6 +207,8 @@ func cmdStats(settingsPath string, args []string, out io.Writer) error {
 		}
 	}
 }
+
+// statsWidth obtains the output width with a stable redirected-output fallback.
 func statsWidth(out io.Writer) int {
 	if f, ok := out.(*os.File); ok {
 		if n := statsTerminalWidth(f); n > 0 {
@@ -209,30 +220,40 @@ func statsWidth(out io.Writer) int {
 	}
 	return 140
 }
+
+// paint wraps text in ANSI color only when color output is enabled.
 func paint(s, code string, color bool) string {
 	if !color {
 		return s
 	}
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
+
+// durationCell renders measured microseconds or an unavailable marker.
 func durationCell(us *int64) string {
 	if us == nil {
 		return "—"
 	}
 	return (time.Duration(*us) * time.Microsecond).String()
 }
+
+// percentCell renders the completed-call success percentage.
 func percentCell(p *float64) string {
 	if p == nil {
 		return "—"
 	}
 	return fmt.Sprintf("%.1f%%", *p)
 }
+
+// lastCell formats the last activity in local time.
 func lastCell(at *time.Time) string {
 	if at == nil {
 		return "—"
 	}
 	return at.Local().Format("01-02 15:04")
 }
+
+// rowTone prioritizes failures and refusals when choosing a row color.
 func rowTone(r toolstats.Row) string {
 	if r.Fail > 0 {
 		return "31"
@@ -245,6 +266,8 @@ func rowTone(r toolstats.Row) string {
 	}
 	return "32"
 }
+
+// statsCells formats one row in the documented column order.
 func statsCells(r toolstats.Row) []string {
 	name := toolstats.Clean(r.Name, 180)
 	if r.Calls == 0 && r.Active == 0 {
@@ -252,6 +275,8 @@ func statsCells(r toolstats.Row) []string {
 	}
 	return []string{name, fmt.Sprint(r.Calls), fmt.Sprint(r.OK), fmt.Sprint(r.Refused), fmt.Sprint(r.Fail), fmt.Sprint(r.Cancel), percentCell(r.OKPercent), durationCell(r.MeanUS), durationCell(r.P95US), durationCell(r.MaxUS), lastCell(r.Last)}
 }
+
+// asciiTable sizes columns by visible content and right-aligns numeric fields.
 func asciiTable(headers []string, rows [][]string, tones []string, color bool) string {
 	widths := make([]int, len(headers))
 	for i, h := range headers {
@@ -296,6 +321,8 @@ func asciiTable(headers []string, rows [][]string, tones []string, color bool) s
 	border()
 	return b.String()
 }
+
+// renderStats renders independent request and attempt tables with coverage diagnostics.
 func renderStats(out io.Writer, s toolstats.Snapshot, color bool, width int) error {
 	var b strings.Builder
 	since := "todo el histórico"

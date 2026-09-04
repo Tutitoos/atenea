@@ -17,12 +17,15 @@ import (
 // MethodStats is the internal socket method for activity snapshots.
 const MethodStats = "atenea/stats"
 
+// statsBasePath resolves the routing metrics path without opening its store.
 func statsBasePath(cfg config.Config) string {
 	if cfg.Metrics.Path != "" {
 		return cfg.Metrics.Path
 	}
 	return metrics.DefaultPath()
 }
+
+// statsCatalog builds a declared inventory without contacting providers.
 func statsCatalog(cfg config.Config) []toolstats.Tool {
 	var out []toolstats.Tool
 	for _, c := range cfg.Capabilities {
@@ -52,6 +55,8 @@ func StatsFromDisk(ctx context.Context, cfg config.Config, q toolstats.Query) (t
 	store := toolstats.New(toolstats.Path(statsBasePath(cfg)))
 	return readStats(ctx, cfg, store, q)
 }
+
+// readStats combines activity, catalog, and separately bounded legacy measurements.
 func readStats(ctx context.Context, cfg config.Config, store *toolstats.Store, q toolstats.Query) (toolstats.Snapshot, error) {
 	out, err := store.Read(ctx, q, statsCatalog(cfg))
 	if err != nil {
@@ -74,6 +79,8 @@ func (c *Core) Stats(ctx context.Context, q toolstats.Query) (toolstats.Snapshot
 	out.Service = "running"
 	return out, err
 }
+
+// statsQuery handles the internal statistics RPC without requiring MCP initialization.
 func (v *conversation) statsQuery(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
 	var q toolstats.Query
 	if len(raw) > 0 {
@@ -126,8 +133,10 @@ type statsRunner struct {
 	store *toolstats.Store
 }
 
+// Unwrap preserves access to the underlying runner for existing integrations.
 func (r statsRunner) Unwrap() contract.Runner { return r.Runner }
 
+// Run records one implementation attempt linked to the original request.
 func (r statsRunner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
 	_, call := r.store.Begin(ctx, toolstats.Event{Level: "attempt", Tool: req.Implementation.ID, Provider: req.Implementation.Provider, Repository: req.Repository.ID})
 	defer func() {
@@ -140,6 +149,8 @@ func (r statsRunner) Run(ctx context.Context, req contract.RunRequest) (out cont
 	out, err = r.Runner.Run(ctx, req)
 	return out, err
 }
+
+// resultError preserves structured execution failures when the outer call succeeds.
 func resultError(result *orchestrator.Result, err error) error {
 	if err != nil {
 		return err
@@ -165,6 +176,8 @@ func (c *Core) StartStatsRequest(ctx context.Context, tool, repo string) (contex
 	}
 	return c.stats.Begin(ctx, toolstats.Event{Level: "request", Tool: tool, Provider: "atenea", Repository: repo})
 }
+
+// statsMCPResult classifies MCP errors without retaining response payloads.
 func statsMCPResult(result any, rpcErr *rpcError) (string, string, string) {
 	if rpcErr != nil {
 		return "fail", "invalid_request", rpcErr.Message
@@ -197,6 +210,7 @@ func statsMCPResult(result any, rpcErr *rpcError) (string, string, string) {
 	return "ok", "", ""
 }
 
+// statsRepository extracts repository metadata from a tool request.
 func statsRepository(params toolsCallParams) string {
 	args, err := params.argumentMap()
 	if err != nil {
@@ -208,6 +222,7 @@ func statsRepository(params toolsCallParams) string {
 
 type statsErrorKey struct{}
 
+// setStatsError passes a structured workflow failure to the request recorder.
 func setStatsError(ctx context.Context, err error) {
 	if err != nil {
 		if target, ok := ctx.Value(statsErrorKey{}).(*error); ok {

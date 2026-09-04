@@ -3,6 +3,8 @@ package core_test
 import (
 	"context"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/core"
@@ -93,7 +95,10 @@ func TestStatsCapabilityRequestIsNotCountedTwice(t *testing.T) {
 	}
 }
 func TestStatsCLIInvalidCapabilityAndCancellation(t *testing.T) {
-	atenea, _ := measured(t, "")
+	atenea, base := measured(t, "")
+	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = atenea.Shutdown() }()
 	_, _ = atenea.Ask(context.Background(), orchestrator.Question{Capability: "missing", Repository: "api"})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -106,5 +111,35 @@ func TestStatsCLIInvalidCapabilityAndCancellation(t *testing.T) {
 	r := statsTotal(t, out, "request")
 	if r.Calls != 2 || r.Fail < 1 {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// TestStatsTaskRepositoryAttribution rejects first-repository attribution for global tasks.
+func TestStatsTaskRepositoryAttribution(t *testing.T) {
+	atenea, base := measured(t, "")
+	if err := os.Chmod(filepath.Dir(base), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// A stopped core records the rejected request without executing providers.
+	if err := atenea.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	for _, repos := range [][]string{nil, {"api", "scripts"}, {"api"}} {
+		_, err := atenea.Do(context.Background(), orchestrator.Task{Text: "stats attribution test", Repositories: repos})
+		if err == nil {
+			t.Fatal("stopped core accepted task")
+		}
+	}
+	for _, tc := range []struct {
+		repo  string
+		calls int64
+	}{{"", 3}, {"api", 1}, {"scripts", 0}} {
+		out, err := atenea.Stats(context.Background(), toolstats.Query{Repository: tc.repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := statsTotal(t, out, "request"); r.Calls != tc.calls {
+			t.Fatalf("repo=%q: %+v", tc.repo, r)
+		}
 	}
 }
