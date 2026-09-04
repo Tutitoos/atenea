@@ -136,6 +136,8 @@ type Store struct {
 // is mid-run, and the default journal makes that reader wait on a writer or
 // the writer wait on the reader. A busy timeout on top: two Ateneas starting
 // at once is ordinary on a machine where this is a CLI as often as a service.
+// Immediate transactions reserve their write turn before reading because the
+// workflow store uses this same file and a deferred lock upgrade can fail busy.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultPath()
@@ -147,6 +149,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	dsn := "file:" + url.PathEscape(path) +
 		"?_pragma=journal_mode(WAL)" +
 		"&_pragma=busy_timeout(5000)" +
+		"&_txlock=immediate" +
 		"&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

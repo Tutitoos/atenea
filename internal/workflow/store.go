@@ -541,7 +541,9 @@ CREATE INDEX IF NOT EXISTS workflow_gate_open ON workflow_gate(decision);
 // runs they dispatch.
 func DefaultPath() string { return trace.DefaultPath() }
 
-// Open opens (creating if needed) the store at path and migrates it.
+// Open opens (creating if needed) the store at path and migrates it. Immediate
+// transactions take the shared trace database's write turn before reading, so
+// a concurrent trace writer cannot make a later workflow update fail to upgrade.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultPath()
@@ -553,6 +555,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	dsn := "file:" + url.PathEscape(path) +
 		"?_pragma=journal_mode(WAL)" +
 		"&_pragma=busy_timeout(5000)" +
+		"&_txlock=immediate" +
 		"&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
