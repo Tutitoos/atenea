@@ -1,0 +1,6 @@
+# Review the audit stack as well as the default branch.
+# https://docs.coderabbit.ai/configuration/auto-review
+reviews:
+  auto_review:
+    base_branches:
+      - "^feat/audit-.*$"
