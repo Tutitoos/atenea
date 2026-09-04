@@ -56,3 +56,5 @@ finally:
         proc.wait()
 print("Scrapling Spider helper parsed and answered initialize/tools/list")
 PY
+
+python3 "$root/helper/scrapling-spider/test_protocol.py"

@@ -293,6 +293,9 @@ func freshInstall(t *testing.T) (repo, runs string) {
 // stand-in, so a quiet revert of the runner would leave the suite green. This
 // test is what refuses that.
 func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
+	if os.Getenv("ATENEA_TEST_REAL_OMP") != "1" {
+		t.Skip("real OMP integration: run scripts/omp-integration-check.sh")
+	}
 	freshInstall(t)
 
 	// Who is behind the catalog, according to the core itself.
@@ -336,6 +339,9 @@ func TestTheSkeletonBeatsThroughTheRealAdapter(t *testing.T) {
 // the orchestrator looks at a real directory, narrows the work to what it
 // found, dispatches it, reviews the answers and leaves a paper copy.
 func TestTaskRunsAgainstARealRepositoryEndToEnd(t *testing.T) {
+	if os.Getenv("ATENEA_TEST_REAL_OMP") != "1" {
+		t.Skip("real OMP integration: run scripts/omp-integration-check.sh")
+	}
 	freshInstall(t)
 
 	out, err := cli(t, "task", "TODO", "--trace")

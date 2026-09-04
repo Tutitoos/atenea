@@ -47,17 +47,42 @@ func RedactRaw(raw string) string {
 	}
 	var value any
 	if json.Unmarshal([]byte(text), &value) == nil {
-		redactJSON(value)
+		value = redactJSON(value)
 		if encoded, err := json.Marshal(value); err == nil {
 			text = string(encoded)
 		}
 	}
+	return boundRaw(redactText(text))
+}
+
+func redactText(text string) string {
 	text = quotedSecretRaw.ReplaceAllString(text, `${1}"[REDACTED]"`)
 	text = privateKeyRaw.ReplaceAllString(text, "[REDACTED PRIVATE KEY]")
 	text = bearerRaw.ReplaceAllString(text, "Bearer [REDACTED]")
 	text = secretRaw.ReplaceAllString(text, "${1}[REDACTED]")
-	text = queryRaw.ReplaceAllString(text, "${1}[REDACTED]")
-	return boundRaw(text)
+	return queryRaw.ReplaceAllString(text, "${1}[REDACTED]")
+}
+
+func redactJSON(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+			switch normalized {
+			case "apikey", "accesstoken", "refreshtoken", "clientsecret", "password", "passwd", "secret", "token":
+				v[key] = "[REDACTED]"
+			default:
+				v[key] = redactJSON(child)
+			}
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = redactJSON(child)
+		}
+	case string:
+		return redactText(v)
+	}
+	return value
 }
 
 // boundRaw caps the text at MaxPersistedRaw bytes, cutting on a character
@@ -76,25 +101,6 @@ func RedactRaw(raw string) string {
 // bytes is a bounded walk rather than a scan. The bound also means text that
 // was not valid UTF-8 to begin with is truncated near the ceiling instead of
 // being unwound to nothing.
-func redactJSON(value any) {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, child := range v {
-			normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
-			switch normalized {
-			case "apikey", "accesstoken", "refreshtoken", "clientsecret", "password", "passwd", "secret", "token":
-				v[key] = "[REDACTED]"
-			default:
-				redactJSON(child)
-			}
-		}
-	case []any:
-		for _, child := range v {
-			redactJSON(child)
-		}
-	}
-}
-
 func boundRaw(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && r != '\n' && r != '\t' {
