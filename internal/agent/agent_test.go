@@ -442,6 +442,7 @@ func TestChildNarrowsAndDepthIsCapped(t *testing.T) {
 	}
 }
 
+// TestDeclaredListsEveryType checks the regression scenario: declared lists every type.
 func TestDeclaredListsEveryType(t *testing.T) {
 	r, _ := runner(t, declared("/bin/true"))
 	if got := r.Declared(); len(got) != 1 || got[0] != "reader" {
@@ -681,6 +682,7 @@ func TestNoCommissionOutsideAWorkflow(t *testing.T) {
 	}
 }
 
+// TestInvalidChargeDoesNotSurviveRejection checks the regression scenario: invalid charge does not survive rejection.
 func TestInvalidChargeDoesNotSurviveRejection(t *testing.T) {
 	for _, spent := range []string{`{"usd":-10,"priced_by":"fixture"}`, `{"usd":0.2}`, `{"input_tokens":-1}`} {
 		for _, exit := range []string{"", "\nexit 1"} {
@@ -697,10 +699,27 @@ func TestInvalidChargeDoesNotSurviveRejection(t *testing.T) {
 	}
 }
 
+// TestValidChargeSurvivesInvalidResult checks the regression scenario: valid charge survives invalid result.
 func TestValidChargeSurvivesInvalidResult(t *testing.T) {
 	r, _ := runner(t, declared(answers(t, `{"result":{"wrong":"x"},"verdict":"ok","spent":{"usd":0.2,"priced_by":"fixture"}}`)))
 	report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task()})
 	if err == nil || report.Spent.USD == nil || *report.Spent.USD != 0.2 {
 		t.Fatalf("valid charge lost: %+v %v", report.Spent, err)
+	}
+}
+
+// TestDecodeFailurePreservesObservedCharge meters syntactically valid rejected envelopes.
+func TestDecodeFailurePreservesObservedCharge(t *testing.T) {
+	for _, body := range []string{
+		`{"verdict":"not-a-verdict","spent":{"usd":0.2,"priced_by":"fixture"}}`,
+		`{"verdict":"ok","unknown":true,"spent":{"usd":0.2,"priced_by":"fixture"}}`,
+	} {
+		for _, exit := range []string{"", "\nexit 2"} {
+			r, _ := runner(t, declared(stub(t, "cat >/dev/null\necho '"+body+"'"+exit)))
+			report, _, err := r.Run(t.Context(), "reader", task(), nil)
+			if err == nil || report.Spent.USD == nil || *report.Spent.USD != 0.2 {
+				t.Fatalf("charge lost: %+v %v", report, err)
+			}
+		}
 	}
 }

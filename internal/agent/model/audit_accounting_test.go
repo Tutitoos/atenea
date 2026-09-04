@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestAuditFallbackSubtractsCumulativeTwice checks the regression scenario: audit fallback subtracts cumulative twice.
 func TestAuditFallbackSubtractsCumulativeTwice(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "args")

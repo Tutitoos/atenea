@@ -268,18 +268,36 @@ func decodeReport(raw []byte) (contract.Report, error) {
 		}
 		out.Discovered = append(out.Discovered, contract.Discovery{Level: level, Note: d.Note})
 	}
-	if c := wire.Spent; c != nil {
-		out.Spent = contract.Charge{
-			InputTokens:      c.InputTokens,
-			OutputTokens:     c.OutputTokens,
-			CacheReadTokens:  c.CacheReadTokens,
-			CacheWriteTokens: c.CacheWriteTokens,
-			PricedBy:         c.PricedBy,
-		}
+	out.Spent = chargeFromWire(wire.Spent)
+	return out, nil
+}
+
+// observedCharge recovers only a validated charge from a complete JSON envelope.
+func observedCharge(raw []byte) contract.Charge {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return contract.Charge{}
+	}
+	var wire *chargeWire
+	if json.Unmarshal(envelope["spent"], &wire) != nil {
+		return contract.Charge{}
+	}
+	charge := chargeFromWire(wire)
+	if charge.Validate() != nil {
+		return contract.Charge{}
+	}
+	return charge
+}
+
+// chargeFromWire preserves absent and explicitly zero monetary amounts.
+func chargeFromWire(c *chargeWire) contract.Charge {
+	var out contract.Charge
+	if c != nil {
+		out = contract.Charge{InputTokens: c.InputTokens, OutputTokens: c.OutputTokens, CacheReadTokens: c.CacheReadTokens, CacheWriteTokens: c.CacheWriteTokens, PricedBy: c.PricedBy}
 		if c.USD != nil {
 			amount := *c.USD
-			out.Spent.USD = &amount
+			out.USD = &amount
 		}
 	}
-	return out, nil
+	return out
 }
