@@ -1357,6 +1357,10 @@ func (c *Client) invoke(ctx context.Context, dir string, timeout time.Duration, 
 		return envelope{}, contract.Stopped(ctxErr, "claude code", timeout).WithRaw(stderr)
 	}
 
+	if errors.Is(runErr, procgroup.ErrOutputLimit) {
+		return envelope{}, contract.Fail(contract.FailureUnavailable, "claude code output exceeds 8 MiB").WithRaw(stderr)
+	}
+
 	out, parseErr := parse(stdout)
 	if parseErr != nil {
 		// A turn that failed before it could print an envelope says so in

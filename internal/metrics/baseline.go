@@ -423,7 +423,7 @@ func (s *Store) Baselines(ctx context.Context, capability, repository, subject s
 	return out, nil
 }
 
-func (s *Store) readCosts(ctx context.Context, db *sql.DB, capability, repository string,
+func (s *Store) readCosts(ctx context.Context, db *connection, capability, repository string,
 	out map[string]Baseline) error {
 	rows, err := db.QueryContext(ctx, costs, capability, repository, capability, repository)
 	if err != nil {
@@ -521,7 +521,7 @@ func scanRecency(rows *sql.Rows) ([]recencyRow, error) {
 
 // readRecency fills in each implementation's newest end for one capability on
 // one repository.
-func (s *Store) readRecency(ctx context.Context, db *sql.DB, capability, repository, subject string,
+func (s *Store) readRecency(ctx context.Context, db *connection, capability, repository, subject string,
 	out map[string]Baseline) error {
 	rows, err := db.QueryContext(ctx, recencyHere, capability, repository, subject)
 	if err != nil {
@@ -761,6 +761,7 @@ func Apply(base map[string]Baseline, candidates []contract.Implementation, now t
 	return notices
 }
 
+// plural selects singular or plural wording.
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word

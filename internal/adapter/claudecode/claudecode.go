@@ -23,6 +23,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -161,6 +162,7 @@ func New(opts Options) (*Runner, error) {
 	return runner, nil
 }
 
+// resolve resolves the requested declared agent type.
 func (r *Runner) resolve() (toolpath.Resolved, error) {
 	if r.binary != "" {
 		return toolpath.Resolve("explicit", []toolpath.Candidate{{Source: "explicit", Binary: r.binary}})
@@ -524,6 +526,9 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 		}
 		_, _ = legacyOutput.WriteString(line)
 		_ = legacyOutput.WriteByte('\n')
+		if legacyOutput.Err() != nil {
+			break
+		}
 		event, ok, err := parseStreamLine(line)
 		if err != nil {
 			continue
@@ -547,7 +552,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 			}
 		}
 	}
-	scanErr := scanner.Err()
+	scanErr := errors.Join(scanner.Err(), legacyOutput.Err())
 	if scanErr != nil {
 		// Drained before Wait, always: the scan stopped and Wait waits for the
 		// child, so a child still writing into a pipe nobody empties would
@@ -556,6 +561,9 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	}
 	runErr := cmd.Wait()
 	peak := procstat.PeakRSS(cmd.ProcessState)
+	if errors.Is(scanErr, procgroup.ErrOutputLimit) || stderr.Err() != nil {
+		return out, peak, contract.Fail(contract.FailureUnavailable, "claude code output exceeds 8 MiB")
+	}
 	if scanErr != nil {
 		// A stream this adapter could not finish reading is only fatal when
 		// nothing usable arrived before it broke. One line over the buffer

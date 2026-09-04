@@ -304,6 +304,9 @@ func finalize(out *Snapshot, grouped map[string]*Row) {
 		if out.Coverage.Dropped > 0 {
 			r.Summarized = true
 		}
+		if t := totals[r.Level]; t != nil && r.Summarized {
+			t.Summarized = true
+		}
 		if out.Query.Used && r.Calls == 0 && r.Active == 0 {
 			continue
 		}

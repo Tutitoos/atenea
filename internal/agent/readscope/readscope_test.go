@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestRootAndAssignedFiles checks the regression scenario: root and assigned files.
 func TestRootAndAssignedFiles(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "yes"), []byte("yes"), 0600); err != nil {

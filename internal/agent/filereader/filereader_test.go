@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// TestMainReadsARepositoryFile checks the regression scenario: main reads arepository file.
 func TestMainReadsARepositoryFile(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "SPEC.md")
@@ -41,6 +42,7 @@ func TestMainReadsARepositoryFile(t *testing.T) {
 	}
 }
 
+// TestMainReportsControlledFailures checks the regression scenario: main reports controlled failures.
 func TestMainReportsControlledFailures(t *testing.T) {
 	dir := t.TempDir()
 	large := filepath.Join(dir, "large")
@@ -85,6 +87,7 @@ func TestMainReportsControlledFailures(t *testing.T) {
 	}
 }
 
+// TestMainRejectsUnreadableAssignments checks the regression scenario: main rejects unreadable assignments.
 func TestMainRejectsUnreadableAssignments(t *testing.T) {
 	var output bytes.Buffer
 	err := Main(strings.NewReader("{"), &output)
@@ -99,6 +102,7 @@ func TestMainRejectsUnreadableAssignments(t *testing.T) {
 	}
 }
 
+// TestCountLines checks the regression scenario: count lines.
 func TestCountLines(t *testing.T) {
 	tests := []struct {
 		body string
@@ -116,6 +120,7 @@ func TestCountLines(t *testing.T) {
 	}
 }
 
+// mustJSON encodes a fixture or fails the test.
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -123,4 +128,26 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// TestExternalSymlinksDoNotRevealMetadata returns the same refusal for every target.
+func TestExternalSymlinksDoNotRevealMetadata(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "file"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{outside, filepath.Join(outside, "file"), filepath.Join(outside, "missing")} {
+		link := filepath.Join(root, "link")
+		_ = os.Remove(link)
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		in := assignment{}
+		in.Task.Files = []string{"link"}
+		in.Context = map[string]json.RawMessage{"repository": mustJSON(t, map[string]string{"root": root})}
+		got := answer(in)
+		if got.Reason == nil || got.Reason.Kind != "permission_denied" || got.Reason.Text != "read outside permitted scope or unavailable" {
+			t.Fatalf("metadata exposed: %+v", got)
+		}
+	}
 }

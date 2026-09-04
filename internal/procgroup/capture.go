@@ -3,7 +3,6 @@ package procgroup
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os/exec"
 )
 
@@ -15,11 +14,16 @@ type Capture struct {
 	stop     func()
 }
 
+// ErrOutputLimit identifies a process whose captured output exceeded the limit.
+var ErrOutputLimit = errors.New("process output exceeds 8 MiB")
+
 // MaxOutput caps a captured stream at eight MiB.
 const MaxOutput = 8 << 20
 
 // NewCapture constructs a bounded capture with an overflow callback.
 func NewCapture(stop func()) *Capture { return &Capture{stop: stop} }
+
+// Write retains bounded bytes and stops the owned process on overflow.
 func (c *Capture) Write(p []byte) (int, error) {
 	n := len(p)
 	space := MaxOutput - c.buffer.Len()
@@ -38,6 +42,9 @@ func (c *Capture) Write(p []byte) (int, error) {
 
 // WriteString implements io.StringWriter.
 func (c *Capture) WriteString(s string) (int, error) { return c.Write([]byte(s)) }
+
+// String returns the public textual representation.
+// String returns bounded diagnostic text with an overflow marker when needed.
 func (c *Capture) String() string {
 	if c.exceeded {
 		return c.buffer.String() + "\n[process output exceeds 8 MiB]"
@@ -61,10 +68,18 @@ func Output(cmd *exec.Cmd) ([]byte, error) {
 		exit.Stderr = diagnostic.Bytes()
 	}
 	if out.exceeded || diagnostic.exceeded {
-		err = fmt.Errorf("process output exceeds 8 MiB")
+		err = errors.Join(ErrOutputLimit, err)
 	}
 	return out.Bytes(), err
 }
 
 // WriteByte appends one byte within the stream limit.
 func (c *Capture) WriteByte(b byte) error { _, err := c.Write([]byte{b}); return err }
+
+// Err reports overflow after the capture writer has stopped.
+func (c *Capture) Err() error {
+	if c.exceeded {
+		return ErrOutputLimit
+	}
+	return nil
+}
