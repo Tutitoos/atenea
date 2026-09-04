@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/pkg/contract"
+
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -36,6 +38,12 @@ func (s *Store) Read(ctx context.Context, q Query, catalog []Tool) (Snapshot, er
 	for {
 		out, err := s.readOnce(ctx, q, catalog)
 		if err == nil {
+			for i := range out.Errors {
+				out.Errors[i].Reason = Clean(contract.RedactRaw(out.Errors[i].Reason), 240)
+			}
+			for i := range out.Coverage.Notes {
+				out.Coverage.Notes[i] = contract.RedactRaw(out.Coverage.Notes[i])
+			}
 			return out, nil
 		}
 		transient := transientRead(err)

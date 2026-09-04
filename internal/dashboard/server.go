@@ -163,6 +163,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/login", s.login)
 	mux.Handle("/", s.static())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.allowedHost(r) {
+			writeError(w, http.StatusForbidden, "dashboard host not allowed")
+			return
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
@@ -175,6 +179,29 @@ func (s *Server) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// allowedHost validates the authority without resolving attacker-controlled DNS.
+func (s *Server) allowedHost(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return true
+	}
+	for _, listener := range s.cfg.Listeners {
+		h, _, err := net.SplitHostPort(listener.Addr)
+		if err == nil && ip != nil && ip.Equal(net.ParseIP(h)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) static() http.Handler {
