@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -46,7 +47,9 @@ func RedactRaw(raw string) string {
 		return boundRaw(text)
 	}
 	var value any
-	if json.Unmarshal([]byte(text), &value) == nil {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+	if decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF {
 		redactJSON(value)
 		if encoded, err := json.Marshal(value); err == nil {
 			text = string(encoded)
