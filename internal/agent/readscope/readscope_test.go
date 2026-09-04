@@ -29,4 +29,13 @@ func TestRootAndAssignedFiles(t *testing.T) {
 	if _, err := ReadFile(root, "yes", []string{"other"}); err == nil {
 		t.Fatal("unassigned read")
 	}
+	if err := os.WriteFile(filepath.Join(root, "unassigned"), []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("unassigned", filepath.Join(root, "assigned-link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFile(root, "assigned-link", []string{"assigned-link"}); err == nil {
+		t.Fatal("assigned symlink reached an unassigned file")
+	}
 }
