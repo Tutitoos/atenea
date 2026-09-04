@@ -2,10 +2,10 @@ package metrics
 
 import (
 	"context"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -548,46 +548,56 @@ func TestAFlushWaitsForTheOneAlreadyWriting(t *testing.T) {
 	}
 }
 
-// Record is on the hot path of real work, and past the buffer ceiling it used
-// to discard the oldest entry by copying every surviving one down a slot:
-// measured at 74us per call with the default limit of 10000, against roughly
-// 40ns before the buffer filled. The cost was proportional to the ceiling,
-// which is the shape this asserts is gone -- a ring moves an index instead of
-// the rows, so a store with a hundred times the ceiling pays the same.
-func TestRecordCostsTheSameWhateverTheCeiling(t *testing.T) {
-	const (
-		small  = 200
-		large  = 20000
-		sample = 5000
-	)
-	cost := func(limit int) time.Duration {
-		s := &Store{limit: limit}
-		m := attempt(time.Now(), "code.search", "ripgrep")
-		for range limit {
-			s.Record(m)
-		}
-		// The fastest of several rounds, because the machine running this is
-		// also running everything else and only the floor is about the code.
-		best := time.Duration(math.MaxInt64)
-		for range 5 {
-			start := time.Now()
-			for range sample {
+// Overflow must overwrite the oldest slot without shifting surviving entries.
+// Verify the ring and its chronological drain directly; wall-clock ratios at
+// nanosecond scale depend on runner scheduling and cache behavior. Performance
+// remains covered by BenchmarkRecord and scripts/benchmark-check.sh.
+func TestRecordOverflowKeepsSurvivorsInPlace(t *testing.T) {
+	for _, limit := range []int{1, 200, 20000} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			s := &Store{limit: limit}
+			measurement := func(id int) Measurement {
+				m := attempt(time.Unix(1, 0), "code.search", "ripgrep")
+				m.StepID = strconv.Itoa(id)
+				return m
+			}
+			expected := make([]string, limit)
+			for i := range limit {
+				m := measurement(i)
 				s.Record(m)
+				expected[i] = m.StepID
 			}
-			if spent := time.Since(start); spent < best {
-				best = spent
+			backing := &s.buf[0]
+			capacity := cap(s.buf)
+			// Cross a full rotation and keep going to exercise wrapped heads.
+			for i := range limit + 3 {
+				m := measurement(limit + i)
+				s.Record(m)
+				expected[i%limit] = m.StepID
+				if len(s.buf) != limit || cap(s.buf) != capacity || &s.buf[0] != backing {
+					t.Fatal("overflow changed the backing array or buffer size")
+				}
+				if s.Pending() != limit || s.Dropped() != i+1 {
+					t.Fatalf("overflow %d: pending=%d dropped=%d", i+1, s.Pending(), s.Dropped())
+				}
+				if i == 0 || i == limit-1 || i == limit+2 {
+					for slot, want := range expected {
+						if got := s.buf[slot].StepID; got != want {
+							t.Fatalf("overflow %d moved slot %d: got %s, want %s", i+1, slot, got, want)
+						}
+					}
+				}
 			}
-		}
-		return best / sample
-	}
-
-	cheap, dear := cost(small), cost(large)
-	// A hundredfold ceiling against a fivefold budget: generous enough to
-	// survive a noisy machine, and nowhere near the hundredfold difference a
-	// per-call copy of the whole buffer produces.
-	if dear > 5*cheap {
-		t.Errorf("a Record costs %v at a ceiling of %d and %v at %d: the discard is copying the buffer, not moving an index",
-			cheap, small, dear, large)
+			batch := s.drain()
+			if len(batch) != limit || s.Pending() != 0 {
+				t.Fatalf("drain: batch=%d pending=%d", len(batch), s.Pending())
+			}
+			for i, m := range batch {
+				if want := strconv.Itoa(limit + 3 + i); m.StepID != want {
+					t.Fatalf("drain row %d: got %s, want %s", i, m.StepID, want)
+				}
+			}
+		})
 	}
 }
 
