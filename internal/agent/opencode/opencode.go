@@ -210,9 +210,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	var stream eventStream
 	var limitErr error
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), procgroup.MaxOutput+2)
+	scanner.Split(scanEventFrame)
 	for scanner.Scan() {
-		if err := stream.accept(scanner.Bytes()); err != nil {
+		if err := stream.acceptFrame(scanner.Bytes()); err != nil {
 			// The charge, on this path too. An event this adapter cannot read
 			// says nothing about the steps that arrived before it, and those
 			// steps carried real tokens and a real cost: every other failing
@@ -357,9 +358,10 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 	}
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), procgroup.MaxOutput+2)
+	scanner.Split(scanEventFrame)
 	for scanner.Scan() {
-		if err := stream.accept(scanner.Bytes()); err != nil {
+		if err := stream.acceptFrame(scanner.Bytes()); err != nil {
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
 			return stream, err
@@ -446,11 +448,40 @@ type part struct {
 	Cost *float64 `json:"cost"`
 }
 
+// scanEventFrame preserves the bytes consumed by ScanLines so aggregate
+// accounting includes LF or CRLF delimiters removed from the JSON token.
+func scanEventFrame(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	advance, line, err := bufio.ScanLines(data, atEOF)
+	if line == nil {
+		return advance, nil, err
+	}
+	return advance, data[:advance], err
+}
+
+// accept keeps the historical test helper semantics of one LF-delimited event.
 func (s *eventStream) accept(raw []byte) error {
-	if len(raw)+1 > procgroup.MaxOutput-s.bytes {
+	return s.acceptBytes(raw, 1)
+}
+
+func (s *eventStream) acceptFrame(frame []byte) error {
+	delimiter := 0
+	raw := frame
+	if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+		delimiter = 1
+		raw = raw[:len(raw)-1]
+		if len(raw) > 0 && raw[len(raw)-1] == '\r' {
+			delimiter++
+			raw = raw[:len(raw)-1]
+		}
+	}
+	return s.acceptBytes(raw, delimiter)
+}
+
+func (s *eventStream) acceptBytes(raw []byte, delimiter int) error {
+	if len(raw)+delimiter > procgroup.MaxOutput-s.bytes {
 		return contract.Fail(contract.FailureUnavailable, "opencode event stream exceeds 8 MiB")
 	}
-	s.bytes += len(raw) + 1
+	s.bytes += len(raw) + delimiter
 	var ev event
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return contract.Fail(contract.FailureUnavailable,

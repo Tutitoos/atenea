@@ -88,12 +88,14 @@ def crawl(url, max_pages=25, max_depth=2, selector="", extraction="markdown",
         logging_level = 40
 
         def rules(self):
+            """Return the single-host link rule used by this crawl."""
             return [CrawlRule(
                 link_extractor=LinkExtractor(allow_domains=[host]),
                 callback=self.parse,
             )]
 
         async def parse(self, response):
+            """Collect one response and enqueue links within the configured bounds."""
             nonlocal stopped
             depth = int((getattr(response, "meta", None) or {}).get("depth", 0))
             body = _body(response, selector, extraction)
@@ -141,6 +143,7 @@ def _body(response, selector, extraction):
 
 
 def _render(node, extraction):
+    """Render a Scrapling node using the requested representation."""
     for attribute in {"markdown": ("markdown",), "html": ("html_content", "body"),
                       "text": ("get_all_text", "text")}.get(extraction, ("text",)):
         value = getattr(node, attribute, None)
@@ -155,6 +158,7 @@ def _render(node, extraction):
 
 
 def _title(response):
+    """Return a normalized document title without failing the crawl."""
     try:
         node = response.css_first("title")
     except Exception:
@@ -187,6 +191,7 @@ TOOLS = [{
 
 
 def handle(message):
+    """Dispatch one validated MCP request and return its result payload."""
     method = message.get("method")
     if method == "initialize":
         return {
@@ -220,6 +225,7 @@ def handle(message):
 
 
 def _version():
+    """Return the installed Scrapling version for the MCP handshake."""
     try:
         import scrapling
         return str(getattr(scrapling, "__version__", "0"))
@@ -228,6 +234,7 @@ def _version():
 
 
 def valid_request(message):
+    """Check the JSON-RPC shape accepted by this named-parameter server."""
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
         return False
     if "id" in message:
@@ -238,11 +245,13 @@ def valid_request(message):
 
 
 def write_error(code, message):
+    """Write one JSON-RPC error response with a null correlation ID."""
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}}) + "\n")
     sys.stdout.flush()
 
 
 def main():
+    """Serve newline-delimited JSON-RPC requests until stdin or stdout closes."""
     for line in sys.stdin:
         line = line.strip()
         if not line:
