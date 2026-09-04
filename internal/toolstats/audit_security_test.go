@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestDiagnosticRedactionAtStorageAndRead protects both newly recorded and historical secrets.
 func TestDiagnosticRedactionAtStorageAndRead(t *testing.T) {
 	s := testStore(t)
 	_, c := s.Begin(t.Context(), Event{Level: "request", Tool: "synthetic"})
