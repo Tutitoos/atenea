@@ -423,6 +423,7 @@ func (s *Store) Baselines(ctx context.Context, capability, repository, subject s
 	return out, nil
 }
 
+// readCosts loads aggregate provider costs for the requested capability and repository.
 func (s *Store) readCosts(ctx context.Context, db *connection, capability, repository string,
 	out map[string]Baseline) error {
 	rows, err := db.QueryContext(ctx, costs, capability, repository, capability, repository)
