@@ -368,7 +368,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 	runErr := cmd.Wait()
 	peak = procstat.PeakRSS(cmd.ProcessState)
 	if scanErr != nil {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex output could not be read")
 	}
 	if budgetStopped {
@@ -377,18 +377,18 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 				"codex exceeded its monetary permission during the event stream")
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return response{}, peak, contract.Stopped(ctxErr, "codex", r.timeout)
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Stopped(ctxErr, "codex", r.timeout)
 	}
 	if runErr != nil {
-		return response{}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, classifyFailure(parsed.ErrorText+" "+stderr.String(), runErr)
 	}
 	if parsed.Message == "" {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex completed without a final JSON answer")
 	}
 	var out response
 	if err := json.Unmarshal([]byte(parsed.Message), &out.Structured); err != nil {
-		return response{}, peak, contract.Fail(contract.FailureUnavailable,
+		return response{Usage: parsed.Usage, CostUSD: parsed.CostUSD, CostSeen: parsed.CostSeen}, peak, contract.Fail(contract.FailureUnavailable,
 			"codex returned invalid JSON")
 	}
 	out.Usage = parsed.Usage

@@ -309,7 +309,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 			contract.VerdictIncomplete, death, report.Discovered); err != nil {
 			return contract.Report{}, assignment, err
 		}
-		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death},
+		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death, Spent: report.Spent},
 			assignment, contract.Fail(death.Kind, "agent %s (%s): %s",
 				assignment.ID, d.TypeName, death.Text)
 	}
@@ -405,11 +405,13 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		stderr = strings.TrimSpace(string(exit.Stderr))
 	}
 
+	partial, _ := decodeReport(stdout)
+
 	// The clock and the cancel are checked before the output, because a
 	// truncated answer from a killed process can still parse, and reading it
 	// as an answer would turn a death into a verdict.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Report{}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
+		return contract.Report{Spent: partial.Spent}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
 	}
 
 	report, parseErr := decodeReport(stdout)
@@ -421,7 +423,7 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		// A report AND a non-zero exit. The report is discarded: a process
 		// that answered and then failed to exit cleanly has not established
 		// which of the two to believe.
-		return contract.Report{}, deathf(contract.FailureUnavailable,
+		return contract.Report{Spent: report.Spent}, deathf(contract.FailureUnavailable,
 			"answered and then exited badly: %v%s", runErr, note(stderr))
 	}
 
@@ -430,7 +432,7 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		// A well-formed answer in the wrong shape is not a death of the
 		// process -- but it is a death of the ANSWER, and the same rule
 		// applies: nobody may read a result that was never checked.
-		return contract.Report{}, deathf(contract.FailureInvalidInput,
+		return contract.Report{Spent: report.Spent}, deathf(contract.FailureInvalidInput,
 			"the answer does not match the declared shape: %v", err)
 	}
 	return report, nil

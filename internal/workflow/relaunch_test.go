@@ -229,8 +229,9 @@ func TestTheRefusedAttemptsChargeStaysOnTheReceipt(t *testing.T) {
 		declared("judge", refusesOnce(t, dir, "judge", "wrong"), config.PoolReview),
 	)
 
-	run, err := h.engine.Start(t.Context(),
-		graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w")))
+	g := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	g.GrantUSD = 1 // Both charged attempts must be funded.
+	run, err := h.engine.Start(t.Context(), g)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -307,8 +308,9 @@ func TestARefusedReviewIsOnDiskBeforeTheRedispatch(t *testing.T) {
 		declared("judge", refusesOnce(t, dir, "judge", "wrong"), config.PoolReview),
 	)
 
-	run, err := h.engine.Start(t.Context(),
-		graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w")))
+	g := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	g.GrantUSD = 1 // Both charged attempts must be funded.
+	run, err := h.engine.Start(t.Context(), g)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

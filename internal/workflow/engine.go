@@ -1198,6 +1198,34 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 		return run, err
 	}
 
+	totalGrant := run.GrantUSD
+	if grant > 0 {
+		totalGrant = grant
+	}
+	required := 0.0
+	for _, row := range run.Steps {
+		if row.TraceID != "" {
+			if row.Spent.USD != nil {
+				required += *row.Spent.USD
+			} else {
+				required += row.Step.Permission.BudgetUSD
+			}
+		}
+	}
+	for _, row := range run.Superseded {
+		if row.Spent.USD != nil {
+			required += *row.Spent.USD
+		} else {
+			required += row.GrantUSD
+		}
+	}
+	for _, raise := range raises {
+		required += raise.USD
+	}
+	if required > totalGrant+moneyEpsilon {
+		return run, contract.Fail(contract.FailurePermissionDenied, "redo requires $%.2f including previous attempts; grant is $%.2f", required, totalGrant)
+	}
+
 	if grant > 0 {
 		if err := e.store.Regrant(ctx, id, grant); err != nil {
 			return run, err
@@ -1611,7 +1639,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					dispatch.Rejected = &card
 				}
 				if err := e.store.Claim(write, id, step.ID, traceID,
-					attempts[step.ID], e.now(), e.pid); err != nil {
+					attempts[step.ID], e.now(), e.pid, step.Permission.BudgetUSD); err != nil {
 					return run, err
 				}
 				traces[step.ID] = traceID
@@ -1644,6 +1672,9 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// loop: the cancel usually lands while this loop is blocked here,
 		// which is exactly when that flag is still false.
 		if finished.status == StatusInterrupted {
+			if err := e.store.Finish(write, id, finished.stepID, StatusInterrupted, finished.report, e.now()); err != nil {
+				return run, err
+			}
 			aborted = true
 			if err := e.store.Interrupt(write, id, finished.stepID, "cut by abort", e.now()); err != nil {
 				return run, err

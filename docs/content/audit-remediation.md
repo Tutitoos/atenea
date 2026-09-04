@@ -11,3 +11,9 @@ Stop writers, take a verified backup, and work on a restored copy first. Invento
 ## 02: Permissions (B01, B11, R03)
 
 Workflow dispatch now carries the exact step effects, including an explicit empty grant. Direct callers retain the declared default when omitted. Shipped readers use directory-rooted bounded reads and enforce named task files. Custom executables remain trusted programs; these checks are not an OS sandbox.
+
+## 03: Accounting (B02, B03, B06, B07, B08)
+
+Claims reserve the whole requested step share in SQLite before dispatch. A retry that cannot fund that share is refused instead of silently increasing the grant or gambling on a smaller share. Reservations survive restart, include archived attempts, and retain unknown charges at their granted ceiling. Observed charges settle the hold; provider overspend remains visible rather than being clipped. The additive reservation table reconstructs older attempts from their existing trace IDs and grants.
+
+Codex and OpenCode preserve reported usage on failure. OpenCode finalization uses only the remaining budget/tokens. Fallback subtracts cumulative spend from the original grant exactly once. A child killed before emitting any charge remains unknown; Atenea cannot reconstruct an unreported bill.

@@ -93,7 +93,7 @@ func TestAStepCutAtItsCeilingIsRedoneAtARaisedShare(t *testing.T) {
 	}
 
 	out, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20)
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30)
 	if err != nil {
 		t.Fatalf("Redo: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAStepCutAtItsCeilingIsRedoneAtARaisedShare(t *testing.T) {
 func TestARedoIsRecordedAsAGateSomebodyAnswered(t *testing.T) {
 	h, run := deadEnd(t, 0.10)
 	if _, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20); err != nil {
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30); err != nil {
 		// The second attempt dies at its ceiling too -- this stub always
 		// does -- and that is not what this test is about.
 		if !strings.Contains(err.Error(), "incomplete") {
@@ -206,7 +206,7 @@ func TestARedoOfAStepNobodyJudgedNamesResume(t *testing.T) {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	_, err = h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20)
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30)
 	if err == nil {
 		t.Fatal("a redo of an interrupted step was accepted")
 	}
@@ -235,7 +235,7 @@ func TestARedoOfAStepThatAnsweredIsRefused(t *testing.T) {
 		t.Fatalf("step a is %s, want ok", got)
 	}
 	_, err = h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20)
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30)
 	if err == nil {
 		t.Fatal("a step that answered at its ceiling was redone")
 	}
@@ -260,7 +260,7 @@ func TestARedoPastTheGrantIsRefusedUntilTheGrantIsRaised(t *testing.T) {
 
 	// Named explicitly, the same raise goes through.
 	if _, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20); err != nil {
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30); err != nil {
 		if !strings.Contains(err.Error(), "incomplete") {
 			t.Fatalf("Redo with a raised grant: %v", err)
 		}
@@ -269,7 +269,7 @@ func TestARedoPastTheGrantIsRefusedUntilTheGrantIsRaised(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if after.GrantUSD != 0.20 {
+	if after.GrantUSD != 0.30 {
 		t.Errorf("the grant is $%.2f, want $0.20", after.GrantUSD)
 	}
 }
@@ -313,7 +313,7 @@ func TestARaisedShareStillUnderTheFloorIsRefused(t *testing.T) {
 		ModelFor: func(string) string { return "claude-opus-5" },
 	}, dir, types...)
 	_, err = second.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.20)
+		[]workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30)
 	if err == nil {
 		t.Fatal("a raise that cannot clear the floor was dispatched")
 	}
@@ -383,7 +383,7 @@ func TestARaiseThatClearsItsOwnDeadSpendTimesTheRatioIsAdmitted(t *testing.T) {
 	// $0.50 x 1.08 = $0.54; $0.55 clears it and reaches dispatch, where the
 	// stub finishes for $0.40 -- less than what it spent dying.
 	out, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.55}}, 0.55)
+		[]workflow.Raise{{StepID: "a", USD: 0.55}}, 1.05)
 	if err != nil {
 		t.Fatalf("Redo: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestItsOwnDeadSpendSupersedesAHighTypeMedian(t *testing.T) {
 	// $0.10 x 1.08 = $0.108. $0.15 clears it and would be refused by the
 	// $5.00 population median alone.
 	out, err := h.engine.Redo(t.Context(), run.ID,
-		[]workflow.Raise{{StepID: "a", USD: 0.15}}, 0.15)
+		[]workflow.Raise{{StepID: "a", USD: 0.15}}, 0.25)
 	if err != nil {
 		t.Fatalf("Redo refused a raise its own dead spend clears, citing the population "+
 			"median instead: %v", err)

@@ -607,6 +607,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if len(candidates) == 1 {
 		return c.turnOnce(ctx, req)
 	}
+	originalBudget := req.BudgetUSD
 	var total contract.Charge
 	var notices []string
 	for index, candidate := range candidates {
@@ -648,7 +649,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		case spentUSD <= 0:
 			provenance = "the failed attempt reported no spend"
 		default:
-			remaining = req.BudgetUSD - spentUSD
+			remaining = originalBudget - spentUSD
 			if remaining <= 0 {
 				// The original failure's raw provider text survives the
 				// rewording: this sentence explains why the chain stopped,

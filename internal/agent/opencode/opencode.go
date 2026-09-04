@@ -249,7 +249,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	}
 	waitErr := cmd.Wait()
 	if ctxErr := turnCtx.Err(); ctxErr != nil {
-		return Answer{}, contract.Stopped(ctxErr, "opencode", limit).WithRaw(strings.TrimSpace(stderr.String()))
+		return Answer{Spent: stream.charge()}, contract.Stopped(ctxErr, "opencode", limit).WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if limitErr != nil {
 		return Answer{Spent: stream.charge()}, limitErr
@@ -271,7 +271,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 	passes := 1
 	toolCalls := append([]string(nil), stream.toolCalls...)
 	if !stream.finished && stream.stopped && stream.sessionID != "" {
-		finalStream, finalErr := r.finalize(turnCtx, req, stream.sessionID)
+		remaining := req
+		if req.BudgetUSD > 0 && charge.USD != nil {
+			remaining.BudgetUSD -= *charge.USD
+		}
+		if req.MaxTokens > 0 {
+			remaining.MaxTokens -= charge.Tokens()
+		}
+		if (req.BudgetUSD > 0 && remaining.BudgetUSD <= 0) || (req.MaxTokens > 0 && remaining.MaxTokens <= 0) {
+			return Answer{Spent: charge}, contract.Fail(contract.FailurePermissionDenied, "no allowance remains for finalization")
+		}
+		finalStream, finalErr := r.finalize(turnCtx, remaining, stream.sessionID)
 		charge = charge.Plus(finalStream.charge())
 		if finalErr != nil {
 			return Answer{Spent: charge}, finalErr
@@ -282,7 +292,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (Answer, error) {
 		passes++
 	}
 	if !stream.finished {
-		return Answer{Spent: stream.charge()}, contract.Fail(contract.FailureUnavailable,
+		return Answer{Spent: charge}, contract.Fail(contract.FailureUnavailable,
 			"opencode ended without a step_finish event").WithRaw(strings.TrimSpace(stderr.String()))
 	}
 	if text == "" {
@@ -341,6 +351,11 @@ func (r *Runner) finalize(ctx context.Context, req Request, sessionID string) (e
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
 		if err := stream.accept(scanner.Bytes()); err != nil {
+			_ = procgroup.Kill(cmd)
+			_ = cmd.Wait()
+			return stream, err
+		}
+		if err := stream.limitFailure(req); err != nil {
 			_ = procgroup.Kill(cmd)
 			_ = cmd.Wait()
 			return stream, err

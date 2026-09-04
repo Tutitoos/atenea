@@ -370,6 +370,11 @@ type Store struct {
 }
 
 const schema = `
+CREATE TABLE IF NOT EXISTS workflow_reservation (
+ workflow_id TEXT NOT NULL, trace_id TEXT NOT NULL, reserved_usd REAL NOT NULL,
+ PRIMARY KEY(workflow_id, trace_id)
+);
+
 CREATE TABLE IF NOT EXISTS workflow (
     id          TEXT    NOT NULL PRIMARY KEY,
     task        TEXT    NOT NULL,
@@ -759,12 +764,41 @@ func (s *Store) Discard(ctx context.Context, id string) error {
 // there. It cannot drift from the columns Finish wrote, because it never
 // passes through Go.
 func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
-	attempt int, at time.Time, pid int) error {
+	attempt int, at time.Time, pid int, budget ...float64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if len(budget) > 0 {
+		// Take the SQLite writer lock before reading the balance.
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow SET grant_usd=grant_usd WHERE id=?`, id); err != nil {
+			return err
+		}
+		for _, table := range []string{"workflow_attempt", "workflow_step"} {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_reservation SELECT workflow_id,trace_id,COALESCE(spent_usd,grant_usd) FROM `+table+` WHERE workflow_id=? AND trace_id<>''`, id); err != nil {
+				return err
+			}
+		}
+		// Observed spend replaces a reservation; unknown spend keeps its full hold.
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=(SELECT spent_usd FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id) WHERE workflow_id=? AND EXISTS (SELECT 1 FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id AND status<>'running' AND spent_usd IS NOT NULL)`, id, id, id); err != nil {
+			return err
+		}
+		var grant, used float64
+		if err := tx.QueryRowContext(ctx, `SELECT grant_usd FROM workflow WHERE id=?`, id).Scan(&grant); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(reserved_usd),0) FROM workflow_reservation WHERE workflow_id=?`, id).Scan(&used); err != nil {
+			return err
+		}
+		if budget[0] < 0 || used+budget[0] > grant+1e-9 {
+			return contract.Fail(contract.FailurePermissionDenied, "workflow budget exhausted: grant %.4f, spent/reserved %.4f, requested %.4f", grant, used, budget[0])
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workflow_reservation VALUES(?,?,?)`, id, traceID, budget[0]); err != nil {
+			return err
+		}
+	}
 
 	if _, err := tx.ExecContext(ctx, fileAttempt, stamp(at), id, stepID); err != nil {
 		return unavailable(err, "workflow: filing %s step %s attempt", id, stepID)
@@ -815,6 +849,11 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 		completeness, report.StoppedAt, id, stepID)
 	if err != nil {
 		return unavailable(err, "workflow: closing %s step %s", id, stepID)
+	}
+	if report.Spent.USD != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=? WHERE workflow_id=? AND trace_id=(SELECT trace_id FROM workflow_step WHERE workflow_id=? AND id=?)`, *report.Spent.USD, id, id, stepID); err != nil {
+			return unavailable(err, "workflow: settling reservation")
+		}
 	}
 	return nil
 }
