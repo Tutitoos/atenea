@@ -44,7 +44,7 @@ func TestRetiredProviderKeepsOnlyUnsupportedContractsDormant(t *testing.T) {
 		}
 	}
 	slices.Sort(dormant)
-	if !slices.Equal(dormant, []string{"symbol.implementations", "symbol.unresolved"}) {
+	if !slices.Equal(dormant, []string{"symbol.unresolved"}) {
 		t.Fatalf("dormant = %v", dormant)
 	}
 	if _, err := config.Load(write(t, minimal)); err != nil {

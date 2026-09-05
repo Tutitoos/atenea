@@ -1,0 +1,255 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ref"
+            },
+            "ref": {
+              "type": "string",
+              "description": "Snapshot element ref such as @e12."
+            },
+            "label": {
+              "type": "string",
+              "description": "Optional human label for the ref."
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "selector"
+            },
+            "selector": {
+              "type": "string",
+              "description": "Agent-device selector expression."
+            }
+          },
+          "required": [
+            "kind",
+            "selector"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "point"
+            },
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "UI target. This is separate from deviceTarget, which selects the device form."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector."
+    },
+    "udid": {
+      "type": "string",
+      "description": "iOS device UDID selector."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android device or Vega VVD serial selector."
+    },
+    "iosSimulatorDeviceSet": {
+      "type": "string",
+      "description": "iOS simulator device-set path used for device resolution."
+    },
+    "iosXctestrunFile": {
+      "type": "string",
+      "description": "Externally built iOS XCTest runner .xctestrun artifact path."
+    },
+    "iosXctestDerivedDataPath": {
+      "type": "string",
+      "description": "Derived data path for external iOS XCTest runner execution."
+    },
+    "iosXctestEnvDir": {
+      "type": "string",
+      "description": "Writable directory for iOS XCTest runner env overlays."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "daemonBaseUrl": {
+      "type": "string",
+      "description": "Remote daemon base URL."
+    },
+    "daemonAuthToken": {
+      "type": "string",
+      "description": "Remote daemon auth token."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for command execution."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "button": {
+      "type": "string",
+      "enum": [
+        "primary",
+        "secondary",
+        "middle"
+      ],
+      "description": "Pointer button for platforms that support mouse buttons."
+    },
+    "depth": {
+      "type": "integer",
+      "description": "Snapshot traversal depth.",
+      "minimum": 0
+    },
+    "scope": {
+      "type": "string",
+      "description": "Snapshot scope selector used before resolution."
+    },
+    "raw": {
+      "type": "boolean",
+      "description": "Use raw snapshot data during selector resolution."
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of press/click repetitions.",
+      "minimum": 1
+    },
+    "intervalMs": {
+      "type": "integer",
+      "description": "Delay between repeated press/click actions.",
+      "minimum": 0
+    },
+    "holdMs": {
+      "type": "integer",
+      "description": "Hold duration for each action.",
+      "minimum": 0
+    },
+    "jitterPx": {
+      "type": "integer",
+      "description": "Randomization radius in pixels.",
+      "minimum": 0
+    },
+    "doubleTap": {
+      "type": "boolean",
+      "description": "Request a double-tap action."
+    },
+    "verify": {
+      "type": "boolean",
+      "description": "Capture cheap post-action evidence (AX digest, node counts, changedFromBefore) instead of a follow-up snapshot."
+    },
+    "settle": {
+      "type": "boolean",
+      "description": "After the action, wait for the UI to go quiet and return the settled diff vs the pre-action tree in the same response. Best-effort; never fails the action."
+    },
+    "settleQuietMs": {
+      "type": "integer",
+      "description": "Settle: quiet window in milliseconds (default 500).",
+      "minimum": 0
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "description": "Settle: wait deadline in milliseconds (default 10000).",
+      "minimum": 1
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "stateDir": {
+      "type": "string",
+      "description": "Agent-device state directory."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "additionalProperties": false
+}

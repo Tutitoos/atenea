@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/agentdevice"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
 	"github.com/Tutitoos/atenea/internal/floor"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -48,7 +49,7 @@ const commandTool = "atenea.command"
 
 var readOnlyCommands = []string{
 	"help", "status", "metrics", "traces", "catalog", "doctor",
-	"detect", "incidents", "floor", "config", "intent",
+	"detect", "incidents", "floor", "config", "intent", "device.sessions", "device.help", "maintenance",
 }
 
 // Command answers the small read-only surface intended for chat shortcuts.
@@ -81,6 +82,40 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 
 	response := CommandResponse{Command: name, Status: "ok"}
 	switch name {
+	case "maintenance":
+		response.Summary = "Kivgraph maintenance"
+		if c.graphMaintenance == nil {
+			response.Data = map[string]any{"state": "not_configured"}
+		} else {
+			job, err := c.graphMaintenance.MaintenanceID(req.ID)
+			if err != nil {
+				return CommandResponse{}, err
+			}
+
+			response.Data = job
+		}
+	case "device.help":
+		response.Summary = "Agent-device arguments and session recovery"
+		response.Data = map[string]any{"version": agentdevice.Version, "click": agentdevice.Help("click"), "wait": agentdevice.Help("wait")}
+	case "device.sessions":
+		backend, ok := c.backends["agent-device"]
+		if !ok || backend.Backend == nil {
+			return CommandResponse{}, contract.Fail(contract.FailureUnavailable, "agent-device requires a conversation; use atenea.command device.sessions through MCP")
+		}
+		raw, err := backend.Call(ctx, "session", deviceSessionListArgs(nil))
+		if err != nil {
+			return CommandResponse{}, err
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return CommandResponse{}, err
+		}
+		observation := observeMCP(body, nil, nil)
+		if observation.Outcome != "ok" {
+			return CommandResponse{}, contract.Fail(contract.FailureUnspecified, "%s: %s", observation.Code, observation.Reason)
+		}
+		response.Summary = "Active agent-device sessions (read only)"
+		response.Data = body
 	case "help":
 		response.Summary = "Available read-only Atenea commands"
 		response.Data = map[string]any{"commands": readOnlyCommands}

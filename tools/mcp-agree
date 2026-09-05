@@ -1,71 +1,25 @@
 #!/usr/bin/env python3
-"""mcp-agree - do the four clients still agree about MCP?
+"""Audit client MCP compatibility with separate evidence levels.
 
-One command, one verdict. Silent-ish when green, loud and specific when not.
+The default mode reads declarations and Atenea's effective profile policy.
+Missing disk declarations do not prove that a wrapper failed to inject them.
+--live discovers each profile directly, recording server version and schema hash;
+it does not claim to observe the tools a host delivered to its model.
+--wire captures a supported client's request through a loopback recorder.
+Historical counts are observations, never compatibility requirements.
 
-It guards the three ways this stack drifts without erroring:
-
-  1. omp's toggle       /mcp enable|disable writes ~/.omp/agent/mcp.json behind you.
-  2. the installer      `kena agent setup` fillMissing()s serena, context7, semgrep
-                        and graph backends back into omp AND claude as enabled:true.
-                        45 -> ~80 tools, with atenea's own backends running twice.
-                        disabledServers does NOT stop it: that list only covers
-                        DISCOVERED servers, not ones declared at user scope.
-  3. claude's approval  ~/.claude.json project entries decide which project-scope
-                        .mcp.json servers may load.
-
-Two surfaces, and only one of them can be green:
-
-  - FILE surface     what the four clients DECLARE. Provable from disk, so it
-                     gets a verdict: green or red, backed by a stat fingerprint.
-  - ACCOUNT surface  what actually reaches the model. It includes Claude Code's
-                     built-ins and the mcp__claude_ai_* connectors attached to
-                     the claude_max OAuth session. NO FILE ON THIS MACHINE
-                     DECLARES THEM, so no fingerprint can cover them and no
-                     reading of them is ever reported as green: the account line
-                     says "measured <date>" or it says it does not know.
-
-Measured 2026-08-13 on this box: 45 tools provable from config (atenea 28 +
-claude-mem 14 + headroom 3), 126 on the wire, 81 invisible to any file-based
-check by construction - 32 Claude Code built-ins and 49 account connectors
-(Gmail 24, Google Calendar 9, Google Drive 8, Spotify 8).
-
-Where 43 came from, so nobody re-derives it: ~/.config/atenea/CLIENTS.md:80
-recorded "atenea 26 + headroom 3 + claude-mem 14 = 43" when atenea exposed 26
-capabilities. atenea exposes 28 today, so the same sum is 45. The number moves
-whenever atenea gains a capability - which is why the count now comes from a
-measurement with a date on it, not from a constant in a docstring.
-
-Design notes, so the next reader does not mistake a choice for an accident:
-
-  - The fast path reads files only. That is deliberate, not lazy: the installer
-    and the toggle both drift by changing a DECLARATION, so the declaration is
-    the sharper instrument - it names the cause, not just the effect.
-  - It never shells out to `claude mcp list`. Measured 2026-08-10: any claude
-    start rewrites ~/.claude.json, and in an untrusted project it PRUNES the
-    approval keys. A check must not damage what it inspects.
-  - `--live` handshakes atenea and headroom over stdio. That spawns
-    nothing a client would not spawn anyway, and writes nothing. It sees only
-    the servers it launches itself, which is why it is not allowed to speak for
-    the whole surface.
-  - `--trust-warning` runs in front of every `claude` launch and must stay
-    under ~30 ms. It reads files, warns about the trust dialog, and claims no
-    tool count at all. A real wire measurement costs ~2.5 s; that belongs in
-    `--wire`, on demand, never here.
-
-Usage:  mcp-agree [--live] [--quiet]
-        mcp-agree --trust-warning     what accepting Claude's trust dialog in
-                                      the current tree would switch on (stderr)
-        mcp-agree --wire [--client=claude|omp|opencode|codex]
-                                      measure the surface that actually reaches
-                                      the model (~2.5 s per client, 0 tokens)
-Exit:   0 file surface agrees and the account surface was measured in THIS
-          shell session
-        1 drift, or warned · 2 could not read something
-        3 file surface agrees, account surface unverified - never call this green
+Usage: mcp-agree [--live|--wire] [--client=NAME] [--profile=NAME] [--quiet]
+       mcp-agree --trust-warning
+Exit: 0 verified requested wire measurement; 1 detected conflict or failed probe;
+      2 invalid input or unreadable configuration; 3 incomplete evidence.
 """
 
 import json
+import hashlib
+import queue
+import threading
+import time
+import shutil
 import os
 import re
 import subprocess
@@ -279,7 +233,7 @@ ACCOUNT_PREFIX = "mcp__claude_ai_"
 # "mcp:mcp__claude_ai", which matches nothing and let connectors count twice - once
 # as groups, once as `cuenta`.
 ACCOUNT_GROUP_PREFIX = "mcp:claude_ai_"
-CLAUDE_BIN = os.path.join(BIN, "claude")
+CLAUDE_BIN = shutil.which("claude") or os.path.join(BIN, "claude")
 
 # opencode has no anthropic socket of its own: it drives the Claude Code CLI
 # with these exact flags (read off the live process tree 2026-08-13), so its
@@ -311,8 +265,7 @@ WIRE_PROBES = {
                        'wire_api="responses",env_key="OPENAI_API_KEY"}',
                  "-c", "model_provider=probe", "hi"],
         "env": {"OPENAI_API_KEY": "mcp-agree-probe"},
-        "note": "OpenAI: su cuerpo no lleva tools, y los conectores de Anthropic "
-                "no pueden alcanzarle",
+        "note": "Se inspecciona el cuerpo recibido; no se presupone su catalogo.",
     },
 }
 
@@ -395,6 +348,9 @@ def probe_wire(client, timeout=90):
     """
     import time
 
+    if client == "opencode":
+        notes.append("opencode: el puente historico de Claude no acredita este cliente; usa --live para el perfil shared")
+        return None
     spec = WIRE_PROBES[client]
     srv, seen = _recorder()
     port = str(srv.server_address[1])
@@ -473,24 +429,15 @@ def render_wire(client, surface):
 # went missing from ~/.omp/agent/mcp.json on 2026-08-11 at 18:06 and was not
 # noticed for two days. Suppressed is not removed. Update these WITH a dated
 # measurement, never to make a red run go quiet.
-WIRE_INVARIANTS = {
-    "claude": {"builtin": 32, "mcp:atenea": 28,
-               "mcp:plugin_claude-mem_mcp-search": 14, "mcp:headroom": 3},
-    "omp": {"builtin": 12},
-    "opencode": {"builtin": 29},
-    "codex": {},          # its body carries no tools at all
-}
-
-# Distinct claude-mem route names each client may carry. 14 is one mount of a
-# 14-tool server; 28 is both declarations back on the wire.
-MEM_ROUTES = {"claude": 14, "omp": 14, "opencode": 0, "codex": 0}
-
-
 def check_wire_invariants(client, surface):
     """The rules a measurement must satisfy. Violations are red, not notes."""
     if surface is None:
         return
-    if surface["account"]:
+    try:
+        deny = load_json(os.path.join(HOME,".claude","settings.json")).get("permissions",{}).get("deny",[])
+    except (OSError,ValueError):
+        deny = []
+    if surface["account"] and "mcp__claude_ai_*" in deny:
         offenders = sorted({str(n).split("__")[1] for n in surface["names"]
                             if str(n).startswith(ACCOUNT_PREFIX)})
         fail("wire", f"{client} lleva {surface['account']} herramientas de cuenta "
@@ -498,30 +445,18 @@ def check_wire_invariants(client, surface):
              "los conectores de la sesion OAuth volvieron al cable. La negacion "
              "vive en ~/.claude/settings.json permissions.deny como "
              '"mcp__claude_ai_*"; si sigue ahi, es que dejo de aplicarse')
-    expected = WIRE_INVARIANTS.get(client)
-    got = {k: v for k, v in surface["groups"].items()
-           if not k.startswith(ACCOUNT_GROUP_PREFIX)}
-    if expected is not None and got != expected:
-        moved = sorted(set(expected) | set(got))
-        detail = ", ".join(f"{k} {expected.get(k, 0)}->{got.get(k, 0)}"
-                           for k in moved if expected.get(k) != got.get(k))
-        fail("wire", f"{client} ya no sirve el conjunto acordado: {detail}",
-             "un servidor entro, se cayo o cambio de tamano. Si es un cambio "
-             "querido - atenea gana una capacidad, por ejemplo - actualiza "
-             "WIRE_INVARIANTS y la fecha del docstring en el mismo commit")
-    want_mem = MEM_ROUTES.get(client)
-    got_mem = surface.get("claude_mem", 0)
-    if want_mem is not None and got_mem != want_mem:
-        why = ("las dos declaraciones estan sirviendo a la vez: el plugin de "
-               "Claude Code (claude-mem@thedotmack -> mcp-search) y el nombre "
-               "'claude-mem' que omp descubre desde opencode. La lista "
-               "disabledServers de ~/.omp/agent/mcp.json es lo unico que calla "
-               "la segunda, y ya se perdio una vez"
-               if got_mem > want_mem else
-               "claude-mem dejo de montar; si no fue a proposito, el backend "
-               "no arranco y el cliente no lo dira")
-        fail("wire", f"{client} lleva {got_mem} rutas claude-mem, esperaba "
-                     f"{want_mem}", why)
+    policy = effective_policy(client)
+    if not surface.get("names"):
+        notes.append(f"{client}: el cuerpo capturado no acredita las tools recibidas")
+        return
+    if policy and policy["mode"] == "atenea_only":
+        direct = {group[4:] for group in surface["groups"] if group.startswith("mcp:")
+                  and not group.startswith(ACCOUNT_GROUP_PREFIX)}
+        unexpected = direct - {"atenea"}
+        if unexpected:
+            fail("wire",f"{client}: MCP directos fuera de la politica {sorted(unexpected)}",
+                 "contrasta el wrapper realmente ejecutado, la configuracion inyectada y los plugins del cliente")
+    notes.append(f"{client}: catalogo medido; recuentos historicos no se usan como contrato")
 
 
 def run_wire(clients):
@@ -624,7 +559,7 @@ def fingerprint():
     import hashlib
 
     h = hashlib.sha256()
-    for path in STAT_INPUTS:
+    for path in STAT_INPUTS + [shutil.which(client) or client for client in WIRE_PROBES] + [os.environ.get("ATENEA_CONFIG", "")]:
         try:
             st = os.stat(path)
             h.update(f"{path}:{st.st_mtime_ns}:{st.st_size}\n".encode())
@@ -651,7 +586,7 @@ def save_surface(measured):
         stored = {}
     clients = stored.get("clients") or {}
     for client, surface in measured.items():
-        if surface is None:
+        if surface is None or not surface.get("names"):
             continue
         clients[client] = {
             "count": len(surface["names"]),
@@ -687,7 +622,7 @@ def account_line(cached, fp):
     surface failed, and it can never make the whole verdict green on its own.
     """
     entry = cached.get("claude")
-    if not entry:
+    if not entry or not entry.get("count"):
         return ("sin medir nunca · corre `mcp-agree --wire`", False)
     when = entry.get("measured_at", "?")
     body = (f"medida {when[:10]} · {entry.get('count', '?')} tools en el cable "
@@ -703,73 +638,122 @@ def account_line(cached, fp):
 
 
 # ---------------------------------------------------------------- live
-def handshake(name, cmd, args, env_extra=None, want_names=False):
-    """Speak MCP at a server the way a client would. Writes nothing.
-
-    Turn-taking, not a batch dump: measured 2026-08-10, atenea answers
-    `initialize` and then ignores anything that arrived in the same write.
-    A client sends one request and waits, so this does too.
-    """
+def handshake(name, cmd, args, env_extra=None, want_names=False,
+              client_name="mcp-agree", client_version="unknown", timeout=30,
+              want_metadata=False):
+    """Bounded MCP discovery under the actual client identity/profile."""
     env = dict(os.environ)
     env.update(env_extra or {})
-    p = None
+    process = None
+    messages = queue.Queue()
+    deadline = time.monotonic() + timeout
     try:
-        p = subprocess.Popen([cmd] + args, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, bufsize=1, env=env)
-
-        def send(obj):
-            p.stdin.write(json.dumps(obj) + "\n")
-            p.stdin.flush()
-
-        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                         "clientInfo": {"name": "mcp-agree", "version": "1"}}})
-        p.stdout.readline()
-        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        for _ in range(20):
-            line = p.stdout.readline()
-            if not line:
-                break
+        process = subprocess.Popen([cmd] + args, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, bufsize=1, env=env)
+        def read():
             try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
-            if msg.get("id") == 2 and "result" in msg:
-                served = msg["result"].get("tools", [])
-                return [t["name"] for t in served] if want_names else len(served)
-    except OSError as exc:
-        fail("live", f"{name} no arranca", str(exc))
+                while True:
+                    line = process.stdout.readline(8 * 1024 * 1024 + 1)
+                    if not line:
+                        break
+                    if len(line) <= 8 * 1024 * 1024:
+                        try:
+                            messages.put(json.loads(line))
+                        except ValueError:
+                            pass
+                    else:
+                        break
+            except (OSError, ValueError):
+                pass
+            finally:
+                messages.put(None)
+        threading.Thread(target=read, daemon=True).start()
+        def send(message):
+            process.stdin.write(json.dumps(message) + "\n")
+            process.stdin.flush()
+        def response(identifier):
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("MCP discovery timed out")
+                message = messages.get(timeout=remaining)
+                if message is None:
+                    raise ValueError("MCP process ended before its response")
+                if not isinstance(message, dict):
+                    raise ValueError("invalid MCP envelope")
+                if message.get("id") == identifier:
+                    if "error" in message:
+                        raise ValueError("MCP rejected discovery")
+                    return message.get("result", {})
+        send({"jsonrpc":"2.0", "id":1, "method":"initialize",
+              "params":{"protocolVersion":"2024-11-05", "capabilities":{},
+                        "clientInfo":{"name":client_name,"version":client_version}}})
+        initialized = response(1)
+        send({"jsonrpc":"2.0", "method":"notifications/initialized"})
+        served = []
+        cursor = None
+        identifier = 2
+        seen = set()
+        while True:
+            send({"jsonrpc":"2.0", "id":identifier, "method":"tools/list",
+                  "params": {} if cursor is None else {"cursor":cursor}})
+            page = response(identifier)
+            tools = page.get("tools", [])
+            if not isinstance(tools, list) or any(not isinstance(tool, dict) or not isinstance(tool.get("name"), str) for tool in tools):
+                raise ValueError("invalid MCP catalog")
+            served.extend(tools)
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
+            if cursor in seen:
+                raise ValueError("MCP catalog repeated its cursor")
+            seen.add(cursor)
+            identifier += 1
+        if want_metadata:
+            schemas = {tool["name"]: {key:tool[key] for key in
+                       ("inputSchema", "outputSchema") if key in tool} for tool in served}
+            digest = hashlib.sha256(json.dumps(schemas, sort_keys=True,
+                                    separators=(",", ":")).encode()).hexdigest()
+            return {"client":client_name,"client_version":client_version,
+                    "server":initialized.get("serverInfo", {}), "tools":[tool["name"] for tool in served],
+                    "schema_hash":digest,"observed_at":time.time(),
+                    "evidence":"direct_handshake; host-delivered tools remain separate"}
+        return [tool["name"] for tool in served] if want_names else len(served)
+    except (OSError, ValueError, TimeoutError, queue.Empty):
+        fail("live", f"{name}: descubrimiento MCP no verificado",
+             "inicio, protocolo o plazo fallido; ningun recuento sustituye esta evidencia")
         return None
     finally:
-        if p and p.poll() is None:
-            p.terminate()
-    fail("live", f"{name} arranco pero no devolvio tools/list",
-         "sin respuesta a tools/list en 20 lineas")
-    return None
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            if process.stdin:
+                try:
+                    process.stdin.close()
+                except (OSError, ValueError):
+                    pass
+            if process.stdout:
+                process.stdout.close()
 
 
 def check_live():
-    """Handshake the servers this stack launches, and report what they serve.
-
-    It no longer FAILS on those two counts. `--live` sees only the servers it
-    spawns itself - never the client's built-ins, never a plugin's server,
-    never the account connectors - so "atenea 28, headroom 3" was a green light
-    for 31 tools out of a 77-tool surface. Counting is now the wire's job
-    (WIRE_INVARIANTS); what stays here is the thing a handshake can prove and a
-    file cannot: whether the declared core servers answer their handshake.
-    """
-    counts = {}
-    n = handshake("atenea", os.path.join(BIN, "atenea"), ["mcp"])
-    if n is not None:
-        counts["atenea"] = n
-    n = handshake("headroom", os.path.join(BIN, "headroom"), ["mcp", "serve"],
-                  {"HEADROOM_NO_MEMORY_TOOLS": "1", "HEADROOM_NO_MEMORY_CONTEXT": "1"})
-    if n is not None:
-        counts["headroom"] = n
-
-    notes.append("handshake: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    """Measure each policy separately; never infer the host's tool surface."""
+    atenea = os.environ.get("ATENEA_BIN") or shutil.which("atenea") or os.path.join(BIN,"atenea")
+    for client in wire_clients_from_argv() or []:
+        policy = effective_policy(client)
+        if policy is None:
+            continue
+        measured = handshake("atenea/"+client, atenea,
+                             ["mcp", "--desktop-profile", policy["profile"]],
+                             client_name=client, want_metadata=True)
+        if measured is not None:
+            notes.append("handshake " + json.dumps({**measured, "profile":policy["profile"]}, sort_keys=True))
 
 
 # ------------------------------------------------------- warning before the click
@@ -825,6 +809,70 @@ def trust_warning():
     return 0
 
 
+def effective_policy(client):
+    """Mirror ResolveDesktopProfile for file-only diagnosis, with explicit provenance.
+
+    This describes the wrapper policy. It does not claim a wrapper ran.
+    """
+    filename = os.environ.get("ATENEA_CONFIG") or os.path.join(HOME,".config","atenea","atenea.toml")
+    try:
+        config = load_toml(filename)
+    except (OSError, ValueError):
+        notes.append(f"{client}: politica Atenea sin verificar")
+        return None
+    name = "claude" if client == "claude" else "chatgpt" if client in ("codex","chatgpt") else "shared"
+    overrides = [arg.split("=",1)[1] for arg in sys.argv if arg.startswith("--profile=")]
+    if overrides:
+        name = overrides[-1]
+    defaults = {"claude":{"mcp_mode":"atenea_only"},
+                "chatgpt":{"mcp_mode":"atenea_only"},
+                "shared":{"mcp_mode":"hybrid","direct_mcp":["*"]},
+                "agent-device-full":{"mcp_mode":"atenea_only"}}
+    profile = next((row for row in config.get("desktop_profile",[]) if row.get("name")==name), defaults.get(name))
+    if profile is None or (profile.get("clients") and client not in profile["clients"] and "*" not in profile["clients"]):
+        fail("policy", f"{client}: perfil incompatible {name}", "verifica --profile y desktop_profile.clients")
+        return None
+    served = {row.get("provider") for row in config.get("implementation",[])}
+    direct = []
+    if profile.get("mcp_mode") == "hybrid":
+        allowed = profile.get("direct_mcp",[])
+        direct = sorted(row["id"] for row in config.get("mcp_server",[])
+                        if row.get("expose")=="on" and row.get("id") not in served
+                        and ("*" in allowed or row.get("id") in allowed))
+    return {"profile":name,"mode":profile.get("mcp_mode"),
+            "expected_wrapper_servers":["atenea"]+direct,
+            "source":filename,"injected_configuration":"unobserved",
+            "received_tools":"unobserved"}
+
+
+def audit_client_declarations(client):
+    policy = effective_policy(client)
+    locations = {
+        "omp":[os.path.join(os.environ.get("PI_CODING_AGENT_DIR") or os.path.join(HOME,".omp","agent"),"mcp.json")],
+        "claude":[os.path.join(HOME,".claude.json")],
+        "codex":[os.path.join(HOME,".codex","config.toml")],
+        "opencode":opencode_configs(),
+    }
+    declared = {}
+    sources = []
+    for filename in locations[client]:
+        if not os.path.isfile(filename):
+            continue
+        document = load_toml(filename) if filename.endswith(".toml") else load_jsonc(filename)
+        key = "mcp_servers" if client=="codex" else "mcp" if client=="opencode" else "mcpServers"
+        for name, value in (document.get(key) or {}).items():
+            declared[name] = {"enabled": value.get("enabled",True) and name not in document.get("disabledServers",[])}
+        sources.append(filename.replace(HOME,"~"))
+    rows.append((client, sorted(declared), ", ".join(sources) or "sin declaracion en disco"))
+    if policy:
+        notes.append(client+": "+json.dumps(policy,sort_keys=True))
+    notes.append(f"{client}: disco={len(declared)}; la inyeccion del wrapper y las tools recibidas requieren evidencia independiente")
+    # Retired declarations are a concrete conflict even if this particular
+    # launch later suppresses them. Missing disk entries prove no absence.
+    if "serena" in declared and declared["serena"]["enabled"]:
+        fail("retired",f"{client}: Serena sigue habilitada en disco","el proveedor esta retirado")
+
+
 # ---------------------------------------------------------------- main
 def wire_clients_from_argv():
     """--client=NAME, repeatable; absent means all four."""
@@ -848,16 +896,18 @@ def main():
         clients = wire_clients_from_argv()
         if clients is None:
             return 2
-        run_wire(clients)
+        measured = run_wire(clients)
         if fails:
             for case, what, why in fails:
                 print(f"\n  [{case}] {what}")
                 print(f"          {why}")
             return 1
-        return 0
+        return 0 if all(value and value.get("names") for value in measured.values()) else 3
 
-
-    for fn in (check_omp, check_claude, check_codex, check_opencode, check_serena):
+    clients = wire_clients_from_argv()
+    if clients is None:
+        return 2
+    for fn in ([lambda client=client: audit_client_declarations(client) for client in clients] + [check_serena]):
         try:
             fn()
         except FileNotFoundError as exc:
@@ -893,7 +943,7 @@ def main():
             print(f"  {client:<9} {', '.join(names):<34} {src}")
         for note in notes:
             print(f"  nota: {note}")
-        print(f"  ficheros  VERDE     los cuatro coinciden · fingerprint {fp}")
+        print(f"  ficheros  LEIDOS    politica y declaraciones separadas · fingerprint {fp}")
         print(f"  cuenta    {account_text}")
     if not account_verified:
         # Deliberately not 0: the file surface agrees, and that is all this run

@@ -96,6 +96,10 @@ func ParseFailureKind(s string) (FailureKind, error) {
 // Failure is the error type crossing the contract boundary.
 type Failure struct {
 	Kind FailureKind
+	// Code identifies a stable provider cause without changing its routing bin.
+	Code string
+	// HealthNeutral failures do not diagnose provider availability.
+	HealthNeutral bool
 	// Message is Atenea's own wording, in English like every technical artifact.
 	Message string
 	// Raw is the untranslated output of the underlying CLI or tool, kept so a
@@ -196,4 +200,19 @@ func Stopped(ctxErr error, provider string, limit time.Duration) *Failure {
 		return Fail(FailureCanceled, "%s was stopped before it answered", provider)
 	}
 	return Fail(FailureTimeout, "%s took longer than %s", provider, limit)
+}
+
+// CodeOf returns a diagnostic cause, falling back to the established bin.
+func CodeOf(err error) string {
+	var f *Failure
+	if errors.As(err, &f) && f.Code != "" {
+		return f.Code
+	}
+	return KindOf(err).String()
+}
+
+// AffectsHealth excludes request-scoped failures from provider health.
+func AffectsHealth(err error) bool {
+	var f *Failure
+	return !errors.As(err, &f) || !f.HealthNeutral
 }

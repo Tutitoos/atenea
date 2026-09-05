@@ -21,6 +21,7 @@ required=(
 	"code.impact|kivgraph.impact"
 	"symbol.definition|kivgraph.definition"
 	"symbol.references|kivgraph.references"
+	"symbol.implementations|kivgraph.implementations"
 	"symbol.overview|kivgraph.overview"
 	"symbol.overview|tokensave.overview"
 	"symbol.calls|tokensave.calls"
@@ -83,7 +84,7 @@ if [[ "$(wc -l <<<"$edges" | tr -d ' ')" -ne "${#required[@]}" ]]; then
 fi
 
 # Retired-provider guard: the neutral contracts remain, but have no edges.
-for capability in symbol.implementations symbol.unresolved; do
+for capability in symbol.unresolved; do
 	if grep -q "^$capability|" <<<"$edges"; then
 		echo "$capability unexpectedly has a provider edge" >&2
 		exit 1

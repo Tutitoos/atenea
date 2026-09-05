@@ -153,19 +153,24 @@ func TestFailedAutomaticRebuildDoesNotLoop(t *testing.T) {
 	runner.requireFresh = true
 	runner.autoReindexRegistered = true
 	runner.maintenanceDirectory = t.TempDir()
-	var calls int
+	var calls atomic.Int32
 	runner.index = func(context.Context, string, string) (IndexReport, error) {
-		calls++
+		calls.Add(1)
 		return IndexReport{}, errors.New("fixture rebuild failed")
 	}
+	if err := runner.EnableBackground(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runner.CloseMaintenance)
 	for i := 0; i < 2; i++ {
 		_, err := runner.Run(t.Context(), request(t, repo, CapabilityIntent, map[string]any{"intent": "test"}))
+		runner.jobs.wg.Wait()
 		if err == nil {
 			t.Fatal("failed rebuild accepted")
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("rebuilds=%d", calls)
+	if calls.Load() != 1 {
+		t.Fatalf("rebuilds=%d", calls.Load())
 	}
 }
 

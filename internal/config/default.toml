@@ -200,6 +200,7 @@ runners = ["omp"]
   implementations = [
     "kivgraph.definition",
     "kivgraph.references",
+    "kivgraph.implementations",
     "kivgraph.overview",
     "kivgraph.cross_repo_consumers",
     "kivgraph.get",
@@ -1515,7 +1516,7 @@ effects = ["read"]
 
 [[capability]]
 id = "symbol.implementations"
-version = "1.0.0"
+version = "1.1.0"
 summary = "From something abstract, find who really implements it."
 semantics = """
 Given an interface or an overridable method, the concrete implementations \
@@ -1568,6 +1569,24 @@ effects = ["read"]
   required = false
   summary = "How much to return around each implementation. Small by default."
 
+  [[capability.input]]
+  name = "limit"
+  type = "int"
+  required = false
+  summary = "Page size, 1 to 500; defaults to 50."
+
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+  summary = "Previous next_cursor; keep scope and other arguments unchanged."
+
+  [[capability.input]]
+  name = "detection"
+  type = "string"
+  required = false
+  summary = "Optional declared or structural evidence filter."
+
   [[capability.output]]
   name = "locations"
   type = "record_list"
@@ -1591,6 +1610,78 @@ effects = ["read"]
     type = "string"
     required = false
     summary = "The line at the implementation, present only when it was asked for."
+
+    [[capability.output.field]]
+    name = "repository"
+    type = "string"
+    required = false
+    summary = "Provider repository."
+
+    [[capability.output.field]]
+    name = "qualified_name"
+    type = "string"
+    required = false
+    summary = "Provider qualified name."
+
+    [[capability.output.field]]
+    name = "stable_key"
+    type = "string"
+    required = false
+    summary = "Provider stable key."
+
+    [[capability.output.field]]
+    name = "confidence"
+    type = "string"
+    required = false
+    summary = "Provider confidence."
+
+    [[capability.output.field]]
+    name = "provenance"
+    type = "string"
+    required = false
+    summary = "Provider provenance."
+
+    [[capability.output.field]]
+    name = "detection"
+    type = "string"
+    required = false
+    summary = "Provider detection."
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = false
+  summary = "More implementations are available."
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+  summary = "Cursor for the next page of this generation."
+
+  [[capability.output]]
+  name = "snapshot_id"
+  type = "int"
+  required = false
+  summary = "Generation that served this page."
+
+  [[capability.output]]
+  name = "completeness"
+  type = "string"
+  required = false
+  summary = "COMPLETE or LOWER_BOUND within the analyzed corpus."
+
+  [[capability.output]]
+  name = "total"
+  type = "int"
+  required = false
+  summary = "Total matching implementations before pagination."
+
+  [[capability.output]]
+  name = "coverage_notes"
+  type = "string_list"
+  required = false
+  summary = "Observed limits of the analysis and generation."
 
 [[capability]]
 id = "symbol.overview"
@@ -2857,9 +2948,7 @@ scope_guarantee = "filtered"   # Codex is instructed to stay inside the reposito
 # a graph of declarations, the declaration a position falls inside of already
 # IS the definition.
 #
-# What kivgraph is deliberately NOT declared for: symbol.implementations (this
-# server exposes no tool that answers "who fulfils this interface" --
-# find_references reports uses, which is a different question).
+# Implementation relations are provided by find_implementations.
 
 [[implementation]]
 id = "kivgraph.cross_repo_consumers"
@@ -2892,6 +2981,19 @@ capability = "symbol.definition"
 id = "kivgraph.references"
 provider = "kivgraph"
 capability = "symbol.references"
+
+  [implementation.constraints]
+  languages = []
+  requires_index = true
+
+  [implementation.cost]
+  estimated_duration = "25ms"
+  estimated_tokens = 800
+
+[[implementation]]
+id = "kivgraph.implementations"
+provider = "kivgraph"
+capability = "symbol.implementations"
 
   [implementation.constraints]
   languages = []

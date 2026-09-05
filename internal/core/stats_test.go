@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/core"
@@ -148,5 +149,63 @@ func TestStatsTaskRepositoryAttribution(t *testing.T) {
 		if r := statsTotal(t, out, "request"); r.Calls != tc.calls {
 			t.Fatalf("repo=%q: %+v", tc.repo, r)
 		}
+	}
+}
+
+func TestRawFunctionalFailureAgreesWithReceiptAndStats(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{resultOverride: `{"content":[{"type":"text","text":"Invalid condition"}],"isError":true,"structuredContent":{"error_code":"INVALID_ARGS"}}`})
+	defer backend.Close()
+	atenea := buildService(t, rawSettings(t, backend.URL))
+	defer serve(t, atenea)()
+	c := dial(t)
+	c.handshake("stats-test")
+	got := result(t, c.call("tools/call", map[string]any{"name": "raw.semgrep.semgrep_scan", "arguments": map[string]any{"code_files": []any{}}}), "raw error")
+	if got["isError"] != true {
+		t.Fatal(got)
+	}
+	run := onlyRun(t, atenea)
+	if run.Verdict != "failed" || run.ErrorCode != "INVALID_ARGS" || run.RequestID == "" || run.AttemptID == "" {
+		t.Fatalf("receipt=%+v", run)
+	}
+	snapshot, err := core.AskedStats(toolstats.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []string{"request", "attempt"} {
+		if r := statsTotal(t, snapshot, level); r.Fail != 1 || r.OK != 0 {
+			t.Fatalf("%s: %+v", level, r)
+		}
+	}
+	if len(snapshot.Errors) != 1 || snapshot.Errors[0].Code != "INVALID_ARGS" {
+		t.Fatal(snapshot.Errors)
+	}
+}
+
+// A backend's own timeout may expire while the client context is still live.
+// The response must use the same cause as the receipt and statistics.
+func TestRawBackendTimeoutAgreesAcrossResponseReceiptAndStats(t *testing.T) {
+	backend := httptest.NewServer(&fakeBackend{blockCalls: true})
+	defer backend.Close()
+	settings := strings.Replace(rawSettings(t, backend.URL), "\nurl =", "\ntimeout = \"100ms\"\nurl =", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	c.handshake("timeout-audit")
+	result(t, c.call("tools/list", nil), "catalog")
+	got := result(t, c.call("tools/call", map[string]any{"name": "raw.semgrep.semgrep_scan", "arguments": map[string]any{"code_files": []any{}}}), "timeout")
+	metadata, ok := got["structuredContent"].(map[string]any)
+	if !ok || metadata["error_code"] != "timeout" {
+		t.Fatalf("response=%+v", got)
+	}
+	run := onlyRun(t, atenea)
+	if run.ErrorCode != "timeout" || run.Verdict != "failed" {
+		t.Fatalf("receipt=%+v", run)
+	}
+	snapshot, err := core.AskedStats(toolstats.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Errors) != 1 || snapshot.Errors[0].Code != "timeout" {
+		t.Fatal(snapshot.Errors)
 	}
 }

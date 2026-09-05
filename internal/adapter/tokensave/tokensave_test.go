@@ -855,3 +855,19 @@ func TestFetchEntitiesPartitionsAClippedLargeAnswer(t *testing.T) {
 		t.Fatalf("tokensave_entities calls = %d, want initial plus %d filters", len(calls), len(entityKindFilters))
 	}
 }
+
+func TestRunRejectsBranchSubstitutionBeforeQuerying(t *testing.T) {
+	const warning = "WARNING: branch 'feature/fix' is not tracked — serving from 'main'. Run `tokensave branch add feature/fix` to track it."
+	const notice = "⚠️ tokensave v7.10.0 is installed, but v7.11.0 is available. Run `tokensave upgrade` to update."
+	for _, text := range []string{warning + notice + readyStatus, notice + warning + readyStatus, `{"node_count":3,"branch_fallback":true,"active_branch":"feature/fix"}`} {
+		t.Run(text[:20], func(t *testing.T) {
+			root, repo := workspace(t)
+			fake, sess := newFakeTokensave(t)
+			fake.on(toolStatus, text, false)
+			_, err := newTestRunner(t, root, sess).Run(context.Background(), request(t, repo, CapabilityOverview, map[string]any{"file": "internal/client.go"}))
+			if contract.CodeOf(err) != "branch_mismatch" || contract.AffectsHealth(err) || contract.RawOf(err) != text {
+				t.Fatalf("branch fallback = %v, want health-neutral branch_mismatch with original answer", err)
+			}
+		})
+	}
+}

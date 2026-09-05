@@ -1987,6 +1987,7 @@ func parse(raw []byte, source string) (Config, error) {
 			Prefer:     rule.Prefer,
 		})
 	}
+	cfg.Selector.HealthStaleAfter = 24 * time.Hour
 	if raw := strings.TrimSpace(decoded.Selector.HealthStaleAfter); raw != "" {
 		staleAfter, parseErr := time.ParseDuration(raw)
 		if parseErr != nil || staleAfter <= 0 {

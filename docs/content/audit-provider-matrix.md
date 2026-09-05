@@ -11,7 +11,7 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 | symbol.dependencies | kivgraph.dependencies | Declaration and local contracts |
 | symbol.definition | kivgraph.definition | Declaration and local contracts |
 | symbol.references | kivgraph.references | Declaration and local contracts |
-| symbol.implementations | No implementation | Declaration and local contracts |
+| symbol.implementations | kivgraph.implementations | Declaration and local contracts |
 | symbol.overview | kivgraph.overview, tokensave.overview | Declaration and local contracts |
 | symbol.calls | tokensave.calls | Declaration and local contracts |
 | code.impact | kivgraph.impact | Declaration and local contracts |

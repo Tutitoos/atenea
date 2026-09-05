@@ -29,7 +29,10 @@ import (
 
 // Run is the paper copy of one commission in flight.
 type Run struct {
-	ID string `json:"id"`
+	ID        string `json:"id"`
+	RequestID string `json:"request_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 	// Kind tells a task-shaped commission apart from a single ask or a
 	// caller-supplied plan: task rebuilds explore-then-split, ask is one step,
 	// and plan resumes directly from its supplied DAG.

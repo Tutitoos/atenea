@@ -202,6 +202,9 @@ const (
 	// was not. The distinction is what the reason field is for: an incomplete
 	// report says which part is missing and why it stopped.
 	VerdictIncomplete
+
+	// VerdictRefused records an action denied before execution.
+	VerdictRefused
 )
 
 var verdictNames = map[Verdict]string{
@@ -210,6 +213,7 @@ var verdictNames = map[Verdict]string{
 	VerdictFailed:      "failed",
 	VerdictCanceled:    "canceled",
 	VerdictIncomplete:  "incomplete",
+	VerdictRefused:     "refused",
 }
 
 func (v Verdict) String() string {

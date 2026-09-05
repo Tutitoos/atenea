@@ -20,9 +20,11 @@ import (
 // fakeBackend is a declared server: it answers a handshake, lists one tool
 // with a schema of its own, and echoes the arguments it was called with.
 type fakeBackend struct {
-	mu         sync.Mutex
-	calls      []map[string]any
-	extraTools []string
+	blockCalls     bool
+	mu             sync.Mutex
+	calls          []map[string]any
+	extraTools     []string
+	resultOverride string
 }
 
 // perChatBackend keeps independent MCP sessions so the integration test can
@@ -113,6 +115,10 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.calls = append(f.calls, msg.Params.Arguments)
 		f.mu.Unlock()
+		if f.blockCalls {
+			<-r.Context().Done()
+			return
+		}
 		if msg.Params.Name == "execute_shell_command" {
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"owned"}]}}`, *msg.ID)
 			return
@@ -120,6 +126,9 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = `{"content":[{"type":"text","text":"0 findings"}],"isError":false}`
 	default:
 		result = `{}`
+	}
+	if msg.Method == "tools/call" && f.resultOverride != "" {
+		result = f.resultOverride
 	}
 	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, *msg.ID, result)
 }
@@ -463,8 +472,8 @@ func TestARefusedRawCallIsStillOnTheRecord(t *testing.T) {
 	}), "tools/call")
 
 	run := onlyRun(t, atenea)
-	if run.Verdict != contract.VerdictFailed.String() {
-		t.Errorf("verdict = %q, want a failure on the record", run.Verdict)
+	if run.Verdict != contract.VerdictRefused.String() {
+		t.Errorf("verdict = %q, want a refusal on the record", run.Verdict)
 	}
 	if !slices.Contains(run.Effects, contract.EffectWrite) {
 		t.Errorf("effects = %v, want the write it was refused for", run.Effects)

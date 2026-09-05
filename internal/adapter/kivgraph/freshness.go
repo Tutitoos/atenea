@@ -15,9 +15,10 @@ import (
 )
 
 type contentFreshness struct {
-	Generation int    `json:"generation"`
-	State      string `json:"state"`
-	Detail     string `json:"detail"`
+	InputDigest string `json:"input_digest,omitempty"`
+	Generation  int    `json:"generation"`
+	State       string `json:"state"`
+	Detail      string `json:"detail"`
 }
 
 func contentFresh(status *statusResult) bool {
@@ -33,13 +34,13 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 		return status, false, nil
 	}
 	if !explicit && !r.autoReindexRegistered {
-		return nil, false, contract.Fail(contract.FailureUnavailable, "graph freshness is not verified; authorize graph.ensure_fresh for registered repositories")
+		return nil, false, maintenanceFailure("freshness_unverified", "Graph freshness unverified; request graph.ensure_fresh")
 	}
 	if r.index == nil {
 		return nil, false, contract.Fail(contract.FailureUnavailable, "no full-index command configured")
 	}
 	if status != nil && status.ContentFreshness != nil && status.ContentFreshness.State == "unavailable" {
-		return nil, false, contract.Fail(contract.FailureUnavailable, "graph inventory unavailable: %s", status.ContentFreshness.Detail)
+		return nil, false, maintenanceFailure("freshness_unverified", "Graph inventory unavailable: "+status.ContentFreshness.Detail)
 	}
 	dir := r.maintenanceDirectory
 	if dir == "" {
@@ -85,12 +86,16 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 		return nil, false, contract.Fail(contract.FailureUnavailable, "graph status missing")
 	}
 	if current.ContentFreshness != nil && current.ContentFreshness.State == "unavailable" {
-		return nil, false, contract.Fail(contract.FailureUnavailable, "graph inventory unavailable: %s", current.ContentFreshness.Detail)
+		return nil, false, maintenanceFailure("freshness_unverified", "Graph inventory unavailable: "+current.ContentFreshness.Detail)
 	}
 	attempted, _ := os.ReadFile(marker)
-	identity := strconv.Itoa(current.SnapshotID)
-	if string(attempted) == identity && !explicit {
-		return nil, false, contract.Fail(contract.FailureUnavailable, "automatic graph rebuild already attempted for this generation; inspect the failure and retry explicit graph.ensure_fresh")
+	generationIdentity := strconv.Itoa(current.SnapshotID)
+	identity := generationIdentity
+	if current.ContentFreshness != nil && current.ContentFreshness.InputDigest != "" {
+		identity += ":" + current.ContentFreshness.InputDigest
+	}
+	if (string(attempted) == identity || string(attempted) == generationIdentity) && !explicit {
+		return nil, false, maintenanceFailure("rebuild_blocked", "automatic graph rebuild already attempted for this generation; inspect the failure and retry explicit graph.ensure_fresh")
 	}
 	if err := os.WriteFile(marker, []byte(identity), 0600); err != nil {
 		return nil, false, contract.Fail(contract.FailureUnavailable, "record graph rebuild attempt: %v", err)
@@ -98,13 +103,19 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 	// No registry writes or index_project registration: only the configured
 	// official full-index command can cross this boundary.
 	slog.Info("Kivgraph full rebuild started", "repository", req.Repository.ID)
+	if err := noteMaintenancePhase(ctx, "indexing"); err != nil {
+		return nil, false, err
+	}
 	report, err := r.index(ctx, req.Repository.Path, "full")
 	if err != nil {
-		return nil, false, r.failureFor(err, ctx)
+		return nil, false, indexFailure(err, ctx)
+	}
+	if err := noteMaintenancePhase(ctx, "verifying"); err != nil {
+		return nil, false, err
 	}
 	generation, err := strconv.Atoi(report.Generation)
 	if err != nil || generation <= current.SnapshotID {
-		return nil, false, contract.Fail(contract.FailureUnavailable, "full rebuild did not advance the published generation")
+		return nil, false, maintenanceFailure("freshness_unverified", "Full rebuild did not advance the published generation")
 	}
 	for {
 		verified, err := r.fetchStatus(ctx, sess)
@@ -118,7 +129,7 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 				if err := os.WriteFile(marker, []byte(strconv.Itoa(verified.SnapshotID)), 0600); err != nil {
 					return nil, false, contract.Fail(contract.FailureUnavailable, "record failed freshness verification: %v", err)
 				}
-				return nil, false, contract.Fail(contract.FailureUnavailable, "published graph could not verify source freshness (expected generation %d, served %d); results withheld", generation, verified.SnapshotID)
+				return nil, false, maintenanceFailure("freshness_unverified", fmt.Sprintf("published graph could not verify source freshness (expected generation %d, served %d); results withheld", generation, verified.SnapshotID))
 			}
 			if err := checkGraphReady(verified, req.Repository.Path); err != nil {
 				return nil, false, err
