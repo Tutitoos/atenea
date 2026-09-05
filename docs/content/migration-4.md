@@ -21,9 +21,9 @@ Headroom/OpenCode wrappers: it prevents automatic registration of this retired p
 
 At the original retirement, `symbol.implementations`, `symbol.search` and
 `symbol.unresolved` had no provider. The subsequent Kivgraph integration restores
-`symbol.search` with a structural declaration search. The other two remain in
-the catalog/status but absent from `tools/list`; direct calls return
-`not_offered`. New source, symbol-impact and graph-maintenance capabilities are
+`symbol.search` with a structural declaration search. Contract 4.1 also restores
+`symbol.implementations` through compiler-proven Kivgraph relations. Only
+`symbol.unresolved` remains absent from `tools/list`; direct calls return `not_offered`. New source, symbol-impact and graph-maintenance capabilities are
 additive to contract 4.0 and do not revive the retired provider.
 
 Kivgraph, Tokensave and generic MCP transports/supervision remain available.

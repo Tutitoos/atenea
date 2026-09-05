@@ -457,9 +457,10 @@ func (r *Runner) isSensitive(relative string) bool {
 // statusAnswer is tokensave_status narrowed to the three counts that say
 // whether there is a graph here at all.
 type statusAnswer struct {
-	Nodes int `json:"node_count"`
-	Edges int `json:"edge_count"`
-	Files int `json:"file_count"`
+	Nodes          int  `json:"node_count"`
+	Edges          int  `json:"edge_count"`
+	Files          int  `json:"file_count"`
+	BranchFallback bool `json:"branch_fallback"`
 }
 
 // metricsPrefix is the line tokensave appends to its own tool results, after
@@ -470,6 +471,13 @@ const metricsPrefix = "tokensave_metrics:"
 // The update notice is a separate MCP text block, concatenated without a
 // newline by the transport. Only this known notice may precede a JSON answer.
 var updateNotice = regexp.MustCompile("^⚠️ tokensave v[0-9]+\\.[0-9]+\\.[0-9]+ is installed, but v[0-9]+\\.[0-9]+\\.[0-9]+ is available\\. Run `tokensave upgrade` to update\\.")
+
+var branchFallbackNotice = regexp.MustCompile(`^WARNING: branch '[^\r\n]+' is not tracked — serving from '[^\r\n]+'\.`)
+
+func branchFallbackFailure(text string) error {
+	return &contract.Failure{Kind: contract.FailureInvalidInput, Code: "branch_mismatch", HealthNeutral: true,
+		Message: "tokensave is serving a fallback branch; track the requested branch before retrying", Raw: text}
+}
 
 // payloadOf is the JSON of one tool result, with that trailing report cut off.
 //
@@ -504,10 +512,16 @@ func (r *Runner) checkGraphReady(ctx context.Context, sess *mcpstdio.Session) er
 	if err != nil {
 		return r.failureFor(err, ctx)
 	}
+	if branchFallbackNotice.MatchString(strings.TrimSpace(updateNotice.ReplaceAllString(strings.TrimSpace(text), ""))) {
+		return branchFallbackFailure(text)
+	}
 	var status statusAnswer
 	if err := json.Unmarshal(payloadOf(text), &status); err != nil {
 		return contract.Fail(contract.FailureUnavailable,
 			"tokensave %s: unreadable answer", toolStatus).WithRaw(text)
+	}
+	if status.BranchFallback {
+		return branchFallbackFailure(text)
 	}
 	if status.Nodes == 0 && status.Edges == 0 && status.Files == 0 {
 		return contract.Fail(contract.FailureUnavailable,

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/pidlock"
+	"github.com/Tutitoos/atenea/internal/procgroup"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -69,9 +70,16 @@ type blastSymbol struct {
 	StableKey     string `json:"stable_key"`
 }
 
+type indexProgress struct {
+	Phase      string `json:"phase"`
+	Repository string `json:"repository"`
+	Detail     string `json:"detail"`
+}
+
 type indexEvent struct {
-	Event  string         `json:"event"`
-	Result *indexDocument `json:"result,omitempty"`
+	Progress *indexProgress `json:"progress,omitempty"`
+	Event    string         `json:"event"`
+	Result   *indexDocument `json:"result,omitempty"`
 }
 
 type indexDocument struct {
@@ -641,6 +649,7 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 			"kivgraph repository.index: only mode full is supported, got %q", mode)
 	}
 	command := exec.CommandContext(ctx, executable, "index", "--full", "--json")
+	procgroup.Contain(command)
 	command.Dir = root
 	command.Env = append(os.Environ(), env...)
 	// stdout is scanned as it arrives; only stderr is tailed.
@@ -666,7 +675,18 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 	if err := command.Start(); err != nil {
 		return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w", err)
 	}
-	report, parseErr := parseIndexStream(stdout)
+	report, parseErr := parseIndexStreamObserved(stdout, func(progress indexProgress) error {
+		return noteMaintenanceProgress(ctx, progress)
+	})
+	if parseErr != nil {
+		_ = procgroup.Kill(command)
+		// A descendant may have escaped while retaining stdout. Closing our
+		// reader prevents that inherited descriptor from keeping maintenance
+		// blocked after the owning process group has been stopped.
+		_ = stdout.Close()
+		_ = command.Wait()
+		return IndexReport{}, parseErr
+	}
 	// Drained before Wait, always: Wait closes the pipe, and a Wait that ran
 	// while the scan was still reading would race it. parseIndexStream returns
 	// only after the stream ends or a line refuses to parse -- and on the
@@ -679,9 +699,6 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 		}
 		return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w", err)
 	}
-	if parseErr != nil {
-		return IndexReport{}, parseErr
-	}
 	return report, nil
 }
 
@@ -692,6 +709,10 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 // instead of being silently cut into something that no longer parses -- which
 // is the failure this replaced.
 func parseIndexStream(stream io.Reader) (IndexReport, error) {
+	return parseIndexStreamObserved(stream, nil)
+}
+
+func parseIndexStreamObserved(stream io.Reader, observe func(indexProgress) error) (IndexReport, error) {
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxIndexLine)
 	var report *indexDocument
@@ -703,6 +724,11 @@ func parseIndexStream(stream io.Reader) (IndexReport, error) {
 		var event indexEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return IndexReport{}, fmt.Errorf("kivgraph index --full returned invalid JSONL: %w", err)
+		}
+		if event.Progress != nil && observe != nil {
+			if err := observe(*event.Progress); err != nil {
+				return IndexReport{}, err
+			}
 		}
 		if event.Event == "result" && event.Result != nil {
 			report = event.Result

@@ -126,6 +126,12 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 	}
 	at := time.UnixMicro(started)
 	out.Coverage.Started = &at
+	effectiveSince := at
+	if q.Since.After(at) {
+		effectiveSince = q.Since
+	}
+	out.Coverage.EffectiveSince = &effectiveSince
+	out.Coverage.EffectiveUntil = &q.Until
 	var dropped int64
 	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='dropped'`).Scan(&dropped)
 	if err != nil && err != sql.ErrNoRows {
@@ -167,7 +173,36 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 	if err != nil {
 		return out, err
 	}
+	identities := map[string]Tool{}
+	if exists, err := hasTable(ctx, tx, "catalog_context"); err != nil {
+		return out, err
+	} else if exists {
+		rows, err := tx.QueryContext(ctx, `SELECT provider,version,schema_hash,observed FROM catalog_context`)
+		if err != nil {
+			return out, err
+		}
+		for rows.Next() {
+			var provider, version, hash string
+			var at int64
+			if err := rows.Scan(&provider, &version, &hash, &at); err != nil {
+				_ = rows.Close()
+				return out, err
+			}
+			observed := time.UnixMicro(at).UTC()
+			identities[provider] = Tool{ProviderVersion: version, SchemaHash: hash, CatalogObservedAt: &observed}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return out, err
+		}
+	}
 	for i := range out.Catalog {
+		if identity, ok := identities[out.Catalog[i].Provider]; ok {
+			out.Catalog[i].ProviderVersion = identity.ProviderVersion
+			out.Catalog[i].SchemaHash = identity.SchemaHash
+			out.Catalog[i].CatalogObservedAt = identity.CatalogObservedAt
+		}
 		if out.Catalog[i].State == "catalog_unknown" && known[out.Catalog[i].Provider] {
 			out.Catalog[i].State = "catalog_saved"
 		}
@@ -220,7 +255,8 @@ func (s *Store) readOnce(ctx context.Context, q Query, catalog []Tool) (Snapshot
 	if err != nil {
 		return out, err
 	}
-	if q.Since.Before(at) {
+	if !q.Since.IsZero() && q.Since.Before(at) {
+		out.Coverage.Partial = true
 		out.Coverage.Notes = append(out.Coverage.Notes, "Requests and raw tools before recording started were not fully measured; older routing metrics are separate.")
 	}
 	if out.Coverage.Dropped > 0 {

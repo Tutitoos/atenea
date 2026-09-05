@@ -1,0 +1,171 @@
+{
+  "type": "object",
+  "properties": {
+    "session": {
+      "type": "string",
+      "description": "Agent-device session name."
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "apple",
+        "android",
+        "harmonyos",
+        "vega",
+        "linux",
+        "web",
+        "ios",
+        "macos"
+      ],
+      "description": "Platform selector used to resolve a device."
+    },
+    "deviceTarget": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Device target form. Maps to the CLI --target flag."
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "mobile",
+        "tv",
+        "desktop"
+      ],
+      "description": "Alias for deviceTarget on commands without a UI target field. Interaction commands reserve target for the UI element."
+    },
+    "device": {
+      "type": "string",
+      "description": "Device name selector."
+    },
+    "udid": {
+      "type": "string",
+      "description": "iOS device UDID selector."
+    },
+    "serial": {
+      "type": "string",
+      "description": "Android device or Vega VVD serial selector."
+    },
+    "iosSimulatorDeviceSet": {
+      "type": "string",
+      "description": "iOS simulator device-set path used for device resolution."
+    },
+    "iosXctestrunFile": {
+      "type": "string",
+      "description": "Externally built iOS XCTest runner .xctestrun artifact path."
+    },
+    "iosXctestDerivedDataPath": {
+      "type": "string",
+      "description": "Derived data path for external iOS XCTest runner execution."
+    },
+    "iosXctestEnvDir": {
+      "type": "string",
+      "description": "Writable directory for iOS XCTest runner env overlays."
+    },
+    "androidDeviceAllowlist": {
+      "type": "string",
+      "description": "Android serial allowlist used for device resolution."
+    },
+    "daemonBaseUrl": {
+      "type": "string",
+      "description": "Remote daemon base URL."
+    },
+    "daemonAuthToken": {
+      "type": "string",
+      "description": "Remote daemon auth token."
+    },
+    "tenant": {
+      "type": "string",
+      "description": "Remote tenant identifier."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Lease run identifier."
+    },
+    "leaseId": {
+      "type": "string",
+      "description": "Existing lease identifier."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory for command execution."
+    },
+    "debug": {
+      "type": "boolean",
+      "description": "Enable debug diagnostics."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "duration",
+        "text",
+        "ref",
+        "selector",
+        "stable"
+      ]
+    },
+    "durationMs": {
+      "type": "integer"
+    },
+    "text": {
+      "type": "string"
+    },
+    "ref": {
+      "type": "string"
+    },
+    "selector": {
+      "type": "string"
+    },
+    "stable": {
+      "type": "boolean"
+    },
+    "quietMs": {
+      "type": "integer"
+    },
+    "timeoutMs": {
+      "type": "integer"
+    },
+    "depth": {
+      "type": "integer"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "raw": {
+      "type": "boolean"
+    },
+    "noRecord": {
+      "type": "boolean",
+      "description": "Do not record this action."
+    },
+    "stateDir": {
+      "type": "string",
+      "description": "Agent-device state directory."
+    },
+    "mcpOutputFormat": {
+      "type": "string",
+      "enum": [
+        "optimized",
+        "json"
+      ],
+      "description": "MCP text content format. Defaults to optimized agent-friendly text; use json for JSON text. Structured content is always returned separately."
+    },
+    "includeCost": {
+      "type": "boolean",
+      "description": "Include per-command agent-cost (cost.wallClockMs, …) in structuredContent. Defaults to off; the default response shape is unchanged."
+    },
+    "responseLevel": {
+      "type": "string",
+      "enum": [
+        "digest",
+        "default",
+        "full"
+      ],
+      "description": "Response verbosity: token-cheap digest / default (today) / full. Defaults to default; the default response shape is unchanged."
+    }
+  },
+  "additionalProperties": false
+}

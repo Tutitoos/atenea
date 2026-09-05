@@ -129,6 +129,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"kivgraph.ensure_fresh",
 		"kivgraph.get",
 		"kivgraph.impact",
+		"kivgraph.implementations",
 		"kivgraph.index",
 		"kivgraph.intent_search",
 		"kivgraph.overview",
@@ -2926,5 +2927,23 @@ func TestConfigInitWritesAParseableFileFromAnAwkwardDirectory(t *testing.T) {
 				t.Errorf("no repository names %q; the file declares %q", want, got)
 			}
 		})
+	}
+}
+
+func TestOldConfigurationGetsHealthExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		extra string
+		want  time.Duration
+	}{
+		{"", 24 * time.Hour},
+		{"\n[selector]\nhealth_stale_after = \"2h\"\n", 2 * time.Hour},
+	} {
+		cfg, err := config.Load(write(t, minimal+tc.extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Selector.HealthStaleAfter != tc.want {
+			t.Fatalf("expiry=%v want %v", cfg.Selector.HealthStaleAfter, tc.want)
+		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
+	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
@@ -80,6 +81,8 @@ type conversation struct {
 	clientName    string
 	clientVersion string
 	policy        desktopPolicy
+	deviceMu      sync.Mutex
+	deviceContext map[string]any
 	backendMu     sync.Mutex
 	backends      map[string]passthrough.Backend
 	// screen remembers whether this chat has been handed what is on the
@@ -142,8 +145,10 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	}
 	switch req.Method {
 	case MethodCommand:
-		result, rpcErr := v.command(req.Params)
+		result, rpcErr := v.command(ctx, req.Params)
 		out.Result, out.Error = result, rpcErr
+	case MethodStatsErrors:
+		out.Result, out.Error = v.statsErrors(ctx, req.Params)
 	case MethodStats:
 		result, rpcErr := v.statsQuery(ctx, req.Params)
 		out.Result, out.Error = result, rpcErr
@@ -173,7 +178,7 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 	return out
 }
 
-func (v *conversation) command(raw json.RawMessage) (any, *rpcError) {
+func (v *conversation) command(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
 	if v.session == nil {
 		return nil, notInitialized()
 	}
@@ -189,7 +194,11 @@ func (v *conversation) command(raw json.RawMessage) (any, *rpcError) {
 			return nil, &rpcError{Code: codeInvalidParams, Message: "atenea/command: expected one JSON object"}
 		}
 	}
-	response, err := v.core.Command(context.Background(), req)
+	if req.Name == "device.sessions" {
+		encoded, _ := json.Marshal(deviceSessionListArgs(nil))
+		return v.rawCall(ctx, "agent-device", "session", toolsCallParams{Name: "raw.agent-device.session", Arguments: encoded})
+	}
+	response, err := v.core.Command(ctx, req)
 	if err != nil {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
@@ -473,6 +482,12 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			statsNames = append(statsNames, passthrough.Name(id, tool.Name))
 		}
 		v.core.stats.Remember(id, statsNames)
+		if identity, ok := backend.Backend.(interface {
+			Version() string
+			SchemaHash() string
+		}); ok {
+			v.core.stats.RememberIdentity(id, identity.Version(), identity.SchemaHash())
+		}
 		for _, tool := range offered {
 			entry := map[string]any{
 				"name":        passthrough.Name(id, tool.Name),
@@ -565,6 +580,7 @@ type toolsCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
 	Input     json.RawMessage `json:"input"`
+	Meta      map[string]any  `json:"_meta,omitempty"`
 }
 
 func (p toolsCallParams) argumentMap() (map[string]any, error) {
@@ -596,6 +612,8 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	started := time.Now()
 	requestedTool := "unknown"
 	var statsErr error
+	observation := &mcpObservation{}
+	ctx = context.WithValue(ctx, observationKey{}, observation)
 	ctx = context.WithValue(ctx, statsErrorKey{}, &statsErr)
 	var incoming toolsCallParams
 	_ = json.Unmarshal(raw, &incoming)
@@ -611,20 +629,20 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	if server, _, ok := passthrough.Split(statsName); ok {
 		provider = server
 	}
+	origin, _ := incoming.Meta["atenea.origin"].(string)
+	ctx = toolstats.WithMetadata(ctx, toolstats.Metadata{Client: compatibilityClientID(v.clientName, v.policy.Profile), ClientVersion: v.clientVersion, Profile: v.policy.Profile, Origin: origin})
 	ctx, statsCall := v.core.stats.Begin(ctx, toolstats.Event{Level: "request", Tool: statsName, Provider: provider, Repository: statsRepo})
-	defer func() {
-		if statsErr != nil {
-			statsCall.End(statsErr)
-		} else {
-			outcome, code, reason := statsMCPResult(result, rpcErr)
-			statsCall.Finish(outcome, code, reason)
-		}
-	}()
 	fallbackUsed := false
-	outcomeHint := ""
 	defer func() {
-		outcome, errorCode := compatibilityOutcome(result, rpcErr, outcomeHint, fallbackUsed)
-		v.recordCompatibility(requestedTool, outcome, errorCode, started, fallbackUsed)
+		if !observation.Ready {
+			*observation = observeMCP(result, rpcErr, statsErr)
+		}
+		statsCall.Event.Metadata.ReceiptID = observation.ReceiptID
+		statsCall.Event.Metadata.ProviderVersion = observation.ProviderVersion
+		statsCall.Event.Metadata.SchemaHash = observation.SchemaHash
+		statsCall.Finish(observation.Outcome, observation.Code, observation.Reason)
+		outcome := observation.compatibility(fallbackUsed)
+		v.recordCompatibility(requestedTool, outcome, observation.Code, started, fallbackUsed, statsCall.Event.ID, observation.ReceiptID)
 	}()
 	if v.session == nil {
 		return nil, notInitialized()
@@ -641,7 +659,6 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 			"tool arguments must be a JSON object", "Retry with arguments or input as a JSON object."), nil
 	}
 	if !v.policy.allows(params.Name) {
-		outcomeHint = "denied"
 		return desktopDiagnostic("profile_denied", requestedTool, params.Name, fallbackUsed,
 			fmt.Sprintf("tool %q is not enabled for desktop profile %q", params.Name, v.policy.Profile),
 			"Enable the tool in the Atenea desktop profile and retry."), nil
@@ -668,7 +685,7 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		if err != nil {
 			return nil, &rpcError{Code: codeInternal, Message: "atenea.command arguments: " + err.Error()}
 		}
-		return v.command(encoded)
+		return v.command(ctx, encoded)
 	}
 	switch params.Name {
 	case toolWorkflowCreate:
@@ -739,20 +756,28 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		Payload:    payload,
 	})
 	statsErr = resultError(runResult, runErr)
+	*observation = observeMCP(nil, nil, statsErr)
+	if runResult != nil {
+		observation.ReceiptID = runResult.RunID
+		if len(runResult.Steps) == 1 {
+			step := runResult.Steps[0]
+			observation.ProviderVersion = step.Outcome.ToolVersion
+			if step.Decision.Chosen.Provider != "" {
+				statsCall.Event.Provider = step.Decision.Chosen.Provider
+			}
+		}
+	}
 	// Receipts describe dispatch, not selection, and survive failed calls too.
 	defer func() { appendToolUsage(result, runResult) }()
 	if runErr != nil {
-		code := "tool_failure"
+		code := contract.CodeOf(statsErr)
 		recommendation := "Inspect the tool error and retry if appropriate."
-		if ctx.Err() != nil {
-			code = "tool_timeout"
-			recommendation = "Retry with a smaller request or a profile with a longer allowed timeout."
-		}
+
 		return desktopDiagnostic(code, requestedTool, params.Name, fallbackUsed, runErr.Error(), recommendation), nil
 	}
 	answer, ok := answerOf(runResult)
 	if !ok {
-		return desktopDiagnostic("tool_failure", requestedTool, params.Name, fallbackUsed,
+		return desktopDiagnostic(contract.CodeOf(statsErr), requestedTool, params.Name, fallbackUsed,
 			refusalOf(runResult), "Inspect the tool error and retry if appropriate."), nil
 	}
 	// The text block carries the same answer serialized, because a client
@@ -780,14 +805,33 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 // to find, and "it was only a passthrough" is how a trail grows holes.
 func (v *conversation) rawCall(ctx context.Context, server, tool string, params toolsCallParams) (answer any, rpcFailure *rpcError) {
 	var callErr error
+	var observedBackend passthrough.Backend
+	started := time.Now()
+	var effects []contract.Effect
+	var normalized *mcpObservation
 	_, statsCall := v.core.stats.Begin(ctx, toolstats.Event{Level: "attempt", Tool: params.Name, Provider: server, Repository: statsRepository(params)})
 	defer func() {
-		if callErr != nil {
-			setStatsError(ctx, callErr)
-			statsCall.End(callErr)
+		var observation mcpObservation
+		if normalized != nil {
+			observation = *normalized
 		} else {
-			outcome, code, reason := statsMCPResult(answer, rpcFailure)
-			statsCall.Finish(outcome, code, reason)
+			observation = observeMCP(answer, rpcFailure, callErr)
+		}
+		observation.ReceiptID = checkpoint.NewID(started)
+		if identity, ok := observedBackend.(interface {
+			Version() string
+			SchemaHash() string
+		}); ok {
+			observation.ProviderVersion = identity.Version()
+			observation.SchemaHash = identity.SchemaHash()
+			statsCall.Event.Metadata.ProviderVersion = identity.Version()
+			statsCall.Event.Metadata.SchemaHash = identity.SchemaHash()
+		}
+		v.core.fileRawReceipt(v.session, params.Name, effects, started, observation, statsCall.Event)
+		statsCall.Event.Metadata.ReceiptID = observation.ReceiptID
+		statsCall.Finish(observation.Outcome, observation.Code, observation.Reason)
+		if target, ok := ctx.Value(observationKey{}).(*mcpObservation); ok {
+			*target = observation
 		}
 	}()
 	backend, ok := v.rawBackend(server)
@@ -800,10 +844,10 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(
 			"%s: no backend named %q is declared with expose = \"raw\"", params.Name, server)}
 	}
+	observedBackend = backend.Backend
 	if timeout := backend.declared.ToolTimeoutOf(tool); timeout > 0 {
 		ctx = passthrough.WithTimeoutOverride(ctx, timeout)
 	}
-	started := time.Now()
 	arguments, err := params.argumentMap()
 	if err != nil {
 		return desktopDiagnostic("invalid_arguments", params.Name, params.Name, false,
@@ -818,16 +862,30 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	// authorize is refused whether or not it was ever on the allow list. A
 	// refusal is filed like any other answer, because an attempt that was
 	// stopped is exactly what an audit is looking for.
-	effects := backend.declared.EffectsFor(tool, arguments)
+	effects = backend.declared.EffectsFor(tool, arguments)
 	if err := v.session.entitled(effects); err != nil {
 		callErr = err
-		v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 		return desktopDiagnostic("permission_denied", params.Name, params.Name, false,
 			err.Error(), "Request the required permission before retrying."), nil
 	}
+	if server == "agent-device" {
+		if err := v.validateDeviceCall(ctx, backend, tool, arguments); err != nil {
+			callErr = err
+			return desktopDiagnostic(contract.CodeOf(err), params.Name, params.Name, false, err.Error(), "Call atenea.command name=device.help or name=device.sessions."), nil
+		}
+	}
+	if server == "agent-device" {
+		release, err := v.reserveDeviceCall(ctx, backend, tool, arguments)
+		if err != nil {
+			callErr = err
+			return desktopDiagnostic(contract.CodeOf(err), params.Name, params.Name, false, err.Error(), "List sessions; choose a dedicated session and a free device."), nil
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	result, err := backend.Call(ctx, tool, arguments)
 	callErr = err
-	v.core.fileRawReceipt(v.session, params.Name, effects, started, err)
 	// A call is the other place a backend's state becomes known for free.
 	// Only an unavailable or timed-out one counts against it; see
 	// recordBackendCall for why a refusal must not.
@@ -836,11 +894,12 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 		// A backend's refusal is an answer, not a protocol error: the model
 		// asked for something real and can read why it did not work. The
 		// same split the capability path already makes.
-		code := "backend_unavailable"
-		recommendation := "Check the MCP backend and retry."
-		if ctx.Err() != nil {
-			code = "tool_timeout"
-			recommendation = "Retry with a smaller request or a longer backend timeout."
+		observation := observeMCP(nil, nil, err)
+		normalized = &observation
+		code := observation.Code
+		recommendation := "Check the MCP backend before retrying."
+		if server == "agent-device" && deviceDependent(tool) {
+			recommendation = "Read this flow session and a fresh snapshot. Do not repeat clicks, typing or open while execution is uncertain."
 		}
 		return desktopDiagnostic(code, params.Name, params.Name, false, err.Error(), recommendation), nil
 	}
@@ -852,6 +911,9 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	if err := json.Unmarshal(result, &out); err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: fmt.Sprintf(
 			"%s: the backend's answer is not an object: %v", params.Name, err)}
+	}
+	if server == "agent-device" && out["isError"] != true {
+		v.rememberDeviceContext(tool, arguments)
 	}
 	return normalizeDesktopResult(out), nil
 }

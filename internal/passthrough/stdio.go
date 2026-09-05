@@ -54,6 +54,7 @@ import (
 // could come back and no tool could be called. It kept a process alive for its
 // web UI and that was all it could ever do.
 type stdioBackend struct {
+	version atomic.Value
 	id      string
 	command []string
 	env     map[string]string
@@ -600,7 +601,7 @@ func (b *stdioBackend) gone(proc *process, method string) error {
 // handshake is the replay the shim did from a file. It runs on the process, so
 // the notification that completes it is sent before any chat can ask anything.
 func (b *stdioBackend) handshake(ctx context.Context, proc *process) error {
-	_, err := b.send(ctx, proc, "initialize", map[string]any{
+	hello, err := b.send(ctx, proc, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea", "version": "1"},
@@ -608,6 +609,7 @@ func (b *stdioBackend) handshake(ctx context.Context, proc *process) error {
 	if err != nil {
 		return err
 	}
+	b.version.Store(serverVersion(hello))
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{},
 	})
@@ -664,3 +666,9 @@ func (t *tail) String() string {
 	defer t.mu.Unlock()
 	return strings.TrimSpace(string(t.buf))
 }
+
+// Version returns the observed handshake version without starting a process.
+func (b *stdioBackend) Version() string { v, _ := b.version.Load().(string); return v }
+
+// SchemaHash reads discovery evidence without starting a process.
+func (b *stdioBackend) SchemaHash() string { return b.catalog.fingerprint() }

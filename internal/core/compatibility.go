@@ -66,6 +66,11 @@ func cloneCatalogs(raw map[string]string) map[string]string {
 }
 
 func (p desktopPolicy) allows(tool string) bool {
+	// The upstream session action union is intentionally available only through
+	// atenea.command device.sessions, which constructs an action=list request.
+	if tool == "raw.agent-device.session" {
+		return false
+	}
 	if p.DisabledTools[tool] {
 		return false
 	}
@@ -81,9 +86,6 @@ func (p desktopPolicy) allows(tool string) bool {
 }
 
 func (p desktopPolicy) filterTools(tools []map[string]any) []map[string]any {
-	if len(p.EnabledTools) == 0 && len(p.DisabledTools) == 0 && len(p.RawCatalogs) == 0 {
-		return tools
-	}
 	filtered := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		name, _ := tool["name"].(string)
@@ -143,6 +145,8 @@ func normalizeDesktopToolName(name string) (string, bool) {
 }
 
 type compatibilityEvent struct {
+	RequestID     string `json:"request_id,omitempty"`
+	ReceiptID     string `json:"receipt_id,omitempty"`
 	Timestamp     string `json:"timestamp"`
 	Client        string `json:"client"`
 	ClientVersion string `json:"client_version,omitempty"`
@@ -173,7 +177,7 @@ type CompatibilitySummary struct {
 	LastErrorCode string `json:"last_error_code,omitempty"`
 }
 
-func (v *conversation) recordCompatibility(tool, outcome, errorCode string, started time.Time, fallbackUsed bool) {
+func (v *conversation) recordCompatibility(tool, outcome, errorCode string, started time.Time, fallbackUsed bool, ids ...string) {
 	path := filepath.Join(platform.StateDir(), "compatibility-"+time.Now().UTC().Format("20060102")+".jsonl")
 	event := compatibilityEvent{
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -181,6 +185,12 @@ func (v *conversation) recordCompatibility(tool, outcome, errorCode string, star
 		Server: "atenea", Tool: tool, Outcome: outcome,
 		LatencyMS: time.Since(started).Milliseconds(), FallbackUsed: fallbackUsed,
 		ErrorCode: errorCode,
+	}
+	if len(ids) > 0 {
+		event.RequestID = ids[0]
+	}
+	if len(ids) > 1 {
+		event.ReceiptID = ids[1]
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -302,36 +312,11 @@ func readCompatibilitySummary(client, profile string) CompatibilitySummary {
 }
 
 func compatibilityOutcome(result any, rpcErr *rpcError, hinted string, fallback bool) (string, string) {
+	o := observeMCP(result, rpcErr, nil)
 	if hinted != "" {
-		if body, ok := result.(map[string]any); ok {
-			if structured, ok := body["structuredContent"].(map[string]any); ok {
-				if code, ok := structured["error_code"].(string); ok && code != "" {
-					return hinted, code
-				}
-			}
-		}
-		return hinted, ""
+		return hinted, o.Code
 	}
-	if rpcErr != nil {
-		return "error", fmt.Sprint(rpcErr.Code)
-	}
-	if body, ok := result.(map[string]any); ok {
-		if failed, ok := body["isError"].(bool); ok && failed {
-			if structured, ok := body["structuredContent"].(map[string]any); ok {
-				if code, ok := structured["error_code"].(string); ok && code != "" {
-					if fallback {
-						return "fallback", code
-					}
-					return "error", code
-				}
-			}
-			if fallback {
-				return "fallback", "tool_failure"
-			}
-			return "error", "tool_failure"
-		}
-	}
-	return "available", ""
+	return o.compatibility(fallback), o.Code
 }
 
 func (v *conversation) filterDesktopTools(tools []map[string]any) []map[string]any {

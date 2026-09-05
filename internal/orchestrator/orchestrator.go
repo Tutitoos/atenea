@@ -474,6 +474,7 @@ type StepResult struct {
 	// counted. Turning the message back into a kind afterwards is not
 	// possible: err.Error() is one-way.
 	FailureKind contract.FailureKind
+	FailureCode string
 	// Raw is the provider's own text behind Failure, when whatever adapter
 	// raised it kept one. Empty on success, and empty on a failure the core
 	// raised itself with nothing to quote.
@@ -556,8 +557,10 @@ func (a *Agent) Run(ctx context.Context, task Task) (result *Result, err error) 
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: task.Text}
 	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID, SessionID: task.Session})
+	ctx = checkpoint.WithRunID(ctx, result.RunID)
 	record := checkpoint.Run{
-		ID: result.RunID, Kind: checkpoint.KindTask, Session: task.Session, SessionClient: task.SessionClient,
+		RequestID: checkpoint.RequestID(ctx),
+		ID:        result.RunID, Kind: checkpoint.KindTask, Session: task.Session, SessionClient: task.SessionClient,
 		SessionName: task.SessionName, SessionNameBasis: task.SessionNameBasis,
 		SessionPrimaryProject: task.SessionPrimaryProject, SessionOriginSurface: task.SessionOriginSurface,
 		SessionOriginTransport: task.SessionOriginTransport, SessionExternalObserved: task.SessionExternalObserved, Task: task.Text,
@@ -662,8 +665,10 @@ func (a *Agent) RunPlan(ctx context.Context, plan contract.Plan, budgetUSD float
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: plan.Task, Plan: plan}
 	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID})
+	ctx = checkpoint.WithRunID(ctx, result.RunID)
 	record := checkpoint.Run{
-		ID: result.RunID, Kind: checkpoint.KindPlan, Task: plan.Task,
+		RequestID: checkpoint.RequestID(ctx),
+		ID:        result.RunID, Kind: checkpoint.KindPlan, Task: plan.Task,
 		Started: started, BudgetUSD: budgetUSD,
 		ContractVersion: contract.Current.String(), Plan: plan,
 	}
@@ -777,8 +782,10 @@ func (a *Agent) Ask(ctx context.Context, q Question) (result *Result, err error)
 	started := time.Now()
 	result = &Result{RunID: checkpoint.NewID(started), Task: text}
 	a.emit(observability.Event{Kind: "run.started", RunID: result.RunID, SessionID: q.Session, Capability: q.Capability, Repository: q.Repository})
+	ctx = checkpoint.WithRunID(ctx, result.RunID)
 	record := checkpoint.Run{
-		ID: result.RunID, Kind: checkpoint.KindAsk, Session: q.Session, SessionClient: q.SessionClient,
+		RequestID: checkpoint.RequestID(ctx),
+		ID:        result.RunID, Kind: checkpoint.KindAsk, Session: q.Session, SessionClient: q.SessionClient,
 		SessionName: q.SessionName, SessionNameBasis: q.SessionNameBasis,
 		SessionPrimaryProject: q.SessionPrimaryProject, SessionOriginSurface: q.SessionOriginSurface,
 		SessionOriginTransport: q.SessionOriginTransport, SessionExternalObserved: q.SessionExternalObserved, Task: text,
@@ -1452,7 +1459,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		// catalog a subject dimension instead was the other option and is
 		// worse -- that map is persisted, so it would grow one entry per host
 		// ever touched and never shrink.
-		if contract.KindOf(runErr) == contract.FailureUnavailable && out.Subject == "" {
+		if contract.AffectsHealth(runErr) && contract.KindOf(runErr) == contract.FailureUnavailable && out.Subject == "" {
 			_ = a.catalog.SetHealth(repository.ID, decision.Chosen.ID, contract.Health{
 				State:  contract.HealthDown,
 				Reason: runErr.Error(),
@@ -1549,6 +1556,7 @@ func (a *Agent) close(out StepResult, err error) StepResult {
 	if err != nil {
 		out.Failure = err.Error()
 		out.FailureKind = contract.KindOf(err)
+		out.FailureCode = contract.CodeOf(err)
 		out.Raw = contract.RawOf(err)
 		child = contract.VerdictFailed
 	}

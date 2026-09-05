@@ -33,6 +33,13 @@ Read recorded activity without probing tools. Defaults to all retained history.
   --provider ID       filter provider
   --tool TEXT         filter tool names by substring
   --used              omit tools with no activity in this period
+  --errors            paginated request failures and retained cause counts
+  --limit N           errors per page, 1..500 (default 50)
+  --cursor TOKEN      next page; freezes the original time window
+  --error-code CODE   exact diagnostic code (requires --errors)
+  --client NAME       diagnostic client filter (requires --errors)
+  --profile NAME      diagnostic profile filter (requires --errors)
+  --origin KIND       normal, synthetic or unknown (requires --errors)
   --json              structured output
   --color MODE        auto (default), always, never; respects NO_COLOR
   --watch             refresh every two seconds (interactive terminal only)
@@ -45,8 +52,11 @@ Examples:
 `
 
 type statsOptions struct {
-	today, week, month, used, json, watch bool
-	since, repo, provider, tool, color    string
+	today, week, month, used, json, watch      bool
+	since, repo, provider, tool, color         string
+	errors                                     bool
+	limit                                      int
+	cursor, errorCode, client, profile, origin string
 }
 
 // parseStats validates flags and incompatible output modes.
@@ -65,6 +75,13 @@ func parseStats(args []string) (statsOptions, error) {
 	f.BoolVar(&o.json, "json", false, "")
 	f.BoolVar(&o.watch, "watch", false, "")
 	f.StringVar(&o.color, "color", "auto", "")
+	f.BoolVar(&o.errors, "errors", false, "")
+	f.IntVar(&o.limit, "limit", 50, "")
+	f.StringVar(&o.cursor, "cursor", "", "")
+	f.StringVar(&o.errorCode, "error-code", "", "")
+	f.StringVar(&o.client, "client", "", "")
+	f.StringVar(&o.profile, "profile", "", "")
+	f.StringVar(&o.origin, "origin", "", "")
 	if err := f.Parse(args); err != nil {
 		return o, contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -86,6 +103,15 @@ func parseStats(args []string) (statsOptions, error) {
 	}
 	if o.watch && o.json {
 		return o, contract.Fail(contract.FailureInvalidInput, "--watch cannot be combined with --json")
+	}
+	if o.limit < 1 || o.limit > 500 {
+		return o, contract.Fail(contract.FailureInvalidInput, "--limit must be 1..500")
+	}
+	if !o.errors && (o.cursor != "" || o.errorCode != "" || o.client != "" || o.profile != "" || o.origin != "") {
+		return o, contract.Fail(contract.FailureInvalidInput, "diagnostic filters require --errors")
+	}
+	if o.errors && o.watch {
+		return o, contract.Fail(contract.FailureInvalidInput, "--errors does not support --watch; use the returned cursor")
 	}
 	return o, nil
 }
@@ -154,6 +180,20 @@ func cmdStats(settingsPath string, args []string, out io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if o.errors {
+		q, e := o.query(time.Now())
+		if e != nil {
+			return e
+		}
+		page, e := core.StatsErrorsFromDisk(ctx, cfg, toolstats.ErrorQuery{Query: q, Limit: o.limit, Cursor: o.cursor, Code: o.errorCode, Client: o.client, Profile: o.profile, Origin: o.origin})
+		if e != nil {
+			return e
+		}
+		if o.json {
+			return json.NewEncoder(out).Encode(page)
+		}
+		return renderStatsErrors(out, page)
+	}
 	fetch := func(q toolstats.Query) (toolstats.Snapshot, error) {
 		if status, ok := core.Asked(); ok && status.Settings == cfg.Source {
 			s, e := core.AskedStats(q)
@@ -422,4 +462,27 @@ func renderStats(out io.Writer, s toolstats.Snapshot, color bool, width int) err
 	}
 	_, err := io.WriteString(out, b.String())
 	return err
+}
+
+func renderStatsErrors(out io.Writer, page toolstats.ErrorPage) error {
+	for _, note := range page.Notes {
+		if _, err := fmt.Fprintln(out, note); err != nil {
+			return err
+		}
+	}
+	for _, g := range page.Groups {
+		if _, err := fmt.Fprintf(out, "%d  %s  %s  client=%s profile=%s origin=%s\n", g.Calls, g.Code, g.Tool, g.Client, g.Profile, g.Origin); err != nil {
+			return err
+		}
+	}
+	for _, r := range page.Rows {
+		if _, err := fmt.Fprintf(out, "%s  %s  %s  %s\n  request=%s receipt=%s\n", r.At.Local().Format(time.RFC3339), r.Tool, r.Code, r.Reason, r.ID, r.ReceiptID); err != nil {
+			return err
+		}
+	}
+	if page.NextCursor != "" {
+		_, err := fmt.Fprintln(out, "Next cursor:", page.NextCursor)
+		return err
+	}
+	return nil
 }

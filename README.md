@@ -16,7 +16,7 @@ goal → capability → provider selection → implementation → reviewed resul
 [Changelog](CHANGELOG.md) ·
 [Configuration reference](docs/content/settings.md)
 
-**Source version:** `1.1.0` · **Adapter contract:** `4.0.0`
+**Source version:** `1.1.0` · **Adapter contract:** `4.1.0`
 
 This README describes the current checkout, including unreleased changes.
 The product version in the source does not establish that a matching release
@@ -173,10 +173,14 @@ Use `atenea catalog` for declared contracts, implementations and repositories.
 MCP clients should read `catalog.repositories` and `tools/list` for their actual
 surface, which also depends on attached runners and client policy.
 
-Kivgraph now implements **`symbol.search`** through `kivgraph.search`.
-**`symbol.implementations` and `symbol.unresolved` have no implementation**:
-they remain declared but are absent from `tools/list`; direct calls return
-`not_offered`. A text search is not evidence of semantic implementations.
+Kivgraph provides **`symbol.search`** and **`symbol.implementations`**. The latter
+requires a locally maintained Kivgraph build exposing `find_implementations`;
+these provider changes are not included in an upstream release. Install its
+complete matching bundle and rebuild the graph before using the capability.
+**`symbol.unresolved` has no implementation**: it remains declared but is absent
+from `tools/list`; direct calls return `not_offered`.
+See [maintenance, compatibility and diagnostic statistics](docs/content/maintenance-and-stats.md)
+for provider requirements and evidence limits.
 
 Graph queries require verified content freshness. Automatic rebuilding is off
 by default; `graph.ensure_fresh` is an explicit maintenance capability with

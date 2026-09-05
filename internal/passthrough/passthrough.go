@@ -19,6 +19,7 @@ package passthrough
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -213,6 +214,7 @@ func New(spec Spec) Backend {
 }
 
 type httpBackend struct {
+	version atomic.Value
 	id      string
 	url     string
 	timeout time.Duration
@@ -511,7 +513,7 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 	// The handshake's own answer is not kept: what it says about the server
 	// is already on `atenea wrap`'s report, and a tool list taken here would
 	// be the snapshot Tools deliberately refuses to cache.
-	_, opened, err := b.send(ctx, "initialize", map[string]any{
+	hello, opened, err := b.send(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea", "version": "1"},
@@ -521,6 +523,7 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 	}
 	// Written under the lock this function already holds, which is what makes
 	// the field safe to read anywhere else that takes it.
+	b.version.Store(serverVersion(hello))
 	b.session = opened
 	// The notification carries the session id the initialize answer set, and
 	// a server that never issued one is talking sessionless -- which is
@@ -623,6 +626,9 @@ func (b *httpBackend) post(ctx context.Context, body []byte, session string) (re
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
+		if stopped := httpStop(ctx, err, b.id, timeoutFor(ctx, b.timeout)); stopped != nil {
+			return reply{}, stopped
+		}
 		var wrapped *url.Error
 		if errors.As(err, &wrapped) && wrapped.Err != nil {
 			err = wrapped.Err
@@ -632,6 +638,9 @@ func (b *httpBackend) post(ctx context.Context, body []byte, session string) (re
 	defer func() { _ = resp.Body.Close() }()
 	text, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
+		if stopped := httpStop(ctx, err, b.id, timeoutFor(ctx, b.timeout)); stopped != nil {
+			return reply{}, stopped
+		}
 		return reply{}, b.fail(contract.FailureUnavailable, "reading the answer: %v", err)
 	}
 	return reply{
@@ -642,6 +651,19 @@ func (b *httpBackend) post(ctx context.Context, body []byte, session string) (re
 		session: resp.Header.Get("Mcp-Session-Id"),
 		text:    string(text),
 	}, nil
+}
+
+// The budget belongs to this HTTP exchange, so the caller's outer context
+// may still be healthy when it expires. Preserve that cause before wrapping
+// network failures; otherwise receipts and responses report an outage.
+func httpStop(ctx context.Context, err error, provider string, limit time.Duration) error {
+	if stopped := ctx.Err(); stopped != nil {
+		return contract.Stopped(stopped, provider, limit)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return contract.Stopped(err, provider, limit)
+	}
+	return nil
 }
 
 // fail names the server in every error this package produces. A chat sees
@@ -675,4 +697,32 @@ func clip(text string) string {
 		return text
 	}
 	return text[:limit] + "..."
+}
+
+// Version is handshake evidence; reading it never opens a backend.
+func (b *httpBackend) Version() string { v, _ := b.version.Load().(string); return v }
+func serverVersion(raw json.RawMessage) string {
+	var hello struct{ ServerInfo struct{ Version string } }
+	_ = json.Unmarshal(raw, &hello)
+	return hello.ServerInfo.Version
+}
+
+// SchemaHash returns a canonical digest of already discovered schemas. No I/O.
+func (b *httpBackend) SchemaHash() string { return b.catalog.fingerprint() }
+func (c *catalogCache) fingerprint() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loaded {
+		return ""
+	}
+	entries := map[string]any{}
+	for _, tool := range c.tools {
+		var input, output any
+		_ = json.Unmarshal(tool.InputSchema, &input)
+		_ = json.Unmarshal(tool.OutputSchema, &output)
+		entries[tool.Name] = []any{input, output}
+	}
+	raw, _ := json.Marshal(entries)
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum)
 }

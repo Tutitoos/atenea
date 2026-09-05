@@ -101,7 +101,7 @@ func (s *Store) writer() (*sql.DB, error) {
 		var tx *sql.Tx
 		tx, err = db.Begin()
 		if err == nil {
-			if _, err = tx.Exec(schema, time.Now().UnixMicro()); err == nil {
+			if _, err = tx.Exec(schema+metadataSchema, time.Now().UnixMicro()); err == nil {
 				_, err = tx.Exec(`INSERT INTO owners VALUES(?)`, owner)
 				if err == nil {
 					err = tx.Commit()
@@ -155,6 +155,10 @@ func (s *Store) Begin(ctx context.Context, e Event) (context.Context, *Call) {
 	if e.At.IsZero() {
 		e.At = time.Now()
 	}
+	if e.Metadata == (Metadata{}) {
+		e.Metadata, _ = ctx.Value(metadataKey{}).(Metadata)
+	}
+	e.Metadata = e.Metadata.clean()
 	e.ID = uuid.NewString()
 	e.Parent = RequestID(ctx)
 	if e.Level == "request" {
@@ -194,6 +198,9 @@ func (s *Store) Begin(ctx context.Context, e Event) (context.Context, *Call) {
 			_, err = tx.Exec(`INSERT INTO events(id,parent,level,tool,provider,repository,at) VALUES(?,?,?,?,?,?,?)`, e.ID, e.Parent, e.Level, e.Tool, e.Provider, e.Repository, e.At.UnixMicro())
 			if err == nil {
 				_, err = tx.Exec(`INSERT INTO event_owners VALUES(?,?)`, e.ID, s.owner)
+				if err == nil {
+					err = writeMetadata(tx, e)
+				}
 			}
 			if err == nil {
 				err = tx.Commit()
@@ -219,12 +226,24 @@ func (c *Call) Finish(outcome, code, reason string) {
 		defer s.mu.Unlock()
 		db, err := s.writer()
 		if err == nil {
-			var result sql.Result
-			result, err = db.Exec(`UPDATE events SET tool=?,provider=?,repository=?,ended=?,duration=?,outcome=?,code=?,reason=? WHERE id=?`, c.Event.Tool, c.Event.Provider, c.Event.Repository, time.Now().UnixMicro(), time.Since(c.start).Microseconds(), outcome, Clean(code, 80), Clean(contract.RedactRaw(reason), 240), c.Event.ID)
+			var tx *sql.Tx
+			tx, err = db.Begin()
 			if err == nil {
-				n, _ := result.RowsAffected()
-				if n == 0 {
-					err = fmt.Errorf("missing stats event")
+				var result sql.Result
+				result, err = tx.Exec(`UPDATE events SET tool=?,provider=?,repository=?,ended=?,duration=?,outcome=?,code=?,reason=? WHERE id=?`, c.Event.Tool, c.Event.Provider, c.Event.Repository, time.Now().UnixMicro(), time.Since(c.start).Microseconds(), outcome, Clean(code, 80), Clean(contract.RedactRaw(reason), 240), c.Event.ID)
+				if err == nil {
+					n, _ := result.RowsAffected()
+					if n == 0 {
+						err = fmt.Errorf("missing stats event")
+					}
+				}
+				if err == nil {
+					err = writeMetadata(tx, c.Event)
+				}
+				if err == nil {
+					err = tx.Commit()
+				} else {
+					_ = tx.Rollback()
 				}
 			}
 		}
@@ -293,6 +312,9 @@ func (s *Store) compact(db *sql.DB, now time.Time) error {
 	if err = s.recoverOwners(tx, now, cut); err != nil {
 		return err
 	}
+	if err := foldContext(tx, cut); err != nil {
+		return err
+	}
 	_, err = tx.Exec(`INSERT INTO rollup_bounds SELECT (at/86400000000)*86400000000,level,tool,provider,repository,max(ended)
  FROM events WHERE at<? AND ended IS NOT NULL GROUP BY 1,2,3,4,5
  ON CONFLICT(bucket,level,tool,provider,repository) DO UPDATE SET max_ended=max(max_ended,excluded.max_ended)`, cut)
@@ -315,6 +337,9 @@ func (s *Store) compact(db *sql.DB, now time.Time) error {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM event_owners WHERE event NOT IN (SELECT id FROM events)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM event_context WHERE event NOT IN (SELECT id FROM events)`); err != nil {
 		return err
 	}
 	return tx.Commit()

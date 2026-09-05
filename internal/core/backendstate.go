@@ -289,6 +289,9 @@ func (c *Core) recordBackendListingNote(id, note string) {
 // resetting it to unknown: forgetting a real failure because somebody then
 // asked for a forbidden tool would lose the one fact worth keeping.
 func (c *Core) recordBackendCall(id string, err error) {
+	if !contract.AffectsHealth(err) {
+		return
+	}
 	switch {
 	case err == nil:
 		c.readings.record(id, backendReading{State: BackendOK, At: time.Now()})

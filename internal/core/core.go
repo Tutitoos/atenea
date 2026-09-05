@@ -9,6 +9,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,8 +63,11 @@ type rawBackend struct {
 // Core is safe for concurrent use. Sessions are isolated per chat, but the
 // catalog underneath them is shared.
 type Core struct {
-	settings config.Config
-	catalog  *registry.Registry
+	deviceOwnersMu   sync.Mutex
+	deviceOwners     map[string]*deviceOwner
+	graphMaintenance *kivgraph.Runner
+	settings         config.Config
+	catalog          *registry.Registry
 	// backends are the declared servers whose own tools are re-offered
 	// verbatim, keyed by the id that forms the middle segment of their tool
 	// names. Empty on a machine that declared none, which is every machine
@@ -387,28 +391,40 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			instance: instance,
 		}
 	}
+	graphMaintenance, err := prepareGraphMaintenance(runners, role)
+	if err != nil {
+		return nil, err
+	}
+	if graphMaintenance != nil {
+		graphMaintenance.OnMaintenanceVerified = func() {
+			if err := catalog.InvalidateProviderHealth("kivgraph", "Verified maintenance; capability probe permitted"); err != nil {
+				slog.Warn("invalidate verified graph health", "error", err)
+			}
+		}
+	}
 	built = true
 	return &Core{
-		settings:     cfg,
-		backends:     backends,
-		readings:     readings,
-		catalog:      catalog,
-		chooser:      chooser,
-		runners:      runners,
-		checkpoints:  checkpoints,
-		measurements: store,
-		stats:        stats,
-		notebook:     book,
-		copies:       copies,
-		recovered:    found,
-		beats:        beats,
-		processes:    procs,
-		agent:        agent,
-		events:       events,
-		sessions:     make(map[string]*Session),
-		started:      time.Now(),
-		role:         role,
-		upkeep:       upkeep,
+		graphMaintenance: graphMaintenance,
+		settings:         cfg,
+		backends:         backends,
+		readings:         readings,
+		catalog:          catalog,
+		chooser:          chooser,
+		runners:          runners,
+		checkpoints:      checkpoints,
+		measurements:     store,
+		stats:            stats,
+		notebook:         book,
+		copies:           copies,
+		recovered:        found,
+		beats:            beats,
+		processes:        procs,
+		agent:            agent,
+		events:           events,
+		sessions:         make(map[string]*Session),
+		started:          time.Now(),
+		role:             role,
+		upkeep:           upkeep,
 	}, nil
 }
 
@@ -581,7 +597,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 	runner, err := kivgraph.New(kivgraph.Options{
 		RequireFresh:          true,
 		AutoReindexRegistered: graph.AutoReindexRegistered,
-		MaintenanceDirectory:  kivgraphMaintenanceDirectory(),
+		MaintenanceDirectory:  kivgraphMaintenanceDirectoryFor(cfg),
 		Implementations:       graph.Implementations,
 		Sensitive:             cfg.Security.Sensitive,
 		Timeout:               graph.Timeout,
@@ -635,7 +651,7 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 	return kivgraph.New(kivgraph.Options{
 		RequireFresh:          true,
 		AutoReindexRegistered: graph.AutoReindexRegistered,
-		MaintenanceDirectory:  kivgraphMaintenanceDirectory(),
+		MaintenanceDirectory:  kivgraphMaintenanceDirectoryFor(cfg),
 		Implementations:       graph.Implementations,
 		Sensitive:             cfg.Security.Sensitive,
 		Timeout:               graph.Timeout,
@@ -1113,15 +1129,12 @@ func (c *Core) Checkpoints() *checkpoint.Store { return c.checkpoints }
 // treats its own dumps: the tool already ran on somebody else's server, and
 // refusing to hand back its answer because the paperwork failed would turn a
 // bookkeeping problem into a broken call. The notebook is where that goes.
-func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.Effect, started time.Time, callErr error) {
+func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.Effect, started time.Time, observation mcpObservation, event toolstats.Event) {
 	if c.checkpoints == nil || !c.checkpoints.Enabled() {
 		return
 	}
 	now := time.Now()
-	verdict, failure := contract.VerdictOK.String(), ""
-	if callErr != nil {
-		verdict, failure = contract.VerdictFailed.String(), callErr.Error()
-	}
+	verdict, failure := observation.verdict(), observation.Reason
 	chat := ""
 	client, sessionName, sessionBasis, sessionProject := "", "", "", ""
 	origin := SessionOrigin{}
@@ -1133,7 +1146,10 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 		sessionName, sessionBasis, sessionProject, origin, externalObserved = session.DashboardMetadata()
 	}
 	run := checkpoint.Run{
-		ID:                      checkpoint.NewID(now),
+		ID:                      observation.ReceiptID,
+		RequestID:               event.Parent,
+		AttemptID:               event.ID,
+		ErrorCode:               observation.Code,
 		Kind:                    checkpoint.KindRaw,
 		Session:                 chat,
 		SessionClient:           client,
@@ -1164,6 +1180,8 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 			Verdict:        verdict,
 			Review:         verdict,
 			Failure:        failure,
+			ToolVersion:    observation.ProviderVersion,
+			SchemaHash:     observation.SchemaHash,
 			Funnel:         checkpoint.Funnel{State: checkpoint.FunnelNone},
 			DurationMS:     now.Sub(started).Milliseconds(),
 			ClosedAt:       now,
@@ -1194,7 +1212,12 @@ func (c *Core) Do(ctx context.Context, task orchestrator.Task) (result *orchestr
 		repository = task.Repositories[0]
 	}
 	ctx, call := c.StartStatsRequest(ctx, "orchestrator.task", repository)
-	defer func() { call.End(resultError(result, err)) }()
+	defer func() {
+		if call != nil && result != nil {
+			call.Event.Metadata.ReceiptID = result.RunID
+		}
+		call.End(resultError(result, err))
+	}()
 	if err := c.enter(); err != nil {
 		return nil, err
 	}
@@ -1206,7 +1229,12 @@ func (c *Core) Do(ctx context.Context, task orchestrator.Task) (result *orchestr
 // in-flight bookkeeping a commission gets: a clean stop waits for it too.
 func (c *Core) Ask(ctx context.Context, q orchestrator.Question) (result *orchestrator.Result, err error) {
 	ctx, call := c.StartStatsRequest(ctx, q.Capability, q.Repository)
-	defer func() { call.End(resultError(result, err)) }()
+	defer func() {
+		if call != nil && result != nil {
+			call.Event.Metadata.ReceiptID = result.RunID
+		}
+		call.End(resultError(result, err))
+	}()
 	if err := c.enter(); err != nil {
 		return nil, err
 	}
@@ -1567,6 +1595,9 @@ func (c *Core) Shutdown() error {
 	// The door shuts first: the flag above already refuses new work, and this
 	// stops new callers from getting as far as being refused.
 	c.closeSocket()
+	if c.graphMaintenance != nil {
+		c.graphMaintenance.CancelMaintenance()
+	}
 	c.mu.Lock()
 	dashboard := c.dashboard
 	c.mu.Unlock()
@@ -1585,6 +1616,9 @@ func (c *Core) Shutdown() error {
 	// belongs under the same budget as everything else that can.
 	done := make(chan struct{})
 	go func() {
+		if c.graphMaintenance != nil {
+			c.graphMaintenance.CloseMaintenance()
+		}
 		c.conns.Wait()
 		c.inflight.Wait()
 		close(done)

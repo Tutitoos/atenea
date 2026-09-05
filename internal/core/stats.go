@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/ipc"
 	"github.com/Tutitoos/atenea/internal/metrics"
@@ -140,6 +141,8 @@ func (r statsRunner) Unwrap() contract.Runner { return r.Runner }
 func (r statsRunner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
 	_, call := r.store.Begin(ctx, toolstats.Event{Level: "attempt", Tool: req.Implementation.ID, Provider: req.Implementation.Provider, Repository: req.Repository.ID})
 	defer func() {
+		call.Event.Metadata.ReceiptID = checkpoint.RunID(ctx)
+		call.Event.Metadata.ProviderVersion = out.ToolVersion
 		observedErr := err
 		if observedErr == nil && out.Verdict != contract.VerdictOK {
 			observedErr = contract.Fail(contract.FailureUnspecified, "provider verdict: %s", out.Verdict.String())
@@ -160,7 +163,7 @@ func resultError(result *orchestrator.Result, err error) error {
 	}
 	for _, step := range result.Steps {
 		if step.Failure != "" {
-			return contract.Fail(step.FailureKind, "%s", step.Failure)
+			return &contract.Failure{Kind: step.FailureKind, Code: step.FailureCode, Message: step.Failure}
 		}
 		if step.Review.Parent != contract.VerdictOK {
 			return contract.Fail(contract.FailureUnspecified, "review verdict: %s", step.Review.Parent.String())
@@ -172,42 +175,10 @@ func resultError(result *orchestrator.Result, err error) error {
 // StartStatsRequest brackets validation at a caller boundary; nested Core calls reuse its ID.
 func (c *Core) StartStatsRequest(ctx context.Context, tool, repo string) (context.Context, *toolstats.Call) {
 	if toolstats.RequestID(ctx) != "" {
-		return ctx, nil
+		return checkpoint.WithRequestID(ctx, toolstats.RequestID(ctx)), nil
 	}
-	return c.stats.Begin(ctx, toolstats.Event{Level: "request", Tool: tool, Provider: "atenea", Repository: repo})
-}
-
-// statsMCPResult classifies MCP errors without retaining response payloads.
-func statsMCPResult(result any, rpcErr *rpcError) (string, string, string) {
-	if rpcErr != nil {
-		return "fail", "invalid_request", rpcErr.Message
-	}
-	if m, ok := result.(map[string]any); ok {
-		if failed, _ := m["isError"].(bool); failed {
-			code := "tool_failure"
-			reason := "Tool returned isError"
-			if d, ok := m["structuredContent"].(map[string]any); ok {
-				if v, ok := d["error_code"].(string); ok {
-					code = v
-				}
-			}
-			if items, ok := m["content"].([]any); ok && len(items) > 0 {
-				if item, ok := items[0].(map[string]any); ok {
-					if text, ok := item["text"].(string); ok {
-						reason = text
-					}
-				}
-			}
-			switch code {
-			case "profile_denied", "permission_denied", "external_denied":
-				return "refused", code, reason
-			case "canceled":
-				return "cancel", code, reason
-			}
-			return "fail", code, reason
-		}
-	}
-	return "ok", "", ""
+	ctx, call := c.stats.Begin(ctx, toolstats.Event{Level: "request", Tool: tool, Provider: "atenea", Repository: repo})
+	return checkpoint.WithRequestID(ctx, toolstats.RequestID(ctx)), call
 }
 
 // statsRepository extracts repository metadata from a tool request.
@@ -229,4 +200,26 @@ func setStatsError(ctx context.Context, err error) {
 			*target = err
 		}
 	}
+}
+
+// StatsErrorsFromDisk reads bounded diagnostics without constructing a Core.
+func StatsErrorsFromDisk(ctx context.Context, cfg config.Config, q toolstats.ErrorQuery) (toolstats.ErrorPage, error) {
+	return toolstats.New(toolstats.Path(statsBasePath(cfg))).Errors(ctx, q)
+}
+
+// MethodStatsErrors is the IPC method for paginated failure diagnostics.
+const MethodStatsErrors = "atenea/stats/errors"
+
+func (v *conversation) statsErrors(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+	var q toolstats.ErrorQuery
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+		}
+	}
+	page, err := v.core.stats.Errors(ctx, q)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	return page, nil
 }

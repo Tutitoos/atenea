@@ -346,7 +346,8 @@ type Version struct {
 // a wrong answer.
 // 4.0.0 retires Serena configuration, runners and implementations. Remove
 // Serena declarations and indexes before migrating a 3.x settings file.
-var Current = Version{Major: 4, Minor: 0, Patch: 0}
+// 4.1.0 adds refusal receipts and diagnostic cause/health scope on Failure.
+var Current = Version{Major: 4, Minor: 1, Patch: 0}
 
 // ParseVersion reads a MAJOR.MINOR.PATCH string.
 func ParseVersion(s string) (Version, error) {

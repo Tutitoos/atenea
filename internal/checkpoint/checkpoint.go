@@ -29,7 +29,10 @@ import (
 
 // Run is the paper copy of one commission in flight.
 type Run struct {
-	ID string `json:"id"`
+	ID        string `json:"id"`
+	RequestID string `json:"request_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 	// Kind tells a task-shaped commission apart from a single ask or a
 	// caller-supplied plan: task rebuilds explore-then-split, ask is one step,
 	// and plan resumes directly from its supplied DAG.
@@ -148,6 +151,7 @@ type StepState struct {
 	PeakRSS          int64  `json:"peak_rss,omitempty"`
 	RSSKnown         bool   `json:"rss_known,omitempty"`
 	ToolVersion      string `json:"tool_version,omitempty"`
+	SchemaHash       string `json:"schema_hash,omitempty"`
 	// SpentUSD is what this step was charged, when anything was. It is here
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a

@@ -105,8 +105,8 @@ will hand it the work outright when you want it.
 
 Kivgraph and Tokensave offer the supported graph-backed symbol capabilities.
 Configure the provider and mark a repository indexed only after indexing succeeds.
-`symbol.implementations`, `symbol.search` and `symbol.unresolved` currently have
-no provider and are absent from `tools/list`.
+Kivgraph provides `symbol.implementations` with compiler evidence and paginated
+results. `symbol.unresolved` has no provider and is absent from `tools/list`.
 
 ## Write your own settings
 

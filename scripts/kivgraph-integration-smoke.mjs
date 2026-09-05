@@ -31,7 +31,8 @@ async function connect(client) {
   function request(method, params = {}) {
     const id = ++next;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => { pending.delete(id); reject(new Error("MCP query deadline exceeded")); }, method === "tools/call" && params.name?.includes("ensure_fresh") ? 31*60*1000 : 100*1000);
+      pending.set(id, { resolve: value => { clearTimeout(timeout); resolve(value); }, reject: error => { clearTimeout(timeout); reject(error); } });
       child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
     });
   }
@@ -59,13 +60,13 @@ function toolName(tools, id) {
 for (const client of clients) {
   const session = await connect(client);
   try {
-    for (const id of ["symbol.search", "symbol.source", "symbol.impact", "graph.repositories", "code.context"]) toolName(session.tools, id);
-    assert.ok(!session.tools.some((tool) => /serena|symbol[._](implementations|unresolved)$/.test(tool.name)));
+    for (const id of ["symbol.implementations", "symbol.search", "symbol.source", "symbol.impact", "graph.repositories", "code.context"]) toolName(session.tools, id);
+    assert.ok(!session.tools.some((tool) => /serena|symbol[._]unresolved$/.test(tool.name)));
     console.log(client + ": live initialize/tools/list passed");
     if (client !== "codex" || !process.argv.includes("--queries")) continue;
     async function call(id, args = {}, repository = "taxiprime-backend") {
       console.log("Atenea · " + id + " — " + repository);
-      const result = await session.request("tools/call", { name: toolName(session.tools, id), arguments: { repository, _atenea_prefer: "kivgraph", ...args } });
+      const result = await session.request("tools/call", { name: toolName(session.tools, id), arguments: { repository, _atenea_prefer: "kivgraph", ...args }, _meta: {"atenea.origin":"synthetic"} });
       assert.ok(!result.isError, JSON.stringify(result));
       const receipts = (result.content || []).filter((block) => block.type === "text").flatMap((block) => {
         try { const parsed = JSON.parse(block.text); return parsed.atenea_usage ? [parsed] : []; } catch { return []; }
@@ -89,7 +90,7 @@ for (const client of clients) {
     await call("symbol.intent_search", { intent: "tipos de usuarios", keywords: ["UserType", "user", "role"], limit: 5 });
     await call("code.context", { task: "tipos de usuarios", keywords: ["UserType", "user"], limit: 2, include_snippet: true, snippet_lines: 30 });
     await call("symbol.impact", { file: first.path, line: first.line, column: 1, depth: 1, limit: 10 });
-    for (const id of ["symbol.references", "symbol.dependencies", "symbol.consumers"]) {
+    for (const id of ["symbol.references", "symbol.dependencies", "symbol.consumers", "symbol.implementations"]) {
       await call(id, { file: first.path, line: first.line, column: 1 });
     }
     if (process.argv.includes("--repair")) await call("graph.ensure_fresh", {}, "taxiprime-app");

@@ -520,3 +520,18 @@ func (r *Registry) persistLocked() error {
 	}
 	return nil
 }
+
+// InvalidateProviderHealth permits a fresh probe after verified shared maintenance.
+// It changes only existing observations belonging to that provider.
+func (r *Registry) InvalidateProviderHealth(provider, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, observations := range r.observed {
+		for id := range observations {
+			if r.implementers[id].Provider == provider {
+				observations[id] = contract.Health{State: contract.HealthUnknown, Reason: reason, ObservedAt: time.Now().UTC()}
+			}
+		}
+	}
+	return r.persistLocked()
+}

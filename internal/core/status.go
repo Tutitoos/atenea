@@ -292,10 +292,13 @@ type CapabilityStatus struct {
 
 // ImplementationStatus is one provider and its color.
 type ImplementationStatus struct {
-	ID       string
-	Provider string
-	Light    Light
-	Health   contract.Health
+	ID              string
+	Provider        string
+	Light           Light
+	Health          contract.Health
+	HealthSource    string
+	HealthExpired   bool
+	HealthExpiresAt *time.Time
 }
 
 // RepositoryStatus is one unit of work.
@@ -556,6 +559,7 @@ func (c *Core) Status() Status {
 		}
 		usable := 0
 		for _, impl := range impls {
+			source := "configuration"
 			total++
 			// Two probes reach this line and neither is the declaration: what
 			// the metrics base has on disk, and what a call in this process
@@ -567,6 +571,7 @@ func (c *Core) Status() Status {
 					observed.Reason = "on " + where + ": " + observed.Reason
 				}
 				impl.Health = metrics.Reconcile(impl.Health, observed)
+				source = "runtime observation"
 			}
 			if v, ok := recorded[impl.ID]; ok {
 				health := v.Health
@@ -574,16 +579,28 @@ func (c *Core) Status() Status {
 					health.Reason = "on " + v.Repository + ": " + health.Reason
 				}
 				impl.Health = metrics.Reconcile(impl.Health, health)
+				source = "measurements and runtime observations"
+			}
+			expired := impl.Health.Stale(time.Now(), c.settings.Selector.HealthStaleAfter)
+			var expires *time.Time
+			if !impl.Health.ObservedAt.IsZero() {
+				at := impl.Health.ObservedAt.Add(c.settings.Selector.HealthStaleAfter)
+				expires = &at
+			}
+			if expired {
+				impl.Health.State = contract.HealthUnknown
+				impl.Health.Reason = "Expired observation; awaiting a new probe. " + impl.Health.Reason
 			}
 			light := lightFor(impl.Health.State)
 			if impl.Health.Usable() {
 				usable++
 			}
 			entry.Implementations = append(entry.Implementations, ImplementationStatus{
-				ID:       impl.ID,
-				Provider: impl.Provider,
-				Light:    light,
-				Health:   impl.Health,
+				ID:           impl.ID,
+				Provider:     impl.Provider,
+				Light:        light,
+				Health:       impl.Health,
+				HealthSource: source, HealthExpired: expired, HealthExpiresAt: expires,
 			})
 			if prior, seen := byProvider[impl.Provider]; !seen ||
 				impl.Health.State.Rank() > prior.health.State.Rank() {

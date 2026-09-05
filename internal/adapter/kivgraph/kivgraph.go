@@ -153,28 +153,31 @@ import (
 // capability is the "what" and an implementation is the "who": another
 // provider may answer the same four capabilities tomorrow.
 const (
-	CapabilityDefinition   = "symbol.definition"
-	CapabilityReferences   = "symbol.references"
-	CapabilityOverview     = "symbol.overview"
-	CapabilityConsumers    = "symbol.consumers"
-	CapabilityGet          = "symbol.get"
-	CapabilityIntent       = "symbol.intent_search"
-	CapabilityDependencies = "symbol.dependencies"
-	CapabilityGraphStatus  = "graph.status"
-	CapabilityImpact       = "code.impact"
-	CapabilityIndex        = "repository.index"
-	CapabilitySearch       = "symbol.search"
-	ImplSearch             = "kivgraph.search"
-	CapabilitySource       = "symbol.source"
-	CapabilitySymbolImpact = "symbol.impact"
-	CapabilityRepositories = "graph.repositories"
-	CapabilityEnsureFresh  = "graph.ensure_fresh"
-	CapabilityContext      = "code.context"
-	ImplSource             = "kivgraph.source"
-	ImplSymbolImpact       = "kivgraph.symbol_impact"
-	ImplRepositories       = "kivgraph.repositories"
-	ImplEnsureFresh        = "kivgraph.ensure_fresh"
-	ImplContext            = "kivgraph.context"
+	CapabilityDefinition      = "symbol.definition"
+	CapabilityReferences      = "symbol.references"
+	CapabilityImplementations = "symbol.implementations"
+	ImplImplementations       = "kivgraph.implementations"
+	toolImplementations       = "find_implementations"
+	CapabilityOverview        = "symbol.overview"
+	CapabilityConsumers       = "symbol.consumers"
+	CapabilityGet             = "symbol.get"
+	CapabilityIntent          = "symbol.intent_search"
+	CapabilityDependencies    = "symbol.dependencies"
+	CapabilityGraphStatus     = "graph.status"
+	CapabilityImpact          = "code.impact"
+	CapabilityIndex           = "repository.index"
+	CapabilitySearch          = "symbol.search"
+	ImplSearch                = "kivgraph.search"
+	CapabilitySource          = "symbol.source"
+	CapabilitySymbolImpact    = "symbol.impact"
+	CapabilityRepositories    = "graph.repositories"
+	CapabilityEnsureFresh     = "graph.ensure_fresh"
+	CapabilityContext         = "code.context"
+	ImplSource                = "kivgraph.source"
+	ImplSymbolImpact          = "kivgraph.symbol_impact"
+	ImplRepositories          = "kivgraph.repositories"
+	ImplEnsureFresh           = "kivgraph.ensure_fresh"
+	ImplContext               = "kivgraph.context"
 
 	ImplDefinition   = "kivgraph.definition"
 	ImplReferences   = "kivgraph.references"
@@ -244,7 +247,7 @@ const DefaultBinary = "kivgraph"
 // and not a package-level slice because a caller that appended to a shared
 // one would quietly change what every other Atenea in this process serves.
 func DefaultImplementations() []string {
-	return []string{ImplDefinition, ImplReferences, ImplOverview, ImplConsumers, ImplGet, ImplIntent, ImplDependencies, ImplStatus, ImplImpact, ImplIndex, ImplSearch, ImplSource, ImplSymbolImpact, ImplRepositories, ImplEnsureFresh, ImplContext}
+	return []string{ImplDefinition, ImplReferences, ImplImplementations, ImplOverview, ImplConsumers, ImplGet, ImplIntent, ImplDependencies, ImplStatus, ImplImpact, ImplIndex, ImplSearch, ImplSource, ImplSymbolImpact, ImplRepositories, ImplEnsureFresh, ImplContext}
 }
 
 // IndexReport is the authoritative result of Kivgraph's full index command.
@@ -307,6 +310,10 @@ type Options struct {
 
 // Runner is the kivgraph far side of contract.Runner.
 type Runner struct {
+	// OnMaintenanceVerified runs only after the served generation passes freshness checks.
+	OnMaintenanceVerified func()
+
+	jobs                  *maintenanceJobs
 	requireFresh          bool
 	autoReindexRegistered bool
 	maintenanceDirectory  string
@@ -383,7 +390,7 @@ func (r *Runner) Implementations() []string { return slices.Clone(r.implementati
 // load rather than at the call.
 func (r *Runner) Capabilities() []string {
 	return []string{
-		CapabilityDefinition, CapabilityReferences, CapabilityOverview,
+		CapabilityDefinition, CapabilityReferences, CapabilityImplementations, CapabilityOverview,
 		CapabilityConsumers, CapabilityGet, CapabilityIntent, CapabilityDependencies, CapabilityGraphStatus,
 		CapabilityImpact, CapabilityIndex, CapabilitySearch,
 		CapabilitySource, CapabilitySymbolImpact, CapabilityRepositories, CapabilityEnsureFresh, CapabilityContext,
@@ -407,7 +414,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 
 	started := time.Now()
 	timeout := r.timeout
-	if req.Capability.ID == CapabilityIndex || req.Capability.ID == CapabilityEnsureFresh || r.autoReindexRegistered {
+	if req.Capability.ID == CapabilityIndex || req.Capability.ID == CapabilityEnsureFresh {
 		timeout = r.indexTimeout
 	}
 	call, cancel := context.WithTimeout(ctx, timeout)
@@ -416,6 +423,9 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	sess, err := r.session(call)
 	if err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
+	}
+	if versioned, ok := sess.(interface{ Version() string }); ok {
+		defer func() { out.ToolVersion = versioned.Version() }()
 	}
 	collector := &evidenceSession{Session: sess}
 	sess = collector
@@ -445,7 +455,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	}
 	if req.Capability.ID == CapabilityEnsureFresh || (r.requireFresh && req.Capability.ID != CapabilityGraphStatus && req.Capability.ID != CapabilityRepositories) {
 		var rebuilt bool
-		status, rebuilt, err = r.ensureFresh(call, sess, status, req)
+		status, rebuilt, err = r.managedFresh(call, sess, status, req)
 		if err != nil {
 			return contract.Outcome{}, err
 		}
@@ -477,6 +487,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		result, notes, err = r.runSearch(call, sess, status, req)
 	case CapabilityDefinition:
 		result, notes, err = r.runDefinition(call, sess, status, req)
+	case CapabilityImplementations:
+		result, notes, err = r.runImplementations(call, sess, status, req)
 	case CapabilityReferences:
 		result, notes, err = r.runReferences(call, sess, status, req)
 	case CapabilityOverview:

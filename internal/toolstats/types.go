@@ -23,11 +23,14 @@ type Query struct {
 
 // Tool identifies a catalog entry at the request or attempt level.
 type Tool struct {
-	Level      string `json:"level"`
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	Repository string `json:"repository,omitempty"`
-	State      string `json:"state"`
+	ProviderVersion   string     `json:"provider_version,omitempty"`
+	SchemaHash        string     `json:"schema_hash,omitempty"`
+	CatalogObservedAt *time.Time `json:"catalog_observed_at,omitempty"`
+	Level             string     `json:"level"`
+	Name              string     `json:"name"`
+	Provider          string     `json:"provider"`
+	Repository        string     `json:"repository,omitempty"`
+	State             string     `json:"state"`
 }
 
 // Row contains outcome counters and duration statistics for a tool.
@@ -60,11 +63,13 @@ type Diagnostic struct {
 
 // Coverage describes retained history and known recording gaps.
 type Coverage struct {
-	Started     *time.Time `json:"started"`
-	DetailSince time.Time  `json:"detail_since"`
-	Dropped     int64      `json:"dropped"`
-	Partial     bool       `json:"partial"`
-	Notes       []string   `json:"notes"`
+	Started        *time.Time `json:"started"`
+	EffectiveSince *time.Time `json:"effective_since,omitempty"`
+	EffectiveUntil *time.Time `json:"effective_until,omitempty"`
+	DetailSince    time.Time  `json:"detail_since"`
+	Dropped        int64      `json:"dropped"`
+	Partial        bool       `json:"partial"`
+	Notes          []string   `json:"notes"`
 }
 
 // Snapshot is the shared socket and CLI statistics response.
@@ -97,6 +102,7 @@ type LegacyRow struct {
 
 // Event identifies a request or attempt and its parent request.
 type Event struct {
+	Metadata   Metadata
 	ID         string
 	Parent     string
 	Level      string
@@ -127,7 +133,7 @@ func Outcome(err error) (string, string, string) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "fail", "timeout", Clean(err.Error(), 240)
 	}
-	code := contract.KindOf(err).String()
+	code := contract.CodeOf(err)
 	outcome := "fail"
 	switch contract.KindOf(err) {
 	case contract.FailurePermissionDenied, contract.FailureExternalDenied:
