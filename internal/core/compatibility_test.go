@@ -33,6 +33,16 @@ func TestDesktopPolicyFiltersTools(t *testing.T) {
 	}
 }
 
+func TestDefaultDesktopPolicyDoesNotAdvertiseSessionUnion(t *testing.T) {
+	tools := desktopPolicy{}.filterTools([]map[string]any{
+		{"name": "raw.agent-device.session"},
+		{"name": "catalog.repositories"},
+	})
+	if len(tools) != 1 || tools[0]["name"] != "catalog.repositories" {
+		t.Fatalf("default tools = %#v", tools)
+	}
+}
+
 func TestRawCatalogSelectsCoreAndFull(t *testing.T) {
 	corePolicy := desktopPolicyFromProfile(config.DesktopProfile{
 		Name: "chatgpt", RawCatalogs: map[string]string{"agent-device": "core"},

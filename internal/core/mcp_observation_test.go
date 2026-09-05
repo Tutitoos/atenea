@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -34,6 +35,17 @@ func TestMCPObservationPreservesFailureMeaning(t *testing.T) {
 	}
 	if o := observeMCP(nil, &rpcError{Code: codeInternal, Message: "malformed backend"}, nil); o.Code != "invalid_response" {
 		t.Fatal(o)
+	}
+}
+
+func TestMCPObservationSanitizesEarlyErrors(t *testing.T) {
+	for _, observation := range []mcpObservation{
+		observeMCP(nil, nil, contract.Fail(contract.FailureUnavailable, "Authorization: Bearer secret-token")),
+		observeMCP(nil, &rpcError{Code: codeInternal, Message: "Authorization: Bearer secret-token"}, nil),
+	} {
+		if strings.Contains(observation.Reason, "secret-token") || !strings.Contains(observation.Reason, "[REDACTED]") {
+			t.Fatalf("unsafe observation reason: %q", observation.Reason)
+		}
 	}
 }
 

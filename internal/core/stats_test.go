@@ -82,6 +82,17 @@ func TestStatsRawAliasRefusalAndReadOnlyQueries(t *testing.T) {
 	}
 }
 
+func TestStatsErrorsAcceptsOmittedParameters(t *testing.T) {
+	atenea := buildService(t, socketSettings)
+	defer serve(t, atenea)()
+	client := dial(t)
+	client.handshake("stats-errors-test")
+	page := result(t, client.call(core.MethodStatsErrors, nil), core.MethodStatsErrors)
+	if page["version"] != float64(1) {
+		t.Fatalf("error page = %#v", page)
+	}
+}
+
 // TestStatsCapabilityRequestIsNotCountedTwice checks request propagation through MCP dispatch.
 func TestStatsCapabilityRequestIsNotCountedTwice(t *testing.T) {
 	atenea := buildService(t, socketSettings)

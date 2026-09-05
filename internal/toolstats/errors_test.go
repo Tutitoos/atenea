@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,6 +75,10 @@ func TestContextCompactionRetainsCauseOnce(t *testing.T) {
 
 func TestErrorQueryRejectsInvalidLimitsAndCursorWithoutCreatingStorage(t *testing.T) {
 	s := New(filepath.Join(t.TempDir(), "absent.sqlite"))
+	page, err := s.Errors(t.Context(), ErrorQuery{})
+	if err != nil || len(page.Notes) < 2 || !strings.Contains(page.Notes[0], "older than detail_since") {
+		t.Fatalf("unbounded retention notes = %#v, err = %v", page.Notes, err)
+	}
 	for _, q := range []ErrorQuery{{Limit: -1}, {Limit: 501}, {Cursor: "bad"}, {Origin: "guessed"}} {
 		if _, err := s.Errors(t.Context(), q); err == nil {
 			t.Fatal(q)

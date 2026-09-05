@@ -117,7 +117,7 @@ func (s *Store) Errors(ctx context.Context, q ErrorQuery) (ErrorPage, error) {
 		return out, err
 	}
 	out.Query = q
-	if !q.Since.IsZero() && q.Since.Before(out.DetailSince) {
+	if q.Since.Before(out.DetailSince) {
 		out.Notes = append(out.Notes, "Individual diagnostics older than detail_since have expired; retained cause aggregates remain available.")
 	}
 	if _, err := os.Stat(s.Path); os.IsNotExist(err) {

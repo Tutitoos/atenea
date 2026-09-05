@@ -116,8 +116,20 @@ func TestDeviceOfficialSDKSessionListingKeepsExplicitSessionScope(t *testing.T) 
 	release()
 	for _, input := range []map[string]any{nil, args, {"action": "destroy", "session": "dedicated", "cwd": "/fixture"}} {
 		request := deviceSessionListArgs(input)
-		if request["action"] != "list" || request["session"] == nil || request["session"] == "" {
+		if request["action"] != "list" || request["session"] != "atenea-session-inspection" {
 			t.Fatalf("unsafe or implicitly scoped session list: %#v", request)
 		}
+	}
+}
+
+func TestDeviceConflictDetectionDoesNotDependOnSessionOrder(t *testing.T) {
+	v := &conversation{core: &Core{}, session: &Session{id: "flow-a"}}
+	args := map[string]any{"session": "owned", "cwd": "/fixture"}
+	v.core.deviceOwners = map[string]*deviceOwner{
+		deviceRealm(args) + "owned": {conversation: "flow-a", device: "device-a"},
+	}
+	backend := rawBackend{Backend: deviceStateBackend{response: `{"structuredContent":{"sessions":[{"name":"other","device_id":"device-a","device":"Phone"},{"name":"owned","device_id":"device-a","device":"Phone"}]}}`}}
+	if _, err := v.reserveDeviceCall(t.Context(), backend, "snapshot", args); contract.CodeOf(err) != "DEVICE_BUSY" {
+		t.Fatalf("ordered conflict = %v, want DEVICE_BUSY", err)
 	}
 }

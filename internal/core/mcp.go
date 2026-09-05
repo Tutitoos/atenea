@@ -818,7 +818,6 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 			observation = observeMCP(answer, rpcFailure, callErr)
 		}
 		observation.ReceiptID = checkpoint.NewID(started)
-		v.core.fileRawReceipt(v.session, params.Name, effects, started, observation, statsCall.Event)
 		if identity, ok := observedBackend.(interface {
 			Version() string
 			SchemaHash() string
@@ -828,6 +827,7 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 			statsCall.Event.Metadata.ProviderVersion = identity.Version()
 			statsCall.Event.Metadata.SchemaHash = identity.SchemaHash()
 		}
+		v.core.fileRawReceipt(v.session, params.Name, effects, started, observation, statsCall.Event)
 		statsCall.Event.Metadata.ReceiptID = observation.ReceiptID
 		statsCall.Finish(observation.Outcome, observation.Code, observation.Reason)
 		if target, ok := ctx.Value(observationKey{}).(*mcpObservation); ok {

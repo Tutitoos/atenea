@@ -212,8 +212,10 @@ const MethodStatsErrors = "atenea/stats/errors"
 
 func (v *conversation) statsErrors(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
 	var q toolstats.ErrorQuery
-	if err := json.Unmarshal(raw, &q); err != nil {
-		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+		}
 	}
 	page, err := v.core.stats.Errors(ctx, q)
 	if err != nil {

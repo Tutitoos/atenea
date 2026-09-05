@@ -678,6 +678,15 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 	report, parseErr := parseIndexStreamObserved(stdout, func(progress indexProgress) error {
 		return noteMaintenanceProgress(ctx, progress)
 	})
+	if parseErr != nil {
+		_ = procgroup.Kill(command)
+		// A descendant may have escaped while retaining stdout. Closing our
+		// reader prevents that inherited descriptor from keeping maintenance
+		// blocked after the owning process group has been stopped.
+		_ = stdout.Close()
+		_ = command.Wait()
+		return IndexReport{}, parseErr
+	}
 	// Drained before Wait, always: Wait closes the pipe, and a Wait that ran
 	// while the scan was still reading would race it. parseIndexStream returns
 	// only after the stream ends or a line refuses to parse -- and on the
@@ -689,9 +698,6 @@ func RunConfiguredIndex(ctx context.Context, executable string, env []string, ro
 			return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w: %s", err, detail)
 		}
 		return IndexReport{}, fmt.Errorf("kivgraph index --full failed: %w", err)
-	}
-	if parseErr != nil {
-		return IndexReport{}, parseErr
 	}
 	return report, nil
 }

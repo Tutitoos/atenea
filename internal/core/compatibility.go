@@ -86,9 +86,6 @@ func (p desktopPolicy) allows(tool string) bool {
 }
 
 func (p desktopPolicy) filterTools(tools []map[string]any) []map[string]any {
-	if len(p.EnabledTools) == 0 && len(p.DisabledTools) == 0 && len(p.RawCatalogs) == 0 {
-		return tools
-	}
 	filtered := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		name, _ := tool["name"].(string)

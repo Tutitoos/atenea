@@ -97,6 +97,24 @@ expose="off"
 ''')
         self.assertEqual(self.g["effective_policy"]("omp")["expected_wrapper_servers"], ["atenea", "direct"])
 
+    def test_hybrid_ignores_server_rows_without_id(self):
+        self.write(".config/atenea/atenea.toml", '''[[desktop_profile]]
+name="shared"
+mcp_mode="hybrid"
+direct_mcp=["*"]
+[[mcp_server]]
+expose="on"
+[[mcp_server]]
+id="direct"
+expose="on"
+''')
+        self.assertEqual(self.g["effective_policy"]("omp")["expected_wrapper_servers"], ["atenea", "direct"])
+
+    def test_default_dispatch_includes_each_client_validator(self):
+        validators = self.g["declaration_validators"](["omp", "claude", "opencode", "codex"])
+        self.assertEqual([fn.__name__ for fn in validators],
+                         ["<lambda>"] * 4 + ["check_omp", "check_claude", "check_opencode", "check_codex", "check_serena"])
+
     def test_discovery_records_version_schema_and_all_pages(self):
         script = self.write("server.py", '''import json,sys
 for line in sys.stdin:

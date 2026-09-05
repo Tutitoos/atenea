@@ -18,8 +18,12 @@ type mcpObservation struct {
 	Ready                            bool
 }
 
-func observeMCP(result any, rpcErr *rpcError, err error) mcpObservation {
-	o := mcpObservation{Outcome: "ok", Ready: true}
+func observeMCP(result any, rpcErr *rpcError, err error) (o mcpObservation) {
+	o = mcpObservation{Outcome: "ok", Ready: true}
+	defer func() {
+		o.Reason = toolstats.Clean(contract.RedactRaw(o.Reason), 240)
+		o.Code = toolstats.Clean(o.Code, 80)
+	}()
 	if err != nil {
 		o.Outcome, o.Code, o.Reason = toolstats.Outcome(err)
 		return o
@@ -58,8 +62,6 @@ func observeMCP(result any, rpcErr *rpcError, err error) mcpObservation {
 	case "canceled", "cancelled": //nolint:misspell // Accept both provider protocol spellings.
 		o.Outcome = "cancel"
 	}
-	o.Reason = toolstats.Clean(contract.RedactRaw(o.Reason), 240)
-	o.Code = toolstats.Clean(o.Code, 80)
 	return o
 }
 

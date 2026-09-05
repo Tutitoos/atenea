@@ -837,8 +837,9 @@ def effective_policy(client):
     if profile.get("mcp_mode") == "hybrid":
         allowed = profile.get("direct_mcp",[])
         direct = sorted(row["id"] for row in config.get("mcp_server",[])
-                        if row.get("expose")=="on" and row.get("id") not in served
-                        and ("*" in allowed or row.get("id") in allowed))
+                        if row.get("expose")=="on" and isinstance(row.get("id"), str)
+                        and row["id"] not in served
+                        and ("*" in allowed or row["id"] in allowed))
     return {"profile":name,"mode":profile.get("mcp_mode"),
             "expected_wrapper_servers":["atenea"]+direct,
             "source":filename,"injected_configuration":"unobserved",
@@ -885,6 +886,14 @@ def wire_clients_from_argv():
     return picked or ["claude", "omp", "opencode", "codex"]
 
 
+def declaration_validators(clients):
+    validators = {"omp": check_omp, "claude": check_claude, "opencode": check_opencode,
+                  "codex": check_codex}
+    return ([lambda client=client: audit_client_declarations(client) for client in clients]
+            + [validators[client] for client in clients if client in validators]
+            + [check_serena])
+
+
 def main():
     live = "--live" in sys.argv
     quiet = "--quiet" in sys.argv
@@ -907,7 +916,7 @@ def main():
     clients = wire_clients_from_argv()
     if clients is None:
         return 2
-    for fn in ([lambda client=client: audit_client_declarations(client) for client in clients] + [check_serena]):
+    for fn in declaration_validators(clients):
         try:
             fn()
         except FileNotFoundError as exc:

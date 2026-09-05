@@ -99,6 +99,8 @@ func (f *fakeBackend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Mcp-Session-Id", "session-1")
 	var result string
 	switch msg.Method {
+	case "initialize":
+		result = `{"serverInfo":{"name":"fixture","version":"1.2.3"}}`
 	case "tools/list":
 		// Three tools, on purpose: one the operator allows, one allowed but
 		// costlier, and one that is exactly the reason an allow list exists.
@@ -533,6 +535,7 @@ func TestARawCallLeavesAReceiptSayingThereWasNoFunnel(t *testing.T) {
 
 	c := dial(t)
 	c.handshake("omp")
+	result(t, c.call("tools/list", nil), "tools/list")
 	result(t, c.call("tools/call", map[string]any{
 		"name":      "raw.semgrep.semgrep_scan",
 		"arguments": map[string]any{"code_files": []any{"/tmp/x.py"}},
@@ -566,6 +569,9 @@ func TestARawCallLeavesAReceiptSayingThereWasNoFunnel(t *testing.T) {
 		t.Fatalf("steps = %d, want 1", len(found.Steps))
 	}
 	step := found.Steps[0]
+	if step.ToolVersion != "1.2.3" || step.SchemaHash == "" {
+		t.Fatalf("backend identity missing from raw receipt: %+v", step)
+	}
 	if step.Funnel.State != checkpoint.FunnelNone {
 		t.Errorf("funnel state = %q, want %q", step.Funnel.State, checkpoint.FunnelNone)
 	}

@@ -86,9 +86,16 @@ func (r *Runner) EnableBackground() error {
 
 // CloseMaintenance cancels owned children and waits until their state is saved.
 func (r *Runner) CloseMaintenance() {
+	r.CancelMaintenance()
+	if r.jobs != nil {
+		r.jobs.wg.Wait()
+	}
+}
+
+// CancelMaintenance asks owned children to stop without waiting for them.
+func (r *Runner) CancelMaintenance() {
 	if r.jobs != nil {
 		r.jobs.cancel()
-		r.jobs.wg.Wait()
 	}
 }
 

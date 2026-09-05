@@ -94,7 +94,7 @@ func deviceSessionListArgs(args map[string]any) map[string]any {
 	// named sessions. A read-only list with an explicit name bypasses that
 	// default scope; it neither creates nor adopts this inspection session.
 	request := map[string]any{"action": "list", "mcpOutputFormat": "json", "session": "atenea-session-inspection"}
-	for _, key := range []string{"session", "cwd", "stateDir", "daemonBaseUrl", "daemonAuthToken", "tenant"} {
+	for _, key := range []string{"cwd", "stateDir", "daemonBaseUrl", "daemonAuthToken", "tenant"} {
 		if value, ok := args[key]; ok {
 			request[key] = value
 		}
@@ -181,16 +181,23 @@ func (v *conversation) reserveDeviceCall(ctx context.Context, backend rawBackend
 	}
 	found := false
 	for _, state := range sessions {
-		if state.name == session {
-			found = true
-			if v.core.deviceOwners[key] == nil {
-				return nil, deviceFailure("DEVICE_BUSY", "The named session already exists outside this flow. Use another session and free device.")
-			}
-			if device != "" && device != state.device && device != state.label {
-				return nil, deviceFailure("INVALID_ARGS", "Explicit device differs from the device bound to this session.")
-			}
-			device = state.device
-		} else if device != "" && (device == state.device || device == state.label) {
+		if state.name != session {
+			continue
+		}
+		found = true
+		if v.core.deviceOwners[key] == nil {
+			return nil, deviceFailure("DEVICE_BUSY", "The named session already exists outside this flow. Use another session and free device.")
+		}
+		if device != "" && device != state.device && device != state.label {
+			return nil, deviceFailure("INVALID_ARGS", "Explicit device differs from the device bound to this session.")
+		}
+		device = state.device
+	}
+	for _, state := range sessions {
+		if state.name == session || device == "" {
+			continue
+		}
+		if device == state.device || device == state.label {
 			return nil, deviceFailure("DEVICE_BUSY", "This device is occupied by another session. Choose a free device or wait for the owning flow.")
 		}
 	}

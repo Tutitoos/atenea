@@ -472,7 +472,7 @@ const metricsPrefix = "tokensave_metrics:"
 // newline by the transport. Only this known notice may precede a JSON answer.
 var updateNotice = regexp.MustCompile("^⚠️ tokensave v[0-9]+\\.[0-9]+\\.[0-9]+ is installed, but v[0-9]+\\.[0-9]+\\.[0-9]+ is available\\. Run `tokensave upgrade` to update\\.")
 
-var branchFallbackNotice = regexp.MustCompile(`^WARNING: branch '[^'\r\n]+' is not tracked — serving from '[^'\r\n]+'\.`)
+var branchFallbackNotice = regexp.MustCompile(`^WARNING: branch '[^\r\n]+' is not tracked — serving from '[^\r\n]+'\.`)
 
 func branchFallbackFailure(text string) error {
 	return &contract.Failure{Kind: contract.FailureInvalidInput, Code: "branch_mismatch", HealthNeutral: true,

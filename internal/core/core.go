@@ -1180,6 +1180,8 @@ func (c *Core) fileRawReceipt(session *Session, name string, effects []contract.
 			Verdict:        verdict,
 			Review:         verdict,
 			Failure:        failure,
+			ToolVersion:    observation.ProviderVersion,
+			SchemaHash:     observation.SchemaHash,
 			Funnel:         checkpoint.Funnel{State: checkpoint.FunnelNone},
 			DurationMS:     now.Sub(started).Milliseconds(),
 			ClosedAt:       now,
@@ -1594,7 +1596,7 @@ func (c *Core) Shutdown() error {
 	// stops new callers from getting as far as being refused.
 	c.closeSocket()
 	if c.graphMaintenance != nil {
-		c.graphMaintenance.CloseMaintenance()
+		c.graphMaintenance.CancelMaintenance()
 	}
 	c.mu.Lock()
 	dashboard := c.dashboard
@@ -1614,6 +1616,9 @@ func (c *Core) Shutdown() error {
 	// belongs under the same budget as everything else that can.
 	done := make(chan struct{})
 	go func() {
+		if c.graphMaintenance != nil {
+			c.graphMaintenance.CloseMaintenance()
+		}
 		c.conns.Wait()
 		c.inflight.Wait()
 		close(done)

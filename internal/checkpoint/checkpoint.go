@@ -151,6 +151,7 @@ type StepState struct {
 	PeakRSS          int64  `json:"peak_rss,omitempty"`
 	RSSKnown         bool   `json:"rss_known,omitempty"`
 	ToolVersion      string `json:"tool_version,omitempty"`
+	SchemaHash       string `json:"schema_hash,omitempty"`
 	// SpentUSD is what this step was charged, when anything was. It is here
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a

@@ -90,10 +90,7 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 	}
 	attempted, _ := os.ReadFile(marker)
 	generationIdentity := strconv.Itoa(current.SnapshotID)
-	identity := generationIdentity
-	if current.ContentFreshness != nil && current.ContentFreshness.InputDigest != "" {
-		identity += ":" + current.ContentFreshness.InputDigest
-	}
+	identity := freshnessIdentity(current)
 	if (string(attempted) == identity || string(attempted) == generationIdentity) && !explicit {
 		return nil, false, maintenanceFailure("rebuild_blocked", "automatic graph rebuild already attempted for this generation; inspect the failure and retry explicit graph.ensure_fresh")
 	}
@@ -126,7 +123,7 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 			if verified.SnapshotID != generation || !contentFresh(verified) {
 				// Mark the newly published generation too, preventing a loop after a
 				// rebuild that could not attest stability.
-				if err := os.WriteFile(marker, []byte(strconv.Itoa(verified.SnapshotID)), 0600); err != nil {
+				if err := os.WriteFile(marker, []byte(freshnessIdentity(verified)), 0600); err != nil {
 					return nil, false, contract.Fail(contract.FailureUnavailable, "record failed freshness verification: %v", err)
 				}
 				return nil, false, maintenanceFailure("freshness_unverified", fmt.Sprintf("published graph could not verify source freshness (expected generation %d, served %d); results withheld", generation, verified.SnapshotID))
@@ -143,4 +140,12 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func freshnessIdentity(status *statusResult) string {
+	identity := strconv.Itoa(status.SnapshotID)
+	if status.ContentFreshness != nil && status.ContentFreshness.InputDigest != "" {
+		identity += ":" + status.ContentFreshness.InputDigest
+	}
+	return identity
 }

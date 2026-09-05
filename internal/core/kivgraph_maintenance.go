@@ -21,6 +21,10 @@ func kivgraphMaintenanceDirectory() string {
 }
 
 func kivgraphMaintenanceDirectoryFor(cfg config.Config) string {
+	base := kivgraphMaintenanceDirectory()
+	if base == "" {
+		return ""
+	}
 	graph := cfg.Orchestrator.Kivgraph
 	// Include every execution input without persisting environment values.
 	identityBytes, _ := json.Marshal(struct {
@@ -29,7 +33,7 @@ func kivgraphMaintenanceDirectoryFor(cfg config.Config) string {
 	}{cfg.Source, graph})
 	identity := string(identityBytes)
 	sum := sha256.Sum256([]byte(identity))
-	return filepath.Join(kivgraphMaintenanceDirectory(), fmt.Sprintf("%x", sum[:12]))
+	return filepath.Join(base, fmt.Sprintf("%x", sum[:12]))
 }
 
 func prepareGraphMaintenance(runners []contract.Runner, role Role) (*kivgraph.Runner, error) {

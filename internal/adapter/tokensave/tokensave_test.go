@@ -858,8 +858,9 @@ func TestFetchEntitiesPartitionsAClippedLargeAnswer(t *testing.T) {
 
 func TestRunRejectsBranchSubstitutionBeforeQuerying(t *testing.T) {
 	const warning = "WARNING: branch 'feature/fix' is not tracked — serving from 'main'. Run `tokensave branch add feature/fix` to track it."
+	const apostropheWarning = "WARNING: branch 'feature/o'reilly' is not tracked — serving from 'release/o'reilly'. Run `tokensave branch add feature/o'reilly` to track it."
 	const notice = "⚠️ tokensave v7.10.0 is installed, but v7.11.0 is available. Run `tokensave upgrade` to update."
-	for _, text := range []string{warning + notice + readyStatus, notice + warning + readyStatus, `{"node_count":3,"branch_fallback":true,"active_branch":"feature/fix"}`} {
+	for _, text := range []string{warning + notice + readyStatus, notice + warning + readyStatus, apostropheWarning + readyStatus, `{"node_count":3,"branch_fallback":true,"active_branch":"feature/fix"}`} {
 		t.Run(text[:20], func(t *testing.T) {
 			root, repo := workspace(t)
 			fake, sess := newFakeTokensave(t)

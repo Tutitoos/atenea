@@ -174,6 +174,51 @@ func TestFailedAutomaticRebuildDoesNotLoop(t *testing.T) {
 	}
 }
 
+func TestFailedFreshnessVerificationIsRearmedByChangedInputDigest(t *testing.T) {
+	repo := testRepo(t)
+	fake, sess := newFakeKivgraph(t)
+	statusWithDigest := func(generation int, digest string) string {
+		return strings.Replace(freshStatus(t, repo, generation, "stale"),
+			`"state":"stale"`, `"input_digest":"`+digest+`","state":"stale"`, 1)
+	}
+	responses := []string{
+		statusWithDigest(1, "input-a"),
+		statusWithDigest(2, "input-b"),
+		statusWithDigest(2, "input-c"),
+	}
+	var probes, indexes int
+	fake.handlers[toolStatus] = func(map[string]any) (string, bool) {
+		response := responses[probes]
+		probes++
+		return response, false
+	}
+	runner := newTestRunner(t, sess)
+	runner.autoReindexRegistered = true
+	runner.maintenanceDirectory = t.TempDir()
+	runner.index = func(context.Context, string, string) (IndexReport, error) {
+		indexes++
+		if indexes == 1 {
+			return IndexReport{Generation: "2"}, nil
+		}
+		return IndexReport{}, errors.New("second fixture rebuild stopped")
+	}
+	initial := &statusResult{SnapshotID: 1, Status: "ready", ContentFreshness: &contentFreshness{Generation: 1, State: "stale", InputDigest: "input-a"}}
+	if _, _, err := runner.ensureFresh(t.Context(), sess, initial, request(t, repo, CapabilityIntent, map[string]any{"intent": "test"})); contract.CodeOf(err) != "freshness_unverified" {
+		t.Fatalf("first verification error = %v", err)
+	}
+	marker, err := os.ReadFile(filepath.Join(runner.maintenanceDirectory, "last-attempt"))
+	if err != nil || string(marker) != "2:input-b" {
+		t.Fatalf("marker = %q, err = %v", marker, err)
+	}
+	changed := &statusResult{SnapshotID: 2, Status: "ready", ContentFreshness: &contentFreshness{Generation: 2, State: "stale", InputDigest: "input-c"}}
+	if _, _, err = runner.ensureFresh(t.Context(), sess, changed, request(t, repo, CapabilityIntent, map[string]any{"intent": "test"})); contract.CodeOf(err) == "rebuild_blocked" {
+		t.Fatalf("changed input digest did not rearm maintenance: %v", err)
+	}
+	if indexes != 2 {
+		t.Fatalf("rebuilds = %d, want 2", indexes)
+	}
+}
+
 func TestConcurrentFreshnessChecksShareRebuild(t *testing.T) {
 	repo := testRepo(t)
 	fake, sess := newFakeKivgraph(t)
