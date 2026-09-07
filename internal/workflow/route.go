@@ -22,6 +22,8 @@ type routeWire struct {
 	Tools                    []string          `json:"tools,omitempty"`
 	VisibilityRequired       bool              `json:"visibility_required,omitempty"`
 	ThreadID                 string            `json:"thread_id,omitempty"`
+	ParentThreadID           string            `json:"parent_thread_id,omitempty"`
+	NativeForkState          string            `json:"native_fork_state,omitempty"`
 }
 
 func jsonRoute(route *contract.Route) string {
@@ -33,7 +35,8 @@ func jsonRoute(route *contract.Route) string {
 		RequestedReasoningEffort: route.RequestedReasoningEffort, ObservedReasoningEffort: route.ObservedReasoningEffort,
 		Fallbacks: route.Fallbacks, Backend: route.Backend,
 		Binary: route.Binary, Capabilities: route.Capabilities,
-		Providers: route.Providers, Tools: route.Tools, VisibilityRequired: route.VisibilityRequired, ThreadID: route.ThreadID})
+		Providers: route.Providers, Tools: route.Tools, VisibilityRequired: route.VisibilityRequired, ThreadID: route.ThreadID,
+		ParentThreadID: route.ParentThreadID, NativeForkState: route.NativeForkState})
 	if err != nil {
 		return ""
 	}
@@ -52,7 +55,8 @@ func readRoute(raw string) (*contract.Route, error) {
 		Role: wire.Role, ReasoningEffort: wire.ReasoningEffort,
 		RequestedReasoningEffort: wire.RequestedReasoningEffort, ObservedReasoningEffort: wire.ObservedReasoningEffort,
 		Fallbacks: wire.Fallbacks, Backend: wire.Backend, Binary: wire.Binary,
-		Capabilities: wire.Capabilities, Providers: wire.Providers, Tools: wire.Tools, VisibilityRequired: wire.VisibilityRequired, ThreadID: wire.ThreadID}, nil
+		Capabilities: wire.Capabilities, Providers: wire.Providers, Tools: wire.Tools, VisibilityRequired: wire.VisibilityRequired, ThreadID: wire.ThreadID,
+		ParentThreadID: wire.ParentThreadID, NativeForkState: wire.NativeForkState}, nil
 }
 
 func routeForGate(route *contract.Route) *routeWire {
@@ -64,7 +68,8 @@ func routeForGate(route *contract.Route) *routeWire {
 		Role: cloned.Role, ReasoningEffort: cloned.ReasoningEffort,
 		RequestedReasoningEffort: cloned.RequestedReasoningEffort, ObservedReasoningEffort: cloned.ObservedReasoningEffort,
 		Fallbacks: cloned.Fallbacks, Backend: cloned.Backend, Binary: cloned.Binary,
-		Capabilities: cloned.Capabilities, Providers: cloned.Providers, Tools: cloned.Tools, VisibilityRequired: cloned.VisibilityRequired, ThreadID: cloned.ThreadID}
+		Capabilities: cloned.Capabilities, Providers: cloned.Providers, Tools: cloned.Tools, VisibilityRequired: cloned.VisibilityRequired, ThreadID: cloned.ThreadID,
+		ParentThreadID: cloned.ParentThreadID, NativeForkState: cloned.NativeForkState}
 }
 
 func routeFromGate(wire *routeWire) *contract.Route {
@@ -75,5 +80,6 @@ func routeFromGate(wire *routeWire) *contract.Route {
 		Role: wire.Role, ReasoningEffort: wire.ReasoningEffort,
 		RequestedReasoningEffort: wire.RequestedReasoningEffort, ObservedReasoningEffort: wire.ObservedReasoningEffort,
 		Fallbacks: wire.Fallbacks, Backend: wire.Backend, Binary: wire.Binary,
-		Capabilities: wire.Capabilities, Providers: wire.Providers, Tools: wire.Tools, VisibilityRequired: wire.VisibilityRequired, ThreadID: wire.ThreadID}
+		Capabilities: wire.Capabilities, Providers: wire.Providers, Tools: wire.Tools, VisibilityRequired: wire.VisibilityRequired, ThreadID: wire.ThreadID,
+		ParentThreadID: wire.ParentThreadID, NativeForkState: wire.NativeForkState}
 }

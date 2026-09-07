@@ -1436,6 +1436,139 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 	return nil
 }
 
+// ReserveNativeFork durably records the intent to create one child thread.
+// A pending row from an earlier process is an uncertain external effect and
+// therefore blocks rather than issuing another fork.
+func (s *Store) ReserveNativeFork(ctx context.Context, id, stepID, parentThreadID string) (*contract.Route, error) {
+	parentThreadID = strings.TrimSpace(parentThreadID)
+	if parentThreadID == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork requires parent thread id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reserving native fork")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var raw string
+	if err := tx.QueryRowContext(ctx, `SELECT route FROM workflow_step WHERE workflow_id=? AND id=?`, id, stepID).Scan(&raw); err != nil {
+		return nil, unavailable(err, "workflow: reading native fork route")
+	}
+	route, err := readRoute(raw)
+	if err != nil {
+		return nil, err
+	}
+	if route == nil {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork step has no route")
+	}
+	if route.ThreadID != "" {
+		if route.ParentThreadID != "" && route.ParentThreadID != parentThreadID {
+			return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork parent thread changed")
+		}
+		return route, nil
+	}
+	if route.NativeForkState == "pending" {
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"workflow: native fork outcome is uncertain; inspect and bind the child thread before resuming")
+	}
+	if route.ParentThreadID != "" && route.ParentThreadID != parentThreadID {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork parent thread changed")
+	}
+	route.ParentThreadID = parentThreadID
+	route.NativeForkState = "pending"
+	if err := route.Validate(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_step SET route=? WHERE workflow_id=? AND id=?`, jsonRoute(route), id, stepID); err != nil {
+		return nil, unavailable(err, "workflow: writing native fork reservation")
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, unavailable(err, "workflow: committing native fork reservation")
+	}
+	return route, nil
+}
+
+// CompleteNativeFork binds the distinct child identity before its process can
+// resume the thread or start a model turn.
+func (s *Store) CompleteNativeFork(ctx context.Context, id, stepID, parentThreadID, childThreadID string) (*contract.Route, error) {
+	parentThreadID, childThreadID = strings.TrimSpace(parentThreadID), strings.TrimSpace(childThreadID)
+	if parentThreadID == "" || childThreadID == "" || parentThreadID == childThreadID {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork requires distinct parent and child thread ids")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, unavailable(err, "workflow: completing native fork")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var raw string
+	if err := tx.QueryRowContext(ctx, `SELECT route FROM workflow_step WHERE workflow_id=? AND id=?`, id, stepID).Scan(&raw); err != nil {
+		return nil, unavailable(err, "workflow: reading native fork reservation")
+	}
+	route, err := readRoute(raw)
+	if err != nil {
+		return nil, err
+	}
+	if route == nil || route.NativeForkState != "pending" || route.ParentThreadID != parentThreadID || route.ThreadID != "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork reservation changed before completion")
+	}
+	route.ThreadID = childThreadID
+	route.NativeForkState = "complete"
+	if err := route.Validate(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_step SET route=? WHERE workflow_id=? AND id=?`, jsonRoute(route), id, stepID); err != nil {
+		return nil, unavailable(err, "workflow: writing native fork child")
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, unavailable(err, "workflow: committing native fork child")
+	}
+	return route, nil
+}
+
+// BindNativeFork lets an operator resolve a pending provider outcome after
+// inspecting the provider's durable threads. It refuses while an engine owns
+// the workflow so a manual recovery cannot race the original fork call.
+func (s *Store) BindNativeFork(ctx context.Context, id, stepID, childThreadID string) (*contract.Route, error) {
+	childThreadID = strings.TrimSpace(childThreadID)
+	if childThreadID == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork bind requires child thread id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, unavailable(err, "workflow: binding native fork")
+	}
+	defer func() { _ = tx.Rollback() }()
+	var raw string
+	var writerPID int
+	if err := tx.QueryRowContext(ctx, `SELECT s.route,w.writer_pid FROM workflow_step s JOIN workflow w ON w.id=s.workflow_id WHERE s.workflow_id=? AND s.id=?`, id, stepID).Scan(&raw, &writerPID); err != nil {
+		return nil, unavailable(err, "workflow: reading pending native fork")
+	}
+	if writerPID != 0 {
+		return nil, contract.Fail(contract.FailureUnavailable, "workflow: native fork cannot be bound while workflow %s has an active writer", id)
+	}
+	route, err := readRoute(raw)
+	if err != nil {
+		return nil, err
+	}
+	if route == nil || route.NativeForkState != "pending" || strings.TrimSpace(route.ParentThreadID) == "" || route.ThreadID != "" {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: step %s has no pending native fork to bind", stepID)
+	}
+	if childThreadID == route.ParentThreadID {
+		return nil, contract.Fail(contract.FailureInvalidInput, "workflow: native fork child must differ from its parent")
+	}
+	route.ThreadID = childThreadID
+	route.NativeForkState = "complete"
+	if err := route.Validate(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_step SET route=? WHERE workflow_id=? AND id=?`, jsonRoute(route), id, stepID); err != nil {
+		return nil, unavailable(err, "workflow: writing manually bound native fork")
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, unavailable(err, "workflow: committing manually bound native fork")
+	}
+	return route, nil
+}
+
 // finishStep atomically records an outcome and settles its reservation.
 func finishStep(ctx context.Context, tx *sql.Tx, id, stepID string, status Status, report contract.Report, at time.Time) error {
 	var typeName, routeJSON, traceID, pointID string

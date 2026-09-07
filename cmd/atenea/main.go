@@ -438,7 +438,7 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|list|status|export|compare|panel
+	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|native-fork|list|status|export|compare|panel
 
 Run a graph of agent steps. The graph comes from a TOML file and is executed
 exactly as written: nothing here plans, splits or grows it.
@@ -500,6 +500,8 @@ Status, compare and panel accept their documented flags before or after ids.
   status ID             durable state; --format compact|markdown|json
   export ID             complete deterministic --format markdown|json view
   compare A B           compare recorded tokens and duration between workflows
+  native-fork inspect   inspect a pending or completed Codex child relationship
+  native-fork bind      bind a verified child after an uncertain fork outcome
   panel ID              print the read-only dashboard deep link; --open opens it
 
 Flags:

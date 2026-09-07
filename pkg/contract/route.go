@@ -34,6 +34,12 @@ type Route struct {
 	// opaque and must only be reused by the client that received it.
 	VisibilityRequired bool
 	ThreadID           string
+	// ParentThreadID identifies the durable coordinator thread from which a
+	// specialist thread was forked. NativeForkState is empty for ordinary
+	// routes, pending while the external effect is uncertain, and complete
+	// only after the distinct child ThreadID is durably stored.
+	ParentThreadID  string
+	NativeForkState string
 }
 
 // Validate refuses a route that cannot do the job the type exists for.
@@ -52,6 +58,18 @@ type Route struct {
 // Effects and BudgetUSD remain the authority boundary, and this validator
 // deliberately says nothing about whether the route was allowed.
 func (r Route) Validate() error {
+	if r.NativeForkState != "" && r.NativeForkState != "pending" && r.NativeForkState != "complete" {
+		return Fail(FailureInvalidInput, "route: unknown native fork state %q", r.NativeForkState)
+	}
+	if r.NativeForkState != "" && strings.TrimSpace(r.ParentThreadID) == "" {
+		return Fail(FailureInvalidInput, "route: native fork state requires parent thread id")
+	}
+	if r.NativeForkState == "complete" && strings.TrimSpace(r.ThreadID) == "" {
+		return Fail(FailureInvalidInput, "route: completed native fork requires child thread id")
+	}
+	if r.ParentThreadID != "" && r.ParentThreadID == r.ThreadID {
+		return Fail(FailureInvalidInput, "route: parent and child thread ids must differ")
+	}
 	if r.Model != "" && r.RequestedModel != "" && strings.TrimSpace(r.Model) != strings.TrimSpace(r.RequestedModel) {
 		return Fail(FailureInvalidInput, "route: model and requested_model disagree")
 	}

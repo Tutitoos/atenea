@@ -50,6 +50,8 @@ type route struct {
 	Binary                   string   `json:"binary"`
 	VisibilityRequired       bool     `json:"visibility_required,omitempty"`
 	ThreadID                 string   `json:"thread_id,omitempty"`
+	ParentThreadID           string   `json:"parent_thread_id,omitempty"`
+	NativeForkState          string   `json:"native_fork_state,omitempty"`
 	TurnID                   string   `json:"turn_id,omitempty"`
 	UsageRevision            uint64   `json:"usage_revision,omitempty"`
 }

@@ -51,6 +51,15 @@ print(os.path.realpath(sys.argv[1]))
 PY
 )
 	sandbox=$(mktemp -d "$root/${client}.XXXXXX")
+	mkdir -p "$sandbox/home" "$sandbox/codex" "$sandbox/config" "$sandbox/state" "$sandbox/data"
+	core_socket=${ATENEA_TEST_REAL_CORE_SOCKET:?set ATENEA_TEST_REAL_CORE_SOCKET to the running Atenea core socket}
+	if [[ ! -S "$core_socket" ]]; then
+		echo "ATENEA_TEST_REAL_CORE_SOCKET is not a live Unix socket" >&2
+		failed=1
+		exit 2
+	fi
+	mkdir -p "$sandbox/state/atenea/run"
+	ln -s "$core_socket" "$sandbox/state/atenea/run/core.sock"
 	transcript="$sandbox/$transcript_name"
 	sentinel=${ATENEA_TEST_REAL_SENTINEL:?set ATENEA_TEST_REAL_SENTINEL to a pre-existing external sentinel}
 	before=$(shasum -a 256 "$sentinel" | awk '{print $1}')
@@ -98,26 +107,86 @@ PY
 			export OPENCODE_CONFIG_CONTENT
 			;;
 	esac
+	launcher="$sandbox/launch.py"
+	cat >"$launcher" <<'PY'
+import os
+import sys
+
+allowed = {
+    key: os.environ[key]
+    for key in (
+        "PATH", "HOME", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+        "XDG_DATA_HOME", "TMPDIR", "LANG", "TERM", "ATENEA_PILOT_RUN_ID",
+        "ATENEA_PILOT_WORKFLOW_ID", "OPENCODE_CONFIG_CONTENT",
+    )
+    if key in os.environ
+}
+os.setsid()
+os.execve(sys.argv[1], sys.argv[1:], allowed)
+PY
+	mkdir -p "$sandbox/tmp"
+	launch_env=(
+		"PATH=${ATENEA_TEST_REAL_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+		"HOME=$sandbox/home"
+		"CODEX_HOME=$sandbox/codex"
+		"XDG_CONFIG_HOME=$sandbox/config"
+		"XDG_STATE_HOME=$sandbox/state"
+		"XDG_DATA_HOME=$sandbox/data"
+		"TMPDIR=$sandbox/tmp"
+		"LANG=${LANG:-C.UTF-8}"
+		"TERM=${TERM:-dumb}"
+		"ATENEA_PILOT_RUN_ID=$run_id"
+		"ATENEA_PILOT_WORKFLOW_ID=$workflow_id"
+	)
+	if [[ "$client" == "opencode" ]]; then
+		launch_env+=("OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
+	fi
 	set +e
-	HOME="$sandbox/home" CODEX_HOME="$sandbox/codex" XDG_CONFIG_HOME="$sandbox/config" XDG_STATE_HOME="$sandbox/state" XDG_DATA_HOME="$sandbox/data" \
-		ATENEA_PILOT_RUN_ID="$run_id" ATENEA_PILOT_WORKFLOW_ID="$workflow_id" \
-		"$bin" "${args[@]}" >"$transcript" 2>&1 &
+	env -i "${launch_env[@]}" /usr/bin/python3 "$launcher" "$bin" "${args[@]}" >"$transcript" 2>&1 &
 	pid=$!
 	start=$(date +%s)
+	timed_out=0
 	while kill -0 "$pid" 2>/dev/null; do
 		if (( $(date +%s) - start >= seconds )); then
-			kill -TERM "$pid" 2>/dev/null
-			wait "$pid" 2>/dev/null
-			echo "${client} exceeded ${seconds}s" >&2
-			exit 124
+			timed_out=1
+			kill -TERM -- "-$pid" 2>/dev/null
+			break
 		fi
 		sleep 1
 	done
-	wait "$pid"
+	# The client may exit while a helper remains in its session, or ignore
+	# SIGTERM itself. Never wait for either without a deadline: terminate the
+	# whole isolated process group, allow a short grace period, then force it.
+	kill -TERM -- "-$pid" 2>/dev/null
+	grace_start=$(date +%s)
+	while kill -0 -- "-$pid" 2>/dev/null && (( $(date +%s) - grace_start < 2 )); do
+		sleep 0.1
+	done
+	if kill -0 -- "-$pid" 2>/dev/null; then
+		kill -KILL -- "-$pid" 2>/dev/null
+	fi
+	wait "$pid" 2>/dev/null
 	status=$?
+	if (( timed_out )); then
+		status=124
+		echo "${client} exceeded ${seconds}s" >&2
+	fi
+	group_gone=0
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		if ! kill -0 -- "-$pid" 2>/dev/null; then
+			group_gone=1
+			break
+		fi
+		sleep 0.1
+	done
 	set -e
 	if [[ ! -f "$transcript" ]]; then
 		printf '{"client":"%s","status":"unknown","reason":"sandbox transcript was not created"}\n' "$client"
+		failed=1
+		continue
+	fi
+	if (( ! group_gone )); then
+		printf '{"client":"%s","status":"unknown","reason":"client process group survived forced termination"}\n' "$client"
 		failed=1
 		continue
 	fi

@@ -14,6 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  github-delivery-skill:
+    name: GitHub delivery skill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Validate skill behavior
+        run: |
+          python3 scripts/validate-agent-skill.py
+          python3 -m unittest discover -s .agents/skills/atenea-github-delivery/tests -p 'test_*.py'
+
   omp-integration:
     name: OMP / isolated real integration
     runs-on: ubuntu-latest

@@ -82,6 +82,8 @@ type routeWire struct {
 	Tools                    []string          `json:"tools,omitempty"`
 	VisibilityRequired       bool              `json:"visibility_required,omitempty"`
 	ThreadID                 string            `json:"thread_id,omitempty"`
+	ParentThreadID           string            `json:"parent_thread_id,omitempty"`
+	NativeForkState          string            `json:"native_fork_state,omitempty"`
 	TurnID                   string            `json:"turn_id,omitempty"`
 	UsageRevision            uint64            `json:"usage_revision,omitempty"`
 }
@@ -194,7 +196,8 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 			RequestedReasoningEffort: route.RequestedReasoningEffort, ObservedReasoningEffort: route.ObservedReasoningEffort,
 			Fallbacks: route.Fallbacks, Backend: route.Backend, Binary: route.Binary,
 			Capabilities: route.Capabilities, Providers: route.Providers, Tools: route.Tools,
-			VisibilityRequired: route.VisibilityRequired, ThreadID: route.ThreadID}
+			VisibilityRequired: route.VisibilityRequired, ThreadID: route.ThreadID,
+			ParentThreadID: route.ParentThreadID, NativeForkState: route.NativeForkState}
 	}
 	if a.BudgetUSD != nil {
 		budget := *a.BudgetUSD

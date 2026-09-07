@@ -48,12 +48,16 @@ func TestWorkflowLocksShareStableUserRootAcrossProcessEnvironments(t *testing.T)
 		t.Fatalf("lock root %q is not an absolute per-user root", lockRoot)
 	}
 
+	childTMP := filepath.Join(t.TempDir(), "tmp-from-child")
+	if err := os.Mkdir(childTMP, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=TestWorkflowLockHelperProcess", "--")
 	cmd.Env = lockHelperEnv(map[string]string{
 		"ATENEA_LOCK_HELPER":   "1",
 		"ATENEA_LOCK_PROFILE":  profile,
 		"ATENEA_LOCK_WORKTREE": root,
-		"TMPDIR":               filepath.Join(t.TempDir(), "tmp-from-child"),
+		"TMPDIR":               childTMP,
 		"XDG_CACHE_HOME":       filepath.Join(t.TempDir(), "xdg-from-child"),
 		"HOME":                 filepath.Join(t.TempDir(), "home-from-child"),
 		"USER":                 "different-user-name",

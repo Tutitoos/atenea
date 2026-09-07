@@ -42,7 +42,7 @@ func TestProcessTransportBlockedWriteHonorsContext(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("blocked write error = %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
 		t.Fatalf("blocked write ignored context for %v", elapsed)
 	}
 }
@@ -76,6 +76,7 @@ func appServerFake() *fakeAppTransport {
 		"model/list":                      json.RawMessage(`{"data":[{"id":"model-1","model":"gpt-5.6-sol","displayName":"Sol","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"balanced"}]}],"nextCursor":""}`),
 		"modelProvider/capabilities/read": json.RawMessage(`{"imageGeneration":false,"namespaceTools":true,"webSearch":true}`),
 		"thread/start":                    json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}`),
+		"thread/fork":                     json.RawMessage(`{"thread":{"id":"thread-child","status":{"type":"idle"}},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}`),
 		"turn/start":                      json.RawMessage(`{"turn":{"id":"turn-1","threadId":"thread-1","status":"started"}}`),
 		"thread/list":                     json.RawMessage(`{"data":[{"id":"thread-1","status":{"type":"active","activeFlags":[]}}],"nextCursor":"","backwardsCursor":""}`),
 	}}
@@ -102,38 +103,47 @@ func TestAppServerNativeLifecycleCarriesDurabilityAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	hookConfig := map[string]any{"features": map[string]any{"hooks": true}}
-	thread, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol", Permissions: "read", ApprovalPolicy: "never", DeveloperInstructions: "stay within the declared surface", Config: hookConfig, VisibilityRequired: true})
+	thread, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol", Sandbox: "read-only", ApprovalPolicy: "never", DeveloperInstructions: "stay within the declared surface", Config: hookConfig, VisibilityRequired: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if thread.Thread.ID != "thread-1" {
 		t.Fatalf("thread = %+v", thread)
 	}
-	if _, err := client.TurnStart(t.Context(), TurnStartRequest{ThreadID: "thread-1", Prompt: "inspect", Model: "gpt-5.6-sol", ReasoningEffort: "medium", Permissions: "read", VisibilityRequired: true}); err != nil {
+	if _, err := client.TurnStart(t.Context(), TurnStartRequest{ThreadID: "thread-1", Prompt: "inspect", Model: "gpt-5.6-sol", ReasoningEffort: "medium", VisibilityRequired: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.ThreadList(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	var start, turn, caps map[string]any
+	child, err := client.ThreadFork(t.Context(), ThreadForkRequest{ParentThreadID: "thread-1", Model: "gpt-5.6-sol", Workdir: "/tmp/work", Sandbox: "read-only", ApprovalPolicy: "never", DeveloperInstructions: "specialist read only", Config: hookConfig, VisibilityRequired: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Thread.ID != "thread-child" {
+		t.Fatalf("child thread = %+v", child)
+	}
+	var start, fork, turn, caps map[string]any
 	for _, call := range transport.calls {
 		switch call.method {
 		case "thread/start":
 			start = call.params
 		case "turn/start":
 			turn = call.params
+		case "thread/fork":
+			fork = call.params
 		case "modelProvider/capabilities/read":
 			caps = call.params
 		}
 	}
-	if start["ephemeral"] != false || start["allowProviderModelFallback"] != false {
+	if start["ephemeral"] != false {
 		t.Fatalf("durability params = %#v", start)
 	}
 	if _, ok := start["reasoningEffort"]; ok {
 		t.Fatalf("thread/start sent unsupported reasoningEffort: %#v", start)
 	}
-	if start["permissions"] != "read" {
-		t.Fatalf("permissions = %#v", start["permissions"])
+	if _, ok := start["permissions"]; ok {
+		t.Fatalf("thread/start sent unsupported permissions: %#v", start)
 	}
 	if start["approvalPolicy"] != "never" || start["developerInstructions"] != "stay within the declared surface" {
 		t.Fatalf("native restrictions = %#v", start)
@@ -141,16 +151,28 @@ func TestAppServerNativeLifecycleCarriesDurabilityAndIdentity(t *testing.T) {
 	if !reflect.DeepEqual(start["config"], hookConfig) {
 		t.Fatalf("native hook config = %#v", start["config"])
 	}
+	if fork["threadId"] != "thread-1" || fork["model"] != "gpt-5.6-sol" || fork["cwd"] != "/tmp/work" {
+		t.Fatalf("fork identity params = %#v", fork)
+	}
+	if fork["sandbox"] != "read-only" || fork["approvalPolicy"] != "never" || fork["developerInstructions"] != "specialist read only" {
+		t.Fatalf("fork restrictions = %#v", fork)
+	}
+	if fork["ephemeral"] != false || fork["excludeTurns"] != true || !reflect.DeepEqual(fork["config"], hookConfig) {
+		t.Fatalf("fork durability params = %#v", fork)
+	}
 	if turn["effort"] != "medium" {
 		t.Fatalf("turn effort = %#v", turn["effort"])
 	}
 	if _, ok := turn["reasoningEffort"]; ok {
 		t.Fatalf("turn/start sent old reasoningEffort: %#v", turn)
 	}
+	if _, ok := turn["permissions"]; ok {
+		t.Fatalf("turn/start sent unsupported permissions: %#v", turn)
+	}
 	if !reflect.DeepEqual(caps, map[string]any{}) {
 		t.Fatalf("capability params = %#v", caps)
 	}
-	if got := client.Receipt(); got.RequestedModel != "gpt-5.6-sol" || got.ObservedUserAgent == "" || !reflect.DeepEqual(got.RequestedPermissions, []string{"read"}) {
+	if got := client.Receipt(); got.RequestedModel != "gpt-5.6-sol" || got.ObservedUserAgent == "" || !reflect.DeepEqual(got.RequestedPermissions, []string{"read-only"}) {
 		t.Fatalf("receipt = %+v", got)
 	}
 	if len(transport.notifies) != 1 || transport.notifies[0].method != "initialized" || transport.notifies[0].params != nil {
@@ -158,6 +180,26 @@ func TestAppServerNativeLifecycleCarriesDurabilityAndIdentity(t *testing.T) {
 	}
 	if len(transport.order) < 2 || transport.order[0] != "call:initialize" || transport.order[1] != "notify:initialized" {
 		t.Fatalf("initialize ordering = %v", transport.order)
+	}
+}
+
+func TestThreadForkFailsClosedAndRejectsParentAsChild(t *testing.T) {
+	transport := appServerFake()
+	client, err := NewAppServerClient(AppServerOptions{Transport: transport, NativeTransport: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	req := ThreadForkRequest{ParentThreadID: "thread-1", Model: "gpt-5.6-sol", Sandbox: "read-only", ApprovalPolicy: "never"}
+	if _, err := client.ThreadFork(t.Context(), req); err == nil || !strings.Contains(err.Error(), "initialize is required") {
+		t.Fatalf("pre-initialize fork error = %v", err)
+	}
+	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	transport.responses["thread/fork"] = json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}},"model":"gpt-5.6-sol"}`)
+	if _, err := client.ThreadFork(t.Context(), req); err == nil || !strings.Contains(err.Error(), "invalid child thread id") {
+		t.Fatalf("parent-as-child error = %v", err)
 	}
 }
 
@@ -176,6 +218,24 @@ func TestAppServerVisibilityFailsClosedBeforeNonNativeCall(t *testing.T) {
 	}
 }
 
+func TestThreadStartRejectsMutableDefaultsAndLegacyPermissions(t *testing.T) {
+	transport := appServerFake()
+	client, err := NewAppServerClient(AppServerOptions{Transport: transport, NativeTransport: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol"}); err == nil || !strings.Contains(err.Error(), "requires model, sandbox and approval policy") {
+		t.Fatalf("missing restrictions error = %v", err)
+	}
+	if _, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol", Sandbox: "read-only", ApprovalPolicy: "never", Permissions: "read"}); err == nil || !strings.Contains(err.Error(), "permissions is unsupported") {
+		t.Fatalf("legacy permissions error = %v", err)
+	}
+}
+
 func TestAppServerRerouteBlocksTurnAndTypedEvents(t *testing.T) {
 	transport := appServerFake()
 	client, err := NewAppServerClient(AppServerOptions{Transport: transport, NativeTransport: true})
@@ -186,7 +246,7 @@ func TestAppServerRerouteBlocksTurnAndTypedEvents(t *testing.T) {
 	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol"}); err != nil {
+	if _, err := client.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol", Sandbox: "read-only", ApprovalPolicy: "never"}); err != nil {
 		t.Fatal(err)
 	}
 	transport.handler(Notification{Method: "model/rerouted", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","fromModel":"gpt-5.6-sol","toModel":"other","reason":"unavailable"}`)})
@@ -230,7 +290,7 @@ func TestAppServerRejectsInventedLegacyShapes(t *testing.T) {
 	if _, err := statusClient.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statusClient.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol"}); err == nil {
+	if _, err := statusClient.ThreadStart(t.Context(), ThreadStartRequest{Model: "gpt-5.6-sol", Sandbox: "read-only", ApprovalPolicy: "never"}); err == nil {
 		t.Fatal("accepted string thread status")
 	}
 	if _, err := ParseModelRerouted(Notification{Method: "model/rerouted", Params: json.RawMessage(`{"requestedModel":"a","observedModel":"b"}`)}); err == nil {

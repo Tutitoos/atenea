@@ -1,0 +1,1026 @@
+[
+  {
+    "name": "ready merge",
+    "ready": true,
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "invalid branch",
+    "ready": false,
+    "reason": "branch does not match ATENEA naming policy",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feature/no-number",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "wrong branch issue",
+    "ready": false,
+    "reason": "branch issue number does not match primary issue",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/49-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "missing branch",
+    "ready": false,
+    "reason": "scope must resolve to exactly one branch",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 0,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "duplicate branch",
+    "ready": false,
+    "reason": "scope must resolve to exactly one branch",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 2,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "duplicate pr",
+    "ready": false,
+    "reason": "scope must resolve to exactly one pull request",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 2,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "missing closes",
+    "ready": false,
+    "reason": "pull request must contain exactly one matching Closes reference",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "none",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "multiple closes",
+    "ready": false,
+    "reason": "pull request must contain exactly one matching Closes reference",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48\nCloses #49",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "draft",
+    "ready": false,
+    "reason": "pull request is draft or draft state is unknown",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": true,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "conflict",
+    "ready": false,
+    "reason": "pull request is conflicted or mergeability is unknown",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "CONFLICTING",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "changes requested",
+    "ready": false,
+    "reason": "active review requests changes",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "CHANGES_REQUESTED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "pending check",
+    "ready": false,
+    "reason": "required check is not successful: build",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": ""
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "cancelled check",
+    "ready": false,
+    "reason": "required check is not successful: build",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "CANCELLED"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "required checks omitted",
+    "ready": false,
+    "reason": "required checks are missing",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "stale sha",
+    "ready": false,
+    "reason": "reviewed head SHA is stale or missing",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "old",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "missing sha",
+    "ready": false,
+    "reason": "pull request head SHA is missing",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "open thread",
+    "ready": false,
+    "reason": "actionable review threads remain",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 1
+      }
+    }
+  },
+  {
+    "name": "issue duplicate",
+    "ready": false,
+    "reason": "scope must resolve to exactly one open primary issue",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 2,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "review requirement missing",
+    "ready": false,
+    "reason": "review_required must be boolean",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "review requirement string",
+    "ready": false,
+    "reason": "review_required must be boolean",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": "false",
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "changes requested without required review",
+    "ready": false,
+    "reason": "active review requests changes",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": false,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "CHANGES_REQUESTED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "skipped required check",
+    "ready": false,
+    "reason": "required check is not successful: build",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SKIPPED"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "neutral required check",
+    "ready": false,
+    "reason": "required check is not successful: build",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "NEUTRAL"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "dirty branch stage",
+    "ready": false,
+    "reason": "worktree is not clean",
+    "snapshot": {
+      "stage": "branch",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": false,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "dirty pr stage",
+    "ready": false,
+    "reason": "worktree is not clean",
+    "snapshot": {
+      "stage": "pr",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": false,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      }
+    }
+  },
+  {
+    "name": "string branch exception",
+    "ready": false,
+    "reason": "approved_branch_exception must be boolean",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      },
+      "approved_branch_exception": "false"
+    }
+  },
+  {
+    "name": "string dependency exception",
+    "ready": false,
+    "reason": "dependency_bot must be boolean",
+    "snapshot": {
+      "stage": "merge",
+      "issue": {
+        "number": "48",
+        "state": "OPEN"
+      },
+      "branch": "feat/48-closure",
+      "matching_open_issues": 1,
+      "matching_branches": 1,
+      "matching_pull_requests": 1,
+      "reviewed_head_sha": "abc123",
+      "review_required": true,
+      "worktree_clean": true,
+      "pull_request": {
+        "body": "Closes #48",
+        "base": "main",
+        "state": "OPEN",
+        "draft": false,
+        "mergeable": "MERGEABLE",
+        "review_decision": "APPROVED",
+        "head_sha": "abc123",
+        "required_checks": [
+          "build"
+        ],
+        "checks": [
+          {
+            "name": "build",
+            "conclusion": "SUCCESS"
+          }
+        ],
+        "actionable_threads": 0
+      },
+      "dependency_bot": "false"
+    }
+  }
+]

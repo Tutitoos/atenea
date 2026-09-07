@@ -167,8 +167,10 @@ type ModelProviderCapabilities struct {
 
 // ThreadStartRequest is part of ATENEA's public orchestration contract.
 type ThreadStartRequest struct {
-	Model                 string
-	Workdir               string
+	Model   string
+	Workdir string
+	// Permissions is retained for source compatibility and rejected when set;
+	// App Server 0.153.4 accepts Sandbox and ApprovalPolicy instead.
 	Permissions           string
 	Sandbox               string
 	ApprovalPolicy        string
@@ -179,10 +181,25 @@ type ThreadStartRequest struct {
 
 // ThreadResumeRequest is part of ATENEA's public orchestration contract.
 type ThreadResumeRequest struct {
-	ThreadID              string
+	ThreadID string
+	Model    string
+	Workdir  string
+	// Permissions is retained for source compatibility and rejected when set.
+	Permissions           string
+	Sandbox               string
+	ApprovalPolicy        string
+	DeveloperInstructions string
+	Config                map[string]any
+	VisibilityRequired    bool
+}
+
+// ThreadForkRequest creates a native child thread through App Server's
+// thread/fork method. ATENEA remains responsible for specialist roles,
+// concurrency limits, and the durable parent-child workflow mapping.
+type ThreadForkRequest struct {
+	ParentThreadID        string
 	Model                 string
 	Workdir               string
-	Permissions           string
 	Sandbox               string
 	ApprovalPolicy        string
 	DeveloperInstructions string
@@ -200,10 +217,11 @@ type ThreadStarted struct {
 
 // TurnStartRequest is part of ATENEA's public orchestration contract.
 type TurnStartRequest struct {
-	ThreadID           string
-	Prompt             string
-	Model              string
-	ReasoningEffort    string
+	ThreadID        string
+	Prompt          string
+	Model           string
+	ReasoningEffort string
+	// Permissions is retained for source compatibility and rejected when set.
 	Permissions        string
 	OutputSchema       map[string]any
 	VisibilityRequired bool
@@ -433,19 +451,18 @@ func (c *Client) ThreadStart(ctx context.Context, req ThreadStartRequest) (Threa
 	if req.VisibilityRequired && !c.native {
 		return ThreadStarted{}, errors.New("codex app server: visibility_required requires native App Server transport")
 	}
-	if strings.TrimSpace(req.Model) == "" {
-		return ThreadStarted{}, errors.New("codex app server: requested model is required")
+	if strings.TrimSpace(req.Model) == "" || strings.TrimSpace(req.Sandbox) == "" || strings.TrimSpace(req.ApprovalPolicy) == "" {
+		return ThreadStarted{}, errors.New("codex app server: thread/start requires model, sandbox and approval policy")
+	}
+	if strings.TrimSpace(req.Permissions) != "" {
+		return ThreadStarted{}, errors.New("codex app server: permissions is unsupported; use sandbox and approval policy")
 	}
 	params := map[string]any{
-		"model":                      req.Model,
-		"ephemeral":                  false,
-		"allowProviderModelFallback": false,
+		"model":     req.Model,
+		"ephemeral": false,
 	}
 	if req.Workdir != "" {
 		params["cwd"] = req.Workdir
-	}
-	if strings.TrimSpace(req.Permissions) != "" {
-		params["permissions"] = req.Permissions
 	}
 	if strings.TrimSpace(req.Sandbox) != "" {
 		params["sandbox"] = req.Sandbox
@@ -477,10 +494,7 @@ func (c *Client) ThreadStart(ctx context.Context, req ThreadStartRequest) (Threa
 	c.mu.Lock()
 	c.threadID = threadID
 	c.receipt.RequestedModel = req.Model
-	requestedProfile := req.Permissions
-	if requestedProfile == "" {
-		requestedProfile = req.Sandbox
-	}
+	requestedProfile := req.Sandbox
 	c.receipt.RequestedPermissionProfile = requestedProfile
 	if requestedProfile != "" {
 		c.receipt.RequestedPermissions = []string{requestedProfile}
@@ -509,6 +523,9 @@ func (c *Client) ThreadResume(ctx context.Context, req ThreadResumeRequest) (Thr
 		strings.TrimSpace(req.ApprovalPolicy) == "" {
 		return ThreadStarted{}, errors.New("codex app server: thread/resume requires thread, model, sandbox and approval policy")
 	}
+	if strings.TrimSpace(req.Permissions) != "" {
+		return ThreadStarted{}, errors.New("codex app server: permissions is unsupported; use sandbox and approval policy")
+	}
 	params := map[string]any{
 		"threadId": req.ThreadID, "model": req.Model,
 		"sandbox": req.Sandbox, "approvalPolicy": req.ApprovalPolicy,
@@ -517,9 +534,6 @@ func (c *Client) ThreadResume(ctx context.Context, req ThreadResumeRequest) (Thr
 	}
 	if strings.TrimSpace(req.Workdir) != "" {
 		params["cwd"] = req.Workdir
-	}
-	if strings.TrimSpace(req.Permissions) != "" {
-		params["permissions"] = req.Permissions
 	}
 	result, err := c.call(ctx, "thread/resume", params)
 	if err != nil {
@@ -538,10 +552,7 @@ func (c *Client) ThreadResume(ctx context.Context, req ThreadResumeRequest) (Thr
 	c.mu.Lock()
 	c.threadID = req.ThreadID
 	c.receipt.RequestedModel = req.Model
-	requestedProfile := req.Permissions
-	if requestedProfile == "" {
-		requestedProfile = req.Sandbox
-	}
+	requestedProfile := req.Sandbox
 	c.receipt.RequestedPermissionProfile = requestedProfile
 	if requestedProfile != "" {
 		c.receipt.RequestedPermissions = []string{requestedProfile}
@@ -553,6 +564,52 @@ func (c *Client) ThreadResume(ctx context.Context, req ThreadResumeRequest) (Thr
 		c.receipt.ObservedEffort = event.ReasoningEffort
 	}
 	c.mu.Unlock()
+	return event, nil
+}
+
+// ThreadFork creates an App Server child thread without changing the root
+// thread stored by this client. The returned identifier must differ from its
+// parent so callers can persist an unambiguous specialist relationship.
+func (c *Client) ThreadFork(ctx context.Context, req ThreadForkRequest) (ThreadStarted, error) {
+	if req.VisibilityRequired && !c.native {
+		return ThreadStarted{}, errors.New("codex app server: visibility_required requires native App Server transport")
+	}
+	if strings.TrimSpace(req.ParentThreadID) == "" {
+		return ThreadStarted{}, errors.New("codex app server: parent thread id is required")
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		return ThreadStarted{}, errors.New("codex app server: model is required")
+	}
+	if strings.TrimSpace(req.Sandbox) == "" || strings.TrimSpace(req.ApprovalPolicy) == "" {
+		return ThreadStarted{}, errors.New("codex app server: sandbox and approval policy are required")
+	}
+	params := map[string]any{
+		"threadId":              req.ParentThreadID,
+		"model":                 req.Model,
+		"sandbox":               req.Sandbox,
+		"approvalPolicy":        req.ApprovalPolicy,
+		"developerInstructions": req.DeveloperInstructions,
+		"config":                req.Config,
+		"ephemeral":             false,
+		"excludeTurns":          true,
+	}
+	if strings.TrimSpace(req.Workdir) != "" {
+		params["cwd"] = req.Workdir
+	}
+	result, err := c.call(ctx, "thread/fork", params)
+	if err != nil {
+		return ThreadStarted{}, err
+	}
+	event, err := ParseThreadStarted(result)
+	if err != nil {
+		return ThreadStarted{}, err
+	}
+	if event.Thread.ID == "" || event.Thread.ID == req.ParentThreadID {
+		return ThreadStarted{}, errors.New("codex app server: thread/fork returned an invalid child thread id")
+	}
+	if event.Model != "" && event.Model != req.Model {
+		return ThreadStarted{}, fmt.Errorf("%w: requested=%s observed=%s", ErrModelRerouted, req.Model, event.Model)
+	}
 	return event, nil
 }
 
@@ -576,14 +633,14 @@ func (c *Client) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStart
 	if strings.TrimSpace(req.Prompt) == "" {
 		return TurnStarted{}, errors.New("codex app server: prompt is required")
 	}
+	if strings.TrimSpace(req.Permissions) != "" {
+		return TurnStarted{}, errors.New("codex app server: permissions is unsupported; set the thread sandbox")
+	}
 	params := map[string]any{
 		"threadId": req.ThreadID,
 		"input":    []map[string]string{{"type": "text", "text": req.Prompt}},
 		"model":    req.Model,
 		"effort":   req.ReasoningEffort,
-	}
-	if req.Permissions != "" {
-		params["permissions"] = req.Permissions
 	}
 	if len(req.OutputSchema) > 0 {
 		params["outputSchema"] = req.OutputSchema
@@ -659,7 +716,7 @@ func (c *Client) Receipt() ExecutionReceipt {
 }
 
 // UsageRevision is Atenea's local monotonic revision for token usage events.
-// The native 0.151.0 notification carries no usage_revision field, so this
+// The native notification carries no usage_revision field, so this
 // counter is deliberately not presented as server evidence.
 func (c *Client) UsageRevision() uint64 {
 	c.mu.Lock()

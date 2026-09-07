@@ -34,6 +34,13 @@ type Dispatcher interface {
 	NextID() string
 }
 
+// nativeChildPreparer is implemented by runners that can create a provider
+// child thread before dispatch. Keeping it optional preserves non-Codex and
+// test dispatchers while visible Codex routes fail closed when it is absent.
+type nativeChildPreparer interface {
+	PrepareNativeChild(context.Context, agent.Dispatch) (string, error)
+}
+
 // Floor is what starting a turn costs before any work happens: the cache write
 // of a system prompt and a tool catalog, priced.
 //
@@ -2266,10 +2273,11 @@ type done struct {
 }
 
 type queuedDispatch struct {
-	stepID   string
-	dispatch agent.Dispatch
-	slot     globalSlot
-	activity ActivityNotice
+	stepID            string
+	dispatch          agent.Dispatch
+	slot              globalSlot
+	activity          ActivityNotice
+	activityPublished bool
 }
 
 func runDispatch(ctx context.Context, runner Dispatcher, item queuedDispatch, results chan<- done, wg *sync.WaitGroup) {
@@ -2372,9 +2380,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 		}
 		activities := make([]ActivityNotice, 0, len(queued))
 		for _, item := range queued {
-			activities = append(activities, item.activity)
+			if !item.activityPublished {
+				activities = append(activities, item.activity)
+			}
 		}
-		if e.activity != nil {
+		if len(activities) > 0 && e.activity != nil {
 			if err := e.publishActivities(write, id, activities); err != nil {
 				for _, item := range queued {
 					item.slot.Release()
@@ -2388,17 +2398,19 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 					"workflow activity could not be published before dispatch")
 			}
 		}
-		if err := e.publishPlanProgress(write, id); err != nil {
-			for _, item := range queued {
-				item.slot.Release()
-				_ = e.store.InterruptBeforeDispatch(write, id, item.stepID, item.dispatch.ID,
-					"progress publication failed", e.now())
-				delete(running, item.stepID)
-				lanes[plan.Pool(item.stepID)]--
-				status[item.stepID] = StatusInterrupted
+		if len(activities) > 0 {
+			if err := e.publishPlanProgress(write, id); err != nil {
+				for _, item := range queued {
+					item.slot.Release()
+					_ = e.store.InterruptBeforeDispatch(write, id, item.stepID, item.dispatch.ID,
+						"progress publication failed", e.now())
+					delete(running, item.stepID)
+					lanes[plan.Pool(item.stepID)]--
+					status[item.stepID] = StatusInterrupted
+				}
+				return contract.Fail(contract.FailureUnavailable,
+					"workflow progress could not be published before dispatch")
 			}
-			return contract.Fail(contract.FailureUnavailable,
-				"workflow progress could not be published before dispatch")
 		}
 		for _, item := range queued {
 			wg.Add(1)
@@ -2654,15 +2666,20 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 					}
 					return accountingFailure(slotErr)
 				}
-				if strings.EqualFold(strings.TrimSpace(step.TypeName), "audit") && attempts[step.ID] >= 2 {
+				failBeforeQueue := func(cause error) (Run, error) {
 					slot.Release()
-					return run, contract.Fail(contract.FailurePermissionDenied,
-						"workflow %s step %s reached the Astra execution limit of 2", id, step.ID)
+					if queuedErr := startQueued(queued); queuedErr != nil {
+						cause = errors.Join(cause, queuedErr)
+					}
+					return accountingFailure(cause)
+				}
+				if strings.EqualFold(strings.TrimSpace(step.TypeName), "audit") && attempts[step.ID] >= 2 {
+					return failBeforeQueue(contract.Fail(contract.FailurePermissionDenied,
+						"workflow %s step %s reached the Astra execution limit of 2", id, step.ID))
 				}
 				if e.beforeDispatch != nil {
 					if err := e.beforeDispatch(write, step, attempts[step.ID]+1, run.SourceFingerprint); err != nil {
-						slot.Release()
-						return run, err
+						return failBeforeQueue(err)
 					}
 				}
 				attempts[step.ID]++
@@ -2697,30 +2714,50 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 					CommissionUSD: &plan.Graph.GrantUSD,
 					Parent:        cloneAssignment(e.parent),
 				}
+				dispatch.AssignmentID = traceID
+				dispatch.WorkflowID = run.ID
+				// Repository is the durable logical id used for routing and
+				// accounting. Hook binding needs the physical tree served by
+				// this engine.
+				dispatch.Worktree = e.repoRoot
+				dispatch.PolicyDigest = run.Policy.Digest
 				if dispatch.Parent != nil {
 					dispatch.Parent.Operations = slices.Clone(dispatchOperations)
 				}
 				if len(dispatchOperations) > 0 {
 					token, tokenErr := freshGrantToken()
 					if tokenErr != nil {
-						slot.Release()
-						return accountingFailure(contract.Fail(contract.FailureUnavailable,
+						return failBeforeQueue(contract.Fail(contract.FailureUnavailable,
 							"workflow %s step %s could not mint a sensitive-operation grant", id, step.ID))
 					}
-					dispatch.AssignmentID = traceID
-					dispatch.WorkflowID = run.ID
-					// Repository is the durable logical id used for routing and
-					// accounting. Hook binding needs the physical tree served by
-					// this engine; binding it to the id makes every effectful
-					// model dispatch fail closed when the two differ.
-					dispatch.Worktree = e.repoRoot
-					dispatch.PolicyDigest = run.Policy.Digest
 					dispatch.GrantToken = token
+				}
+				nativeForkRequired := dispatch.Parent != nil && dispatch.Parent.Route != nil && dispatch.Route != nil &&
+					strings.EqualFold(strings.TrimSpace(dispatch.Route.Backend), "codex") &&
+					dispatch.Route.VisibilityRequired && strings.TrimSpace(dispatch.Route.ThreadID) == ""
+				var nativeParentThreadID string
+				var nativePreparer nativeChildPreparer
+				if nativeForkRequired {
+					nativeParentThreadID = strings.TrimSpace(dispatch.Parent.Route.ThreadID)
+					if nativeParentThreadID == "" {
+						return failBeforeQueue(contract.Fail(contract.FailureInvalidInput,
+							"workflow %s step %s visible Codex route requires a coordinator thread", id, step.ID))
+					}
+					if dispatch.Route.NativeForkState == "pending" {
+						return failBeforeQueue(contract.Fail(contract.FailureUnavailable,
+							"workflow %s step %s native fork outcome is uncertain; inspect and bind the child thread before resuming", id, step.ID))
+					}
+					var ok bool
+					nativePreparer, ok = e.runner.(nativeChildPreparer)
+					if !ok {
+						return failBeforeQueue(contract.Fail(contract.FailureUnavailable,
+							"workflow %s step %s runner cannot create the required native Codex child", id, step.ID))
+					}
 				}
 				if step.Subject != "" {
 					subject, err := subjectFrom(answers[step.Subject])
 					if err != nil {
-						return run, err
+						return failBeforeQueue(err)
 					}
 					dispatch.Subject = &subject
 					// The same link `atenea agent --review` writes, so the
@@ -2774,13 +2811,45 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 					return accountingFailure(err)
 				}
 				if err := e.store.TouchProgress(write, id, activityAt); err != nil {
-					return accountingFailure(err)
+					return failBeforeQueue(err)
+				}
+				activityPublished := false
+				if nativeForkRequired {
+					if e.activity != nil {
+						if err := e.publishActivities(write, id, []ActivityNotice{activity}); err != nil {
+							_ = e.store.InterruptBeforeDispatch(write, id, step.ID, traceID, "activity publication failed", e.now())
+							return failBeforeQueue(contract.Fail(contract.FailureUnavailable,
+								"workflow activity could not be published before native fork"))
+						}
+					}
+					if err := e.publishPlanProgress(write, id); err != nil {
+						_ = e.store.InterruptBeforeDispatch(write, id, step.ID, traceID, "progress publication failed", e.now())
+						return failBeforeQueue(contract.Fail(contract.FailureUnavailable,
+							"workflow progress could not be published before native fork"))
+					}
+					activityPublished = true
+					reserved, reserveErr := e.store.ReserveNativeFork(write, id, step.ID, nativeParentThreadID)
+					if reserveErr != nil {
+						_ = e.store.InterruptBeforeDispatch(write, id, step.ID, traceID, "native fork reservation failed", e.now())
+						return failBeforeQueue(reserveErr)
+					}
+					dispatch.Route = reserved
+					childThreadID, forkErr := nativePreparer.PrepareNativeChild(activeCtx, dispatch)
+					if forkErr != nil {
+						return failBeforeQueue(forkErr)
+					}
+					completed, completeErr := e.store.CompleteNativeFork(write, id, step.ID, nativeParentThreadID, childThreadID)
+					if completeErr != nil {
+						return failBeforeQueue(completeErr)
+					}
+					dispatch.Route = completed
+					step.Route = completed
 				}
 				traces[step.ID] = traceID
 				lanes[pool]++
 				running[step.ID] = true
 				status[step.ID] = StatusRunning
-				queued = append(queued, queuedDispatch{stepID: step.ID, dispatch: dispatch, slot: slot, activity: activity})
+				queued = append(queued, queuedDispatch{stepID: step.ID, dispatch: dispatch, slot: slot, activity: activity, activityPublished: activityPublished})
 			}
 		}
 		if len(queued) > 0 {

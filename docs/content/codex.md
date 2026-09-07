@@ -8,22 +8,45 @@ weight: 8
 ## Native App Server and managed agent profiles
 
 The native App Server adapter is separate from `codex exec`. It keeps a
-durable thread (`ephemeral = false` and `allowProviderModelFallback = false`),
+durable thread (`ephemeral = false`),
 starts turns on that same thread, and records requested model/effort/profile
 separately from observed model, effort and runtime user agent. A reroute event
-is a hard failure for the receipt; Atenea never silently accepts a substitute
-model. Interactive Codex work uses this native transport by default and fails
+or a mismatched start response is a hard failure; Atenea never silently accepts
+a substitute model. Interactive Codex work uses this native transport by default and fails
 closed when it is disabled or unavailable. `codex exec` remains available
 only to a request explicitly marked invisible or CI.
 
 The first native surface is deliberately small: `initialize`, `model/list`,
-`modelProvider/capabilities/read`, `thread/start`, `turn/start`, and
-`thread/list`, plus typed thread, usage and reroute events. The adapter follows
-the local App Server 0.151.0 wire shapes. The server's initialize response
+`modelProvider/capabilities/read`, `thread/start`, `thread/fork`, `turn/start`,
+and `thread/list`, plus typed thread, usage and reroute events. The adapter was
+tested locally against App Server 0.153.4 wire shapes. The server's initialize response
 does not carry a protocol version, so Atenea leaves the observed protocol
-unknown rather than inventing one. Direct subagent creation is not claimed by
-this vertical; the coordinator and two-specialist limit remains a workflow
-policy until the native protocol exposes a tested operation.
+unknown rather than inventing one. App Server exposes `thread/fork` to clients,
+which Atenea uses to create a durable child thread while preserving its own
+specialist roles, concurrency limits, permissions, and parent-child mapping.
+This is distinct from Codex's model-internal collaboration tools; Atenea does
+not claim direct client access to those tools.
+
+For a visible specialist, the workflow acquires its limits, claims the step and
+budget, and publishes the activity notice and progress before any provider
+call. It then reserves the fork in its durable route, issues one `thread/fork`,
+stores the distinct child id, and only then dispatches the step. The child
+process resumes that id and installs its own hook, model, sandbox and role
+instructions before its first turn.
+
+If the connection is lost after the external request, the reservation remains
+`pending` and automatic resume refuses to fork again. After checking the
+provider's thread list, an operator can inspect and bind the verified child,
+then resume the workflow:
+
+```sh
+atenea workflow native-fork inspect --traces /path/to/traces.db WORKFLOW STEP
+atenea workflow native-fork bind --traces /path/to/traces.db \
+  --child-thread VERIFIED_CHILD WORKFLOW STEP
+atenea workflow resume --traces /path/to/traces.db WORKFLOW
+```
+
+Binding refuses the coordinator id and any workflow with an active writer.
 
 Canonical profiles are synchronized without launching Codex:
 

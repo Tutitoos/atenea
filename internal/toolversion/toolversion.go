@@ -53,6 +53,17 @@ func New(binary string, args ...string) *Probe {
 	return &Probe{binary: binary, args: args, timeout: DefaultTimeout}
 }
 
+// NewWithTimeout returns a probe with an explicit positive deadline. It is
+// useful for instrumented or constrained environments where process startup
+// can legitimately exceed the production default.
+func NewWithTimeout(binary string, timeout time.Duration, args ...string) *Probe {
+	probe := New(binary, args...)
+	if timeout > 0 {
+		probe.timeout = timeout
+	}
+	return probe
+}
+
 // Version reports what the tool calls itself, or empty if it would not say.
 //
 // It never returns an error on purpose. A version is metadata about a

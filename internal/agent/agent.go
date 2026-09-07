@@ -39,6 +39,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Tutitoos/atenea/internal/activity"
+	adaptercodex "github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/trace"
@@ -235,6 +236,61 @@ type Dispatch struct {
 // instead of a step that looks like it never began. Same reason the trace row
 // itself is written before the spawn.
 func (r *Runner) NextID() string { return r.ids() }
+
+// PrepareNativeChild forks the persisted coordinator thread before a Codex
+// specialist process starts. The workflow store owns the pending/complete
+// state around this external effect; this method performs exactly one attempt.
+func (r *Runner) PrepareNativeChild(ctx context.Context, d Dispatch) (string, error) {
+	if d.Parent == nil || d.Parent.Route == nil || d.Route == nil {
+		return "", contract.Fail(contract.FailureInvalidInput, "agent: native child requires parent and child routes")
+	}
+	parentThreadID := strings.TrimSpace(d.Parent.Route.ThreadID)
+	if parentThreadID == "" || d.Route.ParentThreadID != parentThreadID {
+		return "", contract.Fail(contract.FailureInvalidInput, "agent: native child parent thread is missing or changed")
+	}
+	if !strings.EqualFold(strings.TrimSpace(d.Route.Backend), "codex") || !d.Route.VisibilityRequired {
+		return "", contract.Fail(contract.FailureInvalidInput, "agent: native child requires visible Codex route")
+	}
+	modelName := strings.TrimSpace(d.Route.RequestedModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(d.Route.Model)
+	}
+	if modelName == "" {
+		return "", contract.Fail(contract.FailureInvalidInput, "agent: native child route has no model")
+	}
+	sandbox := "read-only"
+	writes := slices.Contains(d.Effects, contract.EffectWrite)
+	if strings.EqualFold(strings.TrimSpace(d.Route.Role), "implement") {
+		if !writes {
+			return "", contract.Fail(contract.FailurePermissionDenied, "agent: native implement child requires write authorization")
+		}
+		sandbox = "workspace-write"
+	} else if writes {
+		return "", contract.Fail(contract.FailurePermissionDenied, "agent: native non-implement child cannot receive write authorization")
+	}
+	client, err := adaptercodex.NewAppServerClient(adaptercodex.AppServerOptions{Binary: d.Route.Binary})
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.Close() }()
+	if _, err := client.Initialize(ctx, adaptercodex.InitializeRequest{ClientInfo: adaptercodex.ClientInfo{Name: "atenea-native-fork", Version: "1"}}); err != nil {
+		return "", err
+	}
+	started, err := client.ThreadFork(ctx, adaptercodex.ThreadForkRequest{
+		ParentThreadID: parentThreadID,
+		Model:          modelName,
+		Workdir:        r.workspace.RepositoryRoot,
+		Sandbox:        sandbox,
+		ApprovalPolicy: "never",
+		DeveloperInstructions: "Follow the assigned specialist role and authorized scope. " +
+			"Do not delegate work or request permission escalation.",
+		VisibilityRequired: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return started.Thread.ID, nil
+}
 
 // Run dispatches one agent and returns what it answered.
 //

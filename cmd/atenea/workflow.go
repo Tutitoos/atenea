@@ -28,7 +28,7 @@ import (
 func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"workflow needs a subcommand: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, list, status, export, compare or panel")
+			"workflow needs a subcommand: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export, compare or panel")
 	}
 	sub, rest := strings.TrimSpace(args[0]), args[1:]
 	switch sub {
@@ -60,12 +60,77 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowAnswerCommand(rest, out)
 	case "redo":
 		return workflowRedo(settingsPath, rest, out)
+	case "native-fork":
+		return workflowNativeFork(rest, out)
 	case "list":
 		return workflowList(rest, out)
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, list, status, export, compare or panel", sub)
+			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, native-fork, list, status, export, compare or panel", sub)
 	}
+}
+
+func workflowNativeFork(args []string, out io.Writer) error {
+	if len(args) == 0 || (args[0] != "inspect" && args[0] != "bind") {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow native-fork needs inspect or bind")
+	}
+	action := args[0]
+	flags := flag.NewFlagSet("workflow native-fork "+action, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	childThreadID := flags.String("child-thread", "", "verified provider child thread id")
+	if err := flags.Parse(args[1:]); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 2 {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow native-fork %s takes workflow and step ids", action)
+	}
+	ctx := context.Background()
+	store, err := workflow.Open(ctx, *tracePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	workflowID, stepID := flags.Arg(0), flags.Arg(1)
+	if action == "bind" {
+		if strings.TrimSpace(*childThreadID) == "" {
+			return contract.Fail(contract.FailureInvalidInput,
+				"workflow native-fork bind requires --child-thread")
+		}
+		route, err := store.BindNativeFork(ctx, workflowID, stepID, *childThreadID)
+		if err != nil {
+			return err
+		}
+		printNativeFork(out, workflowID, stepID, route)
+		return nil
+	}
+	run, err := store.Load(ctx, workflowID)
+	if err != nil {
+		return err
+	}
+	for _, row := range run.Steps {
+		if row.Step.ID == stepID {
+			if row.Step.Route == nil || row.Step.Route.NativeForkState == "" {
+				return contract.Fail(contract.FailureNotFound,
+					"workflow %s step %s has no native fork state", workflowID, stepID)
+			}
+			printNativeFork(out, workflowID, stepID, row.Step.Route)
+			return nil
+		}
+	}
+	return contract.Fail(contract.FailureNotFound,
+		"workflow %s has no step %s", workflowID, stepID)
+}
+
+func printNativeFork(out io.Writer, workflowID, stepID string, route *contract.Route) {
+	child := route.ThreadID
+	if child == "" {
+		child = "-"
+	}
+	fmt.Fprintf(out, "workflow=%s step=%s state=%s parent_thread=%s child_thread=%s\n",
+		workflowID, stepID, route.NativeForkState, route.ParentThreadID, child)
 }
 
 func workflowCreate(settingsPath string, args []string, out io.Writer) error {

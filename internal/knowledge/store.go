@@ -1062,14 +1062,14 @@ func (s *Store) transitionExpected(ctx context.Context, id string, permission Pe
 
 func (s *Store) withBusyRetry(ctx context.Context, operation func() error) error {
 	var err error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < 8; attempt++ {
 		if err = operation(); err == nil {
 			return nil
 		}
 		if !isSQLiteBusy(err) {
 			return err
 		}
-		delay := time.Duration(attempt+1) * 10 * time.Millisecond
+		delay := min(10*time.Millisecond<<attempt, 250*time.Millisecond)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

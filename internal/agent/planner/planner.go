@@ -102,6 +102,8 @@ type route struct {
 	Tools                    []string          `json:"tools"`
 	VisibilityRequired       bool              `json:"visibility_required,omitempty"`
 	ThreadID                 string            `json:"thread_id,omitempty"`
+	ParentThreadID           string            `json:"parent_thread_id,omitempty"`
+	NativeForkState          string            `json:"native_fork_state,omitempty"`
 }
 
 type subject struct {

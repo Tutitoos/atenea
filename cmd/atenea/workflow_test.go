@@ -214,6 +214,42 @@ func TestWorkflowMutatingCommandsRejectMissingPositionals(t *testing.T) {
 	}
 }
 
+func TestWorkflowNativeForkCanInspectAndBindPendingChild(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "workflow.db")
+	store, err := workflow.Open(t.Context(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := workflow.Step{ID: "specialist", TypeName: "reader",
+		Task:       contract.Task{Objective: "inspect", Criterion: "answer"},
+		Permission: contract.Permission{Effects: []contract.Effect{contract.EffectRead}},
+		Route:      &contract.Route{Model: "gpt-5.6-sol", RequestedModel: "gpt-5.6-sol", Backend: "codex", Role: "research", VisibilityRequired: true}}
+	plan := workflow.Plan{Graph: workflow.Graph{Task: "native recovery", Steps: []workflow.Step{step}}, Pools: map[string]config.Pool{"specialist": config.PoolAgent}}
+	if err := store.Create(t.Context(), "wf-native", plan, "", time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveNativeFork(t.Context(), "wf-native", "specialist", "parent-thread"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var inspected bytes.Buffer
+	if err := workflowNativeFork([]string{"inspect", "--traces", dbPath, "wf-native", "specialist"}, &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(inspected.String(), "state=pending") || !strings.Contains(inspected.String(), "parent_thread=parent-thread") {
+		t.Fatalf("inspect output = %q", inspected.String())
+	}
+	var bound bytes.Buffer
+	if err := workflowNativeFork([]string{"bind", "--traces", dbPath, "--child-thread", "verified-child", "wf-native", "specialist"}, &bound); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(bound.String(), "state=complete") || !strings.Contains(bound.String(), "child_thread=verified-child") {
+		t.Fatalf("bind output = %q", bound.String())
+	}
+}
+
 func TestWorkflowCLIStatusCancelAndExactAnswer(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()

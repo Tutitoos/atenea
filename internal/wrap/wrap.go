@@ -158,8 +158,8 @@ type Core struct {
 // this conversion next to the Plan renderers prevents compatibility probes
 // from inventing a second, subtly different payload format.
 type ClientOverlay struct {
-	Args []string
-	Env  map[string]string
+	Args []string          `json:"args,omitempty"`
+	Env  map[string]string `json:"env,omitempty"`
 }
 
 // ClientOverlay is part of ATENEA's public orchestration contract.

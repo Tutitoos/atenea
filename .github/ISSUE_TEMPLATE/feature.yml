@@ -1,0 +1,34 @@
+name: Feature
+description: Propose one reviewable ATENEA behavior.
+title: "feat: "
+labels: []
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: "- [ ] Observable result"
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation and evidence level
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Dependencies, risks, and out-of-scope work

@@ -59,10 +59,14 @@ and reports the sentinel/root evidence.
 
 `scripts/clientcompat-real-gates.sh` is opt-in and fails closed unless the
 owner supplies each real executable, disposable root, pre-existing sentinel,
-timeout, relative transcript filename and absolute Atenea executable. It asks
+running Atenea core socket, timeout, relative transcript filename and absolute Atenea executable. It asks
 `atenea compat-overlay` for the machine-readable overlay emitted by the same
 `internal/wrap` renderers, writes the transcript inside the disposable
-sandbox, and emits only `candidate` or `unknown`; process exit codes and text
+sandbox, and links only the explicitly supplied Unix socket into the isolated
+XDG state root. The launcher starts from an explicit environment allowlist, so
+API keys, proxy variables, SSH agent sockets and unrelated credentials are not
+inherited. Timeout and normal cleanup terminate the whole client process group
+before sentinel and root hashes are checked. It emits only `candidate` or `unknown`; process exit codes and text
 matching never certify MCP or presentation. A controlled structured recorder
 with executable identity/version/hash plus an independent observer must
 promote the result. Unknown or non-zero gate results return a non-zero exit
