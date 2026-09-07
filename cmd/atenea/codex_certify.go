@@ -201,6 +201,9 @@ func runCodexCLIGate(ctx context.Context, codexPath string, env []string, challe
 	run := func(prompt string) ([]byte, error) {
 		commandArgs := []string{"exec", "--json", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only", "-m", "gpt-5.6-sol", "-c", `model_reasoning_effort="medium"`}
 		commandArgs = append(commandArgs, overlay.Args...)
+		// The certification MCP exposes one deterministic read-only tool. Codex
+		// otherwise refuses it under exec's non-interactive approval policy.
+		commandArgs = append(commandArgs, "-c", `mcp_servers.atenea.default_tools_approval_mode="approve"`)
 		commandArgs = append(commandArgs, prompt)
 		cmd := exec.CommandContext(ctx, codexPath, commandArgs...)
 		cmd.Env = env
