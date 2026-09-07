@@ -711,12 +711,20 @@ func codexCertificationCurrent(codexPath string) (codexcert.Current, error) {
 		return codexcert.Current{}, err
 	}
 	profiles, _ := json.Marshal(codexcert.RequiredProfiles)
-	commit, modified := buildinfo.Source()
+	commit, modified, fallback := buildinfo.CertificationSource()
 	if strings.TrimSpace(commit) == "" {
 		return codexcert.Current{}, errors.New("ATENEA binary has no observable VCS revision")
 	}
 	if modified {
 		return codexcert.Current{}, errors.New("ATENEA binary was built from a modified working tree")
+	}
+	if err := verifyCertificationCheckout(commit); err != nil {
+		return codexcert.Current{}, err
+	}
+	if fallback {
+		if err := verifyCertificationRebuild(atenea.SHA256, commit); err != nil {
+			return codexcert.Current{}, err
+		}
 	}
 	machine := codexcert.CurrentMachine()
 	if machine.OS == "darwin" {
@@ -729,6 +737,47 @@ func codexCertificationCurrent(codexPath string) (codexcert.Current, error) {
 	cli.Identifier = "codex"
 	desktop.Identifier = desktopBundle
 	return codexcert.Current{Commit: commit, Atenea: atenea, CodexCLI: cli, CodexDesktop: desktop, Machine: machine, AppServerSchemaVersion: "codex-app-server/v2-experimental", AppServerSchemaSHA256: schema, ProfilesSHA256: codexcert.Hash(string(profiles)), MCPOverlaySHA256: codexcert.Hash("codex-certification-mcp/v1:" + self), PresentationSHA256: codexcert.Hash(codexcert.PresentationContract)}, nil
+}
+
+func certificationBuildArgs(commit, output string) []string {
+	return []string{"build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=" + commit, "-o", output, "./cmd/atenea"}
+}
+
+func verifyCertificationRebuild(wantSHA256, commit string) error {
+	tmp, err := os.MkdirTemp("", "atenea-certification-rebuild-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	candidate := filepath.Join(tmp, "atenea")
+	cmd := exec.Command("go", certificationBuildArgs(commit, candidate)...)
+	cmd.Env = append(os.Environ(), "GOFLAGS=")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("rebuild certified ATENEA checkout: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	rebuilt, err := codexcert.FileFingerprint(candidate, "")
+	if err != nil {
+		return err
+	}
+	if rebuilt.SHA256 != wantSHA256 {
+		return fmt.Errorf("ATENEA binary does not match a reproducible build of commit %s", commit)
+	}
+	return nil
+}
+
+func verifyCertificationCheckout(commit string) error {
+	head, err := commandText("git", "rev-parse", "HEAD")
+	if err != nil || head != commit {
+		return errors.New("certification must run from the exact stamped ATENEA checkout")
+	}
+	status, err := commandText("git", "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return err
+	}
+	if status != "" {
+		return errors.New("certification requires a clean ATENEA checkout")
+	}
+	return nil
 }
 
 func codexDesktopIdentity() (string, string, string, error) {

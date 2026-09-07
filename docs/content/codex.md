@@ -104,13 +104,22 @@ it is attached.
 The certification flow proves the contract that Codex exposes through App
 Server, real CLI JSONL, and the visible Desktop accessibility tree. It does not
 claim provider-internal per-token model telemetry. Start it from a clean,
-revision-stamped ATENEA binary on macOS:
+revision-stamped ATENEA binary on macOS. If the local Go toolchain does not
+embed VCS settings, build the certification binary with the full clean commit:
 
 ```sh
-atenea codex certify start --desktop --ttl 30d
-atenea codex certify status CERTIFICATE_ID --markdown
-atenea codex certify complete CERTIFICATE_ID
-atenea codex certify check --require-valid
+go build -trimpath -buildvcs=false \
+  -ldflags "-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$(git rev-parse HEAD)" \
+  -o /tmp/atenea-certify ./cmd/atenea
+```
+
+Then run:
+
+```sh
+/tmp/atenea-certify codex certify start --desktop --ttl 30d
+/tmp/atenea-certify codex certify status CERTIFICATE_ID --markdown
+/tmp/atenea-certify codex certify complete CERTIFICATE_ID
+/tmp/atenea-certify codex certify check --require-valid
 ```
 
 `start` creates a fresh 0700 sandbox and `CODEX_HOME`, runs device login there,
@@ -132,7 +141,7 @@ schema, MCP overlay, and presentation contract. Export the sanitized signed
 evidence only after every gate passes:
 
 ```sh
-atenea codex certify export CERTIFICATE_ID \
+/tmp/atenea-certify codex certify export CERTIFICATE_ID \
   --output certifications/codex.json \
   --public-key-output certifications/codex-certifier.pub
 ```
