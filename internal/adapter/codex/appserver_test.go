@@ -39,7 +39,7 @@ func TestDefaultAppServerArgsTrustOnlyTheIsolatedAteneaHook(t *testing.T) {
 	if isolated[0] != "--dangerously-bypass-hook-trust" || !strings.Contains(joined, "features.plugins=false") {
 		t.Fatalf("isolated arguments = %q", isolated)
 	}
-	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"} {
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "Interrupt"} {
 		if !strings.Contains(joined, "hooks."+event+"=[]") {
 			t.Fatalf("isolated arguments do not clear %s: %s", event, joined)
 		}

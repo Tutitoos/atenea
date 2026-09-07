@@ -362,7 +362,7 @@ func defaultAppServerArgs(opts AppServerOptions) []string {
 
 func isolatedHookConfigArgs() []string {
 	args := []string{"-c", "features.plugins=false"}
-	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"} {
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop", "Interrupt"} {
 		args = append(args, "-c", "hooks."+event+"=[]")
 	}
 	return args
