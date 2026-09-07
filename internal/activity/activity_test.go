@@ -54,7 +54,7 @@ func TestCloseCancelsAcceptedConnectionsBeforeReturning(t *testing.T) {
 }
 
 func TestParallelPublicationsShareOneBatch(t *testing.T) {
-	batches := make(chan []Notice, 1)
+	batches := make(chan []Notice, 2)
 	server, err := Start(func(batch []Notice) error {
 		batches <- batch
 		return nil
@@ -77,8 +77,18 @@ func TestParallelPublicationsShareOneBatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	batch := <-batches
-	if len(batch) != 2 {
-		t.Fatalf("batch = %#v, want two parallel notices", batch)
+	var notices []Notice
+	for len(notices) < 2 {
+		notices = append(notices, (<-batches)...)
+	}
+	if len(notices) != 2 {
+		t.Fatalf("notices = %#v, want two parallel notices", notices)
+	}
+	seen := map[string]bool{}
+	for _, notice := range notices {
+		seen[notice.Tool] = true
+	}
+	if !seen["code.search"] || !seen["symbol.search"] {
+		t.Fatalf("notices = %#v, want both published tools", notices)
 	}
 }
