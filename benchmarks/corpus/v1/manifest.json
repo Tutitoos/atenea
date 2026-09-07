@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "id": "atenea-acceptance",
+  "version": "1.0.0",
+  "description": "Fixed provider-free acceptance corpus for context, semantic evidence, compatibility and progress reporting.",
+  "scenarios": [
+    {
+      "id": "S01",
+      "title": "Go repository context",
+      "capability": "code.context",
+      "language": "go",
+      "check": "go_context",
+      "fixture": "fixtures/go/repository.go",
+      "description": "The Go fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S02",
+      "title": "TypeScript repository context",
+      "capability": "code.context",
+      "language": "typescript",
+      "check": "typescript_context",
+      "fixture": "fixtures/typescript/repository.ts",
+      "description": "The TypeScript fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S03",
+      "title": "Dart repository context",
+      "capability": "code.context",
+      "language": "dart",
+      "check": "dart_context",
+      "fixture": "fixtures/dart/repository.dart",
+      "description": "The Dart fixture contains a repository contract and a concrete implementation."
+    },
+    {
+      "id": "S04",
+      "title": "Workspace context scope",
+      "capability": "workspace.context",
+      "language": "workspace",
+      "check": "workspace_context",
+      "fixture": "fixtures/workspace.json",
+      "description": "The workspace fixture names two repositories and keeps their file identities explicit."
+    },
+    {
+      "id": "S05",
+      "title": "Go implementation relation",
+      "capability": "symbol.implementations",
+      "language": "go",
+      "check": "go_implementations",
+      "fixture": "fixtures/go/repository.go",
+      "description": "The Go fixture exposes a concrete type and its implementation method."
+    },
+    {
+      "id": "S06",
+      "title": "TypeScript implementation relation",
+      "capability": "symbol.implementations",
+      "language": "typescript",
+      "check": "typescript_implementations",
+      "fixture": "fixtures/typescript/repository.ts",
+      "description": "The TypeScript fixture exposes an implements relation and its method."
+    },
+    {
+      "id": "S07",
+      "title": "Dart semantic implementation coverage",
+      "capability": "symbol.implementations",
+      "language": "dart",
+      "check": "dart_implementations",
+      "fixture": "fixtures/dart/repository.dart",
+      "description": "Dart semantic implementation evidence is measured separately and is not claimed by this local baseline."
+    },
+    {
+      "id": "S08",
+      "title": "MCP legacy protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2025.json",
+      "description": "The legacy MCP target is represented in the fixed compatibility corpus."
+    },
+    {
+      "id": "S09",
+      "title": "MCP current protocol declaration",
+      "capability": "mcp.compatibility",
+      "language": "protocol",
+      "check": "protocol_schema",
+      "fixture": "fixtures/protocol-2026.json",
+      "description": "The current MCP target is represented in the fixed compatibility corpus."
+    },
+    {
+      "id": "S10",
+      "title": "Plan progress rendering",
+      "capability": "plan.progress",
+      "language": "markdown",
+      "check": "progress_rendering",
+      "fixture": "fixtures/progress.md",
+      "description": "The progress fixture contains checked and unchecked tasks plus a deterministic bar."
+    },
+    {
+      "id": "S11",
+      "title": "Bounded recovery baseline",
+      "capability": "workflow.recovery",
+      "language": "integration",
+      "check": "recovery_integration",
+      "fixture": "fixtures/recovery.json",
+      "description": "Real provider failure injection is intentionally excluded from the provider-free baseline."
+    },
+    {
+      "id": "S12",
+      "title": "Client chat visibility",
+      "capability": "chat.visibility",
+      "language": "integration",
+      "check": "chat_visibility_integration",
+      "fixture": "fixtures/chat-visibility.json",
+      "description": "Actual client rendering requires a host integration run and is not inferred from local files."
+    }
+  ]
+}

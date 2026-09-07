@@ -19,9 +19,13 @@ type Scale uint8
 const (
 	// ScaleUnspecified means nobody has classified the repository yet. It never
 	// disqualifies an implementation: an unknown size is not a proven mismatch.
+	// ScaleUnspecified is part of ATENEA's public orchestration contract.
 	ScaleUnspecified Scale = iota
+	// ScaleSmall is part of ATENEA's public orchestration contract.
 	ScaleSmall
+	// ScaleMedium is part of ATENEA's public orchestration contract.
 	ScaleMedium
+	// ScaleLarge is part of ATENEA's public orchestration contract.
 	ScaleLarge
 )
 
@@ -66,8 +70,11 @@ const (
 	// VCSUnspecified means nobody has said either way. It never disqualifies
 	// an implementation: an unmeasured fact is not a proven mismatch, the
 	// same reading Scale gives an unclassified repository.
+	// VCSUnspecified is part of ATENEA's public orchestration contract.
 	VCSUnspecified VCS = iota
+	// VCSPresent is part of ATENEA's public orchestration contract.
 	VCSPresent
+	// VCSAbsent is part of ATENEA's public orchestration contract.
 	VCSAbsent
 )
 
@@ -233,11 +240,15 @@ type HealthState uint8
 const (
 	// HealthUnknown means nobody has looked yet. It is not the same as down: an
 	// unprobed provider is still a candidate, just a less trustworthy one.
+	// HealthUnknown is part of ATENEA's public orchestration contract.
 	HealthUnknown HealthState = iota
+	// HealthAlive is part of ATENEA's public orchestration contract.
 	HealthAlive
 	// HealthDegraded means usable but not at full strength: slow, or working
 	// without its index. It survives the funnel and ranks below alive.
+	// HealthDegraded is part of ATENEA's public orchestration contract.
 	HealthDegraded
+	// HealthDown is part of ATENEA's public orchestration contract.
 	HealthDown
 )
 
@@ -342,13 +353,16 @@ type ScopeGuarantee uint8
 const (
 	// ScopeUnspecified means this implementation has not declared how it
 	// treats scope. Never read silence as ScopeConfined.
+	// ScopeUnspecified is part of ATENEA's public orchestration contract.
 	ScopeUnspecified ScopeGuarantee = iota
 	// ScopeFiltered means the provider may read outside the requested scope,
 	// but every returned match is checked against it afterwards; anything
 	// outside is dropped and reported through a Notice on the Outcome.
+	// ScopeFiltered is part of ATENEA's public orchestration contract.
 	ScopeFiltered
 	// ScopeConfined means the provider is physically restricted to the
 	// requested scope. It cannot see, let alone report, anything outside it.
+	// ScopeConfined is part of ATENEA's public orchestration contract.
 	ScopeConfined
 )
 
@@ -396,6 +410,10 @@ type Implementation struct {
 	// may share one provider, and an index belongs to the provider rather than
 	// to any single implementation of it.
 	Provider string
+	// ConfigDigest identifies the effective provider/implementation settings.
+	// It is a digest only; secrets and raw environment values never travel in
+	// quality records or cache keys.
+	ConfigDigest string
 	// Capability is block 1: which capability this answers.
 	Capability  string
 	Constraints Constraints

@@ -1,12 +1,97 @@
 package workflow_test
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/workflow"
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+type worktreeCaptureDispatcher struct {
+	call agent.Dispatch
+}
+
+func (d *worktreeCaptureDispatcher) NextID() string { return "trace-1" }
+
+func (d *worktreeCaptureDispatcher) Dispatch(_ context.Context, call agent.Dispatch) (contract.Report, contract.Assignment, error) {
+	d.call = call
+	return contract.Report{Verdict: contract.VerdictOK}, contract.Assignment{}, nil
+}
+
+type hierarchyCaptureDispatcher struct {
+	call       agent.Dispatch
+	assignment contract.Assignment
+}
+
+func (d *hierarchyCaptureDispatcher) NextID() string { return "specialist-run" }
+func (d *hierarchyCaptureDispatcher) Dispatch(_ context.Context, call agent.Dispatch) (contract.Report, contract.Assignment, error) {
+	d.call = call
+	child, err := call.Parent.Child(call.ID, call.TypeName, contract.AgentSpecialized, call.Task, call.Effects, *call.Limits)
+	if err != nil {
+		return contract.Report{}, contract.Assignment{}, err
+	}
+	d.assignment = child
+	return contract.Report{Verdict: contract.VerdictOK}, child, nil
+}
+
+func TestWorkflowDispatchesSpecialistUnderPersistedCoordinator(t *testing.T) {
+	dir := t.TempDir()
+	store, err := workflow.Open(t.Context(), filepath.Join(dir, "workflow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	limits := contract.Limits{MaxDuration: time.Minute, MaxTokens: 100}
+	parent := contract.RootAssignment("coordinator-run", "atenea-coordinator", contract.AgentOrchestrator,
+		contract.Task{Objective: "coordinate", Criterion: "bounded"}, limits)
+	parent.Context = []contract.ContextLevel{contract.ContextRepository}
+	parent.Effects = []contract.Effect{contract.EffectRead}
+	budget := 1.0
+	parent.BudgetUSD = &budget
+	dispatcher := &hierarchyCaptureDispatcher{}
+	worker := declared("worker", "/bin/true", config.PoolAgent)
+	engine, err := workflow.New(workflow.Options{Runner: dispatcher, Store: store, Types: []config.AgentType{worker},
+		Lanes: noCeiling(), Parent: &parent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := engine.Create(t.Context(), workflow.Graph{Task: "work", GrantUSD: 1, Steps: []workflow.Step{{
+		ID: "specialist", TypeName: "worker", Limits: limits,
+		Task:       contract.Task{Objective: "inspect", Criterion: "answer"},
+		Permission: contract.Permission{Effects: []contract.Effect{contract.EffectRead}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Launch(t.Context(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if dispatcher.call.Parent == nil || dispatcher.assignment.ParentID != parent.ID || dispatcher.assignment.Depth != 2 {
+		t.Fatalf("dispatch parent=%+v assignment=%+v", dispatcher.call.Parent, dispatcher.assignment)
+	}
+}
+
+func TestRecoverAuthorizedLaunchesAReservedUnlaunchedWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, noCeiling(), declared("worker", answers(t, dir, "worker"), config.PoolAgent))
+	run, _, err := h.engine.Create(t.Context(), graphOf(step("a", "worker", nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := h.engine.RecoverAuthorized(t.Context(), run.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered.Closed || stepOf(t, recovered, "a").Status != workflow.StatusOK {
+		t.Fatalf("recovered = %+v", recovered)
+	}
+}
 
 // What a run was created for is on its record because funding is keyed on it.
 // These tests are about the one thing nobody was checking: that the repository
@@ -145,6 +230,51 @@ func TestARefusedRepositoryLeavesTheRunLaunchable(t *testing.T) {
 	}
 	if got := statuses(t, run)["a"]; got != "ok" {
 		t.Errorf("step a is %q after the corrected launch, want ok", got)
+	}
+}
+
+func TestDispatchBindsSensitiveWorkToPhysicalRepositoryRoot(t *testing.T) {
+	dispatcher := &worktreeCaptureDispatcher{}
+	dir := t.TempDir()
+	store, err := workflow.Open(t.Context(), filepath.Join(dir, "workflow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	root := t.TempDir()
+	worker := declared("worker", "/bin/true", config.PoolAgent,
+		contract.EffectRead, contract.EffectWrite)
+	engine, err := workflow.New(workflow.Options{
+		Runner:         dispatcher,
+		Store:          store,
+		Types:          []config.AgentType{worker},
+		Lanes:          noCeiling(),
+		Repository:     "atenea",
+		RepositoryRoot: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := engine.Create(t.Context(), workflow.Graph{
+		Task:     "run one sensitive step",
+		GrantUSD: 1,
+		Steps: []workflow.Step{{
+			ID: "commit", TypeName: "worker",
+			Task: contract.Task{Objective: "commit", Criterion: "it answers"},
+			Permission: contract.Permission{
+				Effects:    []contract.Effect{contract.EffectRead, contract.EffectWrite},
+				Operations: []contract.Operation{contract.OperationCommit},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.LaunchAuthorized(t.Context(), run.ID, []contract.Operation{contract.OperationCommit}); err != nil {
+		t.Fatal(err)
+	}
+	if dispatcher.call.Worktree != root {
+		t.Fatalf("dispatch worktree = %q, want physical repository root %q", dispatcher.call.Worktree, root)
 	}
 }
 

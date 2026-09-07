@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -33,6 +34,7 @@ const (
 	// today the two were the same blank space: a server whose tools silently
 	// vanished from tools/list looked exactly like a server nobody had asked
 	// for. Keeping them apart is the entire point of remembering anything.
+	// BackendUnknown is part of ATENEA's public orchestration contract.
 	BackendUnknown BackendState = "unknown"
 
 	// BackendOK means the backend answered the last thing Atenea asked it.
@@ -40,6 +42,7 @@ const (
 
 	// BackendFailed means the last thing Atenea asked it did not come back,
 	// and Reason carries the cause in the words the process itself used.
+	// BackendFailed is part of ATENEA's public orchestration contract.
 	BackendFailed BackendState = "failed"
 )
 
@@ -51,9 +54,11 @@ const (
 // to "what is the state of this server", which is one row that gets
 // overwritten.
 type backendReading struct {
-	State  BackendState
-	At     time.Time
-	Reason string
+	State                    BackendState
+	At                       time.Time
+	Reason                   string
+	RequestedProtocolVersion string
+	ObservedProtocolVersion  string
 }
 
 // backendMemory remembers the last reading per backend id.
@@ -128,7 +133,7 @@ func (m *backendMemory) record(id string, reading backendReading) {
 	defer m.mu.Unlock()
 	previous, known := m.readings[id]
 	m.readings[id] = reading
-	if known && previous.State == reading.State && previous.Reason == reading.Reason {
+	if known && previous.State == reading.State && previous.Reason == reading.Reason && previous.RequestedProtocolVersion == reading.RequestedProtocolVersion && previous.ObservedProtocolVersion == reading.ObservedProtocolVersion {
 		return
 	}
 	_ = m.persistLocked()
@@ -207,18 +212,26 @@ func (c *Core) serverStatus(byProvider map[string]providerHealth) []ServerStatus
 	for _, server := range c.settings.MCPServers {
 		probe := server.Probe()
 		entry := ServerStatus{
-			ID:        server.ID,
-			Transport: probe.Transport(),
-			Where:     probe.Where(),
-			Dashboard: server.Dashboard,
-			Expose:    string(server.Expose),
-			State:     BackendUnknown,
+			ID:                       server.ID,
+			Transport:                probe.Transport(),
+			Where:                    probe.Where(),
+			Dashboard:                server.Dashboard,
+			Expose:                   string(server.Expose),
+			State:                    BackendUnknown,
+			RequestedProtocolVersion: probe.RequestedProtocolVersion(),
+			ObservedProtocolVersion:  mcpcompat.Unknown.String(),
 		}
 		switch found, ok := c.readings.reading(server.ID); {
 		case ok:
 			entry.State = found.State
 			entry.Reason = found.Reason
 			entry.LastChecked = found.At
+			if found.RequestedProtocolVersion != "" {
+				entry.RequestedProtocolVersion = found.RequestedProtocolVersion
+			}
+			if found.ObservedProtocolVersion != "" {
+				entry.ObservedProtocolVersion = found.ObservedProtocolVersion
+			}
 		default:
 			if provider, serves := byProvider[server.ID]; serves {
 				entry.State = stateOf(provider.health.State)
@@ -262,16 +275,33 @@ func stateOf(state contract.HealthState) BackendState {
 // A backend that is alive and refuses tools/list has still gone silent from
 // where the operator sits, so it belongs on the screen exactly like one that
 // never started.
-func (c *Core) recordBackendListing(id string, err error) {
+type protocolReporter interface {
+	RequestedProtocolVersion() string
+	ObservedProtocolVersion() string
+}
+
+func protocolReading(value any) (string, string) {
+	if reporter, ok := value.(protocolReporter); ok {
+		return reporter.RequestedProtocolVersion(), reporter.ObservedProtocolVersion()
+	}
+	return mcpcompat.Unknown.String(), mcpcompat.Unknown.String()
+}
+
+func (c *Core) recordBackendListing(id string, err error, backend any) {
+	requested, observed := protocolReading(backend)
 	if err == nil {
-		c.readings.record(id, backendReading{State: BackendOK, At: time.Now()})
+		c.readings.record(id, backendReading{State: BackendOK, At: time.Now(), RequestedProtocolVersion: requested, ObservedProtocolVersion: observed})
 		return
 	}
-	c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error()})
+	c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error(), RequestedProtocolVersion: requested, ObservedProtocolVersion: observed})
 }
 
 func (c *Core) recordBackendListingNote(id, note string) {
-	c.readings.record(id, backendReading{State: BackendOK, At: time.Now(), Reason: note})
+	previous, _ := c.readings.reading(id)
+	previous.State = BackendOK
+	previous.At = time.Now()
+	previous.Reason = note
+	c.readings.record(id, previous)
 }
 
 // recordBackendCall remembers what a tools/call proved about the backend, and
@@ -288,16 +318,25 @@ func (c *Core) recordBackendListingNote(id, note string) {
 // A call that proves nothing leaves the previous reading alone rather than
 // resetting it to unknown: forgetting a real failure because somebody then
 // asked for a forbidden tool would lose the one fact worth keeping.
-func (c *Core) recordBackendCall(id string, err error) {
+func (c *Core) recordBackendCall(id string, err error, backend any) {
+	requested, observed := protocolReading(backend)
 	if !contract.AffectsHealth(err) {
+		previous, known := c.readings.reading(id)
+		if !known {
+			previous.State = BackendUnknown
+		} else if previous.State != BackendUnknown {
+			previous.At = time.Now()
+		}
+		previous.RequestedProtocolVersion, previous.ObservedProtocolVersion = requested, observed
+		c.readings.record(id, previous)
 		return
 	}
 	switch {
 	case err == nil:
-		c.readings.record(id, backendReading{State: BackendOK, At: time.Now()})
+		c.readings.record(id, backendReading{State: BackendOK, At: time.Now(), RequestedProtocolVersion: requested, ObservedProtocolVersion: observed})
 	case contract.KindOf(err) == contract.FailureUnavailable,
 		contract.KindOf(err) == contract.FailureTimeout:
-		c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error()})
+		c.readings.record(id, backendReading{State: BackendFailed, At: time.Now(), Reason: err.Error(), RequestedProtocolVersion: requested, ObservedProtocolVersion: observed})
 	}
 }
 
@@ -311,7 +350,7 @@ func probeDeclaredServers(ctx context.Context, servers []config.MCPServer, readi
 	}
 	results := mcpprobe.ProbeAll(ctx, probes)
 	for _, result := range results {
-		reading := backendReading{At: time.Now()}
+		reading := backendReading{At: time.Now(), RequestedProtocolVersion: result.RequestedProtocolVersion, ObservedProtocolVersion: result.ObservedProtocolVersion}
 		if result.OK {
 			reading.State = BackendOK
 		} else {

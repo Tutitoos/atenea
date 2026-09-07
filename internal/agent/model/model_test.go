@@ -201,6 +201,101 @@ func TestTheModelFlagNamesTheRolesOwnModel(t *testing.T) {
 	}
 }
 
+func TestRoleConfigurationUsesResearchAliasAndFixedEfforts(t *testing.T) {
+	client, err := New(Options{
+		Backend:  BackendCodex,
+		Research: "gpt-5.6-sol", Plan: "gpt-5.6-sol", Implement: "gpt-5.6-luna",
+		Review: "gpt-5.6-sol", Audit: "gpt-6-astra",
+		ResearchReasoningEffort: "medium", PlanReasoningEffort: "medium",
+		ImplementReasoningEffort: "xhigh", ReviewReasoningEffort: "medium", AuditReasoningEffort: "medium",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, tc := range []struct {
+		role  Role
+		model string
+	}{
+		{RoleResearch, "gpt-5.6-sol"},
+		{RoleExplore, "gpt-5.6-sol"},
+		{RolePlan, "gpt-5.6-sol"},
+		{RoleImplement, "gpt-5.6-luna"},
+		{RoleReview, "gpt-5.6-sol"},
+		{RoleAudit, "gpt-6-astra"},
+	} {
+		args, err := client.args(Request{Role: tc.role, Prompt: "x"})
+		if err != nil {
+			t.Fatalf("args(%s): %v", tc.role, err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "--model "+tc.model) {
+			t.Errorf("role %s args = %s", tc.role, joined)
+		}
+	}
+	if got := client.fallbacksFor(RoleResearch); len(got) != 0 {
+		t.Fatalf("research fallbacks = %v, want none", got)
+	}
+}
+
+func TestClaudeArgsDoNotCarryCodexReasoningConfig(t *testing.T) {
+	client := argvClient(t)
+	args, err := client.args(Request{Role: RoleExplore, Prompt: "read", ReasoningEffort: "xhigh"})
+	if err != nil {
+		t.Fatalf("args: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--effort") || strings.Contains(joined, "model_reasoning_effort") {
+		t.Fatalf("Claude argv carried Codex effort configuration: %s", joined)
+	}
+}
+
+func TestCodexSandboxRequiresWriteAuthorizationForImplement(t *testing.T) {
+	client, err := New(Options{Backend: BackendCodex, Implement: "gpt-5.6-luna", Binary: "/missing/codex"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = client.Turn(context.Background(), Request{Role: RoleImplement, Prompt: "edit"})
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("without write authorization kind = %v, want permission_denied", contract.KindOf(err))
+	}
+	_, err = client.Turn(context.Background(), Request{Role: RoleResearch, Prompt: "read", Effects: []contract.Effect{contract.EffectWrite}})
+	if contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("write on research kind = %v, want permission_denied", contract.KindOf(err))
+	}
+}
+
+func TestModelRejectsUnsupportedConfiguredReasoningEffort(t *testing.T) {
+	_, err := New(Options{Backend: BackendCodex, ResearchReasoningEffort: "sideways"})
+	if contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("error = %v, want invalid configured effort", err)
+	}
+}
+
+func TestCodexClientTurnUsesFakeJSONLProvider(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"ok\\\":true}\"}}'\nprintf '%s\\n' '{\"type\":\"turn.completed\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Options{Backend: BackendCodex, Binary: binary, Research: "gpt-5.6-sol", ResearchReasoningEffort: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := client.Turn(context.Background(), Request{
+		Role: RoleResearch, Prompt: "research", Invisible: true, Schema: map[string]any{
+			"type": "object", "required": []any{"ok"},
+			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(answer.Structured, &got); err != nil || got["ok"] != true {
+		t.Fatalf("structured = %s, err=%v", answer.Structured, err)
+	}
+}
+
 func TestExplicitModelFallbacksReachClaudeCode(t *testing.T) {
 	client, err := New(Options{
 		Explore: "claude-sonnet-5", Plan: "claude-opus-5",

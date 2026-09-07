@@ -3,17 +3,49 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/activity"
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestActivityAgentHelper(t *testing.T) {
+	if os.Getenv("ATENEA_ACTIVITY_AGENT_HELPER") != "1" {
+		return
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	if err := activity.PublishFromEnvironment("Bash"); err != nil {
+		os.Exit(3)
+	}
+	_, _ = os.Stdout.WriteString(`{"result":{"path":"a.txt"},"verdict":"ok"}`)
+	os.Exit(0)
+}
+
+func TestDispatchCarriesAcknowledgedActivityFromChild(t *testing.T) {
+	typeDef := declared(os.Args[0], "-test.run=^TestActivityAgentHelper$")
+	typeDef.Env = append(typeDef.Env, "ATENEA_ACTIVITY_AGENT_HELPER=1")
+	r, _ := runner(t, typeDef)
+	var seen atomic.Bool
+	report, _, err := r.Dispatch(t.Context(), agent.Dispatch{TypeName: "reader", Task: task(), Activity: func(batch []activity.Notice) error {
+		if len(batch) != 1 || batch[0].Tool != "Bash" {
+			t.Fatalf("activity = %#v", batch)
+		}
+		seen.Store(true)
+		return nil
+	}})
+	if err != nil || report.Verdict != contract.VerdictOK || !seen.Load() {
+		t.Fatalf("report=%#v seen=%v err=%v", report, seen.Load(), err)
+	}
+}
 
 // stub writes a fake agent: a shell script that answers whatever the test
 // tells it to answer. It stands in for a model harness for the same reason
@@ -141,6 +173,20 @@ func TestFinishedAgentAnswersWithACompletenessClaim(t *testing.T) {
 	}
 	if len(report.Notices) != 1 || report.Notices[0] != "read three of five files" {
 		t.Fatalf("notices = %v", report.Notices)
+	}
+}
+
+func TestFinishedAgentCarriesNativeExecutionIdentity(t *testing.T) {
+	r, _ := runner(t, declared(answers(t,
+		`{"result":{"path":"a.txt"},"verdict":"ok","thread_id":"thread-1",`+
+			`"requested_model":"gpt-5.6-sol","observed_model":"gpt-5.6-sol",`+
+			`"requested_reasoning_effort":"medium","observed_reasoning_effort":"medium"}`)))
+	report, _, err := r.Run(t.Context(), "reader", task(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ThreadID != "thread-1" || report.RequestedModel != "gpt-5.6-sol" || report.ObservedModel != "gpt-5.6-sol" || report.RequestedReasoningEffort != "medium" || report.ObservedReasoningEffort != "medium" {
+		t.Fatalf("native identity = %+v", report)
 	}
 }
 
@@ -675,6 +721,44 @@ func TestTheCommissionsGrantArrivesOnStdin(t *testing.T) {
 	}
 	if payload.BudgetUSD == nil || *payload.BudgetUSD != own {
 		t.Errorf("budget_usd = %v, want %v", payload.BudgetUSD, own)
+	}
+}
+
+func TestSensitiveOperationsTravelOnAssignmentAsOneShotGrant(t *testing.T) {
+	captured := filepath.Join(t.TempDir(), "assignment.json")
+	spec := declared(stub(t, "cat >"+captured+"\ncat <<'REPORT'\n"+
+		`{"result":{"path":"a.txt"},"verdict":"ok"}`+"\nREPORT"))
+	r, _ := runner(t, spec)
+	worktree := t.TempDir()
+	if _, _, err := r.Dispatch(t.Context(), agent.Dispatch{
+		TypeName: spec.Spec.Name, Task: task(), ID: "assignment-1", AssignmentID: "assignment-1",
+		Operations: []contract.Operation{contract.OperationCommit}, WorkflowID: "workflow-1", Worktree: worktree,
+		PolicyDigest: "policy-digest", GrantToken: strings.Repeat("a", 64),
+	}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("reading assignment: %v", err)
+	}
+	var payload struct {
+		AssignmentID string   `json:"id"`
+		WorkflowID   string   `json:"workflow_id"`
+		Worktree     string   `json:"worktree"`
+		PolicyDigest string   `json:"policy_digest"`
+		GrantToken   string   `json:"grant_token"`
+		Operations   []string `json:"operations"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("assignment is not json: %v", err)
+	}
+	if len(payload.Operations) != 1 || payload.Operations[0] != "commit" {
+		t.Fatalf("operations = %v, want one-shot commit", payload.Operations)
+	}
+	if payload.AssignmentID != "assignment-1" || payload.WorkflowID != "workflow-1" ||
+		payload.Worktree != worktree || payload.PolicyDigest != "policy-digest" ||
+		payload.GrantToken != strings.Repeat("a", 64) {
+		t.Fatalf("binding = %+v, want dispatch binding", payload)
 	}
 }
 

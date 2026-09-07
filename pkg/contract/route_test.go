@@ -30,6 +30,24 @@ func TestARouteNamingABackendMustNameItsModel(t *testing.T) {
 	}
 }
 
+func TestNativeForkRouteStateIsUnambiguous(t *testing.T) {
+	cases := map[string]contract.Route{
+		"pending route with child": {
+			NativeForkState: "pending", ParentThreadID: "parent", ThreadID: "child",
+		},
+		"normalized parent equals child": {
+			NativeForkState: "complete", ParentThreadID: " parent ", ThreadID: "parent",
+		},
+	}
+	for name, route := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := route.Validate(); err == nil || contract.KindOf(err) != contract.FailureInvalidInput {
+				t.Fatalf("error = %v, want invalid_input", err)
+			}
+		})
+	}
+}
+
 // Everything a route lists is a name something later has to resolve. An empty
 // entry resolves to nothing and a capability id the catalog could not have
 // declared resolves to nothing either, so both are a decision about nothing

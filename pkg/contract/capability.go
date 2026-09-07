@@ -3,6 +3,7 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"slices"
@@ -38,6 +39,7 @@ const (
 	// EffectProcess spawns an OS process to answer. ripgrep via omp, the
 	// claude CLI and other external tools all cause it, each alongside
 	// whichever of the other three effects that same call also causes.
+	// EffectProcess is part of ATENEA's public orchestration contract.
 	EffectProcess
 	// EffectDevice reaches the machine's own input and display surfaces:
 	// the pointer, the keyboard, the screen, and the accessibility tree of
@@ -57,6 +59,7 @@ const (
 	// launched from a terminal that has it. So a device capability may only
 	// be answered where Atenea is that ancestor, and never on a floor
 	// nobody granted deliberately.
+	// EffectDevice is part of ATENEA's public orchestration contract.
 	EffectDevice
 )
 
@@ -83,6 +86,46 @@ func (e Effect) String() string {
 	}
 	return fmt.Sprintf("effect(%d)", uint8(e))
 }
+
+// Operation is a closed, one-shot sensitive action. It is deliberately
+// separate from EffectWrite: editing a file is not permission to publish a
+// branch, install software, deploy it, or run a migration.
+type Operation string
+
+const (
+	// OperationCommit is part of ATENEA's public orchestration contract.
+	OperationCommit Operation = "commit"
+	// OperationPush is part of ATENEA's public orchestration contract.
+	OperationPush Operation = "push"
+	// OperationInstall is part of ATENEA's public orchestration contract.
+	OperationInstall Operation = "install"
+	// OperationDeploy is part of ATENEA's public orchestration contract.
+	OperationDeploy Operation = "deploy"
+	// OperationMigrate is part of ATENEA's public orchestration contract.
+	OperationMigrate Operation = "migrate"
+	// OperationMerge is part of ATENEA's public orchestration contract.
+	OperationMerge Operation = "merge"
+)
+
+var operationNames = map[Operation]struct{}{
+	OperationCommit: {}, OperationPush: {}, OperationInstall: {},
+	OperationDeploy: {}, OperationMigrate: {}, OperationMerge: {},
+}
+
+// ParseOperation validates the explicit operation spelling.
+func ParseOperation(s string) (Operation, error) {
+	op := Operation(strings.TrimSpace(strings.ToLower(s)))
+	if _, ok := operationNames[op]; !ok {
+		return "", Fail(FailureInvalidInput,
+			"unknown operation %q: want commit, push, install, deploy, migrate or merge", s)
+	}
+	return op, nil
+}
+
+func (o Operation) String() string { return string(o) }
+
+// Known reports whether this operation belongs to the closed set.
+func (o Operation) Known() bool { _, ok := operationNames[o]; return ok }
 
 // ParseEffect reads an effect name.
 func ParseEffect(s string) (Effect, error) {
@@ -137,14 +180,22 @@ type FieldType uint8
 
 // The field types a capability may declare.
 const (
+	// TypeString is part of ATENEA's public orchestration contract.
 	TypeString FieldType = iota
+	// TypeStringList is part of ATENEA's public orchestration contract.
 	TypeStringList
+	// TypeInt is part of ATENEA's public orchestration contract.
 	TypeInt
+	// TypeBool is part of ATENEA's public orchestration contract.
 	TypeBool
 	// TypeRecord is a nested object described by Field.Fields.
 	TypeRecord
 	// TypeRecordList is a list of TypeRecord values.
 	TypeRecordList
+	// TypeFloat is appended to preserve the numeric values of the existing
+	// public enum. It represents a finite JSON number.
+	// TypeFloat is part of ATENEA's public orchestration contract.
+	TypeFloat
 )
 
 var (
@@ -152,6 +203,7 @@ var (
 		TypeString:     "string",
 		TypeStringList: "string_list",
 		TypeInt:        "int",
+		TypeFloat:      "float",
 		TypeBool:       "bool",
 		TypeRecord:     "record",
 		TypeRecordList: "record_list",
@@ -160,6 +212,7 @@ var (
 		"string":      TypeString,
 		"string_list": TypeStringList,
 		"int":         TypeInt,
+		"float":       TypeFloat,
 		"bool":        TypeBool,
 		"record":      TypeRecord,
 		"record_list": TypeRecordList,
@@ -253,11 +306,13 @@ type SubjectKind uint8
 const (
 	// SubjectNone is a capability whose calls are about nothing beyond the
 	// repository, which is the shipped default and every code capability.
+	// SubjectNone is part of ATENEA's public orchestration contract.
 	SubjectNone SubjectKind = iota
 	// SubjectURLHost reads the input as a URL and takes its host, lowercased
 	// and without a port. Every page on one site is one subject: a site
 	// either answers this provider or does not, and that is a fact about the
 	// site rather than about the path.
+	// SubjectURLHost is part of ATENEA's public orchestration contract.
 	SubjectURLHost
 )
 
@@ -491,6 +546,11 @@ func checkValue(subject, kind, path string, f Field, value any) error {
 		}
 	case TypeInt:
 		if !isInteger(value) {
+			return typeErr()
+		}
+	case TypeFloat:
+		number, ok := value.(float64)
+		if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
 			return typeErr()
 		}
 	case TypeStringList:

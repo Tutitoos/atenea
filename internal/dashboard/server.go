@@ -63,6 +63,7 @@ type Provider struct {
 	Session   func(string) (any, error)
 	Runs      func(Query) (any, error)
 	Run       func(string) (any, error)
+	Workflow  func(string) (any, error)
 	Metrics   func(Query) (any, error)
 	Traces    func(Query) (any, error)
 	Incidents func(Query) (any, error)
@@ -156,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/events", s.events)
 	mux.HandleFunc("/api/v1/runs", s.runs)
 	mux.HandleFunc("/api/v1/runs/", s.runs)
+	mux.HandleFunc("/api/v1/workflows/", s.workflows)
 	mux.HandleFunc("/api/v1/metrics", s.metrics)
 	mux.HandleFunc("/api/v1/traces", s.traces)
 	mux.HandleFunc("/api/v1/incidents", s.incidents)
@@ -258,7 +260,7 @@ func isSPARoute(path string) bool {
 			return true
 		}
 	}
-	return len(parts) == 2 && (parts[0] == "sessions" || parts[0] == "runs") && parts[1] != ""
+	return len(parts) == 2 && (parts[0] == "sessions" || parts[0] == "runs" || parts[0] == "workflows") && parts[1] != ""
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request, files fs.FS) {
@@ -449,6 +451,24 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.collection(w, r, s.provider.Runs)
+}
+
+func (s *Server) workflows(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/workflows/")
+	if r.Method != http.MethodGet || id == "" || id == r.URL.Path || s.provider.Workflow == nil {
+		writeError(w, http.StatusMethodNotAllowed, "workflow unavailable")
+		return
+	}
+	if strings.ContainsAny(id, `/\\`) {
+		writeError(w, http.StatusBadRequest, "invalid workflow id")
+		return
+	}
+	v, err := s.provider.Workflow(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": v})
 }
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	s.collection(w, r, s.provider.Metrics)

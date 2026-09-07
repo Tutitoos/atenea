@@ -99,6 +99,45 @@ func TestAChatGrantedWriteMayDescribeAWorkflowThatWrites(t *testing.T) {
 	}
 }
 
+func TestAReadOnlyChatMayNotCancelAWorkflow(t *testing.T) {
+	settings, plan := planFixture(t)
+	settings = strings.Replace(settings, "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = [\"write\", \"process\"]\n", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	author := dial(t)
+	result(t, narrowed(t, author, []string{"write"}), "initialize author")
+	created := result(t, author.call("tools/call", map[string]any{
+		"name": "workflow.create", "arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	structured, _ := created["structuredContent"].(map[string]any)
+	id, _ := structured["id"].(string)
+	if id == "" {
+		t.Fatalf("workflow.create returned no id: %v", created)
+	}
+	reader := dial(t)
+	result(t, narrowed(t, reader, []string{}), "initialize reader")
+	refused := reader.call("tools/call", map[string]any{
+		"name": "workflow.cancel", "arguments": map[string]any{"id": id},
+	})
+	refusedResult, _ := refused["result"].(map[string]any)
+	if refusedResult["isError"] != true || !strings.Contains(answerText(refusedResult), "process") {
+		t.Fatalf("read-only workflow.cancel was accepted or gave the wrong refusal: %v", refused)
+	}
+
+	// A separate session holding process may perform the same scoped mutation.
+	operator := dial(t)
+	result(t, narrowed(t, operator, []string{"process"}), "initialize operator")
+	canceled := result(t, operator.call("tools/call", map[string]any{
+		"name": "workflow.cancel", "arguments": map[string]any{"id": id},
+	}), "workflow.cancel operator")
+	canceledStructured, _ := canceled["structuredContent"].(map[string]any)
+	if canceledStructured["state"] != "aborted" {
+		t.Fatalf("authorized cancel snapshot = %v", canceledStructured)
+	}
+}
+
 // A launch may arrive on a different connection, with a different grant, long
 // after the plan was drawn. So the effects are re-read from the run rather than
 // trusted from whoever created it.

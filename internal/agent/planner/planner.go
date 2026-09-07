@@ -46,6 +46,7 @@ const (
 	SummaryField = "summary"
 	// FindingsField is the concrete part: which files and areas the
 	// commission touches.
+	// FindingsField is part of ATENEA's public orchestration contract.
 	FindingsField = "findings"
 	// PlanField is the graph, as TOML.
 	PlanField = "plan"
@@ -61,14 +62,17 @@ type assignment struct {
 		MaxTokens  int     `json:"max_tokens"`
 	} `json:"limits"`
 	BudgetUSD *float64 `json:"budget_usd"`
+	Effects   []string `json:"effects"`
 	// CommissionUSD is what the run this planner belongs to was granted --
 	// the figure a graph written here divides. BudgetUSD above is this one
 	// turn's own allowance, and dividing that instead was measured: eleven
 	// runs allocated the same $0.90 whether the commission granted $3.50 or
 	// $10.00, because $0.90 was the plan step's own share.
-	CommissionUSD *float64                   `json:"commission_usd"`
-	Context       map[string]json.RawMessage `json:"context"`
-	Route         *route                     `json:"route"`
+	CommissionUSD      *float64                   `json:"commission_usd"`
+	Context            map[string]json.RawMessage `json:"context"`
+	Route              *route                     `json:"route"`
+	VisibilityRequired bool                       `json:"visibility_required,omitempty"`
+	ThreadID           string                     `json:"thread_id,omitempty"`
 	// Subject is the exploration this plan is built from. Rejected is this
 	// planner's own last graph, refused by the compile reviewer: two cards,
 	// because a second attempt needs the finding AND the complaint.
@@ -83,13 +87,23 @@ type task struct {
 }
 
 type route struct {
-	Model        string            `json:"model"`
-	Fallbacks    []string          `json:"fallbacks"`
-	Backend      string            `json:"backend"`
-	Binary       string            `json:"binary"`
-	Capabilities []string          `json:"capabilities"`
-	Providers    map[string]string `json:"providers"`
-	Tools        []string          `json:"tools"`
+	Model                    string            `json:"model"`
+	RequestedModel           string            `json:"requested_model"`
+	ObservedModel            string            `json:"observed_model"`
+	Role                     string            `json:"role"`
+	ReasoningEffort          string            `json:"reasoning_effort"`
+	RequestedReasoningEffort string            `json:"requested_reasoning_effort"`
+	ObservedReasoningEffort  string            `json:"observed_reasoning_effort"`
+	Fallbacks                []string          `json:"fallbacks"`
+	Backend                  string            `json:"backend"`
+	Binary                   string            `json:"binary"`
+	Capabilities             []string          `json:"capabilities"`
+	Providers                map[string]string `json:"providers"`
+	Tools                    []string          `json:"tools"`
+	VisibilityRequired       bool              `json:"visibility_required,omitempty"`
+	ThreadID                 string            `json:"thread_id,omitempty"`
+	ParentThreadID           string            `json:"parent_thread_id,omitempty"`
+	NativeForkState          string            `json:"native_fork_state,omitempty"`
 }
 
 type subject struct {
@@ -104,11 +118,18 @@ type subject struct {
 }
 
 type report struct {
-	Result     map[string]any `json:"result"`
-	Verdict    string         `json:"verdict"`
-	Reason     *reason        `json:"reason,omitempty"`
-	Discovered []discovery    `json:"discovered,omitempty"`
-	Spent      *Charge        `json:"spent,omitempty"`
+	Result                   map[string]any `json:"result"`
+	Verdict                  string         `json:"verdict"`
+	Reason                   *reason        `json:"reason,omitempty"`
+	Discovered               []discovery    `json:"discovered,omitempty"`
+	Spent                    *Charge        `json:"spent,omitempty"`
+	ThreadID                 string         `json:"thread_id,omitempty"`
+	TurnID                   string         `json:"turn_id,omitempty"`
+	UsageRevision            uint64         `json:"usage_revision,omitempty"`
+	RequestedModel           string         `json:"requested_model,omitempty"`
+	ObservedModel            string         `json:"observed_model,omitempty"`
+	RequestedReasoningEffort string         `json:"requested_reasoning_effort,omitempty"`
+	ObservedReasoningEffort  string         `json:"observed_reasoning_effort,omitempty"`
 	// Completeness and StoppedAt carry a pass's own claim about its coverage.
 	// coverage is the only place that fills them in, and it refuses before
 	// either is set on an answer that states no coverage at all, or claims
@@ -260,14 +281,50 @@ func run(ctx context.Context, stdin io.Reader, stdout io.Writer, do turn) error 
 		if in.Route.Binary != "" {
 			cfg.Model.Binary = in.Route.Binary
 		}
-		if in.Route.Model != "" {
-			if in.Type == "plan" {
-				cfg.Model.Plan = in.Route.Model
+		routeRole := in.Route.Role
+		// Older assignments only carried the agent type. Preserve their plan
+		// model selection when the new route role is absent.
+		if routeRole == "" && in.Type == "plan" {
+			routeRole = "plan"
+		}
+		requestedModel := in.Route.RequestedModel
+		if requestedModel == "" {
+			requestedModel = in.Route.Model
+		}
+		if requestedModel != "" {
+			switch routeRole {
+			case "research", "explore":
+				cfg.Model.Research = requestedModel
+				cfg.Model.Explore = requestedModel
+			case "implement":
+				cfg.Model.Implement = requestedModel
+			case "review":
+				cfg.Model.Review = requestedModel
+			case "audit":
+				cfg.Model.Audit = requestedModel
+			case "plan":
+				cfg.Model.Plan = requestedModel
 				cfg.Model.PlanFallbacks = append([]string(nil), in.Route.Fallbacks...)
-			} else {
-				cfg.Model.Explore = in.Route.Model
+			default:
+				cfg.Model.Explore = requestedModel
 				cfg.Model.ExploreFallbacks = append([]string(nil), in.Route.Fallbacks...)
 			}
+		}
+		effort := in.Route.RequestedReasoningEffort
+		if effort == "" {
+			effort = in.Route.ReasoningEffort
+		}
+		switch routeRole {
+		case "research", "explore":
+			cfg.Model.ResearchReasoningEffort = effort
+		case "plan":
+			cfg.Model.PlanReasoningEffort = effort
+		case "implement":
+			cfg.Model.ImplementReasoningEffort = effort
+		case "review":
+			cfg.Model.ReviewReasoningEffort = effort
+		case "audit":
+			cfg.Model.AuditReasoningEffort = effort
 		}
 	}
 	// The settings struct is config's own and carries the same fields in the
@@ -398,6 +455,12 @@ func SurfaceOf(agentType string) (Surface, bool) {
 		// does not need Atenea's capability catalog. It still calls a model,
 		// so floor measurement must price it as a real turn.
 		return Surface{Role: model.RoleExplore}, true
+	case "implement":
+		return Surface{Role: model.RoleImplement, Builtins: []string{"Shell", "ApplyPatch"}}, true
+	case "review":
+		return Surface{Role: model.RoleReview, Builtins: []string{"Read", "Glob", "Grep"}}, true
+	case "audit":
+		return Surface{Role: model.RoleAudit, Builtins: []string{"Read", "Glob", "Grep"}}, true
 	}
 	return Surface{}, false
 }
@@ -421,6 +484,33 @@ func readerSurface() Surface {
 // came from.
 func planSurface() Surface { return Surface{Role: model.RolePlan} }
 
+func routeSelection(in assignment, fallback model.Role) (model.Role, string) {
+	if in.Route == nil || strings.TrimSpace(in.Route.Role) == "" {
+		return fallback, ""
+	}
+	role := model.Role(strings.TrimSpace(in.Route.Role))
+	effort := in.Route.RequestedReasoningEffort
+	if effort == "" {
+		effort = in.Route.ReasoningEffort
+	}
+	return role, effort
+}
+
+func effectsFor(names []string) ([]contract.Effect, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	out := make([]contract.Effect, 0, len(names))
+	for _, name := range names {
+		effect, err := contract.ParseEffect(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, effect)
+	}
+	return out, nil
+}
+
 // readingTools is the CLI's own tools an exploring turn may call.
 //
 // Read, because there is no "read this file" capability, so without it the
@@ -437,8 +527,9 @@ func readingTools() []string { return []string{"Read", "Glob"} }
 
 // explore is the `explore` agent type: the exploring half with Atenea's own
 // capabilities behind it.
-func explore(ctx context.Context, in assignment, _ config.Config, d deps) report {
-	return exploring(ctx, in, d, exploreSurface())
+func explore(ctx context.Context, in assignment, cfg config.Config, d deps) report {
+	codexNative := cfg.Model.NativeCodex()
+	return exploring(ctx, in, d, exploreSurface(), codexNative, false)
 }
 
 // reader is the `reader` agent type: the same function, the same role, the
@@ -446,10 +537,14 @@ func explore(ctx context.Context, in assignment, _ config.Config, d deps) report
 // rather than copying it because a copy is how the two would come to differ
 // in something other than their tools.
 func reader(ctx context.Context, in assignment, _ config.Config, d deps) report {
-	return exploring(ctx, in, d, readerSurface())
+	return exploring(ctx, in, d, readerSurface(), false, false)
 }
 
-func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
+func exploring(ctx context.Context, in assignment, d deps, s Surface, codexNative, codexInvisible bool) report {
+	effects, err := effectsFor(in.Effects)
+	if err != nil {
+		return unavailable("invalid assignment effects: " + err.Error())
+	}
 	var tools string
 	if s.Capabilities {
 		got, err := d.tools()
@@ -467,13 +562,27 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		tools = got
 	}
 
+	role, effort := routeSelection(in, s.Role)
+	visibilityRequired := codexNative || in.VisibilityRequired
+	threadID := in.ThreadID
+	if in.Route != nil {
+		visibilityRequired = visibilityRequired || in.Route.VisibilityRequired
+		if threadID == "" {
+			threadID = in.Route.ThreadID
+		}
+	}
 	answer, err := d.client.Turn(ctx, model.Request{
-		Role:      s.Role,
-		Prompt:    explorePrompt(in, s),
-		Schema:    exploreSchema(),
-		Dir:       repositoryRoot(in),
-		BudgetUSD: budget(in),
-		MaxTokens: in.Limits.MaxTokens,
+		Role:               role,
+		ReasoningEffort:    effort,
+		Prompt:             explorePrompt(in, s),
+		Schema:             exploreSchema(),
+		Dir:                repositoryRoot(in),
+		BudgetUSD:          budget(in),
+		MaxTokens:          in.Limits.MaxTokens,
+		Effects:            effects,
+		VisibilityRequired: visibilityRequired,
+		Invisible:          codexInvisible && !visibilityRequired,
+		ThreadID:           threadID,
 		// ReadTokens holds back readShare's complement for the answer -- see
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),
@@ -481,7 +590,7 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		Builtins:   s.Builtins,
 	})
 	if err != nil {
-		return fromModelError(err, answer.Spent)
+		return observed(fromModelError(err, answer.Spent), answer)
 	}
 
 	var out struct {
@@ -489,14 +598,14 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		Findings string `json:"findings"`
 	}
 	if err := json.Unmarshal(answer.Structured, &out); err != nil {
-		return refused("the model's answer is not in the shape it was given: "+err.Error(), answer.Spent)
+		return observed(refused("the model's answer is not in the shape it was given: "+err.Error(), answer.Spent), answer)
 	}
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.Findings) == "" {
-		return refused("the model answered with an empty exploration", answer.Spent)
+		return observed(refused("the model answered with an empty exploration", answer.Spent), answer)
 	}
 	completeness, stoppedAt, refusal := coverage(answer)
 	if refusal != nil {
-		return *refusal
+		return observed(*refusal, answer)
 	}
 
 	got := report{
@@ -509,6 +618,7 @@ func exploring(ctx context.Context, in assignment, d deps, s Surface) report {
 		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
+	got = observed(got, answer)
 	// What was learned outlives the commission. A note is a sentence, not a
 	// transcript: the ceiling truncates, and a truncated paragraph teaches
 	// the next run nothing.
@@ -529,39 +639,57 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		return unavailable(fmt.Sprintf("the exploration came back %s, so there is nothing to plan from: %s",
 			v, reasonText(in.Subject)))
 	}
+	effects, err := effectsFor(in.Effects)
+	if err != nil {
+		return unavailable("invalid assignment effects: " + err.Error())
+	}
 
 	// The planner's own surface, read from the same table the floor probe
 	// prices: nothing at all, which is why no --mcp-config is built here and
 	// the service is never dialed. See planSurface.
 	s := planSurface()
+	role, effort := routeSelection(in, s.Role)
+	codexNative := cfg.Model.NativeCodex()
+	visibilityRequired := codexNative || in.VisibilityRequired
+	threadID := in.ThreadID
+	if in.Route != nil {
+		visibilityRequired = visibilityRequired || in.Route.VisibilityRequired
+		if threadID == "" {
+			threadID = in.Route.ThreadID
+		}
+	}
 	answer, err := d.client.Turn(ctx, model.Request{
-		Role:      s.Role,
-		Prompt:    planPrompt(in, cfg),
-		Schema:    planSchema(),
-		Dir:       repositoryRoot(in),
-		BudgetUSD: budget(in),
-		MaxTokens: in.Limits.MaxTokens,
+		Role:               role,
+		ReasoningEffort:    effort,
+		Prompt:             planPrompt(in, cfg),
+		Schema:             planSchema(),
+		Dir:                repositoryRoot(in),
+		BudgetUSD:          budget(in),
+		MaxTokens:          in.Limits.MaxTokens,
+		Effects:            effects,
+		VisibilityRequired: visibilityRequired,
+		ThreadID:           threadID,
 		// ReadTokens holds back readShare's complement for the answer -- see
 		// readShare and tokensPerUSD for why this is tokens, not dollars.
 		ReadTokens: readTokens(in),
 		Builtins:   s.Builtins,
 	})
 	if err != nil {
-		return fromModelError(err, answer.Spent)
+		return observed(fromModelError(err, answer.Spent), answer)
 	}
 
 	var out struct {
 		Plan string `json:"plan"`
 	}
 	if err := json.Unmarshal(answer.Structured, &out); err != nil {
-		return refused("the model's answer is not in the shape it was given: "+err.Error(), answer.Spent)
+		return observed(refused("the model's answer is not in the shape it was given: "+err.Error(), answer.Spent), answer)
 	}
 	if strings.TrimSpace(out.Plan) == "" {
-		return refused("the model answered with an empty plan", answer.Spent)
+		return observed(refused("the model answered with an empty plan", answer.Spent), answer)
 	}
 	completeness, stoppedAt, refusal := coverage(answer)
 	if refusal != nil {
-		return *refusal
+		return observed(*refusal, answer)
 	}
 
 	got := report{
@@ -571,7 +699,15 @@ func plan(ctx context.Context, in assignment, cfg config.Config, d deps) report 
 		Notices: append([]string(nil), answer.Notices...),
 	}
 	got.claim(completeness, stoppedAt)
-	return got
+	return observed(got, answer)
+}
+
+func observed(r report, answer model.Answer) report {
+	r.ThreadID = answer.ThreadID
+	r.TurnID, r.UsageRevision = answer.TurnID, answer.UsageRevision
+	r.RequestedModel, r.ObservedModel = answer.RequestedModel, answer.ObservedModel
+	r.RequestedReasoningEffort, r.ObservedReasoningEffort = answer.RequestedReasoningEffort, answer.ObservedReasoningEffort
+	return r
 }
 
 // fromModelError sorts a failed turn, keeping the charge whatever happened.

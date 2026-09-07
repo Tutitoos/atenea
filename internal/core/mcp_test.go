@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/core"
+	"github.com/Tutitoos/atenea/internal/workflow"
 )
 
 // The protocol version this server speaks. A client that asks for it gets it
@@ -29,10 +30,11 @@ const codeInvalidParams = -32602
 // the one-shot `ask` cannot express: MCP is a conversation, and the whole point
 // of the handshake is that what comes after it depends on what it agreed.
 type client struct {
-	t     *testing.T
-	conn  net.Conn
-	lines *bufio.Scanner
-	id    int
+	t             *testing.T
+	conn          net.Conn
+	lines         *bufio.Scanner
+	id            int
+	notifications []map[string]any
 }
 
 func dial(t *testing.T) *client {
@@ -84,14 +86,19 @@ func (c *client) call(method string, params map[string]any) map[string]any {
 		msg["params"] = params
 	}
 	c.send(msg)
-	if !c.lines.Scan() {
-		c.t.Fatalf("%s: nothing came back: %v", method, c.lines.Err())
+	for c.lines.Scan() {
+		var out map[string]any
+		if err := json.Unmarshal(c.lines.Bytes(), &out); err != nil {
+			c.t.Fatalf("%s: answer is not JSON: %v (%s)", method, err, c.lines.Text())
+		}
+		if _, notification := out["method"]; notification && out["id"] == nil {
+			c.notifications = append(c.notifications, out)
+			continue
+		}
+		return out
 	}
-	var out map[string]any
-	if err := json.Unmarshal(c.lines.Bytes(), &out); err != nil {
-		c.t.Fatalf("%s: answer is not JSON: %v (%s)", method, err, c.lines.Text())
-	}
-	return out
+	c.t.Fatalf("%s: nothing came back: %v", method, c.lines.Err())
+	return nil
 }
 
 // notify sends a notification, which by definition is not answered.
@@ -336,6 +343,7 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 	// not a quiet skip appended to a growing list.
 	exemptFromAimable := map[string]string{
 		"catalog.repositories": "answers 'which repositories exist' — the question you ask before you know the name",
+		"workspace.context":    "coordinates explicit targets and must never collapse to one repository argument",
 	}
 
 	atenea := buildService(t, mcpSettings(t))
@@ -355,7 +363,14 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 
 		if _, exempt := exemptFromAimable[name]; exempt {
 			exemptSeen[name] = true
-			if _, hasRepo := props["repository"].(map[string]any); hasRepo {
+			if name == "workspace.context" {
+				if _, hasRepo := props["repository"].(map[string]any); hasRepo {
+					t.Errorf("%v must not have a singular repository argument", name)
+				}
+				if _, hasTargets := props["targets"].(map[string]any); !hasTargets {
+					t.Errorf("%v must expose explicit targets", name)
+				}
+			} else if _, hasRepo := props["repository"].(map[string]any); hasRepo {
 				t.Errorf("%v is in the exempt list but has a repository argument — remove it from the list", name)
 			}
 			continue
@@ -375,6 +390,96 @@ func TestAToolIsAimableAtARepository(t *testing.T) {
 		if !exemptSeen[name] {
 			t.Errorf("exempt list names %v but that tool was not in tools/list — remove the stale entry", name)
 		}
+	}
+}
+
+func TestWorkspaceContextMCPUsesExplicitTargetsAndKeepsRowsSeparate(t *testing.T) {
+	atenea := buildService(t, mcpSettings(t))
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("omp"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	var workspaceTool map[string]any
+	for _, raw := range listed["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if tool["name"] == "workspace.context" {
+			workspaceTool = tool
+		}
+	}
+	if workspaceTool == nil {
+		t.Fatal("workspace.context was not advertised")
+	}
+	schema := workspaceTool["inputSchema"].(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	if _, ok := properties["repository"]; ok {
+		t.Fatal("workspace.context acquired a singular repository argument")
+	}
+	if _, ok := properties["targets"]; !ok {
+		t.Fatal("workspace.context did not advertise targets")
+	}
+	targetSchema := properties["targets"].(map[string]any)["items"].(map[string]any)
+	for _, required := range targetSchema["required"].([]any) {
+		if required == "root" {
+			t.Fatal("workspace.context requires a physical root on the wire")
+		}
+	}
+	catalog := result(t, c.call("tools/call", map[string]any{"name": "catalog.repositories", "arguments": map[string]any{}}), "catalog.repositories")
+	entries := catalog["structuredContent"].(map[string]any)["repositories"].([]any)
+	entry := entries[0].(map[string]any)
+	c.notifications = nil
+	answer := result(t, c.call("tools/call", map[string]any{
+		"name": "workspace.context",
+		"arguments": map[string]any{
+			"targets": []any{map[string]any{"id": entry["id"]}},
+			"payload": map[string]any{"task": "find the TODO"},
+		},
+	}), "workspace.context")
+	if len(c.notifications) != 1 || !strings.Contains(fmt.Sprint(c.notifications[0]), "> **ATENEA · code.context** —") {
+		t.Fatalf("workspace activity notification = %v", c.notifications)
+	}
+	body := answer["structuredContent"].(map[string]any)
+	rows := body["repositories"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["id"] != entry["id"] {
+		t.Fatalf("workspace rows lost repository identity: %+v", body)
+	}
+}
+
+func TestKnowledgeContextIsOptionalAndReadOnly(t *testing.T) {
+	// The default configuration keeps the P15 surface out of the catalog.
+	disabled := buildService(t, mcpSettings(t))
+	defer serve(t, disabled)()
+	d := dial(t)
+	result(t, d.handshake("omp"), "initialize")
+	listed := result(t, d.call("tools/list", nil), "tools/list")
+	for _, raw := range listed["tools"].([]any) {
+		if raw.(map[string]any)["name"] == "knowledge.context" {
+			t.Fatal("knowledge.context advertised while knowledge is disabled")
+		}
+	}
+	d.close()
+
+	dir := t.TempDir()
+	settings := mcpSettings(t) + fmt.Sprintf("\n[knowledge]\nenabled = true\npath = %q\nworkflow_path = %q\n", filepath.Join(dir, "knowledge.sqlite"), filepath.Join(dir, "traces.db"))
+	enabled := buildService(t, settings)
+	defer serve(t, enabled)()
+	c := dial(t)
+	result(t, c.handshake("omp"), "initialize")
+	listed = result(t, c.call("tools/list", nil), "tools/list")
+	found := false
+	for _, raw := range listed["tools"].([]any) {
+		if raw.(map[string]any)["name"] == "knowledge.context" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("knowledge.context was not advertised when configured")
+	}
+	answer := c.call("tools/call", map[string]any{
+		"name":      "knowledge.context",
+		"arguments": map[string]any{"scope": map[string]any{"project_id": "p", "repository_id": "r"}},
+	})
+	if errObj, ok := answer["error"].(map[string]any); !ok || !strings.Contains(fmt.Sprint(errObj["message"]), "not authorized") {
+		t.Fatalf("cross-session knowledge scope was not rejected: %v", answer)
 	}
 }
 
@@ -771,5 +876,331 @@ func TestAPlanDoesNotReportAbsentEdgesAsNull(t *testing.T) {
 		if raw, present := step[field]; present && raw == nil {
 			t.Errorf("a step with no %s reports it as null: %v", field, step)
 		}
+	}
+}
+
+func TestWorkflowAnswerUsesExactGateAndReplayIsIdempotent(t *testing.T) {
+	settings, plan := planFixture(t)
+	settings = strings.Replace(settings, "[orchestrator]\n",
+		"[orchestrator]\nclient_effects = [\"process\"]\n", 1)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	created := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.create", "arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	createdStructured, _ := created["structuredContent"].(map[string]any)
+	id, _ := createdStructured["id"].(string)
+	digest, _ := createdStructured["digest"].(string)
+	if id == "" || digest == "" || len(digest) < 32 {
+		t.Fatalf("workflow.create did not expose the full gate identity: %v", createdStructured)
+	}
+	store, err := workflow.Open(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	activity := workflow.NewActivityNotice("ATENEA", "reader", "busco", "el símbolo Router", "identificar sus usos")
+	activity.WorkflowID, activity.InvocationID, activity.At = id, "fixture-call-1", time.Now()
+	if err := store.RecordActivity(t.Context(), activity); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	_ = store.Close()
+
+	status := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.status", "arguments": map[string]any{"id": id},
+	}), "workflow.status")
+	statusStructured, _ := status["structuredContent"].(map[string]any)
+	if statusStructured["state"] != "unlaunched" || statusStructured["repository"] != "work" || statusStructured["ownership"] != "none" {
+		t.Fatalf("initial status = %v", statusStructured)
+	}
+	activityRows, _ := statusStructured["activity"].([]any)
+	activityCursor, _ := statusStructured["activity_cursor"].(float64)
+	if len(activityRows) != 1 || activityCursor <= 0 {
+		t.Fatalf("activity snapshot = %v cursor=%v", statusStructured["activity"], statusStructured["activity_cursor"])
+	}
+	reconnected := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.status", "arguments": map[string]any{"id": id, "activity_after": activityCursor},
+	}), "workflow.status reconnect")
+	reconnectedStructured, _ := reconnected["structuredContent"].(map[string]any)
+	reconnectedRows, _ := reconnectedStructured["activity"].([]any)
+	if len(reconnectedRows) != 0 || reconnectedStructured["activity_cursor"] != activityCursor {
+		t.Fatalf("reconnected activity repeated: %v", reconnectedStructured)
+	}
+	gates, _ := statusStructured["gates"].([]any)
+	if len(gates) != 1 {
+		t.Fatalf("initial gates = %v", statusStructured["gates"])
+	}
+	gate, _ := gates[0].(map[string]any)
+	if gate["digest"] != digest || gate["kind"] != "launch" || gate["decision"] != "waiting" {
+		t.Fatalf("initial gate DTO = %v", gate)
+	}
+
+	missing := c.call("tools/call", map[string]any{
+		"name": "workflow.answer", "arguments": map[string]any{"id": id, "decision": "rejected", "reason": "declined"},
+	})
+	if _, ok := missing["error"]; !ok {
+		t.Fatalf("answer without ordinal/digest succeeded: %v", missing)
+	}
+	stale := c.call("tools/call", map[string]any{
+		"name": "workflow.answer", "arguments": map[string]any{"id": id, "ordinal": 0, "digest": "stale", "decision": "rejected", "reason": "declined"},
+	})
+	if _, ok := stale["error"]; !ok {
+		t.Fatalf("answer with stale digest succeeded: %v", stale)
+	}
+	answered := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.answer", "arguments": map[string]any{"id": id, "ordinal": 0, "digest": digest, "decision": "rejected", "reason": "declined"},
+	}), "workflow.answer")
+	answeredStructured, _ := answered["structuredContent"].(map[string]any)
+	if answeredStructured["decision"] != "rejected" || answeredStructured["digest"] != digest {
+		t.Fatalf("answer = %v", answeredStructured)
+	}
+	replay := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.answer", "arguments": map[string]any{"id": id, "ordinal": 0, "digest": digest, "decision": "rejected", "reason": "declined"},
+	}), "workflow.answer replay")
+	replayStructured, _ := replay["structuredContent"].(map[string]any)
+	if replayStructured["replayed"] != true || replayStructured["decision"] != "rejected" {
+		t.Fatalf("replay = %v", replayStructured)
+	}
+	conflict := c.call("tools/call", map[string]any{
+		"name": "workflow.answer", "arguments": map[string]any{"id": id, "ordinal": 0, "digest": digest, "decision": "rejected", "reason": "different"},
+	})
+	if _, ok := conflict["error"]; !ok {
+		t.Fatalf("conflicting replay succeeded: %v", conflict)
+	}
+
+	canceled := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.cancel", "arguments": map[string]any{"id": id},
+	}), "workflow.cancel")
+	canceledStructured, _ := canceled["structuredContent"].(map[string]any)
+	if canceledStructured["state"] != "aborted" {
+		t.Fatalf("cancel snapshot = %v", canceledStructured)
+	}
+}
+
+func TestWorkflowLaunchSendsActivityBeforeItsResponse(t *testing.T) {
+	settings, plan := planFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	created := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.create", "arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	structured, _ := created["structuredContent"].(map[string]any)
+	id, _ := structured["id"].(string)
+	if id == "" {
+		t.Fatalf("workflow.create returned no id: %v", structured)
+	}
+	c.notifications = nil
+	response := c.call("tools/call", map[string]any{
+		"name": "workflow.launch", "arguments": map[string]any{"id": id},
+	})
+	if response["id"] == nil {
+		t.Fatalf("workflow.launch returned no response: %v", response)
+	}
+	if len(c.notifications) != 1 {
+		t.Fatalf("notifications before response = %v, want one", c.notifications)
+	}
+	params, _ := c.notifications[0]["params"].(map[string]any)
+	data, _ := params["data"].(string)
+	activityItems, _ := params["activity"].([]any)
+	if len(activityItems) != 1 {
+		t.Fatalf("activity notification = %v", c.notifications[0])
+	}
+	identity, _ := activityItems[0].(map[string]any)
+	cursor, _ := identity["cursor"].(float64)
+	if c.notifications[0]["method"] != "notifications/message" ||
+		!strings.HasPrefix(data, "> **ATENEA · reader** —") || identity["invocation_id"] == "" || cursor <= 0 {
+		t.Fatalf("activity notification = %v", c.notifications[0])
+	}
+}
+
+func TestWorkflowResumeSchemaCarriesExplicitRedo(t *testing.T) {
+	atenea := buildService(t, socketSettings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	tools, _ := listed["tools"].([]any)
+	for _, item := range tools {
+		tool, _ := item.(map[string]any)
+		if tool["name"] != "workflow.resume" {
+			continue
+		}
+		schema, _ := tool["inputSchema"].(map[string]any)
+		props, _ := schema["properties"].(map[string]any)
+		redo, ok := props["redo"].(map[string]any)
+		if !ok || redo["type"] != "array" {
+			t.Fatalf("workflow.resume redo schema = %v", props["redo"])
+		}
+		return
+	}
+	t.Fatal("workflow.resume was not advertised")
+}
+
+func TestWorkflowSchemasDoNotExposeSensitiveOperations(t *testing.T) {
+	atenea := buildService(t, socketSettings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	tools, _ := listed["tools"].([]any)
+	want := map[string]bool{
+		"workflow.launch": false,
+		"workflow.resume": false,
+		"workflow.answer": false,
+	}
+	for _, item := range tools {
+		tool, _ := item.(map[string]any)
+		name, _ := tool["name"].(string)
+		if _, ok := want[name]; !ok {
+			continue
+		}
+		schema, _ := tool["inputSchema"].(map[string]any)
+		properties, _ := schema["properties"].(map[string]any)
+		if _, ok := properties["operations"]; ok {
+			t.Errorf("%s advertises sensitive operations: %v", name, properties["operations"])
+		}
+		want[name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("%s was not advertised", name)
+		}
+	}
+}
+
+func TestWorkflowMCPRejectsSensitiveOperationPayloadWithoutRunning(t *testing.T) {
+	settings, plan := planFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	created := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.create", "arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	createdStructured, _ := created["structuredContent"].(map[string]any)
+	id, _ := createdStructured["id"].(string)
+	digest, _ := createdStructured["digest"].(string)
+	if id == "" || digest == "" {
+		t.Fatalf("workflow.create identity = %v", createdStructured)
+	}
+
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"workflow.launch", map[string]any{"id": id, "operations": []any{"commit"}}},
+		{"workflow.resume", map[string]any{"id": id, "operations": []any{"commit"}}},
+		{"workflow.answer", map[string]any{
+			"id": id, "ordinal": 0, "digest": digest, "decision": "approved",
+			"operations": []any{"commit"},
+		}},
+	} {
+		answer := c.call("tools/call", map[string]any{"name": call.tool, "arguments": call.args})
+		errObj, ok := answer["error"].(map[string]any)
+		if !ok || errObj["code"] != float64(codeInvalidParams) {
+			t.Fatalf("%s accepted operations payload: %v", call.tool, answer)
+		}
+		message, _ := errObj["message"].(string)
+		if !strings.Contains(message, "local human approval") || !strings.Contains(message, "CLI") {
+			t.Errorf("%s refusal = %q, want local CLI approval", call.tool, message)
+		}
+	}
+
+	status := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.status", "arguments": map[string]any{"id": id},
+	}), "workflow.status")
+	statusStructured, _ := status["structuredContent"].(map[string]any)
+	if statusStructured["state"] != "unlaunched" {
+		t.Fatalf("operations payload changed workflow state: %v", statusStructured)
+	}
+	gates, _ := statusStructured["gates"].([]any)
+	gate, _ := gates[0].(map[string]any)
+	if gate["decision"] != "waiting" {
+		t.Fatalf("operations payload answered launch gate: %v", gate)
+	}
+}
+
+func sensitivePlanFixture(t *testing.T) (settings, plan string) {
+	t.Helper()
+	settings, plan = planFixture(t)
+	body, err := os.ReadFile(plan)
+	if err != nil {
+		t.Fatalf("read plan: %v", err)
+	}
+	updated := strings.Replace(string(body), `effects = ["read"]`, "effects = [\"read\", \"write\"]\noperations = [\"commit\"]", 1)
+	if updated == string(body) {
+		t.Fatal("sensitive plan fixture did not add an operation")
+	}
+	if err := os.WriteFile(plan, []byte(updated), 0o600); err != nil {
+		t.Fatalf("write sensitive plan: %v", err)
+	}
+	settings = strings.Replace(settings, "context = [\"repository\"]\neffects = [\"read\"]", "context = [\"repository\"]\neffects = [\"read\", \"write\"]", 1)
+	settings = strings.Replace(settings, "[orchestrator]\n", "[orchestrator]\nclient_effects = [\"read\", \"write\"]\n", 1)
+	return settings, plan
+}
+
+func TestSensitiveWorkflowStaysWaitingThroughMCP(t *testing.T) {
+	settings, plan := sensitivePlanFixture(t)
+	atenea := buildService(t, settings)
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	created := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.create", "arguments": map[string]any{"file": plan},
+	}), "workflow.create")
+	createdStructured, _ := created["structuredContent"].(map[string]any)
+	id, _ := createdStructured["id"].(string)
+	digest, _ := createdStructured["digest"].(string)
+	if id == "" || digest == "" {
+		t.Fatalf("workflow.create identity = %v", createdStructured)
+	}
+
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"workflow.launch", map[string]any{"id": id}},
+		{"workflow.resume", map[string]any{"id": id}},
+		{"workflow.answer", map[string]any{
+			"id": id, "ordinal": 0, "digest": digest, "decision": "approved",
+		}},
+	} {
+		answer := c.call("tools/call", map[string]any{"name": call.tool, "arguments": call.args})
+		if call.tool == "workflow.resume" {
+			resultObject, resultOK := answer["result"].(map[string]any)
+			structured, structuredOK := resultObject["structuredContent"].(map[string]any)
+			if !resultOK || !structuredOK || !strings.Contains(fmt.Sprint(structured["stopped"]), "sensitive-operation authorization") {
+				t.Fatalf("%s resumed a sensitive workflow: %v", call.tool, answer)
+			}
+			continue
+		}
+		errObj, ok := answer["error"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s accepted a sensitive workflow without CLI authorization: %v", call.tool, answer)
+		}
+		if call.tool == "workflow.answer" {
+			message, _ := errObj["message"].(string)
+			if !strings.Contains(message, "local human approval") || !strings.Contains(message, "CLI") {
+				t.Errorf("workflow.answer refusal = %q, want local CLI approval", message)
+			}
+		}
+	}
+
+	status := result(t, c.call("tools/call", map[string]any{
+		"name": "workflow.status", "arguments": map[string]any{"id": id},
+	}), "workflow.status")
+	statusStructured, _ := status["structuredContent"].(map[string]any)
+	if statusStructured["state"] != "unlaunched" {
+		t.Fatalf("sensitive workflow left waiting state through MCP: %v", statusStructured)
+	}
+	gates, _ := statusStructured["gates"].([]any)
+	gate, _ := gates[0].(map[string]any)
+	if gate["decision"] != "waiting" {
+		t.Fatalf("sensitive workflow gate was answered through MCP: %v", gate)
 	}
 }

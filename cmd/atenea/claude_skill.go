@@ -15,6 +15,8 @@ disable-model-invocation: true
 ---
 
 Interpret the arguments after /atenea as one Atenea read-only command.
+Before the call, write one concise line in the main chat:
+> **ATENEA · atenea.command** — consulto <objetivo> para <propósito>, con alcance autorizado y evidencia verificable.
 Call only the Atenea MCP tool atenea.command, passing the command and its typed options.
 Present the Markdown returned by Atenea unchanged.
 Never use Bash, native Computer Use, or another tool to implement this command.

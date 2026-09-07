@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/benchmark"
+	"github.com/Tutitoos/atenea/internal/benchmark/corpus"
 )
 
 type testEvent struct {
@@ -56,6 +57,9 @@ func main() {
 	output := flag.String("output", "benchmarks/runs/latest", "directory for run artifacts")
 	profile := flag.String("profile", "quick", "quick, standard, qualification or stress")
 	runs := flag.Int("benchmark-runs", 3, "independent process runs per benchmark")
+	corpusOnly := flag.Bool("corpus-only", false, "validate the fixed provider-free acceptance corpus and write corpus evidence")
+	corpusRoot := flag.String("corpus-root", "benchmarks/corpus/v1", "fixed acceptance corpus root")
+	expectedCorpusHash := flag.String("expected-corpus-sha256", corpus.CanonicalCorpusSHA256, "independent SHA-256 pin for the acceptance corpus")
 	renderOnly := flag.Bool("render-only", false, "render docs from an existing summary")
 	validateOnly := flag.Bool("validate-only", false, "validate an existing summary")
 	input := flag.String("input", "benchmarks/runs/latest/summary.json", "summary used with render-only")
@@ -63,7 +67,12 @@ func main() {
 	if err := checkInvocation(*profile, flag.Args()); err != nil {
 		fatal(err)
 	}
-
+	if *corpusOnly {
+		if err := runCorpus(ctx, *output, *corpusRoot, *expectedCorpusHash); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	if *renderOnly || *validateOnly {
 		data, err := os.ReadFile(*input)
 		if err != nil {
@@ -136,6 +145,42 @@ func main() {
 	if tests.Err != nil {
 		os.Exit(1)
 	}
+}
+
+// runCorpus is intentionally a separate command path from the performance
+// suite. It is local and deterministic: no model, provider, network, or
+// managed process is started. The resulting JSON and Markdown are still
+// written beside normal benchmark artifacts so CI can archive one run.
+func runCorpus(ctx context.Context, output, root, expectedHash string) error {
+	if strings.TrimSpace(output) == "" {
+		return errors.New("corpus output directory is required")
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(repositoryRoot(), root)
+	}
+	manifest := benchmark.NewManifest(ctx, "corpus", "go run ./cmd/atenea-benchmark --corpus-only")
+	evidence, err := corpus.RunPinned(ctx, root, manifest, expectedHash)
+	if err != nil {
+		return fmt.Errorf("run acceptance corpus: %w", err)
+	}
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		return fmt.Errorf("create corpus output: %w", err)
+	}
+	jsonPath := filepath.Join(output, "corpus.json")
+	markdownPath := filepath.Join(output, "corpus.md")
+	if err := corpus.WriteJSON(jsonPath, evidence); err != nil {
+		return fmt.Errorf("write corpus evidence: %w", err)
+	}
+	if err := corpus.WriteMarkdown(markdownPath, evidence); err != nil {
+		return fmt.Errorf("write corpus report: %w", err)
+	}
+	fmt.Printf("corpus=%s passed=%d failed=%d unsupported=%d commit=%s\n",
+		evidence.CorpusHash, evidence.Counts.Passed, evidence.Counts.Failed,
+		evidence.Counts.Unsupported, evidence.Manifest.Commit)
+	if evidence.Counts.Failed > 0 {
+		return fmt.Errorf("acceptance corpus has %d failed scenario(s)", evidence.Counts.Failed)
+	}
+	return nil
 }
 
 func runTests(ctx context.Context, output string) testRun {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/benchmark"
+	"github.com/Tutitoos/atenea/internal/benchmark/corpus"
 )
 
 func TestParseBenchmarkOutput(t *testing.T) {
@@ -80,6 +81,23 @@ func TestRunTestsAndBenchmarksProduceEvidence(t *testing.T) {
 	for _, result := range results {
 		if !result.Valid || result.NanosecondsOp <= 0 {
 			t.Fatalf("invalid benchmark result = %+v", result)
+		}
+	}
+}
+
+func TestRunCorpusWritesInitialEvidence(t *testing.T) {
+	output := t.TempDir()
+	root := filepath.Join(repositoryRoot(), "benchmarks", "corpus", "v1")
+	if err := runCorpus(context.Background(), output, root, corpus.CanonicalCorpusSHA256); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"corpus.json", "corpus.md"} {
+		data, err := os.ReadFile(filepath.Join(output, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("%s is empty", name)
 		}
 	}
 }

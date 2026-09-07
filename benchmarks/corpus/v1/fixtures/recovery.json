@@ -1,0 +1,5 @@
+{
+  "scenario": "provider-failure-injection",
+  "requires": ["managed-process", "external-provider"],
+  "local_baseline": "unsupported"
+}

@@ -65,6 +65,8 @@ func fieldSchema(field Field) (map[string]any, error) {
 		enumInto(out, field)
 	case TypeInt:
 		out = map[string]any{"type": "integer"}
+	case TypeFloat:
+		out = map[string]any{"type": "number"}
 	case TypeBool:
 		out = map[string]any{"type": "boolean"}
 	case TypeStringList:

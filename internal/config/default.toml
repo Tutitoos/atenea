@@ -23,6 +23,20 @@ shutdown_grace = "10s"
 # reachability. Set to "0s" to keep health strictly on demand via `detect`.
 health_probe_every = "15m"
 
+[result_cache]
+# Bounded, read-only cache for complete code.context answers. A hit is local
+# work and never creates a provider measurement. Set ttl/limits explicitly;
+# zero and negative values are rejected.
+max_entries = 128
+max_bytes = 4194304
+ttl = "5m"
+
+[knowledge]
+# Verified knowledge is opt-in. When enabled, omitted paths resolve under the
+# Atenea state directory and the workflow evidence database is read from
+# traces.db in that same directory.
+enabled = false
+
 [orchestrator]
 # The agent that receives a commission, explores the repositories in scope,
 # splits the work into a graph of steps and hands them out.
@@ -440,6 +454,23 @@ plan = ""
 # declared; Atenea never infers a more expensive replacement.
 explore_fallbacks = []
 plan_fallbacks = []
+# General orchestration roles. They remain empty for the legacy Claude profile.
+# Selecting `backend = "codex"` fills the fixed profile automatically:
+# research/plan/review use gpt-5.6-sol medium, implement uses gpt-5.6-luna
+# xhigh, and audit uses gpt-6-astra medium. Codex never adds fallbacks.
+research = ""
+implement = ""
+review = ""
+audit = ""
+research_reasoning_effort = ""
+plan_reasoning_effort = ""
+implement_reasoning_effort = ""
+review_reasoning_effort = ""
+audit_reasoning_effort = ""
+# Codex agent turns use the native durable App Server by default. The legacy
+# one-shot exec path is available only to a request explicitly marked
+# invisible or CI; disabling this setting fails interactive work closed.
+codex_native = true
 
 [workflow]
 # How a graph of agent steps is scheduled. One ceiling per lane, and a lane is
@@ -457,10 +488,21 @@ max_parallel_agent = 4
 # is that the two cannot starve each other, not that one is cheaper.
 max_parallel_review = 4
 
+# Selectable workflow profiles. Each selected profile is materialized and
+# digested when a workflow is created; omitted max_budget_usd means no extra
+# workflow ceiling beyond the existing grant.
+[[workflow_profile]]
+name = "workflow-v1"
+version = "workflow-v1"
+max_parallel_agent = 4
+max_parallel_review = 4
+
 [selector]
 # Runtime health is evidence, not a permanent truth. Once this age passes the
 # provider returns to unknown and the next real dispatch can re-probe it.
 health_stale_after = "24h"
+# Number of valid complete outcomes needed before quality can rank providers.
+quality_minimum_samples = 2
 
 [metrics]
 # The measurement base: what every attempt cost, on three axes -- time, tokens
@@ -763,6 +805,12 @@ effects = ["read"]
   required = false
   summary = "Maximum lines per source block when snippets were requested."
 
+  [[capability.input]]
+  name = "cursor"
+  type = "string"
+  required = false
+  summary = "Cursor returned by a previous bounded context page."
+
   [[capability.output]]
   name = "symbols"
   type = "record_list"
@@ -851,6 +899,24 @@ effects = ["read"]
     name = "code"
     type = "string"
     required = true
+
+  [[capability.output]]
+  name = "truncated"
+  type = "bool"
+  required = false
+  summary = "Whether more intent results are available through next_cursor."
+
+  [[capability.output]]
+  name = "next_cursor"
+  type = "string"
+  required = false
+  summary = "Opaque cursor for the next bounded intent page."
+
+  [[capability.output]]
+  name = "source_trimmed"
+  type = "int"
+  required = false
+  summary = "Number of source bodies omitted by the provider byte ceiling."
 
   [[capability.output]]
   name = "tests"
@@ -1516,7 +1582,7 @@ effects = ["read"]
 
 [[capability]]
 id = "symbol.implementations"
-version = "1.1.0"
+version = "1.2.0"
 summary = "From something abstract, find who really implements it."
 semantics = """
 Given an interface or an overridable method, the concrete implementations \
@@ -1586,6 +1652,14 @@ effects = ["read"]
   type = "string"
   required = false
   summary = "Optional declared or structural evidence filter."
+  enum = ["declared", "structural"]
+
+  [[capability.input]]
+  name = "language"
+  type = "string"
+  required = false
+  enum = ["go", "typescript"]
+  summary = "Optional source language; inferred from .go, .ts, .tsx, .mts or .cts when omitted."
 
   [[capability.output]]
   name = "locations"
@@ -1647,6 +1721,27 @@ effects = ["read"]
     required = false
     summary = "Provider detection."
 
+    [[capability.output.field]]
+    name = "resolution"
+    type = "string"
+    required = true
+    enum = ["exact"]
+    summary = "Atenea-derived resolution; every published location is exact."
+
+    [[capability.output.field]]
+    name = "language"
+    type = "string"
+    required = true
+    enum = ["go", "typescript"]
+    summary = "Language of the implementation source."
+
+    [[capability.output.field]]
+    name = "edge_kind"
+    type = "string"
+    required = true
+    enum = ["IMPLEMENTS", "OVERRIDES"]
+    summary = "Semantic relation kind."
+
   [[capability.output]]
   name = "truncated"
   type = "bool"
@@ -1682,6 +1777,32 @@ effects = ["read"]
   type = "string_list"
   required = false
   summary = "Observed limits of the analysis and generation."
+
+  [[capability.output]]
+  name = "coverage"
+  type = "record"
+  required = true
+  summary = "The provider's exact, candidate, unresolved_related and package_level coverage counts."
+
+    [[capability.output.field]]
+    name = "exact"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "candidate"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "unresolved_related"
+    type = "int"
+    required = true
+
+    [[capability.output.field]]
+    name = "package_level"
+    type = "int"
+    required = true
 
 [[capability]]
 id = "symbol.overview"
@@ -3767,6 +3888,29 @@ pool = "review"
   summary = "Boundary of what was semantically judged"
 
 [[agent]]
+name = "atenea-coordinator"
+kind = "orchestrator"
+summary = "Owns one commission, validates its scope and delegates bounded specialist work"
+command = "$atenea"
+args = ["agent-exec", "explore"]
+context = ["repository", "workspace", "history"]
+effects = ["read", "write"]
+max_duration = "10m"
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "summary"
+  type = "string"
+  required = true
+  summary = "Coordinator assessment of the complete commission"
+
+  [[agent.result]]
+  name = "findings"
+  type = "string"
+  required = true
+  summary = "Repositories, constraints and specialist work to coordinate"
+
+[[agent]]
 name = "explore"
 kind = "specialized"
 summary = "Looks at the project through Atenea's own capabilities and reports what is there"
@@ -3851,6 +3995,111 @@ max_tokens = 200000
   type = "string"
   required = true
   summary = "The graph, as TOML, in the format `atenea workflow create` reads"
+
+# Model-backed execution stages. Each stage reports its role, evidence and
+# honest coverage; implement carries the only write-capable declaration.
+[[agent]]
+name = "implement"
+kind = "specialized"
+summary = "Applies an authorized implementation objective and reports evidence"
+command = "$atenea"
+args = ["agent-exec", "implement"]
+context = ["repository", "workspace", "history"]
+effects = ["read", "write"]
+max_duration = "10m"
+max_tokens = 200000
+
+  [[agent.result]]
+  name = "role"
+  type = "string"
+  required = true
+  enum = ["implement"]
+  summary = "The exact execution role"
+  [[agent.result]]
+  name = "evidence"
+  type = "string_list"
+  required = true
+  summary = "Evidence produced by the implementation"
+  [[agent.result]]
+  name = "completeness"
+  type = "float"
+  required = true
+  summary = "Fraction of the implementation objective covered"
+  [[agent.result]]
+  name = "stopped_at"
+  type = "string"
+  required = true
+  summary = "Boundary reached by the implementation"
+
+[[agent]]
+name = "review"
+kind = "specialized"
+summary = "Reviews a subject with a model and reports evidence"
+command = "$atenea"
+args = ["agent-exec", "review"]
+context = ["repository", "history"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 100000
+pool = "review"
+reads_subject = true
+
+  [[agent.result]]
+  name = "role"
+  type = "string"
+  required = true
+  enum = ["review"]
+  summary = "The exact review role"
+  [[agent.result]]
+  name = "evidence"
+  type = "string_list"
+  required = true
+  summary = "Evidence considered by the review"
+  [[agent.result]]
+  name = "completeness"
+  type = "float"
+  required = true
+  summary = "Fraction of the review objective covered"
+  [[agent.result]]
+  name = "stopped_at"
+  type = "string"
+  required = true
+  summary = "Boundary reached by the review"
+
+[[agent]]
+name = "audit"
+kind = "specialized"
+summary = "Audits a subject with a model and reports evidence"
+command = "$atenea"
+args = ["agent-exec", "audit"]
+context = ["repository", "history"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 100000
+pool = "review"
+reads_subject = true
+
+  [[agent.result]]
+  name = "role"
+  type = "string"
+  required = true
+  enum = ["audit"]
+  summary = "The exact audit role"
+  [[agent.result]]
+  name = "evidence"
+  type = "string_list"
+  required = true
+  summary = "Evidence considered by the audit"
+  [[agent.result]]
+  name = "completeness"
+  type = "float"
+  required = true
+  summary = "Fraction of the audit objective covered"
+  [[agent.result]]
+  name = "stopped_at"
+  type = "string"
+  required = true
+  summary = "Boundary reached by the audit"
 
 # ---------------------------------------------------------------------------
 # MCP servers: endpoints `atenea wrap` hands to a client instead of letting it

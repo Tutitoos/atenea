@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -54,6 +55,7 @@ func TestFinalizationUsesDenyAllIsolatedEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runner.version = toolversion.NewWithTimeout(binary, fixtureTimeout, "--version")
 	if _, err = runner.Run(t.Context(), Request{Prompt: "synthetic", BudgetUSD: 1, ReadTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +85,7 @@ echo '{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}'`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	runner.version = toolversion.NewWithTimeout(binary, fixtureTimeout, "--version")
 	_, err = runner.finalize(t.Context(), Request{}, "fixture")
 	if contract.KindOf(err) != contract.FailurePermissionDenied {
 		t.Fatalf("tool accepted during finalization: %v", err)

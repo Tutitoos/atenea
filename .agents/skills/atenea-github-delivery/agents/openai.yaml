@@ -1,0 +1,6 @@
+interface:
+  display_name: "ATENEA GitHub Delivery"
+  short_description: "Manage ATENEA issues, branches, PRs, and merges"
+  default_prompt: "Use $atenea-github-delivery to deliver this ATENEA change through its authorized GitHub stages."
+policy:
+  allow_implicit_invocation: true

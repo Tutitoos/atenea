@@ -8,6 +8,8 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,6 +34,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/dashboard"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/knowledge"
 	"github.com/Tutitoos/atenea/internal/mcphttp"
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/mcpstdio"
@@ -42,10 +45,13 @@ import (
 	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/registry"
+	"github.com/Tutitoos/atenea/internal/resultcache"
 	"github.com/Tutitoos/atenea/internal/runner/local"
 	"github.com/Tutitoos/atenea/internal/selector"
+	"github.com/Tutitoos/atenea/internal/sourceidentity"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/internal/toolstats"
+	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -117,6 +123,14 @@ type Core struct {
 	agent     *orchestrator.Agent
 	events    *observability.Hub
 	dashboard *dashboard.Server
+	// knowledgeStore is optional. When absent, existing context paths keep
+	// their behavior; when configured, callers opt into the verified/fresh
+	// context seam explicitly.
+	knowledgeStore      *knowledge.Store
+	knowledgeWorkflow   *workflow.Store
+	knowledgeProbe      func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)
+	knowledgeConfigured bool
+	knowledgeInitErr    error
 
 	started time.Time
 	// role is what this process is allowed to maintain. It is kept so the
@@ -194,9 +208,11 @@ type Role int
 const (
 	// Service is the long-lived process: it sweeps, it ticks, and it is the
 	// one that will hold the socket.
+	// Service is part of ATENEA's public orchestration contract.
 	Service Role = iota
 	// Command is every one-shot subcommand. It dispatches and reads freely;
 	// it touches nobody's upkeep.
+	// Command is part of ATENEA's public orchestration contract.
 	Command
 )
 
@@ -211,6 +227,7 @@ func (r Role) String() string {
 // New builds a core from settings. The role decides whether this process
 // performs the upkeep that must happen exactly once; see Role.
 func New(cfg config.Config, role Role) (*Core, error) {
+	stampImplementationConfigDigests(&cfg)
 	catalog, err := registry.NewWithState(filepath.Join(platform.StateDir(), "registry-state.json"))
 	if err != nil {
 		return nil, err
@@ -230,7 +247,11 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			return nil, err
 		}
 	}
-	chooser, err := selector.New(cfg.Selector)
+	selectorConfig := cfg.Selector
+	if selectorConfig.QualityPath == "" {
+		selectorConfig.QualityPath = filepath.Join(platform.StateDir(), "selector-quality.json")
+	}
+	chooser, err := selector.New(selectorConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -336,10 +357,61 @@ func New(cfg config.Config, role Role) (*Core, error) {
 		_ = beats.Do(context.Background(), jobCompact)
 	}
 	stats := toolstats.New(toolstats.Path(statsBasePath(cfg)))
+	cacheConfig := cfg.ResultCache
+	if cacheConfig == (resultcache.Config{}) {
+		cacheConfig = resultcache.DefaultConfig()
+	}
+	localCache, err := resultcache.New(cacheConfig)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureInvalidInput, "result cache defaults: %v", err)
+	}
+	dispatchRunner := attach(runners, book)
+	if dispatchRunner != nil {
+		// Meter the physical provider call inside the coalescing cache. A
+		// waiter therefore never opens a second attempt; its Outcome remains
+		// visible as Coalesced while the leader owns the provider receipt.
+		dispatchRunner = cachedRunner{Runner: statsRunner{Runner: dispatchRunner, store: stats}, cache: localCache}
+	}
+	identity := func(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+		started := time.Now()
+		var observed contract.CacheIdentity
+		var err error
+		if provider, ok := optional[contract.RuntimeIdentityProvider](dispatchRunner); ok {
+			observed, err = provider.RuntimeIdentity(ctx, req)
+		} else if provider, ok := optional[contract.CacheIdentityProvider](dispatchRunner); ok {
+			observed, err = provider.CacheIdentity(ctx, req)
+		} else {
+			err = contract.Fail(contract.FailureUnavailable, "no current provider identity for implementation %s", req.Implementation.ID)
+		}
+		observed.Observed = true
+		observed.Provider = req.Implementation.Provider
+		if observed.Tool == "" {
+			observed.Tool = "graph_status"
+		}
+		observed.DurationNS = time.Since(started).Nanoseconds()
+		if err != nil {
+			observed.Error = contract.RedactRaw(err.Error())
+		}
+		if err != nil {
+			return observed, err
+		}
+		return observed, nil
+	}
 	agent, err := orchestrator.New(orchestrator.Config{
-		Catalog:     catalog,
-		Chooser:     chooser,
-		Runner:      statsRunner{Runner: attach(runners, book), store: stats},
+		Catalog:  catalog,
+		Chooser:  chooser,
+		Runner:   dispatchRunner,
+		Identity: identity,
+		IdentityActivity: func(ctx context.Context, req contract.RunRequest) func(error) {
+			if stats == nil {
+				return nil
+			}
+			_, call := stats.Begin(ctx, toolstats.Event{
+				Level: "identity", Tool: "provider.identity", Provider: req.Implementation.Provider,
+				Repository: req.Repository.ID,
+			})
+			return func(err error) { call.End(err) }
+		},
 		Reach:       func(repo contract.Repository) ([]string, map[string]string) { return reachRunners(runners, repo) },
 		Checkpoints: checkpoints,
 		Meter:       collector,
@@ -373,12 +445,13 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			instance = config.InstanceShared
 		}
 		spec := passthrough.Spec{
-			ID:      server.ID,
-			URL:     server.URL,
-			Command: server.Command,
-			Env:     server.Env,
-			Timeout: server.Timeout,
-			Allowed: server.Tools,
+			ID:           server.ID,
+			URL:          server.URL,
+			Command:      server.Command,
+			Env:          server.Env,
+			Timeout:      server.Timeout,
+			Allowed:      server.Tools,
+			ProtocolMode: passthrough.ProtocolMode(server.ProtocolMode),
 		}
 		var backend passthrough.Backend
 		if instance != config.InstancePerChat {
@@ -402,30 +475,111 @@ func New(cfg config.Config, role Role) (*Core, error) {
 			}
 		}
 	}
+	var knowledgeStore *knowledge.Store
+	var knowledgeWorkflow *workflow.Store
+	var knowledgeInitErr error
+	if cfg.Knowledge.Enabled {
+		knowledgePath := cfg.Knowledge.Path
+		if knowledgePath == "" {
+			knowledgePath = filepath.Join(platform.StateDir(), "knowledge.sqlite")
+		}
+		workflowPath := cfg.Knowledge.WorkflowPath
+		if workflowPath == "" {
+			workflowPath = filepath.Join(platform.StateDir(), "traces.db")
+		}
+		knowledgeWorkflow, knowledgeInitErr = workflow.Open(context.Background(), workflowPath)
+		if knowledgeInitErr == nil {
+			knowledgeStore, knowledgeInitErr = knowledge.Open(knowledgePath,
+				knowledge.WithEvidenceResolver(workflow.KnowledgeEvidenceResolver{Store: knowledgeWorkflow}))
+		}
+		if knowledgeInitErr != nil {
+			if knowledgeWorkflow != nil {
+				_ = knowledgeWorkflow.Close()
+				knowledgeWorkflow = nil
+			}
+			slog.Warn("knowledge store unavailable; MCP surface will fail closed", "error", knowledgeInitErr)
+		}
+	}
 	built = true
 	return &Core{
-		graphMaintenance: graphMaintenance,
-		settings:         cfg,
-		backends:         backends,
-		readings:         readings,
-		catalog:          catalog,
-		chooser:          chooser,
-		runners:          runners,
-		checkpoints:      checkpoints,
-		measurements:     store,
-		stats:            stats,
-		notebook:         book,
-		copies:           copies,
-		recovered:        found,
-		beats:            beats,
-		processes:        procs,
-		agent:            agent,
-		events:           events,
-		sessions:         make(map[string]*Session),
-		started:          time.Now(),
-		role:             role,
-		upkeep:           upkeep,
+		graphMaintenance:    graphMaintenance,
+		settings:            cfg,
+		backends:            backends,
+		readings:            readings,
+		catalog:             catalog,
+		chooser:             chooser,
+		runners:             runners,
+		checkpoints:         checkpoints,
+		measurements:        store,
+		stats:               stats,
+		notebook:            book,
+		copies:              copies,
+		recovered:           found,
+		beats:               beats,
+		processes:           procs,
+		agent:               agent,
+		events:              events,
+		sessions:            make(map[string]*Session),
+		started:             time.Now(),
+		role:                role,
+		upkeep:              upkeep,
+		knowledgeStore:      knowledgeStore,
+		knowledgeWorkflow:   knowledgeWorkflow,
+		knowledgeConfigured: cfg.Knowledge.Enabled,
+		knowledgeInitErr:    knowledgeInitErr,
 	}, nil
+}
+
+func stampImplementationConfigDigests(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Implementations {
+		cfg.Implementations[i].ConfigDigest = effectiveImplementationDigest(*cfg, cfg.Implementations[i])
+	}
+}
+
+func effectiveImplementationDigest(cfg config.Config, impl contract.Implementation) string {
+	var settings any
+	switch impl.Provider {
+	case "omp":
+		settings = cfg.Orchestrator.OMP
+	case "claudecode":
+		settings = cfg.Orchestrator.ClaudeCode
+	case "codex":
+		settings = cfg.Orchestrator.Codex
+	case "kivgraph":
+		settings = cfg.Orchestrator.Kivgraph
+	case "tokensave":
+		settings = cfg.Orchestrator.Tokensave
+	case "desktop":
+		settings = cfg.Orchestrator.Desktop
+	case "scrapling":
+		settings = cfg.Orchestrator.Scrapling
+	case "local":
+		settings = cfg.Orchestrator.Local
+	}
+	payload := struct {
+		ID, Provider, Capability string
+		Constraints              contract.Constraints
+		Scope                    contract.ScopeGuarantee
+		Settings                 any
+	}{impl.ID, impl.Provider, impl.Capability, impl.Constraints, impl.ScopeGuarantee, settings}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+func implementationDigestForProvider(cfg config.Config, provider string) string {
+	for _, impl := range cfg.Implementations {
+		if impl.Provider == provider {
+			return impl.ConfigDigest
+		}
+	}
+	return ""
 }
 
 // maintenance turns a failed background job into an incident.
@@ -602,6 +756,7 @@ func buildKivgraphRunner(cfg config.Config, procs *supervisor.Supervisor) (contr
 		Sensitive:             cfg.Security.Sensitive,
 		Timeout:               graph.Timeout,
 		IndexTimeout:          graph.IndexTimeout,
+		ConfigDigest:          implementationDigestForProvider(cfg, "kivgraph"),
 		Session: func(ctx context.Context) (kivgraph.Session, error) {
 			return procs.Session(config.RunnerKivgraph)
 		},
@@ -656,6 +811,7 @@ func buildKivgraphOverHTTP(cfg config.Config, graph config.KivgraphAdapter) (con
 		Sensitive:             cfg.Security.Sensitive,
 		Timeout:               graph.Timeout,
 		IndexTimeout:          graph.IndexTimeout,
+		ConfigDigest:          implementationDigestForProvider(cfg, "kivgraph"),
 		Session: func(context.Context) (kivgraph.Session, error) {
 			return client, nil
 		},
@@ -690,6 +846,7 @@ func buildTokensaveRunner(cfg config.Config, procs *supervisor.Supervisor) (cont
 		Implementations: cfg.Orchestrator.Tokensave.Implementations,
 		Sensitive:       cfg.Security.Sensitive,
 		Timeout:         cfg.Orchestrator.Tokensave.Timeout,
+		ConfigDigest:    implementationDigestForProvider(cfg, "tokensave"),
 		Session: func(ctx context.Context) (*mcpstdio.Session, error) {
 			return procs.Session(config.RunnerTokensave)
 		},
@@ -930,6 +1087,33 @@ func (f fanOut) Capabilities() []string {
 	return slices.Compact(out)
 }
 
+func (f fanOut) CacheIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	for _, runner := range f {
+		if !runner.Serves(req.Implementation.ID) {
+			continue
+		}
+		if provider, ok := optional[contract.CacheIdentityProvider](runner); ok {
+			return provider.CacheIdentity(ctx, req)
+		}
+	}
+	return contract.CacheIdentity{}, contract.Fail(contract.FailureUnavailable, "no current cache identity for implementation %s", req.Implementation.ID)
+}
+
+func (f fanOut) RuntimeIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	for _, runner := range f {
+		if !runner.Serves(req.Implementation.ID) {
+			continue
+		}
+		if provider, ok := optional[contract.RuntimeIdentityProvider](runner); ok {
+			return provider.RuntimeIdentity(ctx, req)
+		}
+		if provider, ok := optional[contract.CacheIdentityProvider](runner); ok {
+			return provider.CacheIdentity(ctx, req)
+		}
+	}
+	return contract.CacheIdentity{}, contract.Fail(contract.FailureUnavailable, "no current runtime identity for implementation %s", req.Implementation.ID)
+}
+
 func (f fanOut) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	for _, runner := range f {
 		if runner.Serves(req.Implementation.ID) {
@@ -996,6 +1180,149 @@ func (c *Core) Registry() *registry.Registry { return c.catalog }
 // Settings exposes the settings the core was built from.
 func (c *Core) Settings() config.Config { return c.settings }
 
+// ConfigureKnowledge attaches the optional verified knowledge service. It is
+// deliberately explicit so installations without the P15 store retain their
+// existing context behavior.
+func (c *Core) ConfigureKnowledge(store *knowledge.Store) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.knowledgeStore = store
+	c.knowledgeConfigured = store != nil
+	c.mu.Unlock()
+}
+
+// ConfigureKnowledgeProbe supplies the authorized provider revalidation seam
+// used by the read-only MCP surface. A missing probe fails closed.
+func (c *Core) ConfigureKnowledgeProbe(probe func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.knowledgeProbe = probe
+	c.mu.Unlock()
+}
+
+func (c *Core) knowledgeSurfaceEnabled() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.knowledgeConfigured
+}
+
+func (c *Core) prepareKnowledgeMCP(ctx context.Context, scope knowledge.Scope, permission knowledge.Permission) ([]knowledge.Entry, error) {
+	if c == nil {
+		return nil, fmt.Errorf("core: unavailable")
+	}
+	c.mu.Lock()
+	store, probe, initErr := c.knowledgeStore, c.knowledgeProbe, c.knowledgeInitErr
+	wf := c.knowledgeWorkflow
+	c.mu.Unlock()
+	if store == nil {
+		if initErr != nil {
+			return nil, fmt.Errorf("core: knowledge store unavailable: %w", initErr)
+		}
+		return nil, fmt.Errorf("core: knowledge store is not configured")
+	}
+	if probe == nil {
+		probe = func(ctx context.Context, entry knowledge.Entry) (knowledge.ProbeResult, error) {
+			return c.probeWorkflowKnowledge(ctx, wf, entry)
+		}
+	}
+	return c.PrepareKnowledge(ctx, scope, permission, probe)
+}
+
+func (c *Core) probeWorkflowKnowledge(ctx context.Context, wf *workflow.Store, entry knowledge.Entry) (knowledge.ProbeResult, error) {
+	if wf == nil {
+		return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence store is unavailable")
+	}
+	pointID := ""
+	for _, source := range entry.Sources {
+		prefix := "workflow:"
+		if strings.HasPrefix(source.ID, prefix) {
+			parts := strings.Split(source.ID, ":")
+			if len(parts) >= 3 {
+				pointID = parts[len(parts)-1]
+			}
+		}
+	}
+	if pointID == "" {
+		return knowledge.ProbeResult{}, fmt.Errorf("knowledge evidence has no workflow point")
+	}
+	for _, dependency := range entry.Dependencies {
+		if dependency.Provider.Name != "atenea-workflow" && dependency.Provider.Name != "workflow" {
+			return knowledge.ProbeResult{}, fmt.Errorf("unsupported knowledge provider %q", dependency.Provider.Name)
+		}
+		if dependency.Provider.Instance == "" || dependency.Snapshot == "" || !strings.EqualFold(dependency.Freshness, "fresh") {
+			return knowledge.ProbeResult{}, fmt.Errorf("workflow dependency is not verifiable")
+		}
+		run, err := wf.Load(ctx, dependency.Provider.Instance)
+		if err != nil || run.SourceFingerprint == "" || run.SourceFingerprint != dependency.Snapshot ||
+			(dependency.Source.Digest != "" && dependency.Source.Digest != run.SourceFingerprint) {
+			return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence is stale")
+		}
+		if run.Repository != entry.Scope.RepositoryID {
+			return knowledge.ProbeResult{}, fmt.Errorf("workflow evidence repository mismatch")
+		}
+		if _, err := (workflow.KnowledgeEvidenceResolver{Store: wf}).Resolve(ctx, run.ID, entry.Scope, pointID, entry.KnowledgeDigest); err != nil {
+			return knowledge.ProbeResult{}, fmt.Errorf("workflow acceptance is stale: %w", err)
+		}
+		repo, err := c.catalog.Repository(entry.Scope.RepositoryID)
+		if err != nil {
+			return knowledge.ProbeResult{}, fmt.Errorf("knowledge repository is unavailable: %w", err)
+		}
+		identity, err := sourceidentity.Discover(ctx, repo.Path)
+		if err != nil || identity.Fingerprint == "" || identity.Fingerprint != run.SourceFingerprint {
+			return knowledge.ProbeResult{}, fmt.Errorf("repository source changed since acceptance")
+		}
+	}
+	if len(entry.Sources) == 0 || len(entry.Dependencies) == 0 {
+		return knowledge.ProbeResult{}, fmt.Errorf("knowledge evidence is incomplete")
+	}
+	dependencies := slices.Clone(entry.Dependencies)
+	now := time.Now().UTC()
+	for i := range dependencies {
+		dependencies[i].Freshness = "fresh"
+		dependencies[i].CheckedAt = now
+	}
+	return knowledge.ProbeResult{Complete: true, Success: true, Sources: slices.Clone(entry.Sources), Dependencies: dependencies}, nil
+}
+
+// PrepareKnowledge is the opt-in production context path. ContextProvider
+// performs the permission check and provider revalidation before returning
+// anything, so candidates, stale rows and legacy history cannot leak in.
+func (c *Core) PrepareKnowledge(ctx context.Context, scope knowledge.Scope, permission knowledge.Permission, probe func(context.Context, knowledge.Entry) (knowledge.ProbeResult, error)) ([]knowledge.Entry, error) {
+	if c == nil {
+		return nil, nil
+	}
+	c.mu.Lock()
+	store := c.knowledgeStore
+	c.mu.Unlock()
+	if store == nil {
+		return nil, nil
+	}
+	return (knowledge.ContextProvider{Store: store, Scope: scope, Permission: permission, Probe: probe}).Prepare(ctx)
+}
+
+// PromoteKnowledge is the acceptance gate hook used after a workflow point
+// has been accepted. Evidence is resolved by the store's authoritative
+// workflow resolver; callers cannot pass receipts or booleans.
+func (c *Core) PromoteKnowledge(ctx context.Context, id string, gate knowledge.PromotionGate, permission knowledge.Permission) error {
+	if c == nil {
+		return fmt.Errorf("core: nil core")
+	}
+	c.mu.Lock()
+	store := c.knowledgeStore
+	c.mu.Unlock()
+	if store == nil {
+		return fmt.Errorf("core: knowledge store is not configured")
+	}
+	return (knowledge.AcceptanceGate{Store: store}).Promote(ctx, id, gate, permission)
+}
+
 // Select answers which implementation should serve a capability on a
 // repository, along with the trace that justifies it.
 func (c *Core) Select(capabilityID, repositoryID string) (selector.Decision, error) {
@@ -1051,9 +1378,19 @@ func (c *Core) selectWithPreference(capabilityID, repositoryID, prefer string) (
 		Unreachable: unreachable,
 		Measuring:   measuring,
 		Prefer:      prefer,
+		Language:    firstRepositoryLanguage(repo),
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	return decision, err
+}
+
+func firstRepositoryLanguage(repo contract.Repository) string {
+	if len(repo.Languages) == 0 {
+		return ""
+	}
+	langs := slices.Clone(repo.Languages)
+	slices.Sort(langs)
+	return langs[0]
 }
 
 // priced fills the candidates with what the base measured here. It is the same
@@ -1363,10 +1700,12 @@ type ServerProbe struct {
 	OK        bool
 	// Name and Version are who answered, from the handshake. Empty when
 	// nobody did, which is the only case Reason is set.
-	Name    string
-	Version string
-	Reason  string
-	Took    time.Duration
+	Name                     string
+	Version                  string
+	Reason                   string
+	Took                     time.Duration
+	RequestedProtocolVersion string
+	ObservedProtocolVersion  string
 	// PinnedPath says the declaration carries a PATH of its own, so this
 	// verdict does not depend on the environment of whoever ran the command.
 	//
@@ -1409,16 +1748,18 @@ func (c *Core) DetectServers(ctx context.Context) ([]ServerProbe, error) {
 	for i, server := range servers {
 		_, pinned := server.Env["PATH"]
 		entry := ServerProbe{
-			ID:         server.ID,
-			Transport:  probes[i].Transport(),
-			Where:      probes[i].Where(),
-			Dashboard:  server.Dashboard,
-			Expose:     string(server.Expose),
-			OK:         results[i].OK,
-			Name:       results[i].Name,
-			Version:    results[i].Version,
-			Took:       results[i].Took,
-			PinnedPath: pinned,
+			ID:                       server.ID,
+			Transport:                probes[i].Transport(),
+			Where:                    probes[i].Where(),
+			Dashboard:                server.Dashboard,
+			Expose:                   string(server.Expose),
+			OK:                       results[i].OK,
+			Name:                     results[i].Name,
+			Version:                  results[i].Version,
+			Took:                     results[i].Took,
+			PinnedPath:               pinned,
+			RequestedProtocolVersion: results[i].RequestedProtocolVersion,
+			ObservedProtocolVersion:  results[i].ObservedProtocolVersion,
 		}
 		if results[i].Err != nil {
 			entry.Reason = results[i].Err.Error()
@@ -1633,6 +1974,7 @@ func (c *Core) Shutdown() error {
 		c.mu.Unlock()
 		c.stopProcesses()
 		c.closeBackends()
+		c.closeKnowledge()
 		stopErr = c.settle()
 		return stopErr
 	case <-time.After(c.settings.Core.ShutdownGrace):
@@ -1642,10 +1984,24 @@ func (c *Core) Shutdown() error {
 		// not the thing to throw away because something else overran.
 		c.stopProcesses()
 		c.closeBackends()
+		c.closeKnowledge()
 		_ = c.settle()
 		stopErr = contract.Fail(contract.FailureTimeout,
 			"in-flight work did not finish within %s", c.settings.Core.ShutdownGrace)
 		return stopErr
+	}
+}
+
+func (c *Core) closeKnowledge() {
+	c.mu.Lock()
+	store, workflowStore := c.knowledgeStore, c.knowledgeWorkflow
+	c.knowledgeStore, c.knowledgeWorkflow = nil, nil
+	c.mu.Unlock()
+	if store != nil {
+		_ = store.Close()
+	}
+	if workflowStore != nil {
+		_ = workflowStore.Close()
 	}
 }
 

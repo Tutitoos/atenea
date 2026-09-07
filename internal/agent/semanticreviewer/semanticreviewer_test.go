@@ -75,7 +75,7 @@ func TestJudgeKeepsUncertaintyAndProviderFailuresIncomplete(t *testing.T) {
 		err    error
 	}{
 		{name: "invalid json", answer: model.Answer{Structured: []byte("not-json")}},
-		{name: "unknown verdict", answer: model.Answer{Structured: []byte(`{"verdict":"maybe","confidence":80,"claims":[],"gaps":[],"evidence":[],"scope":"x"}`)}},
+		{name: "unknown verdict", answer: model.Answer{Structured: []byte(`{"verdict":"maybe","confidence":80,"claims":[],"gaps":[],"evidence":[],"scope":"x"}`), ThreadID: "thread-1", RequestedModel: "gpt-5.6-sol", ObservedModel: "gpt-5.6-sol", RequestedReasoningEffort: "medium", ObservedReasoningEffort: "medium"}},
 		{name: "invalid confidence", answer: model.Answer{Structured: []byte(`{"verdict":"supported","confidence":101,"claims":[],"gaps":[],"evidence":[],"scope":"x"}`)}},
 		{name: "provider error", err: errors.New("provider unavailable")},
 	} {
@@ -83,6 +83,9 @@ func TestJudgeKeepsUncertaintyAndProviderFailuresIncomplete(t *testing.T) {
 			got := judge(context.Background(), in, &fakeCaller{answer: tc.answer, err: tc.err}, "/repo")
 			if got.Verdict != "incomplete" || got.Reason == nil {
 				t.Fatalf("got %+v, want incomplete with reason", got)
+			}
+			if tc.name == "unknown verdict" && (got.ThreadID != "thread-1" || got.ObservedModel != "gpt-5.6-sol" || got.ObservedReasoningEffort != "medium") {
+				t.Fatalf("unknown verdict lost native identity: %+v", got)
 			}
 		})
 	}

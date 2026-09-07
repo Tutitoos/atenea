@@ -12,6 +12,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -146,7 +147,7 @@ func dispatchThroughService(capability string, payload map[string]any, out io.Wr
 	}
 
 	if err := send(1, "initialize", map[string]any{
-		"protocolVersion": "2025-06-18",
+		"protocolVersion": mcpcompat.Legacy.String(),
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea-desktop", "version": "1"},
 	}); err != nil {

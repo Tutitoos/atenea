@@ -1,0 +1,19 @@
+{
+  "repositories": [
+    {
+      "name": "fixture-go",
+      "language": "go",
+      "files": ["fixtures/go/repository.go"]
+    },
+    {
+      "name": "fixture-typescript",
+      "language": "typescript",
+      "files": ["fixtures/typescript/repository.ts"]
+    },
+    {
+      "name": "fixture-dart",
+      "language": "dart",
+      "files": ["fixtures/dart/repository.dart"]
+    }
+  ]
+}

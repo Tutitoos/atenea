@@ -331,6 +331,59 @@ func newTestRunner(t *testing.T, root string, sess *mcpstdio.Session) *Runner {
 	return runner
 }
 
+func TestObservedGraphReadyRequiresFreshness(t *testing.T) {
+	root, repo := workspace(t)
+	_, sess := newFakeTokensave(t)
+	if err := sess.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	runner := newTestRunner(t, root, sess)
+	base := contract.CacheIdentity{
+		ToolVersion: sess.Version(), Instance: sess.StableIdentity(),
+		State: &contract.RuntimeState{Status: "ready", Symbols: 1},
+	}
+	for _, test := range []struct {
+		freshness string
+		want      bool
+	}{
+		{freshness: "fresh", want: true},
+		{freshness: "FRESH", want: true},
+		{freshness: "stale", want: false},
+		{freshness: "unverified", want: false},
+		{freshness: "", want: false},
+	} {
+		identity := base
+		identity.Freshness = test.freshness
+		if got := runner.observedGraphReady(contract.RunRequest{Repository: repo, ObservedIdentity: &identity}, sess); got != test.want {
+			t.Errorf("freshness %q: got %v, want %v", test.freshness, got, test.want)
+		}
+	}
+}
+
+func TestRuntimeIdentityRejectsBranchSubstitution(t *testing.T) {
+	const warning = "WARNING: branch 'feature/fix' is not tracked — serving from 'main'. Run `tokensave branch add feature/fix` to track it."
+	const notice = "⚠️ tokensave v7.10.0 is installed, but v7.11.0 is available. Run `tokensave upgrade` to update."
+	for _, text := range []string{
+		warning + readyStatus,
+		notice + warning + readyStatus,
+		`{"node_count":3,"branch_fallback":true,"active_branch":"feature/fix"}`,
+	} {
+		t.Run(text[:20], func(t *testing.T) {
+			root, repo := workspace(t)
+			fake, sess := newFakeTokensave(t)
+			fake.on(toolStatus, text, false)
+
+			identity, err := newTestRunner(t, root, sess).RuntimeIdentity(context.Background(), request(t, repo, CapabilityOverview, map[string]any{"file": "internal/client.go"}))
+			if contract.CodeOf(err) != "branch_mismatch" || contract.AffectsHealth(err) || contract.RawOf(err) != text {
+				t.Fatalf("branch fallback = %v, want health-neutral branch_mismatch with original answer", err)
+			}
+			if !identity.Observed || identity.State != nil || identity.Error != "tokensave is serving a fallback branch" {
+				t.Fatalf("identity = %#v, want observed rejection without ready state", identity)
+			}
+		})
+	}
+}
+
 func rows(t *testing.T, out contract.Outcome, key string) []map[string]any {
 	t.Helper()
 	raw, ok := out.Result[key].([]any)

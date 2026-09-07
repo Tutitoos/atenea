@@ -222,6 +222,19 @@ func TestABackendsToolsAreOfferedUnderTheReservedPrefix(t *testing.T) {
 	if raw == nil {
 		t.Fatalf("the backend's tool is not on the list: %v", tools)
 	}
+	capabilityIndex, rawIndex := -1, -1
+	for i, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		if strings.HasPrefix(fmt.Sprint(tool["name"]), "raw.") && rawIndex < 0 {
+			rawIndex = i
+		}
+		if tool["name"] == "code.search" {
+			capabilityIndex = i
+		}
+	}
+	if capabilityIndex < 0 || rawIndex < 0 || capabilityIndex > rawIndex {
+		t.Fatalf("capability/backend ordering = capability %d raw %d", capabilityIndex, rawIndex)
+	}
 	if raw["description"] != "scan code" {
 		t.Errorf("description = %v, want the backend's own", raw["description"])
 	}

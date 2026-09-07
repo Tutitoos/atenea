@@ -16,6 +16,8 @@
 package selector
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,10 +28,16 @@ import (
 
 // Stage names, in funnel order.
 const (
+	// StageConstraints is part of ATENEA's public orchestration contract.
 	StageConstraints = "constraints"
-	StageReach       = "reach"
-	StageHealth      = "health"
-	StageChoice      = "choice"
+	// StageReach is part of ATENEA's public orchestration contract.
+	StageReach = "reach"
+	// StageHealth is part of ATENEA's public orchestration contract.
+	StageHealth = "health"
+	// StageQuality is part of ATENEA's public orchestration contract.
+	StageQuality = "quality"
+	// StageChoice is part of ATENEA's public orchestration contract.
+	StageChoice = "choice"
 )
 
 // Rule is a standing user preference. A rule outranks any automatic ranking:
@@ -52,14 +60,51 @@ func (r Rule) specificity() int {
 
 // Config is the selector's declarative half.
 type Config struct {
-	Rules            []Rule
-	HealthStaleAfter time.Duration
+	Rules                 []Rule
+	HealthStaleAfter      time.Duration
+	QualityMinimumSamples int
+	// QualityPath is an optional durable ledger. Empty keeps the selector
+	// in-memory for isolated callers; Core supplies the state-root path.
+	QualityPath string
 }
 
 // Selector is stateless and safe for concurrent use.
 type Selector struct {
 	rules            []Rule
 	healthStaleAfter time.Duration
+	quality          *QualityBook
+}
+
+// Eligible applies the same pure funnel gates used by Select, without
+// ranking and without I/O. Core uses this first phase before asking a live
+// provider for RuntimeIdentity, so rejected candidates never receive a probe.
+// Reachability is deliberately strict: an empty Reachable set means nobody is
+// attached, not that every implementation is implicitly reachable.
+func (s *Selector) Eligible(req Request, impl contract.Implementation) (string, bool) {
+	if reason, ok := fits(impl, req.Repository); !ok {
+		return reason, false
+	}
+	if reason, ok := answers(impl, req.Payload); !ok {
+		return reason, false
+	}
+	if !slices.Contains(req.Reachable, impl.ID) {
+		if reason := req.Unreachable[impl.ID]; reason != "" {
+			return reason, false
+		}
+		return "no attached runner serves it", false
+	}
+	if impl.Health.Stale(time.Now(), s.healthStaleAfter) {
+		// Stale observations become unknown in Select and are still eligible
+		// for one fresh runtime observation.
+		return "", true
+	}
+	if !impl.Health.Usable() {
+		if impl.Health.Reason != "" {
+			return impl.Health.Reason, false
+		}
+		return "reported down", false
+	}
+	return "", true
 }
 
 // New validates the rules and returns a selector.
@@ -84,7 +129,11 @@ func New(cfg Config) (*Selector, error) {
 		seen[key] = struct{}{}
 		rules = append(rules, rule)
 	}
-	return &Selector{rules: rules, healthStaleAfter: cfg.HealthStaleAfter}, nil
+	quality, err := OpenQualityBookWithPath(cfg.QualityMinimumSamples, cfg.QualityPath)
+	if err != nil {
+		return nil, contract.Fail(contract.FailureUnavailable, "selector quality ledger: %v", err)
+	}
+	return &Selector{rules: rules, healthStaleAfter: cfg.HealthStaleAfter, quality: quality}, nil
 }
 
 // Rules returns the configured rules.
@@ -136,6 +185,16 @@ type Request struct {
 	// Prefer is a one-call override, normally supplied by `atenea ask/select
 	// --prefer`. It outranks a standing rule for this request only.
 	Prefer string
+	// Quality is optional caller-supplied evidence, primarily useful for a
+	// read-only selector command. Unknown/declared entries remain candidates;
+	// quality only ranks tested samples with enough observations.
+	Quality  map[string]QualityObservation
+	Language string
+	// ObservedVersions is the runtime version reported by each provider. A
+	// quality record from another version is never substituted.
+	ObservedVersions      map[string]string
+	ObservedInstances     map[string]string
+	ObservedConfigDigests map[string]string
 }
 
 // Drop records one implementation leaving the funnel, and why.
@@ -160,6 +219,29 @@ type Stage struct {
 	In      []string
 	Out     []string
 	Dropped []Drop
+	Quality []QualityDetail
+}
+
+// QualityDetail is the auditable quality state for one survivor. The state
+// lattice is explicit: declared is catalog/config, wired is an attached
+// runner, connected is a current handshake/probe, and tested requires a
+// validated outcome sample. Unknown evidence stays neutral.
+type QualityDetail struct {
+	Implementation string
+	State          string
+	Language       string
+	ToolVersion    string
+	Instance       string
+	ConfigDigest   string
+	Samples        int
+	Valid          int
+	Accepted       int
+	Complete       int
+	Partial        int
+	Truncated      int
+	OutOfScope     int
+	Failures       int
+	Reason         string
 }
 
 // Decision is the outcome plus the trace that justifies it.
@@ -212,8 +294,12 @@ func (s *Selector) Select(req Request) (Decision, error) {
 		return decision, contract.Fail(contract.FailureUnavailable,
 			"every implementation of %s is down for repository %s", req.Capability, req.Repository.ID)
 	}
+	quality := s.qualityFor(req, usable)
+	if len(quality) > 0 || s.quality.path != "" {
+		decision.Stages = append(decision.Stages, qualityStage(req, usable, quality, s.quality.MinimumSamples()))
+	}
 
-	chosen, reason, notices := s.choose(req, usable)
+	chosen, reason, notices := s.choose(req, usable, quality)
 	decision.Chosen = chosen
 	decision.Reason = reason
 	decision.Notices = notices
@@ -376,6 +462,140 @@ func (s *Selector) filterHealth(candidates []contract.Implementation, now time.T
 	return kept, stage
 }
 
+func (s *Selector) qualityFor(req Request, candidates []contract.Implementation) map[string]QualityObservation {
+	out := make(map[string]QualityObservation)
+	for _, impl := range candidates {
+		if q, ok := req.Quality[impl.ID]; ok {
+			out[impl.ID] = q
+			continue
+		}
+		version := req.ObservedVersions[impl.ID]
+		instance := req.ObservedInstances[impl.ID]
+		configDigest := req.ObservedConfigDigests[impl.ID]
+		if configDigest == "" {
+			configDigest = implementationConfigDigest(impl)
+		}
+		if version == "" || instance == "" || configDigest == "" {
+			continue
+		}
+		var q QualityObservation
+		var ok bool
+		if version != "" {
+			q, ok = s.quality.SnapshotVersion(req.Capability, repositoryScope(req.Repository), impl.ID, req.Language, version, instance, configDigest)
+		}
+		if ok {
+			out[impl.ID] = q
+		}
+	}
+	return out
+}
+
+func qualityStage(req Request, candidates []contract.Implementation, observations map[string]QualityObservation, minimum int) Stage {
+	stage := Stage{Name: StageQuality, In: ids(candidates), Out: ids(candidates)}
+	// No quality state is a drop. The lattice deliberately keeps declared,
+	// wired and connected candidates eligible until a tested observation exists;
+	// this stage reports evidence while leaving Out equal to In.
+	for _, impl := range candidates {
+		q, ok := observations[impl.ID]
+		version := req.ObservedVersions[impl.ID]
+		instance := req.ObservedInstances[impl.ID]
+		configDigest := req.ObservedConfigDigests[impl.ID]
+		if configDigest == "" {
+			configDigest = implementationConfigDigest(impl)
+		}
+		detail := QualityDetail{Implementation: impl.ID, Language: req.Language, ToolVersion: version, Instance: instance, ConfigDigest: configDigest, State: "wired", Reason: "runner attached; no current provider identity"}
+		if version != "" && instance != "" {
+			detail.State = "connected"
+			detail.Reason = "current provider identity observed"
+		}
+		if ok {
+			detail.Samples = q.Total
+			if detail.Samples == 0 {
+				detail.Samples = q.Samples
+			}
+			detail.Accepted, detail.Complete, detail.Truncated = q.AcceptedCount, q.CompleteCount, q.TruncatedCount
+			detail.Valid, detail.Partial = q.ValidCount, q.PartialCount
+			if detail.Accepted == 0 && q.Accepted {
+				detail.Accepted = 1
+			}
+			if detail.Complete == 0 && q.Complete {
+				detail.Complete = 1
+			}
+			if detail.Truncated == 0 && q.Truncated {
+				detail.Truncated = 1
+			}
+			detail.OutOfScope, detail.Failures = q.OutOfScope, q.FailureCount
+			if q.Tested(minimum) {
+				detail.State = "tested"
+				detail.Reason = fmt.Sprintf("%d validated outcome samples", detail.Samples)
+			} else if detail.Samples > 0 {
+				detail.Reason = fmt.Sprintf("%d validated samples; %d required", detail.Samples, minimum)
+			}
+		}
+		stage.Quality = append(stage.Quality, detail)
+	}
+	return stage
+}
+
+func repositoryScope(repo contract.Repository) string {
+	if repo.Path != "" {
+		if root := canonicalRepositoryRoot(repo.Path); root != "" {
+			return root
+		}
+	}
+	return repo.ID
+}
+
+// RecordOutcome is the only path that creates tested quality. Wiring or a
+// successful handshake does not call it.
+func (s *Selector) RecordOutcome(capability, repository, implementation, language, toolVersion string, out contract.Outcome, runErr error, observed ...string) error {
+	if s == nil || s.quality == nil {
+		return nil
+	}
+	q := Observe(capability, repository, implementation, language, toolVersion, out, runErr)
+	if len(observed) > 0 {
+		q.RepositoryRoot = observed[0]
+	}
+	if len(observed) > 1 {
+		q.Instance = observed[1]
+	}
+	if len(observed) > 2 {
+		q.ConfigDigest = observed[2]
+	}
+	return s.quality.Record(q)
+}
+
+func implementationConfigDigest(impl contract.Implementation) string {
+	if impl.ConfigDigest != "" {
+		return impl.ConfigDigest
+	}
+	payload := struct {
+		ID, Provider, Capability string
+		Constraints              contract.Constraints
+		Scope                    contract.ScopeGuarantee
+	}{impl.ID, impl.Provider, impl.Capability, impl.Constraints, impl.ScopeGuarantee}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
+// ImplementationConfigDigest returns the stable non-secret scope used by
+// quality selection when configuration did not provide an explicit digest.
+func ImplementationConfigDigest(impl contract.Implementation) string {
+	return implementationConfigDigest(impl)
+}
+
+// Quality returns a snapshot for diagnostics and status output.
+func (s *Selector) Quality(capability, repository, implementation, language string) (QualityObservation, bool) {
+	if s == nil || s.quality == nil {
+		return QualityObservation{}, false
+	}
+	return s.quality.Snapshot(capability, repository, implementation, language)
+}
+
 // BreakInSamples is how many real measurements an implementation needs before
 // its own numbers are believed over its declared estimate.
 //
@@ -416,7 +636,7 @@ func inBreakIn(impl contract.Implementation) bool {
 // then the break-in turn while anybody still owes the base its samples, then
 // the cheaper of two equals, and the implementation id last so the same
 // catalog always produces the same answer.
-func (s *Selector) choose(req Request, survivors []contract.Implementation) (contract.Implementation, string, []string) {
+func (s *Selector) choose(req Request, survivors []contract.Implementation, quality map[string]QualityObservation) (contract.Implementation, string, []string) {
 	var notices []string
 	if preferred := strings.TrimSpace(req.Prefer); preferred != "" {
 		exact := slices.ContainsFunc(req.Candidates, func(i contract.Implementation) bool { return i.ID == preferred })
@@ -431,7 +651,7 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 			// the usual policy, never by catalog iteration order.
 			withoutPreference := req
 			withoutPreference.Prefer = ""
-			chosen, _, _ := s.choose(withoutPreference, preferredSurvivors)
+			chosen, _, _ := s.choose(withoutPreference, preferredSurvivors, quality)
 			return chosen, fmt.Sprintf("one-call preference selects %s via %s", chosen.ID, preferred), nil
 		}
 		notices = append(notices, fmt.Sprintf(
@@ -450,7 +670,7 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 			"user rule prefers %s, which did not survive the funnel; falling back", rule.Prefer))
 	}
 	ranked := slices.Clone(survivors)
-	slices.SortFunc(ranked, rankWith(req.Measuring, dominationCounts(ranked)))
+	slices.SortFunc(ranked, rankWithQuality(req.Measuring, dominationCounts(ranked), quality, s.quality.MinimumSamples(), req.Language))
 	// A break-in turn that overtakes a provider the record calls alive is the
 	// one ranking a reader would not predict, so it is said out loud. It is
 	// also self-limiting: two calls and it stops happening.
@@ -461,7 +681,7 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 				"an implementation nobody has measured cannot earn its numbers without being sent the work",
 			ranked[0].ID, ranked[1].ID, ranked[1].Health.State))
 	}
-	return ranked[0], reasonFor(ranked, req.Measuring), notices
+	return ranked[0], reasonForQuality(ranked, req.Measuring, quality, s.quality.MinimumSamples(), req.Language), notices
 }
 
 // reasonFor names what actually settled the choice, so the trace never claims
@@ -470,12 +690,19 @@ func (s *Selector) choose(req Request, survivors []contract.Implementation) (con
 // the figure is the one somebody typed into the settings file, and "break-in
 // turn" means cost did not decide this at all.
 func reasonFor(ranked []contract.Implementation, measuring bool) string {
+	return reasonForQuality(ranked, measuring, nil, 1, "")
+}
+
+func reasonForQuality(ranked []contract.Implementation, measuring bool, quality map[string]QualityObservation, minimum int, language string) string {
 	if len(ranked) < 2 {
 		return "the only surviving implementation"
 	}
 	first, second := ranked[0], ranked[1]
 	if healthSettles(first, second, measuring) {
 		return "healthiest surviving implementation"
+	}
+	if qualitySettles(first, second, quality, minimum, language) {
+		return "best validated quality among equally healthy survivors"
 	}
 	if measuring && owesMore(first, second) {
 		// Said plainly and without the word "cheapest" anywhere near it: this
@@ -634,6 +861,42 @@ func rankWith(measuring bool, dominated map[string]int) func(a, b contract.Imple
 		}
 		return strings.Compare(a.ID, b.ID)
 	}
+}
+
+func rankWithQuality(measuring bool, dominated map[string]int, quality map[string]QualityObservation, minimum int, language string) func(a, b contract.Implementation) int {
+	base := rankWith(measuring, dominated)
+	return func(a, b contract.Implementation) int {
+		// Health is a hard precedence. Quality can only settle two survivors
+		// in the same observed health state and level, before cost/domination.
+		if settlingRank(a, measuring) != settlingRank(b, measuring) || a.Health.State != b.Health.State || a.Health.Score != b.Health.Score {
+			return base(a, b)
+		}
+		qa, oka := quality[a.ID]
+		qb, okb := quality[b.ID]
+		// Unknown/declared quality is neutral. Quality can settle only between
+		// two independently tested observations for the same requested language.
+		if oka && okb && (language == "" || (qa.Language == "" || qa.Language == language) && (qb.Language == "" || qb.Language == language)) && qa.Tested(minimum) && qb.Tested(minimum) {
+			if qa.Score > qb.Score {
+				return -1
+			}
+			if qa.Score < qb.Score {
+				return 1
+			}
+		}
+		return base(a, b)
+	}
+}
+
+func qualitySettles(a, b contract.Implementation, quality map[string]QualityObservation, minimum int, language string) bool {
+	if settlingRank(a, false) != settlingRank(b, false) || a.Health.State != b.Health.State || a.Health.Score != b.Health.Score {
+		return false
+	}
+	qa, oka := quality[a.ID]
+	qb, okb := quality[b.ID]
+	if !oka || !okb || (language != "" && (qa.Language != "" && qa.Language != language || qb.Language != "" && qb.Language != language)) {
+		return false
+	}
+	return qa.Tested(minimum) && qb.Tested(minimum) && qa.Score != qb.Score
 }
 
 // dominationCounts is how many candidates beat each one outright.

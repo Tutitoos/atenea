@@ -667,7 +667,7 @@ func countLines(t *testing.T, path string) int {
 }
 
 // dispatching counts the goroutines execute has out running steps, by looking
-// for its dispatch closure in a dump of every stack.
+// for its named dispatch helper in a dump of every stack.
 //
 // A plain runtime.NumGoroutine() cannot answer this. The test below closes a
 // sql.DB, and database/sql retires its own opener and resetter goroutines when
@@ -683,7 +683,7 @@ func dispatching() int {
 	for {
 		n := runtime.Stack(buf, true)
 		if n < len(buf) {
-			return strings.Count(string(buf[:n]), "workflow.(*Engine).execute.func")
+			return strings.Count(string(buf[:n]), "workflow.runDispatch")
 		}
 		buf = make([]byte, 2*len(buf))
 	}
@@ -707,15 +707,17 @@ func dispatching() int {
 func TestAFailedWriteDoesNotStrandTheStepsStillRunning(t *testing.T) {
 	dir := t.TempDir()
 	h := newHarness(t, noCeiling(),
-		declared("quick", stub(t, dir, "quick", "sleep 1\n"+
+		declared("quick", stub(t, dir, "quick", "touch "+filepath.Join(dir, "quick-started")+"\nsleep 1\n"+
 			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
-		declared("lasting", stub(t, dir, "lasting", "sleep 3\n"+
+		declared("first-lasting", stub(t, dir, "first-lasting", "touch "+filepath.Join(dir, "first-started")+"\nsleep 3\n"+
+			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent),
+		declared("second-lasting", stub(t, dir, "second-lasting", "touch "+filepath.Join(dir, "second-started")+"\nsleep 3\n"+
 			`echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
 
 	run, gate, err := h.engine.Create(t.Context(), graphOf(
 		step("quick", "quick", nil),
-		step("first", "lasting", nil),
-		step("second", "lasting", nil)))
+		step("first", "first-lasting", nil),
+		step("second", "second-lasting", nil)))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -749,6 +751,12 @@ func TestAFailedWriteDoesNotStrandTheStepsStillRunning(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	// Running is persisted before the goroutine is launched. Observe each
+	// agent process itself so the stack assertion cannot race the short gap
+	// between ClaimWithActivity and startQueued.
+	waitFor(t, dir, "quick-started")
+	waitFor(t, dir, "first-started")
+	waitFor(t, dir, "second-started")
 	if got := dispatching(); got != 3 {
 		t.Fatalf("the stack dump shows %d dispatch goroutines while three steps are "+
 			"running: the detector below cannot see what it is meant to count", got)

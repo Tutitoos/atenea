@@ -5,7 +5,37 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestHealthNeutralFirstCallKeepsUnknownTimestampZero(t *testing.T) {
+	memory, err := newBackendMemory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Core{readings: memory}
+	c.recordBackendCall("fixture", &contract.Failure{Kind: contract.FailureInvalidInput, HealthNeutral: true, Message: "bad arguments"}, nil)
+	reading, ok := memory.reading("fixture")
+	if !ok || reading.State != BackendUnknown || !reading.At.IsZero() {
+		t.Fatalf("reading = %+v, %v, want unknown with zero timestamp", reading, ok)
+	}
+}
+
+func TestRepeatedHealthNeutralCallsKeepUnknownTimestampZero(t *testing.T) {
+	memory, err := newBackendMemory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Core{readings: memory}
+	neutral := &contract.Failure{Kind: contract.FailureInvalidInput, HealthNeutral: true, Message: "bad arguments"}
+	c.recordBackendCall("fixture", neutral, nil)
+	c.recordBackendCall("fixture", neutral, nil)
+	reading, ok := memory.reading("fixture")
+	if !ok || reading.State != BackendUnknown || !reading.At.IsZero() {
+		t.Fatalf("reading = %+v, %v, want repeated unknown with zero timestamp", reading, ok)
+	}
+}
 
 func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp-health.json")
@@ -14,7 +44,7 @@ func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 		t.Fatalf("newBackendMemory: %v", err)
 	}
 	at := time.Now().UTC().Truncate(time.Second)
-	first.record("fixture", backendReading{State: BackendFailed, At: at, Reason: "connection refused"})
+	first.record("fixture", backendReading{State: BackendFailed, At: at, Reason: "connection refused", RequestedProtocolVersion: "2026-07-28", ObservedProtocolVersion: "2026-07-28"})
 
 	second, err := newBackendMemory(path)
 	if err != nil {
@@ -24,7 +54,7 @@ func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 	if !ok {
 		t.Fatal("persisted reading was not restored")
 	}
-	if reading.State != BackendFailed || reading.Reason != "connection refused" || !reading.At.Equal(at) {
+	if reading.State != BackendFailed || reading.Reason != "connection refused" || reading.RequestedProtocolVersion != "2026-07-28" || reading.ObservedProtocolVersion != "2026-07-28" || !reading.At.Equal(at) {
 		t.Fatalf("reading after reopen = %+v, want persisted failure", reading)
 	}
 }

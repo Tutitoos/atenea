@@ -23,8 +23,11 @@ type Light uint8
 
 // The colors a light can show, ordered from best to worst.
 const (
+	// LightGreen is part of ATENEA's public orchestration contract.
 	LightGreen Light = iota
+	// LightAmber is part of ATENEA's public orchestration contract.
 	LightAmber
+	// LightRed is part of ATENEA's public orchestration contract.
 	LightRed
 )
 
@@ -227,8 +230,10 @@ type ServerStatus struct {
 	// Expose separates a pointer from a passthrough, and is on the screen
 	// because it is what decides which of the two memories above can ever
 	// say anything about this row.
-	Expose string
-	State  BackendState
+	Expose                   string
+	State                    BackendState
+	RequestedProtocolVersion string
+	ObservedProtocolVersion  string
 	// Reason is the cause in the words the process itself used -- env: 'node':
 	// No such file or directory, not a generic "failed". When the reading came
 	// from the capability path it is prefixed with the implementation that

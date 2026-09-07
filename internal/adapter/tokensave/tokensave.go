@@ -65,13 +65,19 @@ import (
 // The capabilities this adapter answers, and the implementation ids the
 // catalog gives them.
 const (
-	CapabilityContext  = "code.context"
+	// CapabilityContext is part of ATENEA's public orchestration contract.
+	CapabilityContext = "code.context"
+	// CapabilityOverview is part of ATENEA's public orchestration contract.
 	CapabilityOverview = "symbol.overview"
-	CapabilityCalls    = "symbol.calls"
+	// CapabilityCalls is part of ATENEA's public orchestration contract.
+	CapabilityCalls = "symbol.calls"
 
-	ImplContext  = "tokensave.context"
+	// ImplContext is part of ATENEA's public orchestration contract.
+	ImplContext = "tokensave.context"
+	// ImplOverview is part of ATENEA's public orchestration contract.
 	ImplOverview = "tokensave.overview"
-	ImplCalls    = "tokensave.calls"
+	// ImplCalls is part of ATENEA's public orchestration contract.
+	ImplCalls = "tokensave.calls"
 )
 
 // The MCP tool names on tokensave's own far side, measured against v7.9.0.
@@ -185,6 +191,9 @@ type Options struct {
 	Sensitive []string
 	// Timeout caps one call.
 	Timeout time.Duration
+	// ConfigDigest is the stable hash of the effective provider configuration.
+	// It scopes durable quality without persisting paths or credentials.
+	ConfigDigest string
 	// Session returns the live MCP session for the supervised tokensave
 	// child. It is a function, not a stored value, because the process may
 	// not exist yet when New runs (on_demand lifecycle) and may be replaced
@@ -198,6 +207,7 @@ type Runner struct {
 	implementations []string
 	sensitive       []string
 	timeout         time.Duration
+	configDigest    string
 	session         func(ctx context.Context) (*mcpstdio.Session, error)
 }
 
@@ -240,8 +250,64 @@ func New(opts Options) (*Runner, error) {
 		implementations: impls,
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         timeout,
+		configDigest:    strings.TrimSpace(opts.ConfigDigest),
 		session:         opts.Session,
 	}, nil
+}
+
+// RuntimeIdentity performs the one current, read-only status observation used
+// by selection. It deliberately returns version and stable configuration
+// identity even though tokensave's status protocol has no generation/snapshot
+// fields; that keeps quality comparable while making the result-cache bypass
+// honest for this provider.
+func (r *Runner) RuntimeIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	call, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	sess, err := r.session(call)
+	if err != nil {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: err.Error()}, r.failureFor(err, call)
+	}
+	if err := sess.Initialize(call); err != nil {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: err.Error()}, r.failureFor(err, call)
+	}
+	text, err := sess.Call(call, toolStatus, map[string]any{})
+	if err != nil {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: err.Error()}, r.failureFor(err, call)
+	}
+	if hasBranchFallbackNotice(text) {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave is serving a fallback branch"}, branchFallbackFailure(text)
+	}
+	var status statusAnswer
+	if err := json.Unmarshal(payloadOf(text), &status); err != nil {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave status unreadable"}, err
+	}
+	if status.BranchFallback {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave is serving a fallback branch"}, branchFallbackFailure(text)
+	}
+	if status.Nodes == 0 && status.Edges == 0 && status.Files == 0 {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave has no graph"}, contract.Fail(contract.FailureUnavailable, "tokensave has no graph for %s", r.root)
+	}
+	version := strings.TrimSpace(sess.Version())
+	instance := strings.TrimSpace(sess.StableIdentity())
+	if instance == "" {
+		instance = strings.TrimSpace(sess.Instance())
+	}
+	if r.configDigest != "" && instance != "" {
+		instance = r.configDigest + "@" + instance
+	}
+	if version == "" || instance == "" {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, ToolVersion: version, Instance: instance, Error: "tokensave runtime identity incomplete"}, contract.Fail(contract.FailureUnavailable, "tokensave runtime identity incomplete")
+	}
+	return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, ToolVersion: version, Instance: instance, Freshness: "fresh", State: &contract.RuntimeState{
+		Status: "ready", Symbols: status.Nodes, Edges: status.Edges, Files: status.Files,
+	}}, nil
+}
+
+// CacheIdentity keeps the cache seam compatible for callers that do not yet
+// use RuntimeIdentity. Tokensave remains cache-ineligible because its status
+// has no authoritative generation and snapshot.
+func (r *Runner) CacheIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	return r.RuntimeIdentity(ctx, req)
 }
 
 // ID names the runner on the status screen.
@@ -300,8 +366,10 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	if err := sess.Initialize(call); err != nil {
 		return contract.Outcome{}, r.failureFor(err, call)
 	}
-	if err := r.checkGraphReady(call, sess); err != nil {
-		return contract.Outcome{}, err
+	if !r.observedGraphReady(req, sess) {
+		if err := r.checkGraphReady(call, sess); err != nil {
+			return contract.Outcome{}, err
+		}
 	}
 
 	var (
@@ -474,6 +542,10 @@ var updateNotice = regexp.MustCompile("^⚠️ tokensave v[0-9]+\\.[0-9]+\\.[0-9
 
 var branchFallbackNotice = regexp.MustCompile(`^WARNING: branch '[^\r\n]+' is not tracked — serving from '[^\r\n]+'\.`)
 
+func hasBranchFallbackNotice(text string) bool {
+	return branchFallbackNotice.MatchString(strings.TrimSpace(updateNotice.ReplaceAllString(strings.TrimSpace(text), "")))
+}
+
 func branchFallbackFailure(text string) error {
 	return &contract.Failure{Kind: contract.FailureInvalidInput, Code: "branch_mismatch", HealthNeutral: true,
 		Message: "tokensave is serving a fallback branch; track the requested branch before retrying", Raw: text}
@@ -512,7 +584,7 @@ func (r *Runner) checkGraphReady(ctx context.Context, sess *mcpstdio.Session) er
 	if err != nil {
 		return r.failureFor(err, ctx)
 	}
-	if branchFallbackNotice.MatchString(strings.TrimSpace(updateNotice.ReplaceAllString(strings.TrimSpace(text), ""))) {
+	if hasBranchFallbackNotice(text) {
 		return branchFallbackFailure(text)
 	}
 	var status statusAnswer
@@ -528,6 +600,24 @@ func (r *Runner) checkGraphReady(ctx context.Context, sess *mcpstdio.Session) er
 			"tokensave has no graph for %s: it answers every query with nothing", r.root)
 	}
 	return nil
+}
+
+func (r *Runner) observedGraphReady(req contract.RunRequest, sess *mcpstdio.Session) bool {
+	identity := req.ObservedIdentity
+	if identity == nil || identity.State == nil || identity.State.Status != "ready" || identity.State.Symbols+identity.State.Edges+identity.State.Files == 0 || !strings.EqualFold(strings.TrimSpace(identity.Freshness), "fresh") {
+		return false
+	}
+	if strings.TrimSpace(identity.ToolVersion) == "" || strings.TrimSpace(sess.Version()) != identity.ToolVersion {
+		return false
+	}
+	instance := strings.TrimSpace(sess.StableIdentity())
+	if instance == "" {
+		instance = strings.TrimSpace(sess.Instance())
+	}
+	if r.configDigest != "" && instance != "" {
+		instance = r.configDigest + "@" + instance
+	}
+	return instance != "" && instance == identity.Instance
 }
 
 // entity is one row of tokensave_entities: a declaration with the span it

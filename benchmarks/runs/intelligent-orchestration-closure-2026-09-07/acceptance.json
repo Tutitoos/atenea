@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-07",
+  "issue": 48,
+  "pull_request": 47,
+  "branch": "feat/atenea-intelligent-orchestration",
+  "evidence": {
+    "p19_github_delivery": {
+      "state": "pass",
+      "scope": "local",
+      "checks": [
+        "behavioral fixtures",
+        "repository structural validator",
+        "Codex skill validator",
+        "independent Sol review"
+      ]
+    },
+    "p21_agents": {
+      "state": "partial",
+      "scope": "local_and_provider_attempt",
+      "profile_digest": "2cc0389ceb09152eb926943ebaf7e34a852a8a78fd0dfc6f0c6c53bd21821c62",
+      "files_mode": "0600",
+      "profiles": [
+        {
+          "role": "research",
+          "requested_model": "gpt-5.6-sol",
+          "requested_effort": "medium",
+          "observed_model": "unknown",
+          "input_tokens": 16475,
+          "cached_input_tokens": 0,
+          "output_tokens": 13
+        },
+        {
+          "role": "implement",
+          "requested_model": "gpt-5.6-luna",
+          "requested_effort": "xhigh",
+          "observed_model": "unknown",
+          "input_tokens": 14295,
+          "cached_input_tokens": 8960,
+          "output_tokens": 13
+        },
+        {
+          "role": "review",
+          "requested_model": "gpt-5.6-sol",
+          "requested_effort": "medium",
+          "observed_model": "unknown",
+          "input_tokens": 15723,
+          "cached_input_tokens": 0,
+          "output_tokens": 13
+        },
+        {
+          "role": "audit",
+          "requested_model": "gpt-6-astra",
+          "requested_effort": "medium",
+          "observed_model": "unknown",
+          "input_tokens": 17252,
+          "cached_input_tokens": 0,
+          "output_tokens": 13
+        }
+      ],
+      "limitation": "Requested profiles executed and produced usage, but the client exposed no observed model or effort identity.",
+      "point_status": "accepted"
+    },
+    "p22_native_delegation": {
+      "state": "pass",
+      "scope": "local_and_provider_operation",
+      "client_operation": "thread/fork",
+      "codex_cli": "0.153.4",
+      "real_gate_seconds": 9.81,
+      "limitations": "Provider-real thread/fork passed; productive reserve, publish, fork, persist, dispatch and manual recovery are locally tested. Provider identity remains bounded by App Server receipts.",
+      "schema_sha256": "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a",
+      "runtime_integration": {
+        "state": "independently_reviewed",
+        "reviewed_commit_sha": "488f376e72b07a2f08dad4bd039ee31e16dc49f7",
+        "evidence_scope": "prior_head"
+      },
+      "point_status": "accepted"
+    },
+    "p23_real_providers": {
+      "state": "partial",
+      "scope": "provider_attempt",
+      "successful_codex_profiles": 0,
+      "successful_app_server_gate": 1,
+      "provider_cost_usd": "unknown",
+      "requested_codex_profile_executions": 4,
+      "limitation": "All requests returned usage, but observed model and effort identity and provider cost remain unknown.",
+      "point_status": "accepted"
+    },
+    "p24_clients": {
+      "state": "partial",
+      "scope": "client-real",
+      "clients": [
+        {
+          "name": "Codex CLI",
+          "version": "0.153.4",
+          "server_probe": "pass",
+          "isolated_model_auth": "unavailable",
+          "presentation": "unknown"
+        },
+        {
+          "name": "Claude Code",
+          "version": "2.1.236",
+          "mcp_connected": "pass",
+          "isolated_model_auth": "unavailable",
+          "presentation": "unknown"
+        },
+        {
+          "name": "Oh My Pi",
+          "version": "18.0.11",
+          "isolated_integration": "pass",
+          "presentation": "unknown"
+        },
+        {
+          "name": "OpenCode",
+          "version": "1.18.20",
+          "isolated_gate": "timeout",
+          "mcp_connected": "unknown",
+          "presentation": "unknown"
+        },
+        {
+          "name": "ChatGPT Desktop",
+          "version": "26.901.31953",
+          "server_probe": "pass",
+          "presentation": "manual-current-chat-only"
+        }
+      ],
+      "point_status": "accepted"
+    },
+    "p25_efficiency": {
+      "state": "partial",
+      "scope": "measured",
+      "profile_probe_calls": 4,
+      "profile_probe_input_tokens": 63745,
+      "profile_probe_cached_input_tokens": 8960,
+      "profile_probe_output_tokens": 52,
+      "native_fork_gate_calls": 1,
+      "native_fork_gate_seconds": 9.81,
+      "tracking_overhead_tokens": "unknown",
+      "provider_cost_usd": "unknown",
+      "improvement_percent": "not_claimed",
+      "point_status": "accepted"
+    },
+    "p26_ci_reviews": {
+      "state": "pending"
+    },
+    "p27_independent_audit": {
+      "state": "pending"
+    },
+    "p28_merge_install": {
+      "state": "pending"
+    },
+    "p29_final_report": {
+      "state": "in_progress"
+    }
+  }
+}

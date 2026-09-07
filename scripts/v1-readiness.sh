@@ -75,6 +75,8 @@ go mod tidy -diff
 
 echo "[5/9] static validation"
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p 'test_mcp_agree.py'
+python3 scripts/validate-agent-skill.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .agents/skills/atenea-github-delivery/tests -p 'test_*.py'
 go vet ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 

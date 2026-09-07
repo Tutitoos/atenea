@@ -38,6 +38,7 @@ import (
 	"github.com/Tutitoos/atenea/internal/mcpprobe"
 	"github.com/Tutitoos/atenea/internal/metrics"
 	"github.com/Tutitoos/atenea/internal/platform"
+	"github.com/Tutitoos/atenea/internal/resultcache"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/supervisor"
 	"github.com/Tutitoos/atenea/pkg/contract"
@@ -68,8 +69,14 @@ type Config struct {
 	// agents, explore and plan, by role.
 	Model Model
 	// Workflow is how a graph of agent steps is scheduled.
-	Workflow  Workflow
-	Metrics   Metrics
+	Workflow Workflow
+	Metrics  Metrics
+	// ResultCache is the bounded local cache for read-only code.context results.
+	// Its limits are intentionally explicit and validated at load time.
+	ResultCache resultcache.Config
+	// Knowledge is disabled by default. When enabled, Core opens the separate
+	// verified knowledge store and the workflow evidence database at startup.
+	Knowledge Knowledge
 	Dashboard Dashboard
 	Backup    Backup
 	// Retention is how long receipts and traces are kept. See the type.
@@ -110,6 +117,13 @@ type Config struct {
 	MCPServers []MCPServer
 }
 
+// Knowledge controls the optional P15 verified knowledge service.
+type Knowledge struct {
+	Enabled      bool
+	Path         string
+	WorkflowPath string
+}
+
 // MCPServer is one MCP endpoint a client should be pointed at instead of
 // spawning its own copy.
 //
@@ -131,6 +145,10 @@ type MCPServer struct {
 	Dashboard string
 	// Timeout bounds the readiness check. Zero takes the probe's default.
 	Timeout time.Duration
+	// ProtocolMode selects the exact MCP transport policy: legacy (default),
+	// auto, or modern-pin. It is kept as text at this configuration boundary
+	// so unknown values can be rejected before a backend is constructed.
+	ProtocolMode string
 	// Expose says whether the backend's own tools may be reached through
 	// Atenea, and is the field that separates a pointer from a passthrough.
 	//
@@ -220,11 +238,12 @@ func (m MCPServer) EffectsFor(tool string, args map[string]any) []contract.Effec
 // screen ends up naming a transport the prober would not have used.
 func (m MCPServer) Probe() mcpprobe.Server {
 	return mcpprobe.Server{
-		ID:      m.ID,
-		URL:     m.URL,
-		Command: m.Command,
-		Env:     m.Env,
-		Timeout: m.Timeout,
+		ID:           m.ID,
+		URL:          m.URL,
+		Command:      m.Command,
+		Env:          m.Env,
+		Timeout:      m.Timeout,
+		ProtocolMode: mcpprobe.ProtocolMode(m.ProtocolMode),
 	}
 }
 
@@ -238,9 +257,11 @@ type Expose string
 const (
 	// ExposeOff is a pointer: the client is told where the server is and
 	// talks to it directly. Atenea is not in the path.
+	// ExposeOff is part of ATENEA's public orchestration contract.
 	ExposeOff Expose = "off"
 	// ExposeRaw is a passthrough: the tools are re-offered verbatim under
 	// the reserved raw. namespace, with no funnel and no capability.
+	// ExposeRaw is part of ATENEA's public orchestration contract.
 	ExposeRaw Expose = "raw"
 )
 
@@ -400,8 +421,7 @@ type Orchestrator struct {
 	Scrapling  ScraplingAdapter
 }
 
-// Model fixes which model backs each of the two model-backed built-in
-// agents, explore and plan, by role. Its fields mirror
+// Model fixes which model backs each model-backed built-in agent by role. Its fields mirror
 // internal/agent/model.Options -- same names, same types, same order --
 // because internal/config cannot import that package without a cycle
 // (internal/core, which the model client dials for Atenea's own tools,
@@ -436,8 +456,29 @@ type Model struct {
 	Plan string
 	// ExploreFallbacks and PlanFallbacks are explicit provider-side fallbacks.
 	// They are never inferred and travel with the selected route.
-	ExploreFallbacks []string
-	PlanFallbacks    []string
+	ExploreFallbacks         []string
+	PlanFallbacks            []string
+	Research                 string
+	Implement                string
+	Review                   string
+	Audit                    string
+	ResearchReasoningEffort  string
+	PlanReasoningEffort      string
+	ImplementReasoningEffort string
+	ReviewReasoningEffort    string
+	AuditReasoningEffort     string
+	// CodexNative selects the durable App Server transport for visible Codex
+	// agent turns. The transport itself is injected only by tests or an
+	// embedding host; settings never carry a process or socket handle.
+	CodexNative        bool
+	CodexNativeOptions codex.AppServerOptions
+}
+
+// NativeCodex reports whether visible Codex App Server execution applies to
+// this backend. CodexNative may remain true in shared defaults without
+// changing Claude or OpenCode transports.
+func (m Model) NativeCodex() bool {
+	return strings.EqualFold(strings.TrimSpace(m.Backend), "codex") && m.CodexNative
 }
 
 // LocalRunner configures the stand-in that runs when no client adapter is
@@ -524,13 +565,16 @@ type Instance string
 const (
 	// InstanceShared is one process for the whole machine, and the default:
 	// it is what every managed server did before this existed.
+	// InstanceShared is part of ATENEA's public orchestration contract.
 	InstanceShared Instance = "shared"
 	// InstancePerChat is one upstream MCP session per client connection. It is
 	// useful for servers whose session state belongs to a single conversation,
 	// and is closed with that connection rather than retained by the service.
+	// InstancePerChat is part of ATENEA's public orchestration contract.
 	InstancePerChat Instance = "per_chat"
 	// InstancePerRepository is one process per declared repository, each
 	// pinned to that repository and started only when something asks for it.
+	// InstancePerRepository is part of ATENEA's public orchestration contract.
 	InstancePerRepository Instance = "per_repository"
 )
 
@@ -931,14 +975,22 @@ func DefaultLocalAgents() LocalAgents {
 // RunnerTokensave, RunnerDesktop, RunnerScrapling and RunnerLocal are the
 // values orchestrator.runners accepts.
 const (
-	RunnerOMP        = "omp"
+	// RunnerOMP is part of ATENEA's public orchestration contract.
+	RunnerOMP = "omp"
+	// RunnerClaudeCode is part of ATENEA's public orchestration contract.
 	RunnerClaudeCode = "claudecode"
-	RunnerCodex      = "codex"
-	RunnerKivgraph   = "kivgraph"
-	RunnerTokensave  = "tokensave"
-	RunnerDesktop    = "desktop"
-	RunnerScrapling  = "scrapling"
-	RunnerLocal      = "local"
+	// RunnerCodex is part of ATENEA's public orchestration contract.
+	RunnerCodex = "codex"
+	// RunnerKivgraph is part of ATENEA's public orchestration contract.
+	RunnerKivgraph = "kivgraph"
+	// RunnerTokensave is part of ATENEA's public orchestration contract.
+	RunnerTokensave = "tokensave"
+	// RunnerDesktop is part of ATENEA's public orchestration contract.
+	RunnerDesktop = "desktop"
+	// RunnerScrapling is part of ATENEA's public orchestration contract.
+	RunnerScrapling = "scrapling"
+	// RunnerLocal is part of ATENEA's public orchestration contract.
+	RunnerLocal = "local"
 )
 
 // DefaultPath returns where Atenea looks for its settings when nothing else
@@ -1281,37 +1333,62 @@ func WriteDefault(path string, force bool) error {
 // ---------------------------------------------------------------------------
 
 type file struct {
-	Contract        string               `toml:"contract"`
-	Core            fileCore             `toml:"core"`
-	Orchestrator    fileOrchestrator     `toml:"orchestrator"`
-	Model           fileModel            `toml:"model"`
-	Workflow        fileWorkflow         `toml:"workflow"`
-	Metrics         fileMetrics          `toml:"metrics"`
-	Dashboard       fileDashboard        `toml:"dashboard"`
-	Retention       fileRetention        `toml:"retention"`
-	Backup          fileBackup           `toml:"backup"`
-	Security        fileSecurity         `toml:"security"`
-	Desktop         fileDesktop          `toml:"desktop"`
-	Web             fileWeb              `toml:"web"`
-	LocalAgents     fileLocalAgents      `toml:"local_agents"`
-	Selector        fileSelector         `toml:"selector"`
-	Capabilities    []fileCapability     `toml:"capability"`
-	Implementations []fileImpl           `toml:"implementation"`
-	Repositories    []fileRepository     `toml:"repository"`
-	Agents          []fileAgent          `toml:"agent"`
-	MCPServers      []fileMCPServer      `toml:"mcp_server"`
-	DesktopProfiles []fileDesktopProfile `toml:"desktop_profile"`
+	Contract         string                `toml:"contract"`
+	Core             fileCore              `toml:"core"`
+	Orchestrator     fileOrchestrator      `toml:"orchestrator"`
+	Model            fileModel             `toml:"model"`
+	Workflow         fileWorkflow          `toml:"workflow"`
+	WorkflowProfiles []fileWorkflowProfile `toml:"workflow_profile"`
+	Metrics          fileMetrics           `toml:"metrics"`
+	ResultCache      fileResultCache       `toml:"result_cache"`
+	Knowledge        fileKnowledge         `toml:"knowledge"`
+	Dashboard        fileDashboard         `toml:"dashboard"`
+	Retention        fileRetention         `toml:"retention"`
+	Backup           fileBackup            `toml:"backup"`
+	Security         fileSecurity          `toml:"security"`
+	Desktop          fileDesktop           `toml:"desktop"`
+	Web              fileWeb               `toml:"web"`
+	LocalAgents      fileLocalAgents       `toml:"local_agents"`
+	Selector         fileSelector          `toml:"selector"`
+	Capabilities     []fileCapability      `toml:"capability"`
+	Implementations  []fileImpl            `toml:"implementation"`
+	Repositories     []fileRepository      `toml:"repository"`
+	Agents           []fileAgent           `toml:"agent"`
+	MCPServers       []fileMCPServer       `toml:"mcp_server"`
+	DesktopProfiles  []fileDesktopProfile  `toml:"desktop_profile"`
+}
+
+type fileResultCache struct {
+	MaxEntries *int   `toml:"max_entries"`
+	MaxBytes   *int64 `toml:"max_bytes"`
+	TTL        string `toml:"ttl"`
+}
+
+type fileKnowledge struct {
+	Enabled      bool   `toml:"enabled"`
+	Path         string `toml:"path"`
+	WorkflowPath string `toml:"workflow_path"`
 }
 
 // fileModel is [model] as written.
 type fileModel struct {
-	Backend          string   `toml:"backend"`
-	Binary           string   `toml:"binary"`
-	Timeout          string   `toml:"timeout"`
-	Explore          string   `toml:"explore"`
-	Plan             string   `toml:"plan"`
-	ExploreFallbacks []string `toml:"explore_fallbacks"`
-	PlanFallbacks    []string `toml:"plan_fallbacks"`
+	Backend                  string   `toml:"backend"`
+	Binary                   string   `toml:"binary"`
+	Timeout                  string   `toml:"timeout"`
+	Explore                  string   `toml:"explore"`
+	Plan                     string   `toml:"plan"`
+	ExploreFallbacks         []string `toml:"explore_fallbacks"`
+	PlanFallbacks            []string `toml:"plan_fallbacks"`
+	Research                 string   `toml:"research"`
+	Implement                string   `toml:"implement"`
+	Review                   string   `toml:"review"`
+	Audit                    string   `toml:"audit"`
+	ResearchReasoningEffort  string   `toml:"research_reasoning_effort"`
+	PlanReasoningEffort      string   `toml:"plan_reasoning_effort"`
+	ImplementReasoningEffort string   `toml:"implement_reasoning_effort"`
+	ReviewReasoningEffort    string   `toml:"review_reasoning_effort"`
+	AuditReasoningEffort     string   `toml:"audit_reasoning_effort"`
+	CodexNative              *bool    `toml:"codex_native"`
 }
 
 type fileCore struct {
@@ -1511,8 +1588,9 @@ type fileWeb struct {
 }
 
 type fileSelector struct {
-	Rules            []fileRule `toml:"rule"`
-	HealthStaleAfter string     `toml:"health_stale_after"`
+	Rules                 []fileRule `toml:"rule"`
+	HealthStaleAfter      string     `toml:"health_stale_after"`
+	QualityMinimumSamples *int       `toml:"quality_minimum_samples"`
 }
 
 type fileRule struct {
@@ -1591,17 +1669,18 @@ type fileRepository struct {
 }
 
 type fileMCPServer struct {
-	ID        string            `toml:"id"`
-	URL       string            `toml:"url"`
-	Command   []string          `toml:"command"`
-	Env       map[string]string `toml:"env"`
-	Dashboard string            `toml:"dashboard"`
-	Timeout   string            `toml:"timeout"`
-	Expose    string            `toml:"expose"`
-	Instance  string            `toml:"instance"`
-	Tools     []string          `toml:"tools"`
-	Effects   []string          `toml:"effects"`
-	Tool      []fileMCPTool     `toml:"tool"`
+	ID           string            `toml:"id"`
+	URL          string            `toml:"url"`
+	Command      []string          `toml:"command"`
+	Env          map[string]string `toml:"env"`
+	Dashboard    string            `toml:"dashboard"`
+	Timeout      string            `toml:"timeout"`
+	ProtocolMode string            `toml:"protocol_mode"`
+	Expose       string            `toml:"expose"`
+	Instance     string            `toml:"instance"`
+	Tools        []string          `toml:"tools"`
+	Effects      []string          `toml:"effects"`
+	Tool         []fileMCPTool     `toml:"tool"`
 }
 
 type fileMCPTool struct {
@@ -1645,7 +1724,14 @@ func (m fileMCPServer) build(source string) (MCPServer, error) {
 	case !hasURL && !hasCommand:
 		return fail("mcp_server %s: needs a url or a command", id)
 	}
-	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, Dashboard: strings.TrimSpace(m.Dashboard)}
+	protocolMode := strings.TrimSpace(m.ProtocolMode)
+	if protocolMode == "" {
+		protocolMode = "legacy"
+	}
+	if protocolMode != "legacy" && protocolMode != "auto" && protocolMode != "modern-pin" {
+		return fail("mcp_server %s: protocol_mode %q is not legacy, auto, or modern-pin", id, protocolMode)
+	}
+	out := MCPServer{ID: id, Command: m.Command, Env: m.Env, Dashboard: strings.TrimSpace(m.Dashboard), ProtocolMode: protocolMode}
 	if out.Dashboard != "" {
 		validated, err := validateDashboardURL(source, "mcp_server", id, out.Dashboard)
 		if err != nil {
@@ -1960,11 +2046,49 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Workflow, err = decoded.Workflow.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Workflow, err = buildWorkflowProfiles(source, cfg.Workflow, decoded.WorkflowProfiles); err != nil {
+		return Config{}, err
+	}
 	if cfg.LocalAgents, err = decoded.LocalAgents.build(source); err != nil {
 		return Config{}, err
 	}
 	if cfg.Metrics, err = decoded.Metrics.build(source); err != nil {
 		return Config{}, err
+	}
+	cfg.ResultCache = resultcache.DefaultConfig()
+	if decoded.ResultCache.MaxEntries != nil {
+		cfg.ResultCache.MaxEntries = *decoded.ResultCache.MaxEntries
+	}
+	if decoded.ResultCache.MaxBytes != nil {
+		cfg.ResultCache.MaxBytes = *decoded.ResultCache.MaxBytes
+	}
+	if raw := strings.TrimSpace(decoded.ResultCache.TTL); raw != "" {
+		ttl, parseErr := time.ParseDuration(raw)
+		if parseErr != nil {
+			return Config{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: result_cache.ttl must be a valid duration", source)
+		}
+		cfg.ResultCache.TTL = ttl
+	}
+	if err := cfg.ResultCache.Validate(); err != nil {
+		return Config{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: result_cache: %v", source, err)
+	}
+	cfg.Knowledge = Knowledge{
+		Enabled:      decoded.Knowledge.Enabled,
+		Path:         strings.TrimSpace(decoded.Knowledge.Path),
+		WorkflowPath: strings.TrimSpace(decoded.Knowledge.WorkflowPath),
+	}
+	if cfg.Knowledge.Path == "" {
+		cfg.Knowledge.Path = filepath.Join(platform.StateDir(), "knowledge.sqlite")
+	}
+	if cfg.Knowledge.WorkflowPath == "" {
+		cfg.Knowledge.WorkflowPath = filepath.Join(platform.StateDir(), "traces.db")
+	}
+	if cfg.Knowledge.Enabled {
+		if strings.TrimSpace(cfg.Knowledge.Path) == "" || strings.TrimSpace(cfg.Knowledge.WorkflowPath) == "" {
+			return Config{}, contract.Fail(contract.FailureInvalidInput, "settings %s: knowledge paths must not be empty", source)
+		}
 	}
 	if cfg.Dashboard, err = decoded.Dashboard.build(source); err != nil {
 		return Config{}, err
@@ -1988,6 +2112,14 @@ func parse(raw []byte, source string) (Config, error) {
 		})
 	}
 	cfg.Selector.HealthStaleAfter = 24 * time.Hour
+	cfg.Selector.QualityMinimumSamples = 2
+	if decoded.Selector.QualityMinimumSamples != nil {
+		if *decoded.Selector.QualityMinimumSamples < 1 {
+			return Config{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: selector.quality_minimum_samples must be positive", source)
+		}
+		cfg.Selector.QualityMinimumSamples = *decoded.Selector.QualityMinimumSamples
+	}
 	if raw := strings.TrimSpace(decoded.Selector.HealthStaleAfter); raw != "" {
 		staleAfter, parseErr := time.ParseDuration(raw)
 		if parseErr != nil || staleAfter <= 0 {
@@ -3218,16 +3350,22 @@ const (
 )
 
 func (m fileModel) build(source string) (Model, error) {
-	out := Model{Backend: defaultModelBackend, Binary: defaultModelBinary, Timeout: defaultModelTimeout}
+	out := Model{Backend: defaultModelBackend, Binary: defaultModelBinary, Timeout: defaultModelTimeout, CodexNative: true}
 	if strings.TrimSpace(m.Backend) != "" {
 		out.Backend = strings.ToLower(strings.TrimSpace(m.Backend))
 	}
-	if out.Backend != "claude" && out.Backend != "opencode" {
+	if out.Backend != "claude" && out.Backend != "opencode" && out.Backend != "codex" {
 		return Model{}, contract.Fail(contract.FailureInvalidInput,
-			"settings %s: model.backend %q must be claude or opencode", source, m.Backend)
+			"settings %s: model.backend %q must be claude, opencode or codex", source, m.Backend)
 	}
 	if strings.TrimSpace(m.Binary) != "" {
 		out.Binary = strings.TrimSpace(m.Binary)
+	}
+	// The distributed base file names Claude's binary. A repository override
+	// that selects Codex but omits binary must not inherit that unrelated
+	// executable through the merge layer.
+	if out.Backend == "codex" && (strings.TrimSpace(m.Binary) == "" || strings.TrimSpace(m.Binary) == defaultModelBinary) {
+		out.Binary = "codex"
 	}
 	if m.Timeout != "" {
 		timeout, err := time.ParseDuration(m.Timeout)
@@ -3246,6 +3384,60 @@ func (m fileModel) build(source string) (Model, error) {
 	// than defaulted here to some model that costs money by surprise.
 	out.Explore = strings.TrimSpace(m.Explore)
 	out.Plan = strings.TrimSpace(m.Plan)
+	out.Research = strings.TrimSpace(m.Research)
+	out.Implement = strings.TrimSpace(m.Implement)
+	out.Review = strings.TrimSpace(m.Review)
+	out.Audit = strings.TrimSpace(m.Audit)
+	out.ResearchReasoningEffort = strings.TrimSpace(m.ResearchReasoningEffort)
+	out.PlanReasoningEffort = strings.TrimSpace(m.PlanReasoningEffort)
+	out.ImplementReasoningEffort = strings.TrimSpace(m.ImplementReasoningEffort)
+	out.ReviewReasoningEffort = strings.TrimSpace(m.ReviewReasoningEffort)
+	out.AuditReasoningEffort = strings.TrimSpace(m.AuditReasoningEffort)
+	if m.CodexNative != nil {
+		out.CodexNative = *m.CodexNative
+	}
+	if out.Backend == "codex" {
+		if out.Research == "" {
+			out.Research = "gpt-5.6-sol"
+		}
+		if out.Plan == "" {
+			out.Plan = "gpt-5.6-sol"
+		}
+		if out.Implement == "" {
+			out.Implement = "gpt-5.6-luna"
+		}
+		if out.Review == "" {
+			out.Review = "gpt-5.6-sol"
+		}
+		if out.Audit == "" {
+			out.Audit = "gpt-6-astra"
+		}
+		if out.ResearchReasoningEffort == "" {
+			out.ResearchReasoningEffort = "medium"
+		}
+		if out.PlanReasoningEffort == "" {
+			out.PlanReasoningEffort = "medium"
+		}
+		if out.ImplementReasoningEffort == "" {
+			out.ImplementReasoningEffort = "xhigh"
+		}
+		if out.ReviewReasoningEffort == "" {
+			out.ReviewReasoningEffort = "medium"
+		}
+		if out.AuditReasoningEffort == "" {
+			out.AuditReasoningEffort = "medium"
+		}
+	}
+	for role, effort := range map[string]string{
+		"research": out.ResearchReasoningEffort, "plan": out.PlanReasoningEffort,
+		"implement": out.ImplementReasoningEffort, "review": out.ReviewReasoningEffort,
+		"audit": out.AuditReasoningEffort,
+	} {
+		if !validReasoningEffort(effort) {
+			return Model{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: model.%s_reasoning_effort %q is not supported", source, role, effort)
+		}
+	}
 	exploreFallbacks, err := modelFallbacks(source, "explore", out.Explore, m.ExploreFallbacks)
 	if err != nil {
 		return Model{}, err
@@ -3279,6 +3471,18 @@ func modelFallbacks(source, role, primary string, raw []string) ([]string, error
 		out = append(out, name)
 	}
 	return out, nil
+}
+
+func validReasoningEffort(effort string) bool {
+	if effort == "" {
+		return true
+	}
+	switch strings.ToLower(effort) {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c fileCapability) build(source string) (contract.Capability, error) {

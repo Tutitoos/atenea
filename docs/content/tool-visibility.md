@@ -8,6 +8,28 @@ or raw-tool call in the conversation's language, naming the advertised tool,
 target and purpose. Parallel calls may share a message with one line per call.
 Repeated calls still get an announcement.
 
+Workflow dispatches also write a deterministic activity notice to the workflow
+store before the agent process starts. `workflow.status` returns `activity` and
+an `activity_cursor`; pass that cursor back as `activity_after` after reconnecting
+to receive only later notices. `activity_has_more` says another page exists. The
+CLI accepts the same cursor as `workflow show --activity-after`. It prints a
+saved notice immediately before dispatch. A repeated invocation has its own
+notice, while replaying the same
+invocation identifier is deduplicated. Approved graph expansions use `PLAN` in
+place of `ATENEA` and are saved before the plan mutation.
+
+Live MCP notifications carry each durable `invocation_id`, cursor and Markdown
+line. Delivery is acknowledged after publication. If the process dies between
+publication and that acknowledgement, replay retains the same identity so the
+client can discard an already displayed notice rather than print it twice.
+
+The activity line is an intent record. Provider selection and results remain in
+the later usage receipt. MCP initialization instructs the client to place direct
+tool preambles in the main chat before calling. MCP responses can recover durable
+workflow activity, but the protocol cannot force a third-party client to render
+intermediate text; those clients remain partially compatible until their real UI
+is validated.
+
 `_atenea_prefer` accepts either an exact implementation (`kivgraph.overview`)
 or a provider (`kivgraph`). Exact IDs take precedence over provider names.
 Provider preferences rank only that provider's surviving implementations of
@@ -67,10 +89,15 @@ Original structured results and schemas are unchanged. Receipts contain no copie
 of payloads, source code, health-error text or credentials; exclusions use safe
 categories such as `repository_scope`, `not_attached`, `constraints` and `health`.
 
-This is adapter-level visibility, not a trace of every internal Kivgraph MCP
-request. Raw tools already identify their backend in the advertised name and
-retain their passthrough result and the preamble rule. Local shell/file reads
-outside Atenea are not recorded and must not be attributed to a graph provider.
+Workflow agents receive an invocation-scoped Unix activity channel. Atenea's MCP
+relay and the Codex `PreToolUse` hook wait for its acknowledgement before allowing
+the tool call, so internal Atenea MCP calls and Codex Bash, ApplyPatch, MCP and
+local tools are persisted and published first. Tool arguments and results never
+cross this channel. One public capability invocation remains one notice even when
+its adapter makes several private Kivgraph MCP requests. Native tools in clients
+without a pre-tool event remain partial and must use client-visible stepped
+execution until their real activity surface is validated in the compatibility
+pilot. Local reads outside an Atenea workflow are not attributed to a provider.
 Atenea owns these instructions rather than
 forwarding arbitrary upstream prose about tools absent from its catalog.
 

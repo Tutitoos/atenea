@@ -50,6 +50,7 @@ func twoAttempts(t *testing.T, store *workflow.Store, id string) {
 			Kind: contract.FailureUnavailable,
 			Text: "claude code stopped at its spending ceiling before it could answer",
 		},
+		Notices: []string{"the cut attempt has no final answer"},
 		Spent: contract.Charge{
 			USD: usd(0.62), InputTokens: 2, OutputTokens: 152,
 			CacheReadTokens: 4772, CacheWriteTokens: 1416, PricedBy: "a test",
@@ -149,6 +150,9 @@ func TestTheReplacedAttemptIsRecoverable(t *testing.T) {
 	}
 	if first.TraceID != "tr-1" {
 		t.Errorf("trace = %q, want tr-1 -- the trace a reader follows", first.TraceID)
+	}
+	if len(first.Notices) != 1 || first.Notices[0] != "the cut attempt has no final answer" {
+		t.Errorf("notices = %#v, want the archived report caveat", first.Notices)
 	}
 	if first.Reason.Kind != contract.FailureUnavailable {
 		t.Errorf("reason kind = %s, want unavailable", first.Reason.Kind)

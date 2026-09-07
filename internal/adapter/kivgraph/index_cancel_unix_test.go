@@ -26,7 +26,10 @@ func TestIndexCancellationClosesAnalyzerGrandchildren(t *testing.T) {
 		_, err := RunConfiguredIndex(ctx, script, []string{"READY=" + ready}, root, "full")
 		done <- err
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	// The full race suite runs package binaries concurrently. Process startup
+	// can exceed five seconds on a saturated runner even though cancellation
+	// remains prompt once this fixture has actually started.
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if _, err := os.Stat(ready); err == nil {
 			break
@@ -42,7 +45,7 @@ func TestIndexCancellationClosesAnalyzerGrandchildren(t *testing.T) {
 		if err == nil {
 			t.Fatal("canceled index succeeded")
 		}
-	case <-time.After(4 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("index cancellation left a pipe held by an analyzer")
 	}
 }

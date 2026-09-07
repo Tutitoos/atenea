@@ -1,0 +1,29 @@
+name: Documentation
+description: Correct or extend ATENEA documentation.
+title: "docs: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Documentation problem
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Required change and acceptance criteria
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation and evidence level
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies, risks, and exclusions
+    validations:
+      required: true

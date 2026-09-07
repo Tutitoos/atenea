@@ -137,10 +137,40 @@ type statsRunner struct {
 // Unwrap preserves access to the underlying runner for existing integrations.
 func (r statsRunner) Unwrap() contract.Runner { return r.Runner }
 
+// CacheIdentity forwards the optional provider receipt through the metering
+// wrapper. This lets the result cache sit outside statsRunner so only the
+// physical leader opens an attempt, while identity validation remains visible.
+func (r statsRunner) CacheIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	if provider, ok := r.Runner.(contract.RuntimeIdentityProvider); ok {
+		return provider.RuntimeIdentity(ctx, req)
+	}
+	if provider, ok := r.Runner.(contract.CacheIdentityProvider); ok {
+		return provider.CacheIdentity(ctx, req)
+	}
+	return contract.CacheIdentity{}, contract.Fail(contract.FailureUnavailable, "no current cache identity for implementation %s", req.Implementation.ID)
+}
+
+// RuntimeIdentity forwards the stronger current identity when the wrapped
+// runner provides it, preserving selector/cache identity semantics.
+func (r statsRunner) RuntimeIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	if provider, ok := r.Runner.(contract.RuntimeIdentityProvider); ok {
+		return provider.RuntimeIdentity(ctx, req)
+	}
+	if provider, ok := r.Runner.(contract.CacheIdentityProvider); ok {
+		return provider.CacheIdentity(ctx, req)
+	}
+	return contract.CacheIdentity{}, contract.Fail(contract.FailureUnavailable, "no current runtime identity for implementation %s", req.Implementation.ID)
+}
+
 // Run records one implementation attempt linked to the original request.
 func (r statsRunner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, err error) {
 	_, call := r.store.Begin(ctx, toolstats.Event{Level: "attempt", Tool: req.Implementation.ID, Provider: req.Implementation.Provider, Repository: req.Repository.ID})
 	defer func() {
+		// Keep the provider and operation identity intact: a cache hit still
+		// performed a real validation call against that provider. The outcome
+		// fields distinguish validation cost from the avoided context call.
+		call.Event.CacheHit = out.CacheHit
+		call.Event.CacheValidation = out.CacheValidation
 		call.Event.Metadata.ReceiptID = checkpoint.RunID(ctx)
 		call.Event.Metadata.ProviderVersion = out.ToolVersion
 		observedErr := err

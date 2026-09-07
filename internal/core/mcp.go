@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -15,10 +16,13 @@ import (
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/checkpoint"
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/knowledge"
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/orchestrator"
 	"github.com/Tutitoos/atenea/internal/passthrough"
 	"github.com/Tutitoos/atenea/internal/selector"
 	"github.com/Tutitoos/atenea/internal/toolstats"
+	"github.com/Tutitoos/atenea/internal/workspacecontext"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -29,7 +33,7 @@ import (
 // something else is answered with this and decides for itself whether to go on
 // -- which is what the specification asks for, and is honest in a way that
 // echoing the client's own version back would not be.
-const mcpVersion = "2025-06-18"
+const mcpVersion = string(mcpcompat.Legacy)
 
 // rawCatalogTimeout keeps one unavailable raw backend from stalling the
 // complete desktop catalog. A client needs the tools that are ready now; a
@@ -42,17 +46,24 @@ const rawCatalogTimeout = 1 * time.Second
 // CLI asking after the service, it needs no chat behind it, and gating it on a
 // handshake would mean `atenea status` had to pretend to be a model.
 const (
+	// MethodInitialize is part of ATENEA's public orchestration contract.
 	MethodInitialize = "initialize"
-	MethodToolsList  = "tools/list"
-	MethodToolsCall  = "tools/call"
-	MethodCommand    = "atenea/command"
+	// MethodDiscover is part of ATENEA's public orchestration contract.
+	MethodDiscover = "server/discover"
+	// MethodToolsList is part of ATENEA's public orchestration contract.
+	MethodToolsList = "tools/list"
+	// MethodToolsCall is part of ATENEA's public orchestration contract.
+	MethodToolsCall = "tools/call"
+	// MethodCommand is part of ATENEA's public orchestration contract.
+	MethodCommand = "atenea/command"
 
 	// notificationPrefix marks the messages that are owed no answer. Every
 	// notification MCP defines lives under it.
 	notificationPrefix = "notifications/"
 
-	codeInvalidParams = -32602
-	codeInternal      = -32603
+	codeInvalidParams         = -32602
+	codeInternal              = -32603
+	codeMCPVersionUnsupported = -32022
 )
 
 // repositoryArg is Atenea's own argument, added to every tool and belonging to
@@ -68,6 +79,8 @@ const routePreferArg = "_atenea_prefer"
 // toolListRepositories is Atenea's own discovery tool: no repository required,
 // no capability backing it, and no orchestrator in the path.
 const toolListRepositories = "catalog.repositories"
+const toolWorkspaceContext = workspacecontext.Capability
+const toolKnowledgeContext = "knowledge.context"
 
 // conversation is one connection's worth of state, which is exactly one chat.
 //
@@ -80,6 +93,10 @@ type conversation struct {
 	session       *Session
 	clientName    string
 	clientVersion string
+	// Modern protocol identity is observed per request. It is deliberately
+	// separate from Session.client and Session.grant: metadata cannot widen or
+	// replace an application session's permissions.
+	modern        bool
 	policy        desktopPolicy
 	deviceMu      sync.Mutex
 	deviceContext map[string]any
@@ -89,6 +106,7 @@ type conversation struct {
 	// display. See internal/core/tainted.go for why that has to be remembered
 	// per chat rather than asked of the adapter.
 	screen taint
+	notify func(method string, params any) error
 }
 
 func (v *conversation) close() {
@@ -143,9 +161,88 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		out.Error = &rpcError{Code: codeInvalid, Message: "jsonrpc must be " + rpcVersion}
 		return out
 	}
+	modernRequest := false
+	if req.Method == MethodDiscover {
+		if !mcpcompat.HasProtocolMetadata(req.Params) && !hasMetadataEnvelope(req.Params) {
+			out.Error = &rpcError{Code: codeMethodUnknown, Message: "server/discover is supported only by modern MCP"}
+			return out
+		}
+		if _, err := mcpcompat.ParseModernMetadata(req.Params); err != nil {
+			if errors.Is(err, mcpcompat.ErrUnsupportedVersion) {
+				out.Error = modernMetadataError(err, req.Params)
+			} else {
+				out.Error = &rpcError{Code: codeInvalidParams, Message: "server/discover: " + err.Error()}
+			}
+			return out
+		}
+		out.Result = v.serverDiscover()
+		return out
+	}
+	if modernCapableMethod(req.Method) {
+		if mcpcompat.HasProtocolMetadata(req.Params) {
+			meta, err := mcpcompat.ParseModernMetadata(req.Params)
+			if err != nil {
+				out.Error = modernMetadataError(err, req.Params)
+				return out
+			}
+			// Modern MCP is stateless at the application boundary. A fresh
+			// session is opened for this dispatch only; it is closed before
+			// the response reaches the wire. The previous legacy session, if
+			// any, is restored untouched.
+			ephemeral, err := v.core.Open(SessionOptions{Client: meta.ClientName})
+			if err != nil {
+				out.Error = &rpcError{Code: codeInternal, Message: "opening modern request session: " + err.Error()}
+				return out
+			}
+			previousSession, previousModern := v.session, v.modern
+			previousClient, previousVersion := v.clientName, v.clientVersion
+			previousPolicy := v.policy
+			previousDeviceContext := v.deviceContext
+			previousScreen := v.screen
+			v.deviceMu.Lock()
+			v.deviceContext = nil
+			v.deviceMu.Unlock()
+			v.screen = taint{permitted: v.core.settings.Desktop.LookThenAct}
+			v.backendMu.Lock()
+			previousBackends := v.backends
+			v.backends = nil
+			v.backendMu.Unlock()
+			v.session = ephemeral
+			v.modern = true
+			v.clientName, v.clientVersion = meta.ClientName, meta.ClientVersion
+			// Modern metadata has no desktop profile field. Do not inherit
+			// one from a legacy conversation or another modern request.
+			v.policy = desktopPolicy{Fallback: "none"}
+			modernRequest = true
+			defer func() {
+				ephemeral.Close()
+				v.backendMu.Lock()
+				for id, backend := range v.backends {
+					backend.Close()
+					delete(v.backends, id)
+				}
+				v.backends = previousBackends
+				v.backendMu.Unlock()
+				v.deviceMu.Lock()
+				v.deviceContext = previousDeviceContext
+				v.deviceMu.Unlock()
+				v.screen = previousScreen
+				v.session, v.modern = previousSession, previousModern
+				v.clientName, v.clientVersion = previousClient, previousVersion
+				v.policy = previousPolicy
+			}()
+		} else if v.session == nil {
+			out.Error = &rpcError{Code: codeInvalidParams, Message: mcpcompat.ErrMissingModernMetadata.Error()}
+			return out
+		}
+	}
 	switch req.Method {
 	case MethodCommand:
-		result, rpcErr := v.command(ctx, req.Params)
+		commandParams := req.Params
+		if modernRequest {
+			commandParams = withoutModernMetadata(req.Params)
+		}
+		result, rpcErr := v.command(ctx, commandParams)
 		out.Result, out.Error = result, rpcErr
 	case MethodStatsErrors:
 		out.Result, out.Error = v.statsErrors(ctx, req.Params)
@@ -158,6 +255,14 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		result, rpcErr := v.detect(ctx, req.Params)
 		out.Result, out.Error = result, rpcErr
 	case MethodInitialize:
+		var requested struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &requested)
+		if requested.ProtocolVersion == mcpcompat.Modern.String() {
+			out.Error = &rpcError{Code: codeInvalidParams, Message: "modern MCP omits initialize; use server/discover or a self-contained request"}
+			break
+		}
 		result, rpcErr := v.initialize(req.Params)
 		out.Result, out.Error = result, rpcErr
 	case MethodToolsList:
@@ -170,12 +275,112 @@ func (v *conversation) dispatch(ctx context.Context, req rpcRequest) *rpcRespons
 		result, rpcErr := v.promptsList()
 		out.Result, out.Error = result, rpcErr
 	case methodPromptsGet:
-		result, rpcErr := v.promptsGet(req.Params)
+		promptParams := req.Params
+		if modernRequest {
+			promptParams = withoutModernMetadata(req.Params)
+		}
+		result, rpcErr := v.promptsGet(promptParams)
 		out.Result, out.Error = result, rpcErr
 	default:
 		out.Error = &rpcError{Code: codeMethodUnknown, Message: "unknown method " + req.Method}
 	}
+	if modernRequest && out.Error == nil {
+		out.Result = withModernServerMeta(out.Result, req.Method == MethodToolsList || req.Method == methodPromptsList)
+	}
 	return out
+}
+
+func hasMetadataEnvelope(raw json.RawMessage) bool {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil || envelope == nil {
+		return false
+	}
+	_, ok := envelope["_meta"]
+	return ok
+}
+
+func modernMetadataError(err error, raw json.RawMessage) *rpcError {
+	code := codeInvalidParams
+	if errors.Is(err, mcpcompat.ErrUnsupportedVersion) {
+		code = codeMCPVersionUnsupported
+	}
+	out := &rpcError{Code: code, Message: err.Error()}
+	if code == codeMCPVersionUnsupported {
+		var envelope struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		}
+		var requested string
+		if json.Unmarshal(raw, &envelope) == nil {
+			_ = json.Unmarshal(envelope.Meta[mcpcompat.ProtocolVersionKey], &requested)
+		}
+		out.Data = map[string]any{"supported": []string{mcpcompat.Modern.String(), mcpcompat.Legacy.String()}, "requested": requested}
+	}
+	return out
+}
+
+func modernCapableMethod(method string) bool {
+	switch method {
+	case MethodToolsList, MethodToolsCall, MethodCommand, methodPromptsList, methodPromptsGet:
+		return true
+	default:
+		return false
+	}
+}
+
+func withoutModernMetadata(raw json.RawMessage) json.RawMessage {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil {
+		return raw
+	}
+	delete(object, "_meta")
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func withModernServerMeta(result any, cacheable bool) any {
+	object, ok := result.(map[string]any)
+	if !ok {
+		return result
+	}
+	resultCopy := maps.Clone(object)
+	meta := map[string]any{}
+	if existing, ok := resultCopy["_meta"].(map[string]any); ok {
+		meta = maps.Clone(existing)
+	}
+	meta[mcpcompat.ServerInfoKey] = map[string]any{"name": "atenea", "version": buildinfo.Version}
+	resultCopy["_meta"] = meta
+	rawResultType, hasResultType := resultCopy["resultType"]
+	resultType, isString := rawResultType.(string)
+	if !hasResultType {
+		// Atenea's historical result maps omit the extension marker. They are
+		// complete by construction; an explicit future marker stays opaque.
+		resultType = string(mcpcompat.ResultComplete)
+		isString = true
+		resultCopy["resultType"] = resultType
+	}
+	if cacheable && isString && resultType == string(mcpcompat.ResultComplete) {
+		resultCopy["ttlMs"] = int64(0)
+		resultCopy["cacheScope"] = "private"
+	}
+	return resultCopy
+}
+
+func (v *conversation) serverDiscover() map[string]any {
+	serverInfo := map[string]any{"name": "atenea", "version": buildinfo.Version}
+	return map[string]any{
+		"supportedVersions": []string{mcpcompat.Modern.String()},
+		"capabilities": map[string]any{
+			"tools":   map[string]any{"listChanged": false},
+			"prompts": map[string]any{"listChanged": false},
+		},
+		"ttlMs":      int64(0),
+		"cacheScope": "private",
+		"resultType": "complete",
+		"_meta":      map[string]any{mcpcompat.ServerInfoKey: serverInfo},
+	}
 }
 
 func (v *conversation) command(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
@@ -356,6 +561,7 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 			// client may wait on.
 			"tools":   map[string]any{},
 			"prompts": map[string]any{"listChanged": false},
+			"logging": map[string]any{},
 			"experimental": map[string]any{
 				"atenea": map[string]any{"grant": granted},
 			},
@@ -364,7 +570,7 @@ func (v *conversation) initialize(raw json.RawMessage) (any, *rpcError) {
 			"name":    "atenea",
 			"version": buildinfo.Version,
 		},
-		"instructions": "Atenea decides and delegates: each tool is a capability, " +
+		"instructions": "Before every Atenea tool call, write one concise Markdown line in the main chat: > **ATENEA · exact-tool-name** — action, target and purpose. Write it before calling; it describes intent, never proves provider usage or grants permission. Group parallel calls in one message with one line per call and announce retries again. Atenea decides and delegates: each tool is a capability, " +
 			"and the implementation that answers it is chosen per call. Most tools " +
 			"take a repository. Call catalog.repositories first to discover what is " +
 			"registered, the absolute path of each, and what each can answer.\n\n" + toolVisibilityInstructions + "\n\n" + routingVisibilityInstructions,
@@ -403,6 +609,10 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		}, "required": []string{"name"}},
 	})
 	tools = append(tools, v.repositoriesTool())
+	tools = append(tools, v.workspaceContextTool())
+	if v.core.knowledgeSurfaceEnabled() {
+		tools = append(tools, v.knowledgeContextTool())
+	}
 	for _, tool := range v.workflowTools() {
 		// Aimed like every capability: the agents a graph spawns run at a
 		// repository context level, and a workflow that silently picked one
@@ -436,6 +646,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			"outputSchema": output,
 		})
 	}
+	ateneaCount := len(tools)
 	// The backends' own tools come after the capabilities and are never
 	// mixed into them: a client reading this list top to bottom sees what
 	// Atenea promises first and what it merely forwards second. A backend
@@ -465,7 +676,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		// has not changed. What changed is that the Core now remembers why,
 		// so `atenea status` can name this server and this cause instead of
 		// the operator having to notice an absence.
-		v.core.recordBackendListing(id, err)
+		v.core.recordBackendListing(id, err, backend.Backend)
 		if err != nil {
 			continue
 		}
@@ -507,7 +718,14 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			tools = append(tools, entry)
 		}
 	}
-	return map[string]any{"tools": v.filterDesktopTools(tools)}, nil
+	byName := func(a, b map[string]any) int {
+		return strings.Compare(fmt.Sprint(a["name"]), fmt.Sprint(b["name"]))
+	}
+	capabilityTools := v.filterDesktopTools(tools[:ateneaCount])
+	slices.SortFunc(capabilityTools, byName)
+	forwarded := v.filterDesktopTools(tools[ateneaCount:])
+	slices.SortFunc(forwarded, byName)
+	return map[string]any{"tools": append(capabilityTools, forwarded...)}, nil
 }
 
 // aimable adds the repository argument to a capability's declared inputs.
@@ -687,11 +905,25 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 		}
 		return v.command(ctx, encoded)
 	}
+	if params.Name == toolWorkspaceContext {
+		return v.workspaceContext(ctx, arguments)
+	}
+	if params.Name == toolKnowledgeContext {
+		return v.knowledgeContext(ctx, arguments)
+	}
 	switch params.Name {
 	case toolWorkflowCreate:
 		return v.workflowCreate(ctx, arguments)
 	case toolWorkflowLaunch:
 		return v.workflowLaunch(ctx, arguments)
+	case toolWorkflowStatus:
+		return v.workflowStatus(ctx, arguments)
+	case toolWorkflowCancel:
+		return v.workflowCancel(ctx, arguments)
+	case toolWorkflowResume:
+		return v.workflowResume(ctx, arguments)
+	case toolWorkflowAnswer:
+		return v.workflowAnswer(ctx, arguments)
 	}
 	capability, err := v.core.catalog.Capability(params.Name)
 	if err != nil {
@@ -794,6 +1026,69 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	}, nil
 }
 
+func (v *conversation) knowledgeContextTool() map[string]any {
+	return map[string]any{
+		"name":        toolKnowledgeContext,
+		"description": "Read verified, freshly revalidated knowledge for one explicit project and repository scope.",
+		"inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"scope": map[string]any{"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"project_id":    map[string]any{"type": "string"},
+						"repository_id": map[string]any{"type": "string"},
+					}, "required": []string{"project_id", "repository_id"}},
+			},
+			"required": []string{"scope"},
+		},
+	}
+}
+
+func (v *conversation) knowledgeContext(ctx context.Context, arguments map[string]any) (any, *rpcError) {
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: invalid arguments"}
+	}
+	var params struct {
+		Scope struct {
+			ProjectID    string `json:"project_id"`
+			RepositoryID string `json:"repository_id"`
+		} `json:"scope"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: " + err.Error()}
+	}
+	projectID, repositoryID := strings.TrimSpace(params.Scope.ProjectID), strings.TrimSpace(params.Scope.RepositoryID)
+	if projectID == "" || repositoryID == "" {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: scope.project_id and scope.repository_id are required"}
+	}
+	// The scope on the wire is an assertion, not an authority. A chat is
+	// entitled only to the repository selected when its session opened; it
+	// cannot name another project or repository to widen its knowledge view.
+	authorized := strings.TrimSpace(v.session.primaryProject)
+	if authorized == "" {
+		repositories := v.core.catalog.Repositories()
+		if len(repositories) == 1 {
+			authorized = repositories[0].ID
+		}
+	}
+	if authorized == "" || projectID != authorized || repositoryID != authorized {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: scope is not authorized for this session"}
+	}
+	if _, err := v.core.catalog.Repository(repositoryID); err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "knowledge.context: repository is not configured"}
+	}
+	permission := knowledge.Permission{SubjectID: v.session.id, ProjectID: projectID, RepositoryID: repositoryID, Read: true, ProjectMember: true}
+	entries, err := v.core.prepareKnowledgeMCP(ctx, knowledge.Scope{ProjectID: projectID, RepositoryID: repositoryID}, permission)
+	if err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: "knowledge.context: " + err.Error()}
+	}
+	body := map[string]any{"scope": map[string]string{"project_id": projectID, "repository_id": repositoryID}, "entries": entries}
+	return toolResult(body)
+}
+
 // rawCall forwards one tool to its backend and files the receipt for it.
 //
 // Nothing about this path touches the orchestrator, the selector or the
@@ -889,8 +1184,22 @@ func (v *conversation) rawCall(ctx context.Context, server, tool string, params 
 	// A call is the other place a backend's state becomes known for free.
 	// Only an unavailable or timed-out one counts against it; see
 	// recordBackendCall for why a refusal must not.
-	v.core.recordBackendCall(server, err)
+	v.core.recordBackendCall(server, err, observedBackend)
 	if err != nil {
+		var inputRequired *passthrough.InputRequiredError
+		if errors.As(err, &inputRequired) {
+			var preserved map[string]any
+			if json.Unmarshal(inputRequired.Response.Raw, &preserved) == nil {
+				return preserved, nil
+			}
+		}
+		var futureResult *mcpcompat.FutureResultError
+		if errors.As(err, &futureResult) {
+			var preserved map[string]any
+			if json.Unmarshal(futureResult.Response.Raw, &preserved) == nil {
+				return preserved, nil
+			}
+		}
 		// A backend's refusal is an answer, not a protocol error: the model
 		// asked for something real and can read why it did not work. The
 		// same split the capability path already makes.
@@ -982,6 +1291,117 @@ func annotateDesktopResult(result map[string]any, requested, normalized string, 
 	result["_meta"] = meta
 }
 
+type workspaceContextTargetParams struct {
+	ID      string         `json:"id"`
+	Root    string         `json:"root"`
+	Payload map[string]any `json:"payload,omitempty"`
+	Cursor  string         `json:"cursor,omitempty"`
+}
+
+type workspaceContextParams struct {
+	Targets       []workspaceContextTargetParams  `json:"targets"`
+	Payload       map[string]any                  `json:"payload,omitempty"`
+	Continuations []workspacecontext.Continuation `json:"continuations,omitempty"`
+	BudgetUSD     float64                         `json:"budget_usd,omitempty"`
+	MaxParallel   int                             `json:"max_parallel,omitempty"`
+}
+
+// workspaceContextTool is a coordinator surface, not a catalog capability.
+// Its children are still ordinary code.context calls with one repository.
+func (v *conversation) workspaceContextTool() map[string]any {
+	return map[string]any{
+		"name":        toolWorkspaceContext,
+		"description": "Run code.context independently for 1 to 8 explicitly named repositories; results stay separated and preserve repository cursors.",
+		"inputSchema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"targets": map[string]any{
+					"type":     "array",
+					"minItems": 1,
+					"maxItems": workspacecontext.DefaultMaxTargets,
+					"items": map[string]any{
+						"type":                 "object",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"id":      map[string]any{"type": "string"},
+							"root":    map[string]any{"type": "string", "description": "optional assertion; Core resolves the configured root from id"},
+							"payload": map[string]any{"type": "object"},
+							"cursor":  map[string]any{"type": "string"},
+						},
+						"required": []string{"id"},
+					},
+				},
+				"payload": map[string]any{"type": "object", "description": "Shared code.context inputs; each target remains a separate child."},
+				"continuations": map[string]any{
+					"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false,
+						"properties": map[string]any{"repository": map[string]any{"type": "string"}, "cursor": map[string]any{"type": "string"}},
+						"required":   []string{"repository", "cursor"}},
+				},
+				"budget_usd":   map[string]any{"type": "number", "minimum": 0},
+				"max_parallel": map[string]any{"type": "integer", "minimum": 1, "maximum": workspacecontext.DefaultMaxParallel},
+			},
+			"required": []string{"targets"},
+		},
+	}
+}
+
+func (v *conversation) workspaceContext(ctx context.Context, arguments map[string]any) (any, *rpcError) {
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "workspace.context: " + err.Error()}
+	}
+	var params workspaceContextParams
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: "workspace.context: " + err.Error()}
+	}
+	targets := make([]workspacecontext.Target, len(params.Targets))
+	for i, target := range params.Targets {
+		repo, lookupErr := v.core.Registry().Repository(strings.TrimSpace(target.ID))
+		if lookupErr != nil {
+			return nil, &rpcError{Code: codeInvalidParams, Message: "workspace.context: " + lookupErr.Error()}
+		}
+		root := strings.TrimSpace(target.Root)
+		if root == "" {
+			root = repo.Path
+		}
+		targets[i] = workspacecontext.Target{ID: target.ID, Root: root, Payload: target.Payload, Cursor: target.Cursor}
+	}
+	request := workspacecontext.Request{
+		Targets: paramsToTargets(targets), Payload: params.Payload, Continuations: params.Continuations,
+		BudgetUSD: params.BudgetUSD, MaxParallel: params.MaxParallel,
+		Permission: contract.Permission{Task: toolWorkspaceContext, Effects: []contract.Effect{contract.EffectRead}},
+	}
+	request.BeforeDispatch = func(noticeCtx context.Context, target workspacecontext.Target) error {
+		if v.notify == nil {
+			return nil
+		}
+		id := safeDashboardText(target.ID, 80)
+		markdown := "> **ATENEA · code.context** — busco contexto en el repositorio " + id + " para responder la consulta del espacio de trabajo."
+		return v.notify("notifications/message", map[string]any{
+			"level": "info", "logger": "atenea.activity", "data": markdown,
+			"workspace_context": true, "repository": id,
+		})
+	}
+	result, err := v.core.WorkspaceContext(ctx, v.session, request)
+	if err != nil {
+		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: "workspace.context: " + err.Error()}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, &rpcError{Code: codeInternal, Message: "workspace.context: " + err.Error()}
+	}
+	return toolResult(body)
+}
+
+func paramsToTargets(targets []workspacecontext.Target) []workspacecontext.Target { return targets }
+
 // repositoriesTool is the schema entry for catalog.repositories, inserted
 // before all capabilities so a client reading top-to-bottom sees it first.
 func (v *conversation) repositoriesTool() map[string]any {
@@ -1065,8 +1485,15 @@ func toolResult(result map[string]any) (any, *rpcError) {
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: "serializing the answer: " + err.Error()}
 	}
+	content := make([]any, 0, 2)
+	if plan, ok := result["plan"].(map[string]any); ok {
+		if markdown, ok := plan["markdown"].(string); ok && strings.TrimSpace(markdown) != "" {
+			content = append(content, map[string]any{"type": "text", "text": markdown})
+		}
+	}
+	content = append(content, map[string]any{"type": "text", "text": string(body)})
 	return map[string]any{
-		"content":           []any{map[string]any{"type": "text", "text": string(body)}},
+		"content":           content,
 		"structuredContent": result,
 		"isError":           false,
 	}, nil

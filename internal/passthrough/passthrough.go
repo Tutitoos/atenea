@@ -24,14 +24,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -39,7 +42,7 @@ import (
 // the same revision Atenea serves to its own clients: speaking two would mean
 // translating between them, and nothing here translates -- a tool's schema
 // and its result are forwarded as they were given.
-const protocolVersion = "2025-06-18"
+const protocolVersion = string(mcpcompat.Legacy)
 
 // maxBody caps what a backend may return in one answer. A passthrough result
 // is forwarded into a chat, so an unbounded read would let a backend decide
@@ -74,6 +77,10 @@ type Tool struct {
 	InputSchema json.RawMessage
 	// OutputSchema is optional in MCP. Keep it raw and forward it unchanged.
 	OutputSchema json.RawMessage
+	// HeaderMap records validated x-mcp-header annotations for modern HTTP.
+	// It stays internal to passthrough's catalog and is never emitted as a
+	// schema change to callers.
+	HeaderMap map[string]string
 }
 
 // CatalogDrift reports names observed upstream that differ from the declared
@@ -90,11 +97,27 @@ func cloneCatalogDrift(d CatalogDrift) CatalogDrift {
 // catalogCache snapshots tools/list for one backend process generation and
 // coalesces concurrent readers into one upstream request.
 type catalogCache struct {
-	mu         sync.Mutex
-	tools      []Tool
-	generation uint64
-	loaded     bool
-	wait       chan struct{}
+	mu          sync.Mutex
+	tools       []Tool
+	generation  uint64
+	loaded      bool
+	expiresAt   time.Time
+	headerHints map[string]map[string]string
+	wait        chan struct{}
+}
+
+func (c *catalogCache) headerMap(tool string) map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if headers, ok := c.headerHints[tool]; ok {
+		return maps.Clone(headers)
+	}
+	return nil
+}
+
+type cacheHint struct {
+	Cache    bool
+	Duration time.Duration
 }
 
 func cloneTools(tools []Tool) []Tool {
@@ -103,6 +126,7 @@ func cloneTools(tools []Tool) []Tool {
 		out[i] = tool
 		out[i].InputSchema = append(json.RawMessage(nil), tool.InputSchema...)
 		out[i].OutputSchema = append(json.RawMessage(nil), tool.OutputSchema...)
+		out[i].HeaderMap = maps.Clone(tool.HeaderMap)
 	}
 	return out
 }
@@ -111,13 +135,15 @@ func (c *catalogCache) invalidate() {
 	c.mu.Lock()
 	c.loaded = false
 	c.tools = nil
+	c.expiresAt = time.Time{}
+	c.headerHints = nil
 	c.mu.Unlock()
 }
 
-func (c *catalogCache) get(ctx context.Context, generation uint64, load func() ([]Tool, error)) ([]Tool, error) {
+func (c *catalogCache) get(ctx context.Context, generation uint64, load func() ([]Tool, cacheHint, error)) ([]Tool, error) {
 	for {
 		c.mu.Lock()
-		if c.loaded && c.generation == generation {
+		if c.loaded && c.generation == generation && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt)) {
 			out := cloneTools(c.tools)
 			c.mu.Unlock()
 			return out, nil
@@ -136,12 +162,26 @@ func (c *catalogCache) get(ctx context.Context, generation uint64, load func() (
 		c.wait = wait
 		c.mu.Unlock()
 
-		tools, err := load()
+		tools, hint, err := load()
 		c.mu.Lock()
 		if err == nil {
+			c.headerHints = make(map[string]map[string]string, len(tools))
+			for _, tool := range tools {
+				c.headerHints[tool.Name] = maps.Clone(tool.HeaderMap)
+			}
+		}
+		if err == nil && hint.Cache {
 			c.tools = cloneTools(tools)
 			c.generation = generation
 			c.loaded = true
+			c.expiresAt = time.Time{}
+			if hint.Duration > 0 {
+				c.expiresAt = time.Now().Add(hint.Duration)
+			}
+		} else if err == nil {
+			c.loaded = false
+			c.tools = nil
+			c.expiresAt = time.Time{}
 		}
 		c.wait = nil
 		close(wait)
@@ -194,12 +234,13 @@ type Backend interface {
 // two fields is set here and the choice is a consequence of that, not a
 // second decision that could disagree with the first.
 type Spec struct {
-	ID      string
-	URL     string
-	Command []string
-	Env     map[string]string
-	Timeout time.Duration
-	Allowed []string
+	ID           string
+	URL          string
+	Command      []string
+	Env          map[string]string
+	Timeout      time.Duration
+	Allowed      []string
+	ProtocolMode ProtocolMode
 }
 
 // New prepares a backend. Nothing is dialed and nothing is spawned here: a
@@ -224,7 +265,11 @@ type httpBackend struct {
 	// applied by the caller because there is no reading of an unlisted tool
 	// that any caller should be able to choose -- a filter one layer up is
 	// a filter the next caller can forget.
-	allowed []string
+	allowed      []string
+	mode         ProtocolMode
+	activeModern bool
+	protocol     mcpcompat.RequestedObserved
+	discovery    mcpcompat.Discovery
 
 	// mu guards the handshake and the id it produces. Two chats calling a
 	// cold backend at the same moment must produce one session, not two:
@@ -242,16 +287,23 @@ type httpBackend struct {
 	drift      CatalogDrift
 }
 
+type backendTimeoutError struct{ err error }
+
+func (e *backendTimeoutError) Error() string { return e.err.Error() }
+func (e *backendTimeoutError) Unwrap() error { return e.err }
+
 func newHTTP(spec Spec) *httpBackend {
 	timeout := spec.Timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 	return &httpBackend{
-		id:      spec.ID,
-		url:     spec.URL,
-		timeout: timeout,
-		allowed: slices.Clone(spec.Allowed),
+		id:       spec.ID,
+		url:      spec.URL,
+		timeout:  timeout,
+		allowed:  slices.Clone(spec.Allowed),
+		mode:     normalizedProtocolMode(spec.ProtocolMode),
+		protocol: mcpcompat.RequestedObserved{Requested: requestedEra(spec.ProtocolMode), Observed: mcpcompat.Unknown},
 		// Keep-alives are wanted here, unlike the probe's client: this is a
 		// session that will be used again, and re-dialing per call would add
 		// a handshake to every tool a chat runs.
@@ -264,6 +316,18 @@ func (b *httpBackend) Allows(tool string) bool { return slices.Contains(b.allowe
 
 // Allowed is the budget as declared, for a report that has to show it.
 func (b *httpBackend) Allowed() []string { return slices.Clone(b.allowed) }
+
+func (b *httpBackend) RequestedProtocolVersion() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.protocol.RequestedOrUnknown().String()
+}
+
+func (b *httpBackend) ObservedProtocolVersion() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.protocol.ObservedOrUnknown().String()
+}
 
 // ID is the declared name of the server, which is the middle segment of every
 // tool this backend offers.
@@ -312,16 +376,30 @@ func (b *httpBackend) Tools(ctx context.Context) ([]Tool, error) {
 		b.catalog.invalidate()
 		return nil, err
 	}
+	b.mu.Lock()
+	modern := b.activeModern
+	supportsTools := b.discovery.SupportsTools()
+	b.mu.Unlock()
+	if modern && !supportsTools {
+		return nil, b.fail(contract.FailureUnavailable, "server did not advertise tools capability")
+	}
 	generation := b.generation.Load()
-	return b.catalog.get(ctx, generation, func() ([]Tool, error) {
+	return b.catalog.get(ctx, generation, func() ([]Tool, cacheHint, error) {
 		raw, err := b.request(ctx, "tools/list", map[string]any{})
 		if err != nil {
 			b.catalog.invalidate()
-			return nil, err
+			return nil, cacheHint{}, err
 		}
-		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail)
+		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail, modern)
 		b.setCatalogDrift(drift)
-		return tools, err
+		if err != nil {
+			return nil, cacheHint{}, err
+		}
+		hint := cacheHint{Cache: true}
+		if b.isModern() {
+			hint, err = modernCacheHint(raw)
+		}
+		return tools, hint, err
 	})
 }
 
@@ -338,7 +416,7 @@ func (b *httpBackend) CatalogDrift() CatalogDrift {
 	return cloneCatalogDrift(b.drift)
 }
 
-func toolsFromReport(raw json.RawMessage, allowed []string, fail failer) ([]Tool, CatalogDrift, error) {
+func toolsFromReport(raw json.RawMessage, allowed []string, fail failer, modern bool) ([]Tool, CatalogDrift, error) {
 	var body struct {
 		Tools []struct {
 			Name         string          `json:"name"`
@@ -364,7 +442,14 @@ func toolsFromReport(raw json.RawMessage, allowed []string, fail failer) ([]Tool
 		if !slices.Contains(allowed, name) {
 			continue
 		}
-		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, OutputSchema: t.OutputSchema})
+		if modern && !modernInputSchema(t.InputSchema) {
+			continue
+		}
+		headerMap, valid := headerAnnotations(t.InputSchema)
+		if !valid {
+			continue
+		}
+		out = append(out, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, OutputSchema: t.OutputSchema, HeaderMap: headerMap})
 	}
 	missing := make([]string, 0)
 	for _, name := range allowed {
@@ -432,9 +517,24 @@ func (b *httpBackend) Call(ctx context.Context, tool string, args map[string]any
 		return nil, b.fail(contract.FailurePermissionDenied,
 			"tool %q is not in this backend's tools", tool)
 	}
+	if err := b.ensure(ctx); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	modern := b.activeModern
+	supportsTools := b.discovery.SupportsTools()
+	b.mu.Unlock()
+	if modern && !supportsTools {
+		return nil, b.fail(contract.FailureUnavailable, "server did not advertise tools capability")
+	}
 	if args == nil {
 		args = map[string]any{}
 	}
+	headerValues, headerErr := headerValues(b.catalog.headerMap(tool), args)
+	if headerErr != nil {
+		return nil, b.fail(contract.FailureInvalidInput, "tool %q: %v", tool, headerErr)
+	}
+	ctx = context.WithValue(ctx, modernHeaderValuesKey{}, headerValues)
 	return b.request(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
 }
 
@@ -443,8 +543,11 @@ func (b *httpBackend) Call(ctx context.Context, tool string, args map[string]any
 // one of its users goes away is not shared.
 func (b *httpBackend) Close() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.session, b.open = "", false
+	b.activeModern = false
+	b.protocol.Observed = mcpcompat.Unknown
+	b.discovery = mcpcompat.Discovery{}
+	b.mu.Unlock()
 	b.generation.Add(1)
 	b.catalog.invalidate()
 	b.setCatalogDrift(CatalogDrift{})
@@ -510,30 +613,74 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 	if b.open {
 		return nil
 	}
-	// The handshake's own answer is not kept: what it says about the server
-	// is already on `atenea wrap`'s report, and a tool list taken here would
-	// be the snapshot Tools deliberately refuses to cache.
-	hello, opened, err := b.send(ctx, "initialize", map[string]any{
+	switch b.mode {
+	case ProtocolModernPin:
+		b.activeModern = true
+		return b.ensureModernLocked(ctx)
+	case ProtocolAuto:
+		b.activeModern = true
+		if err := b.ensureModernLocked(ctx); err == nil {
+			return nil
+		} else if !isProtocolFallback(err) {
+			b.activeModern = false
+			return err
+		}
+		b.activeModern = false
+		return b.ensureLegacyLocked(ctx)
+	default:
+		b.activeModern = false
+		return b.ensureLegacyLocked(ctx)
+	}
+}
+
+func (b *httpBackend) ensureLegacyLocked(ctx context.Context) error {
+	hello, opened, err := b.sendWithMode(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea", "version": "1"},
-	}, "")
+	}, "", false)
 	if err != nil {
 		return err
 	}
-	// Written under the lock this function already holds, which is what makes
-	// the field safe to read anywhere else that takes it.
 	b.version.Store(serverVersion(hello))
 	b.session = opened
-	// The notification carries the session id the initialize answer set, and
-	// a server that never issued one is talking sessionless -- which is
-	// allowed, and which the empty string already expresses.
-	if err := b.notify(ctx, "notifications/initialized", b.session); err != nil {
+	if err := b.notifyWithMode(ctx, "notifications/initialized", b.session, false); err != nil {
 		return err
 	}
+	b.protocol.Observed = mcpcompat.Legacy
 	b.open = true
 	b.generation.Add(1)
 	return nil
+}
+
+func (b *httpBackend) ensureModernLocked(ctx context.Context) error {
+	result, _, err := b.sendWithMode(ctx, "server/discover", map[string]any{}, "", true)
+	if err != nil {
+		return err
+	}
+	discovery, err := mcpcompat.ParseDiscovery(result)
+	if err != nil {
+		return err
+	}
+	b.discovery = discovery
+	name, version := modernServerInfo(result)
+	if version != "" {
+		b.version.Store(version)
+	} else {
+		b.version.Store("")
+	}
+	_ = name
+	b.session = ""
+	b.protocol.Observed = mcpcompat.Modern
+	b.open = true
+	b.generation.Add(1)
+	return nil
+}
+
+func (b *httpBackend) isModern() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.activeModern
 }
 
 // send performs one JSON-RPC round trip and returns the result member, plus
@@ -545,26 +692,45 @@ func (b *httpBackend) ensure(ctx context.Context) error {
 // that is correct for both. Handing the observation up leaves each caller to
 // record it the way its own lock allows.
 func (b *httpBackend) send(ctx context.Context, method string, params any, session string) (json.RawMessage, string, error) {
+	return b.sendWithMode(ctx, method, params, session, b.isModern())
+}
+
+func (b *httpBackend) sendWithMode(ctx context.Context, method string, params any, session string, modern bool) (json.RawMessage, string, error) {
 	// Atomic rather than guarded by mu: send is called from ensure, which
 	// already holds mu, and taking it again there would deadlock the first
 	// chat to touch a cold backend. The counter needs atomicity, not the
 	// session lock's ordering.
 	id := b.seq.Add(1)
 
+	if modern {
+		var err error
+		params, err = modernParams(params)
+		if err != nil {
+			return nil, "", b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
+		}
+		session = ""
+	}
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
 	})
 	if err != nil {
 		return nil, "", b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
 	}
-	answered, err := b.post(ctx, body, session)
+	answered, err := b.post(ctx, body, session, method, modern)
 	if err != nil {
+		var timedOut *backendTimeoutError
+		if !modern && method != "initialize" && method != "server/discover" && (ctx.Err() != nil || errors.As(err, &timedOut)) {
+			b.cancelHTTP(session, id)
+		}
 		return nil, "", err
 	}
-	if answered.code == http.StatusNotFound && session != "" {
+	if answered.code == http.StatusNotFound && session != "" && !modern {
 		return nil, "", errStaleSession
 	}
 	if answered.code >= 400 {
+		if modern && method == "server/discover" && mcpcompat.LegacyHTTPFallback(answered.code, answered.text) {
+			return nil, "", &protocolFallbackError{message: "modern discovery is not supported by this HTTP server"}
+		}
 		return nil, "", b.fail(contract.FailureUnavailable, "%s: answered %s: %s",
 			method, answered.status, clip(answered.text))
 	}
@@ -575,21 +741,64 @@ func (b *httpBackend) send(ctx context.Context, method string, params any, sessi
 	if session == "" {
 		opened = answered.session
 	}
-	payload, err := decode(answered.text)
+	payload, err := decode(answered.text, id)
 	if err != nil {
 		return nil, opened, b.fail(contract.FailureUnavailable, "%s: %v", method, err)
 	}
+	if modern && method == "server/discover" {
+		var envelope struct {
+			Error *rpcError `json:"error"`
+		}
+		if json.Unmarshal(payload, &envelope) == nil && envelope.Error != nil && envelope.Error.Code == -32601 {
+			return nil, "", &protocolFallbackError{message: envelope.Error.Message}
+		}
+	}
 	raw, err := resultOf(payload, method, b.fail)
+	if err == nil && modern {
+		if method == "server/discover" && isLegacyDiscovery(raw) {
+			return nil, "", &protocolFallbackError{message: "server selected legacy protocol"}
+		}
+		var validationErr error
+		if method == "server/discover" {
+			_, validationErr = mcpcompat.ParseDiscovery(raw)
+		} else {
+			validationErr = validateModernResult(raw, method == "tools/list" || method == "prompts/list")
+		}
+		if validationErr != nil {
+			var inputRequired *InputRequiredError
+			var futureResult *mcpcompat.FutureResultError
+			if errors.As(validationErr, &inputRequired) || errors.As(validationErr, &futureResult) {
+				return nil, "", validationErr
+			}
+			return nil, "", b.fail(contract.FailureUnavailable, "%s: %v", method, validationErr)
+		}
+	}
 	return raw, opened, err
 }
 
-// notify sends a message that is owed no answer.
-func (b *httpBackend) notify(ctx context.Context, method, session string) error {
+func (b *httpBackend) cancelHTTP(session string, id int64) {
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "notifications/canceled",
+		"params":  map[string]any{"requestId": id},
+	})
+	if err != nil {
+		return
+	}
+	ctx, done := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer done()
+	_, _ = b.post(ctx, body, session, "notifications/canceled", false)
+}
+
+func (b *httpBackend) notifyWithMode(ctx context.Context, method, session string, modern bool) error {
+	if modern {
+		session = ""
+	}
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
 	if err != nil {
 		return b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
 	}
-	answered, err := b.post(ctx, body, session)
+	answered, err := b.post(ctx, body, session, method, modern)
 	if err != nil {
 		return err
 	}
@@ -609,7 +818,8 @@ type reply struct {
 	text    string
 }
 
-func (b *httpBackend) post(ctx context.Context, body []byte, session string) (reply, error) {
+func (b *httpBackend) post(ctx context.Context, body []byte, session, method string, modern bool) (reply, error) {
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeoutFor(ctx, b.timeout))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.url, bytes.NewReader(body))
@@ -621,12 +831,31 @@ func (b *httpBackend) post(ctx context.Context, body []byte, session string) (re
 	// both: a streamable-HTTP server picks per response, and refusing one
 	// would make this depend on the mood the server is in.
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if session != "" {
+	if modern {
+		req.Header.Set("MCP-Protocol-Version", mcpcompat.Modern.String())
+		req.Header.Set("Mcp-Method", method)
+		var envelope struct {
+			Params map[string]any `json:"params"`
+		}
+		if json.Unmarshal(body, &envelope) == nil {
+			if name := modernMessageName(envelope.Params); name != "" {
+				req.Header.Set("Mcp-Name", mcpcompat.EncodeSentinelValue(name))
+			}
+			if values, ok := ctx.Value(modernHeaderValuesKey{}).(map[string]string); ok {
+				for name, value := range values {
+					req.Header.Set("Mcp-Param-"+name, value)
+				}
+			}
+		}
+	} else if session != "" {
 		req.Header.Set("Mcp-Session-Id", session)
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
 		if stopped := httpStop(ctx, err, b.id, timeoutFor(ctx, b.timeout)); stopped != nil {
+			if callerCtx.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return reply{}, &backendTimeoutError{err: stopped}
+			}
 			return reply{}, stopped
 		}
 		var wrapped *url.Error
@@ -639,6 +868,9 @@ func (b *httpBackend) post(ctx context.Context, body []byte, session string) (re
 	text, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		if stopped := httpStop(ctx, err, b.id, timeoutFor(ctx, b.timeout)); stopped != nil {
+			if callerCtx.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return reply{}, &backendTimeoutError{err: stopped}
+			}
 			return reply{}, stopped
 		}
 		return reply{}, b.fail(contract.FailureUnavailable, "reading the answer: %v", err)
@@ -674,20 +906,57 @@ func (b *httpBackend) fail(kind contract.FailureKind, format string, args ...any
 
 // decode reads a body that may be plain JSON or a single SSE event, which is
 // the same two shapes the probe already handles.
-func decode(text string) (json.RawMessage, error) {
+func decode(text string, id int64) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil, errors.New("answered with an empty body")
 	}
 	if strings.HasPrefix(trimmed, "{") {
+		var envelope struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Error  *rpcError       `json:"error"`
+		}
+		if json.Unmarshal([]byte(trimmed), &envelope) != nil || envelope.Method != "" {
+			return nil, fmt.Errorf("answered with an invalid JSON-RPC response")
+		}
+		rawID := strings.TrimSpace(string(envelope.ID))
+		if rawID == "null" && envelope.Error != nil {
+			return json.RawMessage(trimmed), nil
+		}
+		if rawID != strconv.FormatInt(id, 10) {
+			return nil, fmt.Errorf("answered id %q, want %d", rawID, id)
+		}
 		return json.RawMessage(trimmed), nil
 	}
-	for line := range strings.SplitSeq(trimmed, "\n") {
-		if payload, found := strings.CutPrefix(strings.TrimSpace(line), "data:"); found {
-			return json.RawMessage(strings.TrimSpace(payload)), nil
+	for _, event := range strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n\n") {
+		var data []string
+		for _, line := range strings.Split(event, "\n") {
+			if payload, found := strings.CutPrefix(strings.TrimRight(line, "\r"), "data:"); found {
+				data = append(data, strings.TrimSpace(payload))
+			}
+		}
+		if len(data) == 0 {
+			continue
+		}
+		payload := strings.Join(data, "\n")
+		var envelope struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Error  *rpcError       `json:"error"`
+		}
+		if json.Unmarshal([]byte(payload), &envelope) != nil || envelope.Method != "" {
+			continue
+		}
+		rawID := strings.TrimSpace(string(envelope.ID))
+		if rawID == "null" && envelope.Error != nil {
+			return json.RawMessage(payload), nil
+		}
+		if rawID == strconv.FormatInt(id, 10) {
+			return json.RawMessage(payload), nil
 		}
 	}
-	return nil, fmt.Errorf("answered with neither json nor an event: %s", clip(trimmed))
+	return nil, fmt.Errorf("answered with no event carrying a reply to request %d: %s", id, clip(trimmed))
 }
 
 func clip(text string) string {

@@ -125,6 +125,16 @@ func TestIndexPipeFailureDoesNotDiagnoseMCPAvailability(t *testing.T) {
 	}
 }
 
+func TestIndexFailureKeepsConfiguredTimeoutAfterContextExpires(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	err := indexFailure(context.DeadlineExceeded, ctx, 5*time.Millisecond)
+	if err.Kind != contract.FailureTimeout || !strings.Contains(err.Error(), "5ms") {
+		t.Fatalf("expired configured timeout was lost: %+v", err)
+	}
+}
+
 func TestMaintenanceFailedGenerationRequiresNewInputsAndRetainsHistory(t *testing.T) {
 	repo := testRepo(t)
 	fake, sess := newFakeKivgraph(t)

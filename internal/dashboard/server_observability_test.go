@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/acceptancefixture"
 	"github.com/Tutitoos/atenea/internal/observability"
 )
 
@@ -83,6 +84,46 @@ func TestRunDetailRouteIsReachable(t *testing.T) {
 	}
 }
 
+func TestWorkflowDetailRouteIsReachableAndReadOnly(t *testing.T) {
+	fixture, active, fixtureErr := acceptancefixture.Load("S12")
+	if fixtureErr != nil {
+		t.Fatal(fixtureErr)
+	}
+	workflowID := "wf-1"
+	if active {
+		var body struct {
+			Scenario string   `json:"scenario"`
+			Requires []string `json:"requires"`
+		}
+		if err := json.Unmarshal(fixture.Bytes, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Scenario == "" || len(body.Requires) == 0 {
+			t.Fatalf("unexpected sealed visibility contract: %+v", body)
+		}
+		workflowID = body.Scenario
+	}
+	s, err := NewServer(Config{Enabled: true, Listeners: []Listener{{Addr: "127.0.0.1:8788", Mode: "loopback"}}}, Provider{
+		Workflow: func(id string) (any, error) { return map[string]any{"id": id, "state": "running"}, nil },
+		Events:   observability.New(2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for method, want := range map[string]int{http.MethodGet: http.StatusOK, http.MethodPost: http.StatusMethodNotAllowed} {
+		req := httptest.NewRequest(method, "http://127.0.0.1:8788/api/v1/workflows/"+workflowID, nil)
+		req.RemoteAddr = "127.0.0.1:1"
+		res := httptest.NewRecorder()
+		s.Handler().ServeHTTP(res, req)
+		if res.Code != want {
+			t.Fatalf("%s workflow = %d body=%s", method, res.Code, res.Body.String())
+		}
+		if method == http.MethodGet && !strings.Contains(res.Body.String(), workflowID) {
+			t.Fatalf("sealed workflow id did not reach provider: %s", res.Body.String())
+		}
+	}
+}
+
 func TestSessionAndOverviewRoutesUseVersionedAPI(t *testing.T) {
 	hub := observability.New(4)
 	s, err := NewServer(Config{Enabled: true, Listeners: []Listener{{Addr: "127.0.0.1:8788", Mode: "loopback"}}}, Provider{
@@ -147,7 +188,7 @@ func TestEmbeddedReactDashboardSupportsDeepLinksWithNonceCSP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/live", "/sessions/session-1", "/runs/run-1", "/metrics"} {
+	for _, path := range []string{"/", "/live", "/sessions/session-1", "/runs/run-1", "/workflows/wf-1", "/metrics"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8788"+path, nil)
 		req.RemoteAddr = "127.0.0.1:1"
 		res := httptest.NewRecorder()

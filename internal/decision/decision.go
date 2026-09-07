@@ -24,15 +24,21 @@ type Kind string
 
 // Intent kinds supported by the deterministic decision compiler.
 const (
+	// KindUnderstand is part of ATENEA's public orchestration contract.
 	KindUnderstand Kind = "understand"
-	KindSearch     Kind = "search"
-	KindPlan       Kind = "plan"
-	KindChange     Kind = "change"
+	// KindSearch is part of ATENEA's public orchestration contract.
+	KindSearch Kind = "search"
+	// KindPlan is part of ATENEA's public orchestration contract.
+	KindPlan Kind = "plan"
+	// KindChange is part of ATENEA's public orchestration contract.
+	KindChange Kind = "change"
 )
 
 // Request is the input to the decision layer.
 type Request struct {
 	Text            string
+	Criterion       string
+	Limits          contract.Limits
 	Repository      string
 	Files           []string
 	BudgetUSD       float64
@@ -44,13 +50,14 @@ type Request struct {
 
 // ModelChoice describes the model role selected for one agent type.
 type ModelChoice struct {
-	Role      string   `json:"role"`
-	Backend   string   `json:"backend"`
-	Binary    string   `json:"binary"`
-	Name      string   `json:"name"`
-	Fallbacks []string `json:"fallbacks,omitempty"`
-	Available bool     `json:"available"`
-	Reason    string   `json:"reason"`
+	Role            string   `json:"role"`
+	Backend         string   `json:"backend"`
+	Binary          string   `json:"binary"`
+	Name            string   `json:"name"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	Fallbacks       []string `json:"fallbacks,omitempty"`
+	Available       bool     `json:"available"`
+	Reason          string   `json:"reason"`
 }
 
 // ToolChoice describes a tool surface offered to a planned agent. Native
@@ -88,6 +95,10 @@ type Reason struct {
 // budget are structurally valid.
 type Plan struct {
 	Text         string             `json:"text"`
+	Criterion    string             `json:"criterion"`
+	Limits       contract.Limits    `json:"limits"`
+	Coordinator  string             `json:"coordinator"`
+	Specialists  []string           `json:"specialists"`
 	Intent       Kind               `json:"intent"`
 	Repositories []string           `json:"repositories"`
 	Effects      []contract.Effect  `json:"effects"`
@@ -140,6 +151,12 @@ func (p Planner) Build(req Request) (Plan, error) {
 	if req.BudgetUSD == 0 {
 		req.BudgetUSD = p.Config.Orchestrator.BudgetUSD
 	}
+	if req.Limits.MaxDuration < 0 || req.Limits.MaxTokens < 0 {
+		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: limits cannot be negative")
+	}
+	if req.Limits.MaxTokens > 0 && req.Limits.MaxDuration <= 0 {
+		return Plan{}, contract.Fail(contract.FailureInvalidInput, "decision: max tokens requires a positive max duration")
+	}
 
 	repos, err := p.repositories(req.Repository)
 	if err != nil {
@@ -147,8 +164,16 @@ func (p Planner) Build(req Request) (Plan, error) {
 	}
 	intent := infer(text)
 	agent := p.agentFor(intent, req.Files)
+	criterion := strings.TrimSpace(req.Criterion)
+	if criterion == "" {
+		criterion = "all requested repositories have an evidence-backed answer and every claimed change is verified"
+	}
 	plan := Plan{
 		Text:         text,
+		Criterion:    criterion,
+		Limits:       req.Limits,
+		Coordinator:  "atenea-coordinator",
+		Specialists:  specialistRoles(agent, intent, p.Config),
 		Intent:       intent,
 		Repositories: repos,
 		Effects:      mergeEffects(req.StandingEffects, req.Effects),
@@ -158,13 +183,24 @@ func (p Planner) Build(req Request) (Plan, error) {
 			{Stage: "policy", Message: "user constraints and declared effects are applied before provider choice"},
 		},
 	}
-	plan.Models = p.modelsFor(agent, intent, firstRepository(repos))
+	plan.Models = p.modelsFor(agent, intent, firstRepository(repos), slices.Contains(plan.Effects, contract.EffectWrite))
 	plan.Tools = p.toolsFor(agent, intent, req.Tool)
 	if req.Tool != "" && !selectedToolExists(plan.Tools, req.Tool) {
 		plan.Reasons = append(plan.Reasons, Reason{Stage: "tool", Message: "requested tool is not declared or allow-listed: " + req.Tool})
 	}
 	modelsReady := true
 	toolsReady := req.Tool == "" || selectedToolExists(plan.Tools, req.Tool)
+	coordinatorReady := hasAgent(p.Config, "atenea-coordinator")
+	if !coordinatorReady {
+		plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow", Message: "atenea-coordinator agent type is required"})
+	}
+	changeChainReady := true
+	if intent == KindChange && slices.Contains(plan.Effects, contract.EffectWrite) {
+		changeChainReady = hasAgent(p.Config, "implement") && hasAgent(p.Config, "review") && hasAgent(p.Config, "audit")
+		if !changeChainReady {
+			plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow", Message: "authorized changes require declared implement, review and audit agent types"})
+		}
+	}
 	for _, model := range plan.Models {
 		if model.Available {
 			continue
@@ -196,7 +232,7 @@ func (p Planner) Build(req Request) (Plan, error) {
 		// transport failure; callers receive the invalid plan and its reasons.
 		return plan, nil //nolint:nilerr // invalid plans are reported in-band
 	}
-	plan.Valid = modelsReady && toolsReady && plan.Budget.Sufficient
+	plan.Valid = modelsReady && toolsReady && coordinatorReady && changeChainReady && plan.Budget.Sufficient
 	plan.Reasons = append(plan.Reasons, Reason{Stage: "workflow",
 		Message: fmt.Sprintf("compiled %d step(s) into %d wave(s)", len(compiled.Graph.Steps), waveCount(compiled.Graph))})
 	return plan, nil
@@ -205,19 +241,20 @@ func (p Planner) Build(req Request) (Plan, error) {
 func (p Planner) stampRoutes(plan *Plan, agent string, kind Kind) {
 	for i := range plan.Workflow.Steps {
 		step := &plan.Workflow.Steps[i]
-		role := modelRole(agent)
-		if step.TypeName == "plan" {
-			role = "plan"
+		role := modelRole(step.TypeName)
+		if role == "" {
+			role = modelRole(agent)
 		}
 		route := contract.Route{}
 		if role != "" {
 			model := p.modelChoice(role, repositoryFromStep(step.ID, plan.Repositories))
-			route.Model, route.Fallbacks, route.Backend, route.Binary = model.Name, slices.Clone(model.Fallbacks), model.Backend, model.Binary
+			route.Role = model.Role
+			route.Model, route.RequestedModel = model.Name, model.Name
+			route.Fallbacks, route.Backend, route.Binary = slices.Clone(model.Fallbacks), model.Backend, model.Binary
+			route.ReasoningEffort, route.RequestedReasoningEffort = model.ReasoningEffort, model.ReasoningEffort
 		}
 		if step.TypeName == "explore" {
 			route.Capabilities = p.capabilitiesFor(kind)
-		}
-		if step.TypeName == "explore" {
 			for _, choice := range plan.Capabilities {
 				if choice.Repository == repositoryFromStep(step.ID, plan.Repositories) && choice.Chosen != "" {
 					if route.Providers == nil {
@@ -227,20 +264,29 @@ func (p Planner) stampRoutes(plan *Plan, agent string, kind Kind) {
 				}
 			}
 		}
-		if step.TypeName != "plan" {
+		if step.TypeName != "plan" && step.TypeName != "review" && step.TypeName != "audit" {
 			for _, tool := range plan.Tools {
 				if tool.Selected {
 					route.Tools = append(route.Tools, tool.ID)
 				}
 			}
 		}
+		if strings.EqualFold(route.Backend, "codex") && p.Config.Model.NativeCodex() {
+			route.VisibilityRequired = true
+			// A visible Codex turn must stay on the native App Server. A
+			// fallback would silently change the requested transport/model.
+			route.Fallbacks = nil
+		}
 		step.Route = &route
 	}
 }
 
 func repositoryFromStep(id string, repositories []string) string {
+	if id == "coordinate" {
+		return firstRepository(repositories)
+	}
 	for _, repo := range repositories {
-		if id == "explore-"+repo || id == "plan-"+repo {
+		if id == "explore-"+repo || id == "plan-"+repo || id == "implement-"+repo || id == "review-"+repo || id == "audit-"+repo {
 			return repo
 		}
 	}
@@ -364,45 +410,83 @@ func hasAgent(cfg config.Config, name string) bool {
 	return false
 }
 
-func (p Planner) modelsFor(agent string, kind Kind, repository string) []ModelChoice {
+func (p Planner) modelsFor(agent string, kind Kind, repository string, effectful bool) []ModelChoice {
 	role := modelRole(agent)
 	if role == "" {
 		return nil
 	}
-	out := []ModelChoice{p.modelChoice(role, repository)}
+	roles := []string{role}
 	if (kind == KindPlan || kind == KindChange) && role != "plan" && hasAgent(p.Config, "plan") {
-		out = append(out, p.modelChoice("plan", repository))
+		roles = append(roles, "plan")
+	}
+	if kind == KindChange && effectful && hasAgent(p.Config, "implement") && hasAgent(p.Config, "review") && hasAgent(p.Config, "audit") {
+		roles = append(roles, "implement", "review", "audit")
+	}
+	out := make([]ModelChoice, 0, len(roles))
+	seen := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		if role == "" || seen[role] {
+			continue
+		}
+		seen[role] = true
+		out = append(out, p.modelChoice(role, repository))
 	}
 	return out
 }
 
 func modelRole(agent string) string {
 	switch agent {
+	case "atenea-coordinator":
+		return "research"
 	case "explore", "reader":
 		return "explore"
+	case "research":
+		return "research"
 	case "plan":
 		return "plan"
+	case "implement":
+		return "implement"
+	case "review", "semantic-reviewer":
+		return "review"
+	case "audit":
+		return "audit"
 	default:
 		return ""
 	}
 }
 
 func (p Planner) modelChoice(role, repository string) ModelChoice {
-	name := p.Config.Model.Explore
-	fallbacks := p.Config.Model.ExploreFallbacks
-	if role == "plan" {
-		name = p.Config.Model.Plan
-		fallbacks = p.Config.Model.PlanFallbacks
+	name, fallbacks, effort := p.Config.Model.Explore, p.Config.Model.ExploreFallbacks, ""
+	switch role {
+	case "research":
+		name, fallbacks, effort = p.Config.Model.Research, nil, p.Config.Model.ResearchReasoningEffort
+		if name == "" {
+			name = p.Config.Model.Explore
+		}
+	case "plan":
+		name, fallbacks, effort = p.Config.Model.Plan, p.Config.Model.PlanFallbacks, p.Config.Model.PlanReasoningEffort
+	case "implement":
+		name, fallbacks, effort = p.Config.Model.Implement, nil, p.Config.Model.ImplementReasoningEffort
+	case "review":
+		name, fallbacks, effort = p.Config.Model.Review, nil, p.Config.Model.ReviewReasoningEffort
+	case "audit":
+		name, fallbacks, effort = p.Config.Model.Audit, nil, p.Config.Model.AuditReasoningEffort
 	}
 	backend := p.Config.Model.Backend
 	if backend == "" {
 		backend = "claude"
 	}
+	if role == "explore" && backend == "codex" && p.Config.Model.Research != "" {
+		name, fallbacks, effort = p.Config.Model.Research, nil, p.Config.Model.ResearchReasoningEffort
+		// `explore` remains the executable agent type for compatibility, while
+		// the routed model role is the canonical Codex research profile.
+		role = "research"
+	}
 	auto := strings.EqualFold(strings.TrimSpace(name), "auto")
 	if auto {
 		candidates := autoModelCandidates(role, backend, fallbacks)
 		if len(candidates) == 0 {
-			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 				Reason: fmt.Sprintf("%s=auto needs declared model candidates for backend %s", role, backend)}
 		}
 		name = candidates[0]
@@ -410,24 +494,24 @@ func (p Planner) modelChoice(role, repository string) ModelChoice {
 	}
 	if role == "plan" && backend == "claude" {
 		if name != "" && name != "claude-opus-5" {
-			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 				Reason: fmt.Sprintf("plan role requires claude-opus-5; configured %q is not permitted", name)}
 		}
 		reason := "plan role pinned to claude-opus-5; lower-reasoning fallbacks disabled"
 		if auto {
 			reason = "auto: " + reason
 		}
-		return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+		return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 			Name: name, Available: name != "", Reason: reason}
 	}
 	if role == "plan" {
 		if !planModelAllowed(name) {
-			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+			return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 				Reason: fmt.Sprintf("plan role only permits high-reasoning models; configured %q is not permitted", name)}
 		}
 		for _, fallback := range fallbacks {
 			if !planModelAllowed(fallback) {
-				return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+				return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 					Reason: fmt.Sprintf("plan fallback %q is not a permitted high-reasoning model", fallback)}
 			}
 		}
@@ -442,7 +526,9 @@ func (p Planner) modelChoice(role, repository string) ModelChoice {
 		fallbacks = slices.DeleteFunc(slices.Clone(candidates), func(candidate string) bool { return candidate == selected })
 		name = selected
 	}
-	if role == "plan" && backend == "claude" {
+	// A decision workflow pins the selected model for every provider. Ranked
+	// candidates are planning evidence, not a runtime substitution chain.
+	if slices.Contains([]string{"explore", "research", "plan", "implement", "review", "audit"}, role) {
 		fallbacks = nil
 	}
 	available := strings.TrimSpace(name) != ""
@@ -452,7 +538,7 @@ func (p Planner) modelChoice(role, repository string) ModelChoice {
 	if auto {
 		reason = "auto: " + reason
 	}
-	return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary,
+	return ModelChoice{Role: role, Backend: backend, Binary: p.Config.Model.Binary, ReasoningEffort: effort,
 		Name: name, Fallbacks: slices.Clone(fallbacks), Available: available, Reason: reason}
 }
 
@@ -461,7 +547,7 @@ func autoModelCandidates(role, backend string, declared []string) []string {
 	switch backend {
 	case "claude":
 		switch role {
-		case "explore":
+		case "explore", "research":
 			defaults = []string{"claude-sonnet-5", "claude-haiku-4-5"}
 		case "plan":
 			defaults = []string{"claude-opus-5"}
@@ -617,18 +703,28 @@ func (p Planner) workflowFor(req Request, kind Kind, agent string, repos []strin
 	// somebody set once and is not about this commission, so it is narrowed
 	// to what this agent type declares instead of refusing every plan a wide
 	// operator line touches.
-	effects := mergeEffects(p.agentEffects(agent, req.StandingEffects), req.Effects)
 	type plannedStep struct {
 		step     workflow.Step
 		estimate BudgetEstimate
 	}
-	planned := make([]plannedStep, 0, len(repos)*2)
-	for _, repo := range repos {
+	planned := make([]plannedStep, 0, len(repos)*5)
+	grantedEffects := mergeEffects(req.StandingEffects, req.Effects)
+	if hasAgent(p.Config, "atenea-coordinator") {
+		repo := firstRepository(repos)
+		estimate := p.estimate(repo, "atenea-coordinator", p.modelChoice("research", repo).Name)
+		planned = append(planned, plannedStep{step: workflow.Step{ID: "coordinate", TypeName: "atenea-coordinator",
+			Task:       contract.Task{Objective: req.Text, Files: slices.Clone(req.Files), Criterion: criterionOrDefault(req.Criterion, "validate scope and delegate no more than two specialists at once")},
+			Permission: contract.Permission{Task: req.Text, Effects: p.agentEffects("atenea-coordinator", grantedEffects)}}, estimate: estimate})
+	}
+	for repoIndex, repo := range repos {
 		id := "explore-" + repo
 		estimate := p.estimate(repo, agent, p.modelChoice(modelRole(agent), repo).Name)
 		planned = append(planned, plannedStep{step: workflow.Step{ID: id, TypeName: agent,
 			Task:       contract.Task{Objective: req.Text, Files: slices.Clone(req.Files), Criterion: "return a complete, evidence-backed repository assessment"},
-			Permission: contract.Permission{Task: req.Text, Effects: effects}}, estimate: estimate})
+			Permission: contract.Permission{Task: req.Text, Effects: p.agentEffects(agent, grantedEffects)}}, estimate: estimate})
+		if hasAgent(p.Config, "atenea-coordinator") {
+			planned[len(planned)-1].step.Needs = []string{"coordinate"}
+		}
 		if kind == KindPlan || kind == KindChange {
 			planAgent := "plan"
 			if !hasAgent(p.Config, planAgent) {
@@ -641,6 +737,26 @@ func (p Planner) workflowFor(req Request, kind Kind, agent string, repos []strin
 					Criterion: "return a valid workflow graph with explicit steps and budgets"},
 				Needs: []string{id}, Subject: id,
 				Permission: contract.Permission{Task: req.Text, Effects: []contract.Effect{contract.EffectRead}}}, estimate: estimate})
+			if kind == KindChange && slices.Contains(grantedEffects, contract.EffectWrite) && hasAgent(p.Config, "implement") && hasAgent(p.Config, "review") && hasAgent(p.Config, "audit") {
+				point := fmt.Sprintf("P%02d", repoIndex+1)
+				title := "Implementar y verificar " + repo
+				implementID := "implement-" + repo
+				implementation := workflow.Step{ID: implementID, PointID: point, PointTitle: title, TypeName: "implement",
+					Task:  contract.Task{Objective: req.Text, Files: slices.Clone(req.Files), Criterion: criterionOrDefault(req.Criterion, "apply the authorized change completely and provide test evidence")},
+					Needs: []string{planID}, Permission: contract.Permission{Task: req.Text, Effects: p.agentEffects("implement", grantedEffects)}}
+				reviewID := "review-" + repo
+				review := workflow.Step{ID: reviewID, PointID: point, PointTitle: title, TypeName: "review",
+					Task:    contract.Task{Objective: "independently review the implementation for: " + req.Text, Criterion: "approve only a complete, tested implementation"},
+					Subject: implementID, Permission: contract.Permission{Task: req.Text, Effects: []contract.Effect{contract.EffectRead}}}
+				auditID := "audit-" + repo
+				audit := workflow.Step{ID: auditID, PointID: point, PointTitle: title, TypeName: "audit",
+					Task:    contract.Task{Objective: "perform the final acceptance and security audit for: " + req.Text, Criterion: "approve only when implementation and independent review evidence are complete"},
+					Subject: reviewID, Permission: contract.Permission{Task: req.Text, Effects: []contract.Effect{contract.EffectRead}}}
+				for _, next := range []workflow.Step{implementation, review, audit} {
+					estimate := p.estimate(repo, next.TypeName, p.modelChoice(next.TypeName, repo).Name)
+					planned = append(planned, plannedStep{step: next, estimate: estimate})
+				}
+			}
 		}
 	}
 	total := 0.0
@@ -658,7 +774,32 @@ func (p Planner) workflowFor(req Request, kind Kind, agent string, repos []strin
 		}
 		steps = append(steps, step)
 	}
-	return workflow.Graph{Task: req.Text, GrantUSD: grant, Steps: steps}
+	criterion := strings.TrimSpace(req.Criterion)
+	if criterion == "" {
+		criterion = "all requested repositories have an evidence-backed answer and every claimed change is verified"
+	}
+	return workflow.Graph{Task: req.Text, Criterion: criterion, Limits: req.Limits, GrantUSD: grant, Steps: steps}
+}
+
+func criterionOrDefault(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func specialistRoles(agent string, kind Kind, cfg config.Config) []string {
+	if kind == KindChange && hasAgent(cfg, "implement") && hasAgent(cfg, "review") && hasAgent(cfg, "audit") {
+		return []string{"implementation", "verification"}
+	}
+	roles := []string{agent}
+	if (kind == KindPlan || kind == KindChange) && hasAgent(cfg, "plan") && agent != "plan" {
+		roles = append(roles, "plan")
+	}
+	if len(roles) > 2 {
+		roles = roles[:2]
+	}
+	return roles
 }
 
 func (p Planner) estimate(repository, agent, model string) BudgetEstimate {

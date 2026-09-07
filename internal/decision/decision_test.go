@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -72,8 +73,8 @@ func TestBuildSplitsBudgetAcrossExploreAndPlanSteps(t *testing.T) {
 	if len(plan.Models) != 2 || plan.Models[0].Role != "explore" || plan.Models[1].Role != "plan" {
 		t.Fatalf("models = %+v, want explore and plan roles", plan.Models)
 	}
-	if len(plan.Workflow.Steps) != 4 {
-		t.Fatalf("steps = %d, want 4", len(plan.Workflow.Steps))
+	if len(plan.Workflow.Steps) != 5 {
+		t.Fatalf("steps = %d, want coordinator plus four specialists", len(plan.Workflow.Steps))
 	}
 	var total float64
 	for _, step := range plan.Workflow.Steps {
@@ -82,14 +83,65 @@ func TestBuildSplitsBudgetAcrossExploreAndPlanSteps(t *testing.T) {
 	if total > 10+1e-9 {
 		t.Fatalf("step shares = %.12f, past grant", total)
 	}
-	if plan.Workflow.Steps[3].Subject != "explore-two" {
-		t.Fatalf("second plan subject = %q, want explore-two", plan.Workflow.Steps[3].Subject)
+	if plan.Workflow.Steps[4].Subject != "explore-two" {
+		t.Fatalf("second plan subject = %q, want explore-two", plan.Workflow.Steps[4].Subject)
 	}
 	if plan.Budget.RequiredUSD <= 0 || !plan.Budget.Sufficient {
 		t.Fatalf("budget = %+v, want a sufficient forecast", plan.Budget)
 	}
-	if plan.Workflow.Steps[0].BudgetEstimateUSD == plan.Workflow.Steps[1].BudgetEstimateUSD {
+	if plan.Workflow.Steps[1].BudgetEstimateUSD == plan.Workflow.Steps[2].BudgetEstimateUSD {
 		t.Fatal("explore and plan received the same forecast; model-aware allocation was not applied")
+	}
+}
+
+func TestBuildRoutesCodexResearchAndPlanProfilesWithoutFallbacks(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	cfg.Model = config.Model{
+		Backend: "codex", Binary: "codex",
+		CodexNative: true,
+		Research:    "gpt-5.6-sol", Plan: "gpt-5.6-sol",
+		Implement: "gpt-5.6-luna", Review: "gpt-5.6-sol", Audit: "gpt-6-astra",
+		ResearchReasoningEffort: "medium", PlanReasoningEffort: "medium",
+		ImplementReasoningEffort: "xhigh", ReviewReasoningEffort: "medium", AuditReasoningEffort: "medium",
+	}
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "preparar un plan", Repository: "repo", BudgetUSD: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Valid {
+		t.Fatalf("plan invalid: %+v", plan.Reasons)
+	}
+	if len(plan.Workflow.Steps) != 3 {
+		t.Fatalf("steps = %d, want coordinator, research and plan", len(plan.Workflow.Steps))
+	}
+	research, planned := plan.Workflow.Steps[1].Route, plan.Workflow.Steps[2].Route
+	if research == nil || research.Role != "research" || research.RequestedModel != "gpt-5.6-sol" || research.RequestedReasoningEffort != "medium" || len(research.Fallbacks) != 0 {
+		t.Fatalf("research route = %+v", research)
+	}
+	if planned == nil || planned.Role != "plan" || planned.RequestedModel != "gpt-5.6-sol" || planned.RequestedReasoningEffort != "medium" || len(planned.Fallbacks) != 0 {
+		t.Fatalf("plan route = %+v", planned)
+	}
+	if !research.VisibilityRequired || !planned.VisibilityRequired {
+		t.Fatal("codex visible routes must require the native App Server")
+	}
+}
+
+func TestBuildPersistsCoordinatorCriterionLimitsAndTwoSpecialistCeiling(t *testing.T) {
+	cfg := fixtureConfig("repo")
+	plan, err := (Planner{Config: cfg}).Build(Request{
+		Text: "preparar un plan", Repository: "repo", BudgetUSD: 10,
+		Criterion: "all findings have source and verification", Limits: contract.Limits{MaxDuration: time.Minute, MaxTokens: 400},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Criterion == "" || plan.Workflow.Criterion != plan.Criterion || plan.Workflow.Limits.MaxTokens != 400 {
+		t.Fatalf("plan metadata = %+v workflow=%+v", plan, plan.Workflow)
+	}
+	if plan.Coordinator != "atenea-coordinator" || len(plan.Specialists) != 2 {
+		t.Fatalf("topology = coordinator %q specialists %v", plan.Coordinator, plan.Specialists)
 	}
 }
 
@@ -115,7 +167,7 @@ func TestBuildRejectsACommissionBelowTheModelAwareForecast(t *testing.T) {
 	}
 }
 
-func TestRoutesCarryDeclaredModelFallbacks(t *testing.T) {
+func TestRoutesPinSelectedModelsWithoutRuntimeFallbacks(t *testing.T) {
 	cfg := fixtureConfig("repo")
 	cfg.Model.ExploreFallbacks = []string{"claude-haiku-5"}
 	cfg.Model.PlanFallbacks = []string{"claude-sonnet-5"}
@@ -125,10 +177,10 @@ func TestRoutesCarryDeclaredModelFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := plan.Workflow.Steps[0].Route.Fallbacks; len(got) != 1 || got[0] != "claude-haiku-5" {
-		t.Fatalf("explore fallbacks = %v", got)
+	if got := plan.Workflow.Steps[1].Route.Fallbacks; len(got) != 0 {
+		t.Fatalf("explore runtime fallbacks = %v", got)
 	}
-	if got := plan.Workflow.Steps[1].Route; got.Model != "claude-opus-5" || len(got.Fallbacks) != 0 {
+	if got := plan.Workflow.Steps[2].Route; got.Model != "claude-opus-5" || len(got.Fallbacks) != 0 {
 		t.Fatalf("plan route = %+v, want pinned Opus without fallback", got)
 	}
 }
@@ -146,8 +198,8 @@ func TestAutoExploreChoosesFromSafeCandidatesUsingHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := plan.Workflow.Steps[0].Route
-	if route == nil || route.Model != "claude-haiku-4-5" || len(route.Fallbacks) != 1 || route.Fallbacks[0] != "claude-sonnet-5" {
+	route := plan.Workflow.Steps[1].Route
+	if route == nil || route.Model != "claude-haiku-4-5" || len(route.Fallbacks) != 0 {
 		t.Fatalf("auto explore route = %+v", route)
 	}
 	if plan.Models[0].Reason == "" || !strings.Contains(plan.Models[0].Reason, "auto") {
@@ -165,7 +217,7 @@ func TestAutoPlanPinsClaudeToOpusWithoutDowngrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := plan.Workflow.Steps[1].Route
+	route := plan.Workflow.Steps[2].Route
 	if route == nil || route.Model != "claude-opus-5" || len(route.Fallbacks) != 0 {
 		t.Fatalf("auto plan route = %+v", route)
 	}
@@ -174,7 +226,7 @@ func TestAutoPlanPinsClaudeToOpusWithoutDowngrade(t *testing.T) {
 	}
 }
 
-func TestAutoPlanUsesOpusThenHighReasoningOpenCodeFallbacks(t *testing.T) {
+func TestAutoPlanSelectsOpusAndPinsItForOpenCode(t *testing.T) {
 	cfg := fixtureConfig("repo")
 	cfg.Model.Backend = "opencode"
 	cfg.Model.Binary = "opencode"
@@ -186,9 +238,8 @@ func TestAutoPlanUsesOpusThenHighReasoningOpenCodeFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := plan.Workflow.Steps[1].Route
-	if route == nil || route.Model != "anthropic/claude-opus-5" || len(route.Fallbacks) != 2 ||
-		route.Fallbacks[0] != "openai/gpt-5.6-sol" || route.Fallbacks[1] != "openai/gpt-5.6-luna" {
+	route := plan.Workflow.Steps[2].Route
+	if route == nil || route.Model != "anthropic/claude-opus-5" || len(route.Fallbacks) != 0 {
 		t.Fatalf("OpenCode auto plan route = %+v", route)
 	}
 }
@@ -237,6 +288,10 @@ func fixtureConfig(repositories ...string) config.Config {
 	for _, id := range repositories {
 		cfg.Repositories = append(cfg.Repositories, contract.Repository{ID: id, Path: "/tmp/" + id})
 	}
+	cfg.Agents = append(cfg.Agents, config.AgentType{Spec: contract.AgentTypeSpec{
+		Name: "atenea-coordinator", Kind: contract.AgentOrchestrator,
+		Result: []contract.Field{{Name: "result", Type: contract.TypeString, Required: true}},
+	}, Effects: []contract.Effect{contract.EffectRead, contract.EffectWrite}})
 	for _, name := range []string{"reader", "explore", "plan"} {
 		typeDef := config.AgentType{Spec: contract.AgentTypeSpec{
 			Name: name, Kind: contract.AgentSpecialized,
@@ -286,11 +341,17 @@ func TestIntentIsClassifiedOnWholeWordsNotSubstrings(t *testing.T) {
 // for confirmation over a permission its steps never received.
 func TestStandingEffectsReachTheStepsAndNotOnlyThePrintedPlan(t *testing.T) {
 	cfg := fixtureConfig("repo")
-	// The agent types have to declare write for it to be inside their
-	// ceiling; a standing grant wider than the type is narrowed instead, as
-	// the reader shape above shows.
-	for i := range cfg.Agents {
-		cfg.Agents[i].Effects = append(cfg.Agents[i].Effects, contract.EffectWrite)
+	cfg.Model.Implement, cfg.Model.Review, cfg.Model.Audit = "luna", "sol", "astra"
+	for _, name := range []string{"implement", "review", "audit"} {
+		typeDef := config.AgentType{Spec: contract.AgentTypeSpec{Name: name, Kind: contract.AgentSpecialized,
+			Result: []contract.Field{{Name: "result", Type: contract.TypeString, Required: true}}},
+			Effects: []contract.Effect{contract.EffectRead}}
+		if name == "implement" {
+			typeDef.Effects = append(typeDef.Effects, contract.EffectWrite)
+		} else {
+			typeDef.Pool, typeDef.ReadsSubject = config.PoolReview, true
+		}
+		cfg.Agents = append(cfg.Agents, typeDef)
 	}
 
 	plan, err := (Planner{Config: cfg}).Build(Request{
@@ -306,19 +367,24 @@ func TestStandingEffectsReachTheStepsAndNotOnlyThePrintedPlan(t *testing.T) {
 	if !slices.Contains(plan.Effects, contract.EffectWrite) {
 		t.Fatalf("plan effects = %v, want the standing write the operator granted", plan.Effects)
 	}
-	explored := 0
+	implemented := 0
 	for _, step := range plan.Workflow.Steps {
-		if !strings.HasPrefix(step.ID, "explore-") {
+		if !strings.HasPrefix(step.ID, "implement-") {
 			continue
 		}
-		explored++
+		implemented++
 		if !slices.Contains(step.Permission.Effects, contract.EffectWrite) {
 			t.Errorf("step %s carries %v, but the plan promised %v",
 				step.ID, step.Permission.Effects, plan.Effects)
 		}
 	}
-	if explored == 0 {
-		t.Fatal("no explore step was planned, so this proves nothing")
+	if implemented == 0 {
+		t.Fatal("no implementation step was planned, so this proves nothing")
+	}
+	for _, step := range plan.Workflow.Steps {
+		if strings.HasPrefix(step.ID, "explore-") && slices.Contains(step.Permission.Effects, contract.EffectWrite) {
+			t.Fatal("exploration received the implementation write grant")
+		}
 	}
 	// And never the other way round: a step may not carry an effect the plan
 	// did not print, because the printed list is what was agreed to.

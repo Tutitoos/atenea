@@ -45,6 +45,24 @@ func (g Graph) Effects() []contract.Effect {
 	return out
 }
 
+// Operations reports the explicit sensitive actions declared by the graph.
+// It is kept separate from Effects so a generic write never authorizes a
+// commit, push, install, deploy, migration, or merge.
+func (g Graph) Operations() []contract.Operation {
+	seen := make(map[contract.Operation]struct{})
+	for _, step := range g.Steps {
+		for _, operation := range step.Permission.Operations {
+			seen[operation] = struct{}{}
+		}
+	}
+	out := make([]contract.Operation, 0, len(seen))
+	for operation := range seen {
+		out = append(out, operation)
+	}
+	slices.SortFunc(out, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
+
 // Step is one node: an agent assignment, plus its place in the graph.
 //
 // It names an agent TYPE, not a capability. A capability step goes through the
@@ -54,11 +72,18 @@ func (g Graph) Effects() []contract.Effect {
 // which every time.
 type Step struct {
 	ID string
+	// PointID groups internal steps into one user-visible plan point. Empty
+	// leaves the step outside progress accounting.
+	PointID    string
+	PointTitle string
 	// TypeName is the declared [[agent]] this step runs.
 	TypeName string
 	// Task is the assignment: what to do, over which files, and what done
 	// looks like.
 	Task contract.Task
+	// Limits is the per-dispatch view of the coordinator ceiling. It is
+	// persisted with the step so a resumed assignment receives the same cap.
+	Limits contract.Limits
 	// Needs lists the step ids that must finish OK before this one starts.
 	// Empty means it can start immediately.
 	Needs []string
@@ -102,6 +127,7 @@ const (
 	// somebody validated: ok, failed or incomplete. It is the default because
 	// "it says it failed" is the claim most worth auditing, and a reviewer
 	// that only ever sees successes audits the half that needs it least.
+	// OnAnswered is part of ATENEA's public orchestration contract.
 	OnAnswered Requirement = iota
 	// OnOK runs the dependent only if the subject succeeded.
 	OnOK
@@ -187,6 +213,14 @@ type Graph struct {
 	// permission is a slice OF, so it is stamped onto any step that did not
 	// carry it.
 	Task string
+	// Criterion is the coordinator-level acceptance statement. Step criteria
+	// remain authoritative for dispatch, while this field makes the original
+	// commission reviewable after a reconnect.
+	Criterion string
+	// Limits are the caller's durable execution limits. A zero value keeps the
+	// historical graph behavior; non-zero values are copied into the workflow
+	// policy before launch.
+	Limits contract.Limits
 	// GrantUSD is the ceiling for the whole graph. The shares handed to the
 	// steps are divided out of it and may not add up to more, because money
 	// is split rather than copied -- see [contract.Permission].
@@ -204,6 +238,7 @@ func (g Graph) Clone() Graph {
 }
 
 var stepID = regexp.MustCompile(`^[a-z0-9]+(?:[-.][a-z0-9]+)*$`)
+var pointID = regexp.MustCompile(`^P[0-9]{2,}$`)
 
 // Plan is a graph that has been checked against the declared agent types: the
 // shape holds, every type resolves, and every step's lane is known.
@@ -254,6 +289,11 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 		return Plan{}, contract.Fail(contract.FailureInvalidInput,
 			"workflow: grant must not be negative, got %v", graph.GrantUSD)
 	}
+	if graph.Limits.MaxDuration != 0 || graph.Limits.MaxTokens != 0 {
+		if err := graph.Limits.Validate(); err != nil {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput, "workflow: %v", err)
+		}
+	}
 
 	declared := make(map[string]config.AgentType, len(types))
 	for _, t := range types {
@@ -265,9 +305,22 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 		Pools: make(map[string]config.Pool, len(graph.Steps)),
 		order: make(map[string]int, len(graph.Steps)),
 	}
+	pointTitles := make(map[string]string)
+	stepPoints := make(map[string]string)
+	stepRoles := make(map[string]string)
+	stepPools := make(map[string]config.Pool)
+	pointImplementations := make(map[string][]string)
 	var shares float64
 	for i := range out.Graph.Steps {
 		step := &out.Graph.Steps[i]
+		if step.Limits.MaxDuration == 0 && step.Limits.MaxTokens == 0 {
+			step.Limits = graph.Limits
+		}
+		if step.Limits.MaxDuration != 0 || step.Limits.MaxTokens != 0 {
+			if err := step.Limits.Validate(); err != nil {
+				return Plan{}, contract.Fail(contract.FailureInvalidInput, "workflow: step %s: %v", step.ID, err)
+			}
+		}
 		if !stepID.MatchString(step.ID) {
 			return Plan{}, contract.Fail(contract.FailureInvalidInput,
 				"workflow: step id %q must be lowercase", step.ID)
@@ -277,6 +330,20 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 				"workflow: step %s is declared twice", step.ID)
 		}
 		out.order[step.ID] = i
+		if (step.PointID == "") != (strings.TrimSpace(step.PointTitle) == "") {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: step %s must declare point_id and point_title together", step.ID)
+		}
+		if step.PointID != "" && !pointID.MatchString(step.PointID) {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: step %s point id %q must use P followed by at least two digits", step.ID, step.PointID)
+		}
+		if title, exists := pointTitles[step.PointID]; step.PointID != "" && exists && title != step.PointTitle {
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: point %s has conflicting titles %q and %q", step.PointID, title, step.PointTitle)
+		} else if step.PointID != "" {
+			pointTitles[step.PointID] = step.PointTitle
+		}
 
 		// A step's permission is a slice of the commission's, so the
 		// commission is what it says it came from. Filling it here rather
@@ -334,6 +401,42 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 				step.ID, step.On)
 		}
 		out.Pools[step.ID] = agentType.Pool
+		role := strings.ToLower(strings.TrimSpace(step.TypeName))
+		if step.Route != nil && strings.TrimSpace(step.Route.Role) != "" {
+			role = strings.ToLower(strings.TrimSpace(step.Route.Role))
+		}
+		stepPoints[step.ID], stepRoles[step.ID], stepPools[step.ID] = step.PointID, role, agentType.Pool
+		if step.PointID != "" && (role == "implement" || slices.Contains(step.Permission.Effects, contract.EffectWrite)) {
+			pointImplementations[step.PointID] = append(pointImplementations[step.PointID], step.ID)
+		}
+	}
+	for _, pointID := range slices.Sorted(maps.Keys(pointImplementations)) {
+		implementations := pointImplementations[pointID]
+		for _, implementationID := range implementations {
+			linked := false
+			for _, review := range out.Graph.Steps {
+				if stepPoints[review.ID] != pointID || stepRoles[review.ID] != "review" ||
+					stepPools[review.ID] != config.PoolReview || review.Subject != implementationID {
+					continue
+				}
+				for _, audit := range out.Graph.Steps {
+					if stepPoints[audit.ID] == pointID && stepRoles[audit.ID] == "audit" &&
+						stepPools[audit.ID] == config.PoolReview && audit.Subject == review.ID {
+						linked = true
+						break
+					}
+				}
+				if linked {
+					break
+				}
+			}
+			if linked {
+				continue
+			}
+			return Plan{}, contract.Fail(contract.FailureInvalidInput,
+				"workflow: implementation point %s requires review and audit: step %s needs a same-point review subject and audit of that review",
+				pointID, implementationID)
+		}
 	}
 
 	// Money is split, not copied: four steps each handed the whole grant

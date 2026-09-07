@@ -274,6 +274,35 @@ func TestARedoPastTheGrantIsRefusedUntilTheGrantIsRaised(t *testing.T) {
 	}
 }
 
+func TestARedoCannotRaiseGrantPastWorkflowPolicyBudget(t *testing.T) {
+	dir := t.TempDir()
+	profiles := []config.WorkflowProfile{{Name: "bounded", Version: "v1", MaxBudgetUSD: 0.25}}
+	h := newHarnessWith(t, workflow.Options{ProfileName: "bounded", Profiles: profiles}, dir,
+		declared("reader", cutAtCeiling(t, dir, "reader", 0.10), config.PoolAgent))
+	one := step("a", "reader", nil)
+	one.Permission.BudgetUSD = 0.10
+	graph := graphOf(one)
+	graph.GrantUSD = 0.10
+	run, err := h.engine.Start(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	_, err = h.engine.Redo(t.Context(), run.ID, []workflow.Raise{{StepID: "a", USD: 0.20}}, 0.30)
+	if err == nil {
+		t.Fatal("Redo above the immutable policy ceiling succeeded")
+	}
+	if !strings.Contains(err.Error(), "policy budget ceiling") {
+		t.Fatalf("Redo refusal = %v, want policy ceiling", err)
+	}
+	after, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after.GrantUSD != 0.10 || len(after.Superseded) != 0 {
+		t.Fatalf("refused redo changed run: grant=%.2f superseded=%d", after.GrantUSD, len(after.Superseded))
+	}
+}
+
 // A grant is raised, never lowered: rows already on the record would otherwise
 // read as having spent money nobody allowed.
 func TestAGrantIsNotLowered(t *testing.T) {
