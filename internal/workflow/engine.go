@@ -2618,7 +2618,8 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 		}
 		queued := make([]queuedDispatch, 0)
 		if !aborted && !activeExpired && !frozen {
-			for _, step := range plan.Graph.Steps {
+			for stepIndex := range plan.Graph.Steps {
+				step := plan.Graph.Steps[stepIndex]
 				if status[step.ID] != StatusPending || running[step.ID] {
 					continue
 				}
@@ -2852,6 +2853,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 					}
 					dispatch.Route = completed
 					step.Route = completed
+					plan.Graph.Steps[stepIndex].Route = completed
 				}
 				traces[step.ID] = traceID
 				lanes[pool]++

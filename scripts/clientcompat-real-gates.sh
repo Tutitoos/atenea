@@ -141,8 +141,12 @@ PY
 	if [[ "$client" == "opencode" ]]; then
 		launch_env+=("OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
 	fi
+	python_bin=$(command -v python3) || {
+		echo "python3 is required" >&2
+		exit 2
+	}
 	set +e
-	env -i "${launch_env[@]}" /usr/bin/python3 "$launcher" "$bin" "${args[@]}" >"$transcript" 2>&1 &
+	env -i "${launch_env[@]}" "$python_bin" "$launcher" "$bin" "${args[@]}" >"$transcript" 2>&1 &
 	pid=$!
 	start=$(date +%s)
 	timed_out=0

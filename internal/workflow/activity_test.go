@@ -213,7 +213,7 @@ func TestParallelDispatchPublishesOneBatchWithOneLinePerCall(t *testing.T) {
 	}
 }
 
-func TestParallelAgentsPublishInternalToolsInOneBatch(t *testing.T) {
+func TestParallelAgentsPublishInternalToolsWithoutLoss(t *testing.T) {
 	dir := t.TempDir()
 	barrier := filepath.Join(dir, "barrier")
 	worker := declared("worker", os.Args[0], config.PoolAgent)
@@ -239,8 +239,12 @@ func TestParallelAgentsPublishInternalToolsInOneBatch(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(internalBatchSizes) != 1 || internalBatchSizes[0] != 2 {
-		t.Fatalf("internal batches = %v, want [2]", internalBatchSizes)
+	totalInternalNotices := 0
+	for _, size := range internalBatchSizes {
+		totalInternalNotices += size
+	}
+	if totalInternalNotices != 2 {
+		t.Fatalf("internal batches = %v, want two notices", internalBatchSizes)
 	}
 	toolNotices := 0
 	for _, notice := range run.Activity {

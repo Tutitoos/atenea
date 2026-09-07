@@ -24,4 +24,14 @@ class DeliveryCases(unittest.TestCase):
     def test_dependency_bot_exception_still_checks_delivery_identity(self):
         snapshot={"stage":"pr","dependency_bot":True,"branch":"dependabot/go/pkg","matching_branches":1,"matching_pull_requests":1,"worktree_clean":True,"pull_request":{"body":"","base":"main","state":"OPEN","head_sha":"head"}}
         self.assertEqual(MODULE.validate(snapshot),[])
+    def test_main_is_rejected_through_every_branch_exception(self):
+        variants = [
+            {"approved_branch_exception": True},
+            {"dependency_bot": True},
+            {"private_security_advisory": True},
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                snapshot={"stage":"branch","issue":{"number":48,"state":"OPEN"},"matching_open_issues":1,"branch":"main","matching_branches":1,"worktree_clean":True,**variant}
+                self.assertIn("branch must not be main",MODULE.validate(snapshot))
 if __name__ == "__main__": unittest.main()

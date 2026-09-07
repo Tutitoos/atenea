@@ -268,7 +268,15 @@ func (r *Runner) PrepareNativeChild(ctx context.Context, d Dispatch) (string, er
 	} else if writes {
 		return "", contract.Fail(contract.FailurePermissionDenied, "agent: native non-implement child cannot receive write authorization")
 	}
-	client, err := adaptercodex.NewAppServerClient(adaptercodex.AppServerOptions{Binary: d.Route.Binary})
+	if childThreadID := strings.TrimSpace(d.Route.ThreadID); childThreadID != "" {
+		if d.Route.NativeForkState != "complete" {
+			return "", contract.Fail(contract.FailureInvalidInput, "agent: native child thread requires a completed fork")
+		}
+		return childThreadID, nil
+	}
+	client, err := adaptercodex.NewAppServerClient(adaptercodex.AppServerOptions{
+		Binary: d.Route.Binary, IsolateAmbientHooks: true,
+	})
 	if err != nil {
 		return "", err
 	}

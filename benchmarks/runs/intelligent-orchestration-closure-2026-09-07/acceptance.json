@@ -69,7 +69,11 @@
       "real_gate_seconds": 9.81,
       "limitations": "Provider-real thread/fork passed; productive reserve, publish, fork, persist, dispatch and manual recovery are locally tested. Provider identity remains bounded by App Server receipts.",
       "schema_sha256": "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a",
-      "runtime_integration": "independently_reviewed",
+      "runtime_integration": {
+        "state": "independently_reviewed",
+        "reviewed_commit_sha": "488f376e72b07a2f08dad4bd039ee31e16dc49f7",
+        "evidence_scope": "prior_head"
+      },
       "point_status": "accepted"
     },
     "p23_real_providers": {

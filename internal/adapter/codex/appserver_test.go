@@ -28,6 +28,40 @@ type fakeAppTransport struct {
 	closed bool
 }
 
+func TestDefaultAppServerArgsTrustOnlyTheIsolatedAteneaHook(t *testing.T) {
+	plain := strings.Join(defaultAppServerArgs(AppServerOptions{}), " ")
+	if strings.Contains(plain, "--dangerously-bypass-hook-trust") {
+		t.Fatalf("default arguments trust ambient hooks: %s", plain)
+	}
+
+	isolated := defaultAppServerArgs(AppServerOptions{IsolateAmbientHooks: true, TrustAteneaHook: true})
+	joined := strings.Join(isolated, " ")
+	if isolated[0] != "--dangerously-bypass-hook-trust" || !strings.Contains(joined, "features.plugins=false") {
+		t.Fatalf("isolated arguments = %q", isolated)
+	}
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"} {
+		if !strings.Contains(joined, "hooks."+event+"=[]") {
+			t.Fatalf("isolated arguments do not clear %s: %s", event, joined)
+		}
+	}
+}
+
+func TestAppServerRejectsHookTrustWithoutIsolation(t *testing.T) {
+	_, err := NewAppServerClient(AppServerOptions{Transport: appServerFake(), TrustAteneaHook: true})
+	if err == nil || !strings.Contains(err.Error(), "requires ambient hook isolation") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAppServerRejectsManagedIsolationWithCustomCommand(t *testing.T) {
+	_, err := NewAppServerClient(AppServerOptions{
+		Binary: "codex", Command: []string{"app-server"}, IsolateAmbientHooks: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined with a custom command") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestProcessTransportBlockedWriteHonorsContext(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

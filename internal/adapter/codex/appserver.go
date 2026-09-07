@@ -74,6 +74,12 @@ type AppServerOptions struct {
 	Command         []string
 	Timeout         time.Duration
 	NativeTransport bool
+	// IsolateAmbientHooks clears every hook event and disables plugins at the
+	// process layer. A thread may then supply only its validated ATENEA hook.
+	IsolateAmbientHooks bool
+	// TrustAteneaHook enables Codex's hook-trust bypass. It is accepted only
+	// with IsolateAmbientHooks so ambient hook sources cannot inherit it.
+	TrustAteneaHook bool
 }
 
 // Client is part of ATENEA's public orchestration contract.
@@ -314,6 +320,12 @@ type Turn struct {
 
 // NewAppServerClient is part of ATENEA's public orchestration contract.
 func NewAppServerClient(opts AppServerOptions) (*Client, error) {
+	if opts.TrustAteneaHook && !opts.IsolateAmbientHooks {
+		return nil, errors.New("codex app server: trusted ATENEA hook requires ambient hook isolation")
+	}
+	if opts.Transport == nil && len(opts.Command) > 0 && (opts.IsolateAmbientHooks || opts.TrustAteneaHook) {
+		return nil, errors.New("codex app server: managed hook isolation cannot be combined with a custom command")
+	}
 	transport := opts.Transport
 	if transport == nil {
 		binary := strings.TrimSpace(opts.Binary)
@@ -322,7 +334,7 @@ func NewAppServerClient(opts AppServerOptions) (*Client, error) {
 		}
 		args := slices.Clone(opts.Command)
 		if len(args) == 0 {
-			args = []string{"--dangerously-bypass-hook-trust", appServerCommand, "--strict-config"}
+			args = defaultAppServerArgs(opts)
 		}
 		var err error
 		transport, err = NewProcessTransport(binary, args...)
@@ -335,6 +347,25 @@ func NewAppServerClient(opts AppServerOptions) (*Client, error) {
 		source.SetNotificationHandler(c.handleNotification)
 	}
 	return c, nil
+}
+
+func defaultAppServerArgs(opts AppServerOptions) []string {
+	args := []string{appServerCommand, "--strict-config"}
+	if opts.IsolateAmbientHooks {
+		args = append(args, isolatedHookConfigArgs()...)
+	}
+	if opts.TrustAteneaHook {
+		args = append([]string{"--dangerously-bypass-hook-trust"}, args...)
+	}
+	return args
+}
+
+func isolatedHookConfigArgs() []string {
+	args := []string{"-c", "features.plugins=false"}
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit", "SubagentStart", "SubagentStop", "Stop"} {
+		args = append(args, "-c", "hooks."+event+"=[]")
+	}
+	return args
 }
 
 // Events is part of ATENEA's public orchestration contract.

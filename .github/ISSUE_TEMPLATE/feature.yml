@@ -32,3 +32,5 @@ body:
     id: risks
     attributes:
       label: Dependencies, risks, and out-of-scope work
+    validations:
+      required: true

@@ -67,7 +67,10 @@ func (r Route) Validate() error {
 	if r.NativeForkState == "complete" && strings.TrimSpace(r.ThreadID) == "" {
 		return Fail(FailureInvalidInput, "route: completed native fork requires child thread id")
 	}
-	if r.ParentThreadID != "" && r.ParentThreadID == r.ThreadID {
+	if r.NativeForkState == "pending" && strings.TrimSpace(r.ThreadID) != "" {
+		return Fail(FailureInvalidInput, "route: pending native fork must not have child thread id")
+	}
+	if strings.TrimSpace(r.ParentThreadID) != "" && strings.TrimSpace(r.ParentThreadID) == strings.TrimSpace(r.ThreadID) {
 		return Fail(FailureInvalidInput, "route: parent and child thread ids must differ")
 	}
 	if r.Model != "" && r.RequestedModel != "" && strings.TrimSpace(r.Model) != strings.TrimSpace(r.RequestedModel) {

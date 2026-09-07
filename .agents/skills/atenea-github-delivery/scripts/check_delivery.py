@@ -38,7 +38,9 @@ def validate(data: object) -> list[str]:
     match = BRANCH.fullmatch(branch)
     approved_exception = data.get("approved_branch_exception", False)
     if not isinstance(approved_exception, bool): reasons.append("approved_branch_exception must be boolean")
-    if not match and approved_exception is not True and not exempt:
+    if branch == "main":
+        reasons.append("branch must not be main")
+    elif not match and approved_exception is not True and not exempt:
         reasons.append("branch does not match ATENEA naming policy")
     if match and issue_number is not None and int(match.group(2)) != issue_number:
         reasons.append("branch issue number does not match primary issue")

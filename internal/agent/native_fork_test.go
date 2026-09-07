@@ -29,3 +29,17 @@ func TestNativeForkRequiresWritePermissionOnlyForImplementer(t *testing.T) {
 		t.Fatal("review child accepted write authorization")
 	}
 }
+
+func TestNativeForkReusesDurablyCompletedChild(t *testing.T) {
+	runner := &agent.Runner{}
+	dispatch := nativeForkDispatch("research", contract.EffectRead)
+	dispatch.Route.NativeForkState = "complete"
+	dispatch.Route.ThreadID = " child-thread "
+	child, err := runner.PrepareNativeChild(t.Context(), dispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child != "child-thread" {
+		t.Fatalf("child = %q", child)
+	}
+}

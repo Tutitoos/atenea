@@ -21,7 +21,9 @@ func TestRealAppServerThreadFork(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	client, err := NewAppServerClient(AppServerOptions{Binary: binary})
+	client, err := NewAppServerClient(AppServerOptions{
+		Binary: binary, IsolateAmbientHooks: true, TrustAteneaHook: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

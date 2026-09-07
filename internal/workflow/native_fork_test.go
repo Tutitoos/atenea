@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func nativeForkEngine(t *testing.T, dispatcher workflow.Dispatcher, activity ...
 	worker := declared("worker", "/bin/true", config.PoolAgent)
 	opts := workflow.Options{
 		Runner: dispatcher, Store: store, Types: []config.AgentType{worker},
-		Lanes: noCeiling(), Parent: &parent,
+		Lanes: noCeiling(), Parent: &parent, MaxRetries: 1,
 	}
 	if len(activity) == 1 {
 		opts.Activity = activity[0]
@@ -100,6 +101,56 @@ func TestVisibleCodexSpecialistForksAndPersistsChildBeforeDispatch(t *testing.T)
 	got := stepOf(t, loaded, "specialist").Step.Route
 	if got == nil || got.ThreadID != "specialist-thread" || got.NativeForkState != "complete" {
 		t.Fatalf("persisted route = %+v", got)
+	}
+}
+
+type recoveringNativeForkDispatcher struct {
+	forkCalls     int
+	dispatchCalls int
+}
+
+func (d *recoveringNativeForkDispatcher) NextID() string {
+	return fmt.Sprintf("recovering-native-run-%d", d.dispatchCalls+1)
+}
+
+func (d *recoveringNativeForkDispatcher) PrepareNativeChild(_ context.Context, call agent.Dispatch) (string, error) {
+	d.forkCalls++
+	if call.Route.NativeForkState != "pending" || call.Route.ThreadID != "" {
+		return "", errors.New("fork was not reserved exactly once")
+	}
+	return "durable-child-thread", nil
+}
+
+func (d *recoveringNativeForkDispatcher) Dispatch(_ context.Context, call agent.Dispatch) (contract.Report, contract.Assignment, error) {
+	d.dispatchCalls++
+	cost := 0.01
+	if call.Route.NativeForkState != "complete" || call.Route.ThreadID != "durable-child-thread" {
+		return contract.Report{}, contract.Assignment{}, errors.New("dispatch lost completed native route")
+	}
+	if d.dispatchCalls == 1 {
+		return contract.Report{InvokedKnown: true, Invoked: true, Verdict: contract.VerdictIncomplete,
+				Reason: contract.Reason{Kind: contract.FailureUnavailable, Text: "transient provider failure"},
+				Spent:  contract.Charge{USD: &cost, PricedBy: "fixture"}},
+			contract.Assignment{}, contract.Fail(contract.FailureUnavailable, "transient provider failure")
+	}
+	return contract.Report{InvokedKnown: true, Invoked: true, Verdict: contract.VerdictOK,
+		Spent: contract.Charge{USD: &cost, PricedBy: "fixture"}}, contract.Assignment{}, nil
+}
+
+func TestNativeForkRecoveryReusesTheCompletedChild(t *testing.T) {
+	dispatcher := &recoveringNativeForkDispatcher{}
+	engine, _ := nativeForkEngine(t, dispatcher)
+	graph := graphOf(nativeForkStep())
+	graph.GrantUSD = 1
+	run, _, err := engine.Create(t.Context(), graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Launch(t.Context(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if dispatcher.forkCalls != 1 || dispatcher.dispatchCalls != 2 {
+		t.Fatalf("fork calls = %d, dispatch calls = %d; want 1 and 2", dispatcher.forkCalls, dispatcher.dispatchCalls)
 	}
 }
 

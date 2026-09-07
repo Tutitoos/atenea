@@ -240,6 +240,8 @@ func New(opts Options) (*Client, error) {
 	if opts.CodexNative && backend == BackendCodex {
 		nativeOptions := opts.CodexNativeOptions
 		nativeOptions.NativeTransport = true
+		nativeOptions.IsolateAmbientHooks = true
+		nativeOptions.TrustAteneaHook = true
 		if nativeOptions.Binary == "" {
 			nativeOptions.Binary = client.binary
 		}
