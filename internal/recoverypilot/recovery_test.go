@@ -195,6 +195,16 @@ func TestExecuteInvalidCostWithFileStoreIsReopenableAndJSONSafe(t *testing.T) {
 	}
 }
 
+func TestLoadAttemptsRejectsTruncatedHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.jsonl")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), (1<<20)+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAttempts(path); err == nil || !strings.Contains(err.Error(), "history is incomplete") {
+		t.Fatalf("LoadAttempts oversized history = %v", err)
+	}
+}
+
 func statusOrEmpty(status string) string {
 	if status == "" {
 		return "empty"

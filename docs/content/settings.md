@@ -446,7 +446,7 @@ repository, which is why one process is the honest number.
 
 ```toml
 [model]
-backend = "claude"  # protocol: claude or opencode; omitted keeps claude
+backend = "claude"  # protocol: claude, codex or opencode; omitted keeps claude
 binary = "claude"    # the CLI that answers a turn; a bare name is looked up on PATH
 timeout = "180s"     # per turn; long enough for repository explore and plan turns
 explore = ""         # model, or "auto", for repository exploration

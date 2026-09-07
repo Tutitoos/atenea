@@ -64,16 +64,15 @@ func main() {
 	validateOnly := flag.Bool("validate-only", false, "validate an existing summary")
 	input := flag.String("input", "benchmarks/runs/latest/summary.json", "summary used with render-only")
 	flag.Parse()
+	if err := checkInvocation(*profile, flag.Args()); err != nil {
+		fatal(err)
+	}
 	if *corpusOnly {
 		if err := runCorpus(ctx, *output, *corpusRoot, *expectedCorpusHash); err != nil {
 			fatal(err)
 		}
 		return
 	}
-	if err := checkInvocation(*profile, flag.Args()); err != nil {
-		fatal(err)
-	}
-
 	if *renderOnly || *validateOnly {
 		data, err := os.ReadFile(*input)
 		if err != nil {

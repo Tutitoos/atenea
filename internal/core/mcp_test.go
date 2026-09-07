@@ -1007,12 +1007,13 @@ func TestWorkflowLaunchSendsActivityBeforeItsResponse(t *testing.T) {
 	params, _ := c.notifications[0]["params"].(map[string]any)
 	data, _ := params["data"].(string)
 	activityItems, _ := params["activity"].([]any)
-	var identity map[string]any
-	if len(activityItems) == 1 {
-		identity, _ = activityItems[0].(map[string]any)
+	if len(activityItems) != 1 {
+		t.Fatalf("activity notification = %v", c.notifications[0])
 	}
+	identity, _ := activityItems[0].(map[string]any)
+	cursor, _ := identity["cursor"].(float64)
 	if c.notifications[0]["method"] != "notifications/message" ||
-		!strings.HasPrefix(data, "> **ATENEA · reader** —") || identity["invocation_id"] == "" || identity["cursor"].(float64) <= 0 {
+		!strings.HasPrefix(data, "> **ATENEA · reader** —") || identity["invocation_id"] == "" || cursor <= 0 {
 		t.Fatalf("activity notification = %v", c.notifications[0])
 	}
 }

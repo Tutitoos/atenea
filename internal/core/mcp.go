@@ -646,6 +646,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			"outputSchema": output,
 		})
 	}
+	ateneaCount := len(tools)
 	// The backends' own tools come after the capabilities and are never
 	// mixed into them: a client reading this list top to bottom sees what
 	// Atenea promises first and what it merely forwards second. A backend
@@ -717,11 +718,14 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 			tools = append(tools, entry)
 		}
 	}
-	filtered := v.filterDesktopTools(tools)
-	slices.SortFunc(filtered, func(a, b map[string]any) int {
+	byName := func(a, b map[string]any) int {
 		return strings.Compare(fmt.Sprint(a["name"]), fmt.Sprint(b["name"]))
-	})
-	return map[string]any{"tools": filtered}, nil
+	}
+	capabilityTools := v.filterDesktopTools(tools[:ateneaCount])
+	slices.SortFunc(capabilityTools, byName)
+	forwarded := v.filterDesktopTools(tools[ateneaCount:])
+	slices.SortFunc(forwarded, byName)
+	return map[string]any{"tools": append(capabilityTools, forwarded...)}, nil
 }
 
 // aimable adds the repository argument to a capability's declared inputs.

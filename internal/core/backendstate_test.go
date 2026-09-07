@@ -5,7 +5,22 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestHealthNeutralFirstCallKeepsUnknownTimestampZero(t *testing.T) {
+	memory, err := newBackendMemory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Core{readings: memory}
+	c.recordBackendCall("fixture", &contract.Failure{Kind: contract.FailureInvalidInput, HealthNeutral: true, Message: "bad arguments"}, nil)
+	reading, ok := memory.reading("fixture")
+	if !ok || reading.State != BackendUnknown || !reading.At.IsZero() {
+		t.Fatalf("reading = %+v, %v, want unknown with zero timestamp", reading, ok)
+	}
+}
 
 func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp-health.json")

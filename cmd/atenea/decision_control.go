@@ -227,12 +227,10 @@ func controlCoordinator(settingsPath, verb, id, tracePath string, coordStore *co
 				if err != nil {
 					return err
 				}
-				status := coordination.StatusRunning
 				if launched.Closed {
-					status = coordination.StatusCompleted
-				}
-				if _, err := coordStore.FinishChild(ctx, id, child.Repository, status, "", time.Now().UTC()); err != nil {
-					return err
+					if _, err := coordStore.FinishChild(ctx, id, child.Repository, coordination.StatusCompleted, "", time.Now().UTC()); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -258,15 +256,13 @@ func controlCoordinator(settingsPath, verb, id, tracePath string, coordStore *co
 			if err != nil {
 				return err
 			}
-			status := coordination.StatusRunning
 			if run.Closed {
 				if err := recordCoordinatorReviewCycle(ctx, coordStore, id, run); err != nil {
 					return err
 				}
-				status = coordination.StatusCompleted
-			}
-			if _, err := coordStore.FinishChild(ctx, id, child.Repository, status, "", time.Now().UTC()); err != nil {
-				return err
+				if _, err := coordStore.FinishChild(ctx, id, child.Repository, coordination.StatusCompleted, "", time.Now().UTC()); err != nil {
+					return err
+				}
 			}
 		}
 		if allDone {

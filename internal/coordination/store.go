@@ -558,6 +558,9 @@ func (s *Store) ObserveCoordinatorThread(ctx context.Context, id, threadID strin
 
 // FinishChild is part of ATENEA's public orchestration contract.
 func (s *Store) FinishChild(ctx context.Context, id, repository, status, message string, now time.Time) (Record, error) {
+	if status != StatusCompleted && status != StatusStopped && status != StatusFailed {
+		return Record{}, contract.Fail(contract.FailureInvalidInput, "coordination: child finish status %q is not terminal", status)
+	}
 	return s.update(ctx, id, func(r *Record) error {
 		for i := range r.Children {
 			if r.Children[i].Repository == repository {

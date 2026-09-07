@@ -324,8 +324,9 @@ func (c *Core) recordBackendCall(id string, err error, backend any) {
 		previous, known := c.readings.reading(id)
 		if !known {
 			previous.State = BackendUnknown
+		} else {
+			previous.At = time.Now()
 		}
-		previous.At = time.Now()
 		previous.RequestedProtocolVersion, previous.ObservedProtocolVersion = requested, observed
 		c.readings.record(id, previous)
 		return

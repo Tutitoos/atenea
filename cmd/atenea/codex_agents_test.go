@@ -2,11 +2,45 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	adaptercodex "github.com/Tutitoos/atenea/internal/adapter/codex"
 )
+
+type failAfterWriter struct {
+	writes int
+	failAt int
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.writes >= w.failAt {
+		return 0, errors.New("write failed")
+	}
+	w.writes++
+	return len(p), nil
+}
+
+func TestPrintCodexAgentReportPropagatesEveryWriteFailure(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		report adaptercodex.SyncReport
+		failAt int
+	}{
+		{name: "header", failAt: 0},
+		{name: "pruned", report: adaptercodex.SyncReport{Pruned: []string{"old"}}, failAt: 1},
+		{name: "skipped", report: adaptercodex.SyncReport{Skipped: []string{"foreign"}}, failAt: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := printCodexAgentReport(test.report, false, &failAfterWriter{failAt: test.failAt}); err == nil {
+				t.Fatal("write failure was ignored")
+			}
+		})
+	}
+}
 
 func TestCodexAgentsCLIUsesFixtureHomesAndProjectDirectories(t *testing.T) {
 	home := t.TempDir()

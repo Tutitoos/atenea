@@ -36,6 +36,9 @@ func TestCoordinatorReceiptIsDurableAndChildBindingIsIdempotent(t *testing.T) {
 	if _, err := store.BindChild(context.Background(), record.ID, "a", "wf-other", now); err == nil {
 		t.Fatal("conflicting workflow binding was accepted")
 	}
+	if _, err := store.FinishChild(context.Background(), record.ID, "a", StatusRunning, "", now); contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("FinishChild running = %v, want invalid_input", err)
+	}
 	if _, err := store.FinishChild(context.Background(), record.ID, "a", StatusCompleted, "", now); err != nil {
 		t.Fatal(err)
 	}

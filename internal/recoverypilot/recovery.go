@@ -6,6 +6,7 @@ package recoverypilot
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -628,8 +629,16 @@ func LoadAttempts(path string) ([]Attempt, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	const attemptsByteLimit = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(f, attemptsByteLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > attemptsByteLimit {
+		return nil, fmt.Errorf("attempt log %s exceeds %d bytes; history is incomplete", path, attemptsByteLimit)
+	}
 	var out []Attempt
-	scanner := bufio.NewScanner(io.LimitReader(f, 1<<20))
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		var attempt Attempt
 		if err := json.Unmarshal(scanner.Bytes(), &attempt); err != nil {
@@ -931,7 +940,11 @@ func runFixtureSupervisor(ctx context.Context, root string) (bool, string) {
 	deadline := time.Now().Add(2 * time.Second)
 	var status supervisor.Status
 	for time.Now().Before(deadline) {
-		status = sup.Status()[0]
+		statuses := sup.Status()
+		if len(statuses) == 0 {
+			return false, "supervisor reported no child while the fixture was running"
+		}
+		status = statuses[0]
 		if status.State == supervisor.StateReady && status.Restarts >= 2 {
 			break
 		}
@@ -1236,8 +1249,12 @@ func runFixtureKivgraph(ctx context.Context, root string, duringKivgraph func())
 				}
 				select {
 				case <-cancelStarted:
-					completed := <-result
-					return completed.report, completed.err
+					select {
+					case completed := <-result:
+						return completed.report, completed.err
+					case <-indexCtx.Done():
+						return kivgraph.IndexReport{}, indexCtx.Err()
+					}
 				default:
 				}
 			}

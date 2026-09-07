@@ -208,6 +208,7 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 	}
 	if parent.Route != nil && parent.Route.ThreadID != "" {
 		if _, err := coordStore.ObserveCoordinatorThread(ctx, coordRecord.ID, parent.Route.ThreadID); err != nil {
+			_, _ = coordStore.SetStatus(ctx, coordRecord.ID, coordination.StatusFailed, err.Error())
 			return err
 		}
 	}
@@ -215,6 +216,8 @@ func cmdDecide(settingsPath string, args []string, out io.Writer) error {
 		repository, graph, workflowID := child.repository, child.graph, child.workflowID
 		engine, closeEngine, err := workflow.ServeWithParent(ctx, cfg, tracePath, repository, "cli", out, &parent)
 		if err != nil {
+			_, _ = coordStore.FinishChild(ctx, coordRecord.ID, repository, coordination.StatusFailed, err.Error(), time.Now().UTC())
+			_, _ = coordStore.SetStatus(ctx, coordRecord.ID, coordination.StatusFailed, err.Error())
 			return err
 		}
 		configureCoordinatorLimits(engine, coordStore, coordRecord.ID, workflowID)

@@ -253,7 +253,7 @@ func (r Run) Budget() string {
 		return fmt.Sprintf("%s; %s", granted, detail)
 	}
 	measured := spend.MeasuredSteps + spend.SupersededObservedSteps + spend.SupersededEstimatedSteps
-	unknown := spend.UnmeasuredSteps + spend.UnknownSteps - spend.UnmeasuredSteps + spend.SupersededUnknownSteps
+	unknown := spend.UnknownSteps + spend.SupersededUnknownSteps
 	return fmt.Sprintf("%s; %d of %d steps measured (%s)", granted,
 		measured, measured+unknown, detail)
 }

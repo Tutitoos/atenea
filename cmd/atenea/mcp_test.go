@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -18,7 +19,8 @@ func TestMCPRelayPublishesToolActivityBeforeForwarding(t *testing.T) {
 	var published atomic.Bool
 	server, err := activity.Start(func(batch []activity.Notice) error {
 		if len(batch) != 1 || batch[0].Tool != "code.search" {
-			t.Fatalf("activity = %#v", batch)
+			t.Errorf("activity = %#v", batch)
+			return errors.New("unexpected activity batch")
 		}
 		published.Store(true)
 		return nil

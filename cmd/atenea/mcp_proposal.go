@@ -123,7 +123,7 @@ func activateMCP(store *mcpactivation.Store, settingsPath string, args []string,
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "activated %s in %s from evidence %s\n", p.ID, path, p.EvidenceDigest[:12])
+	fmt.Fprintf(out, "activated %s in %s from evidence %s\n", p.ID, p.SettingsPath, p.EvidenceDigest[:12])
 	fmt.Fprintln(out, "Restart or reload the Atenea service before the integration becomes connected.")
 	return nil
 }

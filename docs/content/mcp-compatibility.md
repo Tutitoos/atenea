@@ -24,7 +24,7 @@ carry application permissions or hidden client state.
 
 Both transports preserve cancellation semantics for their era. HTTP modern
 cancellation closes the request context, while legacy cancellation uses the
-protocol notification. Stdio cancellation uses `notifications/cancelled` for
+protocol notification. stdio cancellation uses `notifications/cancelled` for
 both eras. Reconnection re-establishes the selected protocol and keeps the
 application allow-list separate from the transport lifecycle.
 

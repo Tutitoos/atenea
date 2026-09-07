@@ -15,10 +15,12 @@ func TestMCPProposalNeedsEvidenceAndExplicitActivation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			return
 		}
 		if request["method"] != "server/discover" {
-			t.Fatalf("method = %v", request["method"])
+			t.Errorf("method = %v", request["method"])
+			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"resultType": "complete", "supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}, "ttlMs": 0, "cacheScope": "private", "_meta": map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "fixture", "version": "1"}}}})
 	}))

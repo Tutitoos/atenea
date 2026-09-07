@@ -61,7 +61,7 @@ No se declara un porcentaje de mejora. Las únicas comparaciones aceptadas son l
 | Nivel | Estado |
 |---|---|
 | Implementado en la rama | Sí. |
-| Pruebas unitarias, integración, carreras, lint, tipos y build local | Sí, sujeto al resultado del cierre P18. |
+| Pruebas unitarias, integración, carreras, lint, tipos y build local | Sí; P18 aceptado localmente. |
 | Proveedores reales | Pendiente. Las pruebas usan adaptadores y proveedores simulados salvo evidencia que declare otra cosa. |
 | Chat real de Codex/ChatGPT, Claude, Oh My Pi y OpenCode | Pendiente. S12 acredita API, SSE y formato local; no acredita renderizado real. |
 | Dart semántico | No soportado y declarado como tal. |

@@ -84,8 +84,8 @@ Commands:
   incidents              Read the crash notebook; add 'clear' to mark it read
   agent TYPE [FILE]      Run one declared agent type as a process, once;
                          --objective/--criterion set the task; --confirm
-  agents scorecard       Show durable agent runs, tokens and measurement coverage
                          approves write or external effects
+  agents scorecard       Show durable agent runs, tokens and measurement coverage
   workflow VERB          Draw, launch and steer a graph of agent steps:
                          create, launch, run, propose, approve, reject,
                          resume, redo, list, show. Money is granted per graph

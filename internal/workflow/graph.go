@@ -410,7 +410,8 @@ func Compile(graph Graph, types []config.AgentType) (Plan, error) {
 			pointImplementations[step.PointID] = append(pointImplementations[step.PointID], step.ID)
 		}
 	}
-	for pointID, implementations := range pointImplementations {
+	for _, pointID := range slices.Sorted(maps.Keys(pointImplementations)) {
+		implementations := pointImplementations[pointID]
 		for _, implementationID := range implementations {
 			linked := false
 			for _, review := range out.Graph.Steps {

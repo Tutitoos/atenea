@@ -113,12 +113,18 @@ func printCodexAgentReport(report adaptercodex.SyncReport, jsonOutput bool, out 
 		_, err = fmt.Fprintln(out, string(data))
 		return err
 	}
-	_, err := fmt.Fprintf(out, "Codex agents: %s\ndigest: %s\nchanged: %t\nmatched: %t\n", report.Path, report.Digest, report.Changed, report.Matches)
+	if _, err := fmt.Fprintf(out, "Codex agents: %s\ndigest: %s\nchanged: %t\nmatched: %t\n", report.Path, report.Digest, report.Changed, report.Matches); err != nil {
+		return err
+	}
 	if len(report.Pruned) > 0 {
-		_, _ = fmt.Fprintf(out, "pruned: %s\n", strings.Join(report.Pruned, ", "))
+		if _, err := fmt.Fprintf(out, "pruned: %s\n", strings.Join(report.Pruned, ", ")); err != nil {
+			return err
+		}
 	}
 	if len(report.Skipped) > 0 {
-		_, _ = fmt.Fprintf(out, "skipped: %s\n", strings.Join(report.Skipped, ", "))
+		if _, err := fmt.Fprintf(out, "skipped: %s\n", strings.Join(report.Skipped, ", ")); err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }

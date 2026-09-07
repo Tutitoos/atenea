@@ -70,7 +70,7 @@ before sentinel and root hashes are checked. It emits only `candidate` or `unkno
 matching never certify MCP or presentation. A controlled structured recorder
 with executable identity/version/hash plus an independent observer must
 promote the result. Unknown or non-zero gate results return a non-zero exit
-status. ChatGPT Desktop and Oh My Pi are reported as manual/partial because
+status. ChatGPT Desktop and Oh My Pi are reported as manual/unknown because
 they have no safe generic injection. No real-client gate was run by `go test
 ./...`.
 

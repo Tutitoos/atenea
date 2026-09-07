@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,15 +114,15 @@ func TestAutoHTTPFallsBackOnlyOnExplicitCompatibility(t *testing.T) {
 
 func TestAutoHTTPDoesNotFallbackAuthenticationOrTimeout(t *testing.T) {
 	t.Run("authentication", func(t *testing.T) {
-		var methods int
+		var methods atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			methods++
+			methods.Add(1)
 			w.WriteHeader(http.StatusUnauthorized)
 		}))
 		defer server.Close()
 		got := mcpprobe.Probe(t.Context(), mcpprobe.Server{URL: server.URL, ProtocolMode: mcpprobe.ProtocolAuto})
-		if got.OK || methods != 1 {
-			t.Fatalf("auth result ok=%v methods=%d err=%v", got.OK, methods, got.Err)
+		if got.OK || methods.Load() != 1 {
+			t.Fatalf("auth result ok=%v methods=%d err=%v", got.OK, methods.Load(), got.Err)
 		}
 	})
 	t.Run("timeout", func(t *testing.T) {
