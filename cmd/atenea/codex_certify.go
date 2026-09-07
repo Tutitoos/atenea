@@ -239,7 +239,7 @@ func cliReconnectPrompt(c codexcert.Challenge) string {
 
 func desktopChallengePrompt(certificateID string, c codexcert.Challenge, binary, stateRoot string) string {
 	command := fmt.Sprintf("%s codex certify challenge %s --nonce %s --state %s", shellQuote(binary), certificateID, shellQuote(c.Nonce), shellQuote(stateRoot))
-	return fmt.Sprintf("Certification challenge %s. Use the shell tool exactly once to run: %s . Immediately before that call, output one Markdown line whose bold label is ATENEA, a middle dot, and the exact tool name codex.certify.challenge; after an em dash write the Spanish action 'consulto', the invocation id %s, and the purpose 'para verificar actividad y progreso.' After success, reproduce the returned result_proof, complete checklist and Progreso line. Do not call another tool.", c.Nonce, command, c.InvocationID)
+	return fmt.Sprintf("Certification challenge %s. Use the shell tool exactly once to run: %s . Immediately before that call, output one Markdown line whose bold label is ATENEA, a middle dot, and the exact tool name codex.certify.challenge; after an em dash write the Spanish action 'consulto', the invocation id %s, and the purpose 'para verificar actividad y progreso.' After success, reproduce the returned output literally and completely from nonce= through the Progreso line, including run, workflow, invocation, result_proof, desktop_process_receipt and activity. Do not call another tool.", c.Nonce, command, c.InvocationID)
 }
 
 func codexCertifyChallenge(args []string, out io.Writer) error {
