@@ -274,9 +274,15 @@ func (r *Runner) RuntimeIdentity(ctx context.Context, req contract.RunRequest) (
 	if err != nil {
 		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: err.Error()}, r.failureFor(err, call)
 	}
+	if hasBranchFallbackNotice(text) {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave is serving a fallback branch"}, branchFallbackFailure(text)
+	}
 	var status statusAnswer
 	if err := json.Unmarshal(payloadOf(text), &status); err != nil {
 		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave status unreadable"}, err
+	}
+	if status.BranchFallback {
+		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave is serving a fallback branch"}, branchFallbackFailure(text)
 	}
 	if status.Nodes == 0 && status.Edges == 0 && status.Files == 0 {
 		return contract.CacheIdentity{Observed: true, Provider: req.Implementation.Provider, Tool: toolStatus, Error: "tokensave has no graph"}, contract.Fail(contract.FailureUnavailable, "tokensave has no graph for %s", r.root)
@@ -536,6 +542,10 @@ var updateNotice = regexp.MustCompile("^⚠️ tokensave v[0-9]+\\.[0-9]+\\.[0-9
 
 var branchFallbackNotice = regexp.MustCompile(`^WARNING: branch '[^\r\n]+' is not tracked — serving from '[^\r\n]+'\.`)
 
+func hasBranchFallbackNotice(text string) bool {
+	return branchFallbackNotice.MatchString(strings.TrimSpace(updateNotice.ReplaceAllString(strings.TrimSpace(text), "")))
+}
+
 func branchFallbackFailure(text string) error {
 	return &contract.Failure{Kind: contract.FailureInvalidInput, Code: "branch_mismatch", HealthNeutral: true,
 		Message: "tokensave is serving a fallback branch; track the requested branch before retrying", Raw: text}
@@ -574,7 +584,7 @@ func (r *Runner) checkGraphReady(ctx context.Context, sess *mcpstdio.Session) er
 	if err != nil {
 		return r.failureFor(err, ctx)
 	}
-	if branchFallbackNotice.MatchString(strings.TrimSpace(updateNotice.ReplaceAllString(strings.TrimSpace(text), ""))) {
+	if hasBranchFallbackNotice(text) {
 		return branchFallbackFailure(text)
 	}
 	var status statusAnswer
