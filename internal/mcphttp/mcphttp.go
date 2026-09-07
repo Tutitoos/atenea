@@ -13,7 +13,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,16 +23,36 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
-// protocolVersion is the MCP revision this client speaks. It is stated
-// rather than negotiated down: a server that cannot answer it should say so
-// at the handshake, not halfway through a call.
-const protocolVersion = "2025-06-18"
+// ProtocolMode is part of ATENEA's public orchestration contract.
+type ProtocolMode string
+
+const (
+	// ProtocolLegacy is part of ATENEA's public orchestration contract.
+	ProtocolLegacy ProtocolMode = "legacy"
+	// ProtocolAuto is part of ATENEA's public orchestration contract.
+	ProtocolAuto ProtocolMode = "auto"
+	// ProtocolModernPin is part of ATENEA's public orchestration contract.
+	ProtocolModernPin ProtocolMode = "modern-pin"
+)
+
+// ErrInputRequired is part of ATENEA's public orchestration contract.
+var ErrInputRequired = errors.New("mcphttp: modern response requires input")
+
+// InputRequiredError is part of ATENEA's public orchestration contract.
+type InputRequiredError struct{ Response json.RawMessage }
+
+func (e *InputRequiredError) Error() string { return ErrInputRequired.Error() }
+func (e *InputRequiredError) Unwrap() error { return ErrInputRequired }
+
+const protocolVersion = string(mcpcompat.Legacy)
 
 // handshakeID is the JSON-RPC id the initialize request carries. It is a
 // constant because decode has to know which reply in an SSE stream belongs
@@ -42,6 +64,8 @@ const handshakeID = 1
 // itself. A blank name is a legitimate thing to send, but a server operator
 // staring at connection logs deserves better than an empty string.
 const defaultClientName = "mcphttp"
+
+var clientInstanceSeq atomic.Uint64
 
 // Options configure a Client.
 type Options struct {
@@ -63,17 +87,24 @@ type Options struct {
 	// Client names this process in the handshake's clientInfo.name. Empty
 	// falls back to a generic name rather than a blank one.
 	Client string
+	// ProtocolMode defaults to legacy. Auto probes modern server/discover and
+	// falls back only on an explicit compatibility response.
+	ProtocolMode ProtocolMode
 }
 
 // Client is one live MCP session against one streamable-HTTP endpoint.
 // Session state cannot be shared across endpoints: a handshake against one
 // server is meaningless to another.
 type Client struct {
-	endpoint   string
-	headers    map[string]string
-	clientName string
-	timeout    time.Duration
-	http       *http.Client
+	endpoint     string
+	headers      map[string]string
+	clientName   string
+	timeout      time.Duration
+	http         *http.Client
+	mode         ProtocolMode
+	activeModern bool
+	protocol     mcpcompat.RequestedObserved
+	discovery    mcpcompat.Discovery
 
 	// handshakeMu serializes the initialize exchange itself. wireMu cannot:
 	// the handshake is a check, a round trip, and then a write, and holding
@@ -96,7 +127,8 @@ type Client struct {
 	nextID int
 	// version is what the server called itself when the session opened.
 	// Guarded by wireMu.
-	version string
+	version  string
+	instance string
 }
 
 // New validates opts and returns a Client for its endpoint.
@@ -111,6 +143,13 @@ func New(opts Options) (*Client, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"mcphttp: timeout must not be negative, got %s", opts.Timeout)
 	}
+	mode := opts.ProtocolMode
+	if mode == "" {
+		mode = ProtocolLegacy
+	}
+	if mode != ProtocolLegacy && mode != ProtocolAuto && mode != ProtocolModernPin {
+		return nil, contract.Fail(contract.FailureInvalidInput, "mcphttp: unknown protocol mode %q", mode)
+	}
 	clientName := strings.TrimSpace(opts.Client)
 	if clientName == "" {
 		clientName = defaultClientName
@@ -119,17 +158,27 @@ func New(opts Options) (*Client, error) {
 	for k, v := range opts.Headers {
 		headers[k] = v
 	}
+	requested := mcpcompat.Legacy
+	activeModern := false
+	if mode == ProtocolAuto || mode == ProtocolModernPin {
+		requested = mcpcompat.Modern
+		activeModern = mode == ProtocolModernPin
+	}
 	return &Client{
-		endpoint:    endpoint,
-		handshakeMu: make(chan struct{}, 1),
-		headers:     headers,
-		clientName:  clientName,
-		timeout:     opts.Timeout,
+		endpoint:     endpoint,
+		handshakeMu:  make(chan struct{}, 1),
+		headers:      headers,
+		clientName:   clientName,
+		timeout:      opts.Timeout,
+		mode:         mode,
+		activeModern: activeModern,
+		protocol:     mcpcompat.RequestedObserved{Requested: requested, Observed: mcpcompat.Unknown},
 		// The per-call deadline is carried on the context (plus this
 		// client's own Timeout, applied in Call), so the http.Client keeps
 		// no timeout of its own: two ceilings on the same call would race,
 		// and the one that fired first would be the one nobody configured.
-		http: &http.Client{},
+		http:     &http.Client{},
+		instance: fmt.Sprintf("%s#%d", endpoint, clientInstanceSeq.Add(1)),
 	}, nil
 }
 
@@ -143,6 +192,52 @@ func (c *Client) Version() string {
 	return c.version
 }
 
+// Instance identifies this concrete endpoint client/session epoch. It is
+// deliberately distinct from the provider name so a reconnect cannot reuse a
+// cache entry produced by another connection.
+func (c *Client) Instance() string {
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
+	if c.session != "" {
+		return c.instance + ":" + c.session
+	}
+	return c.instance
+}
+
+// StableIdentity identifies the configured server endpoint. Session/epoch
+// counters are intentionally excluded so a reconnect with the same effective
+// configuration can recover durable quality; generation and freshness still
+// invalidate read results when the server content changes.
+func (c *Client) StableIdentity() string {
+	// Never persist or expose an endpoint. In particular, userinfo and query
+	// parameters may contain credentials or bearer material. Hash only the
+	// effective public endpoint shape so durable quality records remain stable
+	// across reconnects without being reversible.
+	effective := c.endpoint
+	if parsed, err := url.Parse(c.endpoint); err == nil {
+		parsed.User = nil
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		effective = parsed.String()
+	}
+	digest := sha256.Sum256([]byte(effective))
+	return "http:" + fmt.Sprintf("%x", digest[:])
+}
+
+// RequestedProtocolVersion is part of ATENEA's public orchestration contract.
+func (c *Client) RequestedProtocolVersion() string {
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
+	return c.protocol.RequestedOrUnknown().String()
+}
+
+// ObservedProtocolVersion is part of ATENEA's public orchestration contract.
+func (c *Client) ObservedProtocolVersion() string {
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
+	return c.protocol.ObservedOrUnknown().String()
+}
+
 // rpcRequest is one JSON-RPC call. ID is omitted for notifications, which is
 // what distinguishes them on the wire.
 type rpcRequest struct {
@@ -153,6 +248,7 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
+	ID     json.RawMessage `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  *rpcError       `json:"error"`
 }
@@ -188,10 +284,26 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (st
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
-	if err := c.handshake(ctx); err != nil {
+	if err := c.ensureProtocol(ctx); err != nil {
 		return "", err
 	}
-	raw, err := c.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	if c.isModern() {
+		c.wireMu.Lock()
+		supportsTools := c.discovery.SupportsTools()
+		c.wireMu.Unlock()
+		if !supportsTools {
+			return "", fmt.Errorf("mcphttp: modern server did not advertise tools capability")
+		}
+	}
+	params := map[string]any{"name": tool, "arguments": args}
+	if c.isModern() {
+		var err error
+		params, err = c.modernParams(params)
+		if err != nil {
+			return "", err
+		}
+	}
+	raw, err := c.rpc(ctx, "tools/call", params)
 	if err != nil {
 		return "", err
 	}
@@ -223,6 +335,166 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (st
 	return body, nil
 }
 
+func (c *Client) isModern() bool {
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
+	return c.activeModern
+}
+
+func (c *Client) ensureProtocol(ctx context.Context) error {
+	c.wireMu.Lock()
+	ready := c.ready
+	mode := c.mode
+	c.wireMu.Unlock()
+	if ready {
+		return nil
+	}
+	switch mode {
+	case ProtocolLegacy:
+		return c.handshake(ctx)
+	case ProtocolModernPin:
+		select {
+		case c.handshakeMu <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		defer func() { <-c.handshakeMu }()
+		c.wireMu.Lock()
+		if c.ready {
+			c.wireMu.Unlock()
+			return nil
+		}
+		c.activeModern = true
+		c.wireMu.Unlock()
+		if fallback, err := c.discoverModern(ctx); err != nil {
+			if fallback {
+				return fmt.Errorf("mcphttp: modern-pin refused legacy fallback: %w", err)
+			}
+			return err
+		}
+		c.wireMu.Lock()
+		c.ready = true
+		c.protocol.Observed = mcpcompat.Modern
+		c.wireMu.Unlock()
+		return nil
+	case ProtocolAuto:
+		return c.autoNegotiate(ctx)
+	}
+	return contract.Fail(contract.FailureInvalidInput, "mcphttp: invalid protocol mode %q", mode)
+}
+
+func (c *Client) modernParams(params any) (map[string]any, error) {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return nil, fmt.Errorf("mcphttp: modern params must be an object: %w", err)
+	}
+	meta := map[string]any{}
+	if existing, ok := out["_meta"].(map[string]any); ok {
+		for key, value := range existing {
+			meta[key] = value
+		}
+	}
+	meta[mcpcompat.ProtocolVersionKey] = mcpcompat.Modern.String()
+	meta[mcpcompat.ClientInfoKey] = map[string]any{"name": c.clientName, "version": "0"}
+	meta[mcpcompat.ClientCapabilitiesKey] = map[string]any{}
+	out["_meta"] = meta
+	return out, nil
+}
+
+func (c *Client) autoNegotiate(ctx context.Context) error {
+	select {
+	case c.handshakeMu <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.handshakeMu }()
+	c.wireMu.Lock()
+	if c.ready {
+		c.wireMu.Unlock()
+		return nil
+	}
+	c.activeModern = true
+	c.wireMu.Unlock()
+
+	fallback, err := c.discoverModern(ctx)
+	if err == nil {
+		c.wireMu.Lock()
+		c.ready = true
+		c.protocol.Observed = mcpcompat.Modern
+		c.wireMu.Unlock()
+		return nil
+	}
+	if !fallback {
+		c.wireMu.Lock()
+		c.activeModern = false
+		c.wireMu.Unlock()
+		return err
+	}
+	// The only downgrade path is an explicit protocol/method compatibility
+	// response. Authentication, server failures, network errors and context
+	// cancellation return above and never reach this branch.
+	c.wireMu.Lock()
+	c.activeModern = false
+	c.ready = false
+	c.protocol.Observed = mcpcompat.Legacy
+	c.wireMu.Unlock()
+	return c.legacyHandshakeLocked(ctx)
+}
+
+func (c *Client) discoverModern(ctx context.Context) (bool, error) {
+	params, err := c.modernParams(map[string]any{})
+	if err != nil {
+		return false, err
+	}
+	body, err := json.Marshal(rpcRequest{Version: "2.0", ID: handshakeID, Method: "server/discover", Params: params})
+	if err != nil {
+		return false, err
+	}
+	reply, err := c.postProtocol(ctx, body, "", true)
+	if err != nil {
+		return isCompatibleFallback(err), err
+	}
+	raw, err := decode(reply, handshakeID)
+	if err != nil {
+		return isCompatibleFallback(err), err
+	}
+	if legacyDiscovery(raw) {
+		return true, fmt.Errorf("mcphttp: server selected legacy protocol")
+	}
+	discovery, err := mcpcompat.ParseDiscovery(raw)
+	if err != nil {
+		return false, err
+	}
+	c.wireMu.Lock()
+	c.discovery = discovery
+	c.wireMu.Unlock()
+	c.recordModernResult(raw)
+	return false, nil
+}
+
+func legacyDiscovery(raw json.RawMessage) bool {
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	return json.Unmarshal(raw, &result) == nil && result.ProtocolVersion == mcpcompat.Legacy.String()
+}
+
+func isCompatibleFallback(err error) bool {
+	var rpcErr *rpcError
+	if errors.As(err, &rpcErr) {
+		return rpcErr.Code == -32601
+	}
+	var httpErr *httpResponseError
+	if errors.As(err, &httpErr) {
+		return mcpcompat.LegacyHTTPFallback(httpErr.status, httpErr.body)
+	}
+	return false
+}
+
 // handshake establishes the MCP session, once. It assumes no lock is held by
 // the caller: Call may run many times concurrently against one Client, and
 // every one of them begins by asking whether a session exists.
@@ -250,6 +522,12 @@ func (c *Client) handshake(ctx context.Context) error {
 	if established {
 		return nil
 	}
+	return c.legacyHandshakeLocked(ctx)
+}
+
+// legacyHandshakeLocked performs the old exchange while handshakeMu is held.
+// Auto negotiation uses it only after a compatible modern discovery refusal.
+func (c *Client) legacyHandshakeLocked(ctx context.Context) error {
 	body, err := json.Marshal(rpcRequest{
 		Version: "2.0",
 		ID:      handshakeID,
@@ -276,13 +554,17 @@ func (c *Client) handshake(ctx context.Context) error {
 	// nothing extra. A server that does not introduce itself leaves it
 	// empty, which is a fact rather than a guess.
 	var hello struct {
-		ServerInfo struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
 			Version string `json:"version"`
 		} `json:"serverInfo"`
 	}
 	c.wireMu.Lock()
 	if json.Unmarshal(result, &hello) == nil {
 		c.version = toolversion.Clean(hello.ServerInfo.Version)
+		if observed, parseErr := mcpcompat.Parse(hello.ProtocolVersion); parseErr == nil {
+			c.protocol.Observed = observed
+		}
 	}
 	c.wireMu.Unlock()
 	// The spec requires this notification before any tool call, and a
@@ -321,13 +603,25 @@ func (c *Client) rpc(ctx context.Context, method string, params any) (json.RawMe
 	if err != nil {
 		// A dead session must not be reused: dropping it here is what lets
 		// the next call start clean instead of failing forever.
-		c.wireMu.Lock()
-		c.session = ""
-		c.ready = false
-		c.wireMu.Unlock()
+		if !c.isModern() {
+			c.wireMu.Lock()
+			c.session = ""
+			c.ready = false
+			c.wireMu.Unlock()
+		}
 		return nil, err
 	}
-	return decode(reply, id)
+	raw, err := decode(reply, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.isModern() {
+		if err := validateModernResult(raw, method == "tools/list" || method == "prompts/list"); err != nil {
+			return nil, err
+		}
+		c.recordModernResult(raw)
+	}
+	return raw, nil
 }
 
 // answer is one HTTP exchange, read to completion.
@@ -342,6 +636,16 @@ type answer struct {
 	body        string
 }
 
+type httpResponseError struct {
+	status int
+	text   string
+	body   string
+}
+
+func (e *httpResponseError) Error() string {
+	return fmt.Sprintf("mcp server answered %s: %s", e.text, Clip(e.body))
+}
+
 // post sends one message to the endpoint and returns what came back.
 //
 // It returns the read body rather than the response on purpose: the body is
@@ -349,6 +653,10 @@ type answer struct {
 // back a reader that is already spent and a trap for whoever reads this
 // next.
 func (c *Client) post(ctx context.Context, body []byte, session string) (answer, error) {
+	return c.postProtocol(ctx, body, session, c.isModern())
+}
+
+func (c *Client) postProtocol(ctx context.Context, body []byte, session string, modern bool) (answer, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return answer{}, err
@@ -373,7 +681,18 @@ func (c *Client) post(ctx context.Context, body []byte, session string) (answer,
 	// Protocol headers are owned by the transport, not authentication overrides.
 	var sent rpcRequest
 	_ = json.Unmarshal(body, &sent)
-	if sent.Method != "initialize" {
+	if modern {
+		req.Header.Set("MCP-Protocol-Version", mcpcompat.Modern.String())
+		req.Header.Set("Mcp-Method", sent.Method)
+		if name := modernMessageName(sent.Params); name != "" {
+			req.Header.Set("Mcp-Name", mcpcompat.EncodeSentinelValue(name))
+		} else {
+			req.Header.Del("Mcp-Name")
+		}
+		// A modern transport is stateless even if a server incorrectly returns a
+		// session header; never echo or send one back.
+		req.Header.Del("Mcp-Session-Id")
+	} else if sent.Method != "initialize" {
 		req.Header.Set("MCP-Protocol-Version", protocolVersion)
 	}
 	resp, err := c.http.Do(req)
@@ -425,13 +744,34 @@ func (c *Client) post(ctx context.Context, body []byte, session string) (answer,
 		return answer{}, err
 	}
 	if resp.StatusCode >= 400 {
-		return answer{}, fmt.Errorf("mcp server answered %s: %s", resp.Status, Clip(string(text)))
+		return answer{}, &httpResponseError{status: resp.StatusCode, text: resp.Status, body: string(text)}
 	}
 	return answer{
 		session:     resp.Header.Get("Mcp-Session-Id"),
 		contentType: resp.Header.Get("Content-Type"),
 		body:        string(text),
 	}, nil
+}
+
+func modernMessageName(params any) string {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return ""
+	}
+	var fields struct {
+		Name   string `json:"name"`
+		URI    string `json:"uri"`
+		TaskID string `json:"taskId"`
+	}
+	if json.Unmarshal(encoded, &fields) != nil {
+		return ""
+	}
+	for _, value := range []string{fields.Name, fields.URI, fields.TaskID} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // decode reads the JSON-RPC response to request id out of either framing.
@@ -456,6 +796,9 @@ func decode(reply answer, id int) (json.RawMessage, error) {
 	var out rpcResponse
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
 		return nil, fmt.Errorf("mcp server sent unreadable JSON: %s", Clip(reply.body))
+	}
+	if !matchesID(out.ID, id) {
+		return nil, fmt.Errorf("mcp server answered id %q, want %d", strings.TrimSpace(string(out.ID)), id)
 	}
 	if out.Error != nil {
 		return nil, out.Error
@@ -521,6 +864,48 @@ func sseReply(text string, id int) (string, bool) {
 func matchesID(raw json.RawMessage, id int) bool {
 	text := strings.Trim(strings.TrimSpace(string(raw)), `"`)
 	return text != "" && text == strconv.Itoa(id)
+}
+
+func validateModernResult(raw json.RawMessage, cacheable bool) error {
+	result, err := mcpcompat.ParseMRTR(raw)
+	if err != nil {
+		return fmt.Errorf("mcphttp: %w", err)
+	}
+	if result.Type == mcpcompat.ResultInputRequired {
+		return &InputRequiredError{Response: append(json.RawMessage(nil), raw...)}
+	}
+	if result.Type != mcpcompat.ResultComplete {
+		return &mcpcompat.FutureResultError{Response: result}
+	}
+	if cacheable {
+		var fields struct {
+			TTLMS      *int64 `json:"ttlMs"`
+			CacheScope string `json:"cacheScope"`
+		}
+		if json.Unmarshal(raw, &fields) != nil || fields.TTLMS == nil || *fields.TTLMS < 0 || *fields.TTLMS > mcpcompat.MaxCacheTTLMS || (fields.CacheScope != "public" && fields.CacheScope != "private") {
+			return fmt.Errorf("mcphttp: cacheable modern result requires ttlMs and cacheScope public/private")
+		}
+	}
+	return nil
+}
+
+func (c *Client) recordModernResult(raw json.RawMessage) {
+	var envelope struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return
+	}
+	var info struct {
+		Version string `json:"version"`
+	}
+	c.wireMu.Lock()
+	c.protocol.Observed = mcpcompat.Modern
+	c.version = ""
+	if json.Unmarshal(envelope.Meta[mcpcompat.ServerInfoKey], &info) == nil && strings.TrimSpace(info.Version) != "" {
+		c.version = toolversion.Clean(info.Version)
+	}
+	c.wireMu.Unlock()
 }
 
 // normalizeNewlines makes the blank-line split work on a body framed with

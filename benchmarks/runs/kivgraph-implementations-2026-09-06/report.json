@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "report": "P13 symbol.implementations",
+  "date": "2026-09-06",
+  "provider_base": {
+    "name": "Kivgraph",
+    "revision": "e28323742c8f148a859dcc54045727629ab4ba8e",
+    "repository": "github.com/Tutitoos/kivgraph",
+    "observed": "upstream main"
+  },
+  "atenea": {
+    "declared": "proven",
+    "connected": "unknown",
+    "functionally_tested": "proven",
+    "evidence_level": "local",
+    "scope": "native find_implementations adapter for Go and TypeScript"
+  },
+  "wire": {
+    "tool": "find_implementations",
+    "provider_emits_resolution": false,
+    "atenea_derives_resolution": "exact after language, edge, confidence, provenance and detection validation",
+    "coverage_fields": ["exact", "candidate", "unresolved_related", "package_level"]
+  },
+  "language_matrix": [
+    {
+      "language": "go",
+      "provenance_detection": ["GO_TYPES_USE/structural", "GO_OBJECT_PATH/typed"],
+      "confidence": ["EXACT_TYPECHECKED"],
+      "edge_kind": ["IMPLEMENTS", "OVERRIDES"]
+    },
+    {
+      "language": "typescript",
+      "provenance_detection": ["TYPESCRIPT_IMPL_DECLARED/declared", "TYPESCRIPT_IMPL_STRUCTURAL/structural"],
+      "confidence": ["EXACT_TYPECHECKED", "EXACT_DECLARATION_MAPPED", "EXACT_PACKAGE_MAPPED", "STRUCTURAL_CERTAIN"],
+      "edge_kind": ["IMPLEMENTS", "OVERRIDES"]
+    }
+  ],
+  "excluded": [
+    "Dart remains rejected by Atenea preflight and awaits a real Atenea provider/client E2E observation",
+    "symbol.unresolved is not advertised"
+  ],
+  "validation": [
+    "local adapter contract tests cover exact rows, coverage-only candidates, vocabulary/evidence conflicts, pagination, snapshot and scope",
+    "provider and client connection were not observed by this artifact"
+  ]
+}

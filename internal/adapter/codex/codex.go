@@ -59,7 +59,12 @@ const DefaultTimeout = 120 * time.Second
 
 // Options configures the Codex executable and the implementations it serves.
 type Options struct {
-	Binary          string
+	Binary string
+	// HookBinary is the host-owned executable Codex starts for PreToolUse.
+	// Empty resolves to the current Atenea executable, so no helper has to be
+	// installed globally. Tests and embedded callers may provide an explicit
+	// executable.
+	HookBinary      string
 	Source          string
 	TerminalBinary  string
 	AppBinary       string
@@ -71,6 +76,7 @@ type Options struct {
 // Runner adapts one Codex executable to Atenea's runner contract.
 type Runner struct {
 	binary          string
+	hookBinary      string
 	source          string
 	terminalBinary  string
 	appBinary       string
@@ -94,12 +100,21 @@ func New(opts Options) (*Runner, error) {
 	}
 	runner := &Runner{
 		binary:          strings.TrimSpace(opts.Binary),
+		hookBinary:      strings.TrimSpace(opts.HookBinary),
 		source:          strings.TrimSpace(opts.Source),
 		terminalBinary:  strings.TrimSpace(opts.TerminalBinary),
 		appBinary:       strings.TrimSpace(opts.AppBinary),
 		implementations: slices.Clone(opts.Implementations),
 		sensitive:       slices.Clone(opts.Sensitive),
 		timeout:         opts.Timeout,
+	}
+	if runner.hookBinary == "" {
+		hookBinary, hookErr := os.Executable()
+		if hookErr != nil || strings.TrimSpace(hookBinary) == "" {
+			return nil, contract.Fail(contract.FailureUnavailable,
+				"codex adapter: Atenea hook executable is unavailable")
+		}
+		runner.hookBinary = hookBinary
 	}
 	if runner.terminalBinary == "" {
 		runner.terminalBinary = DefaultTerminalBinary
@@ -401,6 +416,7 @@ func (r *Runner) invoke(ctx context.Context, root string, req contract.RunReques
 }
 
 type response struct {
+	Message    string
 	Structured map[string]any
 	Usage      usage
 	CostUSD    float64
@@ -423,11 +439,13 @@ func (u usage) total() int {
 }
 
 type eventStream struct {
-	Message   string
-	ErrorText string
-	Usage     usage
-	CostUSD   float64
-	CostSeen  bool
+	Message       string
+	ErrorText     string
+	TerminalError string
+	TurnCompleted bool
+	Usage         usage
+	CostUSD       float64
+	CostSeen      bool
 }
 
 // scanEvents reads Codex's JSONL into out, and is the only traversal of that
@@ -510,13 +528,19 @@ func parseEventLine(line string, out *eventStream) error {
 			out.Message = item.Text
 		}
 	case "turn.completed":
+		out.TurnCompleted = true
 		_ = json.Unmarshal(raw["usage"], &out.Usage)
 		if cost, ok := costFromJSON(raw["total_cost_usd"]); ok {
 			out.CostUSD = cost
 			out.CostSeen = true
 		}
 	case "error", "turn.failed":
-		out.ErrorText += " " + eventMessage(raw)
+		message := strings.TrimSpace(eventMessage(raw))
+		if message == "" {
+			message = kind
+		}
+		out.ErrorText += " " + message
+		out.TerminalError = strings.TrimSpace(out.ErrorText)
 	}
 	return nil
 }

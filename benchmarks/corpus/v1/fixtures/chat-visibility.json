@@ -1,0 +1,5 @@
+{
+  "scenario": "client-chat-rendering",
+  "requires": ["chat-host", "live-client"],
+  "local_baseline": "unsupported"
+}

@@ -84,16 +84,20 @@ type Run struct {
 
 // The four values Kind takes.
 const (
+	// KindTask is part of ATENEA's public orchestration contract.
 	KindTask = "task"
-	KindAsk  = "ask"
+	// KindAsk is part of ATENEA's public orchestration contract.
+	KindAsk = "ask"
 	// KindPlan is a caller-supplied multi-capability DAG. It resumes directly
 	// from the graph on file; unlike KindTask it has no implicit exploration
 	// phase to reconstruct.
+	// KindPlan is part of ATENEA's public orchestration contract.
 	KindPlan = "plan"
 	// KindRaw is a passthrough: one tool on a declared backend, forwarded
 	// verbatim. It resumes like neither of the others because it does not
 	// resume at all -- there is no plan to rebuild and no step to redispatch,
 	// so a raw receipt is written once, already closed.
+	// KindRaw is part of ATENEA's public orchestration contract.
 	KindRaw = "raw"
 )
 
@@ -142,16 +146,21 @@ type StepState struct {
 	// history remains useful after the metrics attempt retention window folds.
 	// The Known flags are intentional: zero is a valid value, but absence is
 	// not evidence of zero.
-	InputTokens      int64  `json:"input_tokens,omitempty"`
-	OutputTokens     int64  `json:"output_tokens,omitempty"`
-	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
-	Tokens           int64  `json:"tokens,omitempty"`
-	TokensKnown      bool   `json:"tokens_known,omitempty"`
-	PeakRSS          int64  `json:"peak_rss,omitempty"`
-	RSSKnown         bool   `json:"rss_known,omitempty"`
-	ToolVersion      string `json:"tool_version,omitempty"`
-	SchemaHash       string `json:"schema_hash,omitempty"`
+	InputTokens      int64                     `json:"input_tokens,omitempty"`
+	OutputTokens     int64                     `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64                     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64                     `json:"cache_write_tokens,omitempty"`
+	Tokens           int64                     `json:"tokens,omitempty"`
+	TokensKnown      bool                      `json:"tokens_known,omitempty"`
+	PeakRSS          int64                     `json:"peak_rss,omitempty"`
+	RSSKnown         bool                      `json:"rss_known,omitempty"`
+	ToolVersion      string                    `json:"tool_version,omitempty"`
+	ToolInstance     string                    `json:"tool_instance,omitempty"`
+	CacheHit         bool                      `json:"cache_hit,omitempty"`
+	Coalesced        bool                      `json:"coalesced,omitempty"`
+	CacheVersion     string                    `json:"cache_version,omitempty"`
+	CacheValidation  *contract.CacheValidation `json:"cache_validation,omitempty"`
+	SchemaHash       string                    `json:"schema_hash,omitempty"`
 	// SpentUSD is what this step was charged, when anything was. It is here
 	// and not in the measurement base on purpose: the base ranks providers
 	// and money must never rank, but a receipt with no price on it is not a
@@ -208,10 +217,12 @@ const (
 	// FunnelNotKept means a funnel decided this step and nothing recorded
 	// how -- a step rebuilt from an older receipt, or one that never
 	// dispatched and so never reached the selector.
+	// FunnelNotKept is part of ATENEA's public orchestration contract.
 	FunnelNotKept = "not_kept"
 	// FunnelNone means there was no funnel to keep, because the step was a
 	// passthrough to a declared backend: one provider, nothing to choose
 	// between, and no decision that could have gone another way.
+	// FunnelNone is part of ATENEA's public orchestration contract.
 	FunnelNone = "none"
 )
 
@@ -222,9 +233,30 @@ type FunnelStage struct {
 	// of the last stage are derivable from the drops and the chosen
 	// implementation, and writing every candidate at every stage would grow
 	// the file with a list that repeats itself four times.
-	In      int          `json:"in"`
-	Out     int          `json:"out"`
-	Dropped []FunnelDrop `json:"dropped,omitempty"`
+	In      int             `json:"in"`
+	Out     int             `json:"out"`
+	Dropped []FunnelDrop    `json:"dropped,omitempty"`
+	Quality []FunnelQuality `json:"quality,omitempty"`
+}
+
+// FunnelQuality preserves the selector's declared/wired/connected/tested
+// lattice and aggregate counters without rerunning a provider on resume.
+type FunnelQuality struct {
+	Implementation string `json:"implementation"`
+	State          string `json:"state"`
+	Language       string `json:"language,omitempty"`
+	ToolVersion    string `json:"tool_version,omitempty"`
+	Instance       string `json:"instance,omitempty"`
+	ConfigDigest   string `json:"config_digest,omitempty"`
+	Samples        int    `json:"samples"`
+	Valid          int    `json:"valid"`
+	Accepted       int    `json:"accepted"`
+	Complete       int    `json:"complete"`
+	Partial        int    `json:"partial"`
+	Truncated      int    `json:"truncated"`
+	OutOfScope     int    `json:"out_of_scope"`
+	Failures       int    `json:"failures"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 // FunnelDrop is one candidate that did not survive a stage, and why.
@@ -362,6 +394,7 @@ func sanitizedRun(run Run) Run {
 		for j := range step.Funnel.Stages {
 			stage := &step.Funnel.Stages[j]
 			stage.Dropped = append([]FunnelDrop(nil), stage.Dropped...)
+			stage.Quality = append([]FunnelQuality(nil), stage.Quality...)
 			for k := range stage.Dropped {
 				stage.Dropped[k].Raw = contract.RedactRaw(stage.Dropped[k].Raw)
 			}

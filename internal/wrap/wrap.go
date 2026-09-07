@@ -154,6 +154,31 @@ type Core struct {
 	Command     []string
 }
 
+// ClientOverlay is the exact ephemeral contract consumed by a client. Keeping
+// this conversion next to the Plan renderers prevents compatibility probes
+// from inventing a second, subtly different payload format.
+type ClientOverlay struct {
+	Args []string
+	Env  map[string]string
+}
+
+// ClientOverlay is part of ATENEA's public orchestration contract.
+func (p Plan) ClientOverlay(client string, core Core) (ClientOverlay, error) {
+	switch client {
+	case "codex":
+		args, err := p.CodexArgs(core)
+		return ClientOverlay{Args: args}, err
+	case "claude":
+		args, err := p.ClaudeArgs(core)
+		return ClientOverlay{Args: args}, err
+	case "opencode":
+		payload, err := p.OpenCodePayload(core)
+		return ClientOverlay{Env: map[string]string{"OPENCODE_CONFIG_CONTENT": payload}}, err
+	default:
+		return ClientOverlay{}, fmt.Errorf("client %q has no ephemeral MCP overlay", client)
+	}
+}
+
 // OpenCodePayload renders what goes in OPENCODE_CONFIG_CONTENT.
 //
 // Only servers that answered are in it. A refused server is left out rather

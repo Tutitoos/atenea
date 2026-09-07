@@ -32,6 +32,7 @@ func (c *Core) newDashboard() (*dashboard.Server, error) {
 		Session:   c.dashboardSession,
 		Runs:      c.dashboardRuns,
 		Run:       c.dashboardRun,
+		Workflow:  c.dashboardWorkflow,
 		Metrics:   c.dashboardMetrics,
 		Traces:    c.dashboardTraces,
 		Incidents: c.dashboardIncidents,

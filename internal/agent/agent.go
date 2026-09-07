@@ -38,6 +38,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Tutitoos/atenea/internal/activity"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/internal/trace"
@@ -176,9 +177,21 @@ func (r *Runner) Declared() []string {
 // itself a retry or a review of anything.
 type Dispatch struct {
 	// Effects is the explicit grant; nil preserves the declared default for direct callers.
-	Effects  []contract.Effect
-	TypeName string
-	Task     contract.Task
+	Effects    []contract.Effect
+	Operations []contract.Operation
+	// WorkflowID, Worktree and PolicyDigest bind an effectful model turn to
+	// the durable workflow authorization. GrantToken is a one-shot token
+	// minted for this dispatch; it is never inherited by a child or retry.
+	AssignmentID string
+	WorkflowID   string
+	Worktree     string
+	PolicyDigest string
+	GrantToken   string
+	TypeName     string
+	Task         contract.Task
+	// Limits overrides the declared type ceiling only when the workflow has
+	// already validated a narrower durable limit.
+	Limits *contract.Limits
 	// Route carries the decision-router's selected execution surface. A child
 	// without an explicit route inherits its parent's route in Dispatch.
 	Route *contract.Route
@@ -209,6 +222,9 @@ type Dispatch struct {
 	// the workflow engine and nil everywhere else. An agent that writes a
 	// graph divides this; BudgetUSD above is its own share.
 	CommissionUSD *float64
+	// Activity receives pre-tool intent from descendants over an ephemeral,
+	// acknowledged local channel. It is process state, never assignment data.
+	Activity func([]activity.Notice) error
 }
 
 // NextID mints an execution id without dispatching anything.
@@ -244,6 +260,27 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 		}
 		declared.Effects = slices.Clone(d.Effects)
 	}
+	if d.Limits != nil {
+		limits := *d.Limits
+		if err := limits.Validate(); err != nil {
+			return contract.Report{}, contract.Assignment{}, err
+		}
+		if declared.Limits.MaxDuration > 0 && limits.MaxDuration > declared.Limits.MaxDuration {
+			return contract.Report{}, contract.Assignment{}, contract.Fail(contract.FailurePermissionDenied, "dispatch duration limit exceeds declared agent ceiling")
+		}
+		if declared.Limits.MaxTokens > 0 && (limits.MaxTokens == 0 || limits.MaxTokens > declared.Limits.MaxTokens) {
+			return contract.Report{}, contract.Assignment{}, contract.Fail(contract.FailurePermissionDenied, "dispatch token limit exceeds declared agent ceiling")
+		}
+		declared.Limits = limits
+	}
+	if d.Parent != nil {
+		for _, operation := range d.Operations {
+			if !d.Parent.AllowsOperation(operation) {
+				return contract.Report{}, contract.Assignment{}, contract.Fail(contract.FailurePermissionDenied,
+					"dispatch operation %s exceeds parent grant", operation)
+			}
+		}
+	}
 	assignment, err := r.assign(declared, d.Task, d.Parent, d.ID, d.BudgetUSD)
 	if err != nil {
 		return contract.Report{}, contract.Assignment{}, err
@@ -252,6 +289,15 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 		commission := *d.CommissionUSD
 		assignment.CommissionUSD = &commission
 	}
+	if d.AssignmentID != "" && d.AssignmentID != assignment.ID {
+		return contract.Report{}, assignment, contract.Fail(contract.FailureInvalidInput,
+			"dispatch assignment id %q does not match execution id %q", d.AssignmentID, assignment.ID)
+	}
+	assignment.Operations = slices.Clone(d.Operations)
+	assignment.WorkflowID = d.WorkflowID
+	assignment.Worktree = d.Worktree
+	assignment.PolicyDigest = d.PolicyDigest
+	assignment.GrantToken = d.GrantToken
 	if d.Route != nil {
 		route := d.Route.Clone()
 		assignment.Route = &route
@@ -267,10 +313,8 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 		rejected := d.Rejected.Clone()
 		assignment.Rejected = &rejected
 	}
-	if d.Subject != nil || d.Rejected != nil {
-		if err := assignment.Validate(); err != nil {
-			return contract.Report{}, assignment, err
-		}
+	if err := assignment.Validate(); err != nil {
+		return contract.Report{}, assignment, err
 	}
 
 	started := r.now()
@@ -292,7 +336,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 		return contract.Report{}, assignment, err
 	}
 
-	report, runErr := r.execute(ctx, declared, assignment)
+	report, runErr := r.execute(ctx, declared, assignment, d.Activity)
 	// The closing write does NOT ride the caller's context. Canceling a run
 	// is the one case where the record matters most and the caller's context
 	// is already dead: a Complete on it fails, the row stays open, and the
@@ -309,7 +353,7 @@ func (r *Runner) Dispatch(ctx context.Context, d Dispatch) (contract.Report, con
 			contract.VerdictIncomplete, death, report.Discovered); err != nil {
 			return contract.Report{}, assignment, err
 		}
-		return contract.Report{Verdict: contract.VerdictIncomplete, Reason: death, Spent: report.Spent},
+		return contract.Report{Invoked: report.Invoked, InvokedKnown: report.InvokedKnown, Verdict: contract.VerdictIncomplete, Reason: death, Spent: report.Spent},
 			assignment, contract.Fail(death.Kind, "agent %s (%s): %s",
 				assignment.ID, d.TypeName, death.Text)
 	}
@@ -372,7 +416,7 @@ func (r *Runner) assign(declared config.AgentType, task contract.Task,
 // execute spawns the process and reads its answer. Every error it returns is
 // a death.
 func (r *Runner) execute(ctx context.Context, declared config.AgentType,
-	assignment contract.Assignment) (contract.Report, error) {
+	assignment contract.Assignment, activityCallback func([]activity.Notice) error) (contract.Report, error) {
 	served, err := r.serve(ctx, assignment)
 	if err != nil {
 		return contract.Report{}, err
@@ -383,7 +427,7 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	}
 	payload, err := encodeAssignment(assignment, served, schema)
 	if err != nil {
-		return contract.Report{}, err
+		return contract.Report{InvokedKnown: true, Invoked: false}, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, assignment.Limits.MaxDuration)
@@ -394,12 +438,28 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		cmd.Dir = root
 	}
 	cmd.Env = append(os.Environ(), declared.Env...)
+	activityServer, err := activity.Start(activityCallback)
+	if err != nil {
+		return contract.Report{InvokedKnown: true, Invoked: false}, contract.Fail(contract.FailureUnavailable, "agent activity channel: %v", err)
+	}
+	if activityServer != nil {
+		defer func() { _ = activityServer.Close() }()
+		cmd.Env = append(cmd.Env, activity.Environment+"="+activityServer.Path())
+	}
 	cmd.Stdin = strings.NewReader(string(payload))
 	// An agent spawns tools of its own. Without this, canceling leaves them
 	// running and Wait blocks on pipes they still hold.
 	procgroup.Contain(cmd)
 
+	// Resolve before starting so a missing executable is a durable preflight
+	// outcome. Once Output starts, the child may have consumed work; those
+	// outcomes are marked invoked even when no charge can be measured.
+	binary := r.binary(declared.Command)
+	if _, err := exec.LookPath(binary); err != nil {
+		return contract.Report{InvokedKnown: true, Invoked: false}, deathf(contract.FailureUnavailable, "agent executable %q is unavailable: %v", binary, err)
+	}
 	stdout, runErr := procgroup.Output(cmd)
+	invoked := contract.Report{InvokedKnown: true, Invoked: true}
 	var stderr string
 	var exit *exec.ExitError
 	if errors.As(runErr, &exit) {
@@ -412,16 +472,19 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 	// truncated answer from a killed process can still parse, and reading it
 	// as an answer would turn a death into a verdict.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return contract.Report{Spent: observed}, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
+		invoked.Spent = observed
+		return invoked, stopped(ctxErr, assignment.Limits.MaxDuration, stderr)
 	}
 	if errors.Is(runErr, procgroup.ErrOutputLimit) {
-		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
+		invoked.Spent = observed
+		return invoked, deathf(contract.FailureUnavailable,
 			"%v%s", runErr, note(stderr))
 	}
 
 	report, parseErr := decodeReport(stdout)
 	if parseErr != nil {
-		return contract.Report{Spent: observed}, deathf(contract.FailureUnavailable,
+		invoked.Spent = observed
+		return invoked, deathf(contract.FailureUnavailable,
 			"%s%s", contract.MessageOf(parseErr), note(stderr))
 	}
 	if runErr != nil {
@@ -431,19 +494,21 @@ func (r *Runner) execute(ctx context.Context, declared config.AgentType,
 		if report.Spent.Validate() != nil {
 			report.Spent = contract.Charge{}
 		}
-		return contract.Report{Spent: report.Spent}, deathf(contract.FailureUnavailable,
+		invoked.Spent = report.Spent
+		return invoked, deathf(contract.FailureUnavailable,
 			"answered and then exited badly: %v%s", runErr, note(stderr))
 	}
 
 	if err := report.Spent.Validate(); err != nil {
-		return contract.Report{}, deathf(contract.FailureInvalidInput, "invalid reported charge: %v", err)
+		return invoked, deathf(contract.FailureInvalidInput, "invalid reported charge: %v", err)
 	}
 	report = report.Normalize()
+	report.InvokedKnown, report.Invoked = true, true
 	if err := report.Validate(declared.Spec); err != nil {
 		// A well-formed answer in the wrong shape is not a death of the
 		// process -- but it is a death of the ANSWER, and the same rule
 		// applies: nobody may read a result that was never checked.
-		return contract.Report{Spent: report.Spent}, deathf(contract.FailureInvalidInput,
+		return contract.Report{InvokedKnown: true, Invoked: true, Spent: report.Spent}, deathf(contract.FailureInvalidInput,
 			"the answer does not match the declared shape: %v", err)
 	}
 	return report, nil

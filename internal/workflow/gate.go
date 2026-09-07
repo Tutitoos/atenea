@@ -36,6 +36,7 @@ type Kind uint8
 const (
 	// KindLaunch is the first gate on every run: the plan as created, before
 	// anything spawns.
+	// KindLaunch is part of ATENEA's public orchestration contract.
 	KindLaunch Kind = iota
 	// KindApprove is an expansion of a run already going.
 	KindApprove
@@ -48,6 +49,7 @@ const (
 	// answer to what that step actually needed. A reader totalling what a run
 	// was allowed to spend has to be able to tell the third from the first
 	// two without diffing shares by hand.
+	// KindRedo is part of ATENEA's public orchestration contract.
 	KindRedo
 )
 
@@ -81,8 +83,11 @@ const (
 	// DecisionWaiting is a gate nobody has answered. It stays this way
 	// indefinitely: nothing here times out, because a question that expires
 	// into a default is not a question.
+	// DecisionWaiting is part of ATENEA's public orchestration contract.
 	DecisionWaiting Decision = iota
+	// DecisionApproved is part of ATENEA's public orchestration contract.
 	DecisionApproved
+	// DecisionRejected is part of ATENEA's public orchestration contract.
 	DecisionRejected
 )
 
@@ -127,6 +132,60 @@ type Proposal struct {
 	Replaces []string
 }
 
+// Operations returns the closed set of sensitive actions a proposal asks to
+// perform. It is deliberately separate from Effects: write permission never
+// implies commit, push, install, deploy, migrate or merge.
+func (p Proposal) Operations() []contract.Operation {
+	seen := make(map[contract.Operation]struct{})
+	for _, step := range p.Steps {
+		for _, operation := range step.Permission.Operations {
+			seen[operation] = struct{}{}
+		}
+	}
+	out := make([]contract.Operation, 0, len(seen))
+	for operation := range seen {
+		out = append(out, operation)
+	}
+	slices.SortFunc(out, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
+
+// Effects is part of ATENEA's public orchestration contract.
+func (p Proposal) Effects() []contract.Effect {
+	seen := make(map[contract.Effect]struct{})
+	for _, step := range p.Steps {
+		for _, effect := range step.Permission.Effects {
+			seen[effect] = struct{}{}
+		}
+	}
+	out := make([]contract.Effect, 0, len(seen))
+	for effect := range seen {
+		out = append(out, effect)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// ValidateOperations verifies the one-shot operation authorization supplied
+// with a gate answer. An approved sensitive operation must name exactly the
+// operations in the immutable proposal; extra names are rejected as well.
+func (p Proposal) ValidateOperations(provided []contract.Operation) error {
+	want := p.Operations()
+	got := slices.Clone(provided)
+	slices.SortFunc(got, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	if len(want) != len(got) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"gate authorization must name exactly the proposal operations")
+	}
+	for i := range want {
+		if want[i] != got[i] {
+			return contract.Fail(contract.FailurePermissionDenied,
+				"gate authorization does not match the proposal operations")
+		}
+	}
+	return nil
+}
+
 // Clone returns a deep copy.
 func (p Proposal) Clone() Proposal {
 	p.Steps = slices.Clone(p.Steps)
@@ -154,8 +213,8 @@ func (p Proposal) Digest() string {
 	// tie the digest to Go's field order, and reordering a declaration is
 	// exactly the kind of edit nobody expects to invalidate an approval.
 	for _, step := range p.Steps {
-		fmt.Fprintf(&b, "step\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.6f\x00%.6f\x00%.6f\x00%s\x00",
-			step.ID, step.TypeName, step.Task.Objective, step.Task.Criterion,
+		fmt.Fprintf(&b, "step\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.6f\x00%.6f\x00%.6f\x00%s\x00",
+			step.ID, step.TypeName, step.PointID, step.PointTitle, step.Task.Objective, step.Task.Criterion,
 			step.Subject, step.On, step.Permission.BudgetUSD,
 			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource)
 		for _, file := range step.Task.Files {
@@ -166,6 +225,9 @@ func (p Proposal) Digest() string {
 		}
 		for _, effect := range step.Permission.Effects {
 			fmt.Fprintf(&b, "effect\x00%s\x00", effect)
+		}
+		for _, operation := range step.Permission.Operations {
+			fmt.Fprintf(&b, "operation\x00%s\x00", operation)
 		}
 		if step.Route != nil {
 			fmt.Fprintf(&b, "route\x00%s\x00", jsonRoute(step.Route))

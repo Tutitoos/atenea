@@ -5,6 +5,50 @@ weight: 8
 
 # Codex CLI provider
 
+## Native App Server and managed agent profiles
+
+The native App Server adapter is separate from `codex exec`. It keeps a
+durable thread (`ephemeral = false` and `allowProviderModelFallback = false`),
+starts turns on that same thread, and records requested model/effort/profile
+separately from observed model, effort and runtime user agent. A reroute event
+is a hard failure for the receipt; Atenea never silently accepts a substitute
+model. Interactive Codex work uses this native transport by default and fails
+closed when it is disabled or unavailable. `codex exec` remains available
+only to a request explicitly marked invisible or CI.
+
+The first native surface is deliberately small: `initialize`, `model/list`,
+`modelProvider/capabilities/read`, `thread/start`, `turn/start`, and
+`thread/list`, plus typed thread, usage and reroute events. The adapter follows
+the local App Server 0.151.0 wire shapes. The server's initialize response
+does not carry a protocol version, so Atenea leaves the observed protocol
+unknown rather than inventing one. Direct subagent creation is not claimed by
+this vertical; the coordinator and two-specialist limit remains a workflow
+policy until the native protocol exposes a tested operation.
+
+Canonical profiles are synchronized without launching Codex:
+
+```sh
+atenea codex agents sync --global
+atenea codex agents sync --project /path/to/repository
+atenea codex agents check --global
+```
+
+Global files are written under `$CODEX_HOME/agents/` (or `~/.codex/agents/`),
+and project files under `<repository>/.codex/agents/`. Each `atenea-*.toml`
+file carries a digest marker and top-level `name`, `description`,
+`developer_instructions`, `model`, `model_reasoning_effort`, and `sandbox_mode`
+keys. Research, review, and audit use `read-only`; implementation uses
+`workspace-write`. Specialist instructions explicitly prohibit delegation.
+Files are written through a same-directory atomic rename with restrictive
+permissions. Foreign files are preserved. Obsolete Atenea-managed files are
+removed only with `--prune`. Tests use temporary homes and project directories;
+the real Codex home is never synchronized by the test suite.
+
+These agent files are the managed Codex agent surface; they are not App Server
+permission-profile identifiers. Native root turns therefore send the validated
+`read-only` or `workspace-write` sandbox mode and do not invent a
+`atenea-<role>` permission profile.
+
 Atenea can use the native Codex CLI as the `codex` provider for
 `code.search`. The adapter is independent from the Claude Code adapter: it
 invokes `codex exec`, consumes Codex JSONL events, and validates the final

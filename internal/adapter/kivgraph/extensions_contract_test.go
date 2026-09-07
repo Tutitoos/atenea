@@ -13,15 +13,20 @@ import (
 )
 
 type extensionSession struct {
-	root    string
-	answers map[string]string
-	calls   []string
+	root       string
+	answers    map[string]string
+	calls      []string
+	snapshotID int
 }
 
 func (s *extensionSession) Call(_ context.Context, tool string, args map[string]any) (string, error) {
 	s.calls = append(s.calls, tool)
 	if tool == "graph_status" {
-		body, _ := json.Marshal(map[string]any{"results": map[string]any{"status": "ready", "snapshot_id": 1, "symbols": 2, "edges": 1, "files": 1, "repositories": 1, "repository_freshness": []any{map[string]any{"name": "test", "path": s.root}}}})
+		snapshotID := s.snapshotID
+		if snapshotID == 0 {
+			snapshotID = 1
+		}
+		body, _ := json.Marshal(map[string]any{"results": map[string]any{"status": "ready", "snapshot_id": snapshotID, "symbols": 2, "edges": 1, "files": 1, "repositories": 1, "repository_freshness": []any{map[string]any{"name": "test", "path": s.root}}}})
 		return string(body), nil
 	}
 	text, ok := s.answers[tool]

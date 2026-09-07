@@ -331,6 +331,35 @@ func newTestRunner(t *testing.T, root string, sess *mcpstdio.Session) *Runner {
 	return runner
 }
 
+func TestObservedGraphReadyRequiresFreshness(t *testing.T) {
+	root, repo := workspace(t)
+	_, sess := newFakeTokensave(t)
+	if err := sess.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	runner := newTestRunner(t, root, sess)
+	base := contract.CacheIdentity{
+		ToolVersion: sess.Version(), Instance: sess.StableIdentity(),
+		State: &contract.RuntimeState{Status: "ready", Symbols: 1},
+	}
+	for _, test := range []struct {
+		freshness string
+		want      bool
+	}{
+		{freshness: "fresh", want: true},
+		{freshness: "FRESH", want: true},
+		{freshness: "stale", want: false},
+		{freshness: "unverified", want: false},
+		{freshness: "", want: false},
+	} {
+		identity := base
+		identity.Freshness = test.freshness
+		if got := runner.observedGraphReady(contract.RunRequest{Repository: repo, ObservedIdentity: &identity}, sess); got != test.want {
+			t.Errorf("freshness %q: got %v, want %v", test.freshness, got, test.want)
+		}
+	}
+}
+
 func rows(t *testing.T, out contract.Outcome, key string) []map[string]any {
 	t.Helper()
 	raw, ok := out.Result[key].([]any)

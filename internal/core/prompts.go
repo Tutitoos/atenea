@@ -149,7 +149,7 @@ func (v *conversation) promptsGet(raw json.RawMessage) (any, *rpcError) {
 		}
 	}
 	encoded, _ := json.Marshal(request)
-	text := "Call the Atenea MCP tool `atenea.command` with this JSON and present its Markdown response unchanged:\n\n" + string(encoded)
+	text := "Before the call, write one concise Markdown line in the main chat using `> **ATENEA · atenea.command** — <action> <target> para <purpose>, con alcance autorizado y evidencia verificable.` Then call the Atenea MCP tool `atenea.command` with this JSON and present its Markdown response unchanged:\n\n" + string(encoded)
 	return map[string]any{
 		"description": definition.Description,
 		"messages": []any{map[string]any{

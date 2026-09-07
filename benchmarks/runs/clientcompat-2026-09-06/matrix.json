@@ -1,0 +1,355 @@
+{
+  "evidence": "read-only doctor detection; no real gates executed",
+  "generated_at": "2026-09-06",
+  "matrix": {
+    "entries": [
+      {
+        "arch": "arm64",
+        "client": "chatgpt",
+        "client_info": "ChatGPT Desktop",
+        "connected": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "mcp"
+            }
+          ],
+          "state": "unknown"
+        },
+        "date": "2026-09-06",
+        "declared": {
+          "evidence": [
+            {
+              "detail": "client detected",
+              "id": "detect"
+            }
+          ],
+          "state": "pass"
+        },
+        "evidence_level": "manual",
+        "observed": "unknown",
+        "os": "darwin",
+        "presentation": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "chat"
+            }
+          ],
+          "state": "unknown"
+        },
+        "profile": "chatgpt",
+        "reconnect": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "reconnect"
+            }
+          ],
+          "state": "unknown"
+        },
+        "requested": "unknown",
+        "scope": "desktop",
+        "server_probe": {
+          "evidence": [
+            {
+              "detail": "direct MCP initialize and tools/list completed",
+              "id": "server"
+            }
+          ],
+          "state": "pass"
+        },
+        "source": "manual",
+        "tested": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "workflow.status"
+            }
+          ],
+          "state": "unknown"
+        },
+        "transport": "stdio",
+        "version": "26.901.31953"
+      },
+      {
+        "arch": "arm64",
+        "client": "claude",
+        "client_info": "Claude Code",
+        "connected": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "mcp"
+            }
+          ],
+          "state": "unknown"
+        },
+        "date": "2026-09-06",
+        "declared": {
+          "evidence": [
+            {
+              "detail": "client detected",
+              "id": "detect"
+            }
+          ],
+          "state": "pass"
+        },
+        "evidence_level": "manual",
+        "observed": "unknown",
+        "os": "darwin",
+        "presentation": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "chat"
+            }
+          ],
+          "state": "unknown"
+        },
+        "profile": "claude",
+        "reconnect": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "reconnect"
+            }
+          ],
+          "state": "unknown"
+        },
+        "requested": "unknown",
+        "scope": "user",
+        "server_probe": {
+          "evidence": [
+            {
+              "detail": "direct MCP initialize and tools/list completed",
+              "id": "server"
+            }
+          ],
+          "state": "pass"
+        },
+        "source": "manual",
+        "tested": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "workflow.status"
+            }
+          ],
+          "state": "unknown"
+        },
+        "transport": "stdio",
+        "version": "2.1.236 (Claude Code)"
+      },
+      {
+        "arch": "arm64",
+        "client": "codex",
+        "client_info": "Codex CLI",
+        "connected": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "mcp"
+            }
+          ],
+          "state": "unknown"
+        },
+        "date": "2026-09-06",
+        "declared": {
+          "evidence": [
+            {
+              "detail": "client detected",
+              "id": "detect"
+            }
+          ],
+          "state": "pass"
+        },
+        "evidence_level": "manual",
+        "observed": "unknown",
+        "os": "darwin",
+        "presentation": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "chat"
+            }
+          ],
+          "state": "unknown"
+        },
+        "profile": "chatgpt",
+        "reconnect": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "reconnect"
+            }
+          ],
+          "state": "unknown"
+        },
+        "requested": "unknown",
+        "scope": "user",
+        "server_probe": {
+          "evidence": [
+            {
+              "detail": "direct MCP initialize and tools/list completed",
+              "id": "server"
+            }
+          ],
+          "state": "pass"
+        },
+        "source": "manual",
+        "tested": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "workflow.status"
+            }
+          ],
+          "state": "unknown"
+        },
+        "transport": "stdio",
+        "version": "codex-cli 0.151.0"
+      },
+      {
+        "arch": "arm64",
+        "client": "omp",
+        "client_info": "Oh My Pi",
+        "connected": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "mcp"
+            }
+          ],
+          "state": "unknown"
+        },
+        "date": "2026-09-06",
+        "declared": {
+          "evidence": [
+            {
+              "detail": "client detected",
+              "id": "detect"
+            }
+          ],
+          "state": "pass"
+        },
+        "evidence_level": "manual",
+        "observed": "unknown",
+        "os": "darwin",
+        "presentation": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "chat"
+            }
+          ],
+          "state": "unknown"
+        },
+        "profile": "shared",
+        "reconnect": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "reconnect"
+            }
+          ],
+          "state": "unknown"
+        },
+        "requested": "unknown",
+        "scope": "user",
+        "server_probe": {
+          "evidence": [
+            {
+              "detail": "direct MCP initialize and tools/list completed",
+              "id": "server"
+            }
+          ],
+          "state": "pass"
+        },
+        "source": "manual",
+        "tested": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "workflow.status"
+            }
+          ],
+          "state": "unknown"
+        },
+        "transport": "stdio",
+        "version": "omp/18.0.11"
+      },
+      {
+        "arch": "arm64",
+        "client": "opencode",
+        "client_info": "OpenCode",
+        "connected": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "mcp"
+            }
+          ],
+          "state": "unknown"
+        },
+        "date": "2026-09-06",
+        "declared": {
+          "evidence": [
+            {
+              "detail": "client detected",
+              "id": "detect"
+            }
+          ],
+          "state": "pass"
+        },
+        "evidence_level": "manual",
+        "observed": "unknown",
+        "os": "darwin",
+        "presentation": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "chat"
+            }
+          ],
+          "state": "unknown"
+        },
+        "profile": "shared",
+        "reconnect": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "reconnect"
+            }
+          ],
+          "state": "unknown"
+        },
+        "requested": "unknown",
+        "scope": "user",
+        "server_probe": {
+          "evidence": [
+            {
+              "detail": "direct MCP initialize and tools/list completed",
+              "id": "server"
+            }
+          ],
+          "state": "pass"
+        },
+        "source": "manual",
+        "tested": {
+          "evidence": [
+            {
+              "detail": "not tested",
+              "id": "workflow.status"
+            }
+          ],
+          "state": "unknown"
+        },
+        "transport": "stdio",
+        "version": "1.18.20"
+      }
+    ],
+    "schema_version": "atenea.client-compat/v1"
+  },
+  "schema_version": "atenea.client-compat/v1"
+}

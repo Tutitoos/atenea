@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ type gateWire struct {
 	Steps []struct {
 		ID                string     `json:"id"`
 		Agent             string     `json:"agent"`
+		PointID           string     `json:"point_id,omitempty"`
+		PointTitle        string     `json:"point_title,omitempty"`
 		Objective         string     `json:"objective"`
 		Files             []string   `json:"files,omitempty"`
 		Criterion         string     `json:"criterion,omitempty"`
@@ -28,6 +31,7 @@ type gateWire struct {
 		Subject           string     `json:"subject,omitempty"`
 		On                string     `json:"on,omitempty"`
 		Effects           []string   `json:"effects,omitempty"`
+		Operations        []string   `json:"operations,omitempty"`
 		Route             *routeWire `json:"route,omitempty"`
 		BudgetEstimateUSD float64    `json:"budget_estimate_usd,omitempty"`
 		BudgetMinimumUSD  float64    `json:"budget_minimum_usd,omitempty"`
@@ -44,9 +48,15 @@ func encodeProposal(p Proposal) (string, error) {
 		for _, effect := range step.Permission.Effects {
 			effects = append(effects, effect.String())
 		}
+		operations := make([]string, 0, len(step.Permission.Operations))
+		for _, operation := range step.Permission.Operations {
+			operations = append(operations, operation.String())
+		}
 		wire.Steps = append(wire.Steps, struct {
 			ID                string     `json:"id"`
 			Agent             string     `json:"agent"`
+			PointID           string     `json:"point_id,omitempty"`
+			PointTitle        string     `json:"point_title,omitempty"`
 			Objective         string     `json:"objective"`
 			Files             []string   `json:"files,omitempty"`
 			Criterion         string     `json:"criterion,omitempty"`
@@ -54,16 +64,18 @@ func encodeProposal(p Proposal) (string, error) {
 			Subject           string     `json:"subject,omitempty"`
 			On                string     `json:"on,omitempty"`
 			Effects           []string   `json:"effects,omitempty"`
+			Operations        []string   `json:"operations,omitempty"`
 			Route             *routeWire `json:"route,omitempty"`
 			BudgetEstimateUSD float64    `json:"budget_estimate_usd,omitempty"`
 			BudgetMinimumUSD  float64    `json:"budget_minimum_usd,omitempty"`
 			BudgetSource      string     `json:"budget_source,omitempty"`
 			BudgetUSD         float64    `json:"budget_usd"`
 		}{
-			ID: step.ID, Agent: step.TypeName, Objective: step.Task.Objective,
-			Files: step.Task.Files, Criterion: step.Task.Criterion,
+			ID: step.ID, Agent: step.TypeName, PointID: step.PointID, PointTitle: step.PointTitle,
+			Objective: step.Task.Objective,
+			Files:     step.Task.Files, Criterion: step.Task.Criterion,
 			Needs: step.Needs, Subject: step.Subject, On: step.On.String(),
-			Effects: effects, Route: routeForGate(step.Route),
+			Effects: effects, Operations: operations, Route: routeForGate(step.Route),
 			BudgetEstimateUSD: step.BudgetEstimateUSD, BudgetMinimumUSD: step.BudgetMinimumUSD,
 			BudgetSource: step.BudgetSource, BudgetUSD: step.Permission.BudgetUSD,
 		})
@@ -103,12 +115,20 @@ func decodeProposal(raw string) (Proposal, error) {
 			}
 			effects = append(effects, effect)
 		}
+		operations := make([]contract.Operation, 0, len(s.Operations))
+		for _, name := range s.Operations {
+			operation, err := contract.ParseOperation(name)
+			if err != nil {
+				return Proposal{}, err
+			}
+			operations = append(operations, operation)
+		}
 		out.Steps = append(out.Steps, Step{
-			ID: s.ID, TypeName: s.Agent,
+			ID: s.ID, TypeName: s.Agent, PointID: s.PointID, PointTitle: s.PointTitle,
 			Task:    contract.Task{Objective: s.Objective, Files: s.Files, Criterion: s.Criterion},
 			Needs:   s.Needs,
 			Subject: s.Subject, On: on,
-			Permission:        contract.Permission{Effects: effects, BudgetUSD: s.BudgetUSD},
+			Permission:        contract.Permission{Effects: effects, Operations: operations, BudgetUSD: s.BudgetUSD},
 			BudgetEstimateUSD: s.BudgetEstimateUSD, BudgetMinimumUSD: s.BudgetMinimumUSD,
 			BudgetSource: s.BudgetSource,
 			Route:        routeFromGate(s.Route),
@@ -434,6 +454,13 @@ func scanGate(row scanner) (Gate, error) {
 // ran and never will is not a state a run should have to explain. What it was
 // stays legible in the gate log, which holds the proposal that removed it.
 func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) error {
+	return s.ApplyWithActivity(ctx, runID, gate, plan, nil)
+}
+
+// ApplyWithActivity commits the graph mutation and its durable PLAN notice
+// together. A crash may delay publication, but cannot leave an invisible
+// scope change that reconnect has no outbox entry to replay.
+func (s *Store) ApplyWithActivity(ctx context.Context, runID string, gate Gate, plan Plan, notice *ActivityNotice) error {
 	if gate.Decision != DecisionApproved {
 		return contract.Fail(contract.FailureInvalidInput,
 			"workflow %s: gate %d is %s, not approved", runID, gate.Ordinal, gate.Decision)
@@ -444,6 +471,13 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 				"this is not the plan that was approved",
 			runID, gate.Ordinal, Short(gate.Digest), Short(got))
 	}
+	run, err := s.Load(ctx, runID)
+	if err != nil {
+		return err
+	}
+	policy := run.Policy.clone()
+	policy.Effects = unionPolicyEffects(policy.Effects, gate.Proposal.Effects())
+	policy.Operations = unionPolicyOperations(policy.Operations, gate.Proposal.Operations())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return unavailable(err, "workflow: applying gate %d on %s", gate.Ordinal, runID)
@@ -466,9 +500,21 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 			return unavailable(err, "workflow: checking applied gate")
 		}
 		if already == 1 {
+			if notice != nil {
+				if _, err := recordActivity(ctx, tx, *notice); err != nil {
+					return unavailable(err, "workflow: reconciling plan activity for %s", runID)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				return unavailable(err, "workflow: reconciling gate %d on %s", gate.Ordinal, runID)
+			}
 			return nil
 		}
 		return contract.Fail(contract.FailurePermissionDenied, "workflow: gate approval does not match persisted decision")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow SET effects=?, policy=? WHERE id=?`,
+		jsonEffects(policy.Effects), jsonPolicy(policy), runID); err != nil {
+		return unavailable(err, "workflow: widening policy for gate %d on %s", gate.Ordinal, runID)
 	}
 
 	for _, id := range gate.Proposal.Replaces {
@@ -496,22 +542,71 @@ func (s *Store) Apply(ctx context.Context, runID string, gate Gate, plan Plan) e
 	for i, step := range gate.Proposal.Steps {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO workflow_step
-			 (workflow_id, id, ordinal, type_name, pool, objective, files,
-			  criterion, needs, subject, on_outcome, effects, route,
+			 (workflow_id, id, ordinal, type_name, point_id, point_title, pool, objective, files,
+			  criterion, needs, subject, on_outcome, effects, operations, route,
 			  budget_estimate_usd, budget_minimum_usd, budget_source, grant_usd, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, step.ID, ordinal+i, step.TypeName, plan.Pools[step.ID].String(),
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, step.ID, ordinal+i, step.TypeName, step.PointID, step.PointTitle, plan.Pools[step.ID].String(),
 			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion,
 			jsonList(step.Needs), step.Subject, step.On.String(),
 			jsonEffects(step.Permission.Effects),
+			jsonOperations(step.Permission.Operations),
 			jsonRoute(step.Route),
 			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource,
 			step.Permission.BudgetUSD, StatusPending.String()); err != nil {
 			return unavailable(err, "workflow: adding %s to %s", step.ID, runID)
+		}
+		if step.PointID != "" {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_point
+				(workflow_id,id,ordinal,title,state,evidence,updated_at) VALUES(?,?,?,?,?,?,?)`,
+				runID, step.PointID, ordinal+i, step.PointTitle, PointPending, "[]", stamp(time.Now())); err != nil {
+				return unavailable(err, "workflow: adding point %s to %s", step.PointID, runID)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow SET plan_revision=plan_revision+1 WHERE id=?`, runID); err != nil {
+		return unavailable(err, "workflow: advancing plan revision for %s", runID)
+	}
+	if notice != nil {
+		if notice.WorkflowID == "" || notice.InvocationID == "" {
+			return contract.Fail(contract.FailureInvalidInput, "workflow plan activity requires workflow and invocation ids")
+		}
+		if _, err := recordActivity(ctx, tx, *notice); err != nil {
+			return unavailable(err, "workflow: recording plan activity for %s", runID)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return unavailable(err, "workflow: applying gate %d on %s", gate.Ordinal, runID)
 	}
 	return nil
+}
+
+func unionPolicyEffects(groups ...[]contract.Effect) []contract.Effect {
+	seen := make(map[contract.Effect]bool)
+	for _, group := range groups {
+		for _, value := range group {
+			seen[value] = true
+		}
+	}
+	out := make([]contract.Effect, 0, len(seen))
+	for value := range seen {
+		out = append(out, value)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func unionPolicyOperations(groups ...[]contract.Operation) []contract.Operation {
+	seen := make(map[contract.Operation]bool)
+	for _, group := range groups {
+		for _, value := range group {
+			seen[value] = true
+		}
+	}
+	out := make([]contract.Operation, 0, len(seen))
+	for value := range seen {
+		out = append(out, value)
+	}
+	slices.SortFunc(out, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	return out
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/agent/filereader"
+	"github.com/Tutitoos/atenea/internal/agent/modelagent"
 	"github.com/Tutitoos/atenea/internal/agent/plancheck"
 	"github.com/Tutitoos/atenea/internal/agent/planner"
 	"github.com/Tutitoos/atenea/internal/agent/reviewer"
@@ -359,6 +360,10 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 		default:
 			return planner.Plan(ctx, stdin, stdout)
 		}
+	case "implement", "review", "audit":
+		ctx, stop := interruptible()
+		defer stop()
+		return modelagent.Main(ctx, stdin, stdout, kind)
 	default:
 		// Unreachable: builtinAgent above admits exactly the names this
 		// switch handles. It stays as the compiler's proof that a name added
@@ -370,14 +375,14 @@ func cmdAgentRun(kind string, stdin io.Reader, stdout io.Writer) error {
 // builtinAgents is the closed list of agents this binary ships, and the only
 // names cmdAgentRun will act on or write to disk.
 var builtinAgents = []string{
-	"filereader", "reviewer", "semantic-reviewer", "plan-check", "explore", "reader", "plan",
+	"filereader", "reviewer", "semantic-reviewer", "plan-check", "explore", "reader", "plan", "implement", "review", "audit",
 }
 
 func builtinAgent(kind string) bool { return slices.Contains(builtinAgents, kind) }
 
 func unknownBuiltinAgent(kind string) error {
 	return contract.Fail(contract.FailureNotFound,
-		"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader and plan", kind)
+		"no built-in agent %q: this binary ships filereader, reviewer, semantic-reviewer, plan-check, explore, reader, plan, implement, review and audit", kind)
 }
 
 // AssignmentLogEnv names a directory where the assignment each built-in agent

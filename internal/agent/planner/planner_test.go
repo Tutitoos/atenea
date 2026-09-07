@@ -85,6 +85,15 @@ func planAssignment(verdict string, result map[string]any) assignment {
 	return in
 }
 
+func TestPlanPromptRequiresStableVisiblePoints(t *testing.T) {
+	got := planPrompt(planAssignment("ok", exploration()), config.Config{})
+	for _, want := range []string{"point_id = \"P00\"", "point_title = \"short title\"", "share its\n    point_id"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("plan prompt does not require %q", want)
+		}
+	}
+}
+
 func exploration() map[string]any {
 	return map[string]any{
 		SummaryField:  "settings load in internal/config",

@@ -107,7 +107,23 @@ contract = "3.6.0"          # required: the contract version this file targets
 [core]
 shutdown_grace = "10s"      # margin a clean stop gives in-flight work
 health_probe_every = "15m"  # background MCP reachability probe; "0s" disables
+
+[result_cache]
+max_entries = 128             # bounded LRU entries for complete code.context
+max_bytes = 4194304           # bounded serialized result bytes (4 MiB)
+ttl = "5m"                    # positive freshness window; zero is refused
 ```
+
+`[result_cache]` controls the in-memory, read-only `code.context` result
+cache. Its limits are validated at startup; partial, truncated, failed or
+sensitive results are never stored, and cache hits do not create provider
+measurements.
+
+`selector.quality_minimum_samples` defaults to `2`. Quality is collected only
+from validated outcomes for the requested capability, repository language and
+tool version. Declared, wired or merely connected providers remain candidates;
+an unknown quality observation carries no penalty and an explicit preference
+still wins.
 
 The `contract` line is the one field with no default: a file must say which
 core it was written for, and a core refuses a file from a different major
@@ -437,6 +453,17 @@ explore = ""         # model, or "auto", for repository exploration
 plan = ""            # model, or "auto", for the high-reasoning plan role
 explore_fallbacks = [] # explicit Claude fallbacks, in declaration order
 plan_fallbacks = []    # ignored by Claude: plan is pinned to claude-opus-5
+research = ""           # Codex research model; defaults to gpt-5.6-sol for backend=codex
+implement = ""          # Codex implementation model; defaults to gpt-5.6-luna
+review = ""             # Codex review model; defaults to gpt-5.6-sol
+audit = ""              # Codex audit model; defaults to gpt-6-astra
+research_reasoning_effort = ""  # Codex default: medium
+plan_reasoning_effort = ""      # Codex default: medium
+implement_reasoning_effort = "" # Codex default: xhigh
+review_reasoning_effort = ""    # Codex default: medium
+audit_reasoning_effort = ""     # Codex default: medium
+codex_native = false              # visible Codex turns use App Server; exec requires explicit invisible/CI
+codex_native = false              # visible Codex turns require the durable App Server; exec is explicit invisible/CI only
 ```
 
 This is the seam the two model-backed built-in agents, `explore` and `plan`,
@@ -479,6 +506,15 @@ explicit-only because they have no semantic capability contract to rank.
 Timeout/unavailable retries are budget-gated: reported dollars are preferred,
 and unpriced token usage is bounded conservatively without being presented as
 a provider invoice.
+
+When `backend = "codex"`, set `codex_native = true` for interactive or
+visibility-required agent turns. Atenea then negotiates `initialize`, sends
+`initialized`, creates one durable thread, and reuses only the returned thread
+for follow-ups while collecting typed completion and usage events. The native
+transport carries the requested model, effort, and sandbox separately from
+observed runtime values. `codex_native = false` leaves visible turns refused;
+the one-shot `codex exec` path is available only when the request explicitly
+declares invisible or CI execution.
 
 The default backend is Claude Code. To opt into the isolated OpenCode event
 protocol, set `backend = "opencode"` and use a provider/model identifier such
@@ -1379,6 +1415,8 @@ budget_usd = 0.50                         # the grant; step shares divide it
 [[step]]
 id = "read-readme"
 agent = "filereader"                      # a declared [[agent]], not a capability
+point_id = "P07"                          # stable user-visible checklist item
+point_title = "Optimize code.context"
 objective = "read README.md and answer"
 files = ["README.md"]
 criterion = "the counts match the file"
@@ -1388,6 +1426,8 @@ budget_usd = 0.25                         # this step's share
 [[step]]
 id = "audit-readme"
 agent = "reviewer"                        # a review-pool type; it needs a subject
+point_id = "P07"                          # several internal steps may share one point
+point_title = "Optimize code.context"
 subject = "read-readme"                   # hand it that step's answer -- implies the edge
 objective = "audit what the reader answered"
 files = ["README.md"]
@@ -1395,6 +1435,18 @@ criterion = "the answer holds"
 effects = ["read"]
 budget_usd = 0.25
 ```
+
+`point_id` and `point_title` are optional, but must be declared together. A
+point is checked only after every step carrying that id finishes `ok`, has a
+trace id, and reports a complete result. Pending reviews, partial answers,
+failures, interruptions and cancellations leave it unchecked. The trace ids
+are stored as its acceptance evidence.
+
+The workflow record keeps the plan revision and every point's state. Status,
+resume and show therefore recover the same ordered checklist after a restart.
+Each change is saved before Atenea emits its Markdown update. Progress uses 20
+segments and the truncated value of `accepted / active points * 100`; retired
+points remain visible but do not count in the denominator.
 
 Atenea can now write one of these, and it is still the same file. Two shipped
 agents do it: `explore` looks at the project through Atenea's own capabilities

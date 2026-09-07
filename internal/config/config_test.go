@@ -962,7 +962,7 @@ func TestBrokenCatalogEntriesAreRefused(t *testing.T) {
 		// file is refused. A stand-in for "no such effect" has to be a word
 		// the vocabulary will not adopt later.
 		"unknown effect":   strings.Replace(minimal, `effects = ["read"]`, `effects = ["nonesuch"]`, 1),
-		"unknown type":     strings.Replace(minimal, `type = "string"`, `type = "float"`, 1),
+		"unknown type":     strings.Replace(minimal, `type = "string"`, `type = "decimal"`, 1),
 		"unknown scale":    strings.Replace(minimal, `scale = "small"`, `scale = "huge"`, 1),
 		"unknown vcs":      strings.Replace(minimal, `vcs = "present"`, `vcs = "sideways"`, 1),
 		"bad duration":     minimal + "\n[implementation.cost]\nestimated_duration = \"soon\"\n",
@@ -1773,7 +1773,7 @@ explore = "haiku"
 		t.Fatalf("Load: %v", err)
 	}
 	want := config.Model{Backend: "claude", Binary: "claude-custom", Timeout: 45 * time.Second, Explore: "haiku", Plan: "claude-opus-5",
-		ExploreFallbacks: []string{}, PlanFallbacks: []string{}}
+		ExploreFallbacks: []string{}, PlanFallbacks: []string{}, CodexNative: true}
 	if !reflect.DeepEqual(cfg.Model, want) {
 		t.Errorf("Model = %+v, want %+v", cfg.Model, want)
 	}
@@ -1823,6 +1823,42 @@ plan = "auto"
 	}
 	if cfg.Model.Explore != "auto" || cfg.Model.Plan != "auto" {
 		t.Fatalf("auto models = explore %q, plan %q", cfg.Model.Explore, cfg.Model.Plan)
+	}
+}
+
+func TestTheModelBlockReadsGeneralRuntimeRolesAndEfforts(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal+`
+[model]
+backend = "codex"
+research = "gpt-5.6-sol"
+plan = "gpt-5.6-sol"
+implement = "gpt-5.6-luna"
+review = "gpt-5.6-sol"
+audit = "gpt-6-astra"
+research_reasoning_effort = "medium"
+plan_reasoning_effort = "medium"
+implement_reasoning_effort = "xhigh"
+review_reasoning_effort = "medium"
+audit_reasoning_effort = "medium"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Model.Backend != "codex" || cfg.Model.Binary != "codex" || cfg.Model.Research != "gpt-5.6-sol" || cfg.Model.Implement != "gpt-5.6-luna" || cfg.Model.Audit != "gpt-6-astra" {
+		t.Fatalf("role models = %+v", cfg.Model)
+	}
+	if cfg.Model.ResearchReasoningEffort != "medium" || cfg.Model.ImplementReasoningEffort != "xhigh" || cfg.Model.AuditReasoningEffort != "medium" {
+		t.Fatalf("role efforts = %+v", cfg.Model)
+	}
+}
+
+func TestTheModelBlockRejectsUnknownReasoningEffort(t *testing.T) {
+	_, err := config.Load(write(t, minimal+`
+[model]
+research_reasoning_effort = "sideways"
+`))
+	if err == nil || !strings.Contains(err.Error(), "reasoning_effort") {
+		t.Fatalf("error = %v, want reasoning effort validation", err)
 	}
 }
 
@@ -2333,6 +2369,8 @@ func required(fields []contract.Field) map[string]any {
 			}
 		case contract.TypeInt:
 			payload[field.Name] = 1
+		case contract.TypeFloat:
+			payload[field.Name] = 0.5
 		case contract.TypeBool:
 			payload[field.Name] = true
 		case contract.TypeStringList:
@@ -2944,6 +2982,18 @@ func TestOldConfigurationGetsHealthExpiry(t *testing.T) {
 		}
 		if cfg.Selector.HealthStaleAfter != tc.want {
 			t.Fatalf("expiry=%v want %v", cfg.Selector.HealthStaleAfter, tc.want)
+		}
+	}
+}
+
+func TestNativeCodexAppliesOnlyToCodexBackend(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		want    bool
+	}{{"codex", true}, {"CODEX", true}, {"claude", false}, {"opencode", false}} {
+		model := config.Model{Backend: tc.backend, CodexNative: true}
+		if got := model.NativeCodex(); got != tc.want {
+			t.Fatalf("backend %q: NativeCodex()=%v want %v", tc.backend, got, tc.want)
 		}
 	}
 }

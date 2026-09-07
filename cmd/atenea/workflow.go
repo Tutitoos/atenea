@@ -28,7 +28,7 @@ import (
 func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		return contract.Fail(contract.FailureInvalidInput,
-			"workflow needs a subcommand: create, launch, run, propose, approve, reject, resume, redo, list or show")
+			"workflow needs a subcommand: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, list, status, export, compare or panel")
 	}
 	sub, rest := strings.TrimSpace(args[0]), args[1:]
 	switch sub {
@@ -46,15 +46,25 @@ func cmdWorkflow(settingsPath string, args []string, out io.Writer) error {
 		return workflowAnswer(rest, out, workflow.DecisionRejected)
 	case "resume":
 		return workflowResume(settingsPath, rest, out)
+	case "status", "show":
+		return workflowShow(rest, out)
+	case "export":
+		return workflowExport(rest, out)
+	case "compare":
+		return workflowCompare(rest, out)
+	case "panel":
+		return workflowPanel(settingsPath, rest, out)
+	case "cancel":
+		return workflowCancel(rest, out)
+	case "answer":
+		return workflowAnswerCommand(rest, out)
 	case "redo":
 		return workflowRedo(settingsPath, rest, out)
 	case "list":
 		return workflowList(rest, out)
-	case "show":
-		return workflowShow(rest, out)
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, resume, redo, list or show", sub)
+			"unknown workflow subcommand %q: create, launch, run, propose, approve, reject, answer, cancel, resume, redo, list, status, export, compare or panel", sub)
 	}
 }
 
@@ -94,6 +104,8 @@ func workflowLaunch(settingsPath string, args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
 	repository := flags.String("repository", "", "repository id to serve at the repository level")
+	operations := newStringList("operation")
+	flags.Var(&operations, "operation", "sensitive operation explicitly authorized; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -110,7 +122,11 @@ func workflowLaunch(settingsPath string, args []string, out io.Writer) error {
 	}
 	defer closers()
 
-	run, runErr := engine.Launch(ctx, flags.Arg(0))
+	parsedOperations, err := parseWorkflowOperations(operations.values)
+	if err != nil {
+		return err
+	}
+	run, runErr := engine.LaunchAuthorized(ctx, flags.Arg(0), parsedOperations)
 	if run.ID != "" {
 		printRun(out, run)
 	}
@@ -173,6 +189,8 @@ func workflowAnswer(args []string, out io.Writer, decision workflow.Decision) er
 	flags.SetOutput(io.Discard)
 	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
 	reason := flags.String("reason", "", "why, on a rejection: required")
+	operations := newStringList("operation")
+	flags.Var(&operations, "operation", "sensitive operation explicitly authorized; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -201,10 +219,24 @@ func workflowAnswer(args []string, out io.Writer, decision workflow.Decision) er
 			"workflow %s is waiting to be launched, not approved: `atenea workflow launch %s` reads the plan "+
 				"and runs it, because whoever commits the grant is whoever spends it", id, id)
 	}
+	parsedOperations, err := parseWorkflowOperations(operations.values)
+	if err != nil {
+		return err
+	}
+	if decision == workflow.DecisionApproved && (len(gate.Proposal.Operations()) > 0 || len(parsedOperations) > 0) {
+		if err := gate.Proposal.ValidateOperations(parsedOperations); err != nil {
+			return err
+		}
+	}
 	answered, err := store.Answer(ctx, id, gate.Ordinal, decision,
 		workflow.Hand("cli"), *reason, time.Now())
 	if err != nil {
-		return err
+		current, readErr := store.Gate(ctx, id, gate.Ordinal)
+		if readErr != nil || current.Decision != decision ||
+			(decision == workflow.DecisionRejected && current.Reason != *reason) {
+			return err
+		}
+		answered = current
 	}
 	fmt.Fprintf(out, "gate %d %s  %s  %s\n", answered.Ordinal, answered.Kind,
 		answered.Decision, workflow.Short(answered.Digest))
@@ -212,6 +244,127 @@ func workflowAnswer(args []string, out io.Writer, decision workflow.Decision) er
 	if answered.Reason != "" {
 		fmt.Fprintf(out, "%s\n", answered.Reason)
 	}
+	return nil
+}
+
+// workflowAnswerCommand is the persistent gate response used by integrations.
+// It accepts only a decision for an existing gate; free-form questions are not
+// part of the workflow contract.
+func workflowAnswerCommand(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow answer", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	decision := flags.String("decision", "", "approved or rejected")
+	ordinal := flags.Int("ordinal", -1, "exact gate ordinal")
+	digest := flags.String("digest", "", "full expected gate digest")
+	reason := flags.String("reason", "", "why, on a rejection: required")
+	operations := newStringList("operation")
+	flags.Var(&operations, "operation", "sensitive operation explicitly authorized; repeatable")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow answer takes one workflow id")
+	}
+	if *ordinal < 0 || strings.TrimSpace(*digest) == "" {
+		return contract.Fail(contract.FailureInvalidInput, "workflow answer requires --ordinal and --digest")
+	}
+	var d workflow.Decision
+	switch strings.ToLower(strings.TrimSpace(*decision)) {
+	case "approved", "approve":
+		d = workflow.DecisionApproved
+	case "rejected", "reject":
+		d = workflow.DecisionRejected
+	default:
+		return contract.Fail(contract.FailureInvalidInput, "workflow answer: --decision must be approved or rejected")
+	}
+	ctx := context.Background()
+	store, err := workflow.Open(ctx, *tracePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	id := flags.Arg(0)
+	gate, err := store.Gate(ctx, id, *ordinal)
+	if err != nil {
+		return err
+	}
+	if gate.Digest != strings.TrimSpace(*digest) {
+		return contract.Fail(contract.FailureInvalidInput, "workflow %s gate %d has a stale digest", id, *ordinal)
+	}
+	if gate.Kind == workflow.KindLaunch && d == workflow.DecisionApproved {
+		return contract.Fail(contract.FailureInvalidInput,
+			"workflow %s is waiting to be launched: use `atenea workflow launch %s`", id, id)
+	}
+	parsedOperations, err := parseWorkflowOperations(operations.values)
+	if err != nil {
+		return err
+	}
+	if d == workflow.DecisionApproved && (len(gate.Proposal.Operations()) > 0 || len(parsedOperations) > 0) {
+		if err := gate.Proposal.ValidateOperations(parsedOperations); err != nil {
+			return err
+		}
+	}
+	if !gate.Waiting() {
+		if gate.Decision != d || (d == workflow.DecisionRejected && gate.Reason != *reason) {
+			return contract.Fail(contract.FailureInvalidInput, "workflow %s gate %d was already answered %s", id, gate.Ordinal, gate.Decision)
+		}
+		fmt.Fprintf(out, "gate %d %s  %s  %s\n", gate.Ordinal, gate.Kind,
+			gate.Decision, gate.Digest)
+		return nil
+	}
+	answered, err := store.Answer(ctx, id, gate.Ordinal, d, workflow.Hand("cli"), *reason, time.Now())
+	if err != nil {
+		current, readErr := store.Gate(ctx, id, gate.Ordinal)
+		if readErr != nil || current.Digest != gate.Digest || current.Decision != d ||
+			(d == workflow.DecisionRejected && current.Reason != *reason) {
+			return err
+		}
+		answered = current
+	}
+	fmt.Fprintf(out, "gate %d %s  %s  %s\n", answered.Ordinal, answered.Kind,
+		answered.Decision, answered.Digest)
+	return nil
+}
+
+func parseWorkflowOperations(values []string) ([]contract.Operation, error) {
+	out := make([]contract.Operation, 0, len(values))
+	seen := make(map[contract.Operation]struct{}, len(values))
+	for _, value := range values {
+		operation, err := contract.ParseOperation(value)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[operation]; ok {
+			return nil, contract.Fail(contract.FailureInvalidInput, "operation %q was specified more than once", operation)
+		}
+		seen[operation] = struct{}{}
+		out = append(out, operation)
+	}
+	return out, nil
+}
+
+func workflowCancel(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("workflow cancel", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	tracePath := flags.String("traces", "", "state database (default "+workflow.DefaultPath()+")")
+	if err := flags.Parse(args); err != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", err)
+	}
+	if flags.NArg() != 1 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow cancel takes one workflow id")
+	}
+	ctx := context.Background()
+	store, err := workflow.Open(ctx, *tracePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	run, err := store.Cancel(ctx, flags.Arg(0), time.Now())
+	if err != nil {
+		return err
+	}
+	printRun(out, run)
 	return nil
 }
 
@@ -255,6 +408,8 @@ func workflowResume(settingsPath string, args []string, out io.Writer) error {
 	repository := flags.String("repository", "", "repository id to serve at the repository level")
 	redo := newStringList("redo")
 	flags.Var(&redo, "redo", "step to dispatch again although nobody judged it; repeatable")
+	operations := newStringList("operation")
+	flags.Var(&operations, "operation", "fresh sensitive operation authorization; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -272,7 +427,11 @@ func workflowResume(settingsPath string, args []string, out io.Writer) error {
 	}
 	defer closers()
 
-	run, runErr := engine.Resume(ctx, flags.Arg(0), redo.values)
+	parsedOperations, err := parseWorkflowOperations(operations.values)
+	if err != nil {
+		return err
+	}
+	run, runErr := engine.ResumeAuthorized(ctx, flags.Arg(0), redo.values, parsedOperations)
 	if run.ID != "" {
 		printRun(out, run)
 	}
@@ -320,7 +479,9 @@ func workflowShow(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("workflow show", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	tracePath := flags.String("traces", "", "state database to read")
-	if err := flags.Parse(args); err != nil {
+	activityAfter := flags.Int64("activity-after", 0, "return activity after this durable cursor")
+	format := flags.String("format", "detail", "detail, compact, markdown or json")
+	if err := flags.Parse(flagsBeforeArgs(args, map[string]bool{"--traces": true, "--activity-after": true, "--format": true})); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
 	if flags.NArg() != 1 {
@@ -338,7 +499,23 @@ func workflowShow(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *activityAfter < 0 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow show: --activity-after must not be negative")
+	}
+	activityPage, activityCursor, activityMore, err := store.ActivitiesPage(ctx, run.ID, *activityAfter, 200)
+	if err != nil {
+		return err
+	}
+	run.Activity, run.ActivityCursor, run.ActivityHasMore = activityPage, activityCursor, activityMore
+	if *format != "detail" {
+		telemetry, err := store.PointTelemetry(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		return renderWorkflowStatus(out, run, telemetry, *format)
+	}
 	printRun(out, run)
+	printActivity(out, run)
 	gates, err := store.Gates(ctx, run.ID)
 	if err != nil {
 		return err
@@ -393,8 +570,15 @@ func printRun(out io.Writer, run workflow.Run) {
 	fmt.Fprintf(out, "%s  %s\n", run.ID, run.Task)
 	fmt.Fprintf(out, "%s  %s\n", runState(run), run.Summary())
 	fmt.Fprintf(out, "%s\n", run.Budget())
+	fmt.Fprintf(out, "profile  %s version=%s digest=%s budget_ceiling=%s parallel=%d/%d retries=%d active=%s\n",
+		run.Policy.Name, run.Policy.Version, run.Policy.Digest, workflowBudget(run.Policy.MaxBudgetUSD),
+		run.Policy.MaxParallelAgent, run.Policy.MaxParallelReview, run.Policy.MaxRetries, run.ActiveDuration)
+	lastProgress := "-"
+	if !run.LastProgressAt.IsZero() {
+		lastProgress = run.LastProgressAt.Format(time.RFC3339)
+	}
+	fmt.Fprintf(out, "watchdog  state=%s last_progress_at=%s\n", run.WatchdogState, lastProgress)
 	fmt.Fprintln(out)
-
 	fmt.Fprintf(out, "%-16s %-14s %-8s %-12s %-12s %-12s %s\n",
 		"STEP", "AGENT", "LANE", "STATE", "FORECAST", "COST", "DETAIL")
 	for _, step := range run.Steps {
@@ -410,7 +594,15 @@ func printRun(out io.Writer, run workflow.Run) {
 			forecast,
 			stepCost(run, step),
 			stepDetail(run, step))
+		for _, notice := range step.Notices {
+			fmt.Fprintf(out, "  notice: %s\n", notice)
+		}
 	}
+	// Keep the checklist visible even when the graph declared no point ids;
+	// the explicit "sin puntos definidos" state is part of the contract and
+	// prevents a client from mistaking an omitted block for an empty response.
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, (workflow.PlanProgress{Revision: run.PlanRevision, Points: run.Points}).Markdown(""))
 
 	if interrupted := run.Interrupted(); len(interrupted) > 0 {
 		fmt.Fprintln(out)
@@ -421,6 +613,27 @@ func printRun(out io.Writer, run workflow.Run) {
 			fmt.Fprintf(out, "  %s (%s)\n", step.Step.ID, step.Reason.Text)
 		}
 	}
+}
+
+func printActivity(out io.Writer, run workflow.Run) {
+	if len(run.Activity) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	for _, activity := range run.Activity {
+		fmt.Fprintln(out, activity.Markdown)
+	}
+	fmt.Fprintf(out, "activity cursor: %d\n", run.ActivityCursor)
+	if run.ActivityHasMore {
+		fmt.Fprintln(out, "activity: more entries remain; continue after this cursor")
+	}
+}
+
+func workflowBudget(value float64) string {
+	if value <= 0 {
+		return "none"
+	}
+	return fmt.Sprintf("$%.4f", value)
 }
 
 // printGate shows a plan somebody has to read before it runs.
@@ -654,6 +867,8 @@ func workflowRedo(settingsPath string, args []string, out io.Writer) error {
 	grant := flags.Float64("grant", 0, "the run's new total grant; default leaves it alone")
 	var raises raiseList
 	flags.Var(&raises, "step", "ID=USD: a step cut at its ceiling, and its raised share; repeatable")
+	operations := newStringList("operation")
+	flags.Var(&operations, "operation", "fresh sensitive operation authorization; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%v", err)
 	}
@@ -681,7 +896,11 @@ func workflowRedo(settingsPath string, args []string, out io.Writer) error {
 	}
 	defer closers()
 
-	run, runErr := engine.Redo(ctx, flags.Arg(0), raises, *grant)
+	parsedOperations, err := parseWorkflowOperations(operations.values)
+	if err != nil {
+		return err
+	}
+	run, runErr := engine.RedoAuthorized(ctx, flags.Arg(0), raises, *grant, parsedOperations)
 	if run.ID != "" {
 		printRun(out, run)
 	}

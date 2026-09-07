@@ -4,6 +4,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -16,26 +17,32 @@ import (
 // something writes it for them. The wire between Atenea and an agent is JSON
 // and stays JSON: that one is generated on both ends.
 type fileGraph struct {
-	Task     string     `toml:"task"`
-	GrantUSD *float64   `toml:"budget_usd"`
-	Steps    []fileStep `toml:"step"`
+	Task        string     `toml:"task"`
+	Criterion   string     `toml:"criterion"`
+	MaxDuration string     `toml:"max_duration"`
+	MaxTokens   *int       `toml:"max_tokens"`
+	GrantUSD    *float64   `toml:"budget_usd"`
+	Steps       []fileStep `toml:"step"`
 }
 
 type fileStep struct {
-	ID        string   `toml:"id"`
-	Agent     string   `toml:"agent"`
-	Objective string   `toml:"objective"`
-	Files     []string `toml:"files"`
-	Criterion string   `toml:"criterion"`
-	Needs     []string `toml:"needs"`
-	Subject   string   `toml:"subject"`
+	ID         string   `toml:"id"`
+	PointID    string   `toml:"point_id"`
+	PointTitle string   `toml:"point_title"`
+	Agent      string   `toml:"agent"`
+	Objective  string   `toml:"objective"`
+	Files      []string `toml:"files"`
+	Criterion  string   `toml:"criterion"`
+	Needs      []string `toml:"needs"`
+	Subject    string   `toml:"subject"`
 	// On is a pointer so that writing it at all can be told from leaving it
 	// out. The default is the same either way; what differs is that `on`
 	// declared beside no subject is a line the author believes is doing
 	// something, and it is refused rather than ignored.
-	On       *string  `toml:"on"`
-	Effects  []string `toml:"effects"`
-	GrantUSD *float64 `toml:"budget_usd"`
+	On         *string  `toml:"on"`
+	Effects    []string `toml:"effects"`
+	Operations []string `toml:"operations"`
+	GrantUSD   *float64 `toml:"budget_usd"`
 }
 
 // ReadFile reads a graph from a TOML file.
@@ -73,7 +80,24 @@ func ParseGraph(text, source string) (Graph, error) {
 			"workflow %s: unknown key(s): %s", source, strings.Join(keys, ", "))
 	}
 
-	out := Graph{Task: strings.TrimSpace(decoded.Task)}
+	out := Graph{Task: strings.TrimSpace(decoded.Task), Criterion: strings.TrimSpace(decoded.Criterion)}
+	if decoded.MaxDuration != "" || decoded.MaxTokens != nil {
+		if decoded.MaxDuration == "" {
+			return Graph{}, contract.Fail(contract.FailureInvalidInput, "workflow %s: max_duration is required when limits are declared", source)
+		}
+		duration, err := time.ParseDuration(decoded.MaxDuration)
+		if err != nil || duration <= 0 {
+			return Graph{}, contract.Fail(contract.FailureInvalidInput, "workflow %s: max_duration must be positive", source)
+		}
+		maxTokens := 0
+		if decoded.MaxTokens != nil {
+			maxTokens = *decoded.MaxTokens
+		}
+		out.Limits = contract.Limits{MaxDuration: duration, MaxTokens: maxTokens}
+		if err := out.Limits.Validate(); err != nil {
+			return Graph{}, contract.Fail(contract.FailureInvalidInput, "workflow %s: %v", source, err)
+		}
+	}
 	if decoded.GrantUSD != nil {
 		out.GrantUSD = *decoded.GrantUSD
 	}
@@ -87,9 +111,20 @@ func ParseGraph(text, source string) (Graph, error) {
 			}
 			effects = append(effects, effect)
 		}
+		operations := make([]contract.Operation, 0, len(step.Operations))
+		for _, name := range step.Operations {
+			operation, err := contract.ParseOperation(name)
+			if err != nil {
+				return Graph{}, contract.Fail(contract.FailureInvalidInput,
+					"workflow %s: step %s: %v", source, step.ID, err)
+			}
+			operations = append(operations, operation)
+		}
 		converted := Step{
-			ID:       strings.TrimSpace(step.ID),
-			TypeName: strings.TrimSpace(step.Agent),
+			ID:         strings.TrimSpace(step.ID),
+			PointID:    strings.TrimSpace(step.PointID),
+			PointTitle: strings.TrimSpace(step.PointTitle),
+			TypeName:   strings.TrimSpace(step.Agent),
 			Task: contract.Task{
 				Objective: strings.TrimSpace(step.Objective),
 				Files:     step.Files,
@@ -97,7 +132,7 @@ func ParseGraph(text, source string) (Graph, error) {
 			},
 			Needs:      step.Needs,
 			Subject:    strings.TrimSpace(step.Subject),
-			Permission: contract.Permission{Effects: effects},
+			Permission: contract.Permission{Effects: effects, Operations: operations},
 		}
 		if step.On != nil {
 			if converted.Subject == "" {

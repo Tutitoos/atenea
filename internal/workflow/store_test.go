@@ -39,6 +39,35 @@ func TestAStepWithNoChargeReadsBackUnmeasured(t *testing.T) {
 	}
 }
 
+func TestFinishPersistsReportNoticesForStatusAndRetryHistory(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+	run, _, err := h.engine.Create(t.Context(), graphOf(step("a", "worker", nil)))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := h.state.Claim(t.Context(), run.ID, "a", "tr-1", 1, time.Now(), 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	notices := []string{"result was shortened", "provider reported a caveat"}
+	if err := h.state.Finish(t.Context(), run.ID, "a", workflow.StatusOK,
+		contract.Report{Result: map[string]any{"ok": true}, Verdict: contract.VerdictOK, Notices: notices}, time.Now()); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	loaded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	row := stepOf(t, loaded, "a")
+	if len(row.Notices) != len(notices) || row.Notices[0] != notices[0] || row.Notices[1] != notices[1] {
+		t.Fatalf("notices = %#v, want %#v", row.Notices, notices)
+	}
+	if got := row.Report().Notices; len(got) != len(notices) || got[0] != notices[0] || got[1] != notices[1] {
+		t.Fatalf("report notices = %#v, want %#v", got, notices)
+	}
+}
+
 func TestBudgetForecastAndRouteReadBackWithTheStep(t *testing.T) {
 	dir := t.TempDir()
 	h := newHarnessOver(t, dir, noCeiling(),
@@ -62,6 +91,33 @@ func TestBudgetForecastAndRouteReadBackWithTheStep(t *testing.T) {
 	}
 	if got.Route == nil || got.Route.Model != "claude-sonnet-5" || len(got.Route.Fallbacks) != 1 {
 		t.Fatalf("route = %+v", got.Route)
+	}
+}
+
+func TestFinishPersistsObservedNativeRouteIdentity(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessOver(t, dir, noCeiling(),
+		declared("worker", stub(t, dir, "worker", `echo '{"result":{"ok":true},"verdict":"ok"}'`), config.PoolAgent))
+	s := step("a", "worker", nil)
+	s.Route = &contract.Route{Model: "gpt-5.6-sol", RequestedModel: "gpt-5.6-sol", Backend: "codex", Role: "research", ReasoningEffort: "medium", RequestedReasoningEffort: "medium", VisibilityRequired: true}
+	run, _, err := h.engine.Create(t.Context(), graphOf(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.state.Claim(t.Context(), run.ID, "a", "tr-1", 1, time.Now(), 4242); err != nil {
+		t.Fatal(err)
+	}
+	report := contract.Report{Verdict: contract.VerdictOK, Result: map[string]any{"ok": true}, ThreadID: "thread-1", RequestedModel: "gpt-5.6-sol", ObservedModel: "gpt-5.6-sol", RequestedReasoningEffort: "medium", ObservedReasoningEffort: "medium"}
+	if err := h.state.Finish(t.Context(), run.ID, "a", workflow.StatusOK, report, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := stepOf(t, loaded, "a").Step.Route
+	if route == nil || route.ThreadID != "thread-1" || route.ObservedModel != "gpt-5.6-sol" || route.ObservedReasoningEffort != "medium" {
+		t.Fatalf("persisted route = %+v", route)
 	}
 }
 

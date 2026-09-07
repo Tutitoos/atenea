@@ -2,14 +2,41 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/activity"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestMCPRelayPublishesToolActivityBeforeForwarding(t *testing.T) {
+	var published atomic.Bool
+	server, err := activity.Start(func(batch []activity.Notice) error {
+		if len(batch) != 1 || batch[0].Tool != "code.search" {
+			t.Fatalf("activity = %#v", batch)
+		}
+		published.Store(true)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	t.Setenv(activity.Environment, server.Path())
+	var forwarded bytes.Buffer
+	err = relayMCPClient(&forwarded, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code.search","arguments":{"secret":"ignored"}}}`+"\n"), "test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !published.Load() || !strings.Contains(forwarded.String(), `"method":"tools/call"`) {
+		t.Fatalf("published=%v forwarded=%q", published.Load(), forwarded.String())
+	}
+}
 
 // The relay's whole job: a client's line reaches the service and the service's
 // answer reaches the client, unchanged. Anything this bridge understood would

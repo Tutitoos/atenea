@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -54,12 +55,16 @@ import (
 // could come back and no tool could be called. It kept a process alive for its
 // web UI and that was all it could ever do.
 type stdioBackend struct {
-	version atomic.Value
-	id      string
-	command []string
-	env     map[string]string
-	timeout time.Duration
-	allowed []string
+	version      atomic.Value
+	id           string
+	command      []string
+	env          map[string]string
+	timeout      time.Duration
+	allowed      []string
+	mode         ProtocolMode
+	activeModern bool
+	protocol     mcpcompat.RequestedObserved
+	discovery    mcpcompat.Discovery
 
 	// mu guards the spawn and everything the spawn produces, and it is held
 	// for the whole of it -- the fork, the handshake's round trip and the
@@ -99,7 +104,8 @@ type process struct {
 	// waiting on an answer selects on it, so a server that dies mid-call fails
 	// its callers instead of hanging them until their timeouts expire one by
 	// one.
-	gone chan struct{}
+	gone           chan struct{}
+	preInitRequest atomic.Bool
 	// why is the reason it went, read only after gone is closed.
 	why error
 	// pending belongs to the process and not to the backend, because the
@@ -168,11 +174,13 @@ func newStdio(spec Spec) *stdioBackend {
 		timeout = 10 * time.Second
 	}
 	return &stdioBackend{
-		id:      spec.ID,
-		command: slices.Clone(spec.Command),
-		env:     spec.Env,
-		timeout: timeout,
-		allowed: slices.Clone(spec.Allowed),
+		id:       spec.ID,
+		command:  slices.Clone(spec.Command),
+		env:      spec.Env,
+		timeout:  timeout,
+		allowed:  slices.Clone(spec.Allowed),
+		mode:     normalizedProtocolMode(spec.ProtocolMode),
+		protocol: mcpcompat.RequestedObserved{Requested: requestedEra(spec.ProtocolMode), Observed: mcpcompat.Unknown},
 	}
 }
 
@@ -182,21 +190,53 @@ func (b *stdioBackend) Where() string { return strings.Join(b.command, " ") }
 func (b *stdioBackend) Allows(tool string) bool { return slices.Contains(b.allowed, tool) }
 func (b *stdioBackend) Allowed() []string       { return slices.Clone(b.allowed) }
 
+func (b *stdioBackend) RequestedProtocolVersion() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.protocol.RequestedOrUnknown().String()
+}
+
+func (b *stdioBackend) ObservedProtocolVersion() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.protocol.ObservedOrUnknown().String()
+}
+
+func (b *stdioBackend) isModern() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.activeModern
+}
+
 func (b *stdioBackend) Tools(ctx context.Context) ([]Tool, error) {
 	if _, err := b.ensure(ctx); err != nil {
 		b.catalog.invalidate()
 		return nil, err
 	}
+	b.mu.Lock()
+	modern := b.activeModern
+	supportsTools := b.discovery.SupportsTools()
+	b.mu.Unlock()
+	if modern && !supportsTools {
+		return nil, b.fail(contract.FailureUnavailable, "server did not advertise tools capability")
+	}
 	generation := b.generation.Load()
-	return b.catalog.get(ctx, generation, func() ([]Tool, error) {
+	return b.catalog.get(ctx, generation, func() ([]Tool, cacheHint, error) {
 		raw, err := b.request(ctx, "tools/list", map[string]any{})
 		if err != nil {
 			b.catalog.invalidate()
-			return nil, err
+			return nil, cacheHint{}, err
 		}
-		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail)
+		tools, drift, err := toolsFromReport(raw, b.allowed, b.fail, modern)
 		b.setCatalogDrift(drift)
-		return tools, err
+		if err != nil {
+			return nil, cacheHint{}, err
+		}
+		hint := cacheHint{Cache: true}
+		if b.isModern() {
+			hint, err = modernCacheHint(raw)
+		}
+		return tools, hint, err
 	})
 }
 
@@ -217,6 +257,16 @@ func (b *stdioBackend) Call(ctx context.Context, tool string, args map[string]an
 	if !b.Allows(tool) {
 		return nil, b.fail(contract.FailurePermissionDenied,
 			"tool %q is not in this backend's tools", tool)
+	}
+	if _, err := b.ensure(ctx); err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	modern := b.activeModern
+	supportsTools := b.discovery.SupportsTools()
+	b.mu.Unlock()
+	if modern && !supportsTools {
+		return nil, b.fail(contract.FailureUnavailable, "server did not advertise tools capability")
 	}
 	if args == nil {
 		args = map[string]any{}
@@ -239,6 +289,9 @@ func (b *stdioBackend) Close() {
 	b.mu.Lock()
 	proc := b.proc
 	b.proc = nil
+	b.activeModern = false
+	b.protocol.Observed = mcpcompat.Unknown
+	b.discovery = mcpcompat.Discovery{}
 	b.mu.Unlock()
 	b.generation.Add(1)
 	b.catalog.invalidate()
@@ -337,28 +390,63 @@ func (b *stdioBackend) ensure(ctx context.Context) (*process, error) {
 			return b.proc, nil
 		}
 	}
+	switch b.mode {
+	case ProtocolModernPin:
+		return b.startLocked(ctx, true)
+	case ProtocolAuto:
+		return b.startAutoLocked(ctx)
+	default:
+		return b.startLocked(ctx, false)
+	}
+}
+
+func (b *stdioBackend) startAutoLocked(ctx context.Context) (*process, error) {
+	// Probe the era in a disposable child so the definitive shared process
+	// never inherits a half-completed handshake or a rejected transport mode.
+	b.activeModern = true
+	probe, err := b.spawn()
+	if err != nil {
+		return nil, err
+	}
+	probeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), b.timeout)
+	err = b.handshakeModern(probeCtx, probe)
+	done()
+	probe.stop()
+	if err == nil {
+		return b.startLocked(ctx, true)
+	}
+	b.activeModern = false
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if !isProtocolFallback(err) {
+		return nil, err
+	}
+	return b.startLocked(ctx, false)
+}
+
+func (b *stdioBackend) startLocked(ctx context.Context, modern bool) (*process, error) {
+	b.activeModern = modern
 	proc, err := b.spawn()
 	if err != nil {
 		return nil, err
 	}
-	// The handshake is the process's, not the chat's: it happens once per
-	// spawn, and every chat that arrives afterwards finds it already done.
-	// Its context is the process's too. spawn() deliberately refuses
-	// exec.CommandContext so the child does not die with the call that
-	// happened to need it first, and handing the caller's context to the
-	// handshake would undo that one line later: the first chat pressing
-	// ctrl-c during initialize would take down the process every other chat
-	// is about to share. WithoutCancel keeps the caller's values -- tracing,
-	// deadlines that other code reads off the context -- while cutting the
-	// cancellation, and b.timeout supplies the bound that the caller's
-	// deadline was providing.
 	handshakeCtx, done := context.WithTimeout(context.WithoutCancel(ctx), b.timeout)
 	defer done()
-	if err := b.handshake(handshakeCtx, proc); err != nil {
+	if modern {
+		err = b.handshakeModern(handshakeCtx, proc)
+	} else {
+		err = b.handshake(handshakeCtx, proc)
+	}
+	if err != nil {
 		proc.stop()
 		return nil, err
 	}
 	b.proc = proc
+	b.protocol.Observed = mcpcompat.Legacy
+	if modern {
+		b.protocol.Observed = mcpcompat.Modern
+	}
 	b.generation.Add(1)
 	return proc, nil
 }
@@ -488,6 +576,7 @@ func (b *stdioBackend) route(proc *process, line string) {
 		return
 	}
 	if msg.Method != "" {
+		proc.preInitRequest.Store(true)
 		b.refuse(proc, msg.ID, msg.Method)
 		return
 	}
@@ -538,10 +627,24 @@ func (b *stdioBackend) refuse(proc *process, id json.RawMessage, method string) 
 // send writes one request and waits for its answer, its timeout, or the death
 // of the process.
 func (b *stdioBackend) send(ctx context.Context, proc *process, method string, params any) (json.RawMessage, error) {
+	b.mu.Lock()
+	modern := b.activeModern
+	b.mu.Unlock()
+	return b.sendWithMode(ctx, proc, method, params, modern)
+}
+
+func (b *stdioBackend) sendWithMode(ctx context.Context, proc *process, method string, params any, modern bool) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeoutFor(ctx, b.timeout))
 	defer cancel()
 
 	id := b.seq.Add(1)
+	if modern {
+		var err error
+		params, err = modernParams(params)
+		if err != nil {
+			return nil, b.fail(contract.FailureInvalidInput, "%s: %v", method, err)
+		}
+	}
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
 	})
@@ -554,32 +657,130 @@ func (b *stdioBackend) send(ctx context.Context, proc *process, method string, p
 	ch := proc.pending.add(id)
 	defer proc.pending.drop(id)
 
-	if err := proc.write(body); err != nil {
+	writeStarted := ctx.Err() == nil
+	if err := proc.writeContext(ctx, body); err != nil {
+		// A caller can cancel while the shared handshake is finishing. In
+		// that case the call was already canceled before its bytes were ever
+		// eligible for the pipe; keep the healthy process for the next chat.
+		// Once a write has started, cancellation retires the process because
+		// an incomplete frame cannot safely be followed by another writer.
+		if writeStarted {
+			b.invalidate(proc)
+		}
 		return nil, err
 	}
 	select {
 	case raw := <-ch:
-		return resultOf(raw, method, b.fail)
+		if modern && method == "server/discover" {
+			var envelope struct {
+				Error *rpcError `json:"error"`
+			}
+			if json.Unmarshal(raw, &envelope) == nil && envelope.Error != nil && envelope.Error.Code == -32601 {
+				return nil, &protocolFallbackError{message: envelope.Error.Message}
+			}
+		}
+		result, err := resultOf(raw, method, b.fail)
+		if err != nil {
+			return nil, err
+		}
+		if modern {
+			if method == "server/discover" && isLegacyDiscovery(result) {
+				return nil, &protocolFallbackError{message: "server selected legacy protocol"}
+			}
+			var validationErr error
+			if method == "server/discover" {
+				_, validationErr = mcpcompat.ParseDiscovery(result)
+			} else {
+				validationErr = validateModernResult(result, method == "tools/list" || method == "prompts/list")
+			}
+			if validationErr != nil {
+				var inputRequired *InputRequiredError
+				var futureResult *mcpcompat.FutureResultError
+				if errors.As(validationErr, &inputRequired) || errors.As(validationErr, &futureResult) {
+					return nil, validationErr
+				}
+				return nil, b.fail(contract.FailureUnavailable, "%s: %v", method, validationErr)
+			}
+		}
+		return result, nil
 	case <-proc.gone:
-		return nil, b.gone(proc, method)
+		return nil, b.gone(proc, method, modern)
 	case <-ctx.Done():
+		if method != "initialize" && method != "server/discover" {
+			b.cancel(proc, id, modern)
+		}
 		return nil, b.fail(contract.FailureTimeout, "%s: %v", method, ctx.Err())
 	}
+}
+
+func (b *stdioBackend) cancel(proc *process, id int64, modern bool) {
+	params := map[string]any{"requestId": id}
+	if modern {
+		var err error
+		params, err = modernParams(params)
+		if err != nil {
+			return
+		}
+	}
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/canceled", "params": params})
+	if err != nil {
+		return
+	}
+	ctx, done := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer done()
+	_ = proc.writeContext(ctx, body)
+}
+
+func (b *stdioBackend) invalidate(proc *process) {
+	b.mu.Lock()
+	if b.proc == proc {
+		b.proc = nil
+		b.activeModern = false
+		b.protocol.Observed = mcpcompat.Unknown
+		b.discovery = mcpcompat.Discovery{}
+	}
+	b.mu.Unlock()
+	b.generation.Add(1)
+	b.catalog.invalidate()
+	proc.stop()
 }
 
 // write serializes one message onto the shared pipe. Two chats writing at once
 // would interleave their bytes and the server would read one corrupt line.
 func (p *process) write(body []byte) error {
+	return p.writeContext(context.Background(), body)
+}
+
+func (p *process) writeContext(ctx context.Context, body []byte) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-	_, err := p.stdin.Write(append(body, '\n'))
-	return err
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.stdin.Write(append(body, '\n'))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = p.stdin.Close()
+		select {
+		case <-done:
+		case <-time.After(procgroup.Grace):
+		}
+		return ctx.Err()
+	case <-p.gone:
+		return errBackendGone
+	}
 }
 
 // gone names a dead server in the words its own stderr used, because for a
 // stdio server that is usually where the reason is -- and wraps the sentinel
 // the retry looks for.
-func (b *stdioBackend) gone(proc *process, method string) error {
+func (b *stdioBackend) gone(proc *process, method string, modern bool) error {
 	// The stdout reader can observe the process going away a few scheduler
 	// ticks before the stderr copier sees EOF. Give that copier a short chance
 	// to publish the server's own reason, while retaining a bound for malformed
@@ -595,17 +796,20 @@ func (b *stdioBackend) gone(proc *process, method string) error {
 	if said := proc.stderr.String(); said != "" {
 		reason += ": " + clip(said)
 	}
+	if modern && method == "server/discover" && proc.preInitRequest.Load() {
+		return &protocolFallbackError{message: "child exited after a pre-initialize request"}
+	}
 	return fmt.Errorf("%w: %s: %s: %s", errBackendGone, b.id, method, reason)
 }
 
 // handshake is the replay the shim did from a file. It runs on the process, so
 // the notification that completes it is sent before any chat can ask anything.
 func (b *stdioBackend) handshake(ctx context.Context, proc *process) error {
-	hello, err := b.send(ctx, proc, "initialize", map[string]any{
+	hello, err := b.sendWithMode(ctx, proc, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "atenea", "version": "1"},
-	})
+	}, false)
 	if err != nil {
 		return err
 	}
@@ -616,9 +820,24 @@ func (b *stdioBackend) handshake(ctx context.Context, proc *process) error {
 	if err != nil {
 		return b.fail(contract.FailureInvalidInput, "%v", err)
 	}
-	if err := proc.write(body); err != nil {
+	if err := proc.writeContext(ctx, body); err != nil {
 		return b.fail(contract.FailureUnavailable, "completing the handshake: %v", err)
 	}
+	return nil
+}
+
+func (b *stdioBackend) handshakeModern(ctx context.Context, proc *process) error {
+	result, err := b.sendWithMode(ctx, proc, "server/discover", map[string]any{}, true)
+	if err != nil {
+		return err
+	}
+	discovery, err := mcpcompat.ParseDiscovery(result)
+	if err != nil {
+		return err
+	}
+	b.discovery = discovery
+	_, version := modernServerInfo(result)
+	b.version.Store(version)
 	return nil
 }
 

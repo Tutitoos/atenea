@@ -11,8 +11,8 @@ import (
 func TestImplementationsPreservesEvidenceAndCoverage(t *testing.T) {
 	root := t.TempDir()
 	symbol := `{"name":"Reader","qualified_name":"Reader","kind":"interface","repository":"test","file_path":"main.ts","start_line":1,"end_line":2,"depth":1,"match":"lexical"}`
-	answer := `{"snapshot_id":7,"total":1,"truncated":true,"next_cursor":"page-2","coverage":{"exact":1},"completeness":{"verdict":"LOWER_BOUND","invisible_scopes":[{"reason":"fixture"}]},"results":{"implementations":[{"repository":"test","file_path":"concrete.ts","start_line":5,"qualified_name":"Concrete","stable_key":"canonical","confidence":"EXACT_TYPECHECKED","provenance":"TYPESCRIPT_IMPL_STRUCTURAL","detection":"structural"}]}}`
-	sess := &extensionSession{root: root, answers: map[string]string{
+	answer := `{"snapshot_id":7,"total":1,"returned":1,"truncated":true,"next_cursor":"page-2","coverage":{"exact":1,"candidate":0,"unresolved_related":0,"package_level":0},"completeness":{"verdict":"LOWER_BOUND","invisible_scopes":[{"reason":"fixture"}]},"results":{"implementations":[{"repository":"test","file_path":"concrete.ts","start_line":5,"qualified_name":"Concrete","stable_key":"canonical","confidence":"EXACT_TYPECHECKED","provenance":"TYPESCRIPT_IMPL_STRUCTURAL","detection":"structural","language":"typescript","edge_kind":"IMPLEMENTS"}]}}`
+	sess := &extensionSession{root: root, snapshotID: 7, answers: map[string]string{
 		"get_file_outline":     `{"snapshot_id":7,"coverage":{"exact":1},"completeness":{"verdict":"COMPLETE"},"results":{"symbols":[` + symbol + `]}}`,
 		"find_implementations": answer,
 	}}

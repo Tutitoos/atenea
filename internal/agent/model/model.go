@@ -26,10 +26,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	adaptercodex "github.com/Tutitoos/atenea/internal/adapter/codex"
 	agentopencode "github.com/Tutitoos/atenea/internal/agent/opencode"
 	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/core"
@@ -44,6 +47,8 @@ const (
 	BackendClaude = "claude"
 	// BackendOpenCode selects OpenCode's isolated JSON event protocol.
 	BackendOpenCode = "opencode"
+	// BackendCodex selects the Codex CLI's non-interactive JSONL protocol.
+	BackendCodex = "codex"
 )
 
 // DefaultBinary is the command looked up on PATH when Options names none.
@@ -75,10 +80,22 @@ type Role string
 const (
 	// RoleExplore is the read-only agent that gathers context before a plan
 	// is written.
+	// RoleExplore is part of ATENEA's public orchestration contract.
 	RoleExplore Role = "explore"
 	// RolePlan is the agent that turns gathered context into a workflow
 	// graph.
+	// RolePlan is part of ATENEA's public orchestration contract.
 	RolePlan Role = "plan"
+	// RoleResearch is the canonical read-only research role. RoleExplore is
+	// retained as a wire/configuration alias for older callers.
+	// RoleResearch is part of ATENEA's public orchestration contract.
+	RoleResearch Role = "research"
+	// RoleImplement is part of ATENEA's public orchestration contract.
+	RoleImplement Role = "implement"
+	// RoleReview is part of ATENEA's public orchestration contract.
+	RoleReview Role = "review"
+	// RoleAudit is part of ATENEA's public orchestration contract.
+	RoleAudit Role = "audit"
 )
 
 // Options configure a Client. Everything here is what internal/config's
@@ -100,8 +117,19 @@ type Options struct {
 	// the primary model is unavailable or overloaded. Claude's plan role is
 	// pinned by the decision/config layers, so its lower-reasoning fallback
 	// list is intentionally ignored here as a final dispatch guard.
-	ExploreFallbacks []string
-	PlanFallbacks    []string
+	ExploreFallbacks         []string
+	PlanFallbacks            []string
+	Research                 string
+	Implement                string
+	Review                   string
+	Audit                    string
+	ResearchReasoningEffort  string
+	PlanReasoningEffort      string
+	ImplementReasoningEffort string
+	ReviewReasoningEffort    string
+	AuditReasoningEffort     string
+	CodexNative              bool
+	CodexNativeOptions       adaptercodex.AppServerOptions
 }
 
 // Client calls a model for whichever caller holds it.
@@ -111,14 +139,36 @@ type Options struct {
 // per Turn. A caller working through both roles in the same run -- explore
 // then plan -- reuses the one Client instead of juggling two.
 type Client struct {
-	backend          string
-	binary           string
-	timeout          time.Duration
-	explore          string
-	plan             string
-	exploreFallbacks []string
-	planFallbacks    []string
-	opencode         *agentopencode.Runner
+	backend             string
+	binary              string
+	timeout             time.Duration
+	explore             string
+	plan                string
+	exploreFallbacks    []string
+	planFallbacks       []string
+	research            string
+	implement           string
+	review              string
+	audit               string
+	researchEffort      string
+	planEffort          string
+	implementEffort     string
+	reviewEffort        string
+	auditEffort         string
+	codex               *adaptercodex.Runner
+	codexNative         bool
+	nativeOptions       *adaptercodex.AppServerOptions
+	native              *adaptercodex.Client
+	nativeMu            sync.Mutex
+	nativeTurnMu        sync.Mutex
+	nativeThreadID      string
+	nativeThreadModel   string
+	nativeThreadSandbox string
+	nativeThreadSurface string
+	nativeHook          adaptercodex.NativeHook
+	nativeInitialized   bool
+	nativeInitErr       error
+	opencode            *agentopencode.Runner
 	// version answers what the CLI calls itself, for Floor's CLIVersion --
 	// memoised for the life of this Client, the same tradeoff
 	// internal/toolversion's own doc explains: an upgrade on disk underneath
@@ -142,9 +192,19 @@ func New(opts Options) (*Client, error) {
 	if backend == "" {
 		backend = BackendClaude
 	}
-	if backend != BackendClaude && backend != BackendOpenCode {
+	if backend != BackendClaude && backend != BackendOpenCode && backend != BackendCodex {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"model client: unknown backend %q", opts.Backend)
+	}
+	for role, effort := range map[string]string{
+		"research": opts.ResearchReasoningEffort, "plan": opts.PlanReasoningEffort,
+		"implement": opts.ImplementReasoningEffort, "review": opts.ReviewReasoningEffort,
+		"audit": opts.AuditReasoningEffort,
+	} {
+		if !validReasoningEffort(effort) {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"model client: %s reasoning effort %q is not supported", role, effort)
+		}
 	}
 	client := &Client{
 		backend:          backend,
@@ -154,16 +214,37 @@ func New(opts Options) (*Client, error) {
 		plan:             strings.TrimSpace(opts.Plan),
 		exploreFallbacks: append([]string(nil), opts.ExploreFallbacks...),
 		planFallbacks:    append([]string(nil), opts.PlanFallbacks...),
+		research:         strings.TrimSpace(opts.Research),
+		implement:        strings.TrimSpace(opts.Implement),
+		review:           strings.TrimSpace(opts.Review),
+		audit:            strings.TrimSpace(opts.Audit),
+		researchEffort:   strings.TrimSpace(opts.ResearchReasoningEffort),
+		planEffort:       strings.TrimSpace(opts.PlanReasoningEffort),
+		implementEffort:  strings.TrimSpace(opts.ImplementReasoningEffort),
+		reviewEffort:     strings.TrimSpace(opts.ReviewReasoningEffort),
+		auditEffort:      strings.TrimSpace(opts.AuditReasoningEffort),
 	}
 	if client.binary == "" {
-		if backend == BackendOpenCode {
+		switch backend {
+		case BackendOpenCode:
 			client.binary = agentopencode.DefaultBinary
-		} else {
+		case BackendCodex:
+			client.binary = adaptercodex.DefaultBinary
+		default:
 			client.binary = DefaultBinary
 		}
 	}
 	if client.timeout == 0 {
 		client.timeout = DefaultTimeout
+	}
+	if opts.CodexNative && backend == BackendCodex {
+		nativeOptions := opts.CodexNativeOptions
+		nativeOptions.NativeTransport = true
+		if nativeOptions.Binary == "" {
+			nativeOptions.Binary = client.binary
+		}
+		client.codexNative = true
+		client.nativeOptions = &nativeOptions
 	}
 	if backend == BackendOpenCode {
 		runner, err := agentopencode.New(agentopencode.Options{Binary: client.binary, Timeout: client.timeout})
@@ -172,8 +253,35 @@ func New(opts Options) (*Client, error) {
 		}
 		client.opencode = runner
 	}
+	if backend == BackendCodex {
+		runner, err := adaptercodex.New(adaptercodex.Options{Binary: client.binary, Timeout: client.timeout})
+		if err != nil {
+			return nil, err
+		}
+		client.codex = runner
+	}
 	client.version = toolversion.New(client.binary, "--version")
 	return client, nil
+}
+
+// Close releases a lazily created native App Server process. Legacy clients
+// remain process-free unless a turn started them, so callers can use the same
+// lifecycle hook for every backend.
+func (c *Client) Close() error {
+	c.nativeMu.Lock()
+	native := c.native
+	hook := c.nativeHook
+	c.native = nil
+	c.nativeInitialized = false
+	c.nativeHook = adaptercodex.NativeHook{}
+	c.nativeMu.Unlock()
+	hookErr := hook.Close()
+	if native != nil {
+		if err := native.Close(); err != nil {
+			return err
+		}
+	}
+	return hookErr
 }
 
 // modelFor resolves which model name backs one Role.
@@ -186,21 +294,80 @@ func (c *Client) modelFor(role Role) (string, error) {
 	switch role {
 	case RoleExplore:
 		name = c.explore
+		if name == "" {
+			name = c.research
+		}
+	case RoleResearch:
+		name = c.research
+		if name == "" {
+			name = c.explore
+		}
 	case RolePlan:
 		name = c.plan
+	case RoleImplement:
+		name = c.implement
+	case RoleReview:
+		name = c.review
+	case RoleAudit:
+		name = c.audit
 	default:
 		// Request.Validate already refuses any other Role before Turn ever
 		// reaches here; this default is what makes a third Role added to
 		// the type without a case here fail loudly instead of silently
 		// asking the CLI for "".
 		return "", contract.Fail(contract.FailureInvalidInput,
-			"request: role %q is not explore or plan", role)
+			"request: role %q is not research, plan, implement, review, audit or explore", role)
 	}
 	if name == "" {
 		return "", contract.Fail(contract.FailureInvalidInput,
 			"request: role %q has no model configured", role)
 	}
 	return name, nil
+}
+
+func validReasoningEffort(effort string) bool {
+	if strings.TrimSpace(effort) == "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) reasoningEffortFor(role Role) string {
+	switch role {
+	case RoleExplore, RoleResearch:
+		if c.researchEffort != "" {
+			return c.researchEffort
+		}
+	case RolePlan:
+		return c.planEffort
+	case RoleImplement:
+		return c.implementEffort
+	case RoleReview:
+		return c.reviewEffort
+	case RoleAudit:
+		return c.auditEffort
+	}
+	return ""
+}
+
+func sandboxFor(role Role, effects []contract.Effect) (string, error) {
+	if role == RoleImplement {
+		if !slices.Contains(effects, contract.EffectWrite) {
+			return "", contract.Fail(contract.FailurePermissionDenied,
+				"request: implement role requires write authorization")
+		}
+		return "workspace-write", nil
+	}
+	if slices.Contains(effects, contract.EffectWrite) {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"request: write authorization is only valid for implement role")
+	}
+	return "read-only", nil
 }
 
 // ateneaServer is the key this package registers Atenea's tools under, and
@@ -271,6 +438,35 @@ type Request struct {
 	// Role picks which of the Client's two configured models this turn
 	// calls.
 	Role Role
+	// ReasoningEffort is the requested provider effort for this turn. It is
+	// carried separately from observed provider metadata; an empty observed
+	// value never means the request was fulfilled.
+	ReasoningEffort string
+	// VisibilityRequired selects the native Codex App Server path. It is
+	// rejected before any provider process is started when native transport is
+	// not configured.
+	VisibilityRequired bool
+	// ThreadID resumes exactly one durable native thread. An empty value lets
+	// the native client create one and return it in Answer.ThreadID.
+	ThreadID string
+	// Invisible and CI explicitly authorize the legacy one-shot exec path.
+	Invisible bool
+	CI        bool
+	// Effects is the authorization supplied by the caller. Codex may request
+	// workspace-write only for an implement role that includes EffectWrite.
+	Effects []contract.Effect
+	// Operations are one-shot sensitive grants. They never follow from
+	// EffectWrite and are carried to the provider so it can enforce or
+	// explicitly report a trusted-host boundary.
+	Operations []contract.Operation
+	// These fields bind an effectful model turn to the workflow authorization
+	// that minted it. They stay outside Prompt because model-controlled text
+	// cannot establish authority.
+	AssignmentID string
+	WorkflowID   string
+	Worktree     string
+	PolicyDigest string
+	GrantToken   string
 	// Prompt is what the model is told, verbatim -- the caller's whole
 	// instruction, not a template this package fills in. Explore and plan
 	// each know what they are asking; this package only knows how to ask it.
@@ -422,10 +618,39 @@ func (r Request) Validate() error {
 		return contract.Fail(contract.FailureInvalidInput, "request: prompt is required")
 	}
 	switch r.Role {
-	case RoleExplore, RolePlan:
+	case RoleExplore, RoleResearch, RolePlan, RoleImplement, RoleReview, RoleAudit:
 	default:
 		return contract.Fail(contract.FailureInvalidInput,
-			"request: role %q is not explore or plan", r.Role)
+			"request: role %q is not research, plan, implement, review, audit or explore", r.Role)
+	}
+	if !validReasoningEffort(r.ReasoningEffort) {
+		return contract.Fail(contract.FailureInvalidInput,
+			"request: unknown reasoning effort %q", r.ReasoningEffort)
+	}
+	if r.VisibilityRequired && (r.Invisible || r.CI) {
+		return contract.Fail(contract.FailureInvalidInput, "request: visibility_required cannot be combined with invisible or CI execution")
+	}
+	if r.Role == RoleImplement && !slices.Contains(r.Effects, contract.EffectWrite) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"request: implement role requires write authorization")
+	}
+	if r.Role != RoleImplement && slices.Contains(r.Effects, contract.EffectWrite) {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"request: write authorization is only valid for implement role")
+	}
+	for _, operation := range r.Operations {
+		if !operation.Known() {
+			return contract.Fail(contract.FailureInvalidInput,
+				"request: unknown sensitive operation %q", operation)
+		}
+		if !slices.Contains(r.Effects, contract.EffectWrite) {
+			return contract.Fail(contract.FailurePermissionDenied,
+				"request: sensitive operation %s requires explicit write authorization", operation)
+		}
+		if operationRequiresExternal(operation) && !slices.Contains(r.Effects, contract.EffectExternal) {
+			return contract.Fail(contract.FailurePermissionDenied,
+				"request: sensitive operation %s requires explicit external authorization", operation)
+		}
 	}
 	if r.BudgetUSD < 0 || math.IsNaN(r.BudgetUSD) || math.IsInf(r.BudgetUSD, 0) {
 		// Zero is deliberately allowed: see BudgetUSD's own doc for why it
@@ -461,6 +686,16 @@ func (r Request) Validate() error {
 	return nil
 }
 
+func operationRequiresExternal(operation contract.Operation) bool {
+	switch operation {
+	case contract.OperationPush, contract.OperationInstall,
+		contract.OperationDeploy, contract.OperationMigrate:
+		return true
+	default:
+		return false
+	}
+}
+
 // reservesAnswer reports whether this turn holds back an allowance for the
 // answer, which is what decides between the two paths through Turn.
 //
@@ -485,10 +720,19 @@ func (r Request) reservesAnswer() bool {
 // wire is the exact drift PromptLogEnv exists to rule out. A single-shot
 // turn gets the caller's own string back unchanged, byte for byte.
 func (r Request) sentPrompt() string {
-	if !r.reservesAnswer() {
-		return r.Prompt
+	prompt := r.Prompt
+	if len(r.Operations) > 0 {
+		operations := make([]string, 0, len(r.Operations))
+		for _, operation := range r.Operations {
+			operations = append(operations, operation.String())
+		}
+		slices.Sort(operations)
+		prompt += "\n\nATENEA AUTHORIZATION: perform only these one-shot sensitive operations: " + strings.Join(operations, ", ") + ". Never infer additional operations from write access."
 	}
-	return r.Prompt + "\n" + passProtocol
+	if !r.reservesAnswer() {
+		return prompt
+	}
+	return prompt + "\n" + passProtocol
 }
 
 // passProtocol is what sentPrompt appends to a reserved-answer prompt: the
@@ -515,6 +759,18 @@ You will be told when to stop reading and answer for good.`
 
 // Answer is what one Turn produced.
 type Answer struct {
+	// ThreadID is the durable native Codex thread used for this answer. It is
+	// empty for Claude/OpenCode and legacy invisible Codex exec turns.
+	ThreadID      string
+	TurnID        string
+	UsageRevision uint64
+	// Requested and observed identity stay separate. Observed values are empty
+	// when App Server did not provide evidence; callers must not infer them
+	// from the request.
+	RequestedModel           string
+	ObservedModel            string
+	RequestedReasoningEffort string
+	ObservedReasoningEffort  string
 	// Text is the model's plain-text result, always populated on a clean
 	// answer whether or not a Schema was asked for.
 	Text string
@@ -603,15 +859,20 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	if err != nil {
 		return Answer{}, err
 	}
+	if c.backend != BackendCodex && (req.VisibilityRequired || req.ThreadID != "") {
+		return Answer{}, contract.Fail(contract.FailurePermissionDenied,
+			"visibility_required and thread_id are supported only by Codex native App Server")
+	}
 	candidates := append([]string{primary}, c.fallbacksFor(req.Role)...)
 	if len(candidates) == 1 {
-		return c.turnOnce(ctx, req)
+		answer, err := c.turnOnce(ctx, req)
+		return c.annotateEnforcement(answer, req), err
 	}
 	originalBudget := req.BudgetUSD
 	var total contract.Charge
 	var notices []string
 	for index, candidate := range candidates {
-		attempt := *c
+		attempt := c.cloneForFallback()
 		if req.Role == RolePlan {
 			attempt.plan = candidate
 			attempt.planFallbacks = nil
@@ -624,7 +885,7 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		answer.Spent = total
 		if turnErr == nil {
 			answer.Notices = append(answer.Notices, notices...)
-			return answer, nil
+			return c.annotateEnforcement(answer, req), nil
 		}
 		if index == len(candidates)-1 || !fallbackRetryable(turnErr) {
 			return answer, turnErr
@@ -642,6 +903,16 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 		// only ever ran after a failure that had already paid for itself --
 		// which is the rarest of them.
 		spentUSD, source := retryCost(total)
+		// Codex has no provider fallback and therefore cannot safely hand an
+		// unknown paid attempt to another candidate. Claude/OpenCode retain
+		// their legacy explicitly configured fallback behavior for an attempt
+		// that only exposed token usage; reservation accounting still keeps
+		// that amount conservative in the workflow store.
+		if req.BudgetUSD > 0 && (estimatedPrice(total.PricedBy) ||
+			(c.backend == BackendCodex && total.Measured() && total.USD == nil)) {
+			return answer, contract.Fail(contract.FailurePermissionDenied,
+				"fallback paused: provider monetary usage is estimated or unknown; obtain observed cost or explicit budget authorization").WithRaw(contract.RawOf(turnErr))
+		}
 		remaining, provenance := req.BudgetUSD, source
 		switch {
 		case req.BudgetUSD <= 0:
@@ -673,6 +944,47 @@ func (c *Client) Turn(ctx context.Context, req Request) (Answer, error) {
 	return Answer{Spent: total}, contract.Fail(contract.FailureUnavailable, "all configured models failed")
 }
 
+// cloneForFallback copies configuration without copying synchronization
+// primitives. A Client has native App Server mutexes even though Codex itself
+// never enters this fallback loop; copying the struct would make two mutex
+// values refer to the same live provider state and is rejected by go vet.
+func (c *Client) cloneForFallback() Client {
+	return Client{
+		backend: c.backend, binary: c.binary, timeout: c.timeout,
+		explore: c.explore, plan: c.plan,
+		exploreFallbacks: slices.Clone(c.exploreFallbacks), planFallbacks: slices.Clone(c.planFallbacks),
+		research: c.research, implement: c.implement, review: c.review, audit: c.audit,
+		researchEffort: c.researchEffort, planEffort: c.planEffort, implementEffort: c.implementEffort,
+		reviewEffort: c.reviewEffort, auditEffort: c.auditEffort,
+		codex: c.codex, codexNative: c.codexNative, nativeOptions: c.nativeOptions,
+		native: c.native, nativeThreadID: c.nativeThreadID, nativeThreadModel: c.nativeThreadModel, nativeThreadSandbox: c.nativeThreadSandbox, nativeThreadSurface: c.nativeThreadSurface, nativeHook: c.nativeHook, nativeInitialized: c.nativeInitialized, nativeInitErr: c.nativeInitErr,
+		opencode: c.opencode, version: c.version,
+	}
+}
+
+func estimatedPrice(pricedBy string) bool {
+	for _, source := range strings.Split(pricedBy, " and ") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(source)), "estimate:") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) annotateEnforcement(answer Answer, req Request) Answer {
+	if len(req.Operations) == 0 || c.backend == BackendCodex {
+		return answer
+	}
+	operations := make([]string, 0, len(req.Operations))
+	for _, operation := range req.Operations {
+		operations = append(operations, operation.String())
+	}
+	slices.Sort(operations)
+	answer.Notices = append(answer.Notices,
+		"enforcement=trusted-host; partial=true; operations="+strings.Join(operations, ","))
+	return answer
+}
+
 func retryCost(c contract.Charge) (float64, string) {
 	if c.USD != nil {
 		return *c.USD, "provider-reported cost"
@@ -690,6 +1002,9 @@ func fallbackRetryable(err error) bool {
 }
 
 func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		req.ReasoningEffort = c.reasoningEffortFor(req.Role)
+	}
 	dir, err := resolveDir(req.Dir)
 	if err != nil {
 		return Answer{}, err
@@ -700,6 +1015,18 @@ func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 	}
 	if c.backend == BackendOpenCode {
 		return c.turnOpenCode(ctx, dir, timeout, req)
+	}
+	if c.backend == BackendCodex {
+		if (req.Invisible || req.CI) && req.ThreadID != "" {
+			return Answer{}, contract.Fail(contract.FailureInvalidInput, "thread_id cannot be resumed through invisible or CI codex exec")
+		}
+		if !req.Invisible && !req.CI {
+			if !c.codexNative {
+				return Answer{}, contract.Fail(contract.FailurePermissionDenied, "Codex interactive turns require native App Server transport; declare invisible or CI to use codex exec")
+			}
+			return c.turnCodexNative(ctx, dir, timeout, req)
+		}
+		return c.turnCodex(ctx, dir, timeout, req)
 	}
 
 	if req.reservesAnswer() {
@@ -729,6 +1056,36 @@ func (c *Client) turnOnce(ctx context.Context, req Request) (Answer, error) {
 	// filled this in; the default backend did not.
 	if claimed, ok := claimOf(env); ok {
 		answer.Completeness, answer.StoppedAt = claimed.reported()
+	}
+	return enforceMaxTokens(answer, req.MaxTokens, nil)
+}
+
+func (c *Client) turnCodex(ctx context.Context, dir string, timeout time.Duration, req Request) (Answer, error) {
+	if c.codex == nil {
+		return Answer{}, contract.Fail(contract.FailureUnavailable, "codex backend is not initialized")
+	}
+	sandbox, err := sandboxFor(req.Role, req.Effects)
+	if err != nil {
+		return Answer{}, err
+	}
+	modelName, err := c.modelFor(req.Role)
+	if err != nil {
+		return Answer{}, err
+	}
+	got, err := c.codex.RunModel(ctx, adaptercodex.ModelRequest{
+		Model: modelName, Prompt: req.sentPrompt(), Dir: dir,
+		AssignmentID: req.AssignmentID, WorkflowID: req.WorkflowID,
+		Worktree: req.Worktree, PolicyDigest: req.PolicyDigest,
+		GrantToken: req.GrantToken,
+		Schema:     req.Schema, BudgetUSD: req.BudgetUSD, MaxTokens: req.MaxTokens,
+		Timeout: timeout, Sandbox: sandbox, ReasoningEffort: req.ReasoningEffort,
+		Tools: req.Tools, Builtins: req.Builtins, Effects: req.Effects, Operations: req.Operations,
+	})
+	structured, _ := json.Marshal(got.Structured)
+	answer := Answer{Text: got.Text, Structured: structured, Spent: got.Spent, Passes: 1,
+		Notices: got.Notices, Completeness: got.Completeness, StoppedAt: got.StoppedAt}
+	if err != nil {
+		return answer, err
 	}
 	return enforceMaxTokens(answer, req.MaxTokens, nil)
 }
@@ -884,9 +1241,9 @@ type FloorMeasurement struct {
 // at all has no USD to report honestly. A floor measured on a turn that did
 // work is not a floor.
 func (c *Client) Floor(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
-	if c.backend == BackendOpenCode {
+	if c.backend == BackendOpenCode || c.backend == BackendCodex {
 		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
-			"opencode floor probes are not supported: its event stream does not expose the Claude cache-prefix measurement")
+			"%s floor probes are not supported: its event stream does not expose the Claude cache-prefix measurement", c.backend)
 	}
 	turn := Request{
 		Role:     req.Role,
@@ -976,9 +1333,9 @@ const firstCallPrompt = "Call the Glob tool exactly once, with the pattern " +
 // cache states and two receipts pretending to be one measurement, which is
 // the mistake internal/floor's own PrefixTokens doc records.
 func (c *Client) FirstCall(ctx context.Context, req FloorRequest) (FloorMeasurement, error) {
-	if c.backend == BackendOpenCode {
+	if c.backend == BackendOpenCode || c.backend == BackendCodex {
 		return FloorMeasurement{}, contract.Fail(contract.FailureUnavailable,
-			"opencode first-call probes are not supported: its event stream does not expose the Claude message accounting")
+			"%s first-call probes are not supported: its event stream does not expose the Claude message accounting", c.backend)
 	}
 	turn := Request{
 		Role:     req.Role,
@@ -1146,6 +1503,9 @@ func VersionToken(banner string) string {
 // exact CLI, plus --model and --mcp-config for what this package's callers
 // need that a capability call does not.
 func (c *Client) args(req Request) ([]string, error) {
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		req.ReasoningEffort = c.reasoningEffortFor(req.Role)
+	}
 	argv := []string{"--print"}
 	if req.reservesAnswer() {
 		// The three flags that hold the process open, and they are not a
@@ -1243,6 +1603,10 @@ func (c *Client) args(req Request) ([]string, error) {
 		return nil, err
 	}
 	argv = append(argv, "--model", modelName)
+	// Reasoning effort is a Codex config key, transported by turnCodex. Do
+	// not leak that provider-specific option into Claude's argv: Claude's
+	// envelope has no compatible flag here, and silently passing one would
+	// make a role appear configured while changing the wrong backend.
 	if fallbacks := c.fallbacksFor(req.Role); len(fallbacks) > 0 && c.backend == BackendClaude {
 		argv = append(argv, "--fallback-model", strings.Join(fallbacks, ","))
 	}
@@ -1270,6 +1634,12 @@ func (c *Client) args(req Request) ([]string, error) {
 }
 
 func (c *Client) fallbacksFor(role Role) []string {
+	if c.backend == BackendCodex {
+		return nil
+	}
+	if role == RoleResearch || role == RoleImplement || role == RoleReview || role == RoleAudit {
+		return nil
+	}
 	if role == RolePlan && c.backend == BackendClaude {
 		return nil
 	}

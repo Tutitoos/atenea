@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/toolversion"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -58,6 +59,35 @@ import (
 // same in both places.
 const maxFrame = 8 << 20
 
+// ProtocolMode is part of ATENEA's public orchestration contract.
+type ProtocolMode string
+
+const (
+	// ProtocolLegacy is part of ATENEA's public orchestration contract.
+	ProtocolLegacy ProtocolMode = "legacy"
+	// ProtocolAuto is part of ATENEA's public orchestration contract.
+	ProtocolAuto ProtocolMode = "auto"
+	// ProtocolModernPin is part of ATENEA's public orchestration contract.
+	ProtocolModernPin ProtocolMode = "modern-pin"
+)
+
+// ErrInputRequired is part of ATENEA's public orchestration contract.
+var ErrInputRequired = errors.New("mcpstdio: modern response requires input")
+
+// InputRequiredError is part of ATENEA's public orchestration contract.
+type InputRequiredError struct{ Response json.RawMessage }
+
+func (e *InputRequiredError) Error() string { return ErrInputRequired.Error() }
+func (e *InputRequiredError) Unwrap() error { return ErrInputRequired }
+
+type methodNotFoundError struct{ message string }
+
+func (e *methodNotFoundError) Error() string { return e.message }
+
+type legacyProtocolError struct{ message string }
+
+func (e *legacyProtocolError) Error() string { return e.message }
+
 // Options configures the handshake Initialize performs. Every field
 // defaults when left zero, so Options{} is a legitimate call.
 type Options struct {
@@ -71,6 +101,11 @@ type Options struct {
 	// cannot answer this revision should say so at the handshake, the
 	// earliest point that failure can be caught.
 	ProtocolVersion string
+	// ProtocolMode defaults to legacy. Auto is in-place only: if a child does
+	// not explicitly reject modern discovery, this session never retries with
+	// legacy after timeout, EOF, or another contaminated transport error. A
+	// supervisor that can restart a sibling process owns broader auto policy.
+	ProtocolMode ProtocolMode
 }
 
 func (o Options) withDefaults() Options {
@@ -81,7 +116,10 @@ func (o Options) withDefaults() Options {
 		o.ClientVersion = "0"
 	}
 	if o.ProtocolVersion == "" {
-		o.ProtocolVersion = "2025-06-18"
+		o.ProtocolVersion = mcpcompat.Legacy.String()
+	}
+	if o.ProtocolMode == "" {
+		o.ProtocolMode = ProtocolLegacy
 	}
 	return o
 }
@@ -91,16 +129,20 @@ func (o Options) withDefaults() Options {
 // from as many goroutines as the caller likes, each getting its own answer
 // back regardless of the order any of them arrive in.
 type Session struct {
-	stdin io.WriteCloser
-	opts  Options
+	stdin       io.WriteCloser
+	opts        Options
+	protocolErr error
 
 	writeGate chan struct{}
 	initGate  chan struct{}
 	seq       atomic.Int64
 	pending   pending
 
-	initMu      sync.Mutex
-	initialized bool
+	initMu       sync.Mutex
+	initialized  bool
+	activeModern bool
+	protocol     mcpcompat.RequestedObserved
+	discovery    mcpcompat.Discovery
 	// version is what the far side called itself on the handshake, cleaned
 	// the way every other provider's version is. It rides in on a round trip
 	// the caller already pays for, so filing measurements under the server
@@ -108,7 +150,8 @@ type Session struct {
 	// version anybody should trust: one written into a comment or a settings
 	// file is a claim about what was installed the day somebody looked.
 	// Guarded by initMu, which is already held wherever it is written.
-	version string
+	version  string
+	instance string
 
 	// closeOnce guards dead and why together: the reader goroutine reaching
 	// EOF and a caller's own Close must not race to close dead twice, and
@@ -127,17 +170,34 @@ type Session struct {
 	why error
 }
 
+var sessionInstanceSeq atomic.Uint64
+
 // New starts routing answers from stdout and returns a Session ready for
 // Initialize. It does not write anything itself: the handshake is a
 // deliberate call, not a side effect of construction, so a caller that only
 // wants to probe liveness some other way never pays for one.
 func New(stdin io.WriteCloser, stdout io.Reader, opts Options) *Session {
+	opts = opts.withDefaults()
+	var protocolErr error
+	if opts.ProtocolMode != ProtocolLegacy && opts.ProtocolMode != ProtocolAuto && opts.ProtocolMode != ProtocolModernPin {
+		protocolErr = fmt.Errorf("mcpstdio: unknown protocol mode %q", opts.ProtocolMode)
+	}
+	requested := mcpcompat.Legacy
+	activeModern := false
+	if opts.ProtocolMode == ProtocolAuto || opts.ProtocolMode == ProtocolModernPin {
+		requested = mcpcompat.Modern
+		activeModern = true
+	}
 	s := &Session{
-		stdin:     stdin,
-		writeGate: make(chan struct{}, 1),
-		initGate:  make(chan struct{}, 1),
-		opts:      opts.withDefaults(),
-		dead:      make(chan struct{}),
+		stdin:        stdin,
+		writeGate:    make(chan struct{}, 1),
+		initGate:     make(chan struct{}, 1),
+		opts:         opts,
+		protocolErr:  protocolErr,
+		activeModern: activeModern,
+		protocol:     mcpcompat.RequestedObserved{Requested: requested, Observed: mcpcompat.Unknown},
+		dead:         make(chan struct{}),
+		instance:     fmt.Sprintf("stdio#%d", sessionInstanceSeq.Add(1)),
 	}
 	go s.read(stdout)
 	return s
@@ -150,6 +210,9 @@ func New(stdin io.WriteCloser, stdout io.Reader, opts Options) *Session {
 // pays for a second round trip over the wire, and Call itself calls this
 // defensively for the same reason.
 func (s *Session) Initialize(ctx context.Context) error {
+	if s.protocolErr != nil {
+		return contract.Fail(contract.FailureInvalidInput, "%v", s.protocolErr)
+	}
 	select {
 	case s.initGate <- struct{}{}:
 	case <-ctx.Done():
@@ -164,6 +227,26 @@ func (s *Session) Initialize(ctx context.Context) error {
 	if ready {
 		return nil
 	}
+	if s.isModern() {
+		if err := s.modernDiscover(ctx); err != nil {
+			if s.opts.ProtocolMode == ProtocolAuto && isExplicitFallback(err) {
+				s.initMu.Lock()
+				s.activeModern = false
+				s.protocol.Observed = mcpcompat.Legacy
+				s.initMu.Unlock()
+				return s.legacyInitialize(ctx)
+			}
+			return err
+		}
+		s.initMu.Lock()
+		s.initialized = true
+		s.initMu.Unlock()
+		return nil
+	}
+	return s.legacyInitialize(ctx)
+}
+
+func (s *Session) legacyInitialize(ctx context.Context) error {
 	result, err := s.rpc(ctx, "initialize", map[string]any{
 		"protocolVersion": s.opts.ProtocolVersion,
 		"capabilities":    map[string]any{},
@@ -179,13 +262,17 @@ func (s *Session) Initialize(ctx context.Context) error {
 	// leaves this empty, which is a fact rather than a guess, and a handshake
 	// whose shape this cannot read is not a handshake that failed.
 	var hello struct {
-		ServerInfo struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
 			Version string `json:"version"`
 		} `json:"serverInfo"`
 	}
 	if json.Unmarshal(result, &hello) == nil {
 		s.initMu.Lock()
 		s.version = toolversion.Clean(hello.ServerInfo.Version)
+		if observed, parseErr := mcpcompat.Parse(hello.ProtocolVersion); parseErr == nil {
+			s.protocol.Observed = observed
+		}
 		s.initMu.Unlock()
 	}
 	if err := s.notifyContext(ctx, "notifications/initialized", map[string]any{}); err != nil {
@@ -195,6 +282,87 @@ func (s *Session) Initialize(ctx context.Context) error {
 	s.initialized = true
 	s.initMu.Unlock()
 	return nil
+}
+
+func (s *Session) isModern() bool {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return s.activeModern
+}
+
+// RequestedProtocolVersion is part of ATENEA's public orchestration contract.
+func (s *Session) RequestedProtocolVersion() string {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return s.protocol.RequestedOrUnknown().String()
+}
+
+// ObservedProtocolVersion is part of ATENEA's public orchestration contract.
+func (s *Session) ObservedProtocolVersion() string {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return s.protocol.ObservedOrUnknown().String()
+}
+
+func (s *Session) modernParams(params any) (map[string]any, error) {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if string(encoded) != "null" {
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			return nil, fmt.Errorf("mcpstdio: modern params must be an object: %w", err)
+		}
+	}
+	meta := map[string]any{}
+	if existing, ok := out["_meta"].(map[string]any); ok {
+		for key, value := range existing {
+			meta[key] = value
+		}
+	}
+	// Reserved negotiation fields are host-owned. Caller metadata may add
+	// application keys, but it cannot downgrade or impersonate this session.
+	meta[mcpcompat.ProtocolVersionKey] = mcpcompat.Modern.String()
+	meta[mcpcompat.ClientInfoKey] = map[string]any{"name": s.opts.ClientName, "version": s.opts.ClientVersion}
+	meta[mcpcompat.ClientCapabilitiesKey] = map[string]any{}
+	out["_meta"] = meta
+	return out, nil
+}
+
+func (s *Session) modernDiscover(ctx context.Context) error {
+	params, err := s.modernParams(map[string]any{})
+	if err != nil {
+		return err
+	}
+	raw, err := s.rpc(ctx, "server/discover", params)
+	if err != nil {
+		return err
+	}
+	if legacyDiscovery(raw) {
+		return &legacyProtocolError{message: "mcpstdio: server selected legacy protocol"}
+	}
+	discovery, err := mcpcompat.ParseDiscovery(raw)
+	if err != nil {
+		return err
+	}
+	s.initMu.Lock()
+	s.discovery = discovery
+	s.initMu.Unlock()
+	return nil
+}
+
+func legacyDiscovery(raw json.RawMessage) bool {
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	return json.Unmarshal(raw, &result) == nil && result.ProtocolVersion == mcpcompat.Legacy.String()
+}
+
+func isExplicitFallback(err error) bool {
+	var methodErr *methodNotFoundError
+	var legacyErr *legacyProtocolError
+	return errors.As(err, &methodErr) || errors.As(err, &legacyErr)
 }
 
 // Version is what the far side called itself, or empty when it has not been
@@ -210,6 +378,26 @@ func (s *Session) Version() string {
 	return s.version
 }
 
+// Instance identifies this concrete child conversation, including a fresh
+// epoch when the supervisor creates a new Session.
+func (s *Session) Instance() string {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	return s.instance
+}
+
+// StableIdentity uses configured protocol plus the server version. The
+// process epoch remains available from Instance for diagnostics, but is not
+// the durable quality scope by itself.
+func (s *Session) StableIdentity() string {
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	if s.version == "" {
+		return ""
+	}
+	return "stdio:" + s.version
+}
+
 // Call runs one tool and returns the concatenated text of every text-typed
 // content entry, mirroring internal/mcphttp/mcphttp.go's own call. A
 // result with isError=true becomes an error carrying that text, or the raw
@@ -219,10 +407,26 @@ func (s *Session) Call(ctx context.Context, tool string, args map[string]any) (s
 	if err := s.Initialize(ctx); err != nil {
 		return "", err
 	}
+	if s.isModern() {
+		s.initMu.Lock()
+		supportsTools := s.discovery.SupportsTools()
+		s.initMu.Unlock()
+		if !supportsTools {
+			return "", contract.Fail(contract.FailureUnavailable, "modern server did not advertise tools capability")
+		}
+	}
 	if args == nil {
 		args = map[string]any{}
 	}
-	raw, err := s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": args})
+	params := map[string]any{"name": tool, "arguments": args}
+	if s.isModern() {
+		var err error
+		params, err = s.modernParams(params)
+		if err != nil {
+			return "", err
+		}
+	}
+	raw, err := s.rpc(ctx, "tools/call", params)
 	if err != nil {
 		return "", err
 	}
@@ -420,14 +624,84 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 	}
 	select {
 	case raw := <-ch:
-		return resultOf(raw, method)
+		result, err := resultOf(raw, method)
+		if err != nil {
+			return nil, err
+		}
+		if s.isModern() {
+			if method == "server/discover" && legacyDiscovery(result) {
+				return nil, &legacyProtocolError{message: "mcpstdio: server selected legacy protocol"}
+			}
+			var validationErr error
+			if method == "server/discover" {
+				_, validationErr = mcpcompat.ParseDiscovery(result)
+			} else {
+				validationErr = validateModernResult(result, method == "tools/list" || method == "prompts/list")
+			}
+			if validationErr != nil {
+				return nil, validationErr
+			}
+			s.recordModernResult(result)
+		}
+		return result, nil
 	case <-s.dead:
 		return nil, s.deadReason()
 	case <-ctx.Done():
+		if method != "initialize" && method != "server/discover" && s.pending.has(id) {
+			s.cancelRequest(id)
+		}
 		// The bin has to say which of the two this was -- a deadline this
 		// call ran into, or somebody upstream changing their mind.
 		return nil, contract.Stopped(ctx.Err(), "mcpstdio", ceiling(ctx, start)).WithRaw(method)
 	}
+}
+
+func (s *Session) cancelRequest(id int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = s.notifyContext(ctx, "notifications/canceled", map[string]any{"requestId": id})
+}
+
+func validateModernResult(raw json.RawMessage, cacheable bool) error {
+	result, err := mcpcompat.ParseMRTR(raw)
+	if err != nil {
+		return fmt.Errorf("mcpstdio: %w", err)
+	}
+	if result.Type == mcpcompat.ResultInputRequired {
+		return &InputRequiredError{Response: append(json.RawMessage(nil), raw...)}
+	}
+	if result.Type != mcpcompat.ResultComplete {
+		return &mcpcompat.FutureResultError{Response: result}
+	}
+	if cacheable {
+		var fields struct {
+			TTLMS      *int64 `json:"ttlMs"`
+			CacheScope string `json:"cacheScope"`
+		}
+		if json.Unmarshal(raw, &fields) != nil || fields.TTLMS == nil || *fields.TTLMS < 0 || *fields.TTLMS > mcpcompat.MaxCacheTTLMS || (fields.CacheScope != "public" && fields.CacheScope != "private") {
+			return fmt.Errorf("mcpstdio: cacheable modern result requires ttlMs and cacheScope public/private")
+		}
+	}
+	return nil
+}
+
+func (s *Session) recordModernResult(raw json.RawMessage) {
+	var envelope struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return
+	}
+	var info struct {
+		Version string `json:"version"`
+	}
+	s.initMu.Lock()
+	s.protocol.Observed = mcpcompat.Modern
+	s.version = ""
+	if json.Unmarshal(envelope.Meta[mcpcompat.ServerInfoKey], &info) == nil && strings.TrimSpace(info.Version) != "" {
+		s.version = toolversion.Clean(info.Version)
+	}
+	s.initMu.Unlock()
 }
 
 // ceiling reports how long ctx allotted this call, the number
@@ -448,6 +722,13 @@ func ceiling(ctx context.Context, start time.Time) time.Duration {
 // notify sends a JSON-RPC notification: no id, so the far side owes no
 // answer and none is waited for.
 func (s *Session) notifyContext(ctx context.Context, method string, params any) error {
+	if s.isModern() {
+		var err error
+		params, err = s.modernParams(params)
+		if err != nil {
+			return contract.Fail(contract.FailureInvalidInput, "%s: %v", method, err)
+		}
+	}
 	body, err := json.Marshal(rpcRequest{Version: "2.0", Method: method, Params: params})
 	if err != nil {
 		return contract.Fail(contract.FailureInvalidInput, "%s: %v", method, err)
@@ -514,6 +795,9 @@ func resultOf(raw json.RawMessage, method string) (json.RawMessage, error) {
 		return nil, contract.Fail(contract.FailureUnavailable, "%s: unreadable answer: %v", method, err)
 	}
 	if answer.Error != nil {
+		if method == "server/discover" && answer.Error.Code == -32601 {
+			return nil, &methodNotFoundError{message: answer.Error.Message}
+		}
 		return nil, contract.Fail(contract.FailureInvalidInput, "%s: %s", method, answer.Error.Message)
 	}
 	return answer.Result, nil
@@ -544,6 +828,13 @@ func (p *pending) drop(id int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.wait, id)
+}
+
+func (p *pending) has(id int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.wait[id]
+	return ok
 }
 
 // deliver hands one answer to whoever asked for it. An id nobody is waiting

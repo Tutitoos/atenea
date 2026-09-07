@@ -33,16 +33,48 @@ Dependent calls reuse only that flow's successful context, check live session
 state and reserve ownership. Uncertain state-changing calls are not retried.
 
 `symbol.implementations` retains its positional input and `locations` output,
-adding optional `limit`, `cursor`, `detection`, provenance and completeness.
-Kivgraph `find_implementations` returns compiler-proven Go and TypeScript type
-and method relations. Declared and structural evidence remain distinguishable;
-empty pages prove absence only within COMPLETE coverage. Rebuild legacy graphs.
+adding optional `limit`, `cursor`, `detection` and `language`, plus provenance,
+resolution, edge kind, coverage and completeness. The 1.2 contract accepts only
+Go and TypeScript source files, including repositories that contain both; Dart
+and other languages are rejected before the Kivgraph session is opened.
 
-This capability requires the locally maintained Kivgraph build exposing
-`find_implementations` (validated with `0.9.8-local.atenea-audit.1`, canonical
-schema 5 and TypeScript facts v5). Those provider changes remain local and are
-not part of an upstream release or this Atenea repository. An older Kivgraph
-installation does not gain implementation queries by updating Atenea alone.
+Kivgraph `find_implementations` returns compiler-proven Go and TypeScript type
+and method relations. The provider wire has no `resolution` field: Atenea
+derives `resolution=exact` only after validating the language-specific evidence
+matrix. Go accepts `GO_TYPES_USE` with `structural` or `GO_OBJECT_PATH` with
+`typed`; TypeScript accepts `TYPESCRIPT_IMPL_DECLARED` with `declared` or
+`TYPESCRIPT_IMPL_STRUCTURAL` with `structural`, together with an exact
+confidence (`EXACT_TYPECHECKED`, `EXACT_DECLARATION_MAPPED`,
+`EXACT_PACKAGE_MAPPED` or `STRUCTURAL_CERTAIN`) and `IMPLEMENTS` or
+`OVERRIDES`. Candidate and unresolved evidence
+are not implementation rows; they remain in the provider's real coverage
+fields `candidate`, `unresolved_related` and `package_level`.
+
+Repository identity, safe relative paths, requested scope, snapshot,
+completeness, pagination and generation are validated together. Exact coverage
+is authoritative and cannot be inflated from the returned page. Empty pages
+establish absence only within COMPLETE coverage; LOWER_BOUND or truncated pages
+do not.
+
+Subject resolution is deterministic and ambiguous positions stop before
+`find_implementations`. The adapter performs no cache, implicit indexing or
+rebuild. Legacy Kivgraph generations that omit the new relation metadata are
+reported as invalid evidence rather than being promoted to exact locations.
+
+The P13 provider baseline is Kivgraph `e28323742c8f148a859dcc54045727629ab4ba8e`
+from its upstream `main`. Atenea consumes the native `find_implementations`
+tool and validates its returned evidence; it does not duplicate Kivgraph's
+graph or Dart analysis implementation. The matrix keeps declaration,
+connection and functional testing as separate facts: a declared tool is not a
+connection, and a connection is not a tested semantic result. `symbol.unresolved`
+remains outside the advertised capability set.
+
+Kivgraph's component tests generate Dart `IMPLEMENTS`/`OVERRIDES` evidence, but
+the real `kivgraph index --full` attempt failed because LadybugDB native support
+was unavailable and no generation was published. Atenea's
+`symbol.implementations` preflight remains Go/TypeScript only. Dart support in
+that Atenea capability is pending a real provider and client end-to-end
+observation; no Dart locations are claimed here.
 
 To pin a Node-backed CLI, use `scripts/pin-node-launcher.py` with explicit
 `--node`, `--entry`, `--output` and `--expected-version`. It verifies versions,

@@ -2,10 +2,14 @@ package workflow
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	internalactivity "github.com/Tutitoos/atenea/internal/activity"
 	"github.com/Tutitoos/atenea/internal/agent"
 	"github.com/Tutitoos/atenea/internal/allowance"
 	"github.com/Tutitoos/atenea/internal/config"
@@ -118,6 +123,15 @@ type Options struct {
 	Types []config.AgentType
 	// Lanes are the ceilings, one per pool. Zero means no ceiling.
 	Lanes config.Workflow
+	// Profile is materialized with each new run. Existing rows retain their
+	// original limits across configuration reloads and reconnects.
+	ProfileName  string
+	Profiles     []config.WorkflowProfile
+	MaxBudgetUSD float64
+	MaxDuration  time.Duration
+	MaxTokens    int
+	MaxRetries   int
+	Watchdog     time.Duration
 	// Now is the clock. Defaults to time.Now.
 	Now func() time.Time
 	// IDs mints workflow ids. Defaults to a timestamp plus a counter.
@@ -161,24 +175,306 @@ type Options struct {
 	// price, and such a step is never refused. Nil turns the check off with
 	// Floors.
 	ModelFor func(agentType string) string
+	// Activity is called only after the notice is durable. Tool intent is
+	// published before invocation; plan state is saved before its update.
+	Activity func([]ActivityNotice) error
+	// Parent is the persisted root Coordinator assignment. When present every
+	// graph step is a bounded child; specialists can never become roots.
+	Parent *contract.Assignment
+	// BeforeDispatch reserves coordinator-level limits before a provider can
+	// observe the invocation. An error stops before Claim and process start.
+	BeforeDispatch func(context.Context, Step, int, string) error
+	// PrepareKnowledge persists an explicit structured candidate after an
+	// implementation result and returns the identity bound into that result.
+	PrepareKnowledge func(context.Context, string, Step, string, contract.Report) (string, string, error)
+	// PromoteKnowledge runs only after SyncPlan has durably accepted a point.
+	PromoteKnowledge func(context.Context, Run) error
 }
 
 // Engine runs graphs.
 type Engine struct {
-	runner   Dispatcher
-	store    *Store
-	types    []config.AgentType
-	lanes    config.Workflow
-	now      func() time.Time
-	ids      func() string
-	pid      int
-	alive    func(pid int) bool
-	poll     time.Duration
-	surface  string
-	repo     string
-	repoRoot string
-	floors   Floors
-	modelFor func(agentType string) string
+	runner           Dispatcher
+	store            *Store
+	types            []config.AgentType
+	lanes            config.Workflow
+	now              func() time.Time
+	ids              func() string
+	pid              int
+	alive            func(pid int) bool
+	poll             time.Duration
+	surface          string
+	repo             string
+	repoRoot         string
+	profileName      string
+	profile          config.WorkflowProfile
+	maxDuration      time.Duration
+	maxRetries       int
+	watchdog         time.Duration
+	floors           Floors
+	modelFor         func(agentType string) string
+	activity         func([]ActivityNotice) error
+	parent           *contract.Assignment
+	beforeDispatch   func(context.Context, Step, int, string) error
+	prepareKnowledge func(context.Context, string, Step, string, contract.Report) (string, string, error)
+	promoteKnowledge func(context.Context, Run) error
+	activityMu       sync.Mutex
+	toolBatchMu      sync.Mutex
+	toolBatch        []*toolActivityRequest
+	toolOpen         bool
+}
+
+type toolActivityRequest struct {
+	ctx        context.Context
+	workflowID string
+	dispatchID string
+	events     []internalactivity.Notice
+	done       chan error
+}
+
+func cloneAssignment(in *contract.Assignment) *contract.Assignment {
+	if in == nil {
+		return nil
+	}
+	out := in.Clone()
+	return &out
+}
+
+func (e *Engine) publishActivities(ctx context.Context, workflowID string, notices []ActivityNotice) error {
+	if len(notices) == 0 || e.activity == nil {
+		return nil
+	}
+	durable := make([]ActivityNotice, len(notices))
+	for index, notice := range notices {
+		if notice.Cursor == 0 {
+			stored, err := e.store.ActivityByInvocation(ctx, workflowID, notice.InvocationID)
+			if err != nil {
+				return err
+			}
+			notice = stored
+		}
+		durable[index] = notice
+	}
+	if err := e.activity(durable); err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(durable))
+	for _, notice := range durable {
+		ids = append(ids, notice.InvocationID)
+	}
+	return e.store.MarkActivitiesDelivered(ctx, workflowID, ids, e.now())
+}
+
+func (e *Engine) publishPendingActivities(ctx context.Context, workflowID string) error {
+	if e.activity == nil {
+		return nil
+	}
+	for {
+		pending, err := e.store.PendingActivities(ctx, workflowID, 200)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := e.publishActivities(ctx, workflowID, pending); err != nil {
+			return err
+		}
+	}
+}
+
+// recordAgentTelemetry closes the durable usage receipt after the step result
+// is committed. The activity notice was already written before Claim, so this
+// enrichment preserves one invocation while adding only provider-observed
+// identity and usage fields.
+func (e *Engine) recordAgentTelemetry(ctx context.Context, workflowID, stepID, agentRunID string, report contract.Report, ended time.Time) error {
+	run, err := e.store.Load(ctx, workflowID)
+	if err != nil {
+		return err
+	}
+	var row StepRow
+	for _, candidate := range run.Steps {
+		if candidate.Step.ID == stepID {
+			row = candidate
+			break
+		}
+	}
+	if row.Step.ID == "" {
+		return contract.Fail(contract.FailureNotFound, "workflow %s step %s disappeared before telemetry", workflowID, stepID)
+	}
+	started := row.Started
+	duration := time.Duration(0)
+	if !started.IsZero() && !ended.Before(started) {
+		duration = ended.Sub(started)
+	}
+	state := tokenMeasurementState(report)
+	if _, err := e.store.RecordAgentRunReceipt(ctx, AgentRunReceipt{
+		WorkflowID: workflowID, PointID: row.Step.PointID, Agent: row.Step.TypeName,
+		AgentRunID: agentRunID, InvocationID: agentRunID, ThreadID: report.ThreadID,
+		TurnID: report.TurnID, UsageRevision: report.UsageRevision,
+		Model: report.ObservedModel, Started: started, Ended: ended, Duration: duration,
+		Tokens: TokenDelta{InputTokens: int64(report.Spent.InputTokens), OutputTokens: int64(report.Spent.OutputTokens), CacheReadTokens: int64(report.Spent.CacheReadTokens), CacheWriteTokens: int64(report.Spent.CacheWriteTokens)},
+		State:  state,
+	}); err != nil {
+		return err
+	}
+	tools, err := e.store.ToolActivitiesByAgentRun(ctx, workflowID, agentRunID)
+	if err != nil {
+		return err
+	}
+	for _, notice := range tools {
+		if _, err := e.store.RecordToolUseReceipt(ctx, ToolUseReceipt{
+			WorkflowID: workflowID, PointID: notice.PointID, AgentRunID: agentRunID,
+			InvocationID: notice.InvocationID, ThreadID: notice.ThreadID, TurnID: notice.TurnID,
+			UsageRevision: notice.UsageRevision, Tool: notice.Tool, Started: notice.At,
+			Ended: notice.At, State: MeasurementUnknown,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tokenMeasurementState(report contract.Report) MeasurementState {
+	if report.Partial() {
+		return MeasurementPartial
+	}
+	if report.Spent.Tokens() > 0 {
+		return MeasurementMeasured
+	}
+	return MeasurementUnknown
+}
+
+func (e *Engine) publishPlanProgress(ctx context.Context, workflowID string) error {
+	return e.publishPlanProgressWith(ctx, workflowID, "", false)
+}
+
+func (e *Engine) publishPlanProgressWith(ctx context.Context, workflowID, forcedEvent string, force bool) error {
+	e.activityMu.Lock()
+	defer e.activityMu.Unlock()
+	progress, changed, event, err := e.store.SyncPlan(ctx, workflowID, e.now())
+	if err != nil || (!changed && !force) {
+		return err
+	}
+	if progress.Total() == 0 {
+		if force {
+			return e.publishPendingActivities(ctx, workflowID)
+		}
+		return nil
+	}
+	if forcedEvent != "" {
+		event = forcedEvent
+	}
+	markdown := progress.Markdown(event)
+	sum := sha256.Sum256([]byte(markdown))
+	notice := ActivityNotice{
+		WorkflowID: workflowID, InvocationID: fmt.Sprintf("plan-%d-%x", progress.Revision, sum[:8]),
+		Kind: "plan", Tool: "Progreso", Action: "actualizo", Objective: event,
+		Purpose: "mostrar estado y evidencia", Markdown: markdown, At: e.now(),
+	}
+	if _, err := e.store.RecordActivityOnce(ctx, notice); err != nil {
+		return err
+	}
+	return e.publishPendingActivities(ctx, workflowID)
+}
+
+func (e *Engine) recordToolActivity(ctx context.Context, workflowID, dispatchID string, events []internalactivity.Notice) error {
+	request := &toolActivityRequest{ctx: ctx, workflowID: workflowID, dispatchID: dispatchID,
+		events: append([]internalactivity.Notice(nil), events...), done: make(chan error, 1)}
+	e.toolBatchMu.Lock()
+	e.toolBatch = append(e.toolBatch, request)
+	leader := !e.toolOpen
+	if leader {
+		e.toolOpen = true
+	}
+	e.toolBatchMu.Unlock()
+	if leader {
+		time.Sleep(3 * time.Millisecond)
+		e.flushToolActivity()
+	}
+	return <-request.done
+}
+
+func (e *Engine) flushToolActivity() {
+	e.toolBatchMu.Lock()
+	batch := e.toolBatch
+	e.toolBatch = nil
+	e.toolOpen = false
+	e.toolBatchMu.Unlock()
+	groups := make(map[string][]*toolActivityRequest)
+	order := make([]string, 0)
+	for _, request := range batch {
+		if _, ok := groups[request.workflowID]; !ok {
+			order = append(order, request.workflowID)
+		}
+		groups[request.workflowID] = append(groups[request.workflowID], request)
+	}
+	for _, workflowID := range order {
+		requests := groups[workflowID]
+		err := e.persistToolActivity(requests[0].ctx, workflowID, requests)
+		for _, request := range requests {
+			request.done <- err
+		}
+	}
+}
+
+func (e *Engine) persistToolActivity(ctx context.Context, workflowID string, requests []*toolActivityRequest) error {
+	e.activityMu.Lock()
+	defer e.activityMu.Unlock()
+	for _, request := range requests {
+		parent, err := e.store.ActivityByInvocation(ctx, workflowID, request.dispatchID)
+		if err != nil {
+			return err
+		}
+		for _, event := range request.events {
+			notice := NewActivityNotice("ATENEA", event.Tool, event.Action, event.Objective, event.Purpose)
+			notice.WorkflowID = workflowID
+			notice.InvocationID = request.dispatchID + "-tool-" + event.ID
+			notice.PointID, notice.AgentRunID = parent.PointID, request.dispatchID
+			notice.ThreadID, notice.TurnID, notice.UsageRevision = parent.ThreadID, parent.TurnID, parent.UsageRevision
+			notice.RequestedModel, notice.ObservedModel = parent.RequestedModel, parent.ObservedModel
+			notice.RequestedReasoningEffort, notice.ObservedReasoningEffort = parent.RequestedReasoningEffort, parent.ObservedReasoningEffort
+			notice.At = e.now()
+			_, err := e.store.RecordActivityOnce(ctx, notice)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	// Publish the whole outbox, including a replayed invocation mixed with a
+	// new one. Every caller shares this result and no tool receives an ack
+	// while its own durable notice remains pending.
+	return e.publishPendingActivities(ctx, workflowID)
+}
+
+// processLeases closes the ownership gap that writer_pid cannot close. Two
+// engines served by the same Atenea share a pid, so a database predicate that
+// only distinguishes pids would let both dispatch the same workflow. The
+// lease is process-local and keyed by the durable store plus workflow id;
+// writer_pid remains the cross-process guard.
+type processLease struct{ token chan struct{} }
+
+var processLeases sync.Map // map[string]*processLease
+
+func (e *Engine) acquireProcessLease(id string) (func(), error) {
+	path, err := filepath.Abs(e.store.Path())
+	if err != nil {
+		path = filepath.Clean(e.store.Path())
+	}
+	key := path + "\x00" + id
+	value, _ := processLeases.LoadOrStore(key, &processLease{token: func() chan struct{} {
+		ch := make(chan struct{}, 1)
+		ch <- struct{}{}
+		return ch
+	}()})
+	lease := value.(*processLease)
+	select {
+	case <-lease.token:
+		var once sync.Once
+		return func() { once.Do(func() { lease.token <- struct{}{} }) }, nil
+	default:
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"workflow %s is already running in this Atenea", id)
+	}
 }
 
 // New builds an engine.
@@ -191,21 +487,58 @@ func New(opts Options) (*Engine, error) {
 		return nil, contract.Fail(contract.FailureInvalidInput,
 			"workflow: a store is required: a run nobody wrote down cannot be resumed")
 	}
+	profile := config.WorkflowProfile{Name: opts.ProfileName, Version: opts.ProfileName,
+		MaxBudgetUSD: opts.MaxBudgetUSD, MaxDuration: opts.MaxDuration,
+		MaxRetries: opts.MaxRetries, MaxParallelAgent: opts.Lanes.MaxParallelAgent,
+		MaxParallelReview: opts.Lanes.MaxParallelReview}
+	if len(opts.Profiles) > 0 {
+		selected, err := config.ResolveWorkflowProfile(opts.Profiles, opts.ProfileName)
+		if err != nil {
+			return nil, err
+		}
+		profile = selected
+		opts.ProfileName = selected.Name
+		opts.MaxBudgetUSD = selected.MaxBudgetUSD
+		opts.MaxDuration = selected.MaxDuration
+		opts.MaxTokens = 0
+		opts.MaxRetries = selected.MaxRetries
+		opts.Lanes.MaxParallelAgent = selected.MaxParallelAgent
+		opts.Lanes.MaxParallelReview = selected.MaxParallelReview
+	}
+	if profile.Name == "" {
+		profile.Name = "workflow-v1"
+	}
+	if profile.Version == "" && (len(opts.Profiles) > 0 || opts.ProfileName != "") {
+		profile.Version = profile.Name
+	}
+	if profile.Digest == "" {
+		profile.Digest = config.ComputeWorkflowProfileDigest(profile)
+	}
 	e := &Engine{
-		runner:   opts.Runner,
-		store:    opts.Store,
-		types:    opts.Types,
-		lanes:    opts.Lanes,
-		now:      opts.Now,
-		ids:      opts.IDs,
-		pid:      opts.PID,
-		alive:    opts.Alive,
-		poll:     opts.Poll,
-		repo:     opts.Repository,
-		repoRoot: opts.RepositoryRoot,
-		surface:  opts.Surface,
-		floors:   opts.Floors,
-		modelFor: opts.ModelFor,
+		runner:           opts.Runner,
+		store:            opts.Store,
+		types:            opts.Types,
+		lanes:            opts.Lanes,
+		now:              opts.Now,
+		ids:              opts.IDs,
+		pid:              opts.PID,
+		alive:            opts.Alive,
+		poll:             opts.Poll,
+		repo:             opts.Repository,
+		repoRoot:         opts.RepositoryRoot,
+		profileName:      opts.ProfileName,
+		profile:          profile,
+		maxDuration:      opts.MaxDuration,
+		maxRetries:       opts.MaxRetries,
+		watchdog:         opts.Watchdog,
+		surface:          opts.Surface,
+		floors:           opts.Floors,
+		modelFor:         opts.ModelFor,
+		activity:         opts.Activity,
+		parent:           cloneAssignment(opts.Parent),
+		beforeDispatch:   opts.BeforeDispatch,
+		prepareKnowledge: opts.PrepareKnowledge,
+		promoteKnowledge: opts.PromoteKnowledge,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -221,6 +554,9 @@ func New(opts Options) (*Engine, error) {
 	}
 	if e.poll <= 0 {
 		e.poll = 250 * time.Millisecond
+	}
+	if e.watchdog <= 0 {
+		e.watchdog = 5 * time.Minute
 	}
 	if e.surface == "" {
 		e.surface = "cli"
@@ -240,16 +576,83 @@ func New(opts Options) (*Engine, error) {
 //
 // The returned Gate carries the digest the launch will be checked against.
 func (e *Engine) Create(ctx context.Context, graph Graph) (Run, Gate, error) {
+	return e.CreateWithID(ctx, e.ids(), graph)
+}
+
+// NextID reserves no state; it lets a coordinator durably bind the exact id
+// before CreateWithID writes the workflow, closing the create-then-bind crash
+// window without inventing a second identity scheme.
+func (e *Engine) NextID() string { return e.ids() }
+
+// Load returns the durable run owned by this engine. It is used by recovery
+// paths that must distinguish a reserved id from an already-created row.
+func (e *Engine) Load(ctx context.Context, id string) (Run, error) {
+	return e.store.Load(ctx, id)
+}
+
+// SetBeforeDispatch installs the coordinator reservation hook before launch.
+func (e *Engine) SetBeforeDispatch(hook func(context.Context, Step, int, string) error) {
+	e.beforeDispatch = hook
+}
+
+// RecoverAuthorized continues either side of the create/launch crash window.
+// A still-open launch gate is answered once; every later state follows the
+// ordinary resume path and its source and ownership checks.
+func (e *Engine) RecoverAuthorized(ctx context.Context, id string, operations []contract.Operation) (Run, error) {
+	run, err := e.store.Load(ctx, id)
+	if err != nil || run.Closed {
+		return run, err
+	}
+	gate, waiting, gateErr := e.store.OpenGate(ctx, id)
+	if gateErr != nil {
+		return run, gateErr
+	}
+	if waiting && gate.Kind == KindLaunch {
+		return e.LaunchAuthorized(ctx, id, operations)
+	}
+	return e.ResumeAuthorized(ctx, id, nil, operations)
+}
+
+// CreateWithID is Create with a caller-reserved durable identity.
+func (e *Engine) CreateWithID(ctx context.Context, id string, graph Graph) (Run, Gate, error) {
+	if strings.TrimSpace(id) == "" {
+		return Run{}, Gate{}, contract.Fail(contract.FailureInvalidInput, "workflow: reserved id is required")
+	}
 	plan, err := Compile(graph, e.types)
 	if err != nil {
 		return Run{}, Gate{}, err
 	}
+	if e.profile.MaxBudgetUSD > 0 && plan.Graph.GrantUSD > e.profile.MaxBudgetUSD+1e-9 {
+		return Run{}, Gate{}, contract.Fail(contract.FailurePermissionDenied,
+			"workflow profile %s budget ceiling %.4f is below requested grant %.4f",
+			e.profile.Name, e.profile.MaxBudgetUSD, plan.Graph.GrantUSD)
+	}
 	if err := e.checkFunding(ctx, "", plan, nil); err != nil {
 		return Run{}, Gate{}, err
 	}
-	id := e.ids()
 	at := e.now()
-	if err := e.store.Create(ctx, id, plan, e.repo, at, 0); err != nil {
+	fingerprint, err := sourceFingerprint(e.repoRoot)
+	if err != nil {
+		return Run{}, Gate{}, contract.Fail(contract.FailureUnavailable,
+			"workflow: cannot fingerprint repository sources: %v", err)
+	}
+	maxDuration := e.maxDuration
+	maxTokens := 0
+	if plan.Graph.Limits.MaxDuration > 0 {
+		if maxDuration > 0 && plan.Graph.Limits.MaxDuration > maxDuration {
+			return Run{}, Gate{}, contract.Fail(contract.FailurePermissionDenied, "workflow: requested duration limit %s exceeds configured ceiling %s", plan.Graph.Limits.MaxDuration, maxDuration)
+		}
+		maxDuration = plan.Graph.Limits.MaxDuration
+		maxTokens = plan.Graph.Limits.MaxTokens
+	}
+	policy := WorkflowPolicy{Name: e.profile.Name, Version: e.profile.Version, Digest: e.profile.Digest, Criterion: plan.Graph.Criterion,
+		MaxBudgetUSD: e.profile.MaxBudgetUSD, Effects: plan.Graph.Effects(), Operations: plan.Graph.Operations(),
+		MaxDuration: maxDuration, MaxTokens: maxTokens, MaxRetries: e.maxRetries,
+		MaxParallelAgent: e.lanes.MaxParallelAgent, MaxParallelReview: e.lanes.MaxParallelReview}
+	if policy.Version == "" && (e.maxDuration > 0 || e.maxRetries > 0) {
+		policy.Version = "workflow-v1"
+	}
+	if err := e.store.CreateWithPolicy(ctx, id, plan, e.repo, fingerprint, policy, at, 0); err != nil {
 		return Run{}, Gate{}, err
 	}
 	gate, err := e.store.Ask(ctx, id, KindLaunch,
@@ -814,6 +1217,20 @@ func grouped(n int) string {
 // is the person committing the grant, and a launch recorded by somebody who
 // then did not run it would leave an approval with nothing behind it.
 func (e *Engine) Launch(ctx context.Context, id string) (Run, error) {
+	return e.LaunchAuthorized(ctx, id, nil)
+}
+
+// LaunchAuthorized answers the launch gate with an explicit one-shot list of
+// sensitive operations. Generic write permission is never promoted into one
+// of these operations. The proposal digest and run record bind the approval
+// to this workflow, repository and worktree; the list is not retained as a
+// reusable session grant.
+func (e *Engine) LaunchAuthorized(ctx context.Context, id string, operations []contract.Operation) (Run, error) {
+	release, err := e.acquireProcessLease(id)
+	if err != nil {
+		return Run{}, err
+	}
+	defer release()
 	// Before the gate, not after it. sameRepository is also checked in
 	// takeOver, which is what covers `run` and `resume` -- but reaching it
 	// through Launch would answer the gate first, and a run whose grant was
@@ -850,11 +1267,16 @@ func (e *Engine) Launch(ctx context.Context, id string) (Run, error) {
 			"workflow %s is waiting on an expansion, not a launch: approve it with `atenea workflow approve %s`",
 			id, id)
 	}
+	if required := gate.Proposal.Operations(); len(required) > 0 || len(operations) > 0 {
+		if err := gate.Proposal.ValidateOperations(operations); err != nil {
+			return Run{}, err
+		}
+	}
 	if _, err := e.store.Answer(ctx, id, gate.Ordinal, DecisionApproved,
 		Hand(e.surface), "", e.now()); err != nil {
 		return Run{}, err
 	}
-	return e.Run(ctx, id)
+	return e.run(ctx, id, operations)
 }
 
 // Effects reports every effect the steps of a recorded workflow may cause.
@@ -871,6 +1293,9 @@ func (e *Engine) Effects(ctx context.Context, id string) ([]contract.Effect, err
 	if err != nil {
 		return nil, err
 	}
+	if len(run.Effects) > 0 {
+		return slices.Clone(run.Effects), nil
+	}
 	seen := make(map[contract.Effect]struct{}, 4)
 	for _, row := range run.Steps {
 		for _, effect := range row.Step.Permission.Effects {
@@ -885,16 +1310,75 @@ func (e *Engine) Effects(ctx context.Context, id string) ([]contract.Effect, err
 	return out, nil
 }
 
+// Operations reports the sensitive operations recorded in a workflow.
+func (e *Engine) Operations(ctx context.Context, id string) ([]contract.Operation, error) {
+	run, err := e.store.Load(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[contract.Operation]struct{})
+	for _, row := range run.Steps {
+		for _, operation := range row.Step.Permission.Operations {
+			seen[operation] = struct{}{}
+		}
+	}
+	out := make([]contract.Operation, 0, len(seen))
+	for operation := range seen {
+		out = append(out, operation)
+	}
+	slices.SortFunc(out, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	return out, nil
+}
+
+func pendingOperations(run Run, plan Plan) []contract.Operation {
+	seen := make(map[contract.Operation]bool)
+	for _, row := range run.Steps {
+		if row.Status != StatusPending && row.Status != StatusInterrupted && row.Status != StatusRunning {
+			continue
+		}
+		for _, operation := range row.Step.Permission.Operations {
+			seen[operation] = true
+		}
+	}
+	_ = plan
+	out := make([]contract.Operation, 0, len(seen))
+	for operation := range seen {
+		out = append(out, operation)
+	}
+	slices.SortFunc(out, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
+
 // Run drives a workflow that is already on disk: it takes the run over and
 // executes whatever the graph and the gates say to do next.
 func (e *Engine) Run(ctx context.Context, id string) (Run, error) {
+	release, err := e.acquireProcessLease(id)
+	if err != nil {
+		return Run{}, err
+	}
+	defer release()
+	return e.run(ctx, id, nil)
+}
+
+func (e *Engine) run(ctx context.Context, id string, operations []contract.Operation) (Run, error) {
 	run, err := e.takeOver(ctx, id)
 	if err != nil {
 		return run, err
 	}
+	if run.Stop == StopAborted {
+		return run, contract.Fail(contract.FailureCanceled,
+			"workflow %s was canceled", id)
+	}
 	plan, err := e.replan(run)
 	if err != nil {
 		return run, err
+	}
+	worktree, err := e.worktreeLease(plan)
+	if err != nil {
+		return run, err
+	}
+	if worktree != nil {
+		defer func() { _ = worktree.Release() }()
 	}
 	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
 	// the claim conditional on that observation still holding, so an Atenea
@@ -903,7 +1387,14 @@ func (e *Engine) Run(ctx context.Context, id string) (Run, error) {
 	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
 		return run, err
 	}
-	return e.execute(ctx, id, plan)
+	if err := e.store.StartActive(ctx, id, e.now()); err != nil {
+		return run, err
+	}
+	run, err = e.store.Load(ctx, id)
+	if err != nil {
+		return run, err
+	}
+	return e.execute(ctx, id, plan, worktree, operations)
 }
 
 // Start compiles a graph, launches it, and runs it, as one command from one
@@ -918,7 +1409,7 @@ func (e *Engine) Start(ctx context.Context, graph Graph) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	return e.Launch(ctx, gate.RunID)
+	return e.LaunchAuthorized(ctx, gate.RunID, nil)
 }
 
 // takeOver refuses a run that is finished, that another live Atenea holds, or
@@ -1001,6 +1492,76 @@ func (e *Engine) sameRepository(run Run) error {
 		strconv.Quote(run.Repository), run.Repository)
 }
 
+// VerifyCompletedSources proves that a closed workflow still belongs to the
+// served repository and that its accepted evidence matches the current tree.
+// It performs no reset or dispatch and is therefore safe for coordinator
+// resume checks of already completed siblings.
+func (e *Engine) VerifyCompletedSources(ctx context.Context, id string) (Run, error) {
+	run, err := e.store.Load(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := e.sameRepository(run); err != nil {
+		return run, err
+	}
+	if !run.Closed {
+		return run, contract.Fail(contract.FailureInvalidInput, "workflow %s is not completed", id)
+	}
+	if strings.TrimSpace(run.SourceFingerprint) == "" || run.SourceFingerprint == "unavailable" {
+		return run, contract.Fail(contract.FailureUnavailable, "workflow %s has no verifiable source fingerprint", id)
+	}
+	current, err := sourceFingerprint(e.repoRoot)
+	if err != nil {
+		return run, contract.Fail(contract.FailureUnavailable, "workflow %s cannot fingerprint current sources: %v", id, err)
+	}
+	if current != run.SourceFingerprint {
+		return run, contract.Fail(contract.FailureInvalidInput, "workflow %s completed evidence is stale because repository sources changed", id)
+	}
+	return run, nil
+}
+
+// CoordinatorAssignment reconstructs the immutable root card from its
+// accepted workflow receipt. Transient operation grants are deliberately not
+// restored; a resumed child must receive them again explicitly.
+func (e *Engine) CoordinatorAssignment(ctx context.Context, id string) (contract.Assignment, error) {
+	run, err := e.VerifyCompletedSources(ctx, id)
+	if err != nil {
+		return contract.Assignment{}, err
+	}
+	for _, row := range run.Steps {
+		var declared *config.AgentType
+		for i := range e.types {
+			if e.types[i].Spec.Name == row.Step.TypeName {
+				declared = &e.types[i]
+				break
+			}
+		}
+		if declared == nil || declared.Spec.Kind != contract.AgentOrchestrator {
+			continue
+		}
+		if row.Status != StatusOK || strings.TrimSpace(row.TraceID) == "" {
+			return contract.Assignment{}, contract.Fail(contract.FailureUnavailable, "workflow %s coordinator has no accepted execution", id)
+		}
+		assignment := contract.RootAssignment(row.TraceID, row.Step.TypeName, contract.AgentOrchestrator, row.Step.Task, row.Step.Limits)
+		assignment.Context = slices.Clone(declared.Context)
+		assignment.Effects = slices.Clone(row.Step.Permission.Effects)
+		budget := row.Step.Permission.BudgetUSD
+		assignment.BudgetUSD = &budget
+		commission := run.GrantUSD
+		assignment.CommissionUSD = &commission
+		assignment.WorkflowID, assignment.Worktree, assignment.PolicyDigest = run.ID, e.repoRoot, run.Policy.Digest
+		if row.Step.Route != nil {
+			route := row.Step.Route.Clone()
+			assignment.Route = &route
+		}
+		if err := assignment.Validate(); err != nil {
+			return contract.Assignment{}, err
+		}
+		return assignment, nil
+	}
+	return contract.Assignment{}, contract.Fail(contract.FailureNotFound, "workflow %s has no root Coordinator step", id)
+}
+
 // Resume continues a run that was cut or whose Atenea died.
 //
 // redo names steps to dispatch again even though this would not otherwise
@@ -1009,33 +1570,42 @@ func (e *Engine) sameRepository(run Run) error {
 // silently doing nothing to a step somebody asked about reads as having
 // redone it.
 func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, error) {
+	return e.ResumeAuthorized(ctx, id, redo, nil)
+}
+
+// ResumeAuthorized supplies the one-shot operation grant needed to dispatch
+// sensitive steps after a reconnect. A plain Resume cannot reuse a prior
+// approval.
+func (e *Engine) ResumeAuthorized(ctx context.Context, id string, redo []string, operations []contract.Operation) (Run, error) {
+	release, err := e.acquireProcessLease(id)
+	if err != nil {
+		return Run{}, err
+	}
+	defer release()
+	return e.resume(ctx, id, redo, operations)
+}
+
+func (e *Engine) resume(ctx context.Context, id string, redo []string, operations []contract.Operation) (Run, error) {
 	run, err := e.takeOver(ctx, id)
 	if err != nil {
 		return run, err
 	}
-
-	plan, err := e.replan(run)
+	wasAborted := run.Stop == StopAborted
+	// Hold the worktree lease before reading the source fingerprint. A shared
+	// lease is enough for a read-only plan and still blocks any competing
+	// writer; an effectful plan takes the exclusive lease immediately. This
+	// closes the verify-then-lock window in which another workflow could
+	// change the checkout between source validation and resume.
+	initialPlan, err := e.replan(run)
 	if err != nil {
 		return run, err
 	}
-
-	// Anything still marked running belonged to a process that is gone.
-	// Nobody read its report, so nobody judged it.
-	at := e.now()
-	for _, step := range run.Steps {
-		if step.Status != StatusRunning {
-			continue
-		}
-		why := "the atenea running it died"
-		if run.Stop == StopAborted {
-			why = "cut by abort"
-		}
-		if err := e.store.Interrupt(ctx, id, step.Step.ID, why, at); err != nil {
-			return run, err
-		}
+	worktree, err := e.worktreeLease(initialPlan)
+	if err != nil {
+		return run, err
 	}
-	if run, err = e.store.Load(ctx, id); err != nil {
-		return Run{}, err
+	if worktree != nil {
+		defer func() { _ = worktree.Release() }()
 	}
 
 	forced := make(map[string]bool, len(redo))
@@ -1054,6 +1624,110 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 					"nobody judged", id, name, step.Status)
 		}
 	}
+	// Claim the durable writer before source rebase can reset rows or advance
+	// their fingerprint. Another process may have taken the run over while the
+	// read-only validation above was running; ResumeOwn's expected stop and
+	// held pid make that race fail closed.
+	if err := e.store.ResumeOwn(ctx, id, e.pid, run.WriterPID, run.Stop); err != nil {
+		return run, err
+	}
+	claimed := true
+	restoreStop := run.Stop
+	defer func() {
+		if claimed {
+			_ = e.store.ReleaseOwn(context.Background(), id, e.pid, restoreStop)
+		}
+	}()
+	currentFingerprint, err := e.verifyResumeSources(run, forced)
+	if err != nil {
+		return run, err
+	}
+	if currentFingerprint != "" && currentFingerprint != run.SourceFingerprint {
+		for _, row := range run.Steps {
+			if !row.Status.Done() {
+				continue
+			}
+			if touchesTheWorld(row.Step.Permission.Effects) {
+				return run, contract.Fail(contract.FailureInvalidInput,
+					"workflow %s source state changed and accepted effectful step %s cannot be reused; explicitly re-evaluate it before resuming", run.ID, row.Step.ID)
+			}
+		}
+		// Read-only accepted evidence is stale after an explicit re-evaluation
+		// request. Reset it before execution so it is never silently reused.
+		for _, row := range run.Steps {
+			if !row.Status.Done() {
+				continue
+			}
+			if err := e.store.MarkRecovery(ctx, id, row.Step.ID, "explicit_reset", "source state changed; result re-evaluation requested"); err != nil {
+				return run, err
+			}
+			if err := e.store.Reset(ctx, id, row.Step.ID, e.now()); err != nil {
+				return run, err
+			}
+			if err := e.publishPlanProgress(ctx, id); err != nil {
+				return run, err
+			}
+		}
+		if err := e.store.SetSourceFingerprint(ctx, id, currentFingerprint); err != nil {
+			return run, err
+		}
+		if run, err = e.store.Load(ctx, id); err != nil {
+			return run, err
+		}
+	}
+
+	plan, err := e.replan(run)
+	if err != nil {
+		return run, err
+	}
+	if err := e.ensureExclusiveWorktree(worktree, plan); err != nil {
+		return run, err
+	}
+	required := pendingOperations(run, plan)
+	if len(required) > 0 || len(operations) > 0 {
+		proposal := Proposal{Steps: make([]Step, 0, len(required))}
+		for _, row := range run.Steps {
+			if row.Status == StatusPending || forced[row.Step.ID] {
+				proposal.Steps = append(proposal.Steps, row.Step)
+			}
+		}
+		if err := proposal.ValidateOperations(operations); err != nil {
+			return run, contract.Fail(contract.FailurePermissionDenied,
+				"workflow %s requires fresh sensitive-operation authorization: %v", id, err)
+		}
+	}
+	// Anything still marked running belonged to a process that is gone.
+	// Nobody read its report, so nobody judged it.
+	at := e.now()
+	for _, step := range run.Steps {
+		if step.Status != StatusRunning {
+			continue
+		}
+		why := "the atenea running it died"
+		if wasAborted {
+			why = "cut by abort"
+		}
+		if err := e.store.Interrupt(ctx, id, step.Step.ID, why, at); err != nil {
+			return run, err
+		}
+		if err := e.publishPlanProgress(ctx, id); err != nil {
+			return run, err
+		}
+	}
+	if run, err = e.store.Load(ctx, id); err != nil {
+		return Run{}, err
+	}
+	automaticResumeRetries := 0
+	for _, step := range run.Steps {
+		if step.Status != StatusInterrupted || forced[step.Step.ID] || touchesTheWorld(step.Step.Permission.Effects) {
+			continue
+		}
+		automaticResumeRetries++
+	}
+	if automaticResumeRetries > 0 && retryLimitReached(run, nil, automaticResumeRetries) {
+		return run, contract.Fail(contract.FailurePermissionDenied,
+			"workflow %s automatic retry limit %d would be exceeded during resume", id, run.Policy.MaxRetries)
+	}
 
 	// An interrupted step is re-dispatched only when re-running it cannot
 	// land twice. Read-only work is free to repeat; a step that may write or
@@ -1067,18 +1741,68 @@ func (e *Engine) Resume(ctx context.Context, id string, redo []string) (Run, err
 		if !forced[step.Step.ID] && touchesTheWorld(step.Step.Permission.Effects) {
 			continue
 		}
+		if err := e.store.MarkRecovery(ctx, id, step.Step.ID, "automatic_resume", step.Reason.Text); err != nil {
+			return run, err
+		}
 		if err := e.store.Reset(ctx, id, step.Step.ID, e.now()); err != nil {
 			return run, err
 		}
+		if err := e.publishPlanProgress(ctx, id); err != nil {
+			return run, err
+		}
 	}
-	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
-	// the claim conditional on that observation still holding, so an Atenea
-	// that slipped in between the two loses the UPDATE instead of sharing the
-	// run.
-	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
+	// From here execute owns the normal lifecycle. A failed dispatch may still
+	// need its current cancellation marker preserved, but it must not restore a
+	// stale pre-resume abort after a successful finish cleared the marker.
+	restoreStop = StopNone
+	if err := e.store.StartActive(ctx, id, e.now()); err != nil {
 		return run, err
 	}
-	return e.execute(ctx, id, plan)
+	run, err = e.store.Load(ctx, id)
+	if err != nil {
+		return run, err
+	}
+	return e.execute(ctx, id, plan, worktree, operations)
+}
+
+func activeContext(ctx context.Context, run Run, now time.Time) (context.Context, context.CancelFunc, error) {
+	if run.Policy.MaxDuration <= 0 {
+		return ctx, func() {}, nil
+	}
+	elapsed := run.ActiveDuration
+	if !run.ActiveStarted.IsZero() && now.After(run.ActiveStarted) {
+		elapsed += now.Sub(run.ActiveStarted)
+	}
+	remaining := run.Policy.MaxDuration - elapsed
+	if remaining <= 0 {
+		return ctx, func() {}, contract.Fail(contract.FailureUnavailable, "workflow %s exceeded its active duration limit", run.ID)
+	}
+	limited, cancel := context.WithTimeout(ctx, remaining)
+	return limited, cancel, nil
+}
+
+func (e *Engine) verifyResumeSources(run Run, forced map[string]bool) (string, error) {
+	// Engines created by the workflow package directly may intentionally have
+	// no repository root (unit fixtures and legacy callers). There is no source
+	// scope to fingerprint in that mode, so preserve their historical resume
+	// behavior; Serve always supplies a resolved root for real workflows.
+	if strings.TrimSpace(e.repoRoot) == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(run.SourceFingerprint) == "" || run.SourceFingerprint == "unavailable" {
+		return "", contract.Fail(contract.FailurePermissionDenied,
+			"workflow %s has no verifiable source fingerprint; create a new plan before resuming it", run.ID)
+	}
+	current, err := sourceFingerprint(e.repoRoot)
+	if err != nil {
+		return "", contract.Fail(contract.FailureUnavailable,
+			"workflow %s source state could not be verified; accepted results were not reused: %v", run.ID, err)
+	}
+	if current != run.SourceFingerprint && len(forced) == 0 {
+		return "", contract.Fail(contract.FailureInvalidInput,
+			"workflow %s source state changed since its previous step; explicitly re-evaluate an interrupted step before resuming", run.ID)
+	}
+	return current, nil
 }
 
 // Raise is one step named for re-dispatch, and the share it is to run under.
@@ -1122,6 +1846,20 @@ type Raise struct {
 // authorized, and a redo that moved it by itself would make the check that
 // exists to catch unapproved spend unable to fail.
 func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant float64) (Run, error) {
+	return e.RedoAuthorized(ctx, id, raises, grant, nil)
+}
+
+// RedoAuthorized is part of ATENEA's public orchestration contract.
+func (e *Engine) RedoAuthorized(ctx context.Context, id string, raises []Raise, grant float64, operations []contract.Operation) (Run, error) {
+	release, err := e.acquireProcessLease(id)
+	if err != nil {
+		return Run{}, err
+	}
+	defer release()
+	return e.redo(ctx, id, raises, grant, operations)
+}
+
+func (e *Engine) redo(ctx context.Context, id string, raises []Raise, grant float64, operations []contract.Operation) (Run, error) {
 	if len(raises) == 0 {
 		return Run{}, contract.Fail(contract.FailureInvalidInput,
 			"workflow redo needs at least one step to dispatch again")
@@ -1140,7 +1878,18 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	if err := e.sameRepository(run); err != nil {
 		return run, err
 	}
-
+	requested := Proposal{Steps: make([]Step, 0, len(raises))}
+	for _, raise := range raises {
+		if row, ok := stepRow(run, raise.StepID); ok {
+			requested.Steps = append(requested.Steps, row.Step)
+		}
+	}
+	if len(requested.Operations()) > 0 || len(operations) > 0 {
+		if err := requested.ValidateOperations(operations); err != nil {
+			return run, contract.Fail(contract.FailurePermissionDenied,
+				"workflow %s requires fresh sensitive-operation authorization: %v", id, err)
+		}
+	}
 	// Validated in full before a single write. A refusal on the third of three
 	// steps must not leave the first two resharded and the run reopened.
 	seen := make(map[string]bool, len(raises))
@@ -1203,6 +1952,11 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	if grant > 0 {
 		totalGrant = grant
 	}
+	if run.Policy.MaxBudgetUSD > 0 && totalGrant > run.Policy.MaxBudgetUSD+moneyEpsilon {
+		return run, contract.Fail(contract.FailurePermissionDenied,
+			"workflow %s policy budget ceiling is $%.4f; requested grant is $%.4f",
+			id, run.Policy.MaxBudgetUSD, totalGrant)
+	}
 	required := 0.0
 	for _, row := range run.Steps {
 		if row.TraceID != "" {
@@ -1226,6 +1980,22 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	if required > totalGrant+moneyEpsilon {
 		return run, contract.Fail(contract.FailurePermissionDenied, "redo requires $%.2f including previous attempts; grant is $%.2f", required, totalGrant)
 	}
+	worktree, err := e.worktreeLease(prospective)
+	if err != nil {
+		return run, err
+	}
+	if worktree != nil {
+		defer func() { _ = worktree.Release() }()
+	}
+	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
+		return run, err
+	}
+	claimed := true
+	defer func() {
+		if claimed {
+			_ = e.store.ReleaseOwn(context.Background(), id, e.pid, StopNone)
+		}
+	}()
 
 	if grant > 0 {
 		if err := e.store.Regrant(ctx, id, grant); err != nil {
@@ -1256,6 +2026,9 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	// share it actually ran under; doing it after would archive the new figure
 	// and lose the half of the pair that was measured.
 	for _, raise := range raises {
+		if err := e.store.MarkRecovery(ctx, id, raise.StepID, "redo", "explicit redo authorization"); err != nil {
+			return run, err
+		}
 		if err := e.store.Reset(ctx, id, raise.StepID, at); err != nil {
 			return run, err
 		}
@@ -1270,14 +2043,14 @@ func (e *Engine) Redo(ctx context.Context, id string, raises []Raise, grant floa
 	if err != nil {
 		return run, err
 	}
-	// run.WriterPID is what takeOver saw and decided on. Handing it back makes
-	// the claim conditional on that observation still holding, so an Atenea
-	// that slipped in between the two loses the UPDATE instead of sharing the
-	// run.
-	if err := e.store.Own(ctx, id, e.pid, run.WriterPID); err != nil {
+	if err := e.store.StartActive(ctx, id, e.now()); err != nil {
 		return run, err
 	}
-	return e.execute(ctx, id, plan)
+	run, err = e.store.Load(ctx, id)
+	if err != nil {
+		return run, err
+	}
+	return e.execute(ctx, id, plan, worktree, operations)
 }
 
 // elsewhere names the path that does serve a step redo just refused, when
@@ -1288,6 +2061,75 @@ func elsewhere(row StepRow) string {
 		return ": nobody judged this one, so `atenea workflow resume --redo` runs it as it was"
 	}
 	return ""
+}
+
+// worktreeLease serializes all execution that may change a checkout while
+// allowing read-only workflows to share it. The lock is acquired before the
+// workflow claims a step, so a busy checkout leaves the durable plan pending
+// and can be retried after the current writer exits.
+func (e *Engine) worktreeLease(plan Plan) (*worktreeLease, error) {
+	if strings.TrimSpace(e.repoRoot) == "" {
+		// Legacy in-memory/unit engines have no worktree identity. Preserve
+		// their historical behavior; real settings always resolve a root.
+		return nil, nil
+	}
+	exclusive := touchesTheWorld(plan.Graph.Effects()) || len(plan.Graph.Operations()) > 0
+	lease, err := acquireWorktreeLease(e.store.Path(), e.repoRoot, exclusive)
+	if err != nil {
+		if strings.Contains(err.Error(), "busy") {
+			return nil, contract.Fail(contract.FailureUnavailable,
+				"workflow worktree is busy with another workflow")
+		}
+		return nil, contract.Fail(contract.FailurePermissionDenied,
+			"workflow worktree could not be locked")
+	}
+	return lease, nil
+}
+
+func (e *Engine) ensureExclusiveWorktree(lease *worktreeLease, plan Plan) error {
+	if lease == nil || (!touchesTheWorld(plan.Graph.Effects()) && len(plan.Graph.Operations()) == 0) {
+		return nil
+	}
+	if err := lease.Upgrade(); err != nil {
+		if strings.Contains(err.Error(), "busy") {
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow worktree is busy with another workflow")
+		}
+		return contract.Fail(contract.FailurePermissionDenied,
+			"workflow worktree could not be locked")
+	}
+	return nil
+}
+
+// sensitiveOperationsForStep intersects a step's declared operations with
+// the one-shot authorization supplied to this particular engine call. The
+// authorization is deliberately not inferred from the persisted step or from
+// write access: a reconnect, retry, child or correction must obtain a fresh
+// explicit grant before it can carry operations into a dispatch.
+func sensitiveOperationsForStep(step Step, authorized []contract.Operation) ([]contract.Operation, bool) {
+	if len(step.Permission.Operations) == 0 {
+		return nil, true
+	}
+	granted := make(map[contract.Operation]struct{}, len(authorized))
+	for _, operation := range authorized {
+		granted[operation] = struct{}{}
+	}
+	for _, operation := range step.Permission.Operations {
+		if _, ok := granted[operation]; !ok {
+			return nil, false
+		}
+	}
+	return slices.Clone(step.Permission.Operations), true
+}
+
+// freshGrantToken is minted for exactly one sensitive dispatch. It is never
+// persisted and is never copied into child, retry or correction state.
+func freshGrantToken() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // touchesTheWorld reports whether repeating this step could land an effect
@@ -1423,17 +2265,48 @@ type done struct {
 	report contract.Report
 }
 
+type queuedDispatch struct {
+	stepID   string
+	dispatch agent.Dispatch
+	slot     globalSlot
+	activity ActivityNotice
+}
+
+func runDispatch(ctx context.Context, runner Dispatcher, item queuedDispatch, results chan<- done, wg *sync.WaitGroup) {
+	defer wg.Done()
+	report, _, err := runner.Dispatch(ctx, item.dispatch)
+	item.slot.Release()
+	results <- done{stepID: item.stepID, status: outcome(report, err), report: reportOf(report, err)}
+}
+
 // execute is the loop: launch everything ready that has a free slot in its
 // lane, wait for one to finish, write it down, look again.
 //
 // One goroutine writes. The steps run in parallel and answer on a channel, and
 // every database write happens here between two waits -- so a status flip is
 // never half-applied and never races another.
-func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error) {
+func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *worktreeLease, authorizedOperations []contract.Operation) (Run, error) {
+	defer func() { _ = e.store.EndActive(context.Background(), id, e.now()) }()
 	run, err := e.store.Load(ctx, id)
 	if err != nil {
 		return Run{}, err
 	}
+	// runCtx carries durable cancellation and human gate waiting. The active
+	// deadline is a separate child used only while providers run; otherwise a
+	// person answering a gate would consume execution time.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	watchdogCtx, stopWatchdog := context.WithCancel(context.Background())
+	watchdogDone := make(chan struct{})
+	watchdogSignal := make(chan struct{}, 1)
+	go e.runWatchdog(watchdogCtx, id, cancel, watchdogSignal, watchdogDone)
+	defer func() { stopWatchdog(); <-watchdogDone }()
+	activeCtx, activeCancel, err := activeContext(runCtx, run, e.now())
+	if err != nil {
+		cancel()
+		return run, err
+	}
+	defer func() { activeCancel() }()
 
 	status := make(map[string]Status, len(run.Steps))
 	attempts := make(map[string]int, len(run.Steps))
@@ -1465,23 +2338,96 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		}
 	}
 	seed(run)
+	// This grant belongs only to the current LaunchAuthorized,
+	// ResumeAuthorized or RedoAuthorized call. Keep it in memory for the
+	// dispatch loop and never write it to the run or session state.
+	authorizedOperations = slices.Clone(authorizedOperations)
 
 	lanes := make(map[config.Pool]int)
+	workflowLanes := e.lanes
+	if run.Policy.Version != "" {
+		workflowLanes = config.Workflow{MaxParallelAgent: run.Policy.MaxParallelAgent, MaxParallelReview: run.Policy.MaxParallelReview}
+	}
 	running := make(map[string]bool)
-	results := make(chan done)
+	resultCapacity := len(plan.Graph.Steps)
+	if resultCapacity < 1 {
+		resultCapacity = 1
+	}
+	results := make(chan done, resultCapacity)
 	var wg sync.WaitGroup
+	// Canceling the provider context must not cancel the writes that record
+	// what happened to an invocation, including a pre-dispatch notice failure.
+	write := context.WithoutCancel(ctx)
+	if err := e.publishPendingActivities(write, id); err != nil {
+		return run, contract.Fail(contract.FailureUnavailable,
+			"workflow pending activity could not be published before resuming")
+	}
+	if err := e.publishPlanProgressWith(write, id, "Seguimiento activo", true); err != nil {
+		return run, contract.Fail(contract.FailureUnavailable,
+			"workflow plan progress could not be published before resuming")
+	}
+	startQueued := func(queued []queuedDispatch) error {
+		if len(queued) == 0 {
+			return nil
+		}
+		activities := make([]ActivityNotice, 0, len(queued))
+		for _, item := range queued {
+			activities = append(activities, item.activity)
+		}
+		if e.activity != nil {
+			if err := e.publishActivities(write, id, activities); err != nil {
+				for _, item := range queued {
+					item.slot.Release()
+					_ = e.store.InterruptBeforeDispatch(write, id, item.stepID, item.dispatch.ID,
+						"activity publication failed", e.now())
+					delete(running, item.stepID)
+					lanes[plan.Pool(item.stepID)]--
+					status[item.stepID] = StatusInterrupted
+				}
+				return contract.Fail(contract.FailureUnavailable,
+					"workflow activity could not be published before dispatch")
+			}
+		}
+		if err := e.publishPlanProgress(write, id); err != nil {
+			for _, item := range queued {
+				item.slot.Release()
+				_ = e.store.InterruptBeforeDispatch(write, id, item.stepID, item.dispatch.ID,
+					"progress publication failed", e.now())
+				delete(running, item.stepID)
+				lanes[plan.Pool(item.stepID)]--
+				status[item.stepID] = StatusInterrupted
+			}
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow progress could not be published before dispatch")
+		}
+		for _, item := range queued {
+			wg.Add(1)
+			go runDispatch(activeCtx, e.runner, item, results, &wg)
+		}
+		return nil
+	}
 
-	// Canceling this cuts the agents without cutting the writes that record
-	// what happened to them. A store call on the caller's context would fail
-	// exactly when the record matters most.
-	runCtx, cancel := context.WithCancel(ctx)
+	// Cancellation is durable because it may arrive over another CLI/MCP
+	// connection. Poll the persisted marker and cancel the local provider
+	// context as soon as it appears; all result writes use `write`, which is
+	// intentionally independent of that cancellation.
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	watchDone := make(chan struct{})
+	go e.runCancellationWatcher(watchCtx, id, cancel, watchDone)
+	defer func() {
+		stopWatch()
+		<-watchDone
+	}()
+	if canceled, err := e.store.Aborted(write, id); err != nil {
+		return run, err
+	} else if canceled {
+		cancel()
+	}
 	// Every exit from this function unwinds the same way, including the ones
 	// that used not to unwind at all. See unwind: `results` is unbuffered, so
 	// leaving without draining it strands every goroutine whose step has
 	// already finished, and waiting without draining it deadlocks outright.
 	defer unwind(cancel, &wg, results)
-	write := context.WithoutCancel(ctx)
-
 	accountingFailure := func(cause error, first ...done) (Run, error) {
 		cancel()
 		completed := append([]done(nil), first...)
@@ -1504,6 +2450,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 	}
 
 	aborted := false
+	watchdogTriggered := false
+	activeExpired := false
+	automaticRetryExhausted := false
+	automaticRetryNeedsAuthorization := false
+	recoveryBlockedReason := ""
 	// A refused launch is refused for good, and not only in the process that
 	// heard the refusal. Read off gate 0 rather than off the wait below: the
 	// answer may have arrived while nothing was running, and an execute that
@@ -1533,7 +2484,17 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		rejected = true
 	}
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-watchdogSignal:
+			watchdogTriggered = true
+			cancel()
+		default:
+		}
+		if activeCtx.Err() != nil && runCtx.Err() == nil {
+			activeExpired = true
+			cancel()
+		}
+		if runCtx.Err() != nil && !activeExpired && !watchdogTriggered {
 			aborted = true
 		}
 		// The freeze. While a gate is open nothing new is dispatched: what
@@ -1543,7 +2504,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// dispatch stopped no step it names can start while somebody reads
 		// it. Staleness stops being a race to detect.
 		frozen := false
-		if !aborted {
+		if !aborted && !activeExpired {
 			gate, waiting, err := e.store.PendingGate(write, id)
 			if err != nil {
 				return run, err
@@ -1555,10 +2516,26 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				// asking about a graph that is still moving.
 				frozen = true
 			default:
-				answered, err := e.await(ctx, id, gate.Ordinal)
+				// Human time is outside the active execution budget. Stop the
+				// active timer and checkpoint the interval before waiting.
+				if err := e.store.EndActive(write, id, e.now()); err != nil {
+					return run, err
+				}
+				activeCancel()
+				answered, err := e.await(runCtx, id, gate.Ordinal)
 				if err != nil {
 					aborted = true
 					break
+				}
+				if err := e.store.StartActive(write, id, e.now()); err != nil {
+					return run, err
+				}
+				if run, err = e.store.Load(write, id); err != nil {
+					return run, err
+				}
+				activeCtx, activeCancel, err = activeContext(runCtx, run, e.now())
+				if err != nil {
+					return run, err
 				}
 				if answered.Decision == DecisionRejected {
 					// A refused launch never ran. A refused expansion
@@ -1586,8 +2563,27 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				if err != nil {
 					return run, err
 				}
-				if err := e.store.Apply(write, id, answered, grown); err != nil {
+				// An approved expansion may add write/external effects or a
+				// sensitive operation to a read-only plan. Upgrade the lease
+				// while the current descriptor is still held, before Apply can
+				// mutate the durable graph or dispatch the new step.
+				if err := e.ensureExclusiveWorktree(worktree, grown); err != nil {
+					// The gate answer is already durable, but the proposal was
+					// not applied. Leave the run resumable and release the writer
+					// rather than strand an ownership claim behind the lock refusal.
+					_ = e.store.End(write, id, StopUnjudged, e.now())
 					return run, err
+				}
+				planNotice := NewActivityNotice("PLAN", "Ampliación", "añado",
+					"los pasos aprobados", "ampliar el workflow")
+				planNotice.WorkflowID = id
+				planNotice.InvocationID = fmt.Sprintf("plan-%d-%s", answered.Ordinal, answered.Digest)
+				planNotice.At = e.now()
+				if err := e.store.ApplyWithActivity(write, id, answered, grown, &planNotice); err != nil {
+					return run, err
+				}
+				if err := e.publishPlanProgressWith(write, id, "Alcance actualizado", true); err != nil {
+					return run, contract.Fail(contract.FailureUnavailable, "workflow plan progress could not be published")
 				}
 				if run, err = e.store.Load(write, id); err != nil {
 					return run, err
@@ -1600,7 +2596,8 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		if rejected {
 			break
 		}
-		if !aborted && !frozen {
+		queued := make([]queuedDispatch, 0)
+		if !aborted && !activeExpired && !frozen {
 			for _, step := range plan.Graph.Steps {
 				if status[step.ID] != StatusPending || running[step.ID] {
 					continue
@@ -1608,13 +2605,65 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				if !ready(step, status) {
 					continue
 				}
+				if e.parent != nil && len(running) >= 2 {
+					// A coordinator may have many sequential stages, but never
+					// more than two specialist assignments active at once.
+					continue
+				}
+				dispatchOperations, authorized := sensitiveOperationsForStep(step, authorizedOperations)
+				if !authorized {
+					return run, contract.Fail(contract.FailurePermissionDenied,
+						"workflow %s step %s requires fresh sensitive-operation authorization", id, step.ID)
+				}
 				pool := plan.Pool(step.ID)
-				if ceiling := e.lanes.Cap(pool); ceiling > 0 && lanes[pool] >= ceiling {
+				if ceiling := workflowLanes.Cap(pool); ceiling > 0 && lanes[pool] >= ceiling {
 					// Ready, but the lane is full. It stays pending and is
 					// looked at again the moment a slot frees: the queue is
 					// this set plus the graph order, not a second list that
 					// could disagree with it.
 					continue
+				}
+				globalProfile := profileSlotIdentity(run.Policy.Name, run.Policy.Digest)
+				if globalProfile == "workflow-v1" && run.Policy.Version != "" {
+					globalProfile = profileSlotIdentity(run.Policy.Version, run.Policy.Digest)
+				}
+				var slot globalSlot
+				var slotErr error
+				if len(running)+len(queued) > 0 {
+					var acquired bool
+					slot, acquired, slotErr = tryAcquireGlobalSlot(globalProfile, pool.String(), workflowLanes.Cap(pool))
+					if slotErr == nil && !acquired {
+						// Another workflow owns the global lane. Keep the ready
+						// step pending and consume a local result first; blocking
+						// here would prevent active work from releasing its slot.
+						continue
+					}
+				} else {
+					slot, slotErr = acquireGlobalSlot(activeCtx, globalProfile, pool.String(), workflowLanes.Cap(pool))
+				}
+				if slotErr != nil {
+					if errors.Is(slotErr, context.DeadlineExceeded) {
+						activeExpired = true
+						cancel()
+						break
+					}
+					if errors.Is(slotErr, context.Canceled) {
+						aborted = true
+						cancel()
+						break
+					}
+					return accountingFailure(slotErr)
+				}
+				if strings.EqualFold(strings.TrimSpace(step.TypeName), "audit") && attempts[step.ID] >= 2 {
+					slot.Release()
+					return run, contract.Fail(contract.FailurePermissionDenied,
+						"workflow %s step %s reached the Astra execution limit of 2", id, step.ID)
+				}
+				if e.beforeDispatch != nil {
+					if err := e.beforeDispatch(write, step, attempts[step.ID]+1, run.SourceFingerprint); err != nil {
+						slot.Release()
+						return run, err
+					}
 				}
 				attempts[step.ID]++
 				// The id is minted here, before anything spawns, so the
@@ -1624,13 +2673,15 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 				// like it never started beside an agent that certainly did.
 				traceID := e.runner.NextID()
 				dispatch := agent.Dispatch{
-					Effects:  append([]contract.Effect{}, step.Permission.Effects...),
-					ID:       traceID,
-					TypeName: step.TypeName,
-					Task:     step.Task,
-					Route:    step.Route,
-					Attempt:  attempts[step.ID],
-					RetryOf:  redoOf(traces[step.ID], attempts[step.ID]),
+					Effects:    append([]contract.Effect{}, step.Permission.Effects...),
+					Operations: dispatchOperations,
+					ID:         traceID,
+					TypeName:   step.TypeName,
+					Task:       step.Task,
+					Limits:     limitsForStep(step.Limits),
+					Route:      step.Route,
+					Attempt:    attempts[step.ID],
+					RetryOf:    redoOf(traces[step.ID], attempts[step.ID]),
 					// The share the plan cut for this step, which Compile
 					// already checked against the grant. An agent that spends
 					// has to be told its ceiling, or the only thing bounding
@@ -1644,6 +2695,27 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					// runs allocated the same $0.90 whatever the
 					// commission said.
 					CommissionUSD: &plan.Graph.GrantUSD,
+					Parent:        cloneAssignment(e.parent),
+				}
+				if dispatch.Parent != nil {
+					dispatch.Parent.Operations = slices.Clone(dispatchOperations)
+				}
+				if len(dispatchOperations) > 0 {
+					token, tokenErr := freshGrantToken()
+					if tokenErr != nil {
+						slot.Release()
+						return accountingFailure(contract.Fail(contract.FailureUnavailable,
+							"workflow %s step %s could not mint a sensitive-operation grant", id, step.ID))
+					}
+					dispatch.AssignmentID = traceID
+					dispatch.WorkflowID = run.ID
+					// Repository is the durable logical id used for routing and
+					// accounting. Hook binding needs the physical tree served by
+					// this engine; binding it to the id makes every effectful
+					// model dispatch fail closed when the two differ.
+					dispatch.Worktree = e.repoRoot
+					dispatch.PolicyDigest = run.Policy.Digest
+					dispatch.GrantToken = token
 				}
 				if step.Subject != "" {
 					subject, err := subjectFrom(answers[step.Subject])
@@ -1672,24 +2744,48 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 					// same constructor so the two callers cannot drift.
 					dispatch.Rejected = &card
 				}
-				if err := e.store.Claim(write, id, step.ID, traceID,
-					attempts[step.ID], e.now(), e.pid, step.Permission.BudgetUSD); err != nil {
+				dispatchID := traceID
+				dispatch.Activity = func(events []internalactivity.Notice) error {
+					return e.recordToolActivity(write, id, dispatchID, events)
+				}
+				activity := NewActivityNotice("ATENEA", step.TypeName, "ejecuto",
+					step.Task.Objective, step.Task.Criterion)
+				activityAt := e.now()
+				activity.WorkflowID, activity.InvocationID, activity.At = id, traceID, activityAt
+				activity.PointID, activity.AgentRunID = step.PointID, traceID
+				if step.Route != nil {
+					activity.ThreadID = step.Route.ThreadID
+					activity.RequestedModel = step.Route.RequestedModel
+					activity.ObservedModel = step.Route.ObservedModel
+					activity.RequestedReasoningEffort = step.Route.RequestedReasoningEffort
+					activity.ObservedReasoningEffort = step.Route.ObservedReasoningEffort
+				}
+				if err := e.store.ClaimWithActivity(write, id, step.ID, traceID,
+					attempts[step.ID], activityAt, e.pid, activity, step.Permission.BudgetUSD); err != nil {
+					slot.Release()
+					if queuedErr := startQueued(queued); queuedErr != nil {
+						return accountingFailure(queuedErr)
+					}
+					if contract.KindOf(err) == contract.FailureCanceled {
+						aborted = true
+						cancel()
+						break
+					}
+					return accountingFailure(err)
+				}
+				if err := e.store.TouchProgress(write, id, activityAt); err != nil {
 					return accountingFailure(err)
 				}
 				traces[step.ID] = traceID
 				lanes[pool]++
 				running[step.ID] = true
 				status[step.ID] = StatusRunning
-				wg.Add(1)
-				go func(stepID string, d agent.Dispatch) {
-					defer wg.Done()
-					report, _, runErr := e.runner.Dispatch(runCtx, d)
-					results <- done{
-						stepID: stepID,
-						status: outcome(report, runErr),
-						report: reportOf(report, runErr),
-					}
-				}(step.ID, dispatch)
+				queued = append(queued, queuedDispatch{stepID: step.ID, dispatch: dispatch, slot: slot, activity: activity})
+			}
+		}
+		if len(queued) > 0 {
+			if err := startQueued(queued); err != nil {
+				return accountingFailure(err)
 			}
 		}
 		if len(running) == 0 {
@@ -1706,25 +2802,89 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// loop: the cancel usually lands while this loop is blocked here,
 		// which is exactly when that flag is still false.
 		if finished.status == StatusInterrupted {
-			if err := e.store.Finish(write, id, finished.stepID, StatusInterrupted, finished.report, e.now()); err != nil {
+			endedAt := e.now()
+			if err := e.store.Finish(write, id, finished.stepID, StatusInterrupted, finished.report, endedAt); err != nil {
+				return accountingFailure(err, finished)
+			}
+			if err := e.recordAgentTelemetry(write, id, finished.stepID, traces[finished.stepID], finished.report, endedAt); err != nil {
 				return accountingFailure(err, finished)
 			}
 			aborted = true
 			if err := e.store.Interrupt(write, id, finished.stepID, "cut by abort", e.now()); err != nil {
 				return run, err
 			}
+			if err := e.publishPlanProgress(write, id); err != nil {
+				return accountingFailure(err, finished)
+			}
 			status[finished.stepID] = StatusInterrupted
+			if watchdogTriggered {
+				aborted = false
+			}
 			continue
 		}
+		endedAt := e.now()
+		step, _ := plan.Step(finished.stepID)
 		if err := e.store.Finish(write, id, finished.stepID, finished.status,
-			finished.report, e.now()); err != nil {
+			finished.report, endedAt); err != nil {
+			return accountingFailure(err, finished)
+		}
+		evidenceFingerprint := run.SourceFingerprint
+		if finished.status != StatusInterrupted && slices.Contains(step.Permission.Effects, contract.EffectWrite) && e.repoRoot != "" {
+			fingerprint, fingerprintErr := sourceFingerprint(e.repoRoot)
+			if fingerprintErr != nil || fingerprint == "" {
+				fingerprint = "unavailable"
+			}
+			if err := e.store.SetAcceptedWriteFingerprint(write, id, finished.stepID, fingerprint); err != nil {
+				return accountingFailure(err, finished)
+			}
+			evidenceFingerprint = fingerprint
+		}
+		if e.prepareKnowledge != nil && finished.status == StatusOK {
+			candidateID, digest, err := e.prepareKnowledge(write, id, step, evidenceFingerprint, finished.report)
+			if err != nil {
+				if rejectErr := e.store.RejectKnowledgeCapture(write, id, finished.stepID, err); rejectErr != nil {
+					return accountingFailure(rejectErr, finished)
+				}
+				return accountingFailure(err, finished)
+			}
+			if candidateID != "" || digest != "" {
+				if candidateID == "" || digest == "" {
+					return accountingFailure(contract.Fail(contract.FailureInvalidInput, "workflow: incomplete knowledge candidate identity"), finished)
+				}
+				if err := e.store.BindKnowledgeCandidate(write, id, finished.stepID, candidateID, digest); err != nil {
+					return accountingFailure(err, finished)
+				}
+				if finished.report.Result == nil {
+					finished.report.Result = make(map[string]any)
+				}
+				finished.report.Result["knowledge_candidate_id"] = candidateID
+				finished.report.Result["knowledge_digest"] = digest
+			}
+		}
+		if err := e.recordAgentTelemetry(write, id, finished.stepID, traces[finished.stepID], finished.report, endedAt); err != nil {
+			return accountingFailure(err, finished)
+		}
+		if err := e.store.TouchProgress(write, id, e.now()); err != nil {
+			return accountingFailure(err, finished)
+		}
+		if err := e.publishPlanProgress(write, id); err != nil {
 			return accountingFailure(err, finished)
 		}
 		status[finished.stepID] = finished.status
+		// Reload after settlement. Recovery admission reads the durable charge
+		// and archived attempts, so a retry cannot be authorized from stale
+		// process memory after a reconnect or a prior attempt.
+		if run, err = e.store.Load(write, id); err != nil {
+			return run, err
+		}
+		if e.promoteKnowledge != nil {
+			if err := e.promoteKnowledge(write, run); err != nil {
+				return accountingFailure(err, finished)
+			}
+		}
 		// Kept for whoever reads this answer next. The same fields the store
 		// just wrote, so a subject built here and one built after a resume
 		// are the same card.
-		step, _ := plan.Step(finished.stepID)
 		answers[finished.stepID] = StepRow{
 			Step:       step,
 			Status:     finished.status,
@@ -1737,6 +2897,42 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			Spent:      finished.report.Spent,
 		}
 
+		if watchdogTriggered {
+			// A stalled dispatch may have caused an effect. Persisted watchdog
+			// state is the human decision point; never auto-retry it.
+			continue
+		}
+		if retry, reason := transientRecoveryRetry(run, step, finished, activeCtx); retry {
+			// Recovery and review corrections share one durable automatic retry
+			// ceiling. Counting the current attempt rows means this remains
+			// correct after a reconnect; no process-local recovery counter can
+			// bypass a review correction performed earlier in the run.
+			if retryLimitReached(run, attempts, 1) {
+				automaticRetryExhausted = true
+				recoveryBlockedReason = fmt.Sprintf("workflow %s recovery retry limit %d was reached", id, run.Policy.MaxRetries)
+				continue
+			}
+			if err := e.store.MarkRecovery(write, id, finished.stepID, "automatic_recovery", finished.report.Reason.Text); err != nil {
+				return run, err
+			}
+			if err := e.store.Reset(write, id, finished.stepID, e.now()); err != nil {
+				return run, err
+			}
+			status[finished.stepID] = StatusPending
+			delete(answers, finished.stepID)
+			if err := e.publishPlanProgress(write, id); err != nil {
+				return accountingFailure(err, finished)
+			}
+			continue
+		} else if reason != "" {
+			// Keep the failed/incomplete row visible and stop the run without
+			// converting an unknown charge or an effectful operation into a
+			// retry. The durable RecoveryState carries this reason to status.
+			recoveryBlockedReason = reason
+			automaticRetryExhausted = true
+			continue
+		}
+
 		// A review that judged and said no sends the work back, once. Same
 		// rule as `atenea agent --review`: the second attempt is handed the
 		// sentence that refused the first, and a third is not offered --
@@ -1747,6 +2943,30 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// file, the service was down -- and re-running the work because its
 		// auditor broke spends money on somebody else's outage.
 		if redo, ok := e.refused(plan, finished, attempts, answers); ok {
+			// A correction is a pair of dispatches: the refused subject and
+			// the review that refused it both go back to pending. Reserve the
+			// complete pair before resetting either row, otherwise a ceiling of
+			// one automatic retry admits two new attempts.
+			correctionAttempts := 1
+			if redo != finished.stepID {
+				correctionAttempts++
+			}
+			if retryLimitReached(run, attempts, correctionAttempts) {
+				automaticRetryExhausted = true
+				continue
+			}
+			// Sensitive operations are one-shot grants attached to the
+			// assignment. The first attempt consumed the grant, so an automatic
+			// correction must never silently carry it into a second dispatch.
+			// Pause with durable unjudged state; a future explicit gate/redo can
+			// obtain a fresh operation authorization.
+			subjectStep, _ := plan.Step(redo)
+			if len(subjectStep.Permission.Operations) > 0 ||
+				len(step.Permission.Operations) > 0 {
+				automaticRetryExhausted = true
+				automaticRetryNeedsAuthorization = true
+				continue
+			}
 			rejections[redo] = agent.RejectedCard(
 				mustSubject(answers[redo]), traces[finished.stepID], finished.report.Reason)
 			// Written down, not merely remembered.
@@ -1762,11 +2982,17 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			// of the same charge -- which is what this used to keep -- made
 			// the live row carry it as well, and the balance counted it twice.
 			for _, stepID := range [...]string{redo, finished.stepID} {
+				if err := e.store.MarkRecovery(write, id, stepID, "automatic_review", finished.report.Reason.Text); err != nil {
+					return run, err
+				}
 				if err := e.store.Reset(write, id, stepID, e.now()); err != nil {
 					return run, err
 				}
 				status[stepID] = StatusPending
 				delete(answers, stepID)
+			}
+			if err := e.publishPlanProgress(write, id); err != nil {
+				return run, err
 			}
 		}
 	}
@@ -1779,8 +3005,12 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 
 	stop := StopNone
 	switch {
+	case watchdogTriggered:
+		stop = StopUnjudged
 	case rejected:
 		stop = StopRejected
+	case activeExpired:
+		stop = StopUnjudged
 	case aborted:
 		// A gate left open by an abort stays open. The question was never
 		// answered, and closing it on the way out would answer it.
@@ -1790,15 +3020,48 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 		// never judged. Saying "finished" here would be a receipt claiming
 		// work that no report was ever read for.
 		stop = StopUnjudged
+	case automaticRetryExhausted:
+		// The failed review remains visible and the run stays resumable, but
+		// no correction is dispatched beyond the persisted automatic retry
+		// ceiling. Explicit redo is a separate, user-approved path.
+		stop = StopUnjudged
 	}
 	if err := e.store.End(write, id, stop, e.now()); err != nil {
 		return run, err
+	}
+	// End writes the durable stop reason after the last step settlement. Sync
+	// once more so the checklist reflects that reason: an unfinished point is
+	// blocked when a run is aborted, rejected, or left unjudged. The earlier
+	// per-step syncs deliberately ran while the run was still active and could
+	// only describe a pending point as in progress.
+	if stop != StopNone {
+		if err := e.publishPlanProgress(write, id); err != nil {
+			return run, err
+		}
 	}
 	out, err := e.store.Load(write, id)
 	if err != nil {
 		return run, err
 	}
-	if aborted {
+	if watchdogTriggered {
+		return out, contract.Fail(contract.FailureUnavailable, "workflow %s paused by watchdog: no progress for %s", id, e.watchdog)
+	}
+	if activeExpired {
+		return out, contract.Fail(contract.FailureUnavailable,
+			"workflow %s exceeded its active duration limit", id)
+	}
+	if automaticRetryExhausted {
+		if automaticRetryNeedsAuthorization {
+			return out, contract.Fail(contract.FailurePermissionDenied,
+				"workflow %s automatic correction requires fresh sensitive-operation authorization", id)
+		}
+		if recoveryBlockedReason != "" {
+			return out, contract.Fail(contract.FailureUnavailable, "%s", recoveryBlockedReason)
+		}
+		return out, contract.Fail(contract.FailurePermissionDenied,
+			"workflow %s automatic retry limit %d was reached", id, out.Policy.MaxRetries)
+	}
+	if aborted || out.Stop == StopAborted {
 		return out, contract.Fail(contract.FailureCanceled,
 			"workflow %s was cut: %s", id, out.Summary())
 	}
@@ -1807,6 +3070,68 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan) (Run, error)
 			"workflow %s was not launched: the plan was rejected", id)
 	}
 	return out, nil
+}
+
+func limitsForStep(limits contract.Limits) *contract.Limits {
+	if limits.MaxDuration == 0 && limits.MaxTokens == 0 {
+		return nil
+	}
+	limitsCopy := limits
+	return &limitsCopy
+}
+
+func (e *Engine) watchCancellation(ctx context.Context, id string, cancel context.CancelFunc) {
+	ticker := time.NewTicker(e.poll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			aborted, err := e.store.Aborted(ctx, id)
+			if err == nil && aborted {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (e *Engine) runCancellationWatcher(ctx context.Context, id string, cancel context.CancelFunc, done chan<- struct{}) {
+	defer close(done)
+	e.watchCancellation(ctx, id, cancel)
+}
+
+func (e *Engine) runWatchdog(ctx context.Context, id string, cancel context.CancelFunc, signal chan<- struct{}, done chan<- struct{}) {
+	defer close(done)
+	interval := e.poll
+	if interval <= 0 || interval > e.watchdog/10 {
+		interval = e.watchdog / 10
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			run, tripped, err := e.store.Watchdog(context.Background(), id, now, e.watchdog)
+			if err != nil || !tripped {
+				continue
+			}
+			if run.WatchdogState == StateUncertain || run.WatchdogState == StateAttentionRequired {
+				select {
+				case signal <- struct{}{}:
+				default:
+				}
+				cancel()
+			}
+			return
+		}
+	}
 }
 
 // redoOf links a re-dispatch to the run it repeats. A first attempt redoes
@@ -1848,6 +3173,125 @@ func (e *Engine) refused(plan Plan, finished done, attempts map[string]int,
 		return "", false
 	}
 	return step.Subject, true
+}
+
+// retryLimitReached counts only recovery/review attempts with an explicit
+// automatic origin. Explicit Redo is intentionally outside this ceiling: it
+// has its own raised share and one-shot approval. Legacy rows without origin
+// metadata retain the old conservative attempt count until they are replaced.
+func retryLimitReached(run Run, attempts map[string]int, additional int) bool {
+	if run.Policy.Version == "" {
+		return false
+	}
+	used := automaticRetries(run)
+	if used == 0 {
+		// A row written before recovery origins existed cannot distinguish an
+		// explicit redo from an automatic retry. Preserve the prior bounded
+		// behavior rather than silently widening its ceiling.
+		for _, row := range run.Steps {
+			if row.RecoveryKind == "" && row.Attempt > 1 {
+				used += row.Attempt - 1
+			}
+		}
+	}
+	// The map is the in-memory dispatch count used by execute. It is only
+	// needed for a current attempt that has not yet been reloaded from SQLite.
+	for _, row := range run.Steps {
+		attempt := row.Attempt
+		if attempts != nil && attempts[row.Step.ID] > attempt {
+			attempt = attempts[row.Step.ID]
+		}
+		if attempt > row.Attempt && row.RecoveryKind == "" {
+			used += attempt - row.Attempt
+		}
+	}
+	return used+additional > run.Policy.MaxRetries
+}
+
+func automaticRetries(run Run) int {
+	used := 0
+	for _, attempt := range run.Superseded {
+		if strings.HasPrefix(attempt.RecoveryKind, "automatic") {
+			used++
+		}
+	}
+	for _, row := range run.Steps {
+		if !strings.HasPrefix(row.RecoveryKind, "automatic") {
+			continue
+		}
+		found := false
+		for _, attempt := range run.Superseded {
+			if attempt.StepID == row.Step.ID && attempt.Attempt == row.Attempt-1 && strings.HasPrefix(attempt.RecoveryKind, "automatic") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			used++
+		}
+	}
+	return used
+}
+
+// transientRecoveryRetry is the production workflow seam for P10. It only
+// admits a provider outage/timeout on a read-only route with measured cost;
+// all other incomplete reports remain visible for a person to resume or
+// inspect. The route is reused by the normal queue, so this helper never
+// selects a fallback model or backend.
+func transientRecoveryRetry(run Run, step Step, finished done, activeCtx context.Context) (bool, string) {
+	if finished.status != StatusIncomplete {
+		return false, ""
+	}
+	if finished.report.Reason.Kind != contract.FailureUnavailable && finished.report.Reason.Kind != contract.FailureTimeout {
+		return false, ""
+	}
+	if activeCtx.Err() != nil {
+		return false, "workflow active duration or cancellation ended before recovery retry"
+	}
+	if step.Route == nil || len(step.Route.Fallbacks) > 0 {
+		// A legacy or provider-agnostic step has no auditable route to reuse;
+		// leave its incomplete result as-is rather than turning that absence
+		// into a new workflow error.
+		return false, ""
+	}
+	if len(step.Permission.Operations) > 0 || !readOnlyRecoveryEffects(step.Permission.Effects) {
+		return false, ""
+	}
+	if !finished.report.InvokedKnown {
+		return false, "workflow recovery stopped because invocation state is unknown"
+	}
+	preflight := !finished.report.Invoked
+	if step.Permission.BudgetUSD > 0 && finished.report.Spent.USD != nil &&
+		*finished.report.Spent.USD >= step.Permission.BudgetUSD*ceilingBand {
+		return false, "workflow recovery stopped at the step spending ceiling"
+	}
+	if !preflight && (finished.report.Spent.USD == nil || finished.report.Spent.Validate() != nil) {
+		return false, "workflow recovery retry stopped because cost is unknown or invalid"
+	}
+	if preflight {
+		return true, ""
+	}
+	if run.Policy.MaxBudgetUSD > 0 {
+		if total := run.Spend().AccumulatedUSD(); total == nil || *total >= run.Policy.MaxBudgetUSD-moneyEpsilon || *total+*finished.report.Spent.USD > run.Policy.MaxBudgetUSD+moneyEpsilon {
+			return false, "workflow recovery retry stopped at the configured budget"
+		}
+	}
+	if run.Policy.MaxDuration > 0 && run.ActiveDuration >= run.Policy.MaxDuration {
+		return false, "workflow recovery retry stopped at the configured duration"
+	}
+	return true, ""
+}
+
+func readOnlyRecoveryEffects(effects []contract.Effect) bool {
+	if len(effects) == 0 {
+		return true
+	}
+	for _, effect := range effects {
+		if effect != contract.EffectRead && effect != contract.EffectProcess {
+			return false
+		}
+	}
+	return true
 }
 
 // mustSubject packs a finished step for the relaunch card. The row came off

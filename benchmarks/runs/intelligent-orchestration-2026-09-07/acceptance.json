@@ -1,0 +1,364 @@
+{
+  "schema_version": 2,
+  "started_at": "2026-09-07T02:21:57.795098Z",
+  "finished_at": "2026-09-07T02:26:22.720967Z",
+  "commit": "9ab1c03e9dca5e2167f582d9f860aae14e23424d",
+  "source_dirty": true,
+  "source_digest": "4eb862618ef67308cd794f0bd110b48e0bda2386cbbbf6047027b33f318f2f46",
+  "source_files": 198,
+  "corpus_sha256": "bb57b8555c44fdd754bc72855c7899adda318677b48ee5696820a710efec98a5",
+  "gates": [
+    {
+      "id": "context",
+      "title": "Repository, workspace and language context",
+      "packages": [
+        "./internal/adapter/kivgraph",
+        "./internal/workspacecontext",
+        "./internal/dartcoverage"
+      ],
+      "scenario_ids": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07"
+      ],
+      "scenarios": [
+        {
+          "id": "S01",
+          "fixture": "fixtures/go/repository.go",
+          "fixture_sha256": "7f49bfc3cc5fd2b266778370a8ff7f4b40a744f4b0f4af1572729127ac204691",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:21:58.79449+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:21:59.751219+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows\"}\n{\"Time\":\"2026-09-07T04:21:59.751329+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwent…"
+        },
+        {
+          "id": "S02",
+          "fixture": "fixtures/typescript/repository.ts",
+          "fixture_sha256": "6c00f0a1a109aa4af02b53a62f393e5bf8767b2741ba957087809de9d5c4dbc2",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:01.694792+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:02.54672+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows\"}\n{\"Time\":\"2026-09-07T04:22:02.546813+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwent…"
+        },
+        {
+          "id": "S03",
+          "fixture": "fixtures/dart/repository.dart",
+          "fixture_sha256": "2bef7d2310868148688987f02780bb765ca44b79ae3b74b20464b02142783b56",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:03.887004+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\"}\n{\"Time\":\"2026-09-07T04:22:04.339466+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\",\"Test\":\"TestRunRevalidatesS03S07WithoutChangingCorpus\"}\n{\"Time\":\"2026-09-07T04:22:04.339775+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\",\"Test\":\"TestRunRevalidatesS03S07WithoutChangingCorpus\",\"Output\":\"=== RUN   TestRu…"
+        },
+        {
+          "id": "S04",
+          "fixture": "fixtures/workspace.json",
+          "fixture_sha256": "3ad990dd854a9b6a0ab23f71162e622031f03457fe0b4cae490b593b72383bdf",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:05.601799+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/workspacecontext\"}\n{\"Time\":\"2026-09-07T04:22:06.020698+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/workspacecontext\",\"Test\":\"TestRunPreservesInputOrderAndSeparatesRepositories\"}\n{\"Time\":\"2026-09-07T04:22:06.02087+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/workspacecontext\",\"Test\":\"TestRunPreservesInputOrderAndSeparatesRepositories\",\"Outp…"
+        },
+        {
+          "id": "S05",
+          "fixture": "fixtures/go/repository.go",
+          "fixture_sha256": "7f49bfc3cc5fd2b266778370a8ff7f4b40a744f4b0f4af1572729127ac204691",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:07.976389+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:08.825492+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations\"}\n{\"Time\":\"2026-09-07T04:22:08.825616+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExac…"
+        },
+        {
+          "id": "S06",
+          "fixture": "fixtures/typescript/repository.ts",
+          "fixture_sha256": "6c00f0a1a109aa4af02b53a62f393e5bf8767b2741ba957087809de9d5c4dbc2",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:10.886017+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:11.739865+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations\"}\n{\"Time\":\"2026-09-07T04:22:11.73995+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExact…"
+        },
+        {
+          "id": "S07",
+          "fixture": "fixtures/dart/repository.dart",
+          "fixture_sha256": "2bef7d2310868148688987f02780bb765ca44b79ae3b74b20464b02142783b56",
+          "preflight": "unsupported",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:13.3817+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\"}\n{\"Time\":\"2026-09-07T04:22:13.714945+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\",\"Test\":\"TestDartImplementationPreflightDoesNotDispatch\"}\n{\"Time\":\"2026-09-07T04:22:13.71504+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/dartcoverage\",\"Test\":\"TestDartImplementationPreflightDoesNotDispatch\",\"Output\":\"=== RUN   TestDar…"
+        }
+      ],
+      "passed": true,
+      "duration_ms": 12920,
+      "measurement_state": "measured",
+      "evidence_scope": "local",
+      "evidence": "=== RUN   TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows\n    context_test.go:103: code.context fixture calls: before=22 after=2\n--- PASS: TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows (0.01s)\n=== RUN   TestContextGroupsSourceAndDeclaresPartialBodies\n--- PASS: TestContextGroupsSourceAndDeclaresPartialBodies (0.01s)\n=== RUN   TestContextCarriesPartialIntentWarningWithoutClaimingAbsence\n--- PASS: TestContextCarriesPartialIntentWarningWithoutClaimingAbsence (0.00s)\n=== RUN   TestContextPassesCursorToTheSecondIntentPage\n--- PASS: TestContextPassesCursorToTheSecondIntentPage (0.00s)\n=== RUN   TestContextDoesNotAskSourceForAnEmptyIntentPage\n--- PASS: TestContextDoesNotAskSourceForAnEmptyIntentPage (0.00s)\n=== RUN   TestContextSourceConsumesDeclaredRangeBeforeAdversarialHeaderLines\n--- PASS: TestContextSourceConsumesDeclaredRangeBeforeAdversarialHeaderLines (0.00s)\n=== RUN   TestContextSourceRejectsAnEnormousRangeWithoutPanicking\n--- PASS: TestContextSourceRejectsAnEnormousRangeWithoutPanicking (0.00s)\n=== RUN   TestContextSourceKeepsFollowingHeaderWhenBodyIsShort\n--- PASS: TestContextSourceKeepsFollowingHeaderWhenBodyIsShort (0.00s)\n=== RUN   TestContextSourceDoesNotA…"
+    },
+    {
+      "id": "mcp",
+      "title": "Legacy and modern MCP contracts",
+      "packages": [
+        "./internal/mcpcompat",
+        "./internal/mcphttp",
+        "./internal/mcpstdio",
+        "./internal/mcpprobe",
+        "./internal/passthrough"
+      ],
+      "scenario_ids": [
+        "S08",
+        "S09"
+      ],
+      "scenarios": [
+        {
+          "id": "S08",
+          "fixture": "fixtures/protocol-2025.json",
+          "fixture_sha256": "2cde451169c13f5e140ba8f2753518cb929833ce14b2858c737fd534b7d8e4ab",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:14.962766+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\"}\n{\"Time\":\"2026-09-07T04:22:15.369998+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\",\"Test\":\"TestParseAcceptsOnlyExactSupportedVersions\"}\n{\"Time\":\"2026-09-07T04:22:15.370108+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\",\"Test\":\"TestParseAcceptsOnlyExactSupportedVersions\",\"Output\":\"=== RUN   TestParseAcceptsOnlyE…"
+        },
+        {
+          "id": "S09",
+          "fixture": "fixtures/protocol-2026.json",
+          "fixture_sha256": "fa0af92d970afd698247a89af7095345c54aac7f13a41c4efad8a96b01519087",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:16.601736+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\"}\n{\"Time\":\"2026-09-07T04:22:16.893741+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\",\"Test\":\"TestParseAcceptsOnlyExactSupportedVersions\"}\n{\"Time\":\"2026-09-07T04:22:16.893865+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/mcpcompat\",\"Test\":\"TestParseAcceptsOnlyExactSupportedVersions\",\"Output\":\"=== RUN   TestParseAcceptsOnlyE…"
+        }
+      ],
+      "passed": true,
+      "duration_ms": 22886,
+      "measurement_state": "measured",
+      "evidence_scope": "local",
+      "evidence": "=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/ascii\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/leading_space\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/trailing_space\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/unicode\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/control\n=== RUN   TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/ambiguous_sentinel\n--- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/ascii (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/leading_space (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/trailing_space (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/unicode (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/control (0.00s)\n    --- PASS: TestEncodeSentinelValueOnlyEncodesAmbiguousBoundaries/ambiguous_sentinel (0.00s)\n=== RUN   TestParseDiscoveryRequiresOfficialCacheableShape\n--- PASS: TestParseDiscov…"
+    },
+    {
+      "id": "recovery",
+      "title": "Bounded recovery and persistent workflows",
+      "packages": [
+        "./internal/recoverypilot",
+        "./internal/workflow"
+      ],
+      "scenario_ids": [
+        "S11"
+      ],
+      "scenarios": [
+        {
+          "id": "S11",
+          "fixture": "fixtures/recovery.json",
+          "fixture_sha256": "0620ab45955587c5461d2c67d905e0ca129e11e24cad5aaf97d79faa42686fd6",
+          "preflight": "unsupported",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:22.318007+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/recoverypilot\"}\n{\"Time\":\"2026-09-07T04:22:23.420974+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/recoverypilot\",\"Test\":\"TestRunFixtureKivgraphScenarioUsesProductionIndexBoundary\"}\n{\"Time\":\"2026-09-07T04:22:23.421052+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/recoverypilot\",\"Test\":\"TestRunFixtureKivgraphScenarioUsesProductionIndexBoundary\"…"
+        }
+      ],
+      "passed": true,
+      "duration_ms": 90969,
+      "measurement_state": "measured",
+      "evidence_scope": "local",
+      "evidence": "=== RUN   TestExecutePersistsTransientAttemptBeforeSameRouteRetry\n--- PASS: TestExecutePersistsTransientAttemptBeforeSameRouteRetry (0.00s)\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/invalid\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/permission\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/unknown_cost\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/write_result\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/external\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/unclassified_failure\n=== RUN   TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/invalid_cost\n--- PASS: TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost (0.00s)\n    --- PASS: TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/invalid (0.00s)\n    --- PASS: TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/permission (0.00s)\n    --- PASS: TestExecuteDoesNotFallbackOrRetryNonTransientAndUnknownCost/unknown_cost (0.00s)\n    --- PASS: TestExecuteDoesNotFallbackOrRetryNonTransi…"
+    },
+    {
+      "id": "quality",
+      "title": "Outcome-backed provider quality",
+      "packages": [
+        "./internal/selector",
+        "./internal/orchestrator"
+      ],
+      "scenario_ids": [
+        "S01",
+        "S02",
+        "S05",
+        "S06"
+      ],
+      "scenarios": [
+        {
+          "id": "S01",
+          "fixture": "fixtures/go/repository.go",
+          "fixture_sha256": "7f49bfc3cc5fd2b266778370a8ff7f4b40a744f4b0f4af1572729127ac204691",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:21:58.79449+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:21:59.751219+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows\"}\n{\"Time\":\"2026-09-07T04:21:59.751329+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwent…"
+        },
+        {
+          "id": "S02",
+          "fixture": "fixtures/typescript/repository.ts",
+          "fixture_sha256": "6c00f0a1a109aa4af02b53a62f393e5bf8767b2741ba957087809de9d5c4dbc2",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:01.694792+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:02.54672+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwentyRows\"}\n{\"Time\":\"2026-09-07T04:22:02.546813+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestContextUsesIntentIdentityAndBoundsCallsForTwent…"
+        },
+        {
+          "id": "S05",
+          "fixture": "fixtures/go/repository.go",
+          "fixture_sha256": "7f49bfc3cc5fd2b266778370a8ff7f4b40a744f4b0f4af1572729127ac204691",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:07.976389+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:08.825492+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations\"}\n{\"Time\":\"2026-09-07T04:22:08.825616+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExac…"
+        },
+        {
+          "id": "S06",
+          "fixture": "fixtures/typescript/repository.ts",
+          "fixture_sha256": "6c00f0a1a109aa4af02b53a62f393e5bf8767b2741ba957087809de9d5c4dbc2",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:10.886017+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\"}\n{\"Time\":\"2026-09-07T04:22:11.739865+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExactRelations\"}\n{\"Time\":\"2026-09-07T04:22:11.73995+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/adapter/kivgraph\",\"Test\":\"TestImplementationsP13AcceptsGoAndTypeScriptExact…"
+        }
+      ],
+      "passed": true,
+      "duration_ms": 7677,
+      "measurement_state": "measured",
+      "evidence_scope": "local",
+      "evidence": "=== RUN   TestABreakInTurnIsNotUnlimited\n--- PASS: TestABreakInTurnIsNotUnlimited (0.00s)\n=== RUN   TestAFirstOutingStillOutranksAMeasuredRival\n--- PASS: TestAFirstOutingStillOutranksAMeasuredRival (0.00s)\n=== RUN   TestAPartlyMeasuredProviderKeepsItsTurn\n--- PASS: TestAPartlyMeasuredProviderKeepsItsTurn (0.00s)\n=== RUN   TestTheReasonSaysWhenARotationWasCutOff\n--- PASS: TestTheReasonSaysWhenARotationWasCutOff (0.00s)\n=== RUN   TestTheFunnelNeverChoosesACandidateAnotherBeatsOnBothAxes\n--- PASS: TestTheFunnelNeverChoosesACandidateAnotherBeatsOnBothAxes (0.00s)\n=== RUN   TestTheRankingDoesNotDependOnTheOrderCandidatesArriveIn\n--- PASS: TestTheRankingDoesNotDependOnTheOrderCandidatesArriveIn (0.00s)\n=== RUN   TestDominanceStillDecidesBetweenTwo\n--- PASS: TestDominanceStillDecidesBetweenTwo (0.00s)\n=== RUN   TestProviderPreferenceAndExactID\n--- PASS: TestProviderPreferenceAndExactID (0.00s)\n=== RUN   TestUnknownPreferenceDoesNotSilentlyFallback\n--- PASS: TestUnknownPreferenceDoesNotSilentlyFallback (0.00s)\n=== RUN   TestUnavailableProviderFallbackExplainsRepositoryScope\n--- PASS: TestUnavailableProviderFallbackExplainsRepositoryScope (0.00s)\n=== RUN   TestRuntimeIdentitySelectRecordRes…"
+    },
+    {
+      "id": "tracking",
+      "title": "Checklist, telemetry and dashboard API",
+      "packages": [
+        "./internal/workflow",
+        "./internal/dashboard",
+        "./cmd/atenea"
+      ],
+      "scenario_ids": [
+        "S10",
+        "S12"
+      ],
+      "scenarios": [
+        {
+          "id": "S10",
+          "fixture": "fixtures/progress.md",
+          "fixture_sha256": "3bfd14670146a6020f3fcd2713bd0abd7c8b1669b6266d53e61ec19fa29e3995",
+          "preflight": "passed",
+          "passed": true,
+          "measurement_state": "measured",
+          "evidence_scope": "local",
+          "evidence": "{\"Time\":\"2026-09-07T04:22:18.995634+02:00\",\"Action\":\"start\",\"Package\":\"github.com/Tutitoos/atenea/internal/workflow\"}\n{\"Time\":\"2026-09-07T04:22:20.08087+02:00\",\"Action\":\"run\",\"Package\":\"github.com/Tutitoos/atenea/internal/workflow\",\"Test\":\"TestPlanProgressUsesTwentySegmentsAndTruncatedPercent\"}\n{\"Time\":\"2026-09-07T04:22:20.080973+02:00\",\"Action\":\"output\",\"Package\":\"github.com/Tutitoos/atenea/internal/workflow\",\"Test\":\"TestPlanProgressUsesTwentySegmentsAndTruncatedPercent\",\"Output\":\"=== RUN   Tes…"
+        },
+        {
+          "id": "S12",
+          "fixture": "fixtures/chat-visibility.json",
+          "fixture_sha256": "5d59a50bae278b693b0525162ef29ea76b443dc20118e4196fbb5d90f7a20581",
+          "preflight": "unsupported",
+          "passed": true,
+          "measurement_state": "unknown",
+          "evidence_scope": "pending",
+          "evidence": "local API, SSE and formatting paths passed; real client rendering pending"
+        }
+      ],
+      "passed": true,
+      "duration_ms": 94561,
+      "measurement_state": "measured",
+      "evidence_scope": "local",
+      "evidence": "=== RUN   TestPlanProgressUsesTwentySegmentsAndTruncatedPercent\n--- PASS: TestPlanProgressUsesTwentySegmentsAndTruncatedPercent (0.00s)\n=== RUN   TestPointAcceptanceRequiresEveryStepFullAndTraced\n--- PASS: TestPointAcceptanceRequiresEveryStepFullAndTraced (0.00s)\n=== RUN   TestProposalDigestCoversVisiblePointIdentity\n--- PASS: TestProposalDigestCoversVisiblePointIdentity (0.00s)\n=== RUN   TestSourceFingerprintTracksUnicodeDirtyRename\n--- PASS: TestSourceFingerprintTracksUnicodeDirtyRename (0.13s)\n=== RUN   TestGlobalWorkflowSlotBlocksAcrossOwnersAndReleasesOnCancel\n--- PASS: TestGlobalWorkflowSlotBlocksAcrossOwnersAndReleasesOnCancel (0.05s)\n=== RUN   TestUnlimitedWorkflowLaneDoesNotCreateGlobalSlot\n--- PASS: TestUnlimitedWorkflowLaneDoesNotCreateGlobalSlot (0.00s)\n=== RUN   TestFreshGrantTokenSatisfiesStrongGrantTokenShape\n--- PASS: TestFreshGrantTokenSatisfiesStrongGrantTokenShape (0.00s)\n=== RUN   TestKnowledgeCaptureCreatesCandidateAndPromotesOnlyAcceptedEvidence\n--- PASS: TestKnowledgeCaptureCreatesCandidateAndPromotesOnlyAcceptedEvidence (0.17s)\n=== RUN   TestRejectedKnowledgeCandidateCannotRemainAccepted\n--- PASS: TestRejectedKnowledgeCandidateCannotRemainAccepted (0.09s)\n==…"
+    }
+  ],
+  "comparison": {
+    "before_id": "unbatched-fixture-reads",
+    "after_id": "snapshot-deduplicated-reads",
+    "corpus_sha256": "bb57b8555c44fdd754bc72855c7899adda318677b48ee5696820a710efec98a5",
+    "source_digest": "4eb862618ef67308cd794f0bd110b48e0bda2386cbbbf6047027b33f318f2f46",
+    "passed": true,
+    "metrics": [
+      {
+        "id": "code_context_provider_calls",
+        "unit": "calls",
+        "before": 22,
+        "after": 2,
+        "measurement_state": "partial",
+        "evidence_scope": "local",
+        "comparable": false,
+        "evidence": "before is a code-derived historical estimate; after is observed from the productive twenty-row route"
+      },
+      {
+        "id": "fixture_read_calls",
+        "unit": "calls",
+        "before": 2400,
+        "after": 1800,
+        "measurement_state": "measured",
+        "evidence_scope": "local",
+        "comparable": true,
+        "non_regression": true,
+        "evidence": "same sealed scenarios; unbatched references versus deduplicated snapshot keys"
+      },
+      {
+        "id": "fixture_access_latency",
+        "unit": "ns",
+        "before": 37669875,
+        "after": 19375,
+        "measurement_state": "measured",
+        "evidence_scope": "local",
+        "comparable": true,
+        "non_regression": true,
+        "evidence": "200 local iterations over the same sealed corpus; absolute durations only"
+      },
+      {
+        "id": "human_interventions",
+        "unit": "count",
+        "before": 0,
+        "after": 0,
+        "measurement_state": "measured",
+        "evidence_scope": "local",
+        "comparable": true,
+        "non_regression": true,
+        "evidence": "provider-free harness required no interaction"
+      },
+      {
+        "id": "tokens",
+        "unit": "tokens",
+        "measurement_state": "unknown",
+        "evidence_scope": "pending",
+        "comparable": false,
+        "evidence": "no model invoked"
+      },
+      {
+        "id": "provider_cost",
+        "unit": "currency",
+        "measurement_state": "unknown",
+        "evidence_scope": "pending",
+        "comparable": false,
+        "evidence": "no provider receipt"
+      },
+      {
+        "id": "real_client_tracking_overhead",
+        "unit": "ms",
+        "measurement_state": "unknown",
+        "evidence_scope": "pending",
+        "comparable": false,
+        "evidence": "requires authorized live-client validation"
+      }
+    ]
+  },
+  "summary": {
+    "passed": 6,
+    "total": 6
+  },
+  "limits": [
+    "Provider-real evidence remains pending unless a gate says real_provider.",
+    "Live client rendering remains pending unless a gate says real_client.",
+    "Unknown metrics stay unknown and are never converted to zero.",
+    "No improvement percentage is claimed."
+  ]
+}

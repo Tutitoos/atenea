@@ -28,17 +28,30 @@ type assignment struct {
 	Limits struct {
 		MaxTokens int `json:"max_tokens"`
 	} `json:"limits"`
-	BudgetUSD *float64                   `json:"budget_usd"`
-	Context   map[string]json.RawMessage `json:"context"`
-	Route     *route                     `json:"route"`
-	Subject   *subject                   `json:"subject"`
+	BudgetUSD          *float64                   `json:"budget_usd"`
+	Effects            []string                   `json:"effects"`
+	Context            map[string]json.RawMessage `json:"context"`
+	Route              *route                     `json:"route"`
+	Subject            *subject                   `json:"subject"`
+	VisibilityRequired bool                       `json:"visibility_required,omitempty"`
+	ThreadID           string                     `json:"thread_id,omitempty"`
 }
 
 type route struct {
-	Model     string   `json:"model"`
-	Fallbacks []string `json:"fallbacks"`
-	Backend   string   `json:"backend"`
-	Binary    string   `json:"binary"`
+	Model                    string   `json:"model"`
+	RequestedModel           string   `json:"requested_model"`
+	ObservedModel            string   `json:"observed_model"`
+	Role                     string   `json:"role"`
+	ReasoningEffort          string   `json:"reasoning_effort"`
+	RequestedReasoningEffort string   `json:"requested_reasoning_effort"`
+	ObservedReasoningEffort  string   `json:"observed_reasoning_effort"`
+	Fallbacks                []string `json:"fallbacks"`
+	Backend                  string   `json:"backend"`
+	Binary                   string   `json:"binary"`
+	VisibilityRequired       bool     `json:"visibility_required,omitempty"`
+	ThreadID                 string   `json:"thread_id,omitempty"`
+	TurnID                   string   `json:"turn_id,omitempty"`
+	UsageRevision            uint64   `json:"usage_revision,omitempty"`
 }
 
 type subject struct {
@@ -64,9 +77,16 @@ type answer struct {
 }
 
 type report struct {
-	Result  map[string]any `json:"result"`
-	Verdict string         `json:"verdict"`
-	Reason  *reason        `json:"reason,omitempty"`
+	Result                   map[string]any `json:"result"`
+	Verdict                  string         `json:"verdict"`
+	Reason                   *reason        `json:"reason,omitempty"`
+	ThreadID                 string         `json:"thread_id,omitempty"`
+	TurnID                   string         `json:"turn_id,omitempty"`
+	UsageRevision            uint64         `json:"usage_revision,omitempty"`
+	RequestedModel           string         `json:"requested_model,omitempty"`
+	ObservedModel            string         `json:"observed_model,omitempty"`
+	RequestedReasoningEffort string         `json:"requested_reasoning_effort,omitempty"`
+	ObservedReasoningEffort  string         `json:"observed_reasoning_effort,omitempty"`
 	// Spent is this agent's own cost, in the shape internal/agent reads back
 	// off the wire. It is not optional here in the way it is for a scripted
 	// agent: this reviewer calls a model on every review, so a report with
@@ -117,19 +137,54 @@ func run(ctx context.Context, in assignment) report {
 		if in.Route.Binary != "" {
 			cfg.Model.Binary = in.Route.Binary
 		}
-		if in.Route.Model != "" {
-			cfg.Model.Explore = in.Route.Model
+		requestedModel := in.Route.RequestedModel
+		if requestedModel == "" {
+			requestedModel = in.Route.Model
+		}
+		if requestedModel != "" {
+			switch in.Route.Role {
+			case "audit":
+				cfg.Model.Audit = requestedModel
+			case "review":
+				cfg.Model.Review = requestedModel
+			default:
+				cfg.Model.Explore = requestedModel
+				cfg.Model.Research = requestedModel
+			}
 			cfg.Model.ExploreFallbacks = append([]string(nil), in.Route.Fallbacks...)
+		}
+		effort := in.Route.RequestedReasoningEffort
+		if effort == "" {
+			effort = in.Route.ReasoningEffort
+		}
+		switch in.Route.Role {
+		case "audit":
+			cfg.Model.AuditReasoningEffort = effort
+		case "review":
+			cfg.Model.ReviewReasoningEffort = effort
+		default:
+			cfg.Model.ResearchReasoningEffort = effort
 		}
 	}
 	client, err := model.New(model.Options(cfg.Model))
 	if err != nil {
 		return incomplete("the semantic reviewer model is unavailable: "+contract.MessageOf(err), nil)
 	}
-	return judge(ctx, in, client, root)
+	codexNative := cfg.Model.NativeCodex()
+	return judge(ctx, in, client, root, codexNative, cfg.Model.Backend == string(model.BackendCodex))
 }
 
-func judge(ctx context.Context, in assignment, client caller, root string) report {
+func judge(ctx context.Context, in assignment, client caller, root string, nativeSetting ...bool) report {
+	codexNative := len(nativeSetting) > 0 && nativeSetting[0]
+	codexBackend := len(nativeSetting) > 1 && nativeSetting[1]
+	visibilityRequired := codexNative || in.VisibilityRequired
+	threadID := in.ThreadID
+	if in.Route != nil {
+		visibilityRequired = visibilityRequired || in.Route.VisibilityRequired
+		if threadID == "" {
+			threadID = in.Route.ThreadID
+		}
+	}
 	budget := 0.0
 	if in.BudgetUSD != nil {
 		budget = *in.BudgetUSD
@@ -138,13 +193,40 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 	if err != nil {
 		return incomplete("the subject could not be encoded for review: "+err.Error(), nil)
 	}
+	effects := make([]contract.Effect, 0, len(in.Effects))
+	for _, name := range in.Effects {
+		effect, parseErr := contract.ParseEffect(name)
+		if parseErr != nil {
+			return incomplete("invalid assignment effects: "+parseErr.Error(), nil)
+		}
+		effects = append(effects, effect)
+	}
+	// Keep the legacy explore role for direct callers that do not carry a
+	// route. Routed workflow reviews select RoleReview explicitly above, while
+	// this default preserves the old in-process contract.
+	role := model.RoleExplore
+	if in.Route != nil && in.Route.Role != "" {
+		role = model.Role(in.Route.Role)
+	}
+	effort := ""
+	if in.Route != nil {
+		effort = in.Route.RequestedReasoningEffort
+		if effort == "" {
+			effort = in.Route.ReasoningEffort
+		}
+	}
 	answerOut, err := client.Turn(ctx, model.Request{
-		Role:      model.RoleExplore,
-		Prompt:    prompt,
-		Schema:    schema(),
-		Dir:       root,
-		BudgetUSD: budget,
-		MaxTokens: in.Limits.MaxTokens,
+		Role:               role,
+		ReasoningEffort:    effort,
+		Prompt:             prompt,
+		Schema:             schema(),
+		Dir:                root,
+		BudgetUSD:          budget,
+		MaxTokens:          in.Limits.MaxTokens,
+		Effects:            effects,
+		VisibilityRequired: visibilityRequired,
+		Invisible:          codexBackend && !visibilityRequired,
+		ThreadID:           threadID,
 	})
 	// The charge survives every branch below, including the failing ones. A
 	// turn that died at its ceiling, or came back in a shape this agent
@@ -153,17 +235,17 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 	// failed reviews are free.
 	charged := planner.Spent(answerOut.Spent)
 	if err != nil {
-		return incomplete("semantic review could not be completed: "+contract.MessageOf(err), charged)
+		return observed(incomplete("semantic review could not be completed: "+contract.MessageOf(err), charged), answerOut)
 	}
 	var judged answer
 	if err := json.Unmarshal(answerOut.Structured, &judged); err != nil {
-		return incomplete("semantic reviewer returned an invalid answer: "+err.Error(), charged)
+		return observed(incomplete("semantic reviewer returned an invalid answer: "+err.Error(), charged), answerOut)
 	}
 	if judged.Verdict != "supported" && judged.Verdict != "unsupported" && judged.Verdict != "indeterminate" {
-		return incomplete("semantic reviewer returned an unknown verdict", charged)
+		return observed(incomplete("semantic reviewer returned an unknown verdict", charged), answerOut)
 	}
 	if judged.Confidence < 0 || judged.Confidence > 100 || strings.TrimSpace(judged.Scope) == "" {
-		return incomplete("semantic reviewer returned an invalid confidence or scope", charged)
+		return observed(incomplete("semantic reviewer returned an invalid confidence or scope", charged), answerOut)
 	}
 	result := map[string]any{
 		"subject": in.Subject.RunID, "semantic_verdict": judged.Verdict,
@@ -172,14 +254,22 @@ func judge(ctx context.Context, in assignment, client caller, root string) repor
 	}
 	switch judged.Verdict {
 	case "supported":
-		return report{Result: result, Verdict: "ok", Spent: charged}
+		return observed(report{Result: result, Verdict: "ok", Spent: charged}, answerOut)
 	case "unsupported":
-		return report{Result: result, Verdict: "failed", Spent: charged,
-			Reason: &reason{Kind: "invalid_input", Text: "the semantic reviewer found unsupported claims"}}
+		return observed(report{Result: result, Verdict: "failed", Spent: charged,
+			Reason: &reason{Kind: "invalid_input", Text: "the semantic reviewer found unsupported claims"}}, answerOut)
 	default:
-		return report{Result: result, Verdict: "incomplete", Spent: charged,
-			Reason: &reason{Kind: "unavailable", Text: "the semantic reviewer could not establish the conclusion"}}
+		return observed(report{Result: result, Verdict: "incomplete", Spent: charged,
+			Reason: &reason{Kind: "unavailable", Text: "the semantic reviewer could not establish the conclusion"}}, answerOut)
 	}
+}
+
+func observed(r report, answer model.Answer) report {
+	r.ThreadID = answer.ThreadID
+	r.TurnID, r.UsageRevision = answer.TurnID, answer.UsageRevision
+	r.RequestedModel, r.ObservedModel = answer.RequestedModel, answer.ObservedModel
+	r.RequestedReasoningEffort, r.ObservedReasoningEffort = answer.RequestedReasoningEffort, answer.ObservedReasoningEffort
+	return r
 }
 
 func promptFor(in assignment) (string, error) {

@@ -28,18 +28,22 @@ type Status uint8
 const (
 	// StatusPending is declared and not started. It is also where a step
 	// goes back to when a resume decides to redo it.
+	// StatusPending is part of ATENEA's public orchestration contract.
 	StatusPending Status = iota
 	// StatusRunning has a live process behind it -- or had one, until the
 	// Atenea that owned it died. Which of the two is a question about a pid,
 	// not about this column, and it is why WriterPID sits beside it.
+	// StatusRunning is part of ATENEA's public orchestration contract.
 	StatusRunning
 	// StatusOK is the agent's own ok.
 	StatusOK
 	// StatusFailed is the agent reaching a judgement and the judgement being
 	// no.
+	// StatusFailed is part of ATENEA's public orchestration contract.
 	StatusFailed
 	// StatusIncomplete is the agent stopping short, or dying, and saying so
 	// through its report.
+	// StatusIncomplete is part of ATENEA's public orchestration contract.
 	StatusIncomplete
 	// StatusInterrupted is a step nobody judged: it was running when the
 	// operator cut it or when Atenea died, and no report was ever read.
@@ -50,6 +54,7 @@ const (
 	// it failed would put a judgement on the record that nothing supports --
 	// the same distinction `incomplete` already draws for an answer that
 	// stopped short.
+	// StatusInterrupted is part of ATENEA's public orchestration contract.
 	StatusInterrupted
 )
 
@@ -97,22 +102,36 @@ const (
 	StopNone Stop = ""
 	// StopAborted is deliberate: the operator cut it and Atenea wrote that
 	// down on the way out.
+	// StopAborted is part of ATENEA's public orchestration contract.
 	StopAborted Stop = "aborted"
 	// StopCrashed is what a resume infers: the record says running, and the
 	// process it names is gone. Nobody wrote this; it is the absence of a
 	// clean close, which is exactly why it must not read the same as abort.
+	// StopCrashed is part of ATENEA's public orchestration contract.
 	StopCrashed Stop = "crashed"
 	// StopUnjudged is a run that ran out of things it may do on its own:
 	// what is left is steps nobody judged, and repeating those could land an
 	// effect twice. It is not finished and it is not aborted -- it is
 	// waiting for a person to say --redo, and calling it finished would put
 	// a completed run on the record with a hole in the middle of it.
+	// StopUnjudged is part of ATENEA's public orchestration contract.
 	StopUnjudged Stop = "unjudged"
 	// StopRejected is a plan a person read and refused. Nothing ran: it is
 	// not aborted, because nobody cut anything, and it is certainly not
 	// finished. A run that never got permission to exist should not look
 	// like one that did its work.
+	// StopRejected is part of ATENEA's public orchestration contract.
 	StopRejected Stop = "rejected"
+	// StateRunning is part of ATENEA's public orchestration contract.
+	StateRunning = "running"
+	// StateCompleted is part of ATENEA's public orchestration contract.
+	StateCompleted = "completed"
+	// StateAttentionRequired is part of ATENEA's public orchestration contract.
+	StateAttentionRequired = "attention_required"
+	// StateUncertain is part of ATENEA's public orchestration contract.
+	StateUncertain = "uncertain"
+	// StateStopped is part of ATENEA's public orchestration contract.
+	StateStopped = "stopped"
 )
 
 // Run is one workflow as the record holds it.
@@ -127,9 +146,25 @@ type Run struct {
 	// and on a run created without the flag; both mean "nothing was
 	// recorded", never "the empty repository".
 	Repository string
-	GrantUSD   float64
-	Started    time.Time
-	Ended      time.Time
+	// Effects is the workflow's persisted permission ceiling. A resumed
+	// workflow may use only the intersection of this set and the current
+	// session grant; it can never gain authority from a reconnect.
+	Effects []contract.Effect
+	// Policy is the complete versioned ceiling captured at creation.
+	Policy WorkflowPolicy
+	// Recovery is the durable, derived retry state shown by workflow status.
+	// It is rebuilt from the persisted current and superseded attempts on every
+	// load, so a reconnect cannot lose the retry ceiling or reason.
+	Recovery *RecoveryState `json:"recovery,omitempty"`
+	// ActiveDuration excludes time spent waiting for a human gate.
+	ActiveDuration time.Duration
+	ActiveStarted  time.Time
+	// SourceFingerprint binds accepted results to the repository state that
+	// produced them. Empty is retained for rows created before this check.
+	SourceFingerprint string
+	GrantUSD          float64
+	Started           time.Time
+	Ended             time.Time
 	// Closed is set when the workflow reached its end, whatever the steps
 	// did. An open run is one somebody may still resume.
 	Closed bool
@@ -137,8 +172,17 @@ type Run struct {
 	// WriterPID is the Atenea that owns this run. It answers the only
 	// question a resume must not guess at: whether somebody else is running
 	// this right now.
-	WriterPID int
-	Steps     []StepRow
+	WriterPID      int
+	WatchdogState  string
+	LastProgressAt time.Time
+	Steps          []StepRow
+	// Activity contains durable pre-invocation notices, oldest first. Cursor
+	// lets a client reconnect and request only entries it has not displayed.
+	Activity        []ActivityNotice
+	ActivityCursor  int64
+	ActivityHasMore bool
+	PlanRevision    int
+	Points          []PlanPoint
 	// Superseded is every dispatch a later attempt replaced, oldest first.
 	//
 	// It is on the Run rather than left to a caller who asks for it because
@@ -151,6 +195,139 @@ type Run struct {
 	Superseded []AttemptRow
 }
 
+// RecoveryStepState is the per-step recovery receipt. Keeping this scoped to a
+// step/route prevents a status reader from combining two different models into
+// one apparently observed route after a reconnect.
+type RecoveryStepState struct {
+	StepID         string `json:"step_id"`
+	RetryUsed      int    `json:"retry_used"`
+	RetryLimit     int    `json:"retry_limit"`
+	Reason         string `json:"reason,omitempty"`
+	NextOrStopped  string `json:"next_or_stopped,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	ObservedModel  string `json:"observed_model,omitempty"`
+	Backend        string `json:"backend,omitempty"`
+	RecoveryKind   string `json:"recovery_kind,omitempty"`
+}
+
+// RecoveryState is the small audit view exposed by workflow status. RetryUsed
+// counts all durable automatic dispatch repeats, including recovery and review
+// corrections. The per-step receipt is authoritative when a run has multiple
+// routes.
+type RecoveryState struct {
+	RetryUsed      int                 `json:"retry_used"`
+	RetryLimit     int                 `json:"retry_limit"`
+	Reason         string              `json:"reason"`
+	NextOrStopped  string              `json:"next_or_stopped,omitempty"`
+	RequestedModel string              `json:"requested_model"`
+	ObservedModel  string              `json:"observed_model"`
+	Backend        string              `json:"backend"`
+	Steps          []RecoveryStepState `json:"steps,omitempty"`
+}
+
+// RecoveryState derives the retry receipt from the workflow record. It does
+// not infer a successful retry from an empty index or from a provider status;
+// only archived attempts and the current step's persisted reason count.
+func (r Run) RecoveryState() RecoveryState {
+	state := RecoveryState{RetryLimit: r.Policy.MaxRetries}
+	identity := ""
+	var reason string
+	for _, row := range r.Steps {
+		stepState := RecoveryStepState{StepID: row.Step.ID, RetryLimit: r.Policy.MaxRetries}
+		stepState.RecoveryKind = row.RecoveryKind
+		if row.Step.Route != nil {
+			stepState.RequestedModel = row.Step.Route.RequestedModel
+			if stepState.RequestedModel == "" {
+				stepState.RequestedModel = row.Step.Route.Model
+			}
+			stepState.ObservedModel = row.Step.Route.ObservedModel
+			stepState.Backend = row.Step.Route.Backend
+			key := stepState.RequestedModel + "\x00" + stepState.ObservedModel + "\x00" + stepState.Backend
+			if identity == "" {
+				identity = key
+				state.RequestedModel, state.ObservedModel, state.Backend = stepState.RequestedModel, stepState.ObservedModel, stepState.Backend
+			} else if identity != key {
+				// The legacy scalar fields cannot honestly represent more than one
+				// route. Consumers must use Steps in that case.
+				state.RequestedModel, state.ObservedModel, state.Backend = "", "", ""
+			}
+		}
+		stepState.Reason = strings.TrimSpace(row.RecoveryReason)
+		if stepState.Reason == "" {
+			stepState.Reason = strings.TrimSpace(row.Reason.Text)
+		}
+		for _, attempt := range r.Superseded {
+			if attempt.StepID != row.Step.ID {
+				continue
+			}
+			if automaticRecoveryKind(attempt.RecoveryKind) {
+				stepState.RetryUsed++
+			}
+			if stepState.Reason == "" && strings.TrimSpace(attempt.RecoveryReason) != "" {
+				stepState.Reason = strings.TrimSpace(attempt.RecoveryReason)
+			}
+		}
+		// A crash may occur after the marker is written and before Reset files
+		// the replaced row. Count that marker once; an archived row already
+		// represents the same automatic retry.
+		if automaticRecoveryKind(row.RecoveryKind) && !hasArchivedRecovery(r.Superseded, row.Step.ID, row.Attempt-1) {
+			stepState.RetryUsed++
+		}
+		if stepState.RetryUsed == 0 && row.Attempt > 1 && row.RecoveryKind == "" {
+			// Rows written before recovery origins existed are conservatively
+			// bounded by their old dispatch count. New rows never infer Redo
+			// from Attempt-1.
+			stepState.RetryUsed = row.Attempt - 1
+		}
+		state.RetryUsed += stepState.RetryUsed
+		if row.CutAtItsCeiling() {
+			stepState.Reason = "step spending ceiling reached"
+		} else if row.InvokedKnown && !row.Invoked {
+			stepState.Reason = "provider preflight did not invoke a provider"
+		} else if row.InvokedKnown && row.Invoked && row.Spent.USD == nil && row.Status == StatusIncomplete {
+			stepState.Reason = "provider invoked with unknown cost"
+		}
+		if stepState.Reason != "" {
+			if reason == "" {
+				reason = stepState.Reason
+			} else if reason != stepState.Reason {
+				reason = "multiple step recovery outcomes; inspect steps"
+			}
+		}
+		if row.Status == StatusIncomplete && stepState.Reason != "" {
+			stepState.NextOrStopped = "stopped:" + stepState.Reason
+		} else if stepState.RetryUsed < r.Policy.MaxRetries {
+			stepState.NextOrStopped = "next"
+		}
+		state.Steps = append(state.Steps, stepState)
+	}
+	state.Reason = reason
+	if r.Stop != StopNone {
+		state.NextOrStopped = "stopped:" + string(r.Stop)
+	} else if state.RetryUsed >= state.RetryLimit && state.RetryLimit >= 0 && state.RetryUsed > 0 {
+		state.NextOrStopped = "stopped:automatic retry limit reached"
+	} else if state.RetryUsed > 0 {
+		state.NextOrStopped = "next"
+	}
+	return state
+}
+
+func automaticRecoveryKind(kind string) bool {
+	return strings.HasPrefix(kind, "automatic")
+}
+
+func hasArchivedRecovery(attempts []AttemptRow, stepID string, attempt int) bool {
+	if attempt <= 0 {
+		return false
+	}
+	for _, archived := range attempts {
+		if archived.StepID == stepID && archived.Attempt == attempt && automaticRecoveryKind(archived.RecoveryKind) {
+			return true
+		}
+	}
+	return false
+}
+
 // StepRow is one node of the graph as the record holds it: the declaration,
 // and whatever has happened to it.
 type StepRow struct {
@@ -161,6 +338,10 @@ type StepRow struct {
 	// Ids, not a foreign key: the trace rows already link to each other this
 	// way, and a step whose trace was pruned should still read.
 	TraceID string
+	// SourceFingerprint is captured at claim time and is immutable evidence of
+	// the repository state that produced this attempt. It must not be rebound
+	// to a later run-level fingerprint after acceptance.
+	SourceFingerprint string
 	// Attempt counts dispatches of this step, from 1. A resume that redoes an
 	// interrupted step increments it, and the new trace row redoes the old.
 	Attempt   int
@@ -175,6 +356,10 @@ type StepRow struct {
 	// succeeded.
 	Result     map[string]any
 	Discovered []contract.Discovery
+	// Notices are caveats attached to the report. They are durable because a
+	// workflow status request may be served by a different process after the
+	// dispatch that produced the report has ended.
+	Notices []string
 	// Spent is what this step was charged. Its zero value reads as
 	// unmeasured -- see [contract.Charge.Measured] -- which is the ordinary
 	// case today: the agent report wire carries no money and nothing on
@@ -183,6 +368,13 @@ type StepRow struct {
 	// two must never collapse into the same "$0.00" on a receipt -- the
 	// same lie as list-price cost on subscription traffic.
 	Spent contract.Charge
+	// Invocation evidence is persisted with the outcome. Known false means a
+	// preflight failure before provider start; known true with an unknown
+	// charge means the provider may already have spent money.
+	Invoked        bool
+	InvokedKnown   bool
+	RecoveryKind   string
+	RecoveryReason string
 	// Completeness is how much of the objective this step's answer covers,
 	// nil when the report made no claim about it. A full ok never sets
 	// this -- see [contract.Report.Partial] -- so nil is both "no report
@@ -259,23 +451,42 @@ func (r StepRow) Truncated() bool {
 type Spend struct {
 	MeasuredSteps   int
 	UnmeasuredSteps int
+	// ObservedSteps and EstimatedSteps separate provider-observed money from
+	// conservative allowance pricing. UnknownSteps includes unmeasured rows
+	// and measured rows without a monetary observation; neither can release a
+	// reservation.
+	ObservedSteps  int
+	EstimatedSteps int
+	UnknownSteps   int
+	ObservedUSD    *float64
+	EstimatedUSD   *float64
 	// TruncatedSteps is how many of MeasuredSteps were charged with no token
 	// count behind them -- see [StepRow.Truncated]. They are counted as
 	// measured because their dollars are real; they are counted again here
 	// because Tokens is a lower bound while any of them exist, and a total
 	// that cannot say so is the same lie in a different column.
 	TruncatedSteps int
-	// SupersededAttempts and SupersededUSD are the dispatches a redo replaced
-	// and what they cost. Held apart from the step totals on purpose: a
+	// SupersededAttempts is every replaced dispatch, while SupersededUSD is
+	// the total for those with a monetary observation. Held apart from the
+	// step totals on purpose: a
 	// superseded attempt is not a step, and folding it into MeasuredSteps
 	// would double-count the step it belongs to in every per-step figure that
 	// reads this -- CostByType and the admission rule among them. It is money
 	// the grant paid all the same, so a balance that omits it is wrong.
 	SupersededAttempts int
 	SupersededUSD      float64
-	Tokens             int
-	USD                *float64
-	PricedBy           []string
+	// These counters classify archived attempts separately from live steps.
+	// Keeping the live counters above unchanged preserves their step-level
+	// meaning, while status readers can add these values to expose the money
+	// and uncertainty accumulated across retries.
+	SupersededObservedSteps  int
+	SupersededEstimatedSteps int
+	SupersededUnknownSteps   int
+	SupersededObservedUSD    *float64
+	SupersededEstimatedUSD   *float64
+	Tokens                   int
+	USD                      *float64
+	PricedBy                 []string
 }
 
 // AttemptRow is a dispatch of a step that a later one replaced.
@@ -287,22 +498,28 @@ type Spend struct {
 // this type exists, is the pair (GrantUSD, Spent): the share it ran under and
 // what it cost before it stopped.
 type AttemptRow struct {
-	StepID  string
-	Attempt int
-	TraceID string
-	Status  Status
-	Verdict contract.Verdict
-	Reason  contract.Reason
+	StepID            string
+	Attempt           int
+	TraceID           string
+	SourceFingerprint string
+	Status            Status
+	Verdict           contract.Verdict
+	Reason            contract.Reason
 	// GrantUSD is the share THIS attempt ran under, which is the figure a
 	// later attempt may have been given more of.
-	GrantUSD float64
-	Spent    contract.Charge
+	GrantUSD       float64
+	Spent          contract.Charge
+	Invoked        bool
+	InvokedKnown   bool
+	RecoveryKind   string
+	RecoveryReason string
 	// Completeness is nil when the attempt made no claim -- and it is nil on
 	// every attempt cut at its ceiling, because a turn that never answered
 	// never reported coverage.
 	Completeness *float64
 	StoppedAt    string
 	Result       map[string]any
+	Notices      []string
 	Started      time.Time
 	Ended        time.Time
 	// Replaced is when Claim superseded this attempt, not when it ended.
@@ -321,11 +538,14 @@ func (a AttemptRow) Cut() bool { return a.Status != StatusOK }
 func (r Run) Spend() Spend {
 	var out Spend
 	var usd float64
+	var observedUSD, estimatedUSD float64
+	var supersededObservedUSD, supersededEstimatedUSD float64
 	fullyPriced := true
 	labels := map[string]bool{}
 	for _, step := range r.Steps {
 		if !step.Spent.Measured() {
 			out.UnmeasuredSteps++
+			out.UnknownSteps++
 			continue
 		}
 		out.MeasuredSteps++
@@ -335,28 +555,77 @@ func (r Run) Spend() Spend {
 		out.Tokens += step.Spent.Tokens()
 		if step.Spent.USD == nil {
 			fullyPriced = false
+			out.UnknownSteps++
 			continue
 		}
 		usd += *step.Spent.USD
 		labels[step.Spent.PricedBy] = true
+		if estimatedPrice(step.Spent.PricedBy) {
+			out.EstimatedSteps++
+			estimatedUSD += *step.Spent.USD
+		} else {
+			out.ObservedSteps++
+			observedUSD += *step.Spent.USD
+		}
 	}
 	// The archive contributes dollars and never tokens: an attempt that was
 	// cut kept a token record its own receipt already contradicts (measured
 	// 2026-08-16: $0.62 against $0.02 of tokens, 30x), so adding those counts
 	// to a total would import the error the live rows were fixed of.
 	for _, attempt := range r.Superseded {
-		if attempt.Spent.USD == nil {
+		out.SupersededAttempts++
+		if !attempt.Spent.Measured() || attempt.Spent.USD == nil {
+			out.SupersededUnknownSteps++
 			continue
 		}
-		out.SupersededAttempts++
+		if estimatedPrice(attempt.Spent.PricedBy) {
+			out.SupersededEstimatedSteps++
+			supersededEstimatedUSD += *attempt.Spent.USD
+		} else {
+			out.SupersededObservedSteps++
+			supersededObservedUSD += *attempt.Spent.USD
+		}
 		out.SupersededUSD += *attempt.Spent.USD
 		labels[attempt.Spent.PricedBy] = true
 	}
 	if out.MeasuredSteps > 0 && fullyPriced {
 		out.USD = &usd
 	}
+	if out.ObservedSteps > 0 {
+		out.ObservedUSD = &observedUSD
+	}
+	if out.EstimatedSteps > 0 {
+		out.EstimatedUSD = &estimatedUSD
+	}
+	if out.SupersededObservedSteps > 0 {
+		out.SupersededObservedUSD = &supersededObservedUSD
+	}
+	if out.SupersededEstimatedSteps > 0 {
+		out.SupersededEstimatedUSD = &supersededEstimatedUSD
+	}
 	out.PricedBy = sortedKeys(labels)
 	return out
+}
+
+// AccumulatedUSD is the complete priced spend, including attempts a retry or
+// redo replaced. A nil result means at least one live or archived attempt has
+// no monetary observation, so returning a partial total would understate the
+// run.
+func (s Spend) AccumulatedUSD() *float64 {
+	if s.USD == nil || s.SupersededUnknownSteps > 0 {
+		return nil
+	}
+	total := *s.USD + s.SupersededUSD
+	return &total
+}
+
+func estimatedPrice(pricedBy string) bool {
+	for _, source := range strings.Split(pricedBy, " and ") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(source)), "estimate:") {
+			return true
+		}
+	}
+	return false
 }
 
 // Store is the workflow record.
@@ -376,6 +645,41 @@ CREATE TABLE IF NOT EXISTS workflow_reservation (
  PRIMARY KEY(workflow_id, trace_id)
 );
 
+CREATE TABLE IF NOT EXISTS workflow_activity (
+ cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+ workflow_id TEXT NOT NULL,
+	point_id TEXT NOT NULL DEFAULT '',
+	agent_run_id TEXT NOT NULL DEFAULT '',
+ invocation_id TEXT NOT NULL,
+	thread_id TEXT NOT NULL DEFAULT '',
+	turn_id TEXT NOT NULL DEFAULT '',
+	usage_revision INTEGER NOT NULL DEFAULT 0,
+	requested_model TEXT NOT NULL DEFAULT '',
+	observed_model TEXT NOT NULL DEFAULT '',
+	requested_reasoning_effort TEXT NOT NULL DEFAULT '',
+	observed_reasoning_effort TEXT NOT NULL DEFAULT '',
+ kind TEXT NOT NULL,
+ tool TEXT NOT NULL,
+ action TEXT NOT NULL,
+ objective TEXT NOT NULL,
+ purpose TEXT NOT NULL,
+ markdown TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ delivered_at TEXT NOT NULL DEFAULT '',
+ UNIQUE(workflow_id, invocation_id),
+ FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS workflow_activity_cursor ON workflow_activity(workflow_id, cursor);
+
+CREATE TABLE IF NOT EXISTS workflow_point (
+ workflow_id TEXT NOT NULL, id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+ title TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+ evidence TEXT NOT NULL DEFAULT '[]', retired INTEGER NOT NULL DEFAULT 0,
+ updated_at TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(workflow_id,id),
+ FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS workflow (
     id          TEXT    NOT NULL PRIMARY KEY,
     task        TEXT    NOT NULL,
@@ -385,6 +689,12 @@ CREATE TABLE IF NOT EXISTS workflow (
     -- those rows is machine-wide and has to say so rather than claim a scope
     -- it cannot support.
     repository  TEXT    NOT NULL DEFAULT '',
+    effects     TEXT    NOT NULL DEFAULT '[]',
+    policy      TEXT    NOT NULL DEFAULT '{}',
+    active_seconds REAL NOT NULL DEFAULT 0,
+    active_started_at TEXT NOT NULL DEFAULT '',
+    source_fingerprint TEXT NOT NULL DEFAULT '',
+    plan_revision INTEGER NOT NULL DEFAULT 1,
     grant_usd   REAL    NOT NULL DEFAULT 0,
     started_at  TEXT    NOT NULL,
     ended_at    TEXT    NOT NULL DEFAULT '',
@@ -395,6 +705,8 @@ CREATE TABLE IF NOT EXISTS workflow (
     -- died had no chance to record anything.
     stop        TEXT    NOT NULL DEFAULT '',
     writer_pid  INTEGER NOT NULL DEFAULT 0
+    ,state      TEXT NOT NULL DEFAULT 'running'
+    ,last_progress_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS workflow_step (
@@ -402,25 +714,31 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     id          TEXT    NOT NULL,
     ordinal     INTEGER NOT NULL,
     type_name   TEXT    NOT NULL,
+    point_id    TEXT    NOT NULL DEFAULT '',
+    point_title TEXT    NOT NULL DEFAULT '',
     pool        TEXT    NOT NULL,
     objective   TEXT    NOT NULL,
     files       TEXT    NOT NULL DEFAULT '[]',
-    criterion   TEXT    NOT NULL DEFAULT '',
+	criterion   TEXT    NOT NULL DEFAULT '',
+	max_duration_ns INTEGER NOT NULL DEFAULT 0,
+	max_tokens INTEGER NOT NULL DEFAULT 0,
     needs       TEXT    NOT NULL DEFAULT '[]',
     -- The step whose answer this one is handed, and how much of that outcome
     -- it demanded. Empty subject is the ordinary case: most steps are handed
     -- nothing. The bar is stored with it because a resumed run must apply the
     -- same one the author wrote, not today's default.
     subject     TEXT    NOT NULL DEFAULT '',
-    on_outcome  TEXT    NOT NULL DEFAULT 'answered',
-    effects     TEXT    NOT NULL DEFAULT '[]',
-    route       TEXT    NOT NULL DEFAULT '',
+		 on_outcome  TEXT    NOT NULL DEFAULT 'answered',
+		 effects     TEXT    NOT NULL DEFAULT '[]',
+		 operations  TEXT    NOT NULL DEFAULT '[]',
+		 route       TEXT    NOT NULL DEFAULT '',
     budget_estimate_usd REAL NOT NULL DEFAULT 0,
     budget_minimum_usd  REAL NOT NULL DEFAULT 0,
     budget_source TEXT NOT NULL DEFAULT '',
     grant_usd   REAL    NOT NULL DEFAULT 0,
     status      TEXT    NOT NULL,
     trace_id    TEXT    NOT NULL DEFAULT '',
+	source_fingerprint TEXT NOT NULL DEFAULT '',
     attempt     INTEGER NOT NULL DEFAULT 0,
     writer_pid  INTEGER NOT NULL DEFAULT 0,
     started_at  TEXT    NOT NULL DEFAULT '',
@@ -430,6 +748,7 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     reason_text TEXT    NOT NULL DEFAULT '',
     result      TEXT    NOT NULL DEFAULT '',
     discovered  TEXT    NOT NULL DEFAULT '',
+    notices     TEXT    NOT NULL DEFAULT '[]',
     -- NULL means unmeasured, and it is the only honest value while no agent
     -- can report a charge. NOT NULL DEFAULT 0 here would turn every free run
     -- into a receipt claiming it was weighed and came to nothing.
@@ -444,7 +763,11 @@ CREATE TABLE IF NOT EXISTS workflow_step (
     -- Whose price produced spent_usd. contract.Charge.Validate refuses a
     -- report where the two disagree before it ever reaches here; this
     -- column only has to keep what it was handed.
-    priced_by   TEXT    NOT NULL DEFAULT '',
+	priced_by   TEXT    NOT NULL DEFAULT '',
+	invoked     INTEGER NOT NULL DEFAULT 0,
+	invoked_known INTEGER NOT NULL DEFAULT 0,
+	recovery_kind TEXT NOT NULL DEFAULT '',
+	recovery_reason TEXT NOT NULL DEFAULT '',
     -- NULL means the report made no claim about coverage -- the ordinary
     -- case, and the only reading a full ok has ever had. Same nullability
     -- as spent_usd, same reason: a step that never measured its own
@@ -483,6 +806,7 @@ CREATE TABLE IF NOT EXISTS workflow_attempt (
     step_id     TEXT    NOT NULL,
     attempt     INTEGER NOT NULL,
     trace_id    TEXT    NOT NULL DEFAULT '',
+	source_fingerprint TEXT NOT NULL DEFAULT '',
     status      TEXT    NOT NULL,
     verdict     TEXT    NOT NULL DEFAULT '',
     reason_kind TEXT    NOT NULL DEFAULT '',
@@ -495,13 +819,18 @@ CREATE TABLE IF NOT EXISTS workflow_attempt (
     spent_output_tokens      INTEGER,
     spent_cache_read_tokens  INTEGER,
     spent_cache_write_tokens INTEGER,
-    priced_by   TEXT    NOT NULL DEFAULT '',
+	priced_by   TEXT    NOT NULL DEFAULT '',
+	invoked     INTEGER NOT NULL DEFAULT 0,
+	invoked_known INTEGER NOT NULL DEFAULT 0,
+	recovery_kind TEXT NOT NULL DEFAULT '',
+	recovery_reason TEXT NOT NULL DEFAULT '',
     completeness REAL,
     stopped_at  TEXT    NOT NULL DEFAULT '',
     -- The answer this attempt gave. A review that refuses one hands the
     -- sentence back to the retry, and that card is process-local today: a
     -- run resumed in another process cannot rebuild it. Kept here so it can.
     result      TEXT    NOT NULL DEFAULT '',
+    notices     TEXT    NOT NULL DEFAULT '[]',
     started_at  TEXT    NOT NULL DEFAULT '',
     ended_at    TEXT    NOT NULL DEFAULT '',
     -- When Claim superseded it, which is a different fact from ended_at: a
@@ -573,6 +902,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, contract.Fail(contract.FailureUnavailable,
 			"workflow: schema %s: %v", path, err)
 	}
+	if _, err := db.ExecContext(ctx, telemetrySchema); err != nil {
+		_ = db.Close()
+		return nil, contract.Fail(contract.FailureUnavailable,
+			"workflow: telemetry schema %s: %v", path, err)
+	}
 	if err := addColumns(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -595,12 +929,47 @@ func addColumns(ctx context.Context, db *sql.DB) error {
 	wanted := []struct{ table, column, ddl string }{
 		{"workflow_gate", "applied", "ALTER TABLE workflow_gate ADD COLUMN applied INTEGER"},
 		{"workflow", "repository", "ALTER TABLE workflow ADD COLUMN repository TEXT NOT NULL DEFAULT ''"},
+		{"workflow", "effects", "ALTER TABLE workflow ADD COLUMN effects TEXT NOT NULL DEFAULT '[]'"},
+		{"workflow", "policy", "ALTER TABLE workflow ADD COLUMN policy TEXT NOT NULL DEFAULT '{}'"},
+		{"workflow", "active_seconds", "ALTER TABLE workflow ADD COLUMN active_seconds REAL NOT NULL DEFAULT 0"},
+		{"workflow", "active_started_at", "ALTER TABLE workflow ADD COLUMN active_started_at TEXT NOT NULL DEFAULT ''"},
+		{"workflow", "state", "ALTER TABLE workflow ADD COLUMN state TEXT NOT NULL DEFAULT 'running'"},
+		{"workflow", "last_progress_at", "ALTER TABLE workflow ADD COLUMN last_progress_at TEXT NOT NULL DEFAULT ''"},
+		{"workflow", "source_fingerprint", "ALTER TABLE workflow ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"},
+		{"workflow", "plan_revision", "ALTER TABLE workflow ADD COLUMN plan_revision INTEGER NOT NULL DEFAULT 1"},
 		{"workflow_step", "completeness", "ALTER TABLE workflow_step ADD COLUMN completeness REAL"},
+		{"workflow_step", "operations", "ALTER TABLE workflow_step ADD COLUMN operations TEXT NOT NULL DEFAULT '[]'"},
 		{"workflow_step", "stopped_at", "ALTER TABLE workflow_step ADD COLUMN stopped_at TEXT NOT NULL DEFAULT ''"},
 		{"workflow_step", "route", "ALTER TABLE workflow_step ADD COLUMN route TEXT NOT NULL DEFAULT ''"},
 		{"workflow_step", "budget_estimate_usd", "ALTER TABLE workflow_step ADD COLUMN budget_estimate_usd REAL NOT NULL DEFAULT 0"},
 		{"workflow_step", "budget_minimum_usd", "ALTER TABLE workflow_step ADD COLUMN budget_minimum_usd REAL NOT NULL DEFAULT 0"},
 		{"workflow_step", "budget_source", "ALTER TABLE workflow_step ADD COLUMN budget_source TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "notices", "ALTER TABLE workflow_step ADD COLUMN notices TEXT NOT NULL DEFAULT '[]'"},
+		{"workflow_step", "point_id", "ALTER TABLE workflow_step ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "point_title", "ALTER TABLE workflow_step ADD COLUMN point_title TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "max_duration_ns", "ALTER TABLE workflow_step ADD COLUMN max_duration_ns INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_step", "max_tokens", "ALTER TABLE workflow_step ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_attempt", "notices", "ALTER TABLE workflow_attempt ADD COLUMN notices TEXT NOT NULL DEFAULT '[]'"},
+		{"workflow_step", "invoked", "ALTER TABLE workflow_step ADD COLUMN invoked INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_step", "invoked_known", "ALTER TABLE workflow_step ADD COLUMN invoked_known INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_attempt", "invoked", "ALTER TABLE workflow_attempt ADD COLUMN invoked INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_attempt", "invoked_known", "ALTER TABLE workflow_attempt ADD COLUMN invoked_known INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_step", "recovery_kind", "ALTER TABLE workflow_step ADD COLUMN recovery_kind TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "recovery_reason", "ALTER TABLE workflow_step ADD COLUMN recovery_reason TEXT NOT NULL DEFAULT ''"},
+		{"workflow_step", "source_fingerprint", "ALTER TABLE workflow_step ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"},
+		{"workflow_attempt", "source_fingerprint", "ALTER TABLE workflow_attempt ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''"},
+		{"workflow_attempt", "recovery_kind", "ALTER TABLE workflow_attempt ADD COLUMN recovery_kind TEXT NOT NULL DEFAULT ''"},
+		{"workflow_attempt", "recovery_reason", "ALTER TABLE workflow_attempt ADD COLUMN recovery_reason TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "delivered_at", "ALTER TABLE workflow_activity ADD COLUMN delivered_at TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "point_id", "ALTER TABLE workflow_activity ADD COLUMN point_id TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "agent_run_id", "ALTER TABLE workflow_activity ADD COLUMN agent_run_id TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "thread_id", "ALTER TABLE workflow_activity ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "turn_id", "ALTER TABLE workflow_activity ADD COLUMN turn_id TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "usage_revision", "ALTER TABLE workflow_activity ADD COLUMN usage_revision INTEGER NOT NULL DEFAULT 0"},
+		{"workflow_activity", "requested_model", "ALTER TABLE workflow_activity ADD COLUMN requested_model TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "observed_model", "ALTER TABLE workflow_activity ADD COLUMN observed_model TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "requested_reasoning_effort", "ALTER TABLE workflow_activity ADD COLUMN requested_reasoning_effort TEXT NOT NULL DEFAULT ''"},
+		{"workflow_activity", "observed_reasoning_effort", "ALTER TABLE workflow_activity ADD COLUMN observed_reasoning_effort TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, add := range wanted {
 		rows, err := db.QueryContext(ctx, "SELECT 1 FROM pragma_table_info(?) WHERE name = ?",
@@ -646,6 +1015,21 @@ func (s *Store) Close() error {
 // The whole graph, in one transaction, before anything spawns. A workflow
 // half on disk is one a resume would continue with steps it never knew about.
 func (s *Store) Create(ctx context.Context, id string, plan Plan, repository string, at time.Time, pid int) error {
+	return s.CreateWithFingerprint(ctx, id, plan, repository, "", at, pid)
+}
+
+// CreateWithFingerprint writes a plan together with the source state it was
+// planned against. The wrapper above preserves the store API for old callers
+// and fixtures that do not have a repository root.
+func (s *Store) CreateWithFingerprint(ctx context.Context, id string, plan Plan, repository, fingerprint string, at time.Time, pid int) error {
+	return s.CreateWithPolicy(ctx, id, plan, repository, fingerprint, WorkflowPolicy{}, at, pid)
+}
+
+// CreateWithPolicy persists the immutable execution ceiling with the plan.
+func (s *Store) CreateWithPolicy(ctx context.Context, id string, plan Plan, repository, fingerprint string, policy WorkflowPolicy, at time.Time, pid int) error {
+	if err := policy.valid(); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return unavailable(err, "workflow: begin %s", id)
@@ -653,26 +1037,34 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, repository str
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO workflow (id, task, repository, grant_usd, started_at, writer_pid)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		id, plan.Graph.Task, repository, plan.Graph.GrantUSD, stamp(at), pid); err != nil {
+		`INSERT INTO workflow (id, task, repository, effects, policy, source_fingerprint, grant_usd, started_at, writer_pid, state, last_progress_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, plan.Graph.Task, repository, jsonEffects(plan.Graph.Effects()), jsonPolicy(policy), fingerprint, plan.Graph.GrantUSD, stamp(at), pid, StateRunning, stamp(at)); err != nil {
 		return unavailable(err, "workflow: opening %s", id)
 	}
 	for i, step := range plan.Graph.Steps {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO workflow_step
-			 (workflow_id, id, ordinal, type_name, pool, objective, files,
-			  criterion, needs, subject, on_outcome, effects, route,
+			 (workflow_id, id, ordinal, type_name, point_id, point_title, pool, objective, files,
+			  criterion, max_duration_ns, max_tokens, needs, subject, on_outcome, effects, operations, route,
 			  budget_estimate_usd, budget_minimum_usd, budget_source, grant_usd, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, step.ID, i, step.TypeName, plan.Pools[step.ID].String(),
-			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, step.ID, i, step.TypeName, step.PointID, step.PointTitle, plan.Pools[step.ID].String(),
+			step.Task.Objective, jsonList(step.Task.Files), step.Task.Criterion, step.Limits.MaxDuration.Nanoseconds(), step.Limits.MaxTokens,
 			jsonList(step.Needs), step.Subject, step.On.String(),
 			jsonEffects(step.Permission.Effects),
+			jsonOperations(step.Permission.Operations),
 			jsonRoute(step.Route),
 			step.BudgetEstimateUSD, step.BudgetMinimumUSD, step.BudgetSource,
 			step.Permission.BudgetUSD, StatusPending.String()); err != nil {
 			return unavailable(err, "workflow: opening %s step %s", id, step.ID)
+		}
+		if step.PointID != "" {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_point
+				(workflow_id,id,ordinal,title,state,evidence,updated_at) VALUES(?,?,?,?,?,?,?)`,
+				id, step.PointID, i, step.PointTitle, PointPending, "[]", stamp(at)); err != nil {
+				return unavailable(err, "workflow: opening %s point %s", id, step.PointID)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -703,16 +1095,18 @@ func (s *Store) Create(ctx context.Context, id string, plan Plan, repository str
 // through Go.
 const fileAttempt = `
 INSERT OR IGNORE INTO workflow_attempt (
-    workflow_id, step_id, attempt, trace_id, status, verdict,
+    workflow_id, step_id, attempt, trace_id, source_fingerprint, status, verdict,
     reason_kind, reason_text, grant_usd, spent_usd,
     spent_input_tokens, spent_output_tokens,
     spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
-    completeness, stopped_at, result, started_at, ended_at, replaced_at)
-SELECT workflow_id, id, attempt, trace_id, status, verdict,
+    invoked, invoked_known, recovery_kind, recovery_reason,
+    completeness, stopped_at, result, notices, started_at, ended_at, replaced_at)
+SELECT workflow_id, id, attempt, trace_id, source_fingerprint, status, verdict,
        reason_kind, reason_text, grant_usd, spent_usd,
        spent_input_tokens, spent_output_tokens,
        spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
-       completeness, stopped_at, result, started_at, ended_at, ?
+       invoked, invoked_known, recovery_kind, recovery_reason,
+       completeness, stopped_at, result, notices, started_at, ended_at, ?
 FROM workflow_step
 WHERE workflow_id = ? AND id = ? AND attempt > 0`
 
@@ -771,11 +1165,37 @@ func (s *Store) Discard(ctx context.Context, id string) error {
 // passes through Go.
 func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 	attempt int, at time.Time, pid int, budget ...float64) error {
+	return s.claim(ctx, id, stepID, traceID, attempt, at, pid, nil, budget...)
+}
+
+// ClaimWithActivity atomically saves the pre-invocation notice and the claim.
+// A process can therefore never start from a claim whose intent was not saved.
+func (s *Store) ClaimWithActivity(ctx context.Context, id, stepID, traceID string,
+	attempt int, at time.Time, pid int, notice ActivityNotice, budget ...float64) error {
+	return s.claim(ctx, id, stepID, traceID, attempt, at, pid, &notice, budget...)
+}
+
+func (s *Store) claim(ctx context.Context, id, stepID, traceID string,
+	attempt int, at time.Time, pid int, notice *ActivityNotice, budget ...float64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var stop string
+	if err := tx.QueryRowContext(ctx, `SELECT stop FROM workflow WHERE id = ?`, id).Scan(&stop); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return contract.Fail(contract.FailureNotFound, "no workflow %s in %s", id, s.path)
+		}
+		return unavailable(err, "workflow: reading %s before claim", id)
+	}
+	if stop == string(StopAborted) {
+		return contract.Fail(contract.FailureCanceled, "workflow %s was canceled before step %s started", id, stepID)
+	}
+	var sourceFingerprint string
+	if err := tx.QueryRowContext(ctx, `SELECT source_fingerprint FROM workflow WHERE id=?`, id).Scan(&sourceFingerprint); err != nil {
+		return unavailable(err, "workflow: reading source fingerprint before claim")
+	}
 
 	if len(budget) > 0 {
 		// Take the SQLite writer lock before reading the balance.
@@ -783,12 +1203,12 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 			return err
 		}
 		for _, table := range []string{"workflow_attempt", "workflow_step"} {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_reservation SELECT workflow_id,trace_id,COALESCE(spent_usd,grant_usd) FROM `+table+` WHERE workflow_id=? AND trace_id<>''`, id); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_reservation SELECT workflow_id,trace_id,CASE WHEN spent_usd IS NOT NULL AND TRIM(COALESCE(priced_by,'')) <> '' AND LOWER(priced_by) NOT LIKE '%estimate:%' THEN spent_usd ELSE grant_usd END FROM `+table+` WHERE workflow_id=? AND trace_id<>''`, id); err != nil {
 				return err
 			}
 		}
 		// Observed spend replaces a reservation; unknown spend keeps its full hold.
-		if _, err := tx.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=(SELECT spent_usd FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id) WHERE workflow_id=? AND EXISTS (SELECT 1 FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id AND status<>'running' AND spent_usd IS NOT NULL)`, id, id, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=(SELECT spent_usd FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id) WHERE workflow_id=? AND EXISTS (SELECT 1 FROM workflow_step WHERE workflow_id=? AND trace_id=workflow_reservation.trace_id AND status<>'running' AND spent_usd IS NOT NULL AND TRIM(COALESCE(priced_by,'')) <> '' AND LOWER(priced_by) NOT LIKE '%estimate:%')`, id, id, id); err != nil {
 			return err
 		}
 		var grant, used float64
@@ -811,20 +1231,192 @@ func (s *Store) Claim(ctx context.Context, id, stepID, traceID string,
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE workflow_step
-		 SET status = ?, trace_id = ?, attempt = ?, writer_pid = ?, started_at = ?,
+		 SET status = ?, trace_id = ?, source_fingerprint = ?, attempt = ?, writer_pid = ?, started_at = ?,
 		     ended_at = '', verdict = '', reason_kind = '', reason_text = '',
 		     result = '', discovered = '', spent_usd = NULL,
 		     spent_input_tokens = NULL, spent_output_tokens = NULL,
 		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
-		     priced_by = '', completeness = NULL, stopped_at = ''
+			priced_by = '', completeness = NULL, stopped_at = '', invoked = 0, invoked_known = 0
 		 WHERE workflow_id = ? AND id = ?`,
-		StatusRunning.String(), traceID, attempt, pid, stamp(at), id, stepID); err != nil {
+		StatusRunning.String(), traceID, sourceFingerprint, attempt, pid, stamp(at), id, stepID); err != nil {
 		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
+	}
+	if notice != nil {
+		notice.WorkflowID, notice.InvocationID, notice.At = id, traceID, at
+		if _, err := recordActivity(ctx, tx, *notice); err != nil {
+			return unavailable(err, "workflow: recording activity for %s step %s", id, stepID)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return unavailable(err, "workflow: claiming %s step %s", id, stepID)
 	}
 	return nil
+}
+
+func recordActivity(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, notice ActivityNotice) (bool, error) {
+	result, err := exec.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_activity
+		(workflow_id,point_id,agent_run_id,invocation_id,thread_id,turn_id,usage_revision,requested_model,observed_model,requested_reasoning_effort,observed_reasoning_effort,kind,tool,action,objective,purpose,markdown,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, notice.WorkflowID, notice.PointID, notice.AgentRunID, notice.InvocationID,
+		notice.ThreadID, notice.TurnID, notice.UsageRevision, notice.RequestedModel, notice.ObservedModel, notice.RequestedReasoningEffort, notice.ObservedReasoningEffort, notice.Kind,
+		notice.Tool, notice.Action, notice.Objective, notice.Purpose, notice.Markdown, stamp(notice.At))
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+// RecordActivity saves a non-dispatch intent, such as an approved plan change.
+func (s *Store) RecordActivity(ctx context.Context, notice ActivityNotice) error {
+	_, err := s.RecordActivityOnce(ctx, notice)
+	return err
+}
+
+// RecordActivityOnce reports whether this invocation was newly inserted.
+func (s *Store) RecordActivityOnce(ctx context.Context, notice ActivityNotice) (bool, error) {
+	if notice.WorkflowID == "" || notice.InvocationID == "" {
+		return false, contract.Fail(contract.FailureInvalidInput, "workflow activity requires workflow and invocation ids")
+	}
+	if notice.At.IsZero() {
+		notice.At = time.Now()
+	}
+	inserted, err := recordActivity(ctx, s.db, notice)
+	if err != nil {
+		return false, unavailable(err, "workflow: recording activity for %s", notice.WorkflowID)
+	}
+	return inserted, nil
+}
+
+// ActivityByInvocation returns the durable identity assigned at insert time.
+func (s *Store) ActivityByInvocation(ctx context.Context, workflowID, invocationID string) (ActivityNotice, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT cursor,workflow_id,point_id,agent_run_id,invocation_id,thread_id,turn_id,usage_revision,requested_model,observed_model,requested_reasoning_effort,observed_reasoning_effort,kind,tool,action,objective,purpose,markdown,created_at
+		FROM workflow_activity WHERE workflow_id=? AND invocation_id=?`, workflowID, invocationID)
+	var n ActivityNotice
+	var at string
+	if err := row.Scan(&n.Cursor, &n.WorkflowID, &n.PointID, &n.AgentRunID, &n.InvocationID, &n.ThreadID, &n.TurnID, &n.UsageRevision, &n.RequestedModel, &n.ObservedModel, &n.RequestedReasoningEffort, &n.ObservedReasoningEffort, &n.Kind, &n.Tool, &n.Action,
+		&n.Objective, &n.Purpose, &n.Markdown, &at); err != nil {
+		return ActivityNotice{}, unavailable(err, "workflow: reading activity %s for %s", invocationID, workflowID)
+	}
+	n.At = parseStamp(at)
+	return n, nil
+}
+
+// ToolActivitiesByAgentRun returns every internal tool intent belonging to a
+// completed physical agent invocation. Finish enriches these rows with the
+// observed turn identity before telemetry reads them.
+func (s *Store) ToolActivitiesByAgentRun(ctx context.Context, workflowID, agentRunID string) ([]ActivityNotice, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT cursor,workflow_id,point_id,agent_run_id,invocation_id,thread_id,turn_id,usage_revision,requested_model,observed_model,requested_reasoning_effort,observed_reasoning_effort,kind,tool,action,objective,purpose,markdown,created_at
+		FROM workflow_activity WHERE workflow_id=? AND agent_run_id=? AND invocation_id<>agent_run_id ORDER BY cursor`, workflowID, agentRunID)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reading tool activity for %s", agentRunID)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ActivityNotice
+	for rows.Next() {
+		var notice ActivityNotice
+		var at string
+		if err := rows.Scan(&notice.Cursor, &notice.WorkflowID, &notice.PointID, &notice.AgentRunID, &notice.InvocationID, &notice.ThreadID, &notice.TurnID, &notice.UsageRevision, &notice.RequestedModel, &notice.ObservedModel, &notice.RequestedReasoningEffort, &notice.ObservedReasoningEffort, &notice.Kind, &notice.Tool, &notice.Action, &notice.Objective, &notice.Purpose, &notice.Markdown, &at); err != nil {
+			return nil, unavailable(err, "workflow: scanning tool activity for %s", agentRunID)
+		}
+		notice.At = parseStamp(at)
+		out = append(out, notice)
+	}
+	return out, rows.Err()
+}
+
+// PendingActivities returns durable notices that have not received a
+// successful publication acknowledgement yet.
+func (s *Store) PendingActivities(ctx context.Context, workflowID string, limit int) ([]ActivityNotice, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT cursor,workflow_id,point_id,agent_run_id,invocation_id,thread_id,turn_id,usage_revision,requested_model,observed_model,requested_reasoning_effort,observed_reasoning_effort,kind,tool,action,objective,purpose,markdown,created_at
+		FROM workflow_activity WHERE workflow_id=? AND delivered_at='' ORDER BY cursor LIMIT ?`, workflowID, limit)
+	if err != nil {
+		return nil, unavailable(err, "workflow: reading pending activity for %s", workflowID)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]ActivityNotice, 0)
+	for rows.Next() {
+		var n ActivityNotice
+		var at string
+		if err := rows.Scan(&n.Cursor, &n.WorkflowID, &n.PointID, &n.AgentRunID, &n.InvocationID, &n.ThreadID, &n.TurnID, &n.UsageRevision, &n.RequestedModel, &n.ObservedModel, &n.RequestedReasoningEffort, &n.ObservedReasoningEffort, &n.Kind, &n.Tool, &n.Action,
+			&n.Objective, &n.Purpose, &n.Markdown, &at); err != nil {
+			return nil, unavailable(err, "workflow: reading pending activity for %s", workflowID)
+		}
+		n.At = parseStamp(at)
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, unavailable(err, "workflow: reading pending activity for %s", workflowID)
+	}
+	return out, nil
+}
+
+// MarkActivitiesDelivered records the acknowledgement after publication.
+func (s *Store) MarkActivitiesDelivered(ctx context.Context, workflowID string, invocationIDs []string, at time.Time) error {
+	if len(invocationIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: acknowledging activity for %s", workflowID)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, invocationID := range invocationIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow_activity SET delivered_at=?
+			WHERE workflow_id=? AND invocation_id=? AND delivered_at=''`, stamp(at), workflowID, invocationID); err != nil {
+			return unavailable(err, "workflow: acknowledging activity for %s", workflowID)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return unavailable(err, "workflow: acknowledging activity for %s", workflowID)
+	}
+	return nil
+}
+
+// Activities returns one bounded page after an opaque durable cursor, oldest first.
+func (s *Store) Activities(ctx context.Context, workflowID string, after int64, limit int) ([]ActivityNotice, int64, error) {
+	out, cursor, _, err := s.ActivitiesPage(ctx, workflowID, after, limit)
+	return out, cursor, err
+}
+
+// ActivitiesPage also says whether another durable page exists. It reads one
+// extra row so clients never infer completeness from a truncated response.
+func (s *Store) ActivitiesPage(ctx context.Context, workflowID string, after int64, limit int) ([]ActivityNotice, int64, bool, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT cursor,workflow_id,point_id,agent_run_id,invocation_id,thread_id,turn_id,usage_revision,requested_model,observed_model,requested_reasoning_effort,observed_reasoning_effort,kind,tool,action,objective,purpose,markdown,created_at
+		FROM workflow_activity WHERE workflow_id=? AND cursor>? ORDER BY cursor LIMIT ?`, workflowID, after, limit+1)
+	if err != nil {
+		return nil, after, false, unavailable(err, "workflow: reading activity for %s", workflowID)
+	}
+	defer func() { _ = rows.Close() }()
+	out, cursor := []ActivityNotice{}, after
+	for rows.Next() {
+		var n ActivityNotice
+		var at string
+		if err := rows.Scan(&n.Cursor, &n.WorkflowID, &n.PointID, &n.AgentRunID, &n.InvocationID, &n.ThreadID, &n.TurnID, &n.UsageRevision, &n.RequestedModel, &n.ObservedModel, &n.RequestedReasoningEffort, &n.ObservedReasoningEffort, &n.Kind, &n.Tool, &n.Action,
+			&n.Objective, &n.Purpose, &n.Markdown, &at); err != nil {
+			return nil, after, false, unavailable(err, "workflow: reading activity for %s", workflowID)
+		}
+		n.At = parseStamp(at)
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, after, false, unavailable(err, "workflow: reading activity for %s", workflowID)
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	if len(out) > 0 {
+		cursor = out[len(out)-1].Cursor
+	}
+	return out, cursor, hasMore, nil
 }
 
 // Finish writes what a step ended as, together with the answer it gave.
@@ -846,6 +1438,41 @@ func (s *Store) Finish(ctx context.Context, id, stepID string, status Status,
 
 // finishStep atomically records an outcome and settles its reservation.
 func finishStep(ctx context.Context, tx *sql.Tx, id, stepID string, status Status, report contract.Report, at time.Time) error {
+	var typeName, routeJSON, traceID, pointID string
+	if err := tx.QueryRowContext(ctx, `SELECT type_name, route, trace_id, point_id FROM workflow_step WHERE workflow_id=? AND id=?`, id, stepID).Scan(&typeName, &routeJSON, &traceID, &pointID); err != nil {
+		return unavailable(err, "workflow: reading %s step %s before settlement", id, stepID)
+	}
+	route, err := readRoute(routeJSON)
+	if err != nil {
+		return err
+	}
+	if route != nil {
+		requestedModel := strings.TrimSpace(report.RequestedModel)
+		if requestedModel != "" && route.RequestedModel != "" && requestedModel != route.RequestedModel {
+			return contract.Fail(contract.FailureInvalidInput, "workflow: %s step %s: reported requested model %q differs from route %q", id, stepID, requestedModel, route.RequestedModel)
+		}
+		requestedEffort := strings.TrimSpace(report.RequestedReasoningEffort)
+		if requestedEffort != "" && route.RequestedReasoningEffort != "" && requestedEffort != route.RequestedReasoningEffort {
+			return contract.Fail(contract.FailureInvalidInput, "workflow: %s step %s: reported requested effort %q differs from route %q", id, stepID, requestedEffort, route.RequestedReasoningEffort)
+		}
+		if report.ObservedModel != "" {
+			route.ObservedModel = report.ObservedModel
+		}
+		if report.ObservedReasoningEffort != "" {
+			route.ObservedReasoningEffort = report.ObservedReasoningEffort
+		}
+		if report.ThreadID != "" {
+			route.ThreadID = report.ThreadID
+		}
+		routeJSON = jsonRoute(route)
+	}
+	if status == StatusOK && report.Verdict != contract.VerdictOK {
+		return contract.Fail(contract.FailureInvalidInput, "workflow: %s step %s: ok status requires an ok report", id, stepID)
+	}
+	role := strings.ToLower(strings.TrimSpace(typeName))
+	if status == StatusOK && (role == "review" || role == "audit") && len(report.Result) == 0 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow: %s step %s: %s reports cannot be empty", id, stepID, role)
+	}
 	if err := report.Spent.Validate(); err != nil {
 		return err
 	}
@@ -862,25 +1489,55 @@ func finishStep(ctx context.Context, tx *sql.Tx, id, stepID string, status Statu
 	_, err = tx.ExecContext(ctx,
 		`UPDATE workflow_step
 		 SET status = ?, ended_at = ?, verdict = ?, reason_kind = ?, reason_text = ?,
-		     result = ?, discovered = ?, writer_pid = 0, spent_usd = ?,
+			 result = ?, discovered = ?, notices = ?, writer_pid = 0, spent_usd = ?,
 		     spent_input_tokens = ?, spent_output_tokens = ?,
 		     spent_cache_read_tokens = ?, spent_cache_write_tokens = ?, priced_by = ?,
-		     completeness = ?, stopped_at = ?
+		     invoked = ?, invoked_known = ?,
+		     completeness = ?, stopped_at = ?, route = ?
 		 WHERE workflow_id = ? AND id = ?`,
 		status.String(), stamp(at), report.Verdict.String(),
 		report.Reason.Kind.String(), report.Reason.Text,
-		result, jsonDiscoveries(report.Discovered), usd,
+		result, jsonDiscoveries(report.Discovered), jsonList(report.Notices), usd,
 		input, output, cacheRead, cacheWrite, pricedBy,
-		completeness, report.StoppedAt, id, stepID)
+		boolInt(report.Invoked), boolInt(report.InvokedKnown),
+		completeness, report.StoppedAt, routeJSON, id, stepID)
 	if err != nil {
 		return unavailable(err, "workflow: closing %s step %s", id, stepID)
 	}
-	if report.Spent.USD != nil {
+	requestedModel, observedModel := report.RequestedModel, report.ObservedModel
+	requestedEffort, observedEffort := report.RequestedReasoningEffort, report.ObservedReasoningEffort
+	if route != nil {
+		if requestedModel == "" {
+			requestedModel = route.RequestedModel
+		}
+		if observedModel == "" {
+			observedModel = route.ObservedModel
+		}
+		if requestedEffort == "" {
+			requestedEffort = route.RequestedReasoningEffort
+		}
+		if observedEffort == "" {
+			observedEffort = route.ObservedReasoningEffort
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow_activity SET point_id=?,agent_run_id=?,thread_id=?,turn_id=?,usage_revision=?,requested_model=?,observed_model=?,requested_reasoning_effort=?,observed_reasoning_effort=? WHERE workflow_id=? AND (invocation_id=? OR agent_run_id=?)`,
+		pointID, traceID, report.ThreadID, report.TurnID, report.UsageRevision, requestedModel, observedModel, requestedEffort, observedEffort, id, traceID, traceID); err != nil {
+		return unavailable(err, "workflow: correlating activity for %s step %s", id, stepID)
+	}
+	if observedCharge(report.Spent) {
 		if _, err := tx.ExecContext(ctx, `UPDATE workflow_reservation SET reserved_usd=? WHERE workflow_id=? AND trace_id=(SELECT trace_id FROM workflow_step WHERE workflow_id=? AND id=?)`, *report.Spent.USD, id, id, stepID); err != nil {
 			return unavailable(err, "workflow: settling reservation")
 		}
 	}
 	return nil
+}
+
+// observedCharge is the only charge allowed to settle a reservation. An
+// allowance estimate is useful evidence for a report but cannot prove what
+// the provider billed, so it keeps the original reservation and blocks a
+// paid retry until the caller expands or authorizes the budget.
+func observedCharge(spent contract.Charge) bool {
+	return spent.USD != nil && strings.TrimSpace(spent.PricedBy) != "" && !estimatedPrice(spent.PricedBy)
 }
 
 // spentColumns turns a Charge into the six values Finish writes. Nil
@@ -909,6 +1566,35 @@ func (s *Store) Interrupt(ctx context.Context, id, stepID, why string, at time.T
 		contract.FailureCanceled.String(), why, id, stepID)
 	if err != nil {
 		return unavailable(err, "workflow: interrupting %s step %s", id, stepID)
+	}
+	return nil
+}
+
+// InterruptBeforeDispatch records that a claimed invocation never started and
+// releases its budget reservation. The durable activity remains as evidence
+// of the attempted publication; resume gives the step a new invocation id.
+func (s *Store) InterruptBeforeDispatch(ctx context.Context, id, stepID, traceID, why string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: interrupting unpublished %s step %s", id, stepID)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workflow_reservation WHERE workflow_id=? AND trace_id=?`, id, traceID); err != nil {
+		return unavailable(err, "workflow: releasing unpublished %s step %s", id, stepID)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_step
+		SET status=?, ended_at=?, verdict='', reason_kind=?, reason_text=?, writer_pid=0
+		WHERE workflow_id=? AND id=? AND trace_id=? AND status=?`,
+		StatusInterrupted.String(), stamp(at), contract.FailureUnavailable.String(), why,
+		id, stepID, traceID, StatusRunning.String())
+	if err != nil {
+		return unavailable(err, "workflow: interrupting unpublished %s step %s", id, stepID)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return contract.Fail(contract.FailureUnavailable, "workflow: unpublished claim changed before it could be interrupted")
+	}
+	if err := tx.Commit(); err != nil {
+		return unavailable(err, "workflow: interrupting unpublished %s step %s", id, stepID)
 	}
 	return nil
 }
@@ -949,13 +1635,28 @@ func (s *Store) Reset(ctx context.Context, id, stepID string, at time.Time) erro
 		     result = '', discovered = '', spent_usd = NULL,
 		     spent_input_tokens = NULL, spent_output_tokens = NULL,
 		     spent_cache_read_tokens = NULL, spent_cache_write_tokens = NULL,
-		     priced_by = '', completeness = NULL, stopped_at = ''
+			priced_by = '', completeness = NULL, stopped_at = '', invoked = 0, invoked_known = 0
 		 WHERE workflow_id = ? AND id = ?`,
 		StatusPending.String(), id, stepID); err != nil {
 		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
 	}
 	if err := tx.Commit(); err != nil {
 		return unavailable(err, "workflow: resetting %s step %s", id, stepID)
+	}
+	return nil
+}
+
+// MarkRecovery records why the current dispatch is being replaced before
+// Reset files it. Claim intentionally preserves these columns, so a later
+// successful retry still carries the outage/timeout that caused it and a
+// reconnect can distinguish automatic recovery from an explicit Redo.
+func (s *Store) MarkRecovery(ctx context.Context, id, stepID, kind, reason string) error {
+	if strings.TrimSpace(kind) == "" {
+		return contract.Fail(contract.FailureInvalidInput, "workflow recovery kind is required")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow_step SET recovery_kind=?, recovery_reason=? WHERE workflow_id=? AND id=?`, kind, reason, id, stepID)
+	if err != nil {
+		return unavailable(err, "workflow: recording recovery for %s step %s", id, stepID)
 	}
 	return nil
 }
@@ -977,7 +1678,7 @@ func (s *Store) Reset(ctx context.Context, id, stepID string, at time.Time) erro
 func (s *Store) Own(ctx context.Context, id string, pid, held int) error {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE workflow SET writer_pid = ?, closed = 0, ended_at = '', stop = ''
-		 WHERE id = ? AND writer_pid = ?`, pid, id, held)
+		 WHERE id = ? AND writer_pid = ? AND stop <> 'aborted'`, pid, id, held)
 	if err != nil {
 		return unavailable(err, "workflow: claiming %s", id)
 	}
@@ -993,9 +1694,69 @@ func (s *Store) Own(ctx context.Context, id string, pid, held int) error {
 		if loadErr != nil {
 			return loadErr
 		}
+		if current.Stop == StopAborted {
+			return contract.Fail(contract.FailureCanceled,
+				"workflow %s was canceled before it could start", id)
+		}
 		return contract.Fail(contract.FailureUnavailable,
 			"workflow %s was taken over by pid %d while this one was starting it",
 			id, current.WriterPID)
+	}
+	return nil
+}
+
+// ResumeOwn is the explicit counterpart to Own. It is used only by resume:
+// clearing an aborted marker is an operator action, whereas ordinary launch
+// and run must lose a race with cancellation rather than erase it.
+func (s *Store) ResumeOwn(ctx context.Context, id string, pid, held int, expected Stop) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE workflow SET writer_pid = ?, closed = 0, ended_at = '', stop = ''
+		 WHERE id = ? AND writer_pid = ? AND closed = 0 AND stop = ?`, pid, id, held, expected)
+	if err != nil {
+		return unavailable(err, "workflow: resuming %s", id)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return unavailable(err, "workflow: resuming %s", id)
+	}
+	if rows == 0 {
+		current, loadErr := s.Load(ctx, id)
+		if loadErr != nil {
+			return loadErr
+		}
+		if current.Stop == StopAborted {
+			return contract.Fail(contract.FailureCanceled,
+				"workflow %s was canceled while it was being resumed", id)
+		}
+		return contract.Fail(contract.FailureUnavailable,
+			"workflow %s was taken over by pid %d while resuming it", id, current.WriterPID)
+	}
+	return nil
+}
+
+// ReleaseOwn drops a durable resume claim. If stop is still empty, restore is
+// written back; that preserves an abort which ResumeOwn cleared before a
+// pre-execution validation failed. A cancellation arriving after the claim
+// wins the CASE and is never overwritten.
+func (s *Store) ReleaseOwn(ctx context.Context, id string, pid int, restore Stop) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE workflow SET writer_pid = 0,
+			stop = CASE WHEN stop = '' THEN ? ELSE stop END
+		 WHERE id = ? AND writer_pid = ?`, string(restore), id, pid)
+	if err != nil {
+		return unavailable(err, "workflow: releasing %s", id)
+	}
+	if rows, err := result.RowsAffected(); err != nil {
+		return unavailable(err, "workflow: releasing %s", id)
+	} else if rows == 0 {
+		current, loadErr := s.Load(ctx, id)
+		if loadErr != nil {
+			return loadErr
+		}
+		if current.WriterPID != 0 && current.WriterPID != pid {
+			return contract.Fail(contract.FailureUnavailable,
+				"workflow %s was taken over by pid %d while releasing it", id, current.WriterPID)
+		}
 	}
 	return nil
 }
@@ -1038,6 +1799,11 @@ func (s *Store) Regrant(ctx context.Context, id string, usd float64) error {
 	if err != nil {
 		return err
 	}
+	if run.Policy.MaxBudgetUSD > 0 && usd > run.Policy.MaxBudgetUSD+moneyEpsilon {
+		return contract.Fail(contract.FailurePermissionDenied,
+			"workflow %s policy budget ceiling is $%.4f; requested grant is $%.4f",
+			id, run.Policy.MaxBudgetUSD, usd)
+	}
 	if usd < run.GrantUSD-moneyEpsilon {
 		return contract.Fail(contract.FailureInvalidInput,
 			"workflow %s is granted $%.2f: a grant is raised, never lowered, and $%.2f is less",
@@ -1061,10 +1827,189 @@ func (s *Store) End(ctx context.Context, id string, stop Stop, at time.Time) err
 		closed = 0
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE workflow SET closed = ?, ended_at = ?, stop = ?, writer_pid = 0 WHERE id = ?`,
-		closed, stamp(at), string(stop), id)
+		`UPDATE workflow SET
+			closed = CASE WHEN stop = 'aborted' THEN 0 ELSE ? END,
+			ended_at = ?,
+			stop = CASE WHEN stop = 'aborted' THEN 'aborted' ELSE ? END,
+			state = CASE WHEN state IN ('attention_required','uncertain') THEN state WHEN ? = '' THEN 'completed' ELSE 'stopped' END,
+			last_progress_at = ?,
+			writer_pid = 0 WHERE id = ?`,
+		closed, stamp(at), string(stop), string(stop), stamp(at), id)
 	if err != nil {
 		return unavailable(err, "workflow: closing %s", id)
+	}
+	return nil
+}
+
+// Cancel durably requests that a workflow stop. It is idempotent: a second
+// request returns the persisted snapshot and does not disturb a finished run.
+// A running engine observes the marker and cancels its in-process context;
+// resume may explicitly clear it after taking ownership.
+func (s *Store) Cancel(ctx context.Context, id string, at time.Time) (Run, error) {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE workflow SET stop = 'aborted', closed = 0, ended_at = ?
+		 WHERE id = ? AND closed = 0 AND stop <> 'aborted'`, stamp(at), id); err != nil {
+		return Run{}, unavailable(err, "workflow: canceling %s", id)
+	}
+	if _, _, _, err := s.SyncPlan(ctx, id, at); err != nil {
+		return Run{}, err
+	}
+	return s.Load(ctx, id)
+}
+
+// Aborted is the narrow read used by an executing engine's cancellation
+// watcher. It avoids loading all steps merely to observe the durable marker.
+func (s *Store) Aborted(ctx context.Context, id string) (bool, error) {
+	var stop string
+	if err := s.db.QueryRowContext(ctx, `SELECT stop FROM workflow WHERE id = ?`, id).Scan(&stop); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, contract.Fail(contract.FailureNotFound, "no workflow %s in %s", id, s.path)
+		}
+		return false, unavailable(err, "workflow: reading cancellation for %s", id)
+	}
+	return stop == string(StopAborted), nil
+}
+
+// SetSourceFingerprint advances the source evidence after a step with an
+// authorized write effect has been accepted. The update is deliberately
+// explicit: read-only results keep the original fingerprint so an external
+// edit cannot be mistaken for work performed by the workflow.
+func (s *Store) SetSourceFingerprint(ctx context.Context, id, fingerprint string) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE workflow SET source_fingerprint = ? WHERE id = ?`, fingerprint, id)
+	if err != nil {
+		return unavailable(err, "workflow: recording source state for %s", id)
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return contract.Fail(contract.FailureNotFound, "no workflow %s in %s", id, s.path)
+	}
+	return nil
+}
+
+// SetAcceptedWriteFingerprint advances both the workflow and the writer's
+// evidence atomically. Later review and audit claims inherit this same tree.
+func (s *Store) SetAcceptedWriteFingerprint(ctx context.Context, id, stepID, fingerprint string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: recording accepted write source")
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_step SET source_fingerprint=? WHERE workflow_id=? AND id=? AND status='ok'`, fingerprint, id, stepID)
+	if err != nil {
+		return unavailable(err, "workflow: recording %s step %s source", id, stepID)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow %s step %s is not an accepted write", id, stepID)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow SET source_fingerprint=? WHERE id=?`, fingerprint, id); err != nil {
+		return unavailable(err, "workflow: recording source state for %s", id)
+	}
+	return tx.Commit()
+}
+
+// BindKnowledgeCandidate adds the host-derived candidate identity to an
+// already accepted implementation result without replacing any agent output.
+func (s *Store) BindKnowledgeCandidate(ctx context.Context, id, stepID, candidateID, digest string) error {
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT result FROM workflow_step WHERE workflow_id=? AND id=? AND status='ok'`, id, stepID).Scan(&raw); err != nil {
+		return unavailable(err, "workflow: reading %s step %s knowledge result", id, stepID)
+	}
+	result := readMap(raw)
+	if result == nil {
+		result = make(map[string]any)
+	}
+	result["knowledge_candidate_id"], result["knowledge_digest"] = candidateID, digest
+	encoded, err := jsonMap(result)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE workflow_step SET result=? WHERE workflow_id=? AND id=? AND status='ok'`, encoded, id, stepID)
+	return err
+}
+
+// RejectKnowledgeCapture prevents a malformed explicit candidate from leaving
+// its implementation accepted. Later reviews must not inherit that result.
+func (s *Store) RejectKnowledgeCapture(ctx context.Context, id, stepID string, cause error) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE workflow_step SET status='failed',verdict='failed',reason_kind=?,reason_text=? WHERE workflow_id=? AND id=? AND status='ok'`, contract.FailureInvalidInput.String(), "knowledge candidate rejected: "+cause.Error(), id, stepID)
+	if err != nil {
+		return unavailable(err, "workflow: rejecting %s step %s knowledge candidate", id, stepID)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow %s step %s is not an accepted implementation", id, stepID)
+	}
+	return nil
+}
+
+// TouchProgress advances the watchdog cursor after a durable workflow event.
+func (s *Store) TouchProgress(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow SET last_progress_at=? WHERE id=? AND closed=0`, stamp(at), id)
+	if err != nil {
+		return unavailable(err, "workflow: recording progress for %s", id)
+	}
+	return nil
+}
+
+// Watchdog marks a stalled workflow before canceling its active context. It
+// never retries: uncertainty is a human decision, especially when a running
+// step carried a write, external, or device effect.
+func (s *Store) Watchdog(ctx context.Context, id string, now time.Time, timeout time.Duration) (Run, bool, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	run, err := s.Load(ctx, id)
+	if err != nil {
+		return Run{}, false, err
+	}
+	// A workflow can spend an arbitrary amount of time waiting for a human
+	// gate.  That interval is deliberately excluded from the watchdog: there
+	// is no provider effect whose outcome could become uncertain while the
+	// active interval is closed.
+	if run.Closed || run.WatchdogState != StateRunning || run.ActiveStarted.IsZero() || run.LastProgressAt.IsZero() || now.Sub(run.LastProgressAt) < timeout {
+		return run, false, nil
+	}
+	uncertain := false
+	for _, step := range run.Steps {
+		if step.Status != StatusRunning {
+			continue
+		}
+		for _, effect := range step.Step.Permission.Effects {
+			if effect == contract.EffectWrite || effect == contract.EffectExternal || effect == contract.EffectDevice {
+				uncertain = true
+			}
+		}
+	}
+	state := StateAttentionRequired
+	if uncertain {
+		state = StateUncertain
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE workflow SET state=?, stop=?, closed=0, ended_at=?, last_progress_at=? WHERE id=? AND closed=0 AND state='running'`, state, string(StopUnjudged), stamp(now), stamp(now), id)
+	if err != nil {
+		return Run{}, false, unavailable(err, "workflow: watchdog %s", id)
+	}
+	run, err = s.Load(ctx, id)
+	return run, true, err
+}
+
+// StartActive closes any abandoned active interval and starts a new one for
+// the current owner. Gate waiting is therefore excluded from the deadline.
+func (s *Store) StartActive(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow SET
+		active_seconds = active_seconds + CASE WHEN active_started_at <> '' THEN MAX(0, (julianday(?) - julianday(active_started_at)) * 86400) ELSE 0 END,
+		active_started_at = ? WHERE id = ?`, stamp(at), stamp(at), id)
+	if err != nil {
+		return unavailable(err, "workflow: starting active interval for %s", id)
+	}
+	return nil
+}
+
+// EndActive closes the current interval durably. It is idempotent when a
+// crashed process was already recovered by StartActive.
+func (s *Store) EndActive(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE workflow SET
+		active_seconds = active_seconds + CASE WHEN active_started_at <> '' THEN MAX(0, (julianday(?) - julianday(active_started_at)) * 86400) ELSE 0 END,
+		active_started_at = '' WHERE id = ?`, stamp(at), id)
+	if err != nil {
+		return unavailable(err, "workflow: ending active interval for %s", id)
 	}
 	return nil
 }
@@ -1072,16 +2017,18 @@ func (s *Store) End(ctx context.Context, id string, stop Stop, at time.Time) err
 // Load reads one run back whole.
 func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, task, repository, grant_usd, started_at, ended_at, closed, stop, writer_pid
+		`SELECT id, task, repository, effects, policy, active_seconds, active_started_at, source_fingerprint, plan_revision, grant_usd, started_at, ended_at, closed, stop, writer_pid, state, last_progress_at
 		 FROM workflow WHERE id = ?`, id)
 	var (
-		out            Run
-		started, ended string
-		closed         int
-		stop           string
+		out                               Run
+		started, ended, progressAt        string
+		closed                            int
+		stop                              string
+		effects, policyRaw, activeStarted string
+		activeSeconds                     float64
 	)
-	switch err := row.Scan(&out.ID, &out.Task, &out.Repository, &out.GrantUSD, &started, &ended,
-		&closed, &stop, &out.WriterPID); {
+	switch err := row.Scan(&out.ID, &out.Task, &out.Repository, &effects, &policyRaw, &activeSeconds, &activeStarted, &out.SourceFingerprint, &out.PlanRevision, &out.GrantUSD, &started, &ended,
+		&closed, &stop, &out.WriterPID, &out.WatchdogState, &progressAt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return Run{}, contract.Fail(contract.FailureNotFound,
 			"no workflow %s in %s", id, s.path)
@@ -1090,16 +2037,29 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	}
 	out.Started = parseStamp(started)
 	out.Ended = parseStamp(ended)
+	out.ActiveDuration = time.Duration(activeSeconds * float64(time.Second))
+	out.ActiveStarted = parseStamp(activeStarted)
 	out.Closed = closed != 0
 	out.Stop = Stop(stop)
+	out.LastProgressAt = parseStamp(progressAt)
+	if out.WatchdogState == "" {
+		out.WatchdogState = StateRunning
+	}
+	var err error
+	if out.Effects, err = readEffects(effects); err != nil {
+		return Run{}, err
+	}
+	if out.Policy, err = readPolicy(policyRaw); err != nil {
+		return Run{}, err
+	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, type_name, pool, objective, files, criterion, needs, subject,
-				on_outcome, effects, route, budget_estimate_usd, budget_minimum_usd, budget_source,
-				grant_usd, status, trace_id, attempt, writer_pid,
+		`SELECT id, type_name, point_id, point_title, pool, objective, files, criterion, max_duration_ns, max_tokens, needs, subject,
+				on_outcome, effects, operations, route, budget_estimate_usd, budget_minimum_usd, budget_source,
+				grant_usd, status, trace_id, source_fingerprint, attempt, writer_pid,
 		        started_at, ended_at, verdict, reason_kind, reason_text, result,
-		        discovered, spent_usd, spent_input_tokens, spent_output_tokens,
-		        spent_cache_read_tokens, spent_cache_write_tokens, priced_by,
+		        discovered, notices, spent_usd, spent_input_tokens, spent_output_tokens,
+				spent_cache_read_tokens, spent_cache_write_tokens, priced_by, invoked, invoked_known, recovery_kind, recovery_reason,
 		        completeness, stopped_at
 			 FROM workflow_step WHERE workflow_id = ? ORDER BY ordinal`, id)
 	if err != nil {
@@ -1117,12 +2077,46 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 	if err := rows.Err(); err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
 	}
+	if len(out.Effects) == 0 {
+		// Rows written before the run-level ceiling existed derive it from the
+		// immutable step permissions. New rows always persist it at Create.
+		seen := make(map[contract.Effect]bool)
+		for _, row := range out.Steps {
+			for _, effect := range row.Step.Permission.Effects {
+				if !seen[effect] {
+					seen[effect] = true
+					out.Effects = append(out.Effects, effect)
+				}
+			}
+		}
+		slices.Sort(out.Effects)
+	}
+	if len(out.Policy.Effects) == 0 {
+		out.Policy.Effects = slices.Clone(out.Effects)
+	}
+	if len(out.Policy.Operations) == 0 {
+		seen := make(map[contract.Operation]bool)
+		for _, row := range out.Steps {
+			for _, operation := range row.Step.Permission.Operations {
+				seen[operation] = true
+			}
+		}
+		for operation := range seen {
+			out.Policy.Operations = append(out.Policy.Operations, operation)
+		}
+		slices.SortFunc(out.Policy.Operations, func(a, b contract.Operation) int { return strings.Compare(a.String(), b.String()) })
+	}
 	// Closed before the next query rather than at return: the archive read
 	// below would otherwise hold a second connection open for the length of
 	// this one, and WAL only makes that work, not free.
 	if err := rows.Close(); err != nil {
 		return Run{}, unavailable(err, "workflow: reading %s steps", id)
 	}
+	points, err := s.PlanPoints(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	out.Points = points
 	// The archive is read here rather than left to a caller who remembers to
 	// ask, because Run.Spend is the only place a balance comes from and it
 	// cannot see money it was not handed. Empty for every run nobody redid,
@@ -1132,6 +2126,13 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 		return Run{}, err
 	}
 	out.Superseded = superseded
+	recovery := out.RecoveryState()
+	out.Recovery = &recovery
+	activity, cursor, hasMore, err := s.ActivitiesPage(ctx, id, 0, 200)
+	if err != nil {
+		return Run{}, err
+	}
+	out.Activity, out.ActivityCursor, out.ActivityHasMore = activity, cursor, hasMore
 	return out, nil
 }
 
@@ -1145,11 +2146,11 @@ func (s *Store) Load(ctx context.Context, id string) (Run, error) {
 // slice is empty, rather than by comparing a count against an attempt number
 // that a crash could have advanced without a dispatch.
 func (s *Store) Attempts(ctx context.Context, id, stepID string) ([]AttemptRow, error) {
-	query := `SELECT step_id, attempt, trace_id, status, verdict, reason_kind,
+	query := `SELECT step_id, attempt, trace_id, source_fingerprint, status, verdict, reason_kind,
 	                 reason_text, grant_usd, spent_usd, spent_input_tokens,
 	                 spent_output_tokens, spent_cache_read_tokens,
-	                 spent_cache_write_tokens, priced_by, completeness,
-	                 stopped_at, result, started_at, ended_at, replaced_at
+		                 spent_cache_write_tokens, priced_by, invoked, invoked_known, recovery_kind, recovery_reason, completeness,
+	                 stopped_at, result, notices, started_at, ended_at, replaced_at
 	          FROM workflow_attempt WHERE workflow_id = ?`
 	args := []any{id}
 	if stepID != "" {
@@ -1198,21 +2199,23 @@ func (s *Store) Attempts(ctx context.Context, id, stepID string) ([]AttemptRow, 
 
 func scanAttempt(rows *sql.Rows) (AttemptRow, error) {
 	var (
-		out                         AttemptRow
-		status, verdict             string
-		reasonKind, reasonText      string
-		usd                         sql.NullFloat64
-		inputTok, outputTok         sql.NullInt64
-		cacheReadTok, cacheWriteTok sql.NullInt64
-		pricedBy                    string
-		completeness                sql.NullFloat64
-		result                      string
-		started, ended, replaced    string
+		out                          AttemptRow
+		status, verdict              string
+		reasonKind, reasonText       string
+		usd                          sql.NullFloat64
+		inputTok, outputTok          sql.NullInt64
+		cacheReadTok, cacheWriteTok  sql.NullInt64
+		pricedBy                     string
+		invoked, invokedKnown        int
+		recoveryKind, recoveryReason string
+		completeness                 sql.NullFloat64
+		result, notices              string
+		started, ended, replaced     string
 	)
-	if err := rows.Scan(&out.StepID, &out.Attempt, &out.TraceID, &status, &verdict,
+	if err := rows.Scan(&out.StepID, &out.Attempt, &out.TraceID, &out.SourceFingerprint, &status, &verdict,
 		&reasonKind, &reasonText, &out.GrantUSD, &usd, &inputTok, &outputTok,
-		&cacheReadTok, &cacheWriteTok, &pricedBy, &completeness,
-		&out.StoppedAt, &result, &started, &ended, &replaced); err != nil {
+		&cacheReadTok, &cacheWriteTok, &pricedBy, &invoked, &invokedKnown, &recoveryKind, &recoveryReason, &completeness,
+		&out.StoppedAt, &result, &notices, &started, &ended, &replaced); err != nil {
 		return AttemptRow{}, unavailable(err, "workflow: reading an attempt")
 	}
 	var err error
@@ -1241,11 +2244,14 @@ func scanAttempt(rows *sql.Rows) (AttemptRow, error) {
 	out.Spent.CacheReadTokens = int(cacheReadTok.Int64)
 	out.Spent.CacheWriteTokens = int(cacheWriteTok.Int64)
 	out.Spent.PricedBy = pricedBy
+	out.Invoked, out.InvokedKnown = invoked != 0, invokedKnown != 0
+	out.RecoveryKind, out.RecoveryReason = recoveryKind, recoveryReason
 	if completeness.Valid {
 		v := completeness.Float64
 		out.Completeness = &v
 	}
 	out.Result = readMap(result)
+	out.Notices = readList(notices)
 	out.Started = parseStamp(started)
 	out.Ended = parseStamp(ended)
 	out.Replaced = parseStamp(replaced)
@@ -1254,7 +2260,7 @@ func scanAttempt(rows *sql.Rows) (AttemptRow, error) {
 
 // List names the runs, newest first.
 func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
-	query := `SELECT id, task, grant_usd, started_at, ended_at, closed, stop, writer_pid
+	query := `SELECT id, task, grant_usd, started_at, ended_at, closed, stop, writer_pid, state, last_progress_at
 	          FROM workflow ORDER BY started_at DESC`
 	args := []any{}
 	if limit > 0 {
@@ -1270,19 +2276,23 @@ func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
 	var out []Run
 	for rows.Next() {
 		var (
-			run            Run
-			started, ended string
-			closed         int
-			stop           string
+			run                        Run
+			started, ended, progressAt string
+			closed                     int
+			stop                       string
 		)
 		if err := rows.Scan(&run.ID, &run.Task, &run.GrantUSD, &started, &ended,
-			&closed, &stop, &run.WriterPID); err != nil {
+			&closed, &stop, &run.WriterPID, &run.WatchdogState, &progressAt); err != nil {
 			return nil, unavailable(err, "workflow: list")
 		}
 		run.Started = parseStamp(started)
 		run.Ended = parseStamp(ended)
 		run.Closed = closed != 0
 		run.Stop = Stop(stop)
+		run.LastProgressAt = parseStamp(progressAt)
+		if run.WatchdogState == "" {
+			run.WatchdogState = StateRunning
+		}
 		out = append(out, run)
 	}
 	if err := rows.Err(); err != nil {
@@ -1293,34 +2303,40 @@ func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
 
 func scanStep(rows *sql.Rows) (StepRow, error) {
 	var (
-		out                                   StepRow
-		pool, files, needs, effects, routeRaw string
-		onOutcome                             string
-		status, verdict                       string
-		reasonKind, reasonText                string
-		result, discovered                    string
-		started, ended                        string
-		usd                                   sql.NullFloat64
-		budgetEstimate, budgetMinimum         float64
-		budgetSource                          string
-		inputTok, outputTok                   sql.NullInt64
-		cacheReadTok, cacheWriteTok           sql.NullInt64
-		pricedBy                              string
-		completeness                          sql.NullFloat64
-		stoppedAt                             string
+		out                                               StepRow
+		pool, files, needs, effects, operations, routeRaw string
+		onOutcome                                         string
+		status, verdict                                   string
+		reasonKind, reasonText                            string
+		result, discovered, notices                       string
+		started, ended                                    string
+		usd                                               sql.NullFloat64
+		budgetEstimate, budgetMinimum                     float64
+		budgetSource                                      string
+		inputTok, outputTok                               sql.NullInt64
+		cacheReadTok, cacheWriteTok                       sql.NullInt64
+		pricedBy                                          string
+		invoked, invokedKnown                             int
+		recoveryKind, recoveryReason                      string
+		completeness                                      sql.NullFloat64
+		maxDurationNS                                     int64
+		maxTokens                                         int
+		stoppedAt                                         string
 	)
-	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &pool,
-		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &needs,
-		&out.Step.Subject, &onOutcome, &effects, &routeRaw,
+	if err := rows.Scan(&out.Step.ID, &out.Step.TypeName, &out.Step.PointID, &out.Step.PointTitle, &pool,
+		&out.Step.Task.Objective, &files, &out.Step.Task.Criterion, &maxDurationNS, &maxTokens, &needs,
+		&out.Step.Subject, &onOutcome, &effects, &operations, &routeRaw,
 		&budgetEstimate, &budgetMinimum, &budgetSource,
-		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.Attempt,
+		&out.Step.Permission.BudgetUSD, &status, &out.TraceID, &out.SourceFingerprint, &out.Attempt,
 		&out.WriterPID, &started, &ended, &verdict, &reasonKind, &reasonText,
-		&result, &discovered, &usd,
+		&result, &discovered, &notices, &usd,
 		&inputTok, &outputTok, &cacheReadTok, &cacheWriteTok, &pricedBy,
+		&invoked, &invokedKnown, &recoveryKind, &recoveryReason,
 		&completeness, &stoppedAt); err != nil {
 		return StepRow{}, unavailable(err, "workflow: reading a step")
 	}
 	out.Step.BudgetEstimateUSD = budgetEstimate
+	out.Step.Limits = contract.Limits{MaxDuration: time.Duration(maxDurationNS), MaxTokens: maxTokens}
 	out.Step.BudgetMinimumUSD = budgetMinimum
 	out.Step.BudgetSource = budgetSource
 	var err error
@@ -1338,6 +2354,9 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 	out.Step.Task.Files = readList(files)
 	out.Step.Needs = readList(needs)
 	if out.Step.Permission.Effects, err = readEffects(effects); err != nil {
+		return StepRow{}, err
+	}
+	if out.Step.Permission.Operations, err = readOperations(operations); err != nil {
 		return StepRow{}, err
 	}
 	if out.Step.Route, err = readRoute(routeRaw); err != nil {
@@ -1359,6 +2378,7 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 	}
 	out.Result = readMap(result)
 	out.Discovered = readDiscoveries(discovered)
+	out.Notices = readList(notices)
 	out.Spent = contract.Charge{
 		InputTokens:      int(inputTok.Int64),
 		OutputTokens:     int(outputTok.Int64),
@@ -1366,6 +2386,8 @@ func scanStep(rows *sql.Rows) (StepRow, error) {
 		CacheWriteTokens: int(cacheWriteTok.Int64),
 		PricedBy:         pricedBy,
 	}
+	out.Invoked, out.InvokedKnown = invoked != 0, invokedKnown != 0
+	out.RecoveryKind, out.RecoveryReason = recoveryKind, recoveryReason
 	if usd.Valid {
 		value := usd.Float64
 		out.Spent.USD = &value
@@ -1388,6 +2410,13 @@ func stamp(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func parseStamp(s string) time.Time {
@@ -1442,6 +2471,108 @@ func readEffects(raw string) ([]contract.Effect, error) {
 		out = append(out, effect)
 	}
 	return out, nil
+}
+
+func jsonOperations(operations []contract.Operation) string {
+	names := make([]string, 0, len(operations))
+	for _, operation := range operations {
+		names = append(names, operation.String())
+	}
+	return jsonList(names)
+}
+
+func readOperations(raw string) ([]contract.Operation, error) {
+	names := readList(raw)
+	out := make([]contract.Operation, 0, len(names))
+	for _, name := range names {
+		operation, err := contract.ParseOperation(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, operation)
+	}
+	return out, nil
+}
+
+func jsonPolicy(policy WorkflowPolicy) string {
+	raw, err := json.Marshal(struct {
+		Name              string   `json:"name,omitempty"`
+		Version           string   `json:"version,omitempty"`
+		Digest            string   `json:"digest,omitempty"`
+		Criterion         string   `json:"criterion,omitempty"`
+		Effects           []string `json:"effects,omitempty"`
+		Operations        []string `json:"operations,omitempty"`
+		MaxBudgetUSD      float64  `json:"max_budget_usd,omitempty"`
+		MaxDurationNS     int64    `json:"max_duration_ns,omitempty"`
+		MaxTokens         int      `json:"max_tokens,omitempty"`
+		MaxRetries        int      `json:"max_retries,omitempty"`
+		MaxParallelAgent  int      `json:"max_parallel_agent,omitempty"`
+		MaxParallelReview int      `json:"max_parallel_review,omitempty"`
+	}{
+		Name: policy.Name, Version: policy.Version, Digest: policy.Digest, Criterion: policy.Criterion,
+		Effects: effectNames(policy.Effects), Operations: operationNames(policy.Operations), MaxBudgetUSD: policy.MaxBudgetUSD,
+		MaxDurationNS: policy.MaxDuration.Nanoseconds(), MaxTokens: policy.MaxTokens, MaxRetries: policy.MaxRetries,
+		MaxParallelAgent: policy.MaxParallelAgent, MaxParallelReview: policy.MaxParallelReview,
+	})
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func readPolicy(raw string) (WorkflowPolicy, error) {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(raw) == "{}" {
+		return WorkflowPolicy{}, nil
+	}
+	var wire struct {
+		Name              string   `json:"name"`
+		Version           string   `json:"version"`
+		Digest            string   `json:"digest"`
+		Criterion         string   `json:"criterion"`
+		Effects           []string `json:"effects"`
+		Operations        []string `json:"operations"`
+		MaxBudgetUSD      float64  `json:"max_budget_usd"`
+		MaxDurationNS     int64    `json:"max_duration_ns"`
+		MaxTokens         int      `json:"max_tokens"`
+		MaxRetries        int      `json:"max_retries"`
+		MaxParallelAgent  int      `json:"max_parallel_agent"`
+		MaxParallelReview int      `json:"max_parallel_review"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
+		return WorkflowPolicy{}, contract.Fail(contract.FailureUnavailable, "workflow: reading policy: %v", err)
+	}
+	effects, err := readEffects(jsonList(wire.Effects))
+	if err != nil {
+		return WorkflowPolicy{}, err
+	}
+	operations, err := readOperations(jsonList(wire.Operations))
+	if err != nil {
+		return WorkflowPolicy{}, err
+	}
+	policy := WorkflowPolicy{Name: wire.Name, Version: wire.Version, Digest: wire.Digest, Criterion: wire.Criterion, MaxBudgetUSD: wire.MaxBudgetUSD,
+		Effects: effects, Operations: operations,
+		MaxDuration: time.Duration(wire.MaxDurationNS), MaxTokens: wire.MaxTokens, MaxRetries: wire.MaxRetries,
+		MaxParallelAgent: wire.MaxParallelAgent, MaxParallelReview: wire.MaxParallelReview}
+	if err := policy.valid(); err != nil {
+		return WorkflowPolicy{}, err
+	}
+	return policy, nil
+}
+
+func effectNames(values []contract.Effect) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.String())
+	}
+	return out
+}
+
+func operationNames(values []contract.Operation) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.String())
+	}
+	return out
 }
 
 func jsonMap(values map[string]any) (string, error) {

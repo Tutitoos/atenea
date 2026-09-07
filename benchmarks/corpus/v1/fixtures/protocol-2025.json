@@ -1,0 +1,5 @@
+{
+  "protocol_version": "2025-06-18",
+  "transport": "stdio",
+  "mode": "legacy"
+}

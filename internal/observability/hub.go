@@ -21,23 +21,26 @@ const DefaultCapacity = 4096
 // results, discoveries or arbitrary maps here: this type is the privacy
 // boundary between orchestration and a browser.
 type Event struct {
-	Seq            uint64    `json:"seq"`
-	At             time.Time `json:"at"`
-	Kind           string    `json:"kind"`
-	SessionID      string    `json:"session_id,omitempty"`
-	RunID          string    `json:"run_id,omitempty"`
-	StepID         string    `json:"step_id,omitempty"`
-	Capability     string    `json:"capability,omitempty"`
-	Implementation string    `json:"implementation,omitempty"`
-	Provider       string    `json:"provider,omitempty"`
-	Repository     string    `json:"repository,omitempty"`
-	State          string    `json:"state,omitempty"`
-	Reason         string    `json:"reason,omitempty"`
-	Light          string    `json:"light,omitempty"`
-	Attempt        int       `json:"attempt,omitempty"`
-	Count          int       `json:"count,omitempty"`
-	DurationMS     int64     `json:"duration_ms,omitempty"`
-	Tokens         int64     `json:"tokens,omitempty"`
+	Seq             uint64                    `json:"seq"`
+	At              time.Time                 `json:"at"`
+	Kind            string                    `json:"kind"`
+	SessionID       string                    `json:"session_id,omitempty"`
+	RunID           string                    `json:"run_id,omitempty"`
+	StepID          string                    `json:"step_id,omitempty"`
+	Capability      string                    `json:"capability,omitempty"`
+	Implementation  string                    `json:"implementation,omitempty"`
+	Provider        string                    `json:"provider,omitempty"`
+	Repository      string                    `json:"repository,omitempty"`
+	State           string                    `json:"state,omitempty"`
+	Reason          string                    `json:"reason,omitempty"`
+	Light           string                    `json:"light,omitempty"`
+	Attempt         int                       `json:"attempt,omitempty"`
+	Count           int                       `json:"count,omitempty"`
+	DurationMS      int64                     `json:"duration_ms,omitempty"`
+	Tokens          int64                     `json:"tokens,omitempty"`
+	CacheHit        bool                      `json:"cache_hit,omitempty"`
+	Coalesced       bool                      `json:"coalesced,omitempty"`
+	CacheValidation *contract.CacheValidation `json:"cache_validation,omitempty"`
 }
 
 // Safe returns a copy with untrusted reason text redacted and bounded.
@@ -53,6 +56,15 @@ func (e Event) Safe() Event {
 	e.State = safeText(e.State, 48)
 	e.Light = safeText(e.Light, 48)
 	e.Reason = safeText(e.Reason, 240)
+	if e.CacheValidation != nil {
+		validationCopy := *e.CacheValidation
+		validationCopy.Provider = safeText(validationCopy.Provider, 120)
+		validationCopy.Tool = safeText(validationCopy.Tool, 120)
+		validationCopy.ToolVersion = safeText(validationCopy.ToolVersion, 80)
+		validationCopy.Instance = safeText(validationCopy.Instance, 160)
+		validationCopy.Error = safeText(validationCopy.Error, 240)
+		e.CacheValidation = &validationCopy
+	}
 	if len(e.Reason) > 240 {
 		cut := 240 - len("…")
 		for cut > 0 && !utf8.RuneStart(e.Reason[cut]) {

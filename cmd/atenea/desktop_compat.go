@@ -18,9 +18,11 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Tutitoos/atenea/internal/clientcompat"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/core"
 	"github.com/Tutitoos/atenea/internal/ipc"
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 )
 
 type wrapOptions struct {
@@ -616,6 +618,12 @@ type doctorReport struct {
 	Checks        []doctorCheck             `json:"checks"`
 	Config        map[string]string         `json:"config"`
 	Telemetry     core.CompatibilitySummary `json:"telemetry"`
+	Compatibility clientcompat.Entry        `json:"compatibility"`
+}
+
+type doctorAllReport struct {
+	SchemaVersion string              `json:"schema_version"`
+	Matrix        clientcompat.Matrix `json:"matrix"`
 }
 
 func appendDoctorCheck(report *doctorReport, id, status, detail, remedy string) {
@@ -659,7 +667,7 @@ func probeMCPForDoctor(profile, client, version string) (int, []doctorCheck) {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	reader := bufio.NewReader(conn)
 	params := map[string]any{
-		"protocolVersion": "2025-06-18",
+		"protocolVersion": mcpcompat.Legacy.String(),
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]string{"name": client, "version": version},
 		"_meta":           map[string]any{"atenea": map[string]string{"profile": profile}},
@@ -723,6 +731,61 @@ func installedChatGPTState(profile config.DesktopProfile) string {
 }
 
 func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
+	all := false
+	for _, arg := range args {
+		if arg == "--all" {
+			all = true
+			break
+		}
+	}
+	if !all {
+		return cmdDoctorCompatSingle(settingsPath, args, out)
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--client") || strings.HasPrefix(arg, "--profile") {
+			return errors.New("doctor --all no admite --client ni --profile")
+		}
+	}
+	matrix := clientcompat.NewMatrix(time.Now().UTC())
+	for _, spec := range clientcompat.Specs() {
+		var buffer bytes.Buffer
+		if err := cmdDoctorCompatSingle(settingsPath, []string{"--client", spec.Client, "--json"}, &buffer); err != nil {
+			return err
+		}
+		var report doctorReport
+		if err := json.Unmarshal(buffer.Bytes(), &report); err != nil {
+			return fmt.Errorf("doctor --all: invalid report for %s: %w", spec.Client, err)
+		}
+		matrix = replaceCompatibilityEntry(matrix, report.Compatibility)
+	}
+	allReport := doctorAllReport{SchemaVersion: clientcompat.SchemaVersion, Matrix: matrix.Normalize()}
+	if hasDoctorJSON(args) {
+		return json.NewEncoder(out).Encode(allReport)
+	}
+	_, err := io.WriteString(out, allReport.Matrix.Markdown())
+	return err
+}
+
+func hasDoctorJSON(args []string) bool {
+	for _, arg := range args {
+		if arg == "--json" {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceCompatibilityEntry(matrix clientcompat.Matrix, entry clientcompat.Entry) clientcompat.Matrix {
+	for i := range matrix.Entries {
+		if matrix.Entries[i].Client == entry.Client {
+			matrix.Entries[i] = entry
+			return matrix
+		}
+	}
+	return matrix
+}
+
+func cmdDoctorCompatSingle(settingsPath string, args []string, out io.Writer) error {
 	client, profileName, asJSON := "", "", false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -743,7 +806,10 @@ func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 		}
 	}
 	if client == "" {
-		return errors.New("doctor requiere --client claude|chatgpt|codex")
+		return errors.New("doctor requiere --client claude|chatgpt|codex|omp|opencode")
+	}
+	if _, ok := clientcompat.Spec(client); !ok {
+		return fmt.Errorf("doctor: cliente desconocido %q (claude|chatgpt|codex|omp|opencode)", client)
 	}
 	cfg, err := config.Load(settingsPath)
 	if err != nil {
@@ -773,13 +839,14 @@ func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 		appendDoctorCheck(&report, "client.flags", "ok", "todas las flags requeridas están disponibles", "")
 	}
 	appendDoctorCheck(&report, "profile.policy", "ok", fmt.Sprintf("mode=%s direct_mcp=%d fallback=%s startup=%s tool=%s", profile.MCPMode, len(config.FilterDesktopMCPServers(cfg.MCPServers, profile)), profile.Fallback, profile.StartupTimeout, profile.ToolTimeout), "")
-	if client == "chatgpt" || client == "codex" {
+	switch client {
+	case "chatgpt", "codex":
 		if report.Config["state"] == "unmanaged_collision" {
 			appendDoctorCheck(&report, "config.installed", "degraded", "mcp_servers.atenea existe fuera de Atenea", "Usa desktop install ... --replace para adoptarla explícitamente.")
 		} else {
 			appendDoctorCheck(&report, "config.installed", "ok", report.Config["state"], "")
 		}
-	} else {
+	case "claude":
 		state, inspection := claudeMCPState(profile)
 		report.Config["state"] = state
 		report.Config["scopes"] = strings.Join(inspection.Scopes, ",")
@@ -792,6 +859,12 @@ func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 			}
 			appendDoctorCheck(&report, "config.installed", "degraded", state, remedy)
 		}
+	default:
+		// OMP and OpenCode have different configuration stores. Until their
+		// own inspectors exist, leave this unknown rather than inspecting or
+		// prescribing changes to Claude's configuration.
+		report.Config["state"] = "unknown"
+		appendDoctorCheck(&report, "config.inspection", "skipped", client+" configuration inspector is unavailable", "No client-specific configuration was inspected.")
 	}
 	if resolved.Path != "" && (client != "chatgpt" || resolved.AppInstalled) {
 		_, checks := probeMCPForDoctor(profile.Name, client, resolved.Version)
@@ -806,11 +879,61 @@ func cmdDoctorCompat(settingsPath string, args []string, out io.Writer) error {
 	} else {
 		appendDoctorCheck(&report, "mcp.initialize", "skipped", "cliente no resuelto", "Instala el cliente antes de probar MCP.")
 	}
+	report.Compatibility = doctorCompatibility(client, profile, resolved, report.Checks)
 	if asJSON {
 		return json.NewEncoder(out).Encode(report)
 	}
 	fmt.Fprintf(out, "client=%s version=%s profile=%s overall=%s config=%s telemetry=available:%d denied:%d fallback:%d error:%d\n", report.Client, report.ClientVersion, report.Profile, report.Overall, report.Config["state"], report.Telemetry.Available, report.Telemetry.Denied, report.Telemetry.Fallback, report.Telemetry.Error)
 	return nil
+}
+
+func doctorCompatibility(client string, profile config.DesktopProfile, resolved desktopClientResolution, checks []doctorCheck) clientcompat.Entry {
+	spec, _ := clientcompat.Spec(client)
+	entry := clientcompat.Entry{
+		Client: client, ClientInfo: spec.ClientInfo, Version: resolved.Version, Date: time.Now().UTC().Format("2006-01-02"),
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Profile: profile.Name, Transport: spec.Transport,
+		Requested: "unknown", Observed: "unknown", Scope: spec.Scope,
+		EvidenceLevel: clientcompat.EvidenceManual, Source: clientcompat.EvidenceManual,
+		Declared:     clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "detect", Detail: "client not inspected"}),
+		Connected:    clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "mcp", Detail: "not tested"}),
+		Tested:       clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "workflow.status", Detail: "not tested"}),
+		Presentation: clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "chat", Detail: "not tested"}),
+		Reconnect:    clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "reconnect", Detail: "not tested"}),
+		ServerProbe:  clientcompat.EvidenceCheck(clientcompat.Unknown, clientcompat.Evidence{ID: "server-probe", Detail: "not probed"}),
+	}
+	if resolved.Path != "" || resolved.AppInstalled {
+		entry.Declared = clientcompat.EvidenceCheck(clientcompat.Pass, clientcompat.Evidence{ID: "detect", Detail: "client detected"})
+	} else {
+		entry.Declared = clientcompat.EvidenceCheck(clientcompat.Fail, clientcompat.Evidence{ID: "detect", Detail: "client not detected"})
+	}
+	initializeOK, toolsOK := false, false
+	probeChecks := 0
+	for _, check := range checks {
+		if !strings.HasPrefix(check.ID, "mcp.") {
+			continue
+		}
+		if check.Status == "skipped" {
+			continue
+		}
+		probeChecks++
+		switch check.ID {
+		case "mcp.initialize":
+			initializeOK = check.Status == "ok"
+		case "mcp.tools_list":
+			toolsOK = check.Status == "ok"
+		}
+	}
+	// The direct MCP probe is evidence about the server only. It must never
+	// certify this client's connection, observed protocol, presentation, or
+	// reconnect lifecycle.
+	if probeChecks > 0 {
+		if initializeOK && toolsOK {
+			entry.ServerProbe = clientcompat.EvidenceCheck(clientcompat.Pass, clientcompat.Evidence{ID: "server", Detail: "direct MCP initialize and tools/list completed"})
+		} else {
+			entry.ServerProbe = clientcompat.EvidenceCheck(clientcompat.Fail, clientcompat.Evidence{ID: "server", Detail: "direct MCP server probe was incomplete"})
+		}
+	}
+	return entry
 }
 
 func cmdDesktopStatusCompat(settingsPath string, args []string, out io.Writer) error {

@@ -1,8 +1,11 @@
 package core_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -14,6 +17,61 @@ import (
 	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+// TestSocketCancellationHelper is a tiny MCP server used by the socket
+// cancellation test below. Its tools/call deliberately waits for the
+// notifications/canceled message on the same stream before answering, which
+// exercises the real transport path rather than merely canceling a context in
+// a unit test.
+func TestSocketCancellationHelper(t *testing.T) {
+	if os.Getenv("ATENEA_SOCKET_CANCELLATION_HELPER") != "1" {
+		t.Skip("not a helper invocation")
+	}
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	out := json.NewEncoder(os.Stdout)
+	for in.Scan() {
+		var message struct {
+			ID     any            `json:"id"`
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if json.Unmarshal(in.Bytes(), &message) != nil {
+			continue
+		}
+		switch message.Method {
+		case "initialize":
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{
+				"protocolVersion": mcpVersion,
+				"serverInfo":      map[string]any{"name": "socket-cancel", "version": "1"},
+			}})
+		case "notifications/initialized":
+		case "tools/list":
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{
+				"tools": []map[string]any{{"name": "wait", "description": "waits for cancellation", "inputSchema": map[string]any{"type": "object"}}},
+			}})
+		case "tools/call":
+			if name, _ := message.Params["name"].(string); name != "wait" {
+				_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
+				continue
+			}
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "atenea/test_started", "params": map[string]any{"requestId": message.ID}})
+			for in.Scan() {
+				var followup struct {
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				if json.Unmarshal(in.Bytes(), &followup) != nil || followup.Method != "notifications/canceled" {
+					continue
+				}
+				_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "canceled"}}, "isError": true,
+				}})
+				break
+			}
+		}
+	}
+}
 
 // The socket is the service's, and a command must not open one. A door is a
 // claim that somebody is behind it, and a command is gone a second later --
@@ -162,6 +220,47 @@ func TestDetectOverTheSocketRefusesAMalformedBody(t *testing.T) {
 	answer := ask(t, `{"jsonrpc":"2.0","id":4,"method":"atenea/detect","params":"api"}`)
 	if !strings.Contains(answer, "-32600") {
 		t.Errorf("answer = %s, want an invalid-request code", answer)
+	}
+}
+
+func TestSocketCancellationReleasesDispatchAndAllowsNextRequest(t *testing.T) {
+	atenea := buildService(t, socketCancellationSettings(t))
+	stop := serve(t, atenea)
+	defer stop()
+
+	c := dial(t)
+	c.handshake("socket-cancel")
+	c.send(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{
+		"name": "raw.block.wait", "arguments": map[string]any{},
+	}})
+	// Wait until the child has entered its blocked call. The notification is
+	// consumed by answer's reader while the serial dispatcher remains in the
+	// first request, so this proves cancellation is not queued behind it.
+	var canceled map[string]any
+	for c.lines.Scan() {
+		var answer map[string]any
+		if err := json.Unmarshal(c.lines.Bytes(), &answer); err != nil {
+			t.Fatal(err)
+		}
+		if answer["method"] == "atenea/test_started" {
+			c.notify("notifications/canceled", map[string]any{"requestId": 2})
+			continue
+		}
+		if fmt.Sprint(answer["id"]) == "2" {
+			canceled = answer
+			break
+		}
+	}
+	if canceled == nil {
+		t.Fatalf("canceled tools/call produced no response: %v", c.lines.Err())
+	}
+	if _, ok := canceled["result"]; !ok {
+		t.Fatalf("canceled tools/call was not completed without a late effect: %v", canceled)
+	}
+	c.id = 2 // the in-flight request used the next id outside client.call
+	next := c.call("tools/list", nil)
+	if got := next["id"]; got != float64(3) {
+		t.Fatalf("request after cancellation did not continue: id=%v answer=%v", got, next)
 	}
 }
 
@@ -366,6 +465,19 @@ func askLong(t *testing.T, line string) string {
 		t.Fatal("nothing came back")
 		return ""
 	}
+}
+
+func socketCancellationSettings(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+	return socketSettings + fmt.Sprintf("\n[[mcp_server]]\nid = \"block\"\n"+
+		"command = [%q, \"-test.run=TestSocketCancellationHelper\"]\n"+
+		"env = { ATENEA_SOCKET_CANCELLATION_HELPER = \"1\" }\n"+
+		"expose = \"raw\"\ntools = [\"wait\"]\neffects = [\"read\"]\n"+
+		"\n  [[mcp_server.tool]]\n  name = \"wait\"\n  effects = [\"read\"]\n", self)
 }
 
 // The shutdown margin has to cover the connection handlers too.

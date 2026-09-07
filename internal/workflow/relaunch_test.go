@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Tutitoos/atenea/internal/config"
+	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -221,6 +222,96 @@ func TestWorkRefusedTwiceIsNotRunAThirdTime(t *testing.T) {
 	}
 }
 
+func TestAutomaticReviewCorrectionHonorsPersistedRetryLimit(t *testing.T) {
+	dir := t.TempDir()
+	work, log := countingWork(t, dir, "work")
+	h := newHarnessWith(t, workflow.Options{
+		ProfileName: "retry-policy-v1",
+		MaxRetries:  0,
+	}, dir,
+		declared("work", work, config.PoolAgent),
+		declared("judge", refusesOnce(t, dir, "judge", "still wrong"), config.PoolReview),
+	)
+
+	graph := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	if _, err := h.engine.Start(t.Context(), graph); err == nil || !strings.Contains(err.Error(), "automatic retry limit") {
+		t.Fatalf("Start = %v, want persisted automatic retry limit refusal", err)
+	}
+	if handed := cards(t, log); len(handed) != 1 {
+		t.Fatalf("the work ran %d times, want no automatic correction", len(handed))
+	}
+}
+
+func TestAutomaticReviewCorrectionReservesTheWholePairAgainstRetryLimit(t *testing.T) {
+	dir := t.TempDir()
+	work, log := countingWork(t, dir, "work")
+	h := newHarnessWith(t, workflow.Options{
+		ProfileName: "retry-policy-v1",
+		MaxRetries:  1,
+	}, dir,
+		declared("work", work, config.PoolAgent),
+		declared("judge", refusesOnce(t, dir, "judge", "still wrong"), config.PoolReview),
+	)
+
+	graph := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	if _, err := h.engine.Start(t.Context(), graph); err == nil || !strings.Contains(err.Error(), "automatic retry limit") {
+		t.Fatalf("Start = %v, want persisted automatic retry limit refusal", err)
+	}
+	if handed := cards(t, log); len(handed) != 1 {
+		t.Fatalf("the work ran %d times, want no correction when the pair exceeds the ceiling", len(handed))
+	}
+}
+
+func TestAutomaticReviewCorrectionReservesAndAllowsTheWholePairAtTwo(t *testing.T) {
+	dir := t.TempDir()
+	work, log := countingWork(t, dir, "work")
+	h := newHarnessWith(t, workflow.Options{
+		ProfileName: "retry-policy-v2",
+		MaxRetries:  2,
+	}, dir,
+		declared("work", work, config.PoolAgent),
+		declared("judge", refusesOnce(t, dir, "judge", "still wrong"), config.PoolReview),
+	)
+
+	graph := graphOf(step("w", "work", nil), reviewing(step("j", "judge", nil), "w"))
+	if _, err := h.engine.Start(t.Context(), graph); err != nil {
+		t.Fatalf("Start = %v, want the one permitted correction pair", err)
+	}
+	if handed := cards(t, log); len(handed) != 2 {
+		t.Fatalf("the work ran %d times, want exactly one correction", len(handed))
+	}
+}
+
+func TestAutomaticReviewCorrectionDoesNotReuseSensitiveOperation(t *testing.T) {
+	dir := t.TempDir()
+	work, log := countingWork(t, dir, "work")
+	h := newHarness(t, noCeiling(),
+		declared("work", work, config.PoolAgent, contract.EffectRead, contract.EffectWrite),
+		declared("judge", refusesOnce(t, dir, "judge", "still wrong"), config.PoolReview),
+	)
+	workStep := withFiles(step("w", "work", nil, contract.EffectRead, contract.EffectWrite), "out.txt")
+	workStep.Permission.Operations = []contract.Operation{contract.OperationPush}
+	graph := graphOf(workStep, reviewing(step("j", "judge", nil), "w"))
+	run, _, err := h.engine.Create(t.Context(), graph)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := h.engine.LaunchAuthorized(t.Context(), run.ID, []contract.Operation{contract.OperationPush}); err == nil ||
+		!strings.Contains(err.Error(), "fresh sensitive-operation authorization") {
+		t.Fatalf("Launch = %v, want a pause requiring fresh operation authorization", err)
+	}
+	if handed := cards(t, log); len(handed) != 1 {
+		t.Fatalf("the operation-bearing work ran %d times, want no automatic reuse", len(handed))
+	}
+	recorded, err := h.state.Load(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if recorded.Stop != workflow.StopUnjudged {
+		t.Fatalf("stop = %s, want durable unjudged pause", recorded.Stop)
+	}
+}
+
 // The refused attempt cost real money. A receipt that keeps only the accepted
 // half understates the bill by exactly what the correction cost.
 func TestTheRefusedAttemptsChargeStaysOnTheReceipt(t *testing.T) {
@@ -241,15 +332,14 @@ func TestTheRefusedAttemptsChargeStaysOnTheReceipt(t *testing.T) {
 	if spend.USD == nil {
 		t.Fatalf("the run reports no dollar figure: %+v", spend)
 	}
-	// The two halves are held apart, and the receipt adds them. The refused
-	// attempt lives in the archive, which is where Reset files it and where
-	// it survives the process that heard the refusal; the live row holds the
-	// attempt that stands. This used to be one number on the live row -- an
-	// in-memory tally folded into it at Finish -- and the archive held the
-	// same money again, so the balance line, which adds both, charged $0.09
-	// for two attempts that cost $0.06.
-	if spend.SupersededAttempts != 1 {
-		t.Errorf("archived attempts = %d, want the one the review refused", spend.SupersededAttempts)
+	// Both dispatches are held apart, and the receipt adds their priced cost.
+	// The work attempt has a price; the refusing review was a real dispatch but
+	// reported no price, so it remains an unknown archived attempt.
+	if spend.SupersededAttempts != 2 {
+		t.Errorf("archived attempts = %d, want both real dispatches", spend.SupersededAttempts)
+	}
+	if spend.SupersededUnknownSteps != 1 {
+		t.Errorf("unknown archived attempts = %d, want the unpriced review", spend.SupersededUnknownSteps)
 	}
 	if charged := *spend.USD + spend.SupersededUSD; charged < 0.059 || charged > 0.061 {
 		t.Errorf("charged $%.4f, want both attempts ($0.06)", charged)

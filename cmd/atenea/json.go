@@ -209,17 +209,19 @@ type jsonIndexReport struct {
 }
 
 type jsonServerProbe struct {
-	ID         string `json:"id"`
-	Transport  string `json:"transport"`
-	Where      string `json:"where"`
-	Dashboard  string `json:"dashboard,omitempty"`
-	Expose     string `json:"expose"`
-	Reachable  bool   `json:"reachable"`
-	Name       string `json:"name,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	TookMS     int64  `json:"took_ms"`
-	PinnedPath bool   `json:"pinned_path"`
+	ID                       string `json:"id"`
+	Transport                string `json:"transport"`
+	Where                    string `json:"where"`
+	Dashboard                string `json:"dashboard,omitempty"`
+	Expose                   string `json:"expose"`
+	Reachable                bool   `json:"reachable"`
+	Name                     string `json:"name,omitempty"`
+	Version                  string `json:"version,omitempty"`
+	Reason                   string `json:"reason,omitempty"`
+	TookMS                   int64  `json:"took_ms"`
+	PinnedPath               bool   `json:"pinned_path"`
+	RequestedProtocolVersion string `json:"requested_protocol_version"`
+	ObservedProtocolVersion  string `json:"observed_protocol_version"`
 }
 
 // jsonDetection is what `atenea detect --json` answers.
@@ -270,17 +272,19 @@ func printDetectionJSON(out io.Writer, detection core.Detection, by answeredBy) 
 	}
 	for i, server := range servers {
 		js.Servers[i] = jsonServerProbe{
-			ID:         server.ID,
-			Transport:  server.Transport,
-			Where:      server.Where,
-			Dashboard:  server.Dashboard,
-			Expose:     server.Expose,
-			Reachable:  server.OK,
-			Name:       server.Name,
-			Version:    server.Version,
-			Reason:     server.Reason,
-			TookMS:     server.Took.Milliseconds(),
-			PinnedPath: server.PinnedPath,
+			ID:                       server.ID,
+			Transport:                server.Transport,
+			Where:                    server.Where,
+			Dashboard:                server.Dashboard,
+			Expose:                   server.Expose,
+			Reachable:                server.OK,
+			Name:                     server.Name,
+			Version:                  server.Version,
+			Reason:                   server.Reason,
+			TookMS:                   server.Took.Milliseconds(),
+			PinnedPath:               server.PinnedPath,
+			RequestedProtocolVersion: server.RequestedProtocolVersion,
+			ObservedProtocolVersion:  server.ObservedProtocolVersion,
 		}
 	}
 	for i, report := range reports {

@@ -14,7 +14,7 @@ func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 		t.Fatalf("newBackendMemory: %v", err)
 	}
 	at := time.Now().UTC().Truncate(time.Second)
-	first.record("fixture", backendReading{State: BackendFailed, At: at, Reason: "connection refused"})
+	first.record("fixture", backendReading{State: BackendFailed, At: at, Reason: "connection refused", RequestedProtocolVersion: "2026-07-28", ObservedProtocolVersion: "2026-07-28"})
 
 	second, err := newBackendMemory(path)
 	if err != nil {
@@ -24,7 +24,7 @@ func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 	if !ok {
 		t.Fatal("persisted reading was not restored")
 	}
-	if reading.State != BackendFailed || reading.Reason != "connection refused" || !reading.At.Equal(at) {
+	if reading.State != BackendFailed || reading.Reason != "connection refused" || reading.RequestedProtocolVersion != "2026-07-28" || reading.ObservedProtocolVersion != "2026-07-28" || !reading.At.Equal(at) {
 		t.Fatalf("reading after reopen = %+v, want persisted failure", reading)
 	}
 }

@@ -9,6 +9,7 @@ export const keys = {
   session: (id: string) => ["session", id] as const,
   runs: (filters: Record<string, string | undefined>) => ["runs", filters] as const,
   run: (id: string) => ["run", id] as const,
+	workflow: (id: string) => ["workflow", id] as const,
   metrics: (filters: Record<string, string | undefined>) => ["metrics", filters] as const,
   catalog: ["catalog"] as const,
   incidents: ["incidents"] as const,
@@ -28,6 +29,7 @@ export function useRealtime() {
           if (event.seq <= lastSeq.current) return;
           lastSeq.current = event.seq;
           if (event.session_id) void client.invalidateQueries({ queryKey: ["session", event.session_id] });
+          if (event.run_id) void client.invalidateQueries({ queryKey: ["workflow", event.run_id] });
           void client.invalidateQueries({ queryKey: ["overview"] });
           void client.invalidateQueries({ queryKey: ["sessions"] });
           void client.invalidateQueries({ queryKey: ["runs"] });

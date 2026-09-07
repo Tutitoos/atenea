@@ -111,6 +111,41 @@ func TestAnUnpricedRunIsNotAZeroDollarRun(t *testing.T) {
 	}
 }
 
+func TestEstimatedCostIsExposedButDoesNotReleaseReservation(t *testing.T) {
+	store := costStore(t)
+	one := step("a", "worker", nil)
+	one.Permission.BudgetUSD = 0.70
+	graph := graphOf(one)
+	graph.GrantUSD = 1.00
+	plan, err := workflow.Compile(graph,
+		[]config.AgentType{declared("worker", "/bin/true", config.PoolAgent)})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := store.Create(t.Context(), "wf-estimate", plan, "repo", time.Now(), 1); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Claim(t.Context(), "wf-estimate", "a", "trace-1", 1, time.Now(), 1, 0.70); err != nil {
+		t.Fatalf("Claim first: %v", err)
+	}
+	estimate := 0.20
+	if err := store.Finish(t.Context(), "wf-estimate", "a", workflow.StatusOK,
+		contract.Report{Verdict: contract.VerdictOK, Spent: contract.Charge{USD: &estimate, PricedBy: "estimate:allowance"}}, time.Now()); err != nil {
+		t.Fatalf("Finish estimate: %v", err)
+	}
+	run, err := store.Load(t.Context(), "wf-estimate")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	spend := run.Spend()
+	if spend.EstimatedSteps != 1 || spend.ObservedSteps != 0 || spend.UnknownSteps != 0 || spend.EstimatedUSD == nil || *spend.EstimatedUSD != estimate {
+		t.Fatalf("spend = %+v, want one estimated step and $%.2f", spend, estimate)
+	}
+	if err := store.Claim(t.Context(), "wf-estimate", "a", "trace-2", 2, time.Now(), 1, 0.40); err == nil {
+		t.Fatal("second claim succeeded after estimated spend; full reservation should remain held")
+	}
+}
+
 // A repository with no rows of its own is told the truth: here is what the
 // machine knows, and it is not scoped to your tree.
 func TestARepositoryWithNoRunsFallsBackToMachineWideAndSaysSo(t *testing.T) {

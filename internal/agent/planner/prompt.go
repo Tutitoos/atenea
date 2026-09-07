@@ -151,6 +151,8 @@ The format, which is compiled before it runs:
     [[step]]
     id = "read-a"                 # unique, referenced by other steps
     agent = "<one of the declared types>"
+    point_id = "P00"              # stable user-visible deliverable
+    point_title = "short title"   # same id and title on its review/audit steps
     objective = "what this step is asked to do"
     criterion = "what a correct answer looks like"
     files = ["path/one.go"]       # optional
@@ -162,6 +164,8 @@ The format, which is compiled before it runs:
     [[step]]
     id = "audit-a"
     agent = "<a review-pool type>"
+    point_id = "P00"
+    point_title = "short title"
     subject = "read-a"            # required for review-pool types: the step it audits
     on = "answered"               # optional: "ok" (default) or "answered"
     objective = "..."
@@ -172,6 +176,9 @@ The format, which is compiled before it runs:
 Rules the compiler enforces, so getting them wrong costs a round trip:
 
   - Every agent name must be one of the declared types above.
+  - Every user-visible deliverable uses a stable P00, P01, ... identifier.
+    Implementation, review and audit steps for one deliverable share its
+    point_id and exact point_title. Internal explanations are not points.
   - needs and subject must name steps that exist in this graph.
   - No cycles, and no step waiting on or reviewing itself.
   - Shares must not exceed the grant.

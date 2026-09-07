@@ -19,6 +19,14 @@ Qualification and stress profiles use at least ten independent processes:
     go run ./cmd/atenea-benchmark --profile qualification --benchmark-runs 10
     go run ./cmd/atenea-benchmark --profile stress --benchmark-runs 10
 
+The fixed provider-free acceptance corpus can be run independently. It checks
+the committed Go, TypeScript, Dart, workspace, protocol and progress fixtures;
+it never starts a model or external provider. JSON and Markdown evidence are
+written to the selected output directory and include fixture hashes, commit
+and environment:
+
+    go run ./cmd/atenea-benchmark --corpus-only --output /tmp/atenea-corpus
+
 The current reference environment is recorded from the host. On the
 qualification machine it is expected to read **MacBook Air M5, 24 GB,
 darwin/arm64**. The collector deliberately ignores serial numbers, UUIDs and

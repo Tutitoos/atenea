@@ -120,8 +120,9 @@ func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func
 //
 // Asked of the wrapper first so a wrapper that ever does implement it wins,
 // then down the Unwrap chain. Bounded rather than recursive to a fixed point:
-// a cycle here would hang a status screen, and nothing in this package nests
-// more than twice.
+// a cycle here would hang a status screen. Production dispatch can include
+// stats, cache, commission, filesystem and supervisor wrappers before the
+// provider, so the bound leaves room for those layers.
 //
 // Generic on the third caller rather than the second. guardedRunner embeds
 // contract.Runner, an interface, so only that method set is promoted and every
@@ -131,7 +132,7 @@ func guard(runner contract.Runner, procs *supervisor.Supervisor, instanceID func
 // where one of them eventually forgets the depth bound.
 func optional[T any](runner contract.Runner) (T, bool) {
 	var zero T
-	for depth := 0; runner != nil && depth < 4; depth++ {
+	for depth := 0; runner != nil && depth < 8; depth++ {
 		if found, ok := runner.(T); ok {
 			return found, true
 		}

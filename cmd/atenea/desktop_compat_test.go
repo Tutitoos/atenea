@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/clientcompat"
 	"github.com/Tutitoos/atenea/internal/config"
 )
 
@@ -294,5 +295,46 @@ func TestDoctorJSONReportsUnreachableMCPWithoutCallingTools(t *testing.T) {
 	}
 	if report["overall"] != "error" {
 		t.Fatalf("unreachable MCP was not reported as error: %#v", report)
+	}
+}
+
+func TestDoctorAllJSONReportsVersionedClientMatrix(t *testing.T) {
+	settingsPath, _ := isolated(t)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	var out bytes.Buffer
+	if err := cmdDoctorCompat(settingsPath, []string{"--all", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		SchemaVersion string `json:"schema_version"`
+		Matrix        struct {
+			Entries []map[string]any `json:"entries"`
+		} `json:"matrix"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion == "" || len(report.Matrix.Entries) != 5 {
+		t.Fatalf("doctor --all matrix = %#v", report)
+	}
+	for _, entry := range report.Matrix.Entries {
+		if entry["client"] == nil || entry["declared"] == nil || entry["connected"] == nil || entry["reconnect"] == nil {
+			t.Fatalf("incomplete matrix entry = %#v", entry)
+		}
+	}
+}
+
+func TestDoctorServerProbeDoesNotCertifyClientLifecycle(t *testing.T) {
+	profile := config.DesktopProfile{Name: "fixture"}
+	entry := doctorCompatibility("codex", profile, desktopClientResolution{Path: "/bin/codex", Version: "fixture"}, []doctorCheck{
+		{ID: "mcp.initialize", Status: "ok"},
+		{ID: "mcp.tools_list", Status: "ok"},
+	})
+	if entry.ServerProbe.State != clientcompat.Pass {
+		t.Fatalf("server probe = %#v", entry.ServerProbe)
+	}
+	if entry.Connected.State != clientcompat.Unknown || entry.Tested.State != clientcompat.Unknown || entry.Presentation.State != clientcompat.Unknown || entry.Reconnect.State != clientcompat.Unknown || entry.Observed != "unknown" {
+		t.Fatalf("direct probe certified client lifecycle: %#v", entry)
 	}
 }

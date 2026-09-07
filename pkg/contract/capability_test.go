@@ -282,7 +282,10 @@ func TestParseEffectAndFieldType(t *testing.T) {
 	if ft, err := contract.ParseFieldType("record_list"); err != nil || ft != contract.TypeRecordList {
 		t.Fatalf("ParseFieldType = %v, %v", ft, err)
 	}
-	if _, err := contract.ParseFieldType("float"); err == nil {
+	if ft, err := contract.ParseFieldType("float"); err != nil || ft != contract.TypeFloat {
+		t.Fatalf("ParseFieldType float = %v, %v", ft, err)
+	}
+	if _, err := contract.ParseFieldType("decimal"); err == nil {
 		t.Fatal("unknown field type should fail")
 	}
 }

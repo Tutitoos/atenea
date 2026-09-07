@@ -222,6 +222,13 @@ type Assignment struct {
 	// same type are two ids. It is what a receipt, a measurement and a
 	// discovery are all filed under.
 	ID string
+	// WorkflowID, Worktree and PolicyDigest bind an effectful model turn to
+	// the workflow record that authorized it. They are empty for legacy
+	// direct agent invocations, which cannot claim workflow authority.
+	WorkflowID   string
+	Worktree     string
+	PolicyDigest string
+	GrantToken   string
 	// ParentID is the execution that handed this one out. Empty on a root
 	// assignment, and empty means root: an id that names nothing is a broken
 	// chain, which Validate refuses.
@@ -249,6 +256,9 @@ type Assignment struct {
 	// Effects are the consequences this agent is allowed to cause. A child
 	// never holds one its parent did not, which is enforced in Child.
 	Effects []Effect
+	// Operations are one-shot sensitive actions carried by this assignment.
+	// They are never inferred from Effects and are narrowed down the tree.
+	Operations []Operation
 	// BudgetUSD is the share of a grant this run is FORECAST to draw against.
 	// Nil is not zero, and the difference is load-bearing: nil is "nobody
 	// granted money here", which is every dispatch outside a workflow, and
@@ -433,6 +443,11 @@ func (a Assignment) validateGrants() error {
 			return Fail(FailureInvalidInput, "assignment %s: unknown effect", a.ID)
 		}
 	}
+	for _, operation := range a.Operations {
+		if !operation.Known() {
+			return Fail(FailureInvalidInput, "assignment %s: unknown operation", a.ID)
+		}
+	}
 	if a.BudgetUSD != nil && !realMoney(*a.BudgetUSD) {
 		return Fail(FailureInvalidInput,
 			"assignment %s: budget is not a real, non-negative amount (%v)", a.ID, *a.BudgetUSD)
@@ -457,6 +472,11 @@ func realMoney(amount float64) bool {
 
 // Causes reports whether this agent is allowed to cause an effect.
 func (a Assignment) Causes(effect Effect) bool { return slices.Contains(a.Effects, effect) }
+
+// AllowsOperation reports whether this assignment carries a sensitive action.
+func (a Assignment) AllowsOperation(operation Operation) bool {
+	return slices.Contains(a.Operations, operation)
+}
 
 // Sees reports whether this agent may read a context level.
 func (a Assignment) Sees(level ContextLevel) bool { return slices.Contains(a.Context, level) }
@@ -516,16 +536,23 @@ func (a Assignment) Child(id, typeName string, kind AgentType, task Task, want [
 			a.Limits.MaxDuration, a.Limits.MaxTokens)
 	}
 	child := Assignment{
-		Version:  a.Version,
-		ID:       id,
-		ParentID: a.ID,
-		Kind:     kind,
-		TypeName: typeName,
-		Depth:    a.Depth + 1,
-		Task:     task.Clone(),
-		Context:  slices.Clone(a.Context),
-		Limits:   limits,
-		Effects:  slices.Clone(want),
+		Version:    a.Version,
+		ID:         id,
+		WorkflowID: a.WorkflowID, Worktree: a.Worktree,
+		PolicyDigest: a.PolicyDigest,
+		ParentID:     a.ID,
+		Kind:         kind,
+		TypeName:     typeName,
+		Depth:        a.Depth + 1,
+		Task:         task.Clone(),
+		Context:      slices.Clone(a.Context),
+		Limits:       limits,
+		// Sensitive operations are one-shot grants. They belong to the
+		// dispatch that was explicitly minted for this assignment and must
+		// never flow implicitly to a child or retry. A caller that needs a
+		// child to perform one must pass it explicitly through Dispatch,
+		// where the parent grant is checked again.
+		Effects: slices.Clone(want),
 	}
 	if a.CommissionUSD != nil {
 		// The commission is the grant of the run, not a share of it, so it
@@ -551,6 +578,7 @@ func (a Assignment) Clone() Assignment {
 	a.Task = a.Task.Clone()
 	a.Context = slices.Clone(a.Context)
 	a.Effects = slices.Clone(a.Effects)
+	a.Operations = slices.Clone(a.Operations)
 	if a.Route != nil {
 		route := a.Route.Clone()
 		a.Route = &route
@@ -860,6 +888,25 @@ func (c Charge) Validate() error {
 // history, so the next task does not pay to learn them again. The charge goes
 // on the receipt.
 type Report struct {
+	// Invocation evidence is stamped by the host around the provider process.
+	// A known false value means preflight failed before a provider invocation;
+	// a known true value means the provider started, even when its cost is
+	// unknown. Keeping the pair prevents a missing binary from being confused
+	// with a provider that may already have spent money.
+	Invoked      bool
+	InvokedKnown bool
+	// Native execution identity is evidence returned by the provider path.
+	// Observed fields stay empty when the provider did not confirm them.
+	ThreadID string
+	TurnID   string
+	// UsageRevision is an Atenea-local monotonic receipt revision when the
+	// transport does not provide one. Zero means that usage revision was not
+	// observable for this report.
+	UsageRevision            uint64
+	RequestedModel           string
+	ObservedModel            string
+	RequestedReasoningEffort string
+	ObservedReasoningEffort  string
 	// Result is the answer, in the shape the agent type declares.
 	Result map[string]any
 	// Verdict is ok, failed, incomplete or canceled.

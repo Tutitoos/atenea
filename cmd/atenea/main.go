@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	adaptercodex "github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/backup"
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/clientconfig"
@@ -54,8 +55,9 @@ Commands:
   select CAPABILITY      Ask the funnel who should answer a capability
   task "TEXT"            Hand a commission to the orchestrator; --budget USD
                          funds this one above the settings file
-  decide "TEXT"          Explain model, tool, MCP, provider and workflow choices;
-                         --run executes isolated workflows per repository
+  decide "TEXT"          Coordinate a durable, explainable workflow;
+                         --run executes repository-scoped children; status,
+                         cancel and resume accept its persistent id
   ask CAPABILITY         Dispatch one capability against one repository
   resume RUN_ID          Pick an interrupted or failed commission back up;
                          --budget USD replaces what remains of the grant.
@@ -74,13 +76,15 @@ Commands:
                          itself runs inside the service, which is the process
                          the system grants the permission to
   mcp                    Serve an MCP client over stdin/stdout, bridged to the
-                         running service; --check tests the setup without a client
+                         running service; --check tests the setup. propose,
+                         proposals and activate control new integrations
   service install        Install atenea as a background service that starts
                          with the system; 'uninstall' undoes it, 'status'
                          says where it stands
   incidents              Read the crash notebook; add 'clear' to mark it read
   agent TYPE [FILE]      Run one declared agent type as a process, once;
                          --objective/--criterion set the task; --confirm
+  agents scorecard       Show durable agent runs, tokens and measurement coverage
                          approves write or external effects
   workflow VERB          Draw, launch and steer a graph of agent steps:
                          create, launch, run, propose, approve, reject,
@@ -109,6 +113,14 @@ Commands:
   config show            Print the settings that apply here, and from where
   wrap CLIENT [args]     Launch a client with MCP servers Atenea checked a
                          moment ago; --via-headroom composes Headroom too
+  compat-overlay --client CLIENT
+                         Emit the machine-readable ephemeral wrap overlay
+  recovery pilot --fixture --root PATH --sentinel PATH [--json]
+                         Run the deterministic, read-only recovery pilot
+  codex agents sync --global|--project PATH [--prune]
+                         Sync canonical native Codex agent profiles atomically
+  codex agents check [--global|--project PATH]
+                         Check native Codex agent profile receipts
   statusline install [WIDGET]
                          Put Atenea's status line on opencode's screen;
                          'uninstall' takes it off, 'status' says whether the
@@ -129,6 +141,20 @@ Global flags:
 // their flags even see anything -- "atenea ask -h" would otherwise be
 // swallowed as the capability id, not recognized as a request for help.
 var commandHelp = map[string]string{
+	"agents": `Usage: atenea agents scorecard [--traces PATH]
+
+Show the durable cross-workflow scorecard for agents. Measured, estimated and
+unknown usage remain separate; this command does not invoke a model.
+`,
+	"codex": `Usage: atenea codex agents sync --global|--project PATH [--prune]
+       atenea codex agents check [--global|--project PATH]
+
+Synchronize or check Atenea's canonical native Codex App Server profiles.
+Global profiles live under $CODEX_HOME/agents (or ~/.codex/agents); project
+profiles live under <repository>/.codex/agents. Sync uses atomic writes,
+preserves foreign files, and only removes obsolete Atenea-managed profiles
+with --prune. It never invokes Codex and never writes a real home in tests.
+`,
 	"stats": statsHelp,
 	"command": `Usage: atenea command NAME [flags]
 
@@ -150,12 +176,14 @@ Print the product and contract versions.
 Short health screen: one light for Atenea, one per provider it talks to.
 `,
 	"doctor": `Usage: atenea doctor --client CLIENT [--profile NAME] [--json]
+       atenea doctor --all [--json]
 
 Diagnose desktop client/profile compatibility and MCP wiring without invoking
 tools with effects.
 
 Flags:
-  --client CLIENT   claude, chatgpt or codex
+  --client CLIENT   claude, chatgpt, codex, omp or opencode
+  --all             inspect the versioned matrix for every supported client
   --profile NAME    desktop policy profile
   --json            print the diagnostic result as json
 `,
@@ -227,8 +255,17 @@ Flags:
   --json          print the complete plan as json
   --trace         include the decision reasons
   --run           execute the compiled plan, one isolated workflow per repository
+  --criterion TEXT acceptance criterion for the complete commission
+  --max-duration D active duration limit, e.g. 30m
+  --max-tokens N   model token limit per assigned turn
   --confirm       require a TTY confirmation before --run
   --traces PATH   workflow state database
+
+Lifecycle:
+  atenea decide status COORDINATOR_ID [--traces PATH]
+  atenea decide cancel COORDINATOR_ID [--traces PATH]
+  atenea decide resume COORDINATOR_ID [--traces PATH]
+  atenea decide answer WORKFLOW_ID --ordinal N --digest DIGEST --decision approved|rejected
 `,
 	"ask": `Usage: atenea ask CAPABILITY [flags]
 
@@ -401,7 +438,7 @@ recorded as incomplete, not as success.
 once, carrying the rejected answer and the reason it was rejected; a second
 refusal ends it. Each attempt and each review is its own trace row.
 `,
-	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|resume|redo|list|show
+	"workflow": `Usage: atenea workflow create|launch|run|propose|approve|reject|answer|cancel|resume|redo|list|status|export|compare|panel
 
 Run a graph of agent steps. The graph comes from a TOML file and is executed
 exactly as written: nothing here plans, splits or grows it.
@@ -446,8 +483,7 @@ limits.max_tokens is carried and validated as an advisory declaration. The
 model client can use its separate ReadTokens allowance to stop an observed
 conversation, but no provider-independent hard token ceiling is promised.
 
-Flags come before the ids -- Go's parser stops at the first word that is not a
-flag, so anything after one is read as an id.
+Status, compare and panel accept their documented flags before or after ids.
 
   create PATH           write the graph down and print the plan; spawn nothing
   launch ID             commit the grant and run it
@@ -461,6 +497,10 @@ flag, so anything after one is read as an id.
                         raised share; reopens a finished run to do it
   list                  the runs on record
   show ID               one run, step by step, and its gate log
+  status ID             durable state; --format compact|markdown|json
+  export ID             complete deterministic --format markdown|json view
+  compare A B           compare recorded tokens and duration between workflows
+  panel ID              print the read-only dashboard deep link; --open opens it
 
 Flags:
   --traces PATH         state database (workflows live beside the traces)
@@ -471,6 +511,8 @@ Flags:
   --replaces STEP       with propose: a step it removes; repeatable
   --reason WHY          with reject: required
   --limit N             with list: how many runs
+  --activity-after N    with status/show: resume activity after a durable cursor
+  --format FORMAT       with status/export: compact, markdown or json as supported
 
 Ctrl-C cuts the running agents and spawns nothing queued. What was cut is
 recorded as interrupted -- nobody judged it -- and resume redoes the read-only
@@ -671,6 +713,17 @@ Atenea's checked MCP overlay is merged immediately before the real binary.
 Headroom's Serena and retrieve MCP entries are disabled in that mode because
 the corresponding Atenea entries remain the single advertised copy.
 `,
+	"compat-overlay": `Usage: atenea compat-overlay --client CLIENT
+
+Emit the machine-readable ephemeral overlay generated by the same wrap
+renderers used for a compatibility pilot. Supported clients: codex, claude,
+opencode.
+`,
+	"recovery": `Usage: atenea recovery pilot --fixture --root PATH --sentinel PATH [--json]
+
+Run the deterministic read-only recovery pilot. It uses fixture evidence only;
+real providers, rebuilds and external gates are not started.
+`,
 }
 
 // passesArgumentsThrough names the commands whose trailing arguments belong to
@@ -801,7 +854,15 @@ func run(args []string, out io.Writer) error {
 		fmt.Fprint(out, help)
 		return nil
 	}
+	if command == "codex-hook" {
+		// Internal host-owned PreToolUse command. Codex starts this same
+		// executable with an invocation-scoped state file; it must never read
+		// Atenea or Codex user configuration here.
+		return adaptercodex.RunHook(commandArgs, os.Stdin, out)
+	}
 	switch command {
+	case "codex":
+		return cmdCodex(commandArgs, out)
 	case "version":
 		if err := noArguments("version", commandArgs); err != nil {
 			return err
@@ -851,6 +912,9 @@ func run(args []string, out io.Writer) error {
 	case "doctor":
 		return cmdDoctorCompat(settingsPath, commandArgs, out)
 	case "mcp":
+		if len(commandArgs) > 0 && (commandArgs[0] == "propose" || commandArgs[0] == "proposals" || commandArgs[0] == "activate") {
+			return cmdMCPProposal(settingsPath, commandArgs, out)
+		}
 		profile, mcpArgs, err := peelDesktopProfile(commandArgs)
 		if err != nil {
 			return err
@@ -869,6 +933,8 @@ func run(args []string, out io.Writer) error {
 		return cmdIncidents(settingsPath, commandArgs, out)
 	case "agent":
 		return cmdAgent(settingsPath, commandArgs, out)
+	case "agents":
+		return cmdAgents(commandArgs, out)
 	case "agent-exec":
 		// The far side of a spawn, not something a person types. Atenea
 		// names it in the shipped agent declaration and starts it with an
@@ -902,6 +968,10 @@ func run(args []string, out io.Writer) error {
 		// of ours. An operator still sees the report -- stderr is the
 		// terminal too -- and a pipeline no longer has to.
 		return cmdWrap(settingsPath, commandArgs, os.Stderr)
+	case "compat-overlay":
+		return cmdCompatOverlay(commandArgs, out)
+	case "recovery":
+		return cmdRecovery(commandArgs, out)
 	case "statusline":
 		return cmdStatusLine(commandArgs, out)
 	case "help", "-h", "--help":
@@ -1995,6 +2065,7 @@ func printServerProbes(out io.Writer, servers []core.ServerProbe, by answeredBy)
 			verdict, s.ID, s.Transport, s.Expose, path,
 			s.Took.Truncate(time.Millisecond), orDash(detail))
 		fmt.Fprintf(out, "  %-11s %-16s where=%s\n", "", "", orDash(s.Where))
+		fmt.Fprintf(out, "  %-11s %-16s protocol=requested=%s observed=%s\n", "", "", orDash(s.RequestedProtocolVersion), orDash(s.ObservedProtocolVersion))
 		if s.Dashboard != "" {
 			fmt.Fprintf(out, "  %-11s %-16s dashboard=%s\n", "", "", s.Dashboard)
 		}
@@ -2449,6 +2520,9 @@ func cmdAsk(settingsPath string, args []string, out io.Writer) (err error) {
 			`ask needs the capability first, e.g. atenea ask symbol.definition --repo current --set file=main.go --set line=12 --set column=6`)
 	}
 	capabilityID, args := strings.TrimSpace(args[0]), args[1:]
+	if capabilityID == "workspace.context" {
+		return cmdWorkspaceContext(settingsPath, args, out)
+	}
 
 	var fields fieldList
 	var payloadFile string

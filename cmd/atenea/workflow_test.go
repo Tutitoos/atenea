@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,10 +95,11 @@ func TestPrintRunsCostColumnNeverShowsAMeasuredLookingZero(t *testing.T) {
 		Task: "test",
 		Steps: []workflow.StepRow{
 			{
-				Step:   workflow.Step{ID: "a", TypeName: "x"},
-				Pool:   config.PoolAgent,
-				Status: workflow.StatusOK,
-				Spent:  contract.Charge{USD: &usd, PricedBy: "anthropic"},
+				Step:    workflow.Step{ID: "a", TypeName: "x"},
+				Pool:    config.PoolAgent,
+				Status:  workflow.StatusOK,
+				Spent:   contract.Charge{USD: &usd, PricedBy: "anthropic"},
+				Notices: []string{"answer was shortened"},
 			},
 			{
 				Step:   workflow.Step{ID: "b", TypeName: "y"},
@@ -115,6 +117,9 @@ func TestPrintRunsCostColumnNeverShowsAMeasuredLookingZero(t *testing.T) {
 	}
 	if !strings.Contains(out, "unmeasured") {
 		t.Fatalf("output = %q, want the unpriced step to read unmeasured", out)
+	}
+	if !strings.Contains(out, "notice: answer was shortened") {
+		t.Fatalf("output = %q, want the durable notice", out)
 	}
 	if strings.Contains(out, "$0.00") {
 		t.Fatalf("output = %q: a measured-looking zero for an unmeasured step "+
@@ -206,6 +211,102 @@ func TestWorkflowMutatingCommandsRejectMissingPositionals(t *testing.T) {
 				t.Fatalf("%s without positionals unexpectedly succeeded", tc.name)
 			}
 		})
+	}
+}
+
+func TestWorkflowCLIStatusCancelAndExactAnswer(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "atenea.toml")
+	graphPath := filepath.Join(root, "plan.toml")
+	dbPath := filepath.Join(root, "workflow.db")
+	settings := fmt.Sprintf(`contract = "4.0.0"
+
+[orchestrator]
+runners = ["local"]
+
+  [orchestrator.local]
+  implementations = []
+
+[[repository]]
+id = "repo"
+path = %q
+languages = ["go"]
+scale = "small"
+
+[[agent]]
+name = "reader"
+kind = "specialized"
+summary = "reads"
+command = "/bin/true"
+context = ["repository"]
+effects = ["read"]
+max_duration = "5s"
+max_tokens = 100
+
+  [[agent.result]]
+  name = "ok"
+  type = "bool"
+  required = true
+  summary = "ok"
+`, root)
+	graph := `task = "cli workflow"
+budget_usd = 1.0
+
+[[step]]
+id = "read"
+agent = "reader"
+objective = "read"
+criterion = "it reads"
+effects = ["read"]
+budget_usd = 0.25
+`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatalf("write graph: %v", err)
+	}
+	var createOutput bytes.Buffer
+	if err := run([]string{"--config", settingsPath, "workflow", "create", "--traces", dbPath, "--repository", "repo", graphPath}, &createOutput); err != nil {
+		t.Fatalf("workflow create: %v (%s)", err, createOutput.String())
+	}
+	store, err := workflow.Open(t.Context(), dbPath)
+	if err != nil {
+		t.Fatalf("open workflow store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runs, err := store.List(t.Context(), 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("List = %v, %v", runs, err)
+	}
+	id := runs[0].ID
+	gate, err := store.Gate(t.Context(), id, 0)
+	if err != nil {
+		t.Fatalf("Gate: %v", err)
+	}
+	var status bytes.Buffer
+	if err := cmdWorkflow(settingsPath, []string{"status", "--traces", dbPath, id}, &status); err != nil {
+		t.Fatalf("workflow status: %v", err)
+	}
+	if !strings.Contains(status.String(), "unlaunched") || !strings.Contains(status.String(), "repo") {
+		t.Fatalf("status = %q", status.String())
+	}
+	args := []string{"answer", "--traces", dbPath, "--ordinal", "0", "--digest", gate.Digest, "--decision", "rejected", "--reason", "declined", id}
+	var answer bytes.Buffer
+	if err := cmdWorkflow(settingsPath, args, &answer); err != nil {
+		t.Fatalf("workflow answer: %v", err)
+	}
+	var replay bytes.Buffer
+	if err := cmdWorkflow(settingsPath, args, &replay); err != nil {
+		t.Fatalf("workflow answer replay: %v", err)
+	}
+	var cancel bytes.Buffer
+	if err := cmdWorkflow(settingsPath, []string{"cancel", "--traces", dbPath, id}, &cancel); err != nil {
+		t.Fatalf("workflow cancel: %v", err)
+	}
+	if !strings.Contains(cancel.String(), "aborted") {
+		t.Fatalf("cancel = %q", cancel.String())
 	}
 }
 

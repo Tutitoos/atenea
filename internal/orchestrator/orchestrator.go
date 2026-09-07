@@ -52,6 +52,19 @@ type Chooser interface {
 	Select(req selector.Request) (selector.Decision, error)
 }
 
+type qualityRecorder interface {
+	RecordOutcome(capability, repository, implementation, language, toolVersion string, out contract.Outcome, runErr error, observed ...string) error
+}
+
+func primaryLanguage(repository contract.Repository) string {
+	if len(repository.Languages) == 0 {
+		return ""
+	}
+	langs := slices.Clone(repository.Languages)
+	slices.Sort(langs)
+	return langs[0]
+}
+
 // Meter is where a closed step reports what it cost.
 //
 // The orchestrator never writes a measurement, it only hands one upwards: the
@@ -91,6 +104,7 @@ const (
 	// phase: a task that hides what exploring cost reports a total that is
 	// quietly too low, and the selector then compares against a number that
 	// never happened.
+	// PhaseExplore is part of ATENEA's public orchestration contract.
 	PhaseExplore = "explore"
 	// PhaseWork is the split-up commission itself.
 	PhaseWork = "work"
@@ -98,6 +112,7 @@ const (
 	// atomic base that workflows are built out of; Run is one such workflow,
 	// hard-wired. It is a phase of its own rather than a borrowed name so a
 	// receipt never claims a run explored or split when it did neither.
+	// PhaseAsk is part of ATENEA's public orchestration contract.
 	PhaseAsk = "ask"
 )
 
@@ -190,6 +205,14 @@ type Config struct {
 	Catalog Catalog
 	Chooser Chooser
 	Runner  contract.Runner
+	// Identity observes the current provider identity before selection. A nil
+	// callback leaves quality unknown and never consults historical cost as a
+	// substitute.
+	Identity func(context.Context, contract.RunRequest) (contract.CacheIdentity, error)
+	// IdentityActivity brackets each live identity probe in the durable
+	// activity store. It is separate from cache hits: a probe is provider work
+	// and must remain visible even when the following dispatch reuses it.
+	IdentityActivity func(context.Context, contract.RunRequest) func(error)
 	// Reach shares the core's repository-scoped wiring with real dispatch.
 	// Nil retains global reach for standalone runners.
 	Reach       func(contract.Repository) ([]string, map[string]string)
@@ -224,19 +247,21 @@ type Config struct {
 // Agent is the orchestrator. It is safe for concurrent use: two chats can be
 // running commissions at the same time against the same catalog.
 type Agent struct {
-	card            contract.Agent
-	catalog         Catalog
-	chooser         Chooser
-	runner          contract.Runner
-	reach           func(contract.Repository) ([]string, map[string]string)
-	checkpoints     *checkpoint.Store
-	meter           Meter
-	base            Base
-	notebook        *notebook.Notebook
-	events          *observability.Hub
-	maxParallel     int
-	budget          float64
-	standingEffects []contract.Effect
+	card             contract.Agent
+	catalog          Catalog
+	chooser          Chooser
+	runner           contract.Runner
+	identity         func(context.Context, contract.RunRequest) (contract.CacheIdentity, error)
+	identityActivity func(context.Context, contract.RunRequest) func(error)
+	reach            func(contract.Repository) ([]string, map[string]string)
+	checkpoints      *checkpoint.Store
+	meter            Meter
+	base             Base
+	notebook         *notebook.Notebook
+	events           *observability.Hub
+	maxParallel      int
+	budget           float64
+	standingEffects  []contract.Effect
 }
 
 // card is what the orchestrator declares about itself. Declaring a context
@@ -318,19 +343,21 @@ func New(cfg Config) (*Agent, error) {
 		meter = unmetered{}
 	}
 	return &Agent{
-		card:            card.Clone(),
-		catalog:         cfg.Catalog,
-		chooser:         cfg.Chooser,
-		runner:          cfg.Runner,
-		reach:           cfg.Reach,
-		checkpoints:     store,
-		meter:           meter,
-		base:            cfg.Base,
-		notebook:        cfg.Notebook,
-		events:          cfg.Events,
-		maxParallel:     cfg.MaxParallel,
-		budget:          cfg.BudgetUSD,
-		standingEffects: slices.Clone(cfg.StandingEffects),
+		card:             card.Clone(),
+		catalog:          cfg.Catalog,
+		chooser:          cfg.Chooser,
+		runner:           cfg.Runner,
+		identity:         cfg.Identity,
+		identityActivity: cfg.IdentityActivity,
+		reach:            cfg.Reach,
+		checkpoints:      store,
+		meter:            meter,
+		base:             cfg.Base,
+		notebook:         cfg.Notebook,
+		events:           cfg.Events,
+		maxParallel:      cfg.MaxParallel,
+		budget:           cfg.BudgetUSD,
+		standingEffects:  slices.Clone(cfg.StandingEffects),
 	}, nil
 }
 
@@ -1246,7 +1273,7 @@ func (a *Agent) dispatch(ctx context.Context, plan contract.Plan, phase string, 
 			// changing their mind, and a failure nobody's provider committed.
 			// Filed, they would price a tool by the patience of whoever ran
 			// it and mark it down for being interrupted.
-			if step.Dispatched && step.FailureKind != contract.FailureCanceled {
+			if step.Dispatched && countsAsProviderSample(step.Outcome, step.FailureKind) {
 				a.meter.Record(measure(result.RunID, step))
 			}
 			record.Steps = append(record.Steps, snapshot(step))
@@ -1381,15 +1408,119 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if a.reach != nil {
 		reachable, unreachable = a.reach(repository)
 	}
+	request := contract.RunRequest{
+		Capability: capability,
+		Repository: repository,
+		Payload:    step.Payload,
+		Permission: step.Permission,
+	}
+	// Validate before identity probes: an invalid request must not cause any
+	// provider call merely to prepare the funnel. Candidates all answer the
+	// same capability; the selected implementation is stamped later.
+	var requestErr error
+	if len(candidates) > 0 {
+		request.Implementation = candidates[0]
+		requestErr = request.Validate()
+		if requestErr == nil {
+			if missing, allowed := request.Allowed(); !allowed {
+				requestErr = contract.Fail(contract.FailurePermissionDenied,
+					"%s causes %s, which the request permission does not cover", capability.ID, missing)
+			}
+		}
+	}
+	observedVersions := make(map[string]string, len(candidates))
+	observedInstances := make(map[string]string, len(candidates))
+	observedConfigDigests := make(map[string]string, len(candidates))
+	observedIdentities := make(map[string]contract.CacheIdentity, len(candidates))
+	if requestErr == nil && a.identity != nil {
+		eligibility := func(candidate contract.Implementation) bool {
+			selection := selector.Request{
+				Capability: step.Capability, Repository: repository, Candidates: candidates,
+				Reachable: reachable, Unreachable: unreachable, Payload: step.Payload,
+				Language: primaryLanguage(repository),
+			}
+			if pure, ok := a.chooser.(interface {
+				Eligible(selector.Request, contract.Implementation) (string, bool)
+			}); ok {
+				_, fits := pure.Eligible(selection, candidate)
+				return fits
+			}
+			// A custom chooser still receives the strict reach/health gates;
+			// its private constraints cannot be evaluated here.
+			if !slices.Contains(reachable, candidate.ID) || !candidate.Health.Usable() {
+				return false
+			}
+			_, inaccessible := unreachable[candidate.ID]
+			return !inaccessible
+		}
+		for _, candidate := range candidates {
+			if !eligibility(candidate) {
+				continue
+			}
+			request.Implementation = candidate
+			probeStarted := time.Now()
+			finishIdentityActivity := func(error) {}
+			if a.identityActivity != nil {
+				finishIdentityActivity = a.identityActivity(ctx, request)
+				if finishIdentityActivity == nil {
+					finishIdentityActivity = func(error) {}
+				}
+			}
+			a.emitContext(ctx, observability.Event{
+				Kind: "provider.identity.started", StepID: step.ID, Capability: step.Capability,
+				Repository: step.Repository, Implementation: candidate.ID, Provider: candidate.Provider,
+				State: "running", Reason: "checking current runtime identity before selection",
+			})
+			identity, identityErr := a.identity(ctx, request)
+			finishIdentityActivity(identityErr)
+			if identity.DurationNS == 0 {
+				identity.DurationNS = time.Since(probeStarted).Nanoseconds()
+			}
+			identity.Observed = true
+			if identity.Provider == "" {
+				identity.Provider = candidate.Provider
+			}
+			if identity.Tool == "" {
+				identity.Tool = "graph_status"
+			}
+			observedIdentities[candidate.ID] = identity
+			a.emitContext(ctx, observability.Event{
+				Kind: "provider.identity", StepID: step.ID, Capability: step.Capability,
+				Repository: step.Repository, Implementation: candidate.ID,
+				Provider: candidate.Provider, State: "observed", DurationMS: time.Duration(identity.DurationNS).Milliseconds(),
+				Reason: func() string {
+					if identityErr != nil {
+						return identityErr.Error()
+					}
+					return "current runtime identity"
+				}(),
+				CacheValidation: &contract.CacheValidation{Called: true, Provider: identity.Provider, Tool: identity.Tool,
+					ToolVersion: identity.ToolVersion, Instance: identity.Instance, Generation: identity.Generation,
+					Snapshot: identity.Snapshot, Freshness: identity.Freshness, Duration: time.Duration(identity.DurationNS), Error: identity.Error},
+			})
+			if identityErr != nil {
+				continue
+			}
+			if identity.ToolVersion != "" && identity.Instance != "" {
+				observedVersions[candidate.ID] = identity.ToolVersion
+				observedInstances[candidate.ID] = identity.Instance
+				observedConfigDigests[candidate.ID] = selector.ImplementationConfigDigest(candidate)
+			}
+		}
+	}
 	decision, err := a.chooser.Select(selector.Request{
-		Capability:  step.Capability,
-		Repository:  repository,
-		Candidates:  candidates,
-		Reachable:   reachable,
-		Unreachable: unreachable,
-		Measuring:   measuring,
-		Payload:     step.Payload,
-		Prefer:      step.Prefer,
+		Capability:            step.Capability,
+		Repository:            repository,
+		Candidates:            candidates,
+		Reachable:             reachable,
+		Unreachable:           unreachable,
+		Measuring:             measuring,
+		Payload:               step.Payload,
+		Prefer:                step.Prefer,
+		Language:              primaryLanguage(repository),
+		ObservedVersions:      observedVersions,
+		ObservedInstances:     observedInstances,
+		ObservedConfigDigests: observedConfigDigests,
 	})
 	decision.Notices = append(decision.Notices, notices...)
 	out.Decision = decision
@@ -1397,19 +1528,13 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if err != nil {
 		return a.close(out, err)
 	}
-
-	request := contract.RunRequest{
-		Capability:     capability,
-		Implementation: decision.Chosen,
-		Repository:     repository,
-		Payload:        step.Payload,
-		Permission:     step.Permission,
+	if requestErr != nil {
+		return a.close(out, requestErr)
 	}
-	// A payload missing a required field is a fact the request itself already
-	// carries; catching it here means the funnel's own work above -- pricing
-	// candidates, choosing among them -- was not spent finding out.
-	if err := request.Validate(); err != nil {
-		return a.close(out, err)
+
+	request.Implementation = decision.Chosen
+	if identity, ok := observedIdentities[decision.Chosen.ID]; ok {
+		request.ObservedIdentity = &identity
 	}
 	// Stamped on the way in, not after the call returns: a runner that panics
 	// or a context that dies mid-flight still spent the provider's time, and
@@ -1419,6 +1544,33 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	a.emitContext(ctx, observability.Event{Kind: "tool.started", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: "running"})
 	a.emitContext(ctx, observability.Event{Kind: "provider.started", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: "running"})
 	outcome, runErr := a.runner.Run(ctx, request)
+	if outcome.ToolVersion == "" {
+		outcome.ToolVersion = observedVersions[decision.Chosen.ID]
+	}
+	if outcome.ToolInstance == "" {
+		outcome.ToolInstance = observedInstances[decision.Chosen.ID]
+	}
+	out.Outcome = outcome
+	if countsAsProviderSample(outcome, runErr) {
+		if recorder, ok := a.chooser.(qualityRecorder); ok {
+			languages := repository.Languages
+			if len(languages) != 1 {
+				// A multi-language outcome has no per-language evidence. Keep one
+				// generic sample for diagnostics, but selector requests for a
+				// concrete language never consult that generic bucket.
+				languages = []string{""}
+			}
+			for _, language := range languages {
+				instance := outcome.ToolInstance
+				if instance == "" && outcome.CacheValidation != nil {
+					instance = outcome.CacheValidation.Instance
+				}
+				if persistErr := recorder.RecordOutcome(step.Capability, repository.ID, decision.Chosen.ID, language, outcome.ToolVersion, outcome, runErr, repository.Path, instance, selector.ImplementationConfigDigest(decision.Chosen)); persistErr != nil {
+					outcome.Notices = append(outcome.Notices, "quality evidence persistence unavailable: "+persistErr.Error())
+				}
+			}
+		}
+	}
 	out.Outcome = outcome
 	// The core's clock is the one that counts. An adapter sees only its own
 	// call and would report the purer figure, but what decides between two
@@ -1431,7 +1583,7 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 	if runErr != nil {
 		providerState = "failed"
 	}
-	providerEvent := observability.Event{Kind: "provider.completed", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: providerState, DurationMS: out.Spent.Duration.Milliseconds(), Tokens: int64(out.Spent.Tokens)}
+	providerEvent := observability.Event{Kind: "provider.completed", StepID: step.ID, Capability: step.Capability, Repository: step.Repository, Implementation: decision.Chosen.ID, Provider: decision.Chosen.Provider, State: providerState, DurationMS: out.Spent.Duration.Milliseconds(), Tokens: int64(out.Spent.Tokens), CacheHit: outcome.CacheHit, Coalesced: outcome.Coalesced, CacheValidation: outcome.CacheValidation}
 	if runErr != nil {
 		providerEvent.Reason = runErr.Error()
 	}
@@ -1483,6 +1635,23 @@ func (a *Agent) runStep(ctx context.Context, step contract.Step) StepResult {
 		a.reopenGraphQueries(repository.ID)
 	}
 	return a.close(out, nil)
+}
+
+// countsAsProviderSample is the single gate for provider cost and quality
+// accounting. A coalesced waiter received a shared answer but did no physical
+// provider work, just like a retained cache hit.
+func countsAsProviderSample(out contract.Outcome, runErrOrKind any) bool {
+	if out.CacheHit || out.Coalesced {
+		return false
+	}
+	switch value := runErrOrKind.(type) {
+	case error:
+		return value == nil || contract.KindOf(value) != contract.FailureCanceled
+	case contract.FailureKind:
+		return value != contract.FailureCanceled
+	default:
+		return true
+	}
 }
 
 // Verified maintenance permits a new query probe, not an assertion that every
@@ -1880,27 +2049,32 @@ func snapshot(step StepResult) checkpoint.StepState {
 		closed = time.Now()
 	}
 	return checkpoint.StepState{
-		ID:             step.Step.ID,
-		Capability:     step.Step.Capability,
-		Repository:     step.Step.Repository,
-		Implementation: step.Decision.Chosen.ID,
-		Verdict:        step.Review.Child.String(),
-		Review:         step.Review.Parent.String(),
-		Failure:        step.Failure,
-		Raw:            step.Raw,
-		Inputs:         auditableInputs(step.Step),
-		Discoveries:    step.Outcome.Discoveries,
-		DurationMS:     step.Spent.Duration.Milliseconds(),
-		Tokens:         int64(step.Spent.Tokens),
-		TokensKnown:    step.Spent.Tokens > 0,
-		PeakRSS:        step.Spent.PeakRSS,
-		RSSKnown:       step.Spent.PeakRSS > 0,
-		ToolVersion:    step.Outcome.ToolVersion,
-		SpentUSD:       step.Outcome.SpentUSD,
-		SpentUSDKnown:  step.Outcome.SpentUSDKnown,
-		OverspendUSD:   Overspend(step),
-		ClosedAt:       closed,
-		Funnel:         trace(step.Decision),
+		ID:              step.Step.ID,
+		Capability:      step.Step.Capability,
+		Repository:      step.Step.Repository,
+		Implementation:  step.Decision.Chosen.ID,
+		Verdict:         step.Review.Child.String(),
+		Review:          step.Review.Parent.String(),
+		Failure:         step.Failure,
+		Raw:             step.Raw,
+		Inputs:          auditableInputs(step.Step),
+		Discoveries:     step.Outcome.Discoveries,
+		DurationMS:      step.Spent.Duration.Milliseconds(),
+		Tokens:          int64(step.Spent.Tokens),
+		TokensKnown:     step.Spent.Tokens > 0,
+		PeakRSS:         step.Spent.PeakRSS,
+		RSSKnown:        step.Spent.PeakRSS > 0,
+		ToolVersion:     step.Outcome.ToolVersion,
+		ToolInstance:    step.Outcome.ToolInstance,
+		CacheHit:        step.Outcome.CacheHit,
+		Coalesced:       step.Outcome.Coalesced,
+		CacheVersion:    step.Outcome.CacheVersion,
+		CacheValidation: step.Outcome.CacheValidation,
+		SpentUSD:        step.Outcome.SpentUSD,
+		SpentUSDKnown:   step.Outcome.SpentUSDKnown,
+		OverspendUSD:    Overspend(step),
+		ClosedAt:        closed,
+		Funnel:          trace(step.Decision),
 	}
 }
 
@@ -1958,11 +2132,24 @@ func trace(decision selector.Decision) checkpoint.Funnel {
 				Raw:            drop.Raw,
 			})
 		}
+		quality := make([]checkpoint.FunnelQuality, 0, len(stage.Quality))
+		for _, detail := range stage.Quality {
+			quality = append(quality, checkpoint.FunnelQuality{
+				Implementation: detail.Implementation, State: detail.State,
+				Language: detail.Language, ToolVersion: detail.ToolVersion,
+				Instance: detail.Instance, ConfigDigest: detail.ConfigDigest, Samples: detail.Samples, Valid: detail.Valid,
+				Accepted: detail.Accepted, Complete: detail.Complete, Partial: detail.Partial,
+				Truncated:  detail.Truncated,
+				OutOfScope: detail.OutOfScope, Failures: detail.Failures,
+				Reason: detail.Reason,
+			})
+		}
 		stages = append(stages, checkpoint.FunnelStage{
 			Name:    stage.Name,
 			In:      len(stage.In),
 			Out:     len(stage.Out),
 			Dropped: dropped,
+			Quality: quality,
 		})
 	}
 	return checkpoint.Funnel{State: checkpoint.FunnelKept, Stages: stages}

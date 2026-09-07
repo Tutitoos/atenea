@@ -104,10 +104,13 @@ func (s StepRow) Needs() []string {
 // whole.
 func (s StepRow) Report() contract.Report {
 	return contract.Report{
+		Invoked:      s.Invoked,
+		InvokedKnown: s.InvokedKnown,
 		Result:       s.Result,
 		Verdict:      s.Verdict,
 		Reason:       s.Reason,
 		Discovered:   s.Discovered,
+		Notices:      s.Notices,
 		Spent:        s.Spent,
 		Completeness: s.Completeness,
 		StoppedAt:    s.StoppedAt,
@@ -203,7 +206,7 @@ func (r Run) Budget() string {
 		granted = "no grant"
 	}
 	spend := r.Spend()
-	if spend.MeasuredSteps == 0 {
+	if spend.MeasuredSteps == 0 && spend.SupersededAttempts == 0 {
 		// Not "no agent reports a charge yet": they can now, and a run whose
 		// steps all refused before spending is a different fact from a
 		// machine that cannot meter. Both read as unmeasured, and neither
@@ -222,7 +225,7 @@ func (r Run) Budget() string {
 		tokens = "at least " + tokens
 	}
 	detail := tokens + " spent"
-	if spend.USD != nil {
+	if accumulated := spend.AccumulatedUSD(); accumulated != nil {
 		// The balance counts the archive. A redo overwrites the live row, so
 		// the sum over steps is what the CURRENT attempts cost, and a grant
 		// pays for every attempt it funded. Measured 2026-08-16 on the first
@@ -230,7 +233,7 @@ func (r Run) Budget() string {
 		// a $9.00 grant -- the line said "$2.30 left" where $1.68 was left,
 		// and a balance that reads high is the one shape of this error that
 		// authorizes more spending.
-		charged := *spend.USD + spend.SupersededUSD
+		charged := *accumulated
 		detail = fmt.Sprintf("%s and $%.2f spent (priced by %s)",
 			tokens, charged, strings.Join(spend.PricedBy, ", "))
 		if spend.SupersededAttempts > 0 {
@@ -238,7 +241,7 @@ func (r Run) Budget() string {
 				spend.SupersededUSD,
 				plural(spend.SupersededAttempts, "attempt", "attempts"))
 		}
-		if spend.UnmeasuredSteps == 0 {
+		if spend.UnknownSteps == 0 && spend.SupersededUnknownSteps == 0 {
 			detail += fmt.Sprintf(", $%.2f left", r.GrantUSD-charged)
 		}
 	}
@@ -246,11 +249,13 @@ func (r Run) Budget() string {
 		detail += fmt.Sprintf("; %s charged with no token record",
 			plural(spend.TruncatedSteps, "step", "steps"))
 	}
-	if spend.UnmeasuredSteps == 0 {
+	if spend.UnmeasuredSteps == 0 && spend.UnknownSteps == 0 && spend.SupersededUnknownSteps == 0 {
 		return fmt.Sprintf("%s; %s", granted, detail)
 	}
+	measured := spend.MeasuredSteps + spend.SupersededObservedSteps + spend.SupersededEstimatedSteps
+	unknown := spend.UnmeasuredSteps + spend.UnknownSteps - spend.UnmeasuredSteps + spend.SupersededUnknownSteps
 	return fmt.Sprintf("%s; %d of %d steps measured (%s)", granted,
-		spend.MeasuredSteps, spend.MeasuredSteps+spend.UnmeasuredSteps, detail)
+		measured, measured+unknown, detail)
 }
 
 // plural picks the word that agrees with n.

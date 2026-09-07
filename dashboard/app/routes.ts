@@ -13,6 +13,7 @@ export default [
     route("sessions/:sessionId", "./routes/session-detail.tsx"),
     route("runs", "./routes/runs.tsx"),
     route("runs/:runId", "./routes/run-detail.tsx"),
+		route("workflows/:workflowId", "./routes/workflow-detail.tsx"),
     route("metrics", "./routes/metrics.tsx"),
     route("infrastructure", "./routes/infrastructure.tsx"),
     route("incidents", "./routes/incidents.tsx"),

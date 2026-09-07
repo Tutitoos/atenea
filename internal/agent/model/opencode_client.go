@@ -17,10 +17,7 @@ func (c *Client) turnOpenCode(ctx context.Context, dir string, timeout time.Dura
 	if err != nil {
 		return Answer{}, err
 	}
-	prompt := req.Prompt
-	if req.reservesAnswer() {
-		prompt = req.sentPrompt()
-	}
+	prompt := req.sentPrompt()
 	// The deadline travels as a field rather than as a context this side
 	// wraps: the runner bounds the turn AND its finalization pass with it,
 	// and it is the runner that names the limit in the timeout failure. A

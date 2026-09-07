@@ -115,6 +115,51 @@ type IndexProber interface {
 	ProbeIndex(ctx context.Context, root string) (ready bool, hint string, err error)
 }
 
+// CacheIdentityProvider supplies a cheap, current provider snapshot before a
+// read-only result-cache lookup. It is intentionally narrower than Runner:
+// providers that cannot attest generation/freshness must bypass the cache.
+type CacheIdentityProvider interface {
+	CacheIdentity(context.Context, RunRequest) (CacheIdentity, error)
+}
+
+// RuntimeIdentityProvider exposes a current provider identity to the
+// selector. A missing or failed observation remains unknown; historical cost
+// metadata is never a substitute.
+type RuntimeIdentityProvider interface {
+	RuntimeIdentity(context.Context, RunRequest) (CacheIdentity, error)
+}
+
+// CacheIdentity is observed provider state, never caller-supplied payload.
+type CacheIdentity struct {
+	Generation  int
+	Snapshot    int
+	Freshness   string
+	ToolVersion string
+	Instance    string
+	// Observation fields make identity probes auditable. They are populated
+	// by the current runtime, never by a request payload.
+	Observed   bool
+	Provider   string
+	Tool       string
+	DurationNS int64
+	Error      string
+	// State is an ephemeral, request-scoped provider snapshot. It is excluded
+	// from JSON and durable quality/cache records; adapters may reuse it for
+	// the immediately following Run instead of issuing the same status call.
+	State *RuntimeState `json:"-"`
+}
+
+// RuntimeState carries only conservative status facts needed to validate a
+// reused observation. It is intentionally generic across graph providers.
+type RuntimeState struct {
+	Status          string
+	Symbols         int
+	Edges           int
+	Files           int
+	Repositories    int
+	RepositoryPaths []string
+}
+
 // RepositoryReacher is implemented by a runner that can only answer for some
 // of the repositories it is attached to, and knows which before it is asked.
 //
@@ -152,6 +197,10 @@ type RunRequest struct {
 	Repository     Repository
 	Payload        map[string]any
 	Permission     Permission
+	// ObservedIdentity is supplied by the selector when it already performed
+	// the current runtime probe. It prevents the cache wrapper from issuing a
+	// duplicate graph_status call. It never crosses a provider wire.
+	ObservedIdentity *CacheIdentity `json:"-"`
 }
 
 // Validate checks the request before anything runs: the implementation really

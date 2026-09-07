@@ -14,6 +14,8 @@ import (
 	"github.com/Tutitoos/atenea/internal/buildinfo"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/floor"
+	"github.com/Tutitoos/atenea/internal/knowledge"
+	"github.com/Tutitoos/atenea/internal/platform"
 	"github.com/Tutitoos/atenea/internal/trace"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -28,6 +30,12 @@ import (
 // see.
 func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surface string,
 	notices io.Writer) (*Engine, func(), error) {
+	return ServeWithParent(ctx, cfg, tracePath, repository, surface, notices, nil)
+}
+
+// ServeWithParent is part of ATENEA's public orchestration contract.
+func ServeWithParent(ctx context.Context, cfg config.Config, tracePath, repository, surface string,
+	notices io.Writer, parent *contract.Assignment) (*Engine, func(), error) {
 	traces, err := trace.Open(ctx, tracePath)
 	if err != nil {
 		return nil, nil, err
@@ -95,23 +103,70 @@ func Serve(ctx context.Context, cfg config.Config, tracePath, repository, surfac
 	} else {
 		measured = floors{store: store}
 	}
+	var activityCallback func([]ActivityNotice) error
+	if notices != nil {
+		activityCallback = func(activity []ActivityNotice) error {
+			if len(activity) == 0 {
+				return nil
+			}
+			if writer, ok := notices.(interface{ WriteActivity([]ActivityNotice) error }); ok {
+				return writer.WriteActivity(activity)
+			}
+			lines := make([]string, 0, len(activity))
+			for _, item := range activity {
+				lines = append(lines, item.Markdown)
+			}
+			_, err := fmt.Fprintln(notices, strings.Join(lines, "\n"))
+			return err
+		}
+	}
+	var knowledgeState *knowledge.Store
+	var capture knowledgeCapture
+	if cfg.Knowledge.Enabled {
+		knowledgePath := cfg.Knowledge.Path
+		if knowledgePath == "" {
+			knowledgePath = filepath.Join(platform.StateDir(), "knowledge.sqlite")
+		}
+		knowledgeState, err = knowledge.Open(knowledgePath, knowledge.WithEvidenceResolver(KnowledgeEvidenceResolver{Store: state}))
+		if err != nil {
+			_ = state.Close()
+			_ = traces.Close()
+			return nil, nil, contract.Fail(contract.FailureUnavailable, "workflow: opening knowledge store: %v", err)
+		}
+		capture = knowledgeCapture{store: knowledgeState, repository: workspace.RepositoryID}
+	}
 	engine, err := New(Options{
-		Runner:         runner,
-		Store:          state,
-		Types:          cfg.Agents,
-		Lanes:          cfg.Workflow,
-		Surface:        surface,
-		Repository:     workspace.RepositoryID,
-		RepositoryRoot: workspace.RepositoryRoot,
-		Floors:         measured,
-		ModelFor:       modelFor(cfg),
+		Runner:           runner,
+		Store:            state,
+		Types:            cfg.Agents,
+		Lanes:            cfg.Workflow,
+		ProfileName:      cfg.Workflow.Profile,
+		Profiles:         cfg.Workflow.Profiles,
+		MaxBudgetUSD:     cfg.Workflow.MaxBudgetUSD,
+		MaxDuration:      cfg.Workflow.MaxDuration,
+		MaxRetries:       cfg.Workflow.MaxRetries,
+		Surface:          surface,
+		Repository:       workspace.RepositoryID,
+		RepositoryRoot:   workspace.RepositoryRoot,
+		Floors:           measured,
+		ModelFor:         modelFor(cfg),
+		Activity:         activityCallback,
+		Parent:           parent,
+		PrepareKnowledge: capture.prepare,
+		PromoteKnowledge: capture.promote,
 	})
 	if err != nil {
+		if knowledgeState != nil {
+			_ = knowledgeState.Close()
+		}
 		_ = state.Close()
 		_ = traces.Close()
 		return nil, nil, err
 	}
 	return engine, func() {
+		if knowledgeState != nil {
+			_ = knowledgeState.Close()
+		}
 		_ = state.Close()
 		_ = traces.Close()
 	}, nil
@@ -264,10 +319,26 @@ func (f floors) Floor(_ context.Context, repository, agent, model string) (Floor
 func modelFor(cfg config.Config) func(agentType string) string {
 	return func(agentType string) string {
 		switch agentType {
+		case "research":
+			if cfg.Model.Research != "" {
+				return cfg.Model.Research
+			}
+			return cfg.Model.Explore
 		case "explore", "reader":
 			return cfg.Model.Explore
 		case "plan":
 			return cfg.Model.Plan
+		case "implement":
+			return cfg.Model.Implement
+		case "review":
+			return cfg.Model.Review
+		case "semantic-reviewer":
+			if cfg.Model.Review != "" {
+				return cfg.Model.Review
+			}
+			return cfg.Model.Explore
+		case "audit":
+			return cfg.Model.Audit
 		}
 		return ""
 	}

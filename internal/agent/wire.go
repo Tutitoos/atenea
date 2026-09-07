@@ -24,15 +24,20 @@ import (
 
 // assignmentWire is what an agent reads on stdin: one JSON object, then EOF.
 type assignmentWire struct {
-	Contract string     `json:"contract"`
-	ID       string     `json:"id"`
-	ParentID string     `json:"parent_id,omitempty"`
-	Kind     string     `json:"kind"`
-	Type     string     `json:"type"`
-	Depth    int        `json:"depth"`
-	Task     taskWire   `json:"task"`
-	Limits   limitsWire `json:"limits"`
-	Effects  []string   `json:"effects"`
+	Contract     string     `json:"contract"`
+	ID           string     `json:"id"`
+	WorkflowID   string     `json:"workflow_id,omitempty"`
+	Worktree     string     `json:"worktree,omitempty"`
+	PolicyDigest string     `json:"policy_digest,omitempty"`
+	GrantToken   string     `json:"grant_token,omitempty"`
+	ParentID     string     `json:"parent_id,omitempty"`
+	Kind         string     `json:"kind"`
+	Type         string     `json:"type"`
+	Depth        int        `json:"depth"`
+	Task         taskWire   `json:"task"`
+	Limits       limitsWire `json:"limits"`
+	Effects      []string   `json:"effects"`
+	Operations   []string   `json:"operations,omitempty"`
 	// BudgetUSD is what this run may spend. Absent when nobody granted
 	// money, which a model-backed agent has to be able to tell from a grant
 	// of zero: the first means run without a ceiling of your own, and the
@@ -62,13 +67,23 @@ type assignmentWire struct {
 }
 
 type routeWire struct {
-	Model        string            `json:"model,omitempty"`
-	Fallbacks    []string          `json:"fallbacks,omitempty"`
-	Backend      string            `json:"backend,omitempty"`
-	Binary       string            `json:"binary,omitempty"`
-	Capabilities []string          `json:"capabilities,omitempty"`
-	Providers    map[string]string `json:"providers,omitempty"`
-	Tools        []string          `json:"tools,omitempty"`
+	Model                    string            `json:"model,omitempty"`
+	RequestedModel           string            `json:"requested_model,omitempty"`
+	ObservedModel            string            `json:"observed_model,omitempty"`
+	Role                     string            `json:"role,omitempty"`
+	ReasoningEffort          string            `json:"reasoning_effort,omitempty"`
+	RequestedReasoningEffort string            `json:"requested_reasoning_effort,omitempty"`
+	ObservedReasoningEffort  string            `json:"observed_reasoning_effort,omitempty"`
+	Fallbacks                []string          `json:"fallbacks,omitempty"`
+	Backend                  string            `json:"backend,omitempty"`
+	Binary                   string            `json:"binary,omitempty"`
+	Capabilities             []string          `json:"capabilities,omitempty"`
+	Providers                map[string]string `json:"providers,omitempty"`
+	Tools                    []string          `json:"tools,omitempty"`
+	VisibilityRequired       bool              `json:"visibility_required,omitempty"`
+	ThreadID                 string            `json:"thread_id,omitempty"`
+	TurnID                   string            `json:"turn_id,omitempty"`
+	UsageRevision            uint64            `json:"usage_revision,omitempty"`
 }
 
 type taskWire struct {
@@ -98,10 +113,17 @@ type limitsWire struct {
 
 // reportWire is what an agent writes on stdout: one JSON object.
 type reportWire struct {
-	Result     map[string]any  `json:"result"`
-	Verdict    string          `json:"verdict"`
-	Reason     *reasonWire     `json:"reason,omitempty"`
-	Discovered []discoveryWire `json:"discovered,omitempty"`
+	Result                   map[string]any  `json:"result"`
+	Verdict                  string          `json:"verdict"`
+	ThreadID                 string          `json:"thread_id,omitempty"`
+	TurnID                   string          `json:"turn_id,omitempty"`
+	UsageRevision            uint64          `json:"usage_revision,omitempty"`
+	RequestedModel           string          `json:"requested_model,omitempty"`
+	ObservedModel            string          `json:"observed_model,omitempty"`
+	RequestedReasoningEffort string          `json:"requested_reasoning_effort,omitempty"`
+	ObservedReasoningEffort  string          `json:"observed_reasoning_effort,omitempty"`
+	Reason                   *reasonWire     `json:"reason,omitempty"`
+	Discovered               []discoveryWire `json:"discovered,omitempty"`
 	// Notices are caveats about the report, distinct from Reason: a
 	// truncated discovery or a partial answer's own account of itself, not
 	// why the run ended the way it did.
@@ -145,8 +167,10 @@ type discoveryWire struct {
 func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 	schema map[string]any) ([]byte, error) {
 	out := assignmentWire{
-		Contract: a.Version.String(),
-		ID:       a.ID,
+		Contract:   a.Version.String(),
+		ID:         a.ID,
+		WorkflowID: a.WorkflowID, Worktree: a.Worktree,
+		PolicyDigest: a.PolicyDigest, GrantToken: a.GrantToken,
 		ParentID: a.ParentID,
 		Kind:     a.Kind.String(),
 		Type:     a.TypeName,
@@ -165,8 +189,12 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 	}
 	if a.Route != nil {
 		route := a.Route.Clone()
-		out.Route = &routeWire{Model: route.Model, Fallbacks: route.Fallbacks, Backend: route.Backend, Binary: route.Binary,
-			Capabilities: route.Capabilities, Providers: route.Providers, Tools: route.Tools}
+		out.Route = &routeWire{Model: route.Model, RequestedModel: route.RequestedModel, ObservedModel: route.ObservedModel,
+			Role: route.Role, ReasoningEffort: route.ReasoningEffort,
+			RequestedReasoningEffort: route.RequestedReasoningEffort, ObservedReasoningEffort: route.ObservedReasoningEffort,
+			Fallbacks: route.Fallbacks, Backend: route.Backend, Binary: route.Binary,
+			Capabilities: route.Capabilities, Providers: route.Providers, Tools: route.Tools,
+			VisibilityRequired: route.VisibilityRequired, ThreadID: route.ThreadID}
 	}
 	if a.BudgetUSD != nil {
 		budget := *a.BudgetUSD
@@ -180,6 +208,9 @@ func encodeAssignment(a contract.Assignment, ctxPayload map[string]any,
 	out.Rejected = encodeSubject(a.Rejected)
 	for _, effect := range a.Effects {
 		out.Effects = append(out.Effects, effect.String())
+	}
+	for _, operation := range a.Operations {
+		out.Operations = append(out.Operations, operation.String())
 	}
 	payload, err := json.Marshal(out)
 	if err != nil {
@@ -247,6 +278,9 @@ func decodeReport(raw []byte) (contract.Report, error) {
 	out := contract.Report{
 		Result: wire.Result, Verdict: verdict,
 		Notices: wire.Notices, StoppedAt: wire.StoppedAt,
+		ThreadID: wire.ThreadID, RequestedModel: wire.RequestedModel, ObservedModel: wire.ObservedModel,
+		TurnID: wire.TurnID, UsageRevision: wire.UsageRevision,
+		RequestedReasoningEffort: wire.RequestedReasoningEffort, ObservedReasoningEffort: wire.ObservedReasoningEffort,
 	}
 	if wire.Completeness != nil {
 		amount := *wire.Completeness

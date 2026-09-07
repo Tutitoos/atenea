@@ -40,6 +40,8 @@ type commissioned struct {
 	notes *notebook.Notebook
 }
 
+func (c commissioned) Unwrap() contract.Runner { return c.Runner }
+
 func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	if missing, ok := req.Allowed(); !ok {
 		return contract.Outcome{}, contract.Fail(contract.FailurePermissionDenied,
@@ -132,6 +134,8 @@ func (c commissioned) Run(ctx context.Context, req contract.RunRequest) (contrac
 // the empty case is not this gate's business: requests that carry no
 // repository at all pass straight through.
 type grounded struct{ contract.Runner }
+
+func (g grounded) Unwrap() contract.Runner { return g.Runner }
 
 func (g grounded) Run(ctx context.Context, req contract.RunRequest) (contract.Outcome, error) {
 	path := strings.TrimSpace(req.Repository.Path)

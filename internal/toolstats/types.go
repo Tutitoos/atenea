@@ -102,14 +102,16 @@ type LegacyRow struct {
 
 // Event identifies a request or attempt and its parent request.
 type Event struct {
-	Metadata   Metadata
-	ID         string
-	Parent     string
-	Level      string
-	Tool       string
-	Provider   string
-	Repository string
-	At         time.Time
+	Metadata        Metadata
+	CacheHit        bool
+	CacheValidation *contract.CacheValidation
+	ID              string
+	Parent          string
+	Level           string
+	Tool            string
+	Provider        string
+	Repository      string
+	At              time.Time
 }
 
 type requestKey struct{}

@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "matrix_version": "1.0.0",
+  "date": "2026-09-06",
+  "scope": "Dart fixtures and local Atenea contracts; no external provider or client",
+  "fixture_sha256": "c3844c317116c517c03987dbf8f0743c39000df72067adcdb207dcf15039e553",
+  "corpus_sha256": "bb57b8555c44fdd754bc72855c7899adda318677b48ee5696820a710efec98a5",
+  "provider_base": {
+    "name": "Kivgraph",
+    "revision": "e28323742c8f148a859dcc54045727629ab4ba8e",
+    "repository": "github.com/Tutitoos/kivgraph",
+    "evidence": "verified upstream main revision; Atenea consumes the native MCP tool and does not duplicate its graph implementation"
+  },
+  "provider_attempts": [
+    {
+      "id": "kivgraph-dart-cli-2026-09-06",
+      "provider": "Kivgraph",
+      "revision": "e28323742c8f148a859dcc54045727629ab4ba8e",
+      "command": "kivgraph index --full",
+      "status": "failed",
+      "evidence_level": "pending",
+      "date": "2026-09-06",
+      "error": "LadybugDB native support is unavailable; no generation was published"
+    }
+  ],
+  "baseline": [
+    {
+      "id": "S03",
+      "preflight": "passed",
+      "state": "passed",
+      "valid": true,
+      "evidence": "Dart declaration probe contains the repository contract and concrete class"
+    },
+    {
+      "id": "S07",
+      "preflight": "unsupported",
+      "state": "unsupported",
+      "valid": true,
+      "evidence": "Dart semantic implementation evidence is not supported locally"
+    }
+  ],
+  "rows": [
+    {
+      "capability": "code.context",
+      "language": "dart",
+      "declared": "proven",
+      "connected": "unknown",
+      "functionally_tested": "proven",
+      "evidence_level": "local",
+      "date": "2026-09-06",
+      "version": "1.0.0",
+      "scope": "one explicit Dart repository fixture through the local code.context contract",
+      "evidence": [
+        {
+          "id": "dart-runner-local-session",
+          "source": "internal/dartcoverage/report.go",
+          "level": "local",
+          "detail": "the productive code.context Runner route completed against a deterministic local Session response; fixture set contains 2 independent Dart files"
+        }
+      ],
+      "limitations": [
+        "No live Kivgraph provider, MCP connection, or client chat was used; connected remains unknown; real Dart source interpretation was not tested."
+      ]
+    },
+    {
+      "capability": "symbol.implementations",
+      "language": "dart",
+      "declared": "unsupported",
+      "connected": "unknown",
+      "functionally_tested": "unsupported",
+      "evidence_level": "local",
+      "date": "2026-09-06",
+      "version": "1.0.0",
+      "scope": "Dart request rejected during Atenea preflight before a Kivgraph session/provider call",
+      "evidence": [
+        {
+          "id": "p13-dart-preflight",
+          "source": "internal/dartcoverage/report.go",
+          "level": "local",
+          "detail": "the productive symbol.implementations preflight rejects .dart before creating a provider session"
+        }
+      ],
+      "limitations": [
+        "Dart semantic implementations are intentionally not enabled; no Dart locations or source interpretation are claimed."
+      ]
+    },
+    {
+      "capability": "workspace.context",
+      "language": "dart",
+      "declared": "proven",
+      "connected": "unknown",
+      "functionally_tested": "proven",
+      "evidence_level": "local",
+      "date": "2026-09-06",
+      "version": "1.0.0",
+      "scope": "two independent Dart child repository fixtures coordinated locally",
+      "evidence": [
+        {
+          "id": "dart-workspace-coordinator",
+          "source": "internal/dartcoverage/report.go",
+          "level": "local",
+          "detail": "the productive workspace.context Coordinator dispatched two child repository identities with deterministic local Session responses; two child identities were dispatched from a 2-file fixture set"
+        }
+      ],
+      "limitations": [
+        "The fan-out responses are simulated local Session evidence; provider, client, cross-process presentation, and real Dart source interpretation remain unknown."
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "kivgraph-dart-loader",
+      "name": "Kivgraph Dart loader",
+      "status": "proven",
+      "evidence_level": "component_local",
+      "date": "2026-09-06",
+      "version": "e28323742c8f148a859dcc54045727629ab4ba8e",
+      "scope": "Kivgraph component loader and direct tests, separate from Atenea E2E",
+      "evidence": [
+        {
+          "id": "kivgraph-dart-loader-tests",
+          "source": "kivgraph/internal/dartloader/loader_test.go",
+          "level": "component_local",
+          "detail": "component tests observed Kivgraph generating Dart IMPLEMENTS/OVERRIDES evidence at the pinned revision; no published generation or Atenea E2E is claimed"
+        }
+      ],
+      "limitations": [
+        "Component-local evidence does not prove an Atenea provider connection, client presentation, or Dart symbol.implementations support"
+      ]
+    }
+  ],
+  "limitations": [
+    "Dart source interpretation was not tested; local Session responses prove routing and policy only",
+    "S03 and S07 are revalidated from the fixed corpus separately and its SHA is never changed by this report",
+    "real_provider and real_client evidence are pending; a real Kivgraph CLI attempt reached index --full but failed because LadybugDB native support was unavailable, so no generation was published"
+  ]
+}

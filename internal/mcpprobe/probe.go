@@ -31,19 +31,27 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 	"github.com/Tutitoos/atenea/internal/procgroup"
 )
 
-// protocolVersion is the MCP revision the probe announces. A server that
-// speaks an older one still answers `initialize` -- version negotiation is
-// what the handshake is for -- so this being ahead of a server is not a
-// failure and must not be read as one.
-const protocolVersion = "2025-06-18"
+// ProtocolMode is part of ATENEA's public orchestration contract.
+type ProtocolMode string
+
+const (
+	// ProtocolLegacy is part of ATENEA's public orchestration contract.
+	ProtocolLegacy ProtocolMode = "legacy"
+	// ProtocolAuto is part of ATENEA's public orchestration contract.
+	ProtocolAuto ProtocolMode = "auto"
+	// ProtocolModernPin is part of ATENEA's public orchestration contract.
+	ProtocolModernPin ProtocolMode = "modern-pin"
+)
 
 // maxNoise caps how many lines a stdio server may print before its answer.
 // Servers log to stdout despite the spec saying not to, and a probe that
@@ -66,6 +74,19 @@ type Server struct {
 	Command []string
 	Env     map[string]string
 	Timeout time.Duration
+	// ProtocolMode defaults to legacy. Auto may fall back only after an
+	// explicit compatibility response; an ambiguous timeout never changes
+	// protocol eras.
+	ProtocolMode ProtocolMode
+}
+
+// RequestedProtocolVersion exposes the configured era without probing. It is
+// useful in status output where observed evidence is intentionally unknown.
+func (s Server) RequestedProtocolVersion() string {
+	if s.ProtocolMode == ProtocolAuto || s.ProtocolMode == ProtocolModernPin {
+		return mcpcompat.Modern.String()
+	}
+	return mcpcompat.Legacy.String()
 }
 
 // Result is what came back. Err is the whole diagnosis when OK is false: it
@@ -78,6 +99,28 @@ type Result struct {
 	Version string
 	Took    time.Duration
 	Err     error
+	// Requested and observed are deliberately separate. A modern request
+	// followed by a legacy-compatible response is evidence of exactly that,
+	// not evidence that the requested era was accepted.
+	RequestedProtocolVersion string
+	ObservedProtocolVersion  string
+	// Capabilities are protocol-level declarations observed in the handshake.
+	// They are not proof that any tool works.
+	Capabilities []string
+}
+
+type probeObservation struct {
+	Raw      json.RawMessage
+	Observed mcpcompat.Era
+}
+
+type protocolFallbackError struct{ reason string }
+
+func (e *protocolFallbackError) Error() string { return e.reason }
+
+func isProtocolFallback(err error) bool {
+	var fallback *protocolFallbackError
+	return errors.As(err, &fallback)
 }
 
 // Transport names how this server was reached, for a report that has to say
@@ -126,6 +169,8 @@ type rpcResponse struct {
 	Error  *rpcError       `json:"error"`
 }
 
+const protocolVersion = string(mcpcompat.Legacy)
+
 // handshakeID is the id the probe asks initialize with, and the only id an
 // answer to it may carry. Named rather than written as a literal in the two
 // places that need it, because the whole guarantee is that the number sent
@@ -156,21 +201,45 @@ func Probe(ctx context.Context, s Server) Result {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	mode := s.ProtocolMode
+	if mode == "" {
+		mode = ProtocolLegacy
+	}
+	requested := mcpcompat.Legacy
+	if mode == ProtocolAuto || mode == ProtocolModernPin {
+		requested = mcpcompat.Modern
+	}
+	out := Result{
+		ID:                       s.ID,
+		Took:                     time.Since(started),
+		RequestedProtocolVersion: requested.String(),
+		ObservedProtocolVersion:  mcpcompat.Unknown.String(),
+	}
+	if mode != ProtocolLegacy && mode != ProtocolAuto && mode != ProtocolModernPin {
+		out.Err = fmt.Errorf("unknown protocol mode %q", mode)
+		return out
+	}
 
-	var raw json.RawMessage
+	var observation probeObservation
 	var err error
 	switch {
 	case s.URL != "":
-		raw, err = probeHTTP(ctx, s)
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		observation, err = probeHTTP(ctx, s, mode)
 	case len(s.Command) > 0:
-		raw, err = probeStdio(ctx, s)
+		if mode == ProtocolAuto {
+			observation, err = probeStdioAuto(ctx, s, timeout)
+		} else {
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			observation, err = probeStdio(ctx, s, mode == ProtocolModernPin)
+		}
 	default:
 		err = errors.New("no url and no command: nothing to reach")
 	}
 
-	out := Result{ID: s.ID, Took: time.Since(started)}
+	out.Took = time.Since(started)
 	if err != nil {
 		// A deadline that passed reads as a bare "context deadline exceeded",
 		// which names the mechanism and not the fact. The fact is that
@@ -182,11 +251,27 @@ func Probe(ctx context.Context, s Server) Result {
 		out.Err = err
 		return out
 	}
-	var who hello
-	if json.Unmarshal(raw, &who) == nil {
-		out.Name, out.Version = who.ServerInfo.Name, who.ServerInfo.Version
-	}
+	out.ObservedProtocolVersion = observation.Observed.String()
+	out.Name, out.Version = identify(observation.Raw, observation.Observed)
+	out.Capabilities = observedCapabilities(observation.Raw, observation.Observed)
 	out.OK = true
+	return out
+}
+
+func observedCapabilities(raw json.RawMessage, era mcpcompat.Era) []string {
+	var envelope struct {
+		Capabilities map[string]json.RawMessage `json:"capabilities"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(envelope.Capabilities))
+	for name, value := range envelope.Capabilities {
+		if len(value) > 0 && string(value) != "null" && string(value) != "false" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -230,45 +315,124 @@ func initializeBody() ([]byte, error) {
 	})
 }
 
-func probeHTTP(ctx context.Context, s Server) (json.RawMessage, error) {
-	body, err := initializeBody()
-	if err != nil {
-		return nil, err
+func modernDiscoverBody() ([]byte, error) {
+	return json.Marshal(rpcRequest{
+		Version: "2.0",
+		ID:      handshakeID,
+		Method:  "server/discover",
+		Params: map[string]any{"_meta": map[string]any{
+			mcpcompat.ProtocolVersionKey:    mcpcompat.Modern.String(),
+			mcpcompat.ClientInfoKey:         map[string]any{"name": "atenea-probe", "version": "1"},
+			mcpcompat.ClientCapabilitiesKey: map[string]any{},
+		}},
+	})
+}
+
+func probeHTTP(ctx context.Context, s Server, mode ProtocolMode) (probeObservation, error) {
+	if mode == ProtocolLegacy {
+		return probeHTTPRequest(ctx, s.URL, nil, mcpcompat.Legacy)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.URL, bytes.NewReader(body))
+	modern, err := probeHTTPRequest(ctx, s.URL, nil, mcpcompat.Modern)
+	if err == nil || mode == ProtocolModernPin || !isProtocolFallback(err) {
+		return modern, err
+	}
+	// A fallback is a new HTTP request. An authentication, network, status,
+	// or deadline error never reaches this branch.
+	return probeHTTPRequest(ctx, s.URL, nil, mcpcompat.Legacy)
+}
+
+func probeHTTPRequest(ctx context.Context, endpoint string, body []byte, era mcpcompat.Era) (probeObservation, error) {
+	if body == nil {
+		var err error
+		if era == mcpcompat.Modern {
+			body, err = modernDiscoverBody()
+		} else {
+			body, err = initializeBody()
+		}
+		if err != nil {
+			return probeObservation{}, err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// A streamable-HTTP server picks its own framing per response, so both
-	// are advertised: refusing one would make the probe depend on the mood
-	// the server happens to be in rather than on whether it is up.
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	if era == mcpcompat.Modern {
+		req.Header.Set("MCP-Protocol-Version", mcpcompat.Modern.String())
+		req.Header.Set("Mcp-Method", "server/discover")
+	}
 	resp, err := prober.Do(req)
 	if err != nil {
-		// Unwrapped, because the reader already knows the address: every
-		// caller of this package prints it beside the reason. Go's
-		// *url.Error would restate the method and the whole URL in front
-		// of the one clause that says what happened, which pushes the
-		// clause off the end of a line already carrying it once.
 		var wrapped *url.Error
 		if errors.As(err, &wrapped) && wrapped.Err != nil {
-			return nil, wrapped.Err
+			return probeObservation{}, wrapped.Err
 		}
-		return nil, err
+		return probeObservation{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	text, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("answered %s: %s", resp.Status, clip(string(text)))
+		if era == mcpcompat.Modern && mcpcompat.LegacyHTTPFallback(resp.StatusCode, string(text)) {
+			return probeObservation{}, &protocolFallbackError{reason: "modern discovery is not supported by this HTTP server"}
+		}
+		return probeObservation{}, fmt.Errorf("answered %s: %s", resp.Status, clip(string(text)))
 	}
-	return decode(string(text))
+	raw, err := decode(string(text))
+	if err != nil {
+		var rpcErr *rpcError
+		if era == mcpcompat.Modern && errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+			return probeObservation{}, &protocolFallbackError{reason: rpcErr.Error()}
+		}
+		return probeObservation{}, err
+	}
+	if era == mcpcompat.Modern {
+		if legacyDiscovery(raw) {
+			return probeObservation{}, &protocolFallbackError{reason: "server selected legacy protocol"}
+		}
+		if _, err := mcpcompat.ParseDiscovery(raw); err != nil {
+			return probeObservation{}, err
+		}
+	}
+	return probeObservation{Raw: raw, Observed: era}, nil
 }
 
-func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
+func legacyDiscovery(raw json.RawMessage) bool {
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	return json.Unmarshal(raw, &result) == nil && result.ProtocolVersion == mcpcompat.Legacy.String()
+}
+
+func identify(raw json.RawMessage, era mcpcompat.Era) (string, string) {
+	if era == mcpcompat.Modern {
+		var envelope struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		}
+		if json.Unmarshal(raw, &envelope) != nil {
+			return "", ""
+		}
+		var info struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(envelope.Meta[mcpcompat.ServerInfoKey], &info) != nil {
+			return "", ""
+		}
+		return info.Name, info.Version
+	}
+	var who hello
+	if json.Unmarshal(raw, &who) != nil {
+		return "", ""
+	}
+	return who.ServerInfo.Name, who.ServerInfo.Version
+}
+
+func probeStdio(ctx context.Context, s Server, modern bool) (probeObservation, error) {
 	cmd := exec.CommandContext(ctx, s.Command[0], s.Command[1:]...)
 	// An MCP server routinely spawns helpers of its own -- language servers,
 	// indexers -- and killing only the process Atenea started leaves those
@@ -283,18 +447,18 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	// The copier is ours rather than the one cmd.Stderr would start, because
 	// this needs to be joinable twice over: os/exec's contract says Wait must
@@ -328,32 +492,47 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 		_ = cmd.Wait()
 	}()
 
-	body, err := initializeBody()
+	var body []byte
+	if modern {
+		body, err = modernDiscoverBody()
+	} else {
+		body, err = initializeBody()
+	}
 	if err != nil {
-		return nil, err
+		return probeObservation{}, err
 	}
 	if _, err := stdin.Write(append(body, '\n')); err != nil {
 		// Either way the child's stderr is complete and worth the wait: this
 		// is the path where the reason lives there and nowhere else.
 		settle()
-		if childIsGone(err) {
-			return nil, withStderr(errExited, &stderr)
+		if ctx.Err() != nil {
+			return probeObservation{}, ctx.Err()
 		}
-		return nil, withStderr(fmt.Errorf("could not be asked: %w", err), &stderr)
+		if childIsGone(err) {
+			return probeObservation{}, withStderr(errExited, &stderr)
+		}
+		return probeObservation{}, withStderr(fmt.Errorf("could not be asked: %w", err), &stderr)
 	}
 
 	reader := bufio.NewReaderSize(stdout, 1<<20)
+	sawRequest := false
 	for range maxNoise {
 		line, err := reader.ReadString('\n')
 		if err != nil && line == "" {
 			if errors.Is(err, io.EOF) {
+				if ctx.Err() != nil {
+					return probeObservation{}, ctx.Err()
+				}
 				// The shape of a server that starts and dies. Saying so is
 				// the whole point: "connection closed" sends a reader to the
 				// network, and there is no network here.
 				settle()
-				return nil, withStderr(errExited, &stderr)
+				if modern && sawRequest {
+					return probeObservation{}, &protocolFallbackError{reason: "child exited after a pre-initialize request"}
+				}
+				return probeObservation{}, withStderr(errExited, &stderr)
 			}
-			return nil, withStderr(err, &stderr)
+			return probeObservation{}, withStderr(err, &stderr)
 		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
@@ -376,17 +555,50 @@ func probeStdio(ctx context.Context, s Server) (json.RawMessage, error) {
 			// internal/passthrough/stdio.go does, belongs to a session that
 			// outlives one message; this process is killed on the way out of
 			// this function.
+			sawRequest = true
 			continue
 		}
 		if *out.ID != handshakeID {
 			continue // an answer to a question this probe never asked
 		}
 		if out.Error != nil {
-			return nil, out.Error
+			if modern && out.Error.Code == -32601 {
+				return probeObservation{}, &protocolFallbackError{reason: out.Error.Error()}
+			}
+			return probeObservation{}, out.Error
 		}
-		return out.Result, nil
+		if modern {
+			if legacyDiscovery(out.Result) {
+				return probeObservation{}, &protocolFallbackError{reason: "server selected legacy protocol"}
+			}
+			if _, err := mcpcompat.ParseDiscovery(out.Result); err != nil {
+				return probeObservation{}, err
+			}
+			return probeObservation{Raw: out.Result, Observed: mcpcompat.Modern}, nil
+		}
+		return probeObservation{Raw: out.Result, Observed: mcpcompat.Legacy}, nil
 	}
-	return nil, withStderr(fmt.Errorf("printed %d lines and never framed a reply", maxNoise), &stderr)
+	return probeObservation{}, withStderr(fmt.Errorf("printed %d lines and never framed a reply", maxNoise), &stderr)
+}
+
+func probeStdioAuto(ctx context.Context, s Server, timeout time.Duration) (probeObservation, error) {
+	modernCtx, cancel := context.WithTimeout(ctx, timeout)
+	modern, err := probeStdio(modernCtx, s, true)
+	cancel()
+	if err == nil {
+		return modern, nil
+	}
+	// A caller cancellation or an ambiguous timeout is never converted into a
+	// retry. Only an explicit compatibility response can select legacy.
+	if ctx.Err() != nil {
+		return probeObservation{}, ctx.Err()
+	}
+	if !isProtocolFallback(err) {
+		return probeObservation{}, err
+	}
+	legacyCtx, legacyCancel := context.WithTimeout(ctx, timeout)
+	defer legacyCancel()
+	return probeStdio(legacyCtx, s, false)
 }
 
 // errExited is the one sentence for a stdio server that died before it
@@ -494,9 +706,10 @@ func decode(text string) (json.RawMessage, error) {
 		return nil, errors.New("answered with an empty body")
 	}
 	if strings.HasPrefix(payload, "event:") || strings.HasPrefix(payload, "data:") {
-		payload = sseData(payload)
-		if payload == "" {
-			return nil, fmt.Errorf("sent an event with no data: %s", clip(text))
+		var ok bool
+		payload, ok = sseReply(payload, handshakeID)
+		if !ok {
+			return nil, fmt.Errorf("sent no event carrying a reply to initialize: %s", clip(text))
 		}
 	}
 	var out rpcResponse
@@ -519,17 +732,28 @@ func decode(text string) (json.RawMessage, error) {
 	return out.Result, nil
 }
 
-// sseData pulls the payload out of SSE framing. One logical message may be
-// split across several data: lines, which the spec says to rejoin.
-func sseData(text string) string {
-	var b strings.Builder
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if after, ok := strings.CutPrefix(line, "data:"); ok {
-			b.WriteString(strings.TrimSpace(after))
+func sseReply(text string, id int) (string, bool) {
+	for _, event := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n\n") {
+		var data []string
+		for _, line := range strings.Split(event, "\n") {
+			if after, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "data:"); ok {
+				data = append(data, strings.TrimSpace(after))
+			}
 		}
+		if len(data) == 0 {
+			continue
+		}
+		payload := strings.Join(data, "\n")
+		var envelope struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(payload), &envelope) != nil || envelope.Method != "" || envelope.ID == nil || *envelope.ID != id {
+			continue
+		}
+		return payload, true
 	}
-	return b.String()
+	return "", false
 }
 
 // clip keeps an error readable when a server answers with a page instead of

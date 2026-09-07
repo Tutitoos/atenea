@@ -1,4 +1,4 @@
-import type { Envelope, EventRecord, Overview, Run, Session } from "~/lib/types";
+import type { Envelope, EventRecord, Overview, Run, Session, WorkflowDetail } from "~/lib/types";
 import { parseEnvelope, eventSchema } from "./schemas";
 
 export class UnauthorizedError extends Error {}
@@ -25,6 +25,7 @@ export const api = {
   session: (id: string) => request<Session>(`/api/v1/sessions/${encodeURIComponent(id)}`),
   runs: (values: Record<string, string | undefined> = {}) => request<{ items?: Run[]; total?: number }>(`/api/v1/runs?${query({ limit: "100", ...values })}`),
   run: (id: string) => request<Run>(`/api/v1/runs/${encodeURIComponent(id)}`),
+  workflow: (id: string) => request<WorkflowDetail>(`/api/v1/workflows/${encodeURIComponent(id)}`),
   metrics: (values: Record<string, string | undefined> = {}) => request<unknown>(`/api/v1/metrics?${query({ limit: "100", ...values })}`),
   incidents: () => request<unknown>("/api/v1/incidents?limit=100"),
   catalog: () => request<unknown>("/api/v1/catalog"),
@@ -68,6 +69,7 @@ export function connectEvents(after: number, handlers: { event: (event: EventRec
     "provider", "provider.started", "provider.completed",
     "retry", "retry.started", "retry.completed",
     "gate", "gate.waiting", "gate.completed",
+		"workflow", "workflow.activity", "workflow.canceled",
     "health", "health.index", "health.server",
     "process", "process.status",
     "maintenance", "maintenance.completed",

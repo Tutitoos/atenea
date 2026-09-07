@@ -2,10 +2,12 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/buildinfo"
@@ -59,11 +61,13 @@ const (
 	// one spawns a process per declared stdio server. Folding them together
 	// would put six spawns behind the most frequently called method on this
 	// socket.
+	// MethodDetect is part of ATENEA's public orchestration contract.
 	MethodDetect = "atenea/detect"
 
-	codeParse         = -32700
-	codeInvalid       = -32600
-	codeMethodUnknown = -32601
+	codeParse           = -32700
+	codeInvalid         = -32600
+	codeMethodUnknown   = -32601
+	codeRequestCanceled = -32800
 )
 
 // probeAskTimeout is the backstop for a detect over the socket when the caller
@@ -98,6 +102,18 @@ type rpcResponse struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
+}
+
+type rpcSender struct {
+	mu      sync.Mutex
+	encoder *json.Encoder
+}
+
+func (s *rpcSender) send(value any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.encoder.Encode(value)
 }
 
 // listen opens the door, and only the service may.
@@ -220,7 +236,7 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 
 	lines := bufio.NewScanner(conn)
 	lines.Buffer(make([]byte, 0, 64*1024), maxRequestLine)
-	writer := json.NewEncoder(conn)
+	writer := &rpcSender{encoder: json.NewEncoder(conn)}
 	// One conversation per connection, and it dies with it: the chat a client
 	// opens is closed by hanging up, which is the only signal a client that
 	// crashed will ever send.
@@ -228,18 +244,77 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 	// the connection. Reading it per call would let a settings edit change what
 	// a chat may do halfway through the loop it is already running.
 	talk := &conversation{core: c, screen: taint{permitted: c.settings.Desktop.LookThenAct}}
+	talk.notify = func(method string, params any) error {
+		return writer.send(map[string]any{"jsonrpc": rpcVersion, "method": method, "params": params})
+	}
 	defer talk.close()
+	var workers sync.WaitGroup
+	var dispatchMu sync.Mutex
+	var activeMu sync.Mutex
+	active := make(map[string]context.CancelFunc)
+	cancelAll := func() {
+		activeMu.Lock()
+		for _, cancel := range active {
+			cancel()
+		}
+		activeMu.Unlock()
+	}
 	for lines.Scan() {
 		var req rpcRequest
 		if err := json.Unmarshal(lines.Bytes(), &req); err != nil {
-			_ = writer.Encode(rpcResponse{JSONRPC: rpcVersion,
+			_ = writer.send(rpcResponse{JSONRPC: rpcVersion,
 				Error: &rpcError{Code: codeParse, Message: "not JSON"}})
+			cancelAll()
+			workers.Wait()
 			return
 		}
-		if answer := talk.dispatch(ctx, req); answer != nil {
-			_ = writer.Encode(answer)
+		if req.ID == nil && req.Method == "notifications/canceled" {
+			var params struct {
+				RequestID json.RawMessage `json:"requestId"`
+			}
+			if json.Unmarshal(req.Params, &params) == nil && len(params.RequestID) > 0 {
+				activeMu.Lock()
+				if cancel := active[string(bytes.TrimSpace(params.RequestID))]; cancel != nil {
+					cancel()
+				}
+				activeMu.Unlock()
+			}
+			continue
 		}
+		requestCtx, cancel := context.WithCancel(ctx)
+		key := requestIDKey(req.ID)
+		if key != "" {
+			activeMu.Lock()
+			active[key] = cancel
+			activeMu.Unlock()
+		}
+		workers.Add(1)
+		go func(req rpcRequest, requestCtx context.Context, cancel context.CancelFunc, key string) {
+			defer workers.Done()
+			defer cancel()
+			if key != "" {
+				defer func() {
+					activeMu.Lock()
+					delete(active, key)
+					activeMu.Unlock()
+				}()
+			}
+			dispatchMu.Lock()
+			defer dispatchMu.Unlock()
+			var answer *rpcResponse
+			if requestCtx.Err() != nil {
+				answer = &rpcResponse{JSONRPC: rpcVersion, ID: req.ID,
+					Error: &rpcError{Code: codeRequestCanceled, Message: "request canceled"}}
+			} else {
+				answer = talk.dispatch(requestCtx, req)
+			}
+			if answer != nil {
+				_ = writer.send(answer)
+			}
+		}(req, requestCtx, cancel, key)
 	}
+	cancelAll()
+	workers.Wait()
 	// Scan returning false is two different facts and only one of them is a
 	// client hanging up. The other is a request over the scanner's one-mebibyte
 	// token limit, and until this was written the two were indistinguishable
@@ -266,11 +341,22 @@ func (c *Core) answer(ctx context.Context, conn net.Conn) {
 		if errors.Is(err, bufio.ErrTooLong) {
 			message = "the request is over the " + limitWords + " limit for one line"
 		}
-		_ = writer.Encode(rpcResponse{JSONRPC: rpcVersion,
+		_ = writer.send(rpcResponse{JSONRPC: rpcVersion,
 			Error: &rpcError{Code: codeInvalid, Message: message}})
 		_ = c.notebook.Record(notebook.Incident{
 			Op: "socket.request", Detail: message, Version: buildinfo.Full()})
 	}
+}
+
+func requestIDKey(id any) string {
+	if id == nil {
+		return ""
+	}
+	raw, err := json.Marshal(id)
+	if err != nil {
+		return ""
+	}
+	return string(bytes.TrimSpace(raw))
 }
 
 // maxRequestLine is the largest single request this door accepts, and

@@ -14,6 +14,27 @@ type evidenceSession struct {
 	evidence []contract.QueryEvidence
 }
 
+// stamp fills the common provider attestation onto every tool observation in
+// one Run. Individual query envelopes omit generation/freshness, but the final
+// graph_status verification is authoritative and lets cache admission require
+// one coherent fresh snapshot.
+func (s *evidenceSession) stamp(status *statusResult) {
+	if s == nil || status == nil || status.ContentFreshness == nil {
+		return
+	}
+	for i := range s.evidence {
+		if s.evidence[i].ContentGeneration == 0 {
+			s.evidence[i].ContentGeneration = status.ContentFreshness.Generation
+		}
+		if s.evidence[i].SnapshotID == 0 {
+			s.evidence[i].SnapshotID = status.SnapshotID
+		}
+		if s.evidence[i].Freshness == "" {
+			s.evidence[i].Freshness = status.ContentFreshness.State
+		}
+	}
+}
+
 func (s *evidenceSession) Call(ctx context.Context, tool string, args map[string]any) (string, error) {
 	text, err := s.Session.Call(ctx, tool, args)
 	if err != nil || tool == "get_source" {

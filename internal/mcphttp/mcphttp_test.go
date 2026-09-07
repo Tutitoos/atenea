@@ -152,6 +152,26 @@ func TestNewRejectsAnEndpointThatIsNotAnAbsoluteHTTPURL(t *testing.T) {
 	}
 }
 
+func TestStableIdentityDoesNotPersistEndpointSecrets(t *testing.T) {
+	a, err := New(Options{Endpoint: "https://alice:secret@example.test/mcp?token=one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := New(Options{Endpoint: "https://bob:other@example.test/mcp?token=two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := a.StableIdentity(), b.StableIdentity()
+	if first != second {
+		t.Fatalf("effective endpoint identity changed with userinfo/query: %q != %q", first, second)
+	}
+	for _, secret := range []string{"alice", "secret", "token=one", "bob", "other", "token=two"} {
+		if strings.Contains(first, secret) {
+			t.Fatalf("stable identity leaked %q: %q", secret, first)
+		}
+	}
+}
+
 // One connection opens one session, however many callers arrive at once.
 //
 // A caller may fan concurrent Calls out against one Client -- Atenea's own

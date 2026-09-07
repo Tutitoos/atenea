@@ -105,7 +105,7 @@ func (r *Runner) ensureFresh(ctx context.Context, sess Session, status *statusRe
 	}
 	report, err := r.index(ctx, req.Repository.Path, "full")
 	if err != nil {
-		return nil, false, indexFailure(err, ctx)
+		return nil, false, indexFailure(err, ctx, r.indexTimeout)
 	}
 	if err := noteMaintenancePhase(ctx, "verifying"); err != nil {
 		return nil, false, err

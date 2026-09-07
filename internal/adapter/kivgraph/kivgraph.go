@@ -153,42 +153,76 @@ import (
 // capability is the "what" and an implementation is the "who": another
 // provider may answer the same four capabilities tomorrow.
 const (
-	CapabilityDefinition      = "symbol.definition"
-	CapabilityReferences      = "symbol.references"
+	// CapabilityDefinition is part of ATENEA's public orchestration contract.
+	CapabilityDefinition = "symbol.definition"
+	// CapabilityReferences is part of ATENEA's public orchestration contract.
+	CapabilityReferences = "symbol.references"
+	// CapabilityImplementations is part of ATENEA's public orchestration contract.
 	CapabilityImplementations = "symbol.implementations"
-	ImplImplementations       = "kivgraph.implementations"
-	toolImplementations       = "find_implementations"
-	CapabilityOverview        = "symbol.overview"
-	CapabilityConsumers       = "symbol.consumers"
-	CapabilityGet             = "symbol.get"
-	CapabilityIntent          = "symbol.intent_search"
-	CapabilityDependencies    = "symbol.dependencies"
-	CapabilityGraphStatus     = "graph.status"
-	CapabilityImpact          = "code.impact"
-	CapabilityIndex           = "repository.index"
-	CapabilitySearch          = "symbol.search"
-	ImplSearch                = "kivgraph.search"
-	CapabilitySource          = "symbol.source"
-	CapabilitySymbolImpact    = "symbol.impact"
-	CapabilityRepositories    = "graph.repositories"
-	CapabilityEnsureFresh     = "graph.ensure_fresh"
-	CapabilityContext         = "code.context"
-	ImplSource                = "kivgraph.source"
-	ImplSymbolImpact          = "kivgraph.symbol_impact"
-	ImplRepositories          = "kivgraph.repositories"
-	ImplEnsureFresh           = "kivgraph.ensure_fresh"
-	ImplContext               = "kivgraph.context"
+	// ImplImplementations is part of ATENEA's public orchestration contract.
+	ImplImplementations = "kivgraph.implementations"
+	toolImplementations = "find_implementations"
+	// CapabilityOverview is part of ATENEA's public orchestration contract.
+	CapabilityOverview = "symbol.overview"
+	// CapabilityConsumers is part of ATENEA's public orchestration contract.
+	CapabilityConsumers = "symbol.consumers"
+	// CapabilityGet is part of ATENEA's public orchestration contract.
+	CapabilityGet = "symbol.get"
+	// CapabilityIntent is part of ATENEA's public orchestration contract.
+	CapabilityIntent = "symbol.intent_search"
+	// CapabilityDependencies is part of ATENEA's public orchestration contract.
+	CapabilityDependencies = "symbol.dependencies"
+	// CapabilityGraphStatus is part of ATENEA's public orchestration contract.
+	CapabilityGraphStatus = "graph.status"
+	// CapabilityImpact is part of ATENEA's public orchestration contract.
+	CapabilityImpact = "code.impact"
+	// CapabilityIndex is part of ATENEA's public orchestration contract.
+	CapabilityIndex = "repository.index"
+	// CapabilitySearch is part of ATENEA's public orchestration contract.
+	CapabilitySearch = "symbol.search"
+	// ImplSearch is part of ATENEA's public orchestration contract.
+	ImplSearch = "kivgraph.search"
+	// CapabilitySource is part of ATENEA's public orchestration contract.
+	CapabilitySource = "symbol.source"
+	// CapabilitySymbolImpact is part of ATENEA's public orchestration contract.
+	CapabilitySymbolImpact = "symbol.impact"
+	// CapabilityRepositories is part of ATENEA's public orchestration contract.
+	CapabilityRepositories = "graph.repositories"
+	// CapabilityEnsureFresh is part of ATENEA's public orchestration contract.
+	CapabilityEnsureFresh = "graph.ensure_fresh"
+	// CapabilityContext is part of ATENEA's public orchestration contract.
+	CapabilityContext = "code.context"
+	// ImplSource is part of ATENEA's public orchestration contract.
+	ImplSource = "kivgraph.source"
+	// ImplSymbolImpact is part of ATENEA's public orchestration contract.
+	ImplSymbolImpact = "kivgraph.symbol_impact"
+	// ImplRepositories is part of ATENEA's public orchestration contract.
+	ImplRepositories = "kivgraph.repositories"
+	// ImplEnsureFresh is part of ATENEA's public orchestration contract.
+	ImplEnsureFresh = "kivgraph.ensure_fresh"
+	// ImplContext is part of ATENEA's public orchestration contract.
+	ImplContext = "kivgraph.context"
 
-	ImplDefinition   = "kivgraph.definition"
-	ImplReferences   = "kivgraph.references"
-	ImplOverview     = "kivgraph.overview"
-	ImplConsumers    = "kivgraph.cross_repo_consumers"
-	ImplGet          = "kivgraph.get"
-	ImplIntent       = "kivgraph.intent_search"
+	// ImplDefinition is part of ATENEA's public orchestration contract.
+	ImplDefinition = "kivgraph.definition"
+	// ImplReferences is part of ATENEA's public orchestration contract.
+	ImplReferences = "kivgraph.references"
+	// ImplOverview is part of ATENEA's public orchestration contract.
+	ImplOverview = "kivgraph.overview"
+	// ImplConsumers is part of ATENEA's public orchestration contract.
+	ImplConsumers = "kivgraph.cross_repo_consumers"
+	// ImplGet is part of ATENEA's public orchestration contract.
+	ImplGet = "kivgraph.get"
+	// ImplIntent is part of ATENEA's public orchestration contract.
+	ImplIntent = "kivgraph.intent_search"
+	// ImplDependencies is part of ATENEA's public orchestration contract.
 	ImplDependencies = "kivgraph.dependencies"
-	ImplStatus       = "kivgraph.status"
-	ImplImpact       = "kivgraph.impact"
-	ImplIndex        = "kivgraph.index"
+	// ImplStatus is part of ATENEA's public orchestration contract.
+	ImplStatus = "kivgraph.status"
+	// ImplImpact is part of ATENEA's public orchestration contract.
+	ImplImpact = "kivgraph.impact"
+	// ImplIndex is part of ATENEA's public orchestration contract.
+	ImplIndex = "kivgraph.index"
 )
 
 // The MCP tool names behind each capability, on kivgraph's own far side.
@@ -295,6 +329,8 @@ type Options struct {
 	Timeout time.Duration
 	// IndexTimeout caps repository.index independently from read calls.
 	IndexTimeout time.Duration
+	// ConfigDigest is the stable effective configuration identity.
+	ConfigDigest string
 	// Session returns the live MCP session for the supervised kivgraph
 	// child, over whichever transport reaches it. It is a function, not a
 	// stored value, because the process or connection behind it may not
@@ -321,6 +357,7 @@ type Runner struct {
 	sensitive             []string
 	timeout               time.Duration
 	indexTimeout          time.Duration
+	configDigest          string
 	session               func(ctx context.Context) (Session, error)
 	index                 Indexer
 }
@@ -368,6 +405,7 @@ func New(opts Options) (*Runner, error) {
 		sensitive:             slices.Clone(opts.Sensitive),
 		timeout:               timeout,
 		indexTimeout:          indexTimeout,
+		configDigest:          strings.TrimSpace(opts.ConfigDigest),
 		session:               opts.Session,
 		index:                 opts.Index,
 	}, nil
@@ -397,10 +435,66 @@ func (r *Runner) Capabilities() []string {
 	}
 }
 
+// CacheIdentity performs only the cheap graph_status read needed to decide
+// whether a complete code.context answer may be reused. It never trusts
+// request payload generation fields: the provider's published snapshot is the
+// authority. Providers without this seam are deliberately ineligible for the
+// result cache.
+func (r *Runner) CacheIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	call, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	sess, err := r.session(call)
+	if err != nil {
+		return contract.CacheIdentity{}, r.failureFor(err, call)
+	}
+	status, err := r.fetchStatus(call, sess)
+	if err != nil || status == nil || status.ContentFreshness == nil {
+		if err != nil {
+			return contract.CacheIdentity{}, err
+		}
+		return contract.CacheIdentity{}, fmt.Errorf("kivgraph cache identity omitted freshness")
+	}
+	identity := contract.CacheIdentity{
+		Generation: status.ContentFreshness.Generation,
+		Snapshot:   status.SnapshotID,
+		Freshness:  status.ContentFreshness.State,
+		State: &contract.RuntimeState{
+			Status: status.Status, Symbols: status.Symbols, Edges: status.Edges,
+			Files: status.Files, Repositories: status.Repositories,
+		},
+	}
+	for _, repository := range status.RepositoryFreshness {
+		identity.State.RepositoryPaths = append(identity.State.RepositoryPaths, repository.Path)
+	}
+	if versioned, ok := sess.(interface{ Version() string }); ok {
+		identity.ToolVersion = versioned.Version()
+	}
+	identity.Instance = r.sessionIdentity(sess)
+	if identity.Generation < 1 || identity.Snapshot < 1 || identity.Freshness == "" || strings.TrimSpace(identity.ToolVersion) == "" || strings.TrimSpace(identity.Instance) == "" {
+		return contract.CacheIdentity{}, fmt.Errorf("kivgraph cache identity is incomplete")
+	}
+	return identity, nil
+}
+
+// RuntimeIdentity is the selector-facing name for the same current
+// graph_status observation. Keeping one implementation prevents selection and
+// result-cache identity from drifting apart.
+func (r *Runner) RuntimeIdentity(ctx context.Context, req contract.RunRequest) (contract.CacheIdentity, error) {
+	return r.CacheIdentity(ctx, req)
+}
+
 // Run executes one step.
 func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract.Outcome, runErr error) {
 	if err := req.Validate(); err != nil {
 		return contract.Outcome{}, err
+	}
+	if req.Capability.ID == CapabilityImplementations {
+		// Reject unsupported source languages before opening a session or
+		// asking graph_status. This keeps Dart and other languages outside the
+		// provider/identity path rather than discovering that fact after I/O.
+		if _, err := implementationLanguage(req.Payload); err != nil {
+			return contract.Outcome{}, err
+		}
 	}
 	if req.Capability.ID == CapabilityEnsureFresh || req.Capability.ID == CapabilityIndex {
 		if effect, ok := req.Allowed(); !ok {
@@ -427,6 +521,21 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 	if versioned, ok := sess.(interface{ Version() string }); ok {
 		defer func() { out.ToolVersion = versioned.Version() }()
 	}
+	if stable, ok := sess.(interface{ StableIdentity() string }); ok {
+		defer func() {
+			out.ToolInstance = strings.TrimSpace(stable.StableIdentity())
+			if r.configDigest != "" && out.ToolInstance != "" {
+				out.ToolInstance = r.configDigest + "@" + out.ToolInstance
+			}
+		}()
+	} else if instanced, ok := sess.(interface{ Instance() string }); ok {
+		defer func() {
+			out.ToolInstance = instanced.Instance()
+			if r.configDigest != "" && out.ToolInstance != "" {
+				out.ToolInstance = r.configDigest + "@" + out.ToolInstance
+			}
+		}()
+	}
 	collector := &evidenceSession{Session: sess}
 	sess = collector
 	defer func() { out.Evidence = collector.evidence }()
@@ -447,11 +556,15 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		return r.outcome(started, result, notes), nil
 	}
 
-	// Every capability pays for one graph_status call before anything else
-	// is trusted: see the package doc comment and checkGraphReady for why.
-	status, err := r.fetchStatus(call, sess)
-	if err != nil {
-		return contract.Outcome{}, r.failureFor(err, call)
+	// RuntimeIdentity already paid for this exact status snapshot before
+	// selection. Reuse it only when the request-scoped identity still matches
+	// the session and contains the conservative readiness facts Run needs.
+	status, reused := r.observedStatus(req, sess)
+	if !reused {
+		status, err = r.fetchStatus(call, sess)
+		if err != nil {
+			return contract.Outcome{}, r.failureFor(err, call)
+		}
 	}
 	if req.Capability.ID == CapabilityEnsureFresh || (r.requireFresh && req.Capability.ID != CapabilityGraphStatus && req.Capability.ID != CapabilityRepositories) {
 		var rebuilt bool
@@ -520,6 +633,7 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (out contract
 		if verified == nil || verified.SnapshotID != status.SnapshotID || !contentFresh(verified) {
 			return contract.Outcome{}, contract.Fail(contract.FailureUnavailable, "graph changed during query; results withheld")
 		}
+		collector.stamp(verified)
 	}
 	return r.outcome(started, result, notes), nil
 }
@@ -670,6 +784,48 @@ func checkGraphReady(status *statusResult, repository string) error {
 			"kivgraph's published graph does not include repository %s", repository)
 	}
 	return nil
+}
+
+func (r *Runner) observedStatus(req contract.RunRequest, sess Session) (*statusResult, bool) {
+	identity := req.ObservedIdentity
+	if identity == nil || identity.State == nil || identity.Generation < 1 || identity.Snapshot < 1 || !strings.EqualFold(identity.Freshness, "fresh") {
+		return nil, false
+	}
+	if versioned, ok := sess.(interface{ Version() string }); ok && strings.TrimSpace(identity.ToolVersion) != "" && strings.TrimSpace(versioned.Version()) != identity.ToolVersion {
+		return nil, false
+	}
+	if current := r.sessionIdentity(sess); current == "" || current != identity.Instance {
+		return nil, false
+	}
+	status := &statusResult{
+		Status: identity.State.Status, SnapshotID: identity.Snapshot,
+		Symbols: identity.State.Symbols, Edges: identity.State.Edges, Files: identity.State.Files,
+		Repositories:     identity.State.Repositories,
+		ContentFreshness: &contentFreshness{Generation: identity.Generation, State: identity.Freshness},
+	}
+	for _, path := range identity.State.RepositoryPaths {
+		status.RepositoryFreshness = append(status.RepositoryFreshness, repositoryFreshness{Path: path})
+	}
+	if err := checkGraphReady(status, req.Repository.Path); err != nil {
+		return nil, false
+	}
+	return status, true
+}
+
+func (r *Runner) sessionIdentity(sess Session) string {
+	instance := ""
+	if stable, ok := sess.(interface{ StableIdentity() string }); ok {
+		instance = strings.TrimSpace(stable.StableIdentity())
+	}
+	if instance == "" {
+		if instanced, ok := sess.(interface{ Instance() string }); ok {
+			instance = strings.TrimSpace(instanced.Instance())
+		}
+	}
+	if r.configDigest != "" && instance != "" {
+		instance = r.configDigest + "@" + instance
+	}
+	return instance
 }
 
 // statusLabel names status for a refusal message without a nil check at
@@ -1333,6 +1489,7 @@ type outlineDeclaration struct {
 // cleanly into nothing, and an empty outline reports every position as
 // naming no declaration: a wrong answer that looks like a resolved one.
 type outlineAnswer struct {
+	SnapshotID int `json:"snapshot_id"`
 	// truncated and next_cursor sit beside results, not inside it, on the
 	// same envelope every other tool here uses. symbol.overview reports
 	// them: an outline cut short would otherwise read as a file that simply
@@ -1493,7 +1650,7 @@ func compactOutlineDeclaration(kind, encoded string) (outlineDeclaration, bool) 
 // inferred because the same wrong answer -- "this position names no
 // declaration" -- has to be readable as the question that asked it.
 func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
-	capability, repository, file string, line int, name string) (outlineDeclaration, []string, error) {
+	capability, repository, file string, line int, name string, options ...declarationOptions) (outlineDeclaration, []string, error) {
 
 	text, err := sess.Call(ctx, toolOutline, map[string]any{
 		"repository": repository, "path": file, "view": "full", "response_format": "detailed",
@@ -1513,6 +1670,10 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
 			"kivgraph %s: unreadable outline for %s: %v", capability, file, err)
+	}
+	if len(options) > 0 && options[0].expectedSnapshot > 0 && answer.SnapshotID != options[0].expectedSnapshot {
+		return outlineDeclaration{}, nil, contract.Fail(contract.FailureUnavailable,
+			"kivgraph %s: outline generation %d differs from graph generation %d", capability, answer.SnapshotID, options[0].expectedSnapshot)
 	}
 	metadataNotes, err := outlineMetadata(text)
 	if err != nil {
@@ -1558,6 +1719,17 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 			candidates = byName
 		}
 	}
+	if len(options) > 0 && options[0].strict {
+		unique := make(map[string]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			key := fmt.Sprintf("%s|%s|%d|%d", candidate.Name, candidate.QualifiedName, candidate.StartLine, candidate.EndLine)
+			unique[key] = struct{}{}
+		}
+		if len(unique) > 1 {
+			return outlineDeclaration{}, nil, contract.Fail(contract.FailureInvalidInput,
+				"kivgraph %s: %s:%d is ambiguous; provide name or a unique declaration", capability, file, line)
+		}
+	}
 
 	innermost := narrowestSpan(candidates)
 	notes := metadataNotes
@@ -1586,6 +1758,11 @@ func (r *Runner) resolveDeclaration(ctx context.Context, sess Session,
 		}
 	}
 	return innermost, notes, nil
+}
+
+type declarationOptions struct {
+	strict           bool
+	expectedSnapshot int
 }
 
 // resolvePosition is the detour symbol.consumers pays that no other

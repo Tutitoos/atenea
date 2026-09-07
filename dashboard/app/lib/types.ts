@@ -101,6 +101,59 @@ export interface Run {
   steps?: Array<{ id?: string; state?: State; capability?: string; implementation?: string; provider?: string; tool?: string; duration_ms?: number; ended_at?: string; tokens?: number; tokens_known?: boolean }>;
 }
 
+export interface WorkflowPoint {
+  id: string;
+  title: string;
+  state: State;
+  evidence?: string[];
+  retired?: boolean;
+}
+
+export interface WorkflowTelemetry {
+  point_id: string;
+  agent_runs?: number;
+  tool_uses?: number;
+  agent_duration?: number;
+  tool_duration?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  measured?: number;
+  estimated?: number;
+  partial?: number;
+  unknown?: number;
+}
+
+export interface WorkflowActivity {
+  cursor?: number;
+  point_id?: string;
+  agent_run_id?: string;
+  invocation_id?: string;
+  tool?: string;
+  requested_model?: string;
+  observed_model?: string;
+  requested_reasoning_effort?: string;
+  observed_reasoning_effort?: string;
+  markdown?: string;
+  at?: string;
+}
+
+export interface WorkflowDetail {
+  id: string;
+  task?: string;
+  repository?: string;
+  state?: State;
+  started_at?: string;
+  finished_at?: string;
+  active_duration_ms?: number;
+  progress?: { revision?: number; points?: WorkflowPoint[] };
+  telemetry?: WorkflowTelemetry[];
+  activity?: WorkflowActivity[];
+  activity_cursor?: number;
+  activity_has_more?: boolean;
+}
+
 export interface Overview {
   at?: string;
   range?: string;

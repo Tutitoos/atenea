@@ -3,6 +3,7 @@ package contract
 import (
 	"slices"
 	"strings"
+	"time"
 )
 
 // AgentType names the kind of agent a card describes. Two kinds exist: the
@@ -24,9 +25,11 @@ const (
 	AgentUnspecified AgentType = iota
 	// AgentOrchestrator explores, splits the commission and hands out the
 	// pieces. It decides; it does not do the work itself.
+	// AgentOrchestrator is part of ATENEA's public orchestration contract.
 	AgentOrchestrator
 	// AgentSpecialized executes one objective it was handed and answers in
 	// the shape its declared type promises. It never splits work.
+	// AgentSpecialized is part of ATENEA's public orchestration contract.
 	AgentSpecialized
 )
 
@@ -65,15 +68,19 @@ const (
 	ContextUnspecified ContextLevel = iota
 	// ContextRepository is what happens inside one repository: its detail, how
 	// it works from the inside. What happens in a repository stays there.
+	// ContextRepository is part of ATENEA's public orchestration contract.
 	ContextRepository
 	// ContextWorkspace is the map of relations between repositories: who calls
 	// whom. Deliberately separate from the repository level.
+	// ContextWorkspace is part of ATENEA's public orchestration contract.
 	ContextWorkspace
 	// ContextGlobal is what holds everywhere regardless of repository, such as
 	// the language rule. Atenea carries it into every task.
+	// ContextGlobal is part of ATENEA's public orchestration contract.
 	ContextGlobal
 	// ContextHistory is what happened in earlier sessions: user decisions and
 	// facts Atenea discovered. Little and good, loaded lazily.
+	// ContextHistory is part of ATENEA's public orchestration contract.
 	ContextHistory
 )
 
@@ -177,7 +184,9 @@ type Verdict uint8
 const (
 	// VerdictUnspecified is the zero value: nobody has judged this yet.
 	VerdictUnspecified Verdict = iota
+	// VerdictOK is part of ATENEA's public orchestration contract.
 	VerdictOK
+	// VerdictFailed is part of ATENEA's public orchestration contract.
 	VerdictFailed
 
 	// VerdictCanceled is what a step that nobody let finish gets, and it is
@@ -188,6 +197,7 @@ const (
 	// the work for a decision the person at the keyboard made. The two have
 	// to be different words on the screen, because a reader acts on them
 	// differently: one is worth investigating and the other is not.
+	// VerdictCanceled is part of ATENEA's public orchestration contract.
 	VerdictCanceled
 
 	// VerdictIncomplete is work that got somewhere and stopped short: part of
@@ -201,6 +211,7 @@ const (
 	// the two as one bin throws away work that was fine, or trusts work that
 	// was not. The distinction is what the reason field is for: an incomplete
 	// report says which part is missing and why it stopped.
+	// VerdictIncomplete is part of ATENEA's public orchestration contract.
 	VerdictIncomplete
 
 	// VerdictRefused records an action denied before execution.
@@ -264,6 +275,10 @@ type Outcome struct {
 	// string, so an upgrade starts a fresh baseline instead of dragging the
 	// old numbers along. Empty means the far side would not say.
 	ToolVersion string
+	// ToolInstance identifies the current provider/configured connection that
+	// produced the outcome. It prevents a restarted or reconfigured instance
+	// from inheriting another instance's quality.
+	ToolInstance string `json:"tool_instance,omitempty"`
 	// SpentUSD is what the far side actually charged for this call, or zero
 	// when nothing was charged or nobody said.
 	//
@@ -330,6 +345,35 @@ type Outcome struct {
 	// on results nobody could use -- and waste belongs to cost, which is the
 	// funnel stage that decides between providers that all work.
 	OutOfScope int
+	// CacheHit means the result was served by Atenea's local read-only result
+	// cache. Cached results carry no provider spend or timing measurement: a
+	// local hit must not masquerade as another provider sample.
+	CacheHit bool `json:"cache_hit,omitempty"`
+	// CacheVersion identifies the cache serialization/key policy used for the
+	// hit. Empty means the outcome came from a provider or an older receipt.
+	CacheVersion string `json:"cache_version,omitempty"`
+	// Coalesced means this consumer joined an in-flight read whose result was
+	// intentionally not retained (for example, a partial answer). It is not a
+	// cache hit and carries no duplicate provider spend.
+	Coalesced bool `json:"coalesced,omitempty"`
+	// CacheValidation records the provider-side identity check performed before
+	// a cache lookup. A cache hit avoids the context/source operation, but the
+	// validation itself remains a measured provider call.
+	CacheValidation *CacheValidation `json:"cache_validation,omitempty"`
+}
+
+// CacheValidation is part of ATENEA's public orchestration contract.
+type CacheValidation struct {
+	Called      bool          `json:"called"`
+	Provider    string        `json:"provider,omitempty"`
+	Tool        string        `json:"tool,omitempty"`
+	ToolVersion string        `json:"tool_version,omitempty"`
+	Instance    string        `json:"instance,omitempty"`
+	Generation  int           `json:"generation,omitempty"`
+	Snapshot    int           `json:"snapshot,omitempty"`
+	Freshness   string        `json:"freshness,omitempty"`
+	Duration    time.Duration `json:"duration_ns,omitempty"`
+	Error       string        `json:"error,omitempty"`
 }
 
 // QueryEvidence keeps bounded graph answers distinct from exhaustive results.

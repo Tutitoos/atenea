@@ -18,6 +18,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Tutitoos/atenea/internal/mcpcompat"
 )
 
 func probeHTTP(ctx context.Context, client *http.Client, endpoint string) error {
@@ -41,7 +43,7 @@ func probeHTTP(ctx context.Context, client *http.Client, endpoint string) error 
 // It matches internal/mcphttp/mcphttp.go's own constant: a server that
 // cannot answer this revision should say so at the handshake, which is
 // exactly the failure this probe exists to catch before a real call does.
-const protocolVersion = "2025-06-18"
+const protocolVersion = string(mcpcompat.Legacy)
 
 type probeRequest struct {
 	Version string `json:"jsonrpc"`

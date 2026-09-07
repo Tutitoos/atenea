@@ -17,6 +17,33 @@ func compileTypes() []config.AgentType {
 		declared("writer", "/bin/true", config.PoolAgent,
 			contract.EffectRead, contract.EffectWrite),
 		declared("critic", "/bin/true", config.PoolReview),
+		declared("implement", "/bin/true", config.PoolAgent, contract.EffectRead, contract.EffectWrite),
+		declared("review", "/bin/true", config.PoolReview),
+		declared("audit", "/bin/true", config.PoolReview),
+	}
+}
+
+func TestImplementationPointRequiresReviewAndAudit(t *testing.T) {
+	implementation := step("implementation", "implement", nil)
+	implementation.PointID, implementation.PointTitle = "P06", "Visible progress"
+	implementation.Permission.Effects = []contract.Effect{contract.EffectRead, contract.EffectWrite}
+	refuses(t, graphOf(implementation), "requires review and audit")
+
+	review := reviewing(step("review", "review", nil), "implementation")
+	review.PointID, review.PointTitle = "P06", "Visible progress"
+	refuses(t, graphOf(implementation, review), "requires review and audit")
+	foreign := step("foreign", "reader", nil)
+	foreign.PointID, foreign.PointTitle = "P07", "Foreign work"
+	wrongReview := reviewing(step("wrong-review", "review", nil), "foreign")
+	wrongReview.PointID, wrongReview.PointTitle = "P06", "Visible progress"
+	wrongAudit := reviewing(step("wrong-audit", "audit", nil), "wrong-review")
+	wrongAudit.PointID, wrongAudit.PointTitle = "P06", "Visible progress"
+	refuses(t, graphOf(implementation, foreign, wrongReview, wrongAudit), "same-point review subject")
+
+	audit := reviewing(step("audit", "audit", nil), "review")
+	audit.PointID, audit.PointTitle = "P06", "Visible progress"
+	if _, err := compile(t, graphOf(implementation, review, audit)); err != nil {
+		t.Fatalf("complete acceptance chain was refused: %v", err)
 	}
 }
 
