@@ -747,13 +747,26 @@ func certificationBuildArgs(commit, output string) []string {
 }
 
 func verifyCertificationRebuild(self, wantSHA256, commit string) error {
-	file, err := os.CreateTemp(filepath.Dir(self), ".atenea-certification-rebuild-*")
+	parent := filepath.Dir(self)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("certification binary must be in a private directory without group or world access")
+	}
+	file, err := os.CreateTemp(parent, ".atenea-certification-rebuild-*")
 	if err != nil {
 		return err
 	}
 	candidate := file.Name()
 	defer func() { _ = os.Remove(candidate) }()
 	if err := file.Close(); err != nil {
+		return err
+	}
+	// Let go build create the output. Replacing a pre-existing file changes the
+	// linker-signed Mach-O UUID even when every source byte and flag is equal.
+	if err := os.Remove(candidate); err != nil {
 		return err
 	}
 	cmd := exec.Command("go", certificationBuildArgs(commit, candidate)...)

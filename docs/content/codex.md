@@ -108,18 +108,20 @@ revision-stamped ATENEA binary on macOS. If the local Go toolchain does not
 embed VCS settings, build the certification binary with the full clean commit:
 
 ```sh
+cert_dir=$(mktemp -d "${TMPDIR:-/tmp}/atenea-certify.XXXXXX")
+chmod 700 "$cert_dir"
 go build -trimpath -buildvcs=false \
   -ldflags "-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$(git rev-parse HEAD)" \
-  -o /tmp/atenea-certify ./cmd/atenea
+  -o "$cert_dir/atenea-certify" ./cmd/atenea
 ```
 
 Then run:
 
 ```sh
-/tmp/atenea-certify codex certify start --desktop --ttl 30d
-/tmp/atenea-certify codex certify status CERTIFICATE_ID --markdown
-/tmp/atenea-certify codex certify complete CERTIFICATE_ID
-/tmp/atenea-certify codex certify check --require-valid
+"$cert_dir/atenea-certify" codex certify start --desktop --ttl 30d
+"$cert_dir/atenea-certify" codex certify status CERTIFICATE_ID --markdown
+"$cert_dir/atenea-certify" codex certify complete CERTIFICATE_ID
+"$cert_dir/atenea-certify" codex certify check --require-valid
 ```
 
 `start` creates a fresh 0700 sandbox and `CODEX_HOME`, runs device login there,
@@ -141,7 +143,7 @@ schema, MCP overlay, and presentation contract. Export the sanitized signed
 evidence only after every gate passes:
 
 ```sh
-/tmp/atenea-certify codex certify export CERTIFICATE_ID \
+"$cert_dir/atenea-certify" codex certify export CERTIFICATE_ID \
   --output certifications/codex.json \
   --public-key-output certifications/codex-certifier.pub
 ```
