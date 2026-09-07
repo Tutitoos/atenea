@@ -2,10 +2,54 @@ package acceptance
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestSourceIdentityIgnoresCoverageProfile(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "init", "-q"},
+		{"git", "config", "user.email", "atenea-test@example.invalid"},
+		{"git", "config", "user.name", "ATENEA Test"},
+	} {
+		if output, err := command(context.Background(), root, args, nil); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/coverage.out\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := command(context.Background(), root, []string{"git", "add", ".gitignore", "source.go"}, nil); err != nil {
+		t.Fatalf("git add: %v\n%s", err, output)
+	}
+	if output, err := command(context.Background(), root, []string{"git", "commit", "-qm", "fixture"}, nil); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, output)
+	}
+	commit, err := command(context.Background(), root, []string{"git", "rev-parse", "HEAD"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, dirtyBefore, err := sourceIdentity(context.Background(), root, strings.TrimSpace(commit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "coverage.out"), []byte("mode: atomic\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, _, dirtyAfter, err := sourceIdentity(context.Background(), root, strings.TrimSpace(commit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after || dirtyBefore || dirtyAfter {
+		t.Fatalf("ignored coverage profile changed identity: before=%s after=%s dirty=%v/%v", before, after, dirtyBefore, dirtyAfter)
+	}
+}
 
 func TestRequireExecutedTestsRejectsPartialExpectedSet(t *testing.T) {
 	output := strings.Join([]string{

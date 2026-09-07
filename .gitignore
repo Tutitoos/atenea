@@ -10,6 +10,7 @@
 /tmp/
 /atenea
 /coverage-summary.txt
+/coverage.out
 
 # The coverage profile a benchmark run leaves behind. cmd/atenea-benchmark
 # writes it, reads it once to compute the coverage figures it puts in
