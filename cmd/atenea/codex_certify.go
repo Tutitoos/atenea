@@ -230,11 +230,11 @@ func runCodexCLIGate(ctx context.Context, codexPath string, env []string, challe
 }
 
 func cliChallengePrompt(c codexcert.Challenge) string {
-	return fmt.Sprintf("Certification challenge %s. Run ATENEA tool workflow.status exactly once with nonce=%s run_id=%s workflow_id=%s invocation_id=%s after_cursor=0. Immediately before the tool call, output exactly one line: **ATENEA · workflow.status** — consulto %s para verificar actividad y progreso. After the tool succeeds, reproduce its result_proof, complete checklist and Progreso line. Do not call any other tool.", c.Nonce, c.Nonce, c.RunID, c.WorkflowID, c.InvocationID, c.InvocationID)
+	return fmt.Sprintf("Certification challenge %s. Run ATENEA tool workflow.status exactly once with nonce=%s run_id=%s workflow_id=%s invocation_id=%s after_cursor=0. Immediately before the tool call, output exactly one line: **ATENEA · workflow.status** — consulto %s para verificar actividad y progreso. The completed MCP JSONL result is the canonical Markdown render; finish the turn without repeating it. Do not call any other tool.", c.Nonce, c.Nonce, c.RunID, c.WorkflowID, c.InvocationID, c.InvocationID)
 }
 
 func cliReconnectPrompt(c codexcert.Challenge) string {
-	return fmt.Sprintf("Reconnect challenge %s. Run ATENEA tool workflow.status exactly once with nonce=%s run_id=%s workflow_id=%s invocation_id=%s after_cursor=1. Before the call output exactly one line: **ATENEA · workflow.status** — reanudo %s desde cursor 1 sin repetir actividad. Then report result_proof and cursor only. Do not reproduce a checklist or call another tool.", c.Nonce, c.Nonce, c.RunID, c.WorkflowID, c.InvocationID, c.InvocationID)
+	return fmt.Sprintf("Reconnect challenge %s. Run ATENEA tool workflow.status exactly once with nonce=%s run_id=%s workflow_id=%s invocation_id=%s after_cursor=1. Before the call output exactly one line: **ATENEA · workflow.status** — reanudo %s desde cursor 1 sin repetir actividad. The completed MCP JSONL result is canonical; finish without repeating it or a checklist. Do not call another tool.", c.Nonce, c.Nonce, c.RunID, c.WorkflowID, c.InvocationID, c.InvocationID)
 }
 
 func desktopChallengePrompt(certificateID string, c codexcert.Challenge, binary, stateRoot string) string {

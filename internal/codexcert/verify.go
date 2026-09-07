@@ -10,7 +10,7 @@ import (
 )
 
 // PresentationContract is hashed into every certificate so changes invalidate it.
-const PresentationContract = "atenea-codex-presentation/v1: nonce; one markdown notice before correlated MCP call; activity; full checklist; 20-segment progress bar; reconnect without replay"
+const PresentationContract = "atenea-codex-presentation/v1: nonce; one markdown notice before correlated MCP call; completed MCP JSONL markdown payload; activity; full checklist; 20-segment progress bar; completed turn; reconnect without replay"
 
 const checklistLine = "- [x] **P30.** Certificación Codex"
 const progressLine = "**Progreso:** `████████████████████` 100 % · 1/1 puntos completados"
@@ -35,6 +35,7 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 	sequence := 0
 	toolID := ""
 	totalNotices, totalToolCalls := 0, 0
+	turnCompleted, turnFailed := -1, false
 	for scanner.Scan() {
 		var event map[string]any
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
@@ -42,6 +43,12 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 		}
 		sequence++
 		eventType, _ := event["type"].(string)
+		if eventType == "turn.completed" {
+			turnCompleted = sequence
+		}
+		if eventType == "turn.failed" {
+			turnFailed = true
+		}
 		item, _ := event["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		itemID, _ := item["id"].(string)
@@ -70,13 +77,12 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 			result := flattenStrings(item["result"])
 			if strings.Contains(result, resultProof) && strings.Contains(result, "activity=completed") && strings.Contains(result, runID) && strings.Contains(result, workflowID) && !strings.Contains(result, `"isError":true`) {
 				obs.ResponseSequence, obs.ActivitySequence = sequence, sequence
-			}
-		}
-		if eventType == "item.completed" && itemType == "agent_message" && sequence > obs.ResponseSequence && strings.Contains(text, nonce) && strings.Contains(text, resultProof) && strings.Contains(text, checklistLine) && strings.Contains(text, progressLine) {
-			obs.ChecklistCount = strings.Count(text, "[x]") + strings.Count(text, "[ ]")
-			obs.ProgressBar = progressBar(text)
-			if obs.RenderSequence < 0 {
-				obs.RenderSequence = sequence
+				activityAt, checklistAt, progressAt := strings.Index(result, "activity=completed"), strings.Index(result, checklistLine), strings.Index(result, progressLine)
+				if activityAt >= 0 && checklistAt > activityAt && progressAt > checklistAt {
+					obs.ChecklistCount = strings.Count(result, "[x]") + strings.Count(result, "[ ]")
+					obs.ProgressBar = progressBar(result)
+					obs.RenderSequence = sequence
+				}
 			}
 		}
 	}
@@ -86,7 +92,7 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 	if obs.NoticeCount != 1 || obs.RequestCount != 1 || totalNotices != 1 || totalToolCalls != 1 {
 		return fmt.Errorf("expected one correlated notice and tool call, got %d and %d", obs.NoticeCount, obs.RequestCount)
 	}
-	if obs.NoticeSequence < 0 || obs.RequestSequence <= obs.NoticeSequence || obs.ResponseSequence < obs.RequestSequence || obs.ActivitySequence < obs.ResponseSequence || obs.RenderSequence <= obs.ActivitySequence {
+	if obs.NoticeSequence < 0 || obs.RequestSequence <= obs.NoticeSequence || obs.ResponseSequence <= obs.RequestSequence || obs.ActivitySequence < obs.ResponseSequence || obs.RenderSequence < obs.ActivitySequence || turnCompleted <= obs.RenderSequence || turnFailed {
 		return fmt.Errorf("codex CLI evidence order failed: notice=%d request=%d response=%d activity=%d render=%d notices=%d/%d calls=%d/%d checklist=%d bar_segments=%d", obs.NoticeSequence, obs.RequestSequence, obs.ResponseSequence, obs.ActivitySequence, obs.RenderSequence, obs.NoticeCount, totalNotices, obs.RequestCount, totalToolCalls, obs.ChecklistCount, len([]rune(obs.ProgressBar)))
 	}
 	if obs.ChecklistCount != checklistCount {
@@ -122,6 +128,7 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 	noticeSequence, requestSequence, responseSequence, renderSequence := -1, -1, -1, -1
 	replayedPresentation := false
 	toolID := ""
+	turnCompleted, turnFailed := -1, false
 	for scanner.Scan() {
 		var event map[string]any
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
@@ -129,6 +136,12 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 		}
 		sequence++
 		eventType, _ := event["type"].(string)
+		if eventType == "turn.completed" {
+			turnCompleted = sequence
+		}
+		if eventType == "turn.failed" {
+			turnFailed = true
+		}
 		item, _ := event["item"].(map[string]any)
 		itemType, _ := item["type"].(string)
 		text, _ := item["text"].(string)
@@ -158,9 +171,11 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 			if strings.Contains(result, resultProof) && strings.Contains(result, "cursor=1") && strings.Contains(result, "activity=[]") && strings.Contains(result, "notices=[]") && !strings.Contains(result, "[x]") {
 				completed++
 				responseSequence = sequence
+				rendered++
+				renderSequence = sequence
 			}
 		}
-		if eventType == "item.completed" && itemType == "agent_message" && strings.Contains(text, resultProof) && strings.Contains(text, "cursor") && !strings.Contains(text, "[x]") {
+		if eventType == "item.completed" && itemType == "agent_message" && rendered == 0 && strings.Contains(text, resultProof) && strings.Contains(text, "cursor") && !strings.Contains(text, "[x]") {
 			rendered++
 			renderSequence = sequence
 		}
@@ -171,7 +186,7 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 	if notice != 1 || started != 1 || completed != 1 || rendered != 1 || totalNotices != 1 || totalToolCalls != 1 || replayedPresentation {
 		return fmt.Errorf("reconnect evidence counts notice=%d started=%d completed=%d rendered=%d", notice, started, completed, rendered)
 	}
-	if noticeSequence < 0 || requestSequence <= noticeSequence || responseSequence <= requestSequence || renderSequence <= responseSequence {
+	if noticeSequence < 0 || requestSequence <= noticeSequence || responseSequence <= requestSequence || renderSequence < responseSequence || turnCompleted <= renderSequence || turnFailed {
 		return errors.New("reconnect evidence is not ordered notice, request, response, render")
 	}
 	return nil

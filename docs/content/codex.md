@@ -131,6 +131,10 @@ one correlated MCP call and one cursor reconnect. The authenticated sandbox is
 removed and checked before the Desktop challenge is printed. ATENEA never
 copies the normal `auth.json`.
 
+For CLI certification, the canonical Markdown rendering is the payload of the
+typed, completed MCP JSONL event. The gate also requires a later
+`turn.completed`; a failed or incomplete turn cannot pass.
+
 Paste the printed challenge into a new Codex Desktop chat. The Desktop agent
 must run the one-use local challenge command and render its proof, checklist,
 and 20-segment progress bar. `complete` reads only the accessibility tree of

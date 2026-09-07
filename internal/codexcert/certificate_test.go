@@ -179,11 +179,21 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 	lines := []string{
 		`{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"**ATENEA · workflow.status** — consulto invocation para verificar actividad y progreso."}}`,
 		`{"type":"item.started","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":0}}}`,
-		`{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","status":"completed","result":"proof activity=completed nonce run workflow invocation"}}`,
+		"{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"workflow.status\",\"status\":\"completed\",\"result\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}}",
 		"{\"type\":\"item.completed\",\"item\":{\"id\":\"message-2\",\"type\":\"agent_message\",\"text\":\"nonce proof invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}}",
+		`{"type":"turn.completed"}`,
 	}
 	if err := VerifyCLIJSONL([]byte(strings.Join(lines, "\n")), nonce, run, workflow, invocation, proof, 1); err != nil {
 		t.Fatal(err)
+	}
+	withoutFinal := append(append([]string{}, lines[:3]...), lines[4])
+	if err := VerifyCLIJSONL([]byte(strings.Join(withoutFinal, "\n")), nonce, run, workflow, invocation, proof, 1); err != nil {
+		t.Fatalf("completed MCP result was not accepted as deterministic rendering: %v", err)
+	}
+	incompletePayload := append([]string{}, lines...)
+	incompletePayload[2] = `{"type":"item.completed","item":{"id":"tool-1","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","status":"completed","result":"proof activity=completed nonce run workflow invocation"}}`
+	if err := VerifyCLIJSONL([]byte(strings.Join(incompletePayload, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
+		t.Fatal("agent message rescued an incomplete MCP presentation payload")
 	}
 	extraTool := append(append([]string{}, lines...), `{"type":"item.started","item":{"id":"extra-tool","type":"mcp_tool_call","server":"other","tool":"other.tool","arguments":{}}}`)
 	if err := VerifyCLIJSONL([]byte(strings.Join(extraTool, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
@@ -202,9 +212,14 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 		`{"type":"item.started","item":{"id":"tool-r","type":"mcp_tool_call","server":"atenea","tool":"workflow.status","arguments":{"nonce":"nonce","run_id":"run","workflow_id":"workflow","invocation_id":"invocation","after_cursor":1}}}`,
 		`{"type":"item.completed","item":{"id":"tool-r","type":"mcp_tool_call","status":"completed","result":"proof cursor=1 activity=[] notices=[]"}}`,
 		`{"type":"item.completed","item":{"id":"message-r2","type":"agent_message","text":"proof cursor=1"}}`,
+		`{"type":"turn.completed"}`,
 	}
 	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(reconnect, "\n")), nonce, run, workflow, invocation, proof); err != nil {
 		t.Fatal(err)
+	}
+	withoutReconnectFinal := append(append([]string{}, reconnect[:3]...), reconnect[4])
+	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(withoutReconnectFinal, "\n")), nonce, run, workflow, invocation, proof); err != nil {
+		t.Fatalf("completed reconnect result was not accepted: %v", err)
 	}
 	reordered := []string{reconnect[3], reconnect[1], reconnect[2], reconnect[0]}
 	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(reordered, "\n")), nonce, run, workflow, invocation, proof); err == nil {
