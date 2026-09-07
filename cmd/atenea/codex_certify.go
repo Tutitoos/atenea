@@ -725,7 +725,7 @@ func codexCertificationCurrent(codexPath string) (codexcert.Current, error) {
 		return codexcert.Current{}, err
 	}
 	if fallback {
-		if err := verifyCertificationRebuild(self, atenea.SHA256, commit); err != nil {
+		if err := verifyCertificationRebuild(self, commit); err != nil {
 			return codexcert.Current{}, err
 		}
 	}
@@ -746,7 +746,7 @@ func certificationBuildArgs(commit, output string) []string {
 	return []string{"build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=" + commit, "-o", output, "./cmd/atenea"}
 }
 
-func verifyCertificationRebuild(self, wantSHA256, commit string) error {
+func verifyCertificationRebuild(self, commit string) error {
 	parent := filepath.Dir(self)
 	info, err := os.Stat(parent)
 	if err != nil {
@@ -774,11 +774,15 @@ func verifyCertificationRebuild(self, wantSHA256, commit string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rebuild certified ATENEA checkout: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	rebuilt, err := codexcert.FileFingerprint(candidate, "")
+	rebuilt, err := codexcert.ReproducibleFileSHA256(candidate)
 	if err != nil {
 		return err
 	}
-	if rebuilt.SHA256 != wantSHA256 {
+	original, err := codexcert.ReproducibleFileSHA256(self)
+	if err != nil {
+		return err
+	}
+	if rebuilt != original {
 		return fmt.Errorf("ATENEA binary does not match a reproducible build of commit %s", commit)
 	}
 	return nil
