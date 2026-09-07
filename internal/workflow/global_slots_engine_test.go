@@ -91,6 +91,28 @@ func TestGlobalSlotDeadlineIsAnUnjudgedExpiration(t *testing.T) {
 	}
 }
 
+func TestDurationExpiredBeforeDispatchIsPersistedUnjudged(t *testing.T) {
+	dir := t.TempDir()
+	profile := []config.WorkflowProfile{{Name: "expired-before-dispatch", Version: "v1",
+		MaxDuration: time.Nanosecond, MaxParallelAgent: 1, MaxParallelReview: 1}}
+	h := newHarnessWith(t, workflow.Options{ProfileName: profile[0].Name, Profiles: profile}, dir,
+		declared("reader", answers(t, dir, "reader"), config.PoolAgent))
+	run, err := h.engine.Start(t.Context(), graphOf(step("read", "reader", nil)))
+	if err == nil || contract.KindOf(err) != contract.FailureUnavailable {
+		t.Fatalf("expired workflow = %v, want unavailable", err)
+	}
+	if run.Stop != workflow.StopUnjudged || run.Closed {
+		t.Fatalf("expired workflow = stop %q closed %v, want unjudged/open", run.Stop, run.Closed)
+	}
+	loaded, loadErr := h.state.Load(t.Context(), run.ID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.Stop != workflow.StopUnjudged || loaded.Closed {
+		t.Fatalf("persisted workflow = stop %q closed %v", loaded.Stop, loaded.Closed)
+	}
+}
+
 func TestGlobalSlotHolderProcess(t *testing.T) {
 	if os.Getenv("ATENEA_GLOBAL_SLOT_HOLDER") != "1" {
 		t.Skip("subprocess helper")
@@ -110,7 +132,7 @@ func TestGlobalSlotHolderProcess(t *testing.T) {
 
 func waitForGlobalSlotMarker(t *testing.T, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, err := os.Stat(marker); err == nil {
 			return

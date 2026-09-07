@@ -2312,7 +2312,15 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 	activeCtx, activeCancel, err := activeContext(runCtx, run, e.now())
 	if err != nil {
 		cancel()
-		return run, err
+		write := context.WithoutCancel(ctx)
+		if endErr := e.store.End(write, id, StopUnjudged, e.now()); endErr != nil {
+			return run, errors.Join(err, endErr)
+		}
+		if progressErr := e.publishPlanProgress(write, id); progressErr != nil {
+			return run, errors.Join(err, progressErr)
+		}
+		out, loadErr := e.store.Load(write, id)
+		return out, errors.Join(err, loadErr)
 	}
 	defer func() { activeCancel() }()
 
