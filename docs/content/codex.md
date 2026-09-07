@@ -99,6 +99,49 @@ once in the same user account that runs Atenea. An unauthenticated Codex
 process is reported as an unavailable provider, so `ripgrep` can answer when
 it is attached.
 
+## Observable Codex certification
+
+The certification flow proves the contract that Codex exposes through App
+Server, real CLI JSONL, and the visible Desktop accessibility tree. It does not
+claim provider-internal per-token model telemetry. Start it from a clean,
+revision-stamped ATENEA binary on macOS:
+
+```sh
+atenea codex certify start --desktop --ttl 30d
+atenea codex certify status CERTIFICATE_ID --markdown
+atenea codex certify complete CERTIFICATE_ID
+atenea codex certify check --require-valid
+```
+
+`start` creates a fresh 0700 sandbox and `CODEX_HOME`, runs device login there,
+checks `account/read`, and executes the planning, implementation, review, and
+audit model profiles. It then runs two ephemeral, read-only Codex CLI sessions:
+one correlated MCP call and one cursor reconnect. The authenticated sandbox is
+removed and checked before the Desktop challenge is printed. ATENEA never
+copies the normal `auth.json`.
+
+Paste the printed challenge into a new Codex Desktop chat. The Desktop agent
+must run the one-use local challenge command and render its proof, checklist,
+and 20-segment progress bar. `complete` reads only the accessibility tree of
+`com.openai.codex`; it neither clicks nor types and does not retain the tree,
+chat text, or screenshots. Use `cancel` to invalidate an unfinished challenge.
+
+A passed certificate remains valid only for the exact ATENEA commit and
+binary, Codex CLI and Desktop binaries, machine, model profiles, App Server
+schema, MCP overlay, and presentation contract. Export the sanitized signed
+evidence only after every gate passes:
+
+```sh
+atenea codex certify export CERTIFICATE_ID \
+  --output certifications/codex.json \
+  --public-key-output certifications/codex-certifier.pub
+```
+
+The release workflow accepts an evidence-only follow-up commit and rejects a
+tag when code changed after certification, a gate is missing, the signature is
+untrusted, or the certificate is stale or expired. The phrase `Codex
+certificado 100 %` appears only for a currently valid certificate.
+
 ## Configuration
 
 The adapter block uses the existing runner names and defaults to a 90-second

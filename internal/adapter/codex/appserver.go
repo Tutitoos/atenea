@@ -80,6 +80,9 @@ type AppServerOptions struct {
 	// TrustAteneaHook enables Codex's hook-trust bypass. It is accepted only
 	// with IsolateAmbientHooks so ambient hook sources cannot inherit it.
 	TrustAteneaHook bool
+	// Environment replaces the inherited environment for the native process.
+	// A nil slice preserves the normal inherited environment.
+	Environment []string
 }
 
 // Client is part of ATENEA's public orchestration contract.
@@ -121,6 +124,19 @@ type ExecutionReceipt struct {
 	ObservedProtocol           string   `json:"observed_protocol,omitempty"`
 	ObservedUserAgent          string   `json:"observed_user_agent,omitempty"`
 	ModelRerouted              bool     `json:"model_rerouted"`
+	ObservedSource             string   `json:"observed_source,omitempty"`
+	ObservedProvider           string   `json:"observed_provider,omitempty"`
+	ThreadID                   string   `json:"thread_id,omitempty"`
+	TurnID                     string   `json:"turn_id,omitempty"`
+}
+
+// AccountReadResult is the authentication boundary returned by account/read.
+type AccountReadResult struct {
+	Account json.RawMessage `json:"account"`
+	// RequiresOpenAIAuth describes the provider's authentication requirement;
+	// account being non-null is the observable authenticated-session receipt.
+	RequiresOpenAIAuth bool   `json:"requiresOpenaiAuth"`
+	AccountType        string `json:"-"`
 }
 
 // ClientInfo is part of ATENEA's public orchestration contract.
@@ -301,8 +317,11 @@ type ThreadListResult struct {
 
 // Thread is part of ATENEA's public orchestration contract.
 type Thread struct {
-	ID     string       `json:"id"`
-	Status ThreadStatus `json:"status"`
+	ID              string       `json:"id"`
+	Status          ThreadStatus `json:"status"`
+	Model           string       `json:"model,omitempty"`
+	ModelProvider   string       `json:"modelProvider,omitempty"`
+	ReasoningEffort string       `json:"reasoningEffort,omitempty"`
 }
 
 // ThreadStatus is part of ATENEA's public orchestration contract.
@@ -337,7 +356,7 @@ func NewAppServerClient(opts AppServerOptions) (*Client, error) {
 			args = defaultAppServerArgs(opts)
 		}
 		var err error
-		transport, err = NewProcessTransport(binary, args...)
+		transport, err = NewProcessTransportWithEnv(binary, opts.Environment, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -460,6 +479,36 @@ func (c *Client) ModelList(ctx context.Context) (ModelListResult, error) {
 	return out, nil
 }
 
+// AccountRead verifies that App Server can see an authenticated OpenAI
+// account. The opaque account value must never be rendered or persisted.
+func (c *Client) AccountRead(ctx context.Context) (AccountReadResult, error) {
+	result, err := c.call(ctx, "account/read", map[string]any{})
+	if err != nil {
+		return AccountReadResult{}, err
+	}
+	var out AccountReadResult
+	if err := json.Unmarshal(result, &out); err != nil {
+		return out, fmt.Errorf("codex app server: malformed account/read result: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(result, &fields) != nil || fields["requiresOpenaiAuth"] == nil || fields["account"] == nil {
+		return out, errors.New("codex app server: malformed account/read result")
+	}
+	var requiresOpenAIAuth *bool
+	if json.Unmarshal(fields["requiresOpenaiAuth"], &requiresOpenAIAuth) != nil || requiresOpenAIAuth == nil {
+		return out, errors.New("codex app server: malformed account/read authentication flag")
+	}
+	out.RequiresOpenAIAuth = *requiresOpenAIAuth
+	var account struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(out.Account, &account) != nil || (account.Type != "chatgpt" && account.Type != "apiKey") {
+		return out, errors.New("codex app server: account/read is not an authenticated OpenAI account")
+	}
+	out.AccountType = account.Type
+	return out, nil
+}
+
 // ModelProviderCapabilitiesRead is part of ATENEA's public orchestration contract.
 func (c *Client) ModelProviderCapabilitiesRead(ctx context.Context, _ ...string) (ModelProviderCapabilities, error) {
 	result, err := c.call(ctx, "modelProvider/capabilities/read", map[string]any{})
@@ -525,6 +574,9 @@ func (c *Client) ThreadStart(ctx context.Context, req ThreadStartRequest) (Threa
 	c.mu.Lock()
 	c.threadID = threadID
 	c.receipt.RequestedModel = req.Model
+	c.receipt.ObservedSource = "app_server_thread_receipt"
+	c.receipt.ObservedProvider = event.ModelProvider
+	c.receipt.ThreadID = threadID
 	requestedProfile := req.Sandbox
 	c.receipt.RequestedPermissionProfile = requestedProfile
 	if requestedProfile != "" {
@@ -583,6 +635,9 @@ func (c *Client) ThreadResume(ctx context.Context, req ThreadResumeRequest) (Thr
 	c.mu.Lock()
 	c.threadID = req.ThreadID
 	c.receipt.RequestedModel = req.Model
+	c.receipt.ObservedSource = "app_server_thread_receipt"
+	c.receipt.ObservedProvider = event.ModelProvider
+	c.receipt.ThreadID = event.Thread.ID
 	requestedProfile := req.Sandbox
 	c.receipt.RequestedPermissionProfile = requestedProfile
 	if requestedProfile != "" {
@@ -641,6 +696,14 @@ func (c *Client) ThreadFork(ctx context.Context, req ThreadForkRequest) (ThreadS
 	if event.Model != "" && event.Model != req.Model {
 		return ThreadStarted{}, fmt.Errorf("%w: requested=%s observed=%s", ErrModelRerouted, req.Model, event.Model)
 	}
+	c.mu.Lock()
+	c.receipt.RequestedModel = req.Model
+	c.receipt.ObservedModel = event.Model
+	c.receipt.ObservedEffort = event.ReasoningEffort
+	c.receipt.ObservedSource = "app_server_thread_receipt"
+	c.receipt.ObservedProvider = event.ModelProvider
+	c.receipt.ThreadID = event.Thread.ID
+	c.mu.Unlock()
 	return event, nil
 }
 
@@ -684,13 +747,16 @@ func (c *Client) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStart
 	if err != nil {
 		return TurnStarted{}, err
 	}
+	if event.Turn.ThreadID != "" && event.Turn.ThreadID != req.ThreadID {
+		return TurnStarted{}, errors.New("codex app server: turn/start returned an unexpected thread id")
+	}
+	if event.Turn.ThreadID == "" {
+		event.Turn.ThreadID = req.ThreadID
+	}
 	c.mu.Lock()
 	if route, ok := c.reroutes[rerouteKey(req.ThreadID, event.Turn.ID)]; ok {
 		c.mu.Unlock()
 		return event, fmt.Errorf("%w: requested=%s observed=%s", ErrModelRerouted, route.FromModel, route.ToModel)
-	}
-	if event.Turn.ThreadID == "" {
-		event.Turn.ThreadID = req.ThreadID
 	}
 	if req.Model != "" {
 		c.receipt.RequestedModel = req.Model
@@ -701,6 +767,7 @@ func (c *Client) TurnStart(ctx context.Context, req TurnStartRequest) (TurnStart
 			c.receipt.ObservedEffort = ""
 		}
 	}
+	c.receipt.TurnID = event.Turn.ID
 	c.mu.Unlock()
 	return event, nil
 }
@@ -735,6 +802,35 @@ func (c *Client) ThreadList(ctx context.Context) (ThreadListResult, error) {
 		}
 	}
 	return out, nil
+}
+
+// ThreadRead obtains the post-turn configured identity. These values are an
+// App Server receipt, not provider-internal per-token telemetry.
+func (c *Client) ThreadRead(ctx context.Context, threadID string) (Thread, error) {
+	if strings.TrimSpace(threadID) == "" {
+		return Thread{}, errors.New("codex app server: thread/read requires thread id")
+	}
+	result, err := c.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true})
+	if err != nil {
+		return Thread{}, err
+	}
+	var envelope struct {
+		Thread Thread `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &envelope); err != nil {
+		return Thread{}, fmt.Errorf("codex app server: malformed thread/read result: %w", err)
+	}
+	thread := envelope.Thread
+	if thread.ID != threadID || thread.Status.Type == "" || thread.Model == "" || thread.ModelProvider == "" || thread.ReasoningEffort == "" {
+		return Thread{}, errors.New("codex app server: thread/read result missing observable identity")
+	}
+	c.mu.Lock()
+	c.receipt.ObservedModel = thread.Model
+	c.receipt.ObservedEffort = thread.ReasoningEffort
+	c.receipt.ObservedProvider = thread.ModelProvider
+	c.receipt.ObservedSource = "app_server_thread_receipt"
+	c.mu.Unlock()
+	return thread, nil
 }
 
 // Receipt is part of ATENEA's public orchestration contract.
@@ -847,8 +943,8 @@ func ParseThreadStarted(raw json.RawMessage) (ThreadStarted, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("codex app server: malformed thread/started: %w", err)
 	}
-	if out.Thread.ID == "" || out.Thread.Status.Type == "" {
-		return out, errors.New("codex app server: thread/started missing id")
+	if out.Thread.ID == "" || out.Thread.Status.Type == "" || out.Model == "" || out.ModelProvider == "" {
+		return out, errors.New("codex app server: thread/started missing observable identity")
 	}
 	return out, nil
 }
@@ -923,11 +1019,11 @@ func ParseTurnCompleted(notification Notification) (TurnCompleted, error) {
 	if err := json.Unmarshal(notification.Params, &out); err != nil {
 		return out, err
 	}
-	if out.ThreadID == "" {
-		out.ThreadID = out.Turn.ThreadID
-	}
 	if out.ThreadID == "" || out.Turn.ID == "" || out.Turn.Status == "" {
 		return out, errors.New("codex app server: turn/completed is missing turn identity")
+	}
+	if out.Turn.ThreadID != "" && out.Turn.ThreadID != out.ThreadID {
+		return out, errors.New("codex app server: turn/completed thread identity mismatch")
 	}
 	return out, nil
 }
@@ -953,10 +1049,20 @@ type processResponse struct {
 
 // NewProcessTransport is part of ATENEA's public orchestration contract.
 func NewProcessTransport(binary string, args ...string) (*ProcessTransport, error) {
+	return NewProcessTransportWithEnv(binary, nil, args...)
+}
+
+// NewProcessTransportWithEnv starts App Server with an optional exact
+// environment, allowing callers to isolate authentication without mutating
+// the parent process.
+func NewProcessTransportWithEnv(binary string, environment []string, args ...string) (*ProcessTransport, error) {
 	if strings.TrimSpace(binary) == "" {
 		return nil, errors.New("codex app server: binary is required")
 	}
 	cmd := exec.Command(binary, args...)
+	if environment != nil {
+		cmd.Env = slices.Clone(environment)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

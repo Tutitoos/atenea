@@ -33,6 +33,11 @@ const Version = "1.1.0"
 // right meaning: this IS 1.1.0, built from that tree.
 var Full = sync.OnceValue(func() string { return stamp(vcs()) })
 
+// Source returns the full VCS revision embedded by Go and whether the build
+// contained uncommitted files. Certification uses it instead of the caller's
+// current directory so a moved binary cannot be attributed to another repo.
+func Source() (revision string, modified bool) { return vcs() }
+
 // vcs reads where this build came from. It answers empty for the normal shape
 // of a release artifact: `go install atenea@v1.1.0` and a build from an
 // unpacked source archive both land here, and neither has anything truthful to

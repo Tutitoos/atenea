@@ -13,8 +13,11 @@ import (
 )
 
 func cmdCodex(args []string, out io.Writer) error {
+	if len(args) >= 1 && args[0] == "certify" {
+		return cmdCodexCertify(args[1:], out)
+	}
 	if len(args) < 2 || args[0] != "agents" {
-		return fmt.Errorf("codex requires: agents sync --global|--project PATH, or agents check")
+		return fmt.Errorf("codex requires: agents sync|check, or certify start|status|complete|cancel|check")
 	}
 	switch args[1] {
 	case "sync":

@@ -121,6 +121,15 @@ Commands:
                          Sync canonical native Codex agent profiles atomically
   codex agents check [--global|--project PATH]
                          Check native Codex agent profile receipts
+  codex certify start --desktop [--ttl 30d]
+                         Certify observable App Server identity and real Codex
+                         CLI/Desktop presentation with disposable authentication
+  codex certify status [ID] --json|--markdown
+  codex certify complete ID | cancel ID
+  codex certify check --require-valid
+  codex certify export [ID]
+                         Inspect, finish, invalidate, enforce, or export a
+                         sanitized signed Codex certificate
   statusline install [WIDGET]
                          Put Atenea's status line on opencode's screen;
                          'uninstall' takes it off, 'status' says whether the
@@ -148,12 +157,27 @@ unknown usage remain separate; this command does not invoke a model.
 `,
 	"codex": `Usage: atenea codex agents sync --global|--project PATH [--prune]
        atenea codex agents check [--global|--project PATH]
+       atenea codex certify start --desktop [--ttl 30d]
+       atenea codex certify status [CERTIFICATE_ID] [--json|--markdown]
+       atenea codex certify complete CERTIFICATE_ID [--helper PATH]
+       atenea codex certify cancel CERTIFICATE_ID
+       atenea codex certify export [CERTIFICATE_ID]
+       atenea codex certify check --require-valid
+
+For release evidence, run codex certify export after all gates pass. It signs
+the sanitized JSON with a local Ed25519 key and refuses to replace a different
+pinned public key. The release workflow accepts only that evidence-only commit.
 
 Synchronize or check Atenea's canonical native Codex App Server profiles.
 Global profiles live under $CODEX_HOME/agents (or ~/.codex/agents); project
 profiles live under <repository>/.codex/agents. Sync uses atomic writes,
 preserves foreign files, and only removes obsolete Atenea-managed profiles
 with --prune. It never invokes Codex and never writes a real home in tests.
+
+Certification uses a fresh CODEX_HOME and device login, deletes credentials
+after the App Server and CLI gates, and requires a manual Codex Desktop
+challenge. A certificate expires after at most 30 days and is invalidated by
+any recorded binary, schema, profile, presentation, commit or machine drift.
 `,
 	"stats": statsHelp,
 	"command": `Usage: atenea command NAME [flags]
