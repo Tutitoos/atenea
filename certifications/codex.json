@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "certificate_id": "d0d5f8fb0863139e2b6a2f756c98565c",
+  "state": "passed",
+  "created_at": "2026-09-07T21:53:45Z",
+  "expires_at": "2026-10-07T21:53:45Z",
+  "commit": "f81d5b8c2fa11e175bf3378b0eed49ac3944f80d",
+  "atenea": {
+    "identifier": "com.tutitoos.atenea",
+    "version": "1.1.0",
+    "sha256": "0e59704fb4565c71c1f626bdc377ce3458fc857cd186fcf1e184980f8b2a351e"
+  },
+  "codex_cli": {
+    "identifier": "codex",
+    "version": "codex-cli 0.153.4",
+    "sha256": "b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3"
+  },
+  "codex_desktop": {
+    "identifier": "com.openai.codex",
+    "version": "26.901.31953",
+    "sha256": "3f1c4895649dcfde56a3eb2e95bd66e5aeb4541f16bdc2659c7cff67378ac067"
+  },
+  "machine": {
+    "os": "darwin",
+    "os_version": "26.6.2",
+    "architecture": "arm64",
+    "hostname_sha256": "f5cdb3d9822ddf8099503e0d99222a5bee14d2d191ee860f82f8fd1558dbfe60"
+  },
+  "app_server_schema_version": "codex-app-server/v2-experimental",
+  "app_server_schema_sha256": "060abc18d84e368cde6eee8aa3b9d62d0ad7c872d62c51a5798ce7165958f76d",
+  "profiles_sha256": "48ac26ae049096686a3c84f5b06f9d17d19fed8c62c8ff5799c45712f4452308",
+  "mcp_overlay_sha256": "33adcd7a8f066338b1052a6b4b6cf1a4d7c69b1a16762865a25d384980f27941",
+  "presentation_contract_sha256": "0f96d94820d07bc3f39776eec46e5ed961ca0a42fbc672eaac992b46bb00b4e1",
+  "identity": {
+    "state": "passed",
+    "evidence_id": "app_server_thread_receipt:79504f9f09382622d0abfdfe6ee13aae7d569fc949fad4913a928a388fa53741",
+    "checked_at": "2026-09-07T21:54:39Z"
+  },
+  "cli": {
+    "state": "passed",
+    "evidence_id": "codex_cli_jsonl_sha256:73cb533ddf1ee8647d2c50dbf38a8b88e645283664824fb07d7015c841f0840a",
+    "checked_at": "2026-09-07T21:55:44Z"
+  },
+  "desktop": {
+    "state": "passed",
+    "evidence_id": "desktop_ax_process_sha256:ac7b9d86e691f5cd0fcd5d3ac285b8e8fae979746bb6be80372eb73eca46d9de",
+    "checked_at": "2026-09-07T22:04:53Z"
+  },
+  "profiles": [
+    {
+      "role": "planning",
+      "requested_model": "gpt-5.6-sol",
+      "observed_model": "gpt-5.6-sol",
+      "requested_effort": "medium",
+      "observed_effort": "medium",
+      "observed_provider": "openai",
+      "observed_source": "app_server_thread_receipt",
+      "thread_sha256": "bff41687c38c470d01a17be2ee335b34de361269e13f10fe714050ab13881696",
+      "turn_sha256": "316a0b41ec27cf3366677a3ded3095752ff7473bdca8f147b904ba287df84e47",
+      "usage_revision": 1,
+      "rerouted": false
+    },
+    {
+      "role": "implementation",
+      "requested_model": "gpt-5.6-luna",
+      "observed_model": "gpt-5.6-luna",
+      "requested_effort": "xhigh",
+      "observed_effort": "xhigh",
+      "observed_provider": "openai",
+      "observed_source": "app_server_thread_receipt",
+      "thread_sha256": "acfa4fa0c08a579561b15459896b3e35303831dedd12ce4ce15f4853e1616c90",
+      "turn_sha256": "e4087e91cd51063c9234f68bf4ffcde5ec806b837aca94073beea636f896ee88",
+      "usage_revision": 2,
+      "rerouted": false
+    },
+    {
+      "role": "review",
+      "requested_model": "gpt-5.6-sol",
+      "observed_model": "gpt-5.6-sol",
+      "requested_effort": "medium",
+      "observed_effort": "medium",
+      "observed_provider": "openai",
+      "observed_source": "app_server_thread_receipt",
+      "thread_sha256": "c401612d303438567d459efb449ae07d5ea03f3a682aa31574c14f757ac8a5e3",
+      "turn_sha256": "92c27cf29a5ac9d3f0ffccace46801bf75952aff505aa7477f62622bd0862fdc",
+      "usage_revision": 3,
+      "rerouted": false
+    },
+    {
+      "role": "audit",
+      "requested_model": "gpt-6-astra",
+      "observed_model": "gpt-6-astra",
+      "requested_effort": "medium",
+      "observed_effort": "medium",
+      "observed_provider": "openai",
+      "observed_source": "app_server_thread_receipt",
+      "thread_sha256": "baaf3d5f8164bf29aa48c7823284f85ba02aea57cb8de25a4d07a697e23d518f",
+      "turn_sha256": "c977659ab51c0934702f12ade51543ddaef4cd28f71bc27ce3d8c8c15b513112",
+      "usage_revision": 4,
+      "rerouted": false
+    }
+  ],
+  "cleanup_verified": true,
+  "challenge_sha256": "7c66c640a70bf02a5ffbdfe205996eea846a6ffda6f639d823ffe2d6ac37297e",
+  "signer_key_sha256": "062e717ef7bd04683b85ac14464d2f5c2c9fba3338db8ed97f7738c7603239b2",
+  "signature": "XOXHoc1JtzL6ryWdNxkhsbXi/WNww/M2lJvHXOx9v5wxPZ2+QhiVU1LyU4mFt1XVjjMKITEGN/eZoy/0C400BQ=="
+}
