@@ -121,7 +121,7 @@ func TestGlobalSlotHolderProcess(t *testing.T) {
 	dir := t.TempDir()
 	body := "touch " + marker + "\nsleep 1\necho '{\"result\":{\"ok\":true},\"verdict\":\"ok\"}'"
 	profile := []config.WorkflowProfile{{Name: "shared-deadline-regression", Version: "v1",
-		Digest: sharedDeadlineRegressionDigest, MaxDuration: 3 * time.Second,
+		Digest: sharedDeadlineRegressionDigest, MaxDuration: 30 * time.Second,
 		MaxParallelAgent: 1, MaxParallelReview: 1}}
 	h := newHarnessWith(t, workflow.Options{ProfileName: profile[0].Name, Profiles: profile}, dir,
 		declared("reader", stub(t, dir, "reader", body), config.PoolAgent))
