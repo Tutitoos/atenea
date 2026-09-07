@@ -112,3 +112,13 @@ func FailedGate(err error) Gate {
 	}
 	return Gate{State: Failed, CheckedAt: time.Now().UTC().Truncate(time.Second), Reason: reason}
 }
+
+// PendingGate records a retryable observation without accepting or permanently
+// invalidating the gate. Desktop uses it when the expected chat is not visible.
+func PendingGate(err error) Gate {
+	reason := "gate_pending"
+	if err != nil {
+		reason += ":" + Hash(err.Error())[:16]
+	}
+	return Gate{State: Pending, CheckedAt: time.Now().UTC().Truncate(time.Second), Reason: reason}
+}

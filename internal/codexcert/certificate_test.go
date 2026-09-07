@@ -77,6 +77,22 @@ func TestCertificateNeedsEveryRealGateAndExactFingerprint(t *testing.T) {
 	}
 }
 
+func TestRetryableDesktopObservationKeepsCertificatePartial(t *testing.T) {
+	cert, _, err := New(time.Hour, testCurrent(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert.Identity = PassedGate("identity")
+	cert.CLI = PassedGate("cli")
+	cert.Profiles = make([]ProfileReceipt, 4)
+	cert.CleanupVerified = true
+	cert.Desktop = PendingGate(errors.New("different visible window"))
+	cert.Seal()
+	if cert.State != Pending || cert.Desktop.State != Pending || !strings.HasPrefix(cert.Desktop.Reason, "gate_pending:") {
+		t.Fatalf("retryable Desktop observation became terminal: %#v", cert)
+	}
+}
+
 func TestStorePersistsSanitizedCertificateAndSeparateChallenge(t *testing.T) {
 	current := testCurrent(t)
 	cert, nonce, err := New(time.Hour, current)

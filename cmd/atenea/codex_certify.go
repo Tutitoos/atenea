@@ -342,7 +342,7 @@ func codexCertifyComplete(args []string, out io.Writer) error {
 		err = codexcert.VerifyDesktopText(text, challenge.Nonce, challenge.RunID, challenge.WorkflowID, challenge.InvocationID, challenge.ResultProof, challenge.DesktopProcessSHA256, challenge.ChecklistCount)
 	}
 	if err != nil {
-		cert.Desktop = codexcert.FailedGate(err)
+		cert.Desktop = codexcert.PendingGate(err)
 		cert.Seal()
 		_ = store.Save(cert)
 		return err
