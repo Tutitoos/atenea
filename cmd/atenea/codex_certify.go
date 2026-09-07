@@ -725,7 +725,7 @@ func codexCertificationCurrent(codexPath string) (codexcert.Current, error) {
 		return codexcert.Current{}, err
 	}
 	if fallback {
-		if err := verifyCertificationRebuild(atenea.SHA256, commit); err != nil {
+		if err := verifyCertificationRebuild(self, atenea.SHA256, commit); err != nil {
 			return codexcert.Current{}, err
 		}
 	}
@@ -746,13 +746,16 @@ func certificationBuildArgs(commit, output string) []string {
 	return []string{"build", "-trimpath", "-buildvcs=false", "-ldflags=-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=" + commit, "-o", output, "./cmd/atenea"}
 }
 
-func verifyCertificationRebuild(wantSHA256, commit string) error {
-	tmp, err := os.MkdirTemp("", "atenea-certification-rebuild-")
+func verifyCertificationRebuild(self, wantSHA256, commit string) error {
+	file, err := os.CreateTemp(filepath.Dir(self), ".atenea-certification-rebuild-*")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	candidate := filepath.Join(tmp, "atenea")
+	candidate := file.Name()
+	defer func() { _ = os.Remove(candidate) }()
+	if err := file.Close(); err != nil {
+		return err
+	}
 	cmd := exec.Command("go", certificationBuildArgs(commit, candidate)...)
 	cmd.Env = append(os.Environ(), "GOFLAGS=")
 	if output, err := cmd.CombinedOutput(); err != nil {
