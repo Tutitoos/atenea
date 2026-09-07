@@ -205,6 +205,10 @@ func matchingReconnectArguments(raw any, nonce, runID, workflowID, invocationID 
 
 // VerifyDesktopText validates a bounded accessibility observation in memory.
 func VerifyDesktopText(text, nonce, runID, workflowID, invocationID, resultProof, desktopProcessReceipt string, checklistCount int) error {
+	// Electron exposes adjacent Markdown spans as separate accessibility nodes.
+	// Treat node boundaries like ordinary whitespace while preserving every
+	// visible token and the ordering checks below.
+	text = strings.Join(strings.Fields(text), " ")
 	noticeLabel := "ATENEA · codex.certify.challenge"
 	for _, value := range []string{nonce, runID, workflowID, invocationID, resultProof, "desktop_process_receipt=" + desktopProcessReceipt, "activity=completed", noticeLabel, "consulto", "para verificar actividad y progreso.", "P30. Certificación Codex", "████████████████████", "100 %", "1/1 puntos completados"} {
 		if !strings.Contains(text, value) {

@@ -250,6 +250,10 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 	if err := VerifyDesktopText(desktop, nonce, run, workflow, invocation, proof, desktopReceipt, 1); err != nil {
 		t.Fatal(err)
 	}
+	segmentedDesktop := strings.Replace(desktop, "P30. Certificación Codex", "P30.\nCertificación Codex", 1)
+	if err := VerifyDesktopText(segmentedDesktop, nonce, run, workflow, invocation, proof, desktopReceipt, 1); err != nil {
+		t.Fatalf("segmented accessibility text: %v", err)
+	}
 	if err := VerifyDesktopText(strings.Replace(desktop, "████████████████████", "██", 1), nonce, run, workflow, invocation, proof, desktopReceipt, 1); err == nil {
 		t.Fatal("short bar accepted")
 	}
