@@ -87,7 +87,7 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 		return fmt.Errorf("expected one correlated notice and tool call, got %d and %d", obs.NoticeCount, obs.RequestCount)
 	}
 	if obs.NoticeSequence < 0 || obs.RequestSequence <= obs.NoticeSequence || obs.ResponseSequence < obs.RequestSequence || obs.ActivitySequence < obs.ResponseSequence || obs.RenderSequence <= obs.ActivitySequence {
-		return errors.New("codex CLI evidence is not ordered notice, request, response, activity, render")
+		return fmt.Errorf("codex CLI evidence order failed: notice=%d request=%d response=%d activity=%d render=%d notices=%d/%d calls=%d/%d checklist=%d bar_segments=%d", obs.NoticeSequence, obs.RequestSequence, obs.ResponseSequence, obs.ActivitySequence, obs.RenderSequence, obs.NoticeCount, totalNotices, obs.RequestCount, totalToolCalls, obs.ChecklistCount, len([]rune(obs.ProgressBar)))
 	}
 	if obs.ChecklistCount != checklistCount {
 		return fmt.Errorf("checklist has %d items, want %d", obs.ChecklistCount, checklistCount)
