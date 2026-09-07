@@ -22,6 +22,21 @@ func TestHealthNeutralFirstCallKeepsUnknownTimestampZero(t *testing.T) {
 	}
 }
 
+func TestRepeatedHealthNeutralCallsKeepUnknownTimestampZero(t *testing.T) {
+	memory, err := newBackendMemory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Core{readings: memory}
+	neutral := &contract.Failure{Kind: contract.FailureInvalidInput, HealthNeutral: true, Message: "bad arguments"}
+	c.recordBackendCall("fixture", neutral, nil)
+	c.recordBackendCall("fixture", neutral, nil)
+	reading, ok := memory.reading("fixture")
+	if !ok || reading.State != BackendUnknown || !reading.At.IsZero() {
+		t.Fatalf("reading = %+v, %v, want repeated unknown with zero timestamp", reading, ok)
+	}
+}
+
 func TestBackendMemoryPersistsProbeReadings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp-health.json")
 	first, err := newBackendMemory(path)

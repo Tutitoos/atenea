@@ -228,6 +228,9 @@ func controlCoordinator(settingsPath, verb, id, tracePath string, coordStore *co
 					return err
 				}
 				if launched.Closed {
+					if err := recordCoordinatorReviewCycle(ctx, coordStore, id, launched); err != nil {
+						return err
+					}
 					if _, err := coordStore.FinishChild(ctx, id, child.Repository, coordination.StatusCompleted, "", time.Now().UTC()); err != nil {
 						return err
 					}

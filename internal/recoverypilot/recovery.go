@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math"
 	"os"
@@ -591,6 +592,16 @@ type FileStore struct {
 	mu   sync.Mutex
 }
 
+const attemptsByteLimit = 1 << 20
+
+var attemptPathLocks [64]sync.Mutex
+
+func attemptPathLock(path string) *sync.Mutex {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(filepath.Clean(path)))
+	return &attemptPathLocks[hash.Sum32()%uint32(len(attemptPathLocks))]
+}
+
 // PersistAttempt is part of ATENEA's public orchestration contract.
 
 // PersistAttempt is part of ATENEA's public orchestration contract.
@@ -601,8 +612,19 @@ func (s *FileStore) PersistAttempt(ctx context.Context, attempt Attempt) error {
 	if strings.TrimSpace(s.Path) == "" {
 		return errors.New("attempt store path is required")
 	}
+	encoded, err := json.Marshal(attempt)
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pathLock := attemptPathLock(s.Path)
+	pathLock.Lock()
+	defer pathLock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
 		return err
 	}
@@ -611,8 +633,19 @@ func (s *FileStore) PersistAttempt(ctx context.Context, attempt Attempt) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if err := json.NewEncoder(f).Encode(attempt); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return err
+	}
+	if info.Size()+int64(len(encoded)) > attemptsByteLimit {
+		return fmt.Errorf("attempt log %s would exceed %d bytes", s.Path, attemptsByteLimit)
+	}
+	written, err := f.Write(encoded)
+	if err != nil {
+		return err
+	}
+	if written != len(encoded) {
+		return io.ErrShortWrite
 	}
 	return f.Sync()
 }
@@ -629,7 +662,6 @@ func LoadAttempts(path string) ([]Attempt, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	const attemptsByteLimit = 1 << 20
 	data, err := io.ReadAll(io.LimitReader(f, attemptsByteLimit+1))
 	if err != nil {
 		return nil, err
@@ -642,7 +674,7 @@ func LoadAttempts(path string) ([]Attempt, error) {
 	for scanner.Scan() {
 		var attempt Attempt
 		if err := json.Unmarshal(scanner.Bytes(), &attempt); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("attempt log %s history is incomplete: %w", path, err)
 		}
 		out = append(out, attempt)
 	}

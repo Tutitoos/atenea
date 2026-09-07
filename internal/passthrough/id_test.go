@@ -28,3 +28,16 @@ func TestErrorReplyMayCarryNullID(t *testing.T) {
 		t.Fatalf("resultOf error = %v, want remote message", err)
 	}
 }
+
+func TestStringNullIDIsNotAJSONNullErrorID(t *testing.T) {
+	for name, response := range map[string]string{
+		"plain": `{"jsonrpc":"2.0","id":"null","error":{"code":-32603,"message":"unrelated"}}`,
+		"sse":   "data: {\"jsonrpc\":\"2.0\",\"id\":\"null\",\"error\":{\"code\":-32603,\"message\":\"unrelated\"}}\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decode(response, 7); err == nil {
+				t.Fatal("string null id was accepted as JSON null")
+			}
+		})
+	}
+}

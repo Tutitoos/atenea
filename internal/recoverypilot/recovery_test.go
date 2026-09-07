@@ -195,13 +195,70 @@ func TestExecuteInvalidCostWithFileStoreIsReopenableAndJSONSafe(t *testing.T) {
 	}
 }
 
-func TestLoadAttemptsRejectsTruncatedHistory(t *testing.T) {
+func TestLoadAttemptsRejectsOversizedHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "attempts.jsonl")
 	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), (1<<20)+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadAttempts(path); err == nil || !strings.Contains(err.Error(), "history is incomplete") {
 		t.Fatalf("LoadAttempts oversized history = %v", err)
+	}
+}
+
+func TestLoadAttemptsRejectsTruncatedJSONLHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n{\"status\":\"partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAttempts(path); err == nil || !strings.Contains(err.Error(), "history is incomplete") {
+		t.Fatalf("LoadAttempts truncated history = %v", err)
+	}
+}
+
+func TestFileStoreRejectsGrowthBeyondReadableHistoryLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.jsonl")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), attemptsByteLimit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &FileStore{Path: path}
+	if err := store.PersistAttempt(t.Context(), Attempt{}); err == nil || !strings.Contains(err.Error(), "would exceed") {
+		t.Fatalf("PersistAttempt oversized growth = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != attemptsByteLimit {
+		t.Fatalf("history size = %d; rejected append changed the file", info.Size())
+	}
+}
+
+func TestFileStoreSerializesTheSharedHistoryLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "attempts.jsonl")
+	encoded, err := json.Marshal(Attempt{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordSize := len(encoded) + 1
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), attemptsByteLimit-recordSize), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- (&FileStore{Path: path}).PersistAttempt(t.Context(), Attempt{}) }()
+	}
+	successes := 0
+	for range 2 {
+		if err := <-results; err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful appends = %d, want exactly one", successes)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > attemptsByteLimit {
+		t.Fatalf("history info = %+v, err=%v", info, err)
 	}
 }
 

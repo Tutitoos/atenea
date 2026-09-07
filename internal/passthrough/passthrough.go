@@ -920,12 +920,12 @@ func decode(text string, id int64) (json.RawMessage, error) {
 		if json.Unmarshal([]byte(trimmed), &envelope) != nil || envelope.Method != "" {
 			return nil, fmt.Errorf("answered with an invalid JSON-RPC response")
 		}
-		got := strings.Trim(strings.TrimSpace(string(envelope.ID)), `"`)
-		if got == "null" && envelope.Error != nil {
+		rawID := strings.TrimSpace(string(envelope.ID))
+		if rawID == "null" && envelope.Error != nil {
 			return json.RawMessage(trimmed), nil
 		}
-		if got != strconv.FormatInt(id, 10) {
-			return nil, fmt.Errorf("answered id %q, want %d", got, id)
+		if rawID != strconv.FormatInt(id, 10) {
+			return nil, fmt.Errorf("answered id %q, want %d", rawID, id)
 		}
 		return json.RawMessage(trimmed), nil
 	}
@@ -948,11 +948,11 @@ func decode(text string, id int64) (json.RawMessage, error) {
 		if json.Unmarshal([]byte(payload), &envelope) != nil || envelope.Method != "" {
 			continue
 		}
-		got := strings.Trim(strings.TrimSpace(string(envelope.ID)), `"`)
-		if got == "null" && envelope.Error != nil {
+		rawID := strings.TrimSpace(string(envelope.ID))
+		if rawID == "null" && envelope.Error != nil {
 			return json.RawMessage(payload), nil
 		}
-		if got == strconv.FormatInt(id, 10) {
+		if rawID == strconv.FormatInt(id, 10) {
 			return json.RawMessage(payload), nil
 		}
 	}
