@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Tutitoos/atenea/internal/codexcert"
 )
 
 func TestCertificationFlagsPermitDocumentedIDFirstForm(t *testing.T) {
@@ -70,5 +73,18 @@ func TestPinnedCertificationKeyCannotBeReplacedOrSymlinked(t *testing.T) {
 	}
 	if err := writePinnedPublicKey(symlink, publicA); err == nil {
 		t.Fatal("symlinked public key accepted")
+	}
+}
+
+func TestDesktopChallengeRequiresVisibleExactNoticeAndCompleteReceipt(t *testing.T) {
+	c := codexcert.Challenge{Nonce: "nonce", InvocationID: "invocation"}
+	prompt := desktopChallengePrompt("certificate", c, "/private/bin/atenea", "/private/state")
+	if strings.Contains(prompt, "ATENEA · codex.certify.challenge") || !strings.Contains(prompt, "start the final answer with that same constructed Markdown line") || !strings.Contains(prompt, "Do not format the tool or invocation as inline code") {
+		t.Fatalf("Desktop prompt does not preserve the exact visible notice: %s", prompt)
+	}
+	for _, field := range []string{"nonce=", "run", "workflow", "invocation", "result_proof", "desktop_process_receipt", "activity", "Progreso"} {
+		if !strings.Contains(prompt, field) {
+			t.Fatalf("Desktop prompt omitted %q", field)
+		}
 	}
 }
