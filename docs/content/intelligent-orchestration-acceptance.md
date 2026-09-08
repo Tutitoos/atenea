@@ -90,11 +90,14 @@ reescribir lo que se conocía el 7 de septiembre.
 PR #47 se fusionó como `e0c02577b8a64febf6b1acd4e03a04794c17e4ee` y
 PR #50 como `0de5257c211af20c126b6e4e0df3eec8399de15e`. El CI posterior
 al segundo merge pasó sobre ese SHA. La instalación local verificada ejecuta
-ATENEA 1.1.0, contrato 4.1.0, con el servicio instalado, habilitado y activo.
-El comando instalado valida la firma y la vigencia del artefacto P30 mediante
-`codex certify check --require-valid --certificate certifications/codex.json
---public-key certifications/codex-certifier.pub`. Esta comprobación no vuelve a
-certificar el binario instalado. La comprobación separada del entorno instalado
-falló porque la compilación desde el worktree no contenía una revisión VCS
-observable; `scripts/install-dev.sh` ya incorpora la revisión exacta en builds
-limpios y mantiene los builds sucios explícitamente fuera de certificación.
+ATENEA 1.1.0, contrato 4.1.0, desde el commit limpio
+`e33318cf5b44b32bcea82646c6781bc62faaa86e`, con el servicio instalado,
+habilitado y activo.
+
+El gate del entorno instalado `atenea codex certify check --require-valid`
+alcanza la comparación exacta y responde `stale` con código distinto de cero:
+el certificado P30 pertenece a su commit y huella originales. El comando con
+`--certificate certifications/codex.json --public-key
+certifications/codex-certifier.pub` sí valida la firma y vigencia del artefacto
+exportado. Esta comprobación no recertifica el binario instalado; los intentos
+fallidos anteriores siguen registrados en el artefacto de aceptación.

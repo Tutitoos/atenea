@@ -65,19 +65,22 @@ merged as `0de5257c211af20c126b6e4e0df3eec8399de15e`. Their final heads had
 13 and 6 review threads respectively, with none unresolved. The post-merge CI
 run `34198102106` passed on the exact `main` merge SHA.
 
-ATENEA was rebuilt from that `main`, its dashboard checks passed, the binary and
-desktop helper were signed and installed, and the launchd service restarted.
-The running service reported ATENEA 1.1.0, contract 4.1.0, installed, enabled,
-and active. The installed raw binary SHA-256 is
-`00be3451389a93e3bcfe63f89915a49d8e3b26229dc2186d0aa46cb851e01cd3`.
-The installed command validated the signature and expiry of the exported P30
-artifact with `codex certify check --require-valid --certificate
-certifications/codex.json --public-key certifications/codex-certifier.pub`.
-That artifact check does not recertify the installed binary. A separate live
-environment check failed because the linked-worktree build contained no
-observable VCS revision; `scripts/install-dev.sh` now stamps clean builds with
-their exact revision and leaves dirty builds explicitly uncertifiable. The
-failed attempt remains recorded in `acceptance.json`.
+The initial closure smoke rebuilt ATENEA from that `main`. The follow-up
+installer correction was then built from clean commit
+`e33318cf5b44b32bcea82646c6781bc62faaa86e`, after dashboard checks passed.
+The binary and desktop helper were signed and installed, the launchd service
+restarted, and the running service reported ATENEA 1.1.0, contract 4.1.0,
+installed, enabled, and active. The installed raw binary SHA-256 is
+`81215ccd004c2587fb52e68759e4fa3f3df8404c6dc84202854010b01dcea7ea`.
+
+The installed-environment command `atenea codex certify check --require-valid`
+now reaches exact comparison and returns `stale` with a non-zero exit because
+P30 is bound to its original commit and fingerprint. Separately,
+`atenea codex certify check --require-valid --certificate
+certifications/codex.json --public-key certifications/codex-certifier.pub`
+passes signature and expiry validation for the exported P30 artifact. That
+artifact result does not recertify the installed binary. Earlier failed
+attempts remain recorded in `acceptance.json`.
 
 ## Deliberate boundary
 

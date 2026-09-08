@@ -223,7 +223,7 @@
       "codex_merge_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
       "installed_version": "1.1.0",
       "installed_contract": "4.1.0",
-      "installed_binary_raw_sha256": "00be3451389a93e3bcfe63f89915a49d8e3b26229dc2186d0aa46cb851e01cd3",
+      "installed_binary_raw_sha256": "81215ccd004c2587fb52e68759e4fa3f3df8404c6dc84202854010b01dcea7ea",
       "service_installed": true,
       "service_enabled": true,
       "service_active": true,
@@ -237,15 +237,35 @@
       "installed_environment_certificate_attempts": [
         {
           "state": "failed",
-          "command": "atenea codex certify check --require-valid",
+          "source_commit": "0de5257c211af20c126b6e4e0df3eec8399de15e",
           "reason": "installed linked-worktree build had no observable VCS revision",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "failed",
+          "source_commit": "696283d9ccf2bb64b9640a852ddd95153bd6581f",
+          "reason": "reproducible rebuild required the installed executable directory itself to be private",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "failed",
+          "source_commit": "d6a0d5cf56501c392eeb24e62742059f5c9afb81",
+          "reason": "reproducible hashing did not yet normalize a real hardened-runtime signature",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "stale",
+          "source_commit": "e33318cf5b44b32bcea82646c6781bc62faaa86e",
+          "exit_code_nonzero": true,
+          "reason": "exact comparison correctly rejected the earlier P30 commit and fingerprint",
           "hidden_by_retry": false
         }
       ],
       "installer_remediation": {
-        "state": "implemented_and_locally_tested",
-        "behavior": "clean builds carry the exact Git revision; dirty builds remain explicitly uncertifiable"
-      }
+        "state": "passed",
+        "behavior": "clean builds carry the exact Git revision; dirty builds remain explicitly uncertifiable; signed installs are compared through a private signature-free copy"
+      },
+      "installed_source_commit": "e33318cf5b44b32bcea82646c6781bc62faaa86e"
     },
     "p29_final_report": {
       "state": "pass",
