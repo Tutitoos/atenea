@@ -132,9 +132,6 @@ type ExecutionReceipt struct {
 
 // AccountReadResult is the authentication boundary returned by account/read.
 type AccountReadResult struct {
-	Account json.RawMessage `json:"account"`
-	// RequiresOpenAIAuth describes the provider's authentication requirement;
-	// account being non-null is the observable authenticated-session receipt.
 	RequiresOpenAIAuth bool   `json:"requiresOpenaiAuth"`
 	AccountType        string `json:"-"`
 }
@@ -486,27 +483,21 @@ func (c *Client) AccountRead(ctx context.Context) (AccountReadResult, error) {
 	if err != nil {
 		return AccountReadResult{}, err
 	}
-	var out AccountReadResult
-	if err := json.Unmarshal(result, &out); err != nil {
-		return out, fmt.Errorf("codex app server: malformed account/read result: %w", err)
-	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(result, &fields) != nil || fields["requiresOpenaiAuth"] == nil || fields["account"] == nil {
-		return out, errors.New("codex app server: malformed account/read result")
+		return AccountReadResult{}, errors.New("codex app server: malformed account/read result")
 	}
 	var requiresOpenAIAuth *bool
 	if json.Unmarshal(fields["requiresOpenaiAuth"], &requiresOpenAIAuth) != nil || requiresOpenAIAuth == nil {
-		return out, errors.New("codex app server: malformed account/read authentication flag")
+		return AccountReadResult{}, errors.New("codex app server: malformed account/read authentication flag")
 	}
-	out.RequiresOpenAIAuth = *requiresOpenAIAuth
 	var account struct {
 		Type string `json:"type"`
 	}
-	if json.Unmarshal(out.Account, &account) != nil || (account.Type != "chatgpt" && account.Type != "apiKey") {
-		return out, errors.New("codex app server: account/read is not an authenticated OpenAI account")
+	if json.Unmarshal(fields["account"], &account) != nil || (account.Type != "chatgpt" && account.Type != "apiKey") {
+		return AccountReadResult{}, errors.New("codex app server: account/read is not an authenticated OpenAI account")
 	}
-	out.AccountType = account.Type
-	return out, nil
+	return AccountReadResult{RequiresOpenAIAuth: *requiresOpenAIAuth, AccountType: account.Type}, nil
 }
 
 // ModelProviderCapabilitiesRead is part of ATENEA's public orchestration contract.

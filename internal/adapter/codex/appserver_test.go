@@ -128,8 +128,16 @@ func TestAccountAndThreadReadRequireObservableIdentity(t *testing.T) {
 	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.AccountRead(t.Context()); err != nil {
+	account, err := client.AccountRead(t.Context())
+	if err != nil {
 		t.Fatal(err)
+	}
+	encodedAccount, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedAccount), "account") || strings.Contains(string(encodedAccount), "chatgpt") {
+		t.Fatalf("public account receipt exposed opaque provider data: %s", encodedAccount)
 	}
 	thread, err := client.ThreadRead(t.Context(), "thread-1")
 	if err != nil {

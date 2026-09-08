@@ -211,6 +211,11 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 	if err := VerifyCLIJSONL([]byte(strings.Join(incompletePayload, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("agent message rescued an incomplete MCP presentation payload")
 	}
+	erroredPayload := append([]string{}, lines...)
+	erroredPayload[2] = "{\"type\":\"item.completed\",\"item\":{\"id\":\"tool-1\",\"type\":\"mcp_tool_call\",\"server\":\"atenea\",\"tool\":\"workflow.status\",\"status\":\"completed\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"proof activity=completed nonce run workflow invocation\\n- [x] **P30.** Certificación Codex\\n**Progreso:** `████████████████████` 100 % · 1/1 puntos completados\"}],\"isError\":true}}}"
+	if err := VerifyCLIJSONL([]byte(strings.Join(erroredPayload, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
+		t.Fatal("errored MCP result was accepted as certification evidence")
+	}
 	extraTool := append(append([]string{}, lines...), `{"type":"item.started","item":{"id":"extra-tool","type":"mcp_tool_call","server":"other","tool":"other.tool","arguments":{}}}`)
 	if err := VerifyCLIJSONL([]byte(strings.Join(extraTool, "\n")), nonce, run, workflow, invocation, proof, 1); err == nil {
 		t.Fatal("additional MCP tool call accepted")
@@ -232,6 +237,11 @@ func TestPresentationVerifiersRejectPartialAndAcceptOrderedEvidence(t *testing.T
 	}
 	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(reconnect, "\n")), nonce, run, workflow, invocation, proof); err != nil {
 		t.Fatal(err)
+	}
+	erroredReconnect := append([]string{}, reconnect...)
+	erroredReconnect[2] = `{"type":"item.completed","item":{"id":"tool-r","type":"mcp_tool_call","status":"completed","result":{"content":[{"type":"text","text":"proof cursor=1 activity=[] notices=[]"}],"isError":true}}}`
+	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(erroredReconnect, "\n")), nonce, run, workflow, invocation, proof); err == nil {
+		t.Fatal("errored reconnect MCP result was accepted")
 	}
 	withoutReconnectFinal := append(append([]string{}, reconnect[:3]...), reconnect[4])
 	if err := VerifyCLIReconnectJSONL([]byte(strings.Join(withoutReconnectFinal, "\n")), nonce, run, workflow, invocation, proof); err != nil {

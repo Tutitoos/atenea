@@ -159,7 +159,7 @@ func (c Certificate) EffectiveState(now time.Time, current Current) State {
 	if c.Commit != current.Commit || !sameFingerprint(c.Atenea, current.Atenea) || !sameFingerprint(c.CodexCLI, current.CodexCLI) || !sameFingerprint(c.CodexDesktop, current.CodexDesktop) || c.Machine != current.Machine || c.AppServerSchemaVersion != current.AppServerSchemaVersion || c.AppServerSchemaSHA256 != current.AppServerSchemaSHA256 || c.ProfilesSHA256 != current.ProfilesSHA256 || c.MCPOverlaySHA256 != current.MCPOverlaySHA256 || c.PresentationSHA256 != current.PresentationSHA256 {
 		return Stale
 	}
-	if c.Identity.State == Passed && c.CLI.State == Passed && c.Desktop.State == Passed && len(c.Profiles) == 4 && c.CleanupVerified {
+	if c.Identity.State == Passed && c.CLI.State == Passed && c.Desktop.State == Passed && len(c.Profiles) == len(RequiredProfiles) && c.CleanupVerified {
 		return Passed
 	}
 	return Pending
@@ -171,7 +171,7 @@ func sameFingerprint(a, b Fingerprint) bool {
 
 // Seal derives the stored state from completed gates.
 func (c *Certificate) Seal() {
-	if c.Identity.State == Passed && c.CLI.State == Passed && c.Desktop.State == Passed && len(c.Profiles) == 4 && c.CleanupVerified {
+	if c.Identity.State == Passed && c.CLI.State == Passed && c.Desktop.State == Passed && len(c.Profiles) == len(RequiredProfiles) && c.CleanupVerified {
 		c.State = Passed
 	} else if c.Identity.State == Failed || c.CLI.State == Failed || c.Desktop.State == Failed || !c.CleanupVerified {
 		c.State = Failed

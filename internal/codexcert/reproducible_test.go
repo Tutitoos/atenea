@@ -34,8 +34,14 @@ func TestReproducibleMachOHashIgnoresDerivedIdentityOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, _ := ReproducibleFileSHA256(write("two", two))
-	h3, _ := ReproducibleFileSHA256(write("three", three))
+	h2, err := ReproducibleFileSHA256(write("two", two))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h3, err := ReproducibleFileSHA256(write("three", three))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if h1 != h2 {
 		t.Fatal("derived Mach-O UUID or signature changed reproducible hash")
 	}
@@ -44,7 +50,10 @@ func TestReproducibleMachOHashIgnoresDerivedIdentityOnly(t *testing.T) {
 	}
 	policy := append([]byte(nil), one...)
 	binary.BigEndian.PutUint32(policy[128:132], csAdHoc|0x10000)
-	h4, _ := ReproducibleFileSHA256(write("policy", policy))
+	h4, err := ReproducibleFileSHA256(write("policy", policy))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if h1 == h4 {
 		t.Fatal("signature policy change did not change reproducible hash")
 	}

@@ -615,7 +615,11 @@ func flagsBeforeID(args []string, valueFlags map[string]bool) []string {
 		name := strings.SplitN(arg, "=", 2)[0]
 		if strings.HasPrefix(arg, "-") {
 			options = append(options, arg)
-			if valueFlags[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+			lookupName := name
+			if !strings.HasPrefix(name, "--") {
+				lookupName = "-" + name
+			}
+			if valueFlags[lookupName] && !strings.Contains(arg, "=") && i+1 < len(args) {
 				i++
 				options = append(options, args[i])
 			}
@@ -1010,7 +1014,9 @@ func codexDesktopPID() (int, string, error) {
 
 func desktopHelperScanner(reader io.Reader) *bufio.Scanner {
 	scan := bufio.NewScanner(reader)
-	scan.Buffer(make([]byte, 4096), 2<<20)
+	// The helper bounds raw AX text at 1 MB. JSON encoding can expand control
+	// characters and then escape them again inside the JSON-RPC content string.
+	scan.Buffer(make([]byte, 4096), 16<<20)
 	return scan
 }
 

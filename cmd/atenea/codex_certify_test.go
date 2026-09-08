@@ -20,6 +20,11 @@ func TestCertificationFlagsPermitDocumentedIDFirstForm(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args=%q want=%q", got, want)
 	}
+	singleDash := flagsBeforeID([]string{"certificate-id", "-state", "/tmp/state"}, map[string]bool{"--state": true})
+	wantSingleDash := []string{"-state", "/tmp/state", "certificate-id"}
+	if !reflect.DeepEqual(singleDash, wantSingleDash) {
+		t.Fatalf("single-dash args=%q want=%q", singleDash, wantSingleDash)
+	}
 }
 
 func TestCodexLoginStatusRejectsNegativeTextContainingLoggedIn(t *testing.T) {
@@ -32,7 +37,7 @@ func TestCodexLoginStatusRejectsNegativeTextContainingLoggedIn(t *testing.T) {
 }
 
 func TestDesktopHelperScannerAcceptsBoundedAccessibilityResponse(t *testing.T) {
-	payload := bytes.Repeat([]byte{'x'}, 1<<20)
+	payload := bytes.Repeat([]byte{'x'}, 8<<20)
 	scan := desktopHelperScanner(bytes.NewReader(append(payload, '\n')))
 	if !scan.Scan() || len(scan.Bytes()) != len(payload) || scan.Err() != nil {
 		t.Fatalf("large bounded helper response failed: %v", scan.Err())

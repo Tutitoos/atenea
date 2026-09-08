@@ -74,8 +74,11 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 			}
 		}
 		if eventType == "item.completed" && itemType == "mcp_tool_call" && itemID == toolID && item["status"] == "completed" {
+			if mcpResultFailed(item["result"]) {
+				continue
+			}
 			result := flattenStrings(item["result"])
-			if strings.Contains(result, resultProof) && strings.Contains(result, "activity=completed") && strings.Contains(result, runID) && strings.Contains(result, workflowID) && !strings.Contains(result, `"isError":true`) {
+			if strings.Contains(result, resultProof) && strings.Contains(result, "activity=completed") && strings.Contains(result, runID) && strings.Contains(result, workflowID) {
 				obs.ResponseSequence, obs.ActivitySequence = sequence, sequence
 				activityAt, checklistAt, progressAt := strings.Index(result, "activity=completed"), strings.Index(result, checklistLine), strings.Index(result, progressLine)
 				if activityAt >= 0 && checklistAt > activityAt && progressAt > checklistAt {
@@ -105,6 +108,23 @@ func VerifyCLIJSONL(raw []byte, nonce, runID, workflowID, invocationID, resultPr
 		return errors.New("reconnect replayed a tool call")
 	}
 	return nil
+}
+
+func mcpResultFailed(value any) bool {
+	if result, ok := value.(map[string]any); ok {
+		failed, _ := result["isError"].(bool)
+		return failed
+	}
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	var result map[string]any
+	if json.Unmarshal([]byte(text), &result) != nil {
+		return false
+	}
+	failed, _ := result["isError"].(bool)
+	return failed
 }
 
 func matchingArguments(raw any, nonce, runID, workflowID, invocationID string) bool {
@@ -167,6 +187,9 @@ func VerifyCLIReconnectJSONL(raw []byte, nonce, runID, workflowID, invocationID,
 			}
 		}
 		if eventType == "item.completed" && itemType == "mcp_tool_call" && item["id"] == toolID && item["status"] == "completed" {
+			if mcpResultFailed(item["result"]) {
+				continue
+			}
 			result := flattenStrings(item["result"])
 			if strings.Contains(result, resultProof) && strings.Contains(result, "cursor=1") && strings.Contains(result, "activity=[]") && strings.Contains(result, "notices=[]") && !strings.Contains(result, "[x]") {
 				completed++

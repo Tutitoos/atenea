@@ -45,7 +45,8 @@ jobs:
           go run ./cmd/atenea codex certify check --require-valid --certificate "$certificate" --public-key certifications/codex-certifier.pub
           certified_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$certificate")"
           git merge-base --is-ancestor "$certified_commit" "$GITHUB_SHA"
-          git diff --exit-code "$certified_commit" "$GITHUB_SHA" -- . ":(exclude)$certificate"
+          git diff --exit-code "$certified_commit" "$GITHUB_SHA" -- certifications/codex-certifier.pub
+          git diff --exit-code "$certified_commit" "$GITHUB_SHA" -- . ":(exclude)$certificate" ":(exclude)certifications/codex-certifier.pub"
 
       - name: Verify embedded dashboard
         run: |
