@@ -29,6 +29,15 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 | desktop.scroll | macos.scroll | Declaration and local contracts |
 | desktop.type | macos.type | Declaration and local contracts |
 | desktop.key | macos.key | Declaration and local contracts |
+| android.devices | adb.devices | Local contracts and Pixel 10 device-real gate |
+| android.screenshot | adb.screenshot | Local contracts and Pixel 10 device-real gate |
+| android.inspect | uiautomator.inspect | Local contracts and Pixel 10 device-real gate |
+| android.tap | adb.tap | Local command-construction contracts |
+| android.swipe | adb.swipe | Local command-construction contracts |
+| android.type | adb.type | Local command-construction contracts |
+| android.key | adb.key | Local contracts and Pixel 10 device-real gate |
+| android.mirror | scrcpy.mirror | Local contracts and Pixel 10 device-real gate |
+| android.unmirror | scrcpy.unmirror | Local contracts and Pixel 10 device-real gate |
 | symbol.source | kivgraph.source | Declaration and local contracts |
 | symbol.impact | kivgraph.symbol_impact | Declaration and local contracts |
 | graph.repositories | kivgraph.repositories | Declaration and local contracts |

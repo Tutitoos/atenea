@@ -45,7 +45,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
+	wantIDs := []string{"android.devices", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
 		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
@@ -71,13 +71,20 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectWrite, contract.EffectProcess}
 		case "desktop.apps", "desktop.inspect", "desktop.screenshot", "desktop.move":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
+		case "android.devices", "android.inspect", "android.screenshot", "android.mirror", "android.unmirror":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess}
 		// Rearranges what is there or what is visible, without sending.
 		case "desktop.drag", "desktop.scroll":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectWrite}
+		case "android.swipe":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess, contract.EffectWrite}
 		// Pessimistic on purpose: a button may delete or send, and nothing can
 		// know which before it is pressed.
 		case "desktop.click", "desktop.type", "desktop.key":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice,
+				contract.EffectWrite, contract.EffectExternal}
+		case "android.tap", "android.type", "android.key":
+			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess,
 				contract.EffectWrite, contract.EffectExternal}
 		// The only capabilities whose whole purpose is to leave this machine.
 		case "web.fetch", "web.extract", "web.crawl":
@@ -120,6 +127,12 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	}
 	slices.Sort(shipped)
 	want := []string{
+		"adb.devices",
+		"adb.key",
+		"adb.screenshot",
+		"adb.swipe",
+		"adb.tap",
+		"adb.type",
 		"claude.search",
 		"codex.search",
 		"kivgraph.context",
@@ -157,9 +170,12 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		"scrapling.fetch",
 		"scrapling.request",
 		"scrapling.stealth",
+		"scrcpy.mirror",
+		"scrcpy.unmirror",
 		"tokensave.calls",
 		"tokensave.context",
 		"tokensave.overview",
+		"uiautomator.inspect",
 	}
 	if !slices.Equal(shipped, want) {
 		t.Fatalf("implementations = %v, want %v", shipped, want)
@@ -459,6 +475,58 @@ visual_feedback = false
 	}
 	if cfg.Desktop.VisualFeedback {
 		t.Fatal("visual_feedback = false was not honored")
+	}
+}
+
+func TestAndroidBridgeDefaultsDenyEveryDevice(t *testing.T) {
+	cfg, err := config.Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Android.AllowedSerials) != 0 {
+		t.Fatalf("allowed serials = %v, want deny all", cfg.Android.AllowedSerials)
+	}
+	if cfg.Orchestrator.Android.ADBBinary != "adb" || cfg.Orchestrator.Android.ScrcpyBinary != "scrcpy" {
+		t.Fatalf("android binaries = %q %q", cfg.Orchestrator.Android.ADBBinary, cfg.Orchestrator.Android.ScrcpyBinary)
+	}
+	if cfg.Orchestrator.Android.Timeout != 15*time.Second || cfg.Orchestrator.Android.FrameTTL != 30*time.Second {
+		t.Fatalf("android durations = %v %v", cfg.Orchestrator.Android.Timeout, cfg.Orchestrator.Android.FrameTTL)
+	}
+}
+
+func TestAndroidBridgeSettingsAreReadBack(t *testing.T) {
+	body := minimal + `
+[android]
+allowed_serials = ["emulator-5554", "phone-1"]
+
+[orchestrator.android]
+adb_binary = "/opt/android/adb"
+scrcpy_binary = "/opt/android/scrcpy"
+timeout = "8s"
+frame_ttl = "12s"
+implementations = ["adb.devices"]
+`
+	cfg, err := config.Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.Android.AllowedSerials, []string{"emulator-5554", "phone-1"}) {
+		t.Fatalf("allowed serials = %v", cfg.Android.AllowedSerials)
+	}
+	got := cfg.Orchestrator.Android
+	if got.ADBBinary != "/opt/android/adb" || got.ScrcpyBinary != "/opt/android/scrcpy" ||
+		got.Timeout != 8*time.Second || got.FrameTTL != 12*time.Second ||
+		!slices.Equal(got.Implementations, []string{"adb.devices"}) {
+		t.Fatalf("android adapter = %+v", got)
+	}
+}
+
+func TestAndroidSerialAllowListRefusesWildcardsAndDuplicates(t *testing.T) {
+	for _, serials := range []string{`["*"]`, `["phone", "phone"]`, `[""]`} {
+		_, err := config.Load(write(t, minimal+"\n[android]\nallowed_serials = "+serials+"\n"))
+		if err == nil || contract.KindOf(err) != contract.FailureInvalidInput {
+			t.Errorf("allowed_serials = %s gave %v, want invalid input", serials, err)
+		}
 	}
 }
 

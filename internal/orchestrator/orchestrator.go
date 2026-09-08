@@ -185,6 +185,18 @@ const (
 	desktopKeyCapability        = "desktop.key"
 )
 
+const (
+	androidDevicesCapability    = "android.devices"
+	androidInspectCapability    = "android.inspect"
+	androidScreenshotCapability = "android.screenshot"
+	androidTapCapability        = "android.tap"
+	androidSwipeCapability      = "android.swipe"
+	androidTypeCapability       = "android.type"
+	androidKeyCapability        = "android.key"
+	androidMirrorCapability     = "android.mirror"
+	androidUnmirrorCapability   = "android.unmirror"
+)
+
 // One page off the open web. Listed here for the same reason the desktop
 // capabilities are -- a commission that cannot name it cannot use it -- and
 // gated the same way everywhere else: it causes the external effect, which no
@@ -298,6 +310,15 @@ var card = contract.Agent{
 		desktopScrollCapability,
 		desktopTypeCapability,
 		desktopKeyCapability,
+		androidDevicesCapability,
+		androidInspectCapability,
+		androidScreenshotCapability,
+		androidTapCapability,
+		androidSwipeCapability,
+		androidTypeCapability,
+		androidKeyCapability,
+		androidMirrorCapability,
+		androidUnmirrorCapability,
 		webFetchCapability,
 		webExtractCapability,
 		webCrawlCapability,

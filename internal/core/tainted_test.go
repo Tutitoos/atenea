@@ -33,8 +33,8 @@ func TestActingAfterLookingIsRefused(t *testing.T) {
 	}
 	// The remedy has to be in the message. A refusal with no way forward is a
 	// refusal somebody routes around.
-	if !strings.Contains(err.Error(), "atenea desktop click") {
-		t.Errorf("refusal = %q, want it to name the confirmed path", err)
+	if !strings.Contains(err.Error(), "look_then_act") {
+		t.Errorf("refusal = %q, want it to name the deliberate setting", err)
 	}
 }
 
@@ -50,6 +50,19 @@ func TestTheDefaultChatStillRefusesToActOnWhatItRead(t *testing.T) {
 		contract.EffectRead, contract.EffectDevice,
 		contract.EffectWrite, contract.EffectExternal)); err == nil {
 		t.Fatal("a chat with no explicit permission acted on what it had read")
+	}
+}
+
+func TestAndroidObservationTaintsLaterDeviceActions(t *testing.T) {
+	for _, observed := range []string{"android.screenshot", "android.inspect"} {
+		var chat taint
+		chat.note(observed)
+		err := chat.refuseIfTainted(capabilityWith("android.tap",
+			contract.EffectRead, contract.EffectDevice, contract.EffectProcess,
+			contract.EffectWrite, contract.EffectExternal))
+		if err == nil || contract.KindOf(err) != contract.FailurePermissionDenied {
+			t.Errorf("after %s, android.tap error = %v", observed, err)
+		}
 	}
 }
 

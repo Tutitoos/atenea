@@ -93,7 +93,9 @@ client_effects = ["process"]
 # capabilities stay out of tools/list and are refused if called by name.
 # Set this to [] only as an explicit phase-two activation.
 client_denied_capabilities = ["desktop.move", "desktop.drag", "desktop.scroll",
-                              "desktop.click", "desktop.type", "desktop.key"]
+                              "desktop.click", "desktop.type", "desktop.key",
+                              "android.tap", "android.swipe", "android.type",
+                              "android.key", "android.mirror", "android.unmirror"]
 
 # Whether the state of a run in flight is written to disk. Memory is a
 # whiteboard; disk is paper. The dump happens when a step closes and again when
@@ -103,7 +105,7 @@ checkpoints = true
 checkpoint_dir = ""
 
 # Who actually executes a step: any of "omp", "claudecode", "codex",
-# "kivgraph", "tokensave", "desktop", "scrapling" and "local" -- the same eight the loader
+# "kivgraph", "tokensave", "desktop", "android", "scrapling" and "local" -- the same nine the loader
 # accepts, in the order it lists them when it refuses a name it does not know.
 #
 # Atenea decides and delegates, so execution always happens on the far side of
@@ -331,6 +333,26 @@ runners = ["omp"]
     # lifecycle = "on_demand"
     # idle_timeout = "10m"
     # ready_timeout = "10s"
+
+  [orchestrator.android]
+  # Typed Android computer use. The adapter constructs fixed ADB/UIAutomator/
+  # scrcpy commands and never accepts a caller-supplied command or argument
+  # list. It is off unless `runners` names "android".
+  implementations = [
+    "adb.devices",
+    "adb.key",
+    "adb.screenshot",
+    "adb.swipe",
+    "adb.tap",
+    "adb.type",
+    "scrcpy.mirror",
+    "scrcpy.unmirror",
+    "uiautomator.inspect",
+  ]
+  adb_binary = "adb"
+  scrcpy_binary = "scrcpy"
+  timeout = "15s"
+  frame_ttl = "30s"
 
   [orchestrator.scrapling]
   # The open web, answered through a Scrapling MCP server over stdio. Off
@@ -647,6 +669,11 @@ look_then_act = false
 # Show the native Atenea border, cursor and live miniature while desktop use
 # is active. This affects presentation only; window-safety checks remain on.
 visual_feedback = true
+
+[android]
+# Explicit ADB serials only. Empty denies every emulator and physical device;
+# wildcard access is refused so plugging in a new phone never authorizes it.
+allowed_serials = []
 
 [web]
 # Where the web capabilities may reach.
@@ -4301,6 +4328,603 @@ scope_guarantee = "confined"   # it never looks at the repository at all
   # One IPC round trip and one synthetic event. The cost is not the reason to
   # think twice about this call.
   estimated_duration = "60ms"
+  estimated_tokens = 100
+
+# ---------------------------------------------------------------------------
+# Android computer use: scrcpy for the operator, UIAutomator for meaning and
+# ADB for deterministic device-space actions.
+# ---------------------------------------------------------------------------
+
+[[capability]]
+id = "android.devices"
+version = "1.0.0"
+summary = "List Android devices visible to ADB and whether each is allowed."
+effects = ["read", "device", "process"]
+
+  [[capability.output]]
+  name = "devices"
+  type = "record_list"
+  required = true
+  summary = "ADB devices; listing does not authorize a device."
+
+    [[capability.output.field]]
+    name = "serial"
+    type = "string"
+    required = true
+    summary = "Stable ADB serial used by the allow-list."
+
+    [[capability.output.field]]
+    name = "state"
+    type = "string"
+    required = true
+    summary = "ADB state such as device, offline or unauthorized."
+
+    [[capability.output.field]]
+    name = "kind"
+    type = "string"
+    required = true
+    summary = "emulator or physical."
+
+    [[capability.output.field]]
+    name = "allowed"
+    type = "bool"
+    required = true
+    summary = "Whether [android] allowed_serials explicitly names it."
+
+    [[capability.output.field]]
+    name = "model"
+    type = "string"
+    required = false
+    summary = "Model reported by ADB, when present."
+
+[[capability]]
+id = "android.screenshot"
+version = "1.0.0"
+summary = "Capture one explicitly allowed Android device."
+semantics = "Returns untrusted device pixels and a one-shot frame token. Actions recapture the screen and refuse the token if the pixels changed."
+effects = ["read", "device", "process"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+
+  [[capability.output]]
+  name = "png_base64"
+  type = "string"
+  required = true
+  summary = "PNG screenshot encoded as base64."
+
+  [[capability.output]]
+  name = "width"
+  type = "int"
+  required = true
+  summary = "Device-space width used by actions."
+
+  [[capability.output]]
+  name = "height"
+  type = "int"
+  required = true
+  summary = "Device-space height used by actions."
+
+  [[capability.output]]
+  name = "bytes"
+  type = "int"
+  required = true
+  summary = "PNG byte size before base64 encoding."
+
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Captured ADB serial."
+
+  [[capability.output]]
+  name = "untrusted"
+  type = "bool"
+  required = true
+  summary = "Always true: applications control these pixels."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "One-shot token required by a later action."
+
+[[capability]]
+id = "android.inspect"
+version = "1.0.0"
+summary = "Read a bounded UIAutomator hierarchy from an allowed Android device."
+effects = ["read", "device", "process"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+
+  [[capability.output]]
+  name = "nodes"
+  type = "record_list"
+  required = true
+  summary = "Flat UIAutomator nodes with depth and device provenance."
+
+    [[capability.output.field]]
+    name = "depth"
+    type = "int"
+    required = true
+    summary = "Hierarchy depth."
+
+    [[capability.output.field]]
+    name = "serial"
+    type = "string"
+    required = true
+    summary = "Device that supplied the node."
+
+    [[capability.output.field]]
+    name = "text"
+    type = "string"
+    required = false
+    summary = "Visible text."
+
+    [[capability.output.field]]
+    name = "resource_id"
+    type = "string"
+    required = false
+    summary = "Android resource id."
+
+    [[capability.output.field]]
+    name = "class"
+    type = "string"
+    required = false
+    summary = "Android view class."
+
+    [[capability.output.field]]
+    name = "package"
+    type = "string"
+    required = false
+    summary = "Owning Android package."
+
+    [[capability.output.field]]
+    name = "content_desc"
+    type = "string"
+    required = false
+    summary = "Accessibility description."
+
+    [[capability.output.field]]
+    name = "bounds"
+    type = "string"
+    required = false
+    summary = "Device-space bounds."
+
+    [[capability.output.field]]
+    name = "center_x"
+    type = "int"
+    required = false
+    summary = "Computed horizontal center."
+
+    [[capability.output.field]]
+    name = "center_y"
+    type = "int"
+    required = false
+    summary = "Computed vertical center."
+
+    [[capability.output.field]]
+    name = "clickable"
+    type = "bool"
+    required = false
+    summary = "Whether UIAutomator reports the node clickable."
+
+    [[capability.output.field]]
+    name = "enabled"
+    type = "bool"
+    required = false
+    summary = "Whether UIAutomator reports the node enabled."
+
+    [[capability.output.field]]
+    name = "focusable"
+    type = "bool"
+    required = false
+    summary = "Whether the node can take focus."
+
+    [[capability.output.field]]
+    name = "focused"
+    type = "bool"
+    required = false
+    summary = "Whether the node currently has focus."
+
+    [[capability.output.field]]
+    name = "scrollable"
+    type = "bool"
+    required = false
+    summary = "Whether the node is scrollable."
+
+    [[capability.output.field]]
+    name = "password"
+    type = "bool"
+    required = false
+    summary = "Whether Android marks the node as a password field."
+
+    [[capability.output.field]]
+    name = "selected"
+    type = "bool"
+    required = false
+    summary = "Whether the node is selected."
+
+    [[capability.output.field]]
+    name = "checked"
+    type = "bool"
+    required = false
+    summary = "Whether a checkable node is checked."
+
+    [[capability.output.field]]
+    name = "checkable"
+    type = "bool"
+    required = false
+    summary = "Whether the node has a checked state."
+
+  [[capability.output]]
+  name = "count"
+  type = "int"
+  required = true
+  summary = "Returned node count."
+
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Inspected ADB serial."
+
+  [[capability.output]]
+  name = "untrusted"
+  type = "bool"
+  required = true
+  summary = "Always true: applications control this content."
+
+  [[capability.output]]
+  name = "truncated"
+  type = "string"
+  required = false
+  summary = "Safety ceiling that stopped the walk, when any."
+
+[[capability]]
+id = "android.tap"
+version = "1.0.0"
+summary = "Tap device-space coordinates from a fresh Android screenshot."
+effects = ["read", "device", "process", "write", "external"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "One-shot token from android.screenshot."
+
+  [[capability.input]]
+  name = "x"
+  type = "int"
+  required = true
+  summary = "Horizontal coordinate in the captured device image."
+
+  [[capability.input]]
+  name = "y"
+  type = "int"
+  required = true
+  summary = "Vertical coordinate in the captured device image."
+
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Device acted on."
+
+[[capability]]
+id = "android.swipe"
+version = "1.0.0"
+summary = "Swipe between device-space points from a fresh screenshot."
+effects = ["read", "device", "process", "write"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "One-shot token from android.screenshot."
+  [[capability.input]]
+  name = "from_x"
+  type = "int"
+  required = true
+  summary = "Starting horizontal coordinate."
+  [[capability.input]]
+  name = "from_y"
+  type = "int"
+  required = true
+  summary = "Starting vertical coordinate."
+  [[capability.input]]
+  name = "to_x"
+  type = "int"
+  required = true
+  summary = "Ending horizontal coordinate."
+  [[capability.input]]
+  name = "to_y"
+  type = "int"
+  required = true
+  summary = "Ending vertical coordinate."
+  [[capability.input]]
+  name = "duration_ms"
+  type = "int"
+  required = false
+  summary = "Gesture duration from 50 to 5000 milliseconds."
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Device acted on."
+
+[[capability]]
+id = "android.type"
+version = "1.0.0"
+summary = "Type bounded safe ASCII into the focused Android control."
+effects = ["read", "device", "process", "write", "external"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "One-shot token from android.screenshot."
+  [[capability.input]]
+  name = "text"
+  type = "string"
+  required = true
+  summary = "Safe ASCII only; Unicode requires a dedicated input helper."
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Device acted on."
+
+[[capability]]
+id = "android.key"
+version = "1.0.0"
+summary = "Press one allow-listed Android key."
+effects = ["read", "device", "process", "write", "external"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "One-shot token from android.screenshot."
+  [[capability.input]]
+  name = "key"
+  type = "string"
+  required = true
+  enum = ["back", "home", "recents", "enter", "tab", "escape", "delete", "up", "down", "left", "right"]
+  summary = "Android key name."
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Device acted on."
+
+[[capability]]
+id = "android.mirror"
+version = "1.0.0"
+summary = "Start a scoped scrcpy mirror for an allowed Android device."
+effects = ["read", "device", "process"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Mirrored device."
+  [[capability.output]]
+  name = "pid"
+  type = "int"
+  required = true
+  summary = "scrcpy process started by this adapter."
+  [[capability.output]]
+  name = "already_running"
+  type = "bool"
+  required = true
+  summary = "Whether the adapter already owned a mirror."
+
+[[capability]]
+id = "android.unmirror"
+version = "1.0.0"
+summary = "Stop only the scrcpy mirror previously started by Atenea."
+effects = ["read", "device", "process"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+  [[capability.output]]
+  name = "did"
+  type = "string"
+  required = true
+  summary = "Capability that ran."
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Device whose owned mirror stopped."
+
+[[implementation]]
+id = "adb.devices"
+provider = "android"
+capability = "android.devices"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "100ms"
+  estimated_tokens = 300
+
+[[implementation]]
+id = "adb.screenshot"
+provider = "android"
+capability = "android.screenshot"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "900ms"
+  estimated_tokens = 1600
+
+[[implementation]]
+id = "uiautomator.inspect"
+provider = "android"
+capability = "android.inspect"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "2500ms"
+  estimated_tokens = 4000
+
+[[implementation]]
+id = "adb.tap"
+provider = "android"
+capability = "android.tap"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "800ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "adb.swipe"
+provider = "android"
+capability = "android.swipe"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "1000ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "adb.type"
+provider = "android"
+capability = "android.type"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "900ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "adb.key"
+provider = "android"
+capability = "android.key"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "800ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "scrcpy.mirror"
+provider = "android"
+capability = "android.mirror"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "1500ms"
+  estimated_tokens = 100
+
+[[implementation]]
+id = "scrcpy.unmirror"
+provider = "android"
+capability = "android.unmirror"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "100ms"
   estimated_tokens = 100
 
 # ---------------------------------------------------------------------------
