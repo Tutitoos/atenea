@@ -223,7 +223,7 @@
       "codex_merge_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
       "installed_version": "1.1.0",
       "installed_contract": "4.1.0",
-      "installed_binary_raw_sha256": "81215ccd004c2587fb52e68759e4fa3f3df8404c6dc84202854010b01dcea7ea",
+      "installed_binary_raw_sha256": "a57b1528b6ba4d32a2103e45ac3d9ae7cc442f80b26d5652fc0965d25602f722",
       "service_installed": true,
       "service_enabled": true,
       "service_active": true,
@@ -259,13 +259,20 @@
           "exit_code_nonzero": true,
           "reason": "exact comparison correctly rejected the earlier P30 commit and fingerprint",
           "hidden_by_retry": false
+        },
+        {
+          "state": "stale",
+          "source_commit": "a4ef77b5144b7401ce5589d629842d5670f06762",
+          "exit_code_nonzero": true,
+          "reason": "final installed build reached exact comparison and correctly rejected the earlier P30 commit and fingerprint",
+          "hidden_by_retry": false
         }
       ],
       "installer_remediation": {
         "state": "passed",
-        "behavior": "clean builds carry the exact Git revision; dirty builds remain explicitly uncertifiable; signed installs are compared through a private signature-free copy"
+        "behavior": "clean builds carry the exact Git revision; Git inspection fails closed; build staging is private; dirty builds remain explicitly uncertifiable; signed installs are compared through a private signature-free copy"
       },
-      "installed_source_commit": "e33318cf5b44b32bcea82646c6781bc62faaa86e"
+      "installed_source_commit": "a4ef77b5144b7401ce5589d629842d5670f06762"
     },
     "p29_final_report": {
       "state": "pass",

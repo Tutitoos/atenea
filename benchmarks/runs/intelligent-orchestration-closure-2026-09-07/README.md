@@ -67,11 +67,11 @@ run `34198102106` passed on the exact `main` merge SHA.
 
 The initial closure smoke rebuilt ATENEA from that `main`. The follow-up
 installer correction was then built from clean commit
-`e33318cf5b44b32bcea82646c6781bc62faaa86e`, after dashboard checks passed.
+`a4ef77b5144b7401ce5589d629842d5670f06762`, after dashboard checks passed.
 The binary and desktop helper were signed and installed, the launchd service
 restarted, and the running service reported ATENEA 1.1.0, contract 4.1.0,
 installed, enabled, and active. The installed raw binary SHA-256 is
-`81215ccd004c2587fb52e68759e4fa3f3df8404c6dc84202854010b01dcea7ea`.
+`a57b1528b6ba4d32a2103e45ac3d9ae7cc442f80b26d5652fc0965d25602f722`.
 
 The installed-environment command `atenea codex certify check --require-valid`
 now reaches exact comparison and returns `stale` with a non-zero exit because

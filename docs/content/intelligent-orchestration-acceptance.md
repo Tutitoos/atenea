@@ -91,7 +91,7 @@ PR #47 se fusionó como `e0c02577b8a64febf6b1acd4e03a04794c17e4ee` y
 PR #50 como `0de5257c211af20c126b6e4e0df3eec8399de15e`. El CI posterior
 al segundo merge pasó sobre ese SHA. La instalación local verificada ejecuta
 ATENEA 1.1.0, contrato 4.1.0, desde el commit limpio
-`e33318cf5b44b32bcea82646c6781bc62faaa86e`, con el servicio instalado,
+`a4ef77b5144b7401ce5589d629842d5670f06762`, con el servicio instalado,
 habilitado y activo.
 
 El gate del entorno instalado `atenea codex certify check --require-valid`
