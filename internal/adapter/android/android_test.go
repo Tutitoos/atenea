@@ -203,6 +203,125 @@ func TestChangedScreenRefusesAnAction(t *testing.T) {
 	}
 }
 
+func TestSemanticSelectorToleratesUnrelatedPixelChanges(t *testing.T) {
+	first, second := screenshot(t, 20), screenshot(t, 40)
+	window := []byte("mCurrentFocus=Window{abc u0 app.example/app.example.MainActivity}\n")
+	tree := []byte(`<?xml version="1.0"?><hierarchy rotation="0"><node text="Save" resource-id="app:id/save" clickable="true" enabled="true" bounds="[1,1][3,2]"/></hierarchy>`)
+	captures := 0
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[len(args)-1] == "get-state":
+			return []byte("device"), nil
+		case reflect.DeepEqual(args[len(args)-3:], []string{"exec-out", "screencap", "-p"}):
+			captures++
+			if captures == 1 {
+				return first, nil
+			}
+			return second, nil
+		case reflect.DeepEqual(args[len(args)-2:], []string{"dumpsys", "window"}):
+			return window, nil
+		case reflect.DeepEqual(args[len(args)-3:], []string{"uiautomator", "dump", "/dev/tty"}):
+			return tree, nil
+		case reflect.DeepEqual(args, []string{"-s", "phone", "shell", "input", "tap", "2", "1"}):
+			return nil, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return nil, nil
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone", "semantic": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shot.Result["window"] != "app.example/app.example.MainActivity" || shot.Result["orientation"] != "0" {
+		t.Fatalf("semantic screenshot = %#v", shot.Result)
+	}
+	_, err = runner.Run(t.Context(), request(android.CapabilityTap, android.ImplementationTap, map[string]any{
+		"serial": "phone", "frame_id": shot.Result["frame_id"], "selector": map[string]any{"resource_id": "app:id/save"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSemanticSelectorRefusesAmbiguousOrChangedWindow(t *testing.T) {
+	pngBody := screenshot(t, 20)
+	window := []byte("mCurrentFocus=Window{abc u0 app.example/app.example.MainActivity}\n")
+	tree := []byte(`<?xml version="1.0"?><hierarchy rotation="0"><node text="Save" enabled="true" bounds="[1,1][3,2]"/><node text="Save" enabled="true" bounds="[1,2][3,3]"/></hierarchy>`)
+	changedWindow := false
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[len(args)-1] == "get-state":
+			return []byte("device"), nil
+		case args[len(args)-1] == "-p":
+			return pngBody, nil
+		case reflect.DeepEqual(args[len(args)-2:], []string{"dumpsys", "window"}):
+			if changedWindow {
+				return []byte("mCurrentFocus=Window{def u0 other.example/other.example.OtherActivity}\n"), nil
+			}
+			return window, nil
+		case reflect.DeepEqual(args[len(args)-3:], []string{"uiautomator", "dump", "/dev/tty"}):
+			return tree, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return nil, nil
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone", "semantic": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), request(android.CapabilityTap, android.ImplementationTap, map[string]any{
+		"serial": "phone", "frame_id": shot.Result["frame_id"], "selector": map[string]any{"text": "Save"},
+	}))
+	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous selector error = %v", err)
+	}
+	shot, err = runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone", "semantic": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedWindow = true
+	_, err = runner.Run(t.Context(), request(android.CapabilityTap, android.ImplementationTap, map[string]any{
+		"serial": "phone", "frame_id": shot.Result["frame_id"], "selector": map[string]any{"text": "Save"},
+	}))
+	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "focused window changed") {
+		t.Fatalf("changed window error = %v", err)
+	}
+}
+
+func TestSelectorRequiresSemanticFrame(t *testing.T) {
+	pngBody := screenshot(t, 20)
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[len(args)-1] == "get-state" {
+			return []byte("device"), nil
+		}
+		return pngBody, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), request(android.CapabilityTap, android.ImplementationTap, map[string]any{
+		"serial": "phone", "frame_id": shot.Result["frame_id"], "selector": map[string]any{"text": "Save"},
+	}))
+	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "semantic=true") {
+		t.Fatalf("non-semantic selector error = %v", err)
+	}
+}
+
 func TestExpiredFrameIsRefused(t *testing.T) {
 	now := time.Unix(10, 0)
 	runner, err := android.New(android.Options{

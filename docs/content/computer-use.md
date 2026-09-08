@@ -28,6 +28,11 @@ capabilities send fixed ADB actions in native device coordinates. scrcpy is a
 fluid mirror for the person supervising the run; actions do not depend on its
 window geometry.
 
+For devices whose system UI changes pixels between captures, request a semantic
+Android screenshot and select one exact accessible control. Atenea rechecks the
+focused window, orientation and that control immediately before acting; raw
+coordinate actions remain strict pixel-validated fallbacks.
+
 Enable the `android` runner, add exact ADB serials under `[android]
 allowed_serials`, and grant `device` plus `process` to the relevant floor.
 Mutating capabilities additionally require their declared `write` or
