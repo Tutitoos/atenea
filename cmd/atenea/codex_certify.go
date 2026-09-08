@@ -751,28 +751,15 @@ func certificationBuildArgs(commit, output string) []string {
 }
 
 func verifyCertificationRebuild(self, commit string) error {
-	parent := filepath.Dir(self)
-	info, err := os.Stat(parent)
+	// The installed executable normally lives in ~/.local/bin, whose directory
+	// is intentionally traversable. Keep the untrusted rebuild private instead
+	// of rejecting that ordinary installation layout before comparison.
+	rebuildDir, err := os.MkdirTemp("", "atenea-certification-rebuild-*")
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("certification binary must be in a private directory without group or world access")
-	}
-	file, err := os.CreateTemp(parent, ".atenea-certification-rebuild-*")
-	if err != nil {
-		return err
-	}
-	candidate := file.Name()
-	defer func() { _ = os.Remove(candidate) }()
-	if err := file.Close(); err != nil {
-		return err
-	}
-	// Let go build create the output. Replacing a pre-existing file changes the
-	// linker-signed Mach-O UUID even when every source byte and flag is equal.
-	if err := os.Remove(candidate); err != nil {
-		return err
-	}
+	defer func() { _ = os.RemoveAll(rebuildDir) }()
+	candidate := filepath.Join(rebuildDir, "atenea")
 	cmd := exec.Command("go", certificationBuildArgs(commit, candidate)...)
 	cmd.Env = append(os.Environ(), "GOFLAGS=")
 	if output, err := cmd.CombinedOutput(); err != nil {

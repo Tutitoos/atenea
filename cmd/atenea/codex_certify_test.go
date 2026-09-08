@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -50,6 +51,24 @@ func TestCertificateTTLRejectsOverflowingDayCount(t *testing.T) {
 	}
 	if got, err := parseCertificateTTL("30d"); err != nil || got != 30*24*time.Hour {
 		t.Fatalf("30d=%s err=%v", got, err)
+	}
+}
+
+func TestCertificationRebuildAcceptsAnInstalledExecutableDirectory(t *testing.T) {
+	t.Chdir("../..")
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const revision = "9b34dd0215c098a22a0ff7bd6e2be40b2aacac02"
+	binary := filepath.Join(dir, "atenea")
+	command := exec.Command("go", certificationBuildArgs(revision, binary)...)
+	command.Env = append(os.Environ(), "GOFLAGS=")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build fixture: %v: %s", err, output)
+	}
+	if err := verifyCertificationRebuild(binary, revision); err != nil {
+		t.Fatalf("verify from traversable install directory: %v", err)
 	}
 }
 
