@@ -43,10 +43,14 @@ func request(capability, implementation string, payload map[string]any) contract
 }
 
 func screenshot(t *testing.T, shade uint8) []byte {
+	return screenshotSize(t, 4, 3, shade)
+}
+
+func screenshotSize(t *testing.T, width, height int, shade uint8) []byte {
 	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
-	for y := 0; y < 3; y++ {
-		for x := 0; x < 4; x++ {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
 			img.Set(x, y, color.RGBA{R: shade, A: 255})
 		}
 	}
@@ -55,6 +59,33 @@ func screenshot(t *testing.T, shade uint8) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+func TestAdaptiveScreenshotKeepsNativeActionDimensions(t *testing.T) {
+	body := screenshotSize(t, 2000, 1000, 1)
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[len(args)-1] == "get-state" {
+			return []byte("device"), nil
+		}
+		return body, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone", "resolution": "adaptive"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Result["width"] != 2000 || out.Result["height"] != 1000 || out.Result["image_width"] != 1280 || out.Result["image_height"] != 640 || out.Result["scaled"] != true {
+		t.Fatalf("adaptive screenshot = %#v", out.Result)
+	}
+	native, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if native.Result["image_width"] != 2000 || native.Result["scaled"] != false {
+		t.Fatalf("native screenshot = %#v", native.Result)
+	}
 }
 
 func TestWildcardDeviceAccessIsRefused(t *testing.T) {
@@ -221,6 +252,27 @@ func TestUIAutomatorTreeIsFlattenedWithCentersAndProvenance(t *testing.T) {
 	nodes := out.Result["nodes"].([]map[string]any)
 	if len(nodes) != 2 || nodes[0]["center_x"] != 60 || nodes[0]["center_y"] != 50 || nodes[1]["depth"] != 1 || nodes[1]["serial"] != "emulator-5554" {
 		t.Fatalf("nodes = %#v", nodes)
+	}
+}
+
+func TestUIAutomatorInspectionCanFilterTextIDAndRegion(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><hierarchy><node text="Save" resource-id="app:id/save" content-desc="save document" bounds="[10,20][110,80]"/><node text="Cancel" resource-id="app:id/cancel" bounds="[500,600][600,680]"/></hierarchy>`
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[len(args)-1] == "get-state" {
+			return []byte("device"), nil
+		}
+		return []byte(xmlBody), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityInspect, android.ImplementationInspect, map[string]any{"serial": "phone", "text_contains": "document", "resource_id": "app:id/save", "region": "[0,0][200,200]", "visible_only": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := out.Result["nodes"].([]map[string]any)
+	if len(nodes) != 1 || nodes[0]["resource_id"] != "app:id/save" {
+		t.Fatalf("filtered nodes = %#v", nodes)
 	}
 }
 

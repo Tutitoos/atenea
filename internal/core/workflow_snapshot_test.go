@@ -29,10 +29,21 @@ func TestToolResultAttachesAndroidScreenshotAsNativeMCPImage(t *testing.T) {
 		t.Fatalf("image content = %#v", image)
 	}
 	if !reflect.DeepEqual(payload["structuredContent"], map[string]any{
-		"serial":     "emulator-5554",
-		"png_base64": "iVBORw0KGgo=",
+		"serial": "emulator-5554", "image_attached": true,
 	}) {
 		t.Fatalf("structured result changed: %#v", payload["structuredContent"])
+	}
+}
+
+func TestToolResultKeepsLegacyScreenshotBase64WhenRequested(t *testing.T) {
+	result, rpcErr := toolResult(map[string]any{"png_base64": "iVBORw0KGgo=", "legacy_base64": true})
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	payload := result.(map[string]any)
+	structured := payload["structuredContent"].(map[string]any)
+	if structured["png_base64"] != "iVBORw0KGgo=" {
+		t.Fatalf("legacy structured content = %#v", structured)
 	}
 }
 
