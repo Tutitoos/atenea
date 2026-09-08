@@ -318,9 +318,10 @@ permission survives a rebuild. See `helper/README.md` for the measurements.
 `scrcpy_binary` select the two executables without accepting command fragments
 or arbitrary arguments; bare names are resolved through `PATH`. `timeout`
 bounds each ADB/UIAutomator call. `frame_ttl` bounds the one-shot token returned
-by `android.screenshot`; every action also recaptures the device and refuses
-the token when the pixels changed. Naming `android` in `runners` enables the
-provider, but authorizes no device by itself.
+by `android.screenshot`; coordinate actions recapture the device and refuse
+the token when the pixels changed, while explicit semantic selector actions
+validate the window, orientation and current UI target instead. Naming
+`android` in `runners` enables the provider, but authorizes no device by itself.
 
 `device` is the one effect that argues the other way, and it is on neither
 floor as shipped. It marks a capability that reaches the pointer, the keyboard
@@ -752,9 +753,19 @@ all refuse it until the serial is written explicitly.
 `android.screenshot` returns coordinates in the Android device's own pixel
 space. Its `frame_id` is short-lived and one-shot. Before `android.tap`,
 `android.swipe`, `android.type` or `android.key`, the adapter takes another
-capture and refuses the action if the screen changed. This is intentionally
-strict: an animation can require a fresh screenshot, but an old coordinate can
-otherwise press a different control without warning.
+capture and refuses a changed screen for coordinate-only actions. This is
+intentionally strict: an animation can require a fresh screenshot, but an old
+coordinate can otherwise press a different control without warning.
+
+For Android variants whose system bars or compositor change pixels between
+otherwise equivalent frames, request `android.screenshot` with `semantic =
+true`, then include a `selector` in the action. A selector contains one or more
+exact `resource_id`, `text`, and `content_desc` fields. Atenea checks the same
+focused window, dimensions and UIAutomator orientation, resolves the selector
+again, and refuses zero or multiple visible enabled matches. `android.tap` then
+uses that current control's bounds and must not also receive `x` or `y`. This
+does not make UI text trusted: it prevents stale coordinates, while the caller
+still treats the selected UI content as untrusted.
 
 Frame identifiers are random and tied to the current observed device
 connection generation, so identical pixels from separate captures or devices

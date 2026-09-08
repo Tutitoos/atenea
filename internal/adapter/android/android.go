@@ -106,12 +106,14 @@ type Options struct {
 }
 
 type frame struct {
-	serial     string
-	generation uint64
-	digest     [sha256.Size]byte
-	width      int
-	height     int
-	expires    time.Time
+	serial      string
+	generation  uint64
+	digest      [sha256.Size]byte
+	width       int
+	height      int
+	window      string
+	orientation string
+	expires     time.Time
 }
 
 // Runner implements the typed ADB, UIAutomator and scrcpy capability surface.
@@ -327,19 +329,37 @@ func (r *Runner) screenshot(ctx context.Context, payload map[string]any) (map[st
 	if err != nil {
 		return nil, err
 	}
+	known := frame{serial: serial, generation: r.generation(serial), digest: digest, width: width, height: height, expires: r.now().Add(r.frameTTL)}
+	if boolean(payload["semantic"]) {
+		window, err := r.focusedWindow(ctx, serial)
+		if err != nil {
+			return nil, err
+		}
+		tree, err := r.dumpHierarchy(ctx, serial)
+		if err != nil {
+			return nil, err
+		}
+		known.window, known.orientation = window, tree.orientation()
+	}
 	id := "android-" + uuid.NewString()
 	r.mu.Lock()
 	r.pruneFramesLocked()
-	r.frames[id] = frame{serial: serial, generation: r.generations[serial], digest: digest, width: width, height: height, expires: r.now().Add(r.frameTTL)}
+	r.frames[id] = known
 	r.mu.Unlock()
-	return map[string]any{
+	result := map[string]any{
 		"png_base64": base64.StdEncoding.EncodeToString(presented),
 		"width":      width, "height": height, "bytes": len(presented),
 		"source_bytes": len(body), "image_width": imageWidth, "image_height": imageHeight,
 		"scaled":        imageWidth != width || imageHeight != height,
 		"legacy_base64": boolean(payload["legacy_base64"]),
 		"serial":        serial, "untrusted": true, "frame_id": id,
-	}, nil
+	}
+	if known.window != "" {
+		result["semantic"] = true
+		result["window"] = known.window
+		result["orientation"] = known.orientation
+	}
+	return result, nil
 }
 
 func presentScreenshot(body []byte, width, height int, payload map[string]any) ([]byte, int, int, error) {
@@ -391,7 +411,8 @@ type xmlNode struct {
 }
 
 type hierarchy struct {
-	Nodes []xmlNode `xml:"node"`
+	Attrs []xml.Attr `xml:",any,attr"`
+	Nodes []xmlNode  `xml:"node"`
 }
 
 var boundsPattern = regexp.MustCompile(`^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$`)
@@ -401,24 +422,51 @@ func (r *Runner) inspect(ctx context.Context, payload map[string]any) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	body, err := r.run(ctx, r.adb, "-s", serial, "exec-out", "uiautomator", "dump", "/dev/tty")
+	tree, err := r.dumpHierarchy(ctx, serial)
 	if err != nil {
 		return nil, err
 	}
+	nodes, truncated := flattenHierarchy(tree, serial)
+	nodes = filterNodes(nodes, payload)
+	result := map[string]any{"nodes": nodes, "count": len(nodes), "serial": serial, "untrusted": true}
+	if truncated != "" {
+		result["truncated"] = truncated
+	}
+	return result, nil
+}
+
+func (r *Runner) dumpHierarchy(ctx context.Context, serial string) (hierarchy, error) {
+	body, err := r.run(ctx, r.adb, "-s", serial, "exec-out", "uiautomator", "dump", "/dev/tty")
+	if err != nil {
+		return hierarchy{}, err
+	}
 	if len(body) > 2<<20 {
-		return nil, contract.Fail(contract.FailureUnavailable,
+		return hierarchy{}, contract.Fail(contract.FailureUnavailable,
 			"android: uiautomator tree exceeds the 2 MiB safety ceiling")
 	}
 	start := bytes.Index(body, []byte("<?xml"))
 	if start < 0 {
-		return nil, contract.Fail(contract.FailureUnavailable,
+		return hierarchy{}, contract.Fail(contract.FailureUnavailable,
 			"android: uiautomator returned no XML hierarchy")
 	}
 	var tree hierarchy
 	if err := xml.Unmarshal(body[start:], &tree); err != nil {
-		return nil, contract.Fail(contract.FailureUnavailable,
+		return hierarchy{}, contract.Fail(contract.FailureUnavailable,
 			"android: uiautomator returned invalid XML: %v", err)
 	}
+	return tree, nil
+}
+
+func (tree hierarchy) orientation() string {
+	for _, attr := range tree.Attrs {
+		if attr.Name.Local == "rotation" {
+			return attr.Value
+		}
+	}
+	return "unknown"
+}
+
+func flattenHierarchy(tree hierarchy, serial string) ([]map[string]any, string) {
 	nodes := make([]map[string]any, 0, 256)
 	truncated := ""
 	var walk func([]xmlNode, int)
@@ -457,12 +505,7 @@ func (r *Runner) inspect(ctx context.Context, payload map[string]any) (map[strin
 		}
 	}
 	walk(tree.Nodes, 0)
-	nodes = filterNodes(nodes, payload)
-	result := map[string]any{"nodes": nodes, "count": len(nodes), "serial": serial, "untrusted": true}
-	if truncated != "" {
-		result["truncated"] = truncated
-	}
-	return result, nil
+	return nodes, truncated
 }
 
 func filterNodes(nodes []map[string]any, payload map[string]any) []map[string]any {
@@ -513,9 +556,29 @@ func filterNodes(nodes []map[string]any, payload map[string]any) []map[string]an
 }
 
 func (r *Runner) tap(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	serial, current, err := r.validateFrame(ctx, payload)
+	serial, current, target, err := r.validateFrame(ctx, payload)
 	if err != nil {
 		return nil, err
+	}
+	if target != nil {
+		if _, hasX := payload["x"]; hasX {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"android: selector tap must not include x or y coordinates")
+		}
+		if _, hasY := payload["y"]; hasY {
+			return nil, contract.Fail(contract.FailureInvalidInput,
+				"android: selector tap must not include x or y coordinates")
+		}
+		x, xok := integer(target["center_x"])
+		y, yok := integer(target["center_y"])
+		if !xok || !yok {
+			return nil, contract.Fail(contract.FailureUnavailable,
+				"android: selected control has no tappable bounds")
+		}
+		if _, err := r.run(ctx, r.adb, "-s", serial, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y)); err != nil {
+			return nil, err
+		}
+		return actionResult(CapabilityTap, serial), nil
 	}
 	x, xok := integer(payload["x"])
 	y, yok := integer(payload["y"])
@@ -530,7 +593,7 @@ func (r *Runner) tap(ctx context.Context, payload map[string]any) (map[string]an
 }
 
 func (r *Runner) swipe(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	serial, current, err := r.validateFrame(ctx, payload)
+	serial, current, _, err := r.validateFrame(ctx, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +634,7 @@ func (r *Runner) swipe(ctx context.Context, payload map[string]any) (map[string]
 var safeText = regexp.MustCompile(`^[A-Za-z0-9 .,_@+%:/?#=-]+$`)
 
 func (r *Runner) typeText(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	serial, _, err := r.validateFrame(ctx, payload)
+	serial, _, _, err := r.validateFrame(ctx, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +659,7 @@ var allowedKeys = map[string]string{
 }
 
 func (r *Runner) key(ctx context.Context, payload map[string]any) (map[string]any, error) {
-	serial, _, err := r.validateFrame(ctx, payload)
+	serial, _, _, err := r.validateFrame(ctx, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -686,10 +749,10 @@ func (r *Runner) serialFromPayload(payload map[string]any) (string, error) {
 	return serial, nil
 }
 
-func (r *Runner) validateFrame(ctx context.Context, payload map[string]any) (string, frame, error) {
+func (r *Runner) validateFrame(ctx context.Context, payload map[string]any) (string, frame, map[string]any, error) {
 	serial, err := r.serial(ctx, payload)
 	if err != nil {
-		return "", frame{}, err
+		return "", frame{}, nil, err
 	}
 	id, _ := payload["frame_id"].(string)
 	r.mu.Lock()
@@ -700,18 +763,180 @@ func (r *Runner) validateFrame(ctx context.Context, payload map[string]any) (str
 	}
 	r.mu.Unlock()
 	if id == "" || !ok || known.serial != serial || known.generation != r.generation(serial) {
-		return "", frame{}, contract.Fail(contract.FailureInvalidInput,
+		return "", frame{}, nil, contract.Fail(contract.FailureInvalidInput,
 			"android: a fresh frame_id from android.screenshot for %q is required", serial)
+	}
+	selector, semantic, err := selectorFromPayload(payload)
+	if err != nil {
+		return "", frame{}, nil, err
+	}
+	if semantic {
+		target, err := r.validateSemanticFrame(ctx, serial, known, selector)
+		if err != nil {
+			return "", frame{}, nil, err
+		}
+		return serial, known, target, nil
 	}
 	_, _, _, digest, err := r.capture(ctx, serial)
 	if err != nil {
-		return "", frame{}, err
+		return "", frame{}, nil, err
 	}
 	if digest != known.digest {
-		return "", frame{}, contract.Fail(contract.FailureInvalidInput,
+		return "", frame{}, nil, contract.Fail(contract.FailureInvalidInput,
 			"android: the device screen changed after that frame; capture a fresh screenshot before acting")
 	}
-	return serial, known, nil
+	return serial, known, nil, nil
+}
+
+type selector struct {
+	resourceID  string
+	text        string
+	contentDesc string
+}
+
+func selectorFromPayload(payload map[string]any) (selector, bool, error) {
+	raw, exists := payload["selector"]
+	if !exists {
+		return selector{}, false, nil
+	}
+	values, ok := raw.(map[string]any)
+	if !ok {
+		return selector{}, true, contract.Fail(contract.FailureInvalidInput,
+			"android: selector must be an object")
+	}
+	for key := range values {
+		if key != "resource_id" && key != "text" && key != "content_desc" {
+			return selector{}, true, contract.Fail(contract.FailureInvalidInput,
+				"android: selector supports resource_id, text, and content_desc only")
+		}
+	}
+	value := func(key string) (string, error) {
+		raw, ok := values[key]
+		if !ok {
+			return "", nil
+		}
+		text, ok := raw.(string)
+		text = strings.TrimSpace(text)
+		if !ok || text == "" || len(text) > 512 {
+			return "", contract.Fail(contract.FailureInvalidInput,
+				"android: selector %s must be a non-empty string of at most 512 bytes", key)
+		}
+		return text, nil
+	}
+	resourceID, err := value("resource_id")
+	if err != nil {
+		return selector{}, true, err
+	}
+	text, err := value("text")
+	if err != nil {
+		return selector{}, true, err
+	}
+	contentDesc, err := value("content_desc")
+	if err != nil {
+		return selector{}, true, err
+	}
+	if resourceID == "" && text == "" && contentDesc == "" {
+		return selector{}, true, contract.Fail(contract.FailureInvalidInput,
+			"android: selector needs resource_id, text, or content_desc")
+	}
+	return selector{resourceID: resourceID, text: text, contentDesc: contentDesc}, true, nil
+}
+
+func (r *Runner) validateSemanticFrame(ctx context.Context, serial string, known frame, selector selector) (map[string]any, error) {
+	if known.window == "" {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: selector actions require a screenshot captured with semantic=true")
+	}
+	_, width, height, _, err := r.capture(ctx, serial)
+	if err != nil {
+		return nil, err
+	}
+	if width != known.width || height != known.height {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: display dimensions changed after that frame; capture a fresh screenshot before acting")
+	}
+	window, err := r.focusedWindow(ctx, serial)
+	if err != nil {
+		return nil, err
+	}
+	if window != known.window {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: focused window changed after that frame; capture a fresh screenshot before acting")
+	}
+	tree, err := r.dumpHierarchy(ctx, serial)
+	if err != nil {
+		return nil, err
+	}
+	if tree.orientation() != known.orientation {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: orientation changed after that frame; capture a fresh screenshot before acting")
+	}
+	nodes, _ := flattenHierarchy(tree, serial)
+	matches := matchingVisibleNodes(nodes, selector, known.width, known.height)
+	if len(matches) == 0 {
+		return nil, contract.Fail(contract.FailureNotFound,
+			"android: selector no longer identifies a visible enabled control")
+	}
+	if len(matches) > 1 {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: selector is ambiguous (%d visible enabled controls match)", len(matches))
+	}
+	after, err := r.focusedWindow(ctx, serial)
+	if err != nil {
+		return nil, err
+	}
+	if after != window {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: focused window changed while resolving the selector; capture a fresh screenshot before acting")
+	}
+	return matches[0], nil
+}
+
+func matchingVisibleNodes(nodes []map[string]any, selector selector, width, height int) []map[string]any {
+	matches := make([]map[string]any, 0, 1)
+	for _, node := range nodes {
+		if node["enabled"] != true || !isVisibleNode(node, width, height) {
+			continue
+		}
+		if selector.resourceID != "" && node["resource_id"] != selector.resourceID {
+			continue
+		}
+		if selector.text != "" && node["text"] != selector.text {
+			continue
+		}
+		if selector.contentDesc != "" && node["content_desc"] != selector.contentDesc {
+			continue
+		}
+		matches = append(matches, node)
+	}
+	return matches
+}
+
+func isVisibleNode(node map[string]any, width, height int) bool {
+	raw, ok := node["bounds"].(string)
+	match := boundsPattern.FindStringSubmatch(raw)
+	if !ok || len(match) != 5 {
+		return false
+	}
+	x, xok := integer(node["center_x"])
+	y, yok := integer(node["center_y"])
+	return match[1] != match[3] && match[2] != match[4] &&
+		xok && yok && x >= 0 && y >= 0 && x < width && y < height
+}
+
+var focusedWindowPattern = regexp.MustCompile(`(?m)^\s*mCurrentFocus=Window\{[^ ]+ u\d+ ([^}]+)\}`)
+
+func (r *Runner) focusedWindow(ctx context.Context, serial string) (string, error) {
+	body, err := r.run(ctx, r.adb, "-s", serial, "shell", "dumpsys", "window")
+	if err != nil {
+		return "", err
+	}
+	match := focusedWindowPattern.FindStringSubmatch(string(body))
+	if len(match) != 2 || strings.TrimSpace(match[1]) == "" {
+		return "", contract.Fail(contract.FailureUnavailable,
+			"android: unable to determine the focused window")
+	}
+	return strings.TrimSpace(match[1]), nil
 }
 
 func (r *Runner) generation(serial string) uint64 {
