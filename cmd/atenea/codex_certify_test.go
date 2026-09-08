@@ -87,6 +87,9 @@ func TestDesktopChallengeRequiresVisibleExactNoticeAndCompleteReceipt(t *testing
 	if strings.Contains(prompt, "ATENEA · codex.certify.challenge") || !strings.Contains(prompt, "start the final answer with that same constructed Markdown line") || !strings.Contains(prompt, "Do not format the tool or invocation as inline code") {
 		t.Fatalf("Desktop prompt does not preserve the exact visible notice: %s", prompt)
 	}
+	if strings.Contains(prompt, "'/private/state' .") || !strings.Contains(prompt, "'/private/state'\nImmediately before") {
+		t.Fatalf("Desktop command is not isolated from prose punctuation: %s", prompt)
+	}
 	for _, field := range []string{"nonce=", "run", "workflow", "invocation", "result_proof", "desktop_process_receipt", "activity", "Progreso"} {
 		if !strings.Contains(prompt, field) {
 			t.Fatalf("Desktop prompt omitted %q", field)
