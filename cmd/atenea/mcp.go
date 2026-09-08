@@ -16,6 +16,8 @@ import (
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
+const maxMCPResponseLine = 16 << 20
+
 // cmdMCP is the bridge between an MCP client and the running service.
 //
 // MCP clients launch their servers as subprocesses and talk newline-delimited
@@ -191,8 +193,10 @@ func injectMCPContext(line []byte, profile, workspace string) ([]byte, bool) {
 func relay(dst io.Writer, src io.Reader, direction string) error {
 	lines := bufio.NewScanner(src)
 	// One MCP message can carry a whole file's worth of matches, and the
-	// default 64KB would truncate it into a parse error at the far end.
-	lines.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	// default 64KB would truncate it into a parse error at the far end. A native
+	// Android screenshot is commonly larger than 1 MiB after base64 encoding,
+	// while this ceiling still prevents an unbounded unterminated response.
+	lines.Buffer(make([]byte, 0, 64*1024), maxMCPResponseLine)
 	for lines.Scan() {
 		if _, err := dst.Write(append(lines.Bytes(), '\n')); err != nil {
 			return fmt.Errorf("relaying %s: %w", direction, err)

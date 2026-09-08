@@ -27,6 +27,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Tutitoos/atenea/internal/adapter/android"
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
@@ -84,6 +85,8 @@ type Config struct {
 	Security  Security
 	// Desktop is the allow-list for the desktop capabilities. See the type.
 	Desktop Desktop
+	// Android is the explicit device allow-list for the Android bridge.
+	Android Android
 	// Web is where the web capabilities may reach. See the type.
 	Web Web
 	// LocalAgents caps the agent types a repository declares for itself.
@@ -418,6 +421,7 @@ type Orchestrator struct {
 	Kivgraph   KivgraphAdapter
 	Tokensave  TokensaveAdapter
 	Desktop    DesktopAdapter
+	Android    AndroidAdapter
 	Scrapling  ScraplingAdapter
 }
 
@@ -728,6 +732,17 @@ type DesktopAdapter struct {
 	Process *ManagedProcess
 }
 
+// AndroidAdapter drives explicitly allowed Android devices through fixed ADB,
+// UIAutomator and scrcpy commands. It is a direct process adapter: unlike the
+// macOS helper, none of its operations depend on TCC or a graphical ancestor.
+type AndroidAdapter struct {
+	Implementations []string
+	ADBBinary       string
+	ScrcpyBinary    string
+	Timeout         time.Duration
+	FrameTTL        time.Duration
+}
+
 // ScraplingAdapter reaches the open web through a Scrapling MCP server.
 //
 // It is off unless `runners` names it, like every adapter that can cause an
@@ -812,6 +827,12 @@ type Desktop struct {
 	// miniature. It is enabled by default so a person can see where an action
 	// is being sent; disabling it never disables the window-safety checks.
 	VisualFeedback bool
+}
+
+// Android is the device boundary for the Android computer-use bridge. Empty
+// denies every serial; wildcard access is deliberately unsupported.
+type Android struct {
+	AllowedSerials []string
 }
 
 // AllApplications is the token that widens the desktop allow-list to every
@@ -972,7 +993,7 @@ func DefaultLocalAgents() LocalAgents {
 }
 
 // RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
-// RunnerTokensave, RunnerDesktop, RunnerScrapling and RunnerLocal are the
+// RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling and RunnerLocal are the
 // values orchestrator.runners accepts.
 const (
 	// RunnerOMP is part of ATENEA's public orchestration contract.
@@ -987,6 +1008,8 @@ const (
 	RunnerTokensave = "tokensave"
 	// RunnerDesktop is part of ATENEA's public orchestration contract.
 	RunnerDesktop = "desktop"
+	// RunnerAndroid is part of ATENEA's public orchestration contract.
+	RunnerAndroid = "android"
 	// RunnerScrapling is part of ATENEA's public orchestration contract.
 	RunnerScrapling = "scrapling"
 	// RunnerLocal is part of ATENEA's public orchestration contract.
@@ -1347,6 +1370,7 @@ type file struct {
 	Backup           fileBackup            `toml:"backup"`
 	Security         fileSecurity          `toml:"security"`
 	Desktop          fileDesktop           `toml:"desktop"`
+	Android          fileAndroid           `toml:"android"`
 	Web              fileWeb               `toml:"web"`
 	LocalAgents      fileLocalAgents       `toml:"local_agents"`
 	Selector         fileSelector          `toml:"selector"`
@@ -1456,6 +1480,7 @@ type fileOrchestrator struct {
 	Kivgraph   fileKivgraphAdapter   `toml:"kivgraph"`
 	Tokensave  fileTokensaveAdapter  `toml:"tokensave"`
 	Desktop    fileDesktopAdapter    `toml:"desktop"`
+	Android    fileAndroidAdapter    `toml:"android"`
 	Scrapling  fileScraplingAdapter  `toml:"scrapling"`
 }
 
@@ -1528,6 +1553,14 @@ type fileDesktopAdapter struct {
 	Process         *fileManagedProcess `toml:"process"`
 }
 
+type fileAndroidAdapter struct {
+	Implementations *[]string `toml:"implementations"`
+	ADBBinary       string    `toml:"adb_binary"`
+	ScrcpyBinary    string    `toml:"scrcpy_binary"`
+	Timeout         string    `toml:"timeout"`
+	FrameTTL        string    `toml:"frame_ttl"`
+}
+
 // fileScraplingAdapter is the TOML shape of ScraplingAdapter. Identical to
 // its desktop neighbor, and kept as its own type rather than shared with it
 // so that the two can grow apart without one of them silently gaining a key
@@ -1578,6 +1611,10 @@ type fileDesktop struct {
 	Denied         *[]string `toml:"denied"`
 	LookThenAct    *bool     `toml:"look_then_act"`
 	VisualFeedback *bool     `toml:"visual_feedback"`
+}
+
+type fileAndroid struct {
+	AllowedSerials *[]string `toml:"allowed_serials"`
 }
 
 // fileWeb is [web] as written. Pointers, so an omitted list inherits the
@@ -2103,6 +2140,9 @@ func parse(raw []byte, source string) (Config, error) {
 	if cfg.Desktop, err = decoded.Desktop.build(source); err != nil {
 		return Config{}, err
 	}
+	if cfg.Android, err = decoded.Android.build(source); err != nil {
+		return Config{}, err
+	}
 	cfg.Web = decoded.Web.build()
 	for _, rule := range decoded.Selector.Rules {
 		cfg.Selector.Rules = append(cfg.Selector.Rules, selector.Rule{
@@ -2302,6 +2342,12 @@ var clientDeniedCapabilitiesDefault = []string{
 	"desktop.click",
 	"desktop.type",
 	"desktop.key",
+	"android.tap",
+	"android.swipe",
+	"android.type",
+	"android.key",
+	"android.mirror",
+	"android.unmirror",
 }
 
 // Every other direction is a file this binary is too old to read, and no edit
@@ -2356,6 +2402,13 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		Desktop: DesktopAdapter{
 			Implementations: desktop.DefaultImplementations(),
 			Timeout:         desktop.DefaultTimeout,
+		},
+		Android: AndroidAdapter{
+			Implementations: android.DefaultImplementations(),
+			ADBBinary:       android.DefaultADBBinary,
+			ScrcpyBinary:    android.DefaultScrcpyBinary,
+			Timeout:         android.DefaultTimeout,
+			FrameTTL:        android.DefaultFrameTTL,
 		},
 		Scrapling: ScraplingAdapter{
 			Implementations: scrapling.DefaultImplementations(),
@@ -2425,12 +2478,12 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		for _, name := range *o.Runners {
 			switch name {
 			case RunnerOMP, RunnerClaudeCode, RunnerCodex, RunnerKivgraph,
-				RunnerTokensave, RunnerDesktop, RunnerScrapling, RunnerLocal:
+				RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling, RunnerLocal:
 			default:
 				return Orchestrator{}, contract.Fail(contract.FailureInvalidInput,
-					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s",
+					"settings %s: orchestrator.runners has %q, which is not one of %s, %s, %s, %s, %s, %s, %s, %s, %s",
 					source, name, RunnerOMP, RunnerClaudeCode, RunnerCodex,
-					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerScrapling, RunnerLocal)
+					RunnerKivgraph, RunnerTokensave, RunnerDesktop, RunnerAndroid, RunnerScrapling, RunnerLocal)
 			}
 			// A name written twice is a mistake, not an instruction: it would
 			// build the same adapter again and then collide with itself over
@@ -2490,6 +2543,11 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 		return Orchestrator{}, err
 	}
 	out.Desktop = screen
+	androidAdapter, err := o.Android.build(source, out.Android)
+	if err != nil {
+		return Orchestrator{}, err
+	}
+	out.Android = androidAdapter
 	web, err := o.Scrapling.build(source, out.Scrapling)
 	if err != nil {
 		return Orchestrator{}, err
@@ -3008,6 +3066,35 @@ func (d fileDesktopAdapter) build(source string, out DesktopAdapter) (DesktopAda
 	return out, nil
 }
 
+func (a fileAndroidAdapter) build(source string, out AndroidAdapter) (AndroidAdapter, error) {
+	if a.Implementations != nil {
+		out.Implementations = slices.Clone(*a.Implementations)
+	}
+	if value := strings.TrimSpace(a.ADBBinary); value != "" {
+		out.ADBBinary = value
+	}
+	if value := strings.TrimSpace(a.ScrcpyBinary); value != "" {
+		out.ScrcpyBinary = value
+	}
+	if a.Timeout != "" {
+		timeout, err := time.ParseDuration(a.Timeout)
+		if err != nil || timeout <= 0 {
+			return AndroidAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.android.timeout %q must be a positive duration", source, a.Timeout)
+		}
+		out.Timeout = timeout
+	}
+	if a.FrameTTL != "" {
+		ttl, err := time.ParseDuration(a.FrameTTL)
+		if err != nil || ttl <= 0 {
+			return AndroidAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.android.frame_ttl %q must be a positive duration", source, a.FrameTTL)
+		}
+		out.FrameTTL = ttl
+	}
+	return out, nil
+}
+
 func (s fileScraplingAdapter) build(source string, out ScraplingAdapter) (ScraplingAdapter, error) {
 	if s.Implementations != nil {
 		out.Implementations = *s.Implementations
@@ -3229,6 +3316,28 @@ func (d fileDesktop) build(source string) (Desktop, error) {
 			"settings %s: desktop.applications lists %q beside named applications; %q already means every "+
 				"application desktop.denied does not name, so remove one or the other",
 			source, AllApplications, AllApplications)
+	}
+	return out, nil
+}
+
+func (a fileAndroid) build(source string) (Android, error) {
+	out := Android{}
+	if a.AllowedSerials == nil {
+		return out, nil
+	}
+	seen := make(map[string]bool, len(*a.AllowedSerials))
+	for _, raw := range *a.AllowedSerials {
+		serial := strings.TrimSpace(raw)
+		if serial == "" || serial == "*" {
+			return Android{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: android.allowed_serials must contain explicit non-empty serials", source)
+		}
+		if seen[serial] {
+			return Android{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: android.allowed_serials lists %q twice", source, serial)
+		}
+		seen[serial] = true
+		out.AllowedSerials = append(out.AllowedSerials, serial)
 	}
 	return out, nil
 }

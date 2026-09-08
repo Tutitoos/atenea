@@ -2,7 +2,6 @@ package core
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
@@ -77,7 +76,8 @@ type taint struct {
 // `device` alone does not distinguish reading from acting and the two need
 // opposite treatment here.
 func observing(capability string) bool {
-	return capability == "desktop.inspect" || capability == "desktop.screenshot"
+	return capability == "desktop.inspect" || capability == "desktop.screenshot" ||
+		capability == "android.inspect" || capability == "android.screenshot"
 }
 
 // acting reports whether a capability changes something through the machine's
@@ -102,9 +102,10 @@ func (t *taint) refuseIfTainted(capability contract.Capability) error {
 	return contract.Fail(contract.FailurePermissionDenied,
 		"%s changes something through this machine's own input, and this chat has already been "+
 			"handed what is on the screen. What a window displays is written by whoever controls "+
-			"it, so acting on it from here would let that text move the pointer. Use "+
-			"`atenea desktop %s`, which shows what will happen and waits for a person to agree",
-		capability.ID, strings.TrimPrefix(capability.ID, "desktop."))
+			"it, so acting on it from here would let that text drive a device. Start a fresh "+
+			"chat for the action, or deliberately enable [desktop] look_then_act after reviewing "+
+			"the prompt-injection tradeoff",
+		capability.ID)
 }
 
 // note records that screen content has been handed over.

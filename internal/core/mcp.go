@@ -1485,13 +1485,20 @@ func toolResult(result map[string]any) (any, *rpcError) {
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: "serializing the answer: " + err.Error()}
 	}
-	content := make([]any, 0, 2)
+	content := make([]any, 0, 3)
 	if plan, ok := result["plan"].(map[string]any); ok {
 		if markdown, ok := plan["markdown"].(string); ok && strings.TrimSpace(markdown) != "" {
 			content = append(content, map[string]any{"type": "text", "text": markdown})
 		}
 	}
 	content = append(content, map[string]any{"type": "text", "text": string(body)})
+	if image, ok := result["png_base64"].(string); ok && image != "" {
+		content = append(content, map[string]any{
+			"type":     "image",
+			"data":     image,
+			"mimeType": "image/png",
+		})
+	}
 	return map[string]any{
 		"content":           content,
 		"structuredContent": result,

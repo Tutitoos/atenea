@@ -2,6 +2,7 @@ package core
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,31 @@ import (
 	"github.com/Tutitoos/atenea/internal/workflow"
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
+
+func TestToolResultAttachesAndroidScreenshotAsNativeMCPImage(t *testing.T) {
+	result, rpcErr := toolResult(map[string]any{
+		"serial":     "emulator-5554",
+		"png_base64": "iVBORw0KGgo=",
+	})
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	payload := result.(map[string]any)
+	content := payload["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content blocks = %d, want JSON plus native image", len(content))
+	}
+	image := content[1].(map[string]any)
+	if image["type"] != "image" || image["mimeType"] != "image/png" || image["data"] != "iVBORw0KGgo=" {
+		t.Fatalf("image content = %#v", image)
+	}
+	if !reflect.DeepEqual(payload["structuredContent"], map[string]any{
+		"serial":     "emulator-5554",
+		"png_base64": "iVBORw0KGgo=",
+	}) {
+		t.Fatalf("structured result changed: %#v", payload["structuredContent"])
+	}
+}
 
 func TestWorkflowSnapshotUsesStableStringsAndUnlaunchedState(t *testing.T) {
 	asked := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

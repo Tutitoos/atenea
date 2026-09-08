@@ -112,6 +112,17 @@ func TestTheBridgeCarriesAConversationBothWays(t *testing.T) {
 	}
 }
 
+func TestMCPResponseRelayCarriesNativeScreenshotSizedLines(t *testing.T) {
+	line := strings.Repeat("x", (2<<20)+137)
+	var forwarded bytes.Buffer
+	if err := relay(&forwarded, strings.NewReader(line+"\n"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded.String() != line+"\n" {
+		t.Fatalf("relayed %d bytes, want %d", forwarded.Len(), len(line)+1)
+	}
+}
+
 // The setup failure that will actually happen: a client configured to launch
 // this bridge before the service is installed or started. An MCP client shows
 // one line and hides the rest, so that line has to name the fix.

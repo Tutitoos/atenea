@@ -314,6 +314,14 @@ attribute, so Gatekeeper never enters and no certificate is needed by anybody:
 A certificate would buy one thing and it is not the right to run: that the
 permission survives a rebuild. See `helper/README.md` for the measurements.
 
+`[orchestrator.android]` is the direct Android provider. `adb_binary` and
+`scrcpy_binary` select the two executables without accepting command fragments
+or arbitrary arguments; bare names are resolved through `PATH`. `timeout`
+bounds each ADB/UIAutomator call. `frame_ttl` bounds the one-shot token returned
+by `android.screenshot`; every action also recaptures the device and refuses
+the token when the pixels changed. Naming `android` in `runners` enables the
+provider, but authorizes no device by itself.
+
 `device` is the one effect that argues the other way, and it is on neither
 floor as shipped. It marks a capability that reaches the pointer, the keyboard
 or the screen, and the permission behind it is not Atenea's to spend: measured
@@ -721,6 +729,42 @@ Neither list is a permission on its own. The capabilities behind them cause the
 `device` effect, which no floor grants by default, and the adapter refuses them
 outright unless Atenea is the process macOS attributes the permission to — see
 the effect's own section above.
+
+## The Android device allow-list
+
+```toml
+[android]
+allowed_serials = ["emulator-5554"]
+
+[orchestrator.android]
+adb_binary = "adb"
+scrcpy_binary = "scrcpy"
+timeout = "15s"
+frame_ttl = "30s"
+```
+
+`allowed_serials` contains exact values from `adb devices -l`. Empty denies
+every emulator and physical device, and `"*"` is refused: connecting a new
+phone must never authorize it implicitly. `android.devices` may list a device
+and report `allowed = false`, but screenshot, inspection, input and mirroring
+all refuse it until the serial is written explicitly.
+
+`android.screenshot` returns coordinates in the Android device's own pixel
+space. Its `frame_id` is short-lived and one-shot. Before `android.tap`,
+`android.swipe`, `android.type` or `android.key`, the adapter takes another
+capture and refuses the action if the screen changed. This is intentionally
+strict: an animation can require a fresh screenshot, but an old coordinate can
+otherwise press a different control without warning.
+
+`android.inspect` reads a bounded UIAutomator hierarchy and marks it untrusted,
+because an application controls its text. `android.mirror` starts scrcpy with
+fixed arguments for the selected serial; `android.unmirror` can stop only the
+process that the same adapter started. scrcpy is the live operator view. ADB is
+the action path, so window size, scaling and occlusion do not move a tap.
+
+Typing is deliberately limited to bounded safe ASCII. Unicode, arbitrary shell
+text and credentials need a separately reviewed input helper rather than being
+smuggled through `adb shell input text`.
 
 ## Reaching the desktop from a client
 

@@ -9,6 +9,31 @@ Atenea exposes macOS Computer Use as typed `desktop.*` capabilities. Clients
 connect to the `atenea mcp` bridge; they do not connect directly to the helper
 or to a second Computer Use MCP server.
 
+## Android bridge
+
+Atenea can expose Android as a separate typed computer-use surface:
+
+```text
+                        scrcpy: live operator view
+                       /
+Computer Use + Atenea -- UIAutomator: semantic nodes and bounds
+                       \
+                        ADB: screenshots, taps, swipes, text and keys
+```
+
+This does not make the Android Emulator QEMU process a macOS application.
+Instead, `android.screenshot` supplies device pixels, `android.inspect`
+supplies the bounded UIAutomator hierarchy, and the mutating `android.*`
+capabilities send fixed ADB actions in native device coordinates. scrcpy is a
+fluid mirror for the person supervising the run; actions do not depend on its
+window geometry.
+
+Enable the `android` runner, add exact ADB serials under `[android]
+allowed_serials`, and grant `device` plus `process` to the relevant floor.
+Mutating capabilities additionally require their declared `write` or
+`external` effects and remain on the client capability deny-list by default.
+See [Settings]({{< relref "settings" >}}) for the complete boundary.
+
 ## First-phase posture
 
 The first phase is observation only for connected clients:

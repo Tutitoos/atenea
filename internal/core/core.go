@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/adapter/android"
 	"github.com/Tutitoos/atenea/internal/adapter/claudecode"
 	"github.com/Tutitoos/atenea/internal/adapter/codex"
 	"github.com/Tutitoos/atenea/internal/adapter/desktop"
@@ -717,6 +718,15 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 		return buildTokensaveRunner(cfg, procs)
 	case config.RunnerDesktop:
 		return buildDesktopRunner(cfg, procs)
+	case config.RunnerAndroid:
+		return android.New(android.Options{
+			Implementations: cfg.Orchestrator.Android.Implementations,
+			AllowedSerials:  cfg.Android.AllowedSerials,
+			ADBBinary:       cfg.Orchestrator.Android.ADBBinary,
+			ScrcpyBinary:    cfg.Orchestrator.Android.ScrcpyBinary,
+			Timeout:         cfg.Orchestrator.Android.Timeout,
+			FrameTTL:        cfg.Orchestrator.Android.FrameTTL,
+		})
 	case config.RunnerScrapling:
 		return buildScraplingRunner(cfg, procs)
 	case config.RunnerLocal:
