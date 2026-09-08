@@ -39,6 +39,10 @@ The command stores JSON samples and a Markdown summary. A semantic sample is
 successful only when the fixture is the current focused window, the exact
 accessibility description is still visible and enabled, and Atenea sent the
 action. `action_sent` is deliberately distinct from a verified task result.
+With `--semantic-helper`, Atenea writes the reports first and then returns a
+non-zero status when the semantic selector operation has failed. Use
+`--require-success` to apply that same gate to every operation in a
+non-semantic run.
 
 On MIUI, an open notification shade can cover the fixture even though Android
 reports that the activity was started. The benchmark makes one bounded attempt

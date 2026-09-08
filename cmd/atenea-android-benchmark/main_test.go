@@ -36,3 +36,22 @@ func TestHelperFixtureFocusedRequiresCurrentFocus(t *testing.T) {
 		t.Fatal("focused app was treated as current focus")
 	}
 }
+
+func TestHasFailedOperation(t *testing.T) {
+	if hasFailedOperation(report{Operations: []operation{{Name: "semantic", Succeeded: 1}}}) {
+		t.Fatal("successful report was marked failed")
+	}
+	if !hasFailedOperation(report{Operations: []operation{{Name: "semantic", Failed: 1}}}) {
+		t.Fatal("failed operation was not detected")
+	}
+}
+
+func TestHasFailedNamedOperation(t *testing.T) {
+	report := report{Operations: []operation{{Name: "key_home_sent", Failed: 1}, {Name: "semantic_selector_key_home", Succeeded: 1}}}
+	if hasFailedNamedOperation(report, "semantic_selector_key_home") {
+		t.Fatal("unrelated failed operation was treated as a semantic failure")
+	}
+	if !hasFailedNamedOperation(report, "key_home_sent") {
+		t.Fatal("named failed operation was not detected")
+	}
+}
