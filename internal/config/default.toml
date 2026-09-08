@@ -4390,11 +4390,24 @@ effects = ["read", "device", "process"]
   required = true
   summary = "Explicitly allowed ADB serial."
 
+  [[capability.input]]
+  name = "resolution"
+  type = "string"
+  required = false
+  enum = ["adaptive", "native"]
+  summary = "native is the default; adaptive limits the delivered image side to 1280 pixels while device action coordinates remain native."
+
+  [[capability.input]]
+  name = "legacy_base64"
+  type = "bool"
+  required = false
+  summary = "Keep png_base64 in MCP structured and text content for a legacy consumer."
+
   [[capability.output]]
   name = "png_base64"
   type = "string"
   required = true
-  summary = "PNG screenshot encoded as base64."
+  summary = "PNG screenshot encoded as base64; MCP delivers it as a native image by default."
 
   [[capability.output]]
   name = "width"
@@ -4413,6 +4426,36 @@ effects = ["read", "device", "process"]
   type = "int"
   required = true
   summary = "PNG byte size before base64 encoding."
+
+  [[capability.output]]
+  name = "source_bytes"
+  type = "int"
+  required = true
+  summary = "Native-resolution PNG byte size before adaptive scaling."
+
+  [[capability.output]]
+  name = "image_width"
+  type = "int"
+  required = true
+  summary = "Delivered image width; device coordinates use width instead."
+
+  [[capability.output]]
+  name = "image_height"
+  type = "int"
+  required = true
+  summary = "Delivered image height; device coordinates use height instead."
+
+  [[capability.output]]
+  name = "scaled"
+  type = "bool"
+  required = true
+  summary = "Whether the delivered image was adaptively scaled."
+
+  [[capability.output]]
+  name = "legacy_base64"
+  type = "bool"
+  required = true
+  summary = "Whether MCP must retain png_base64 in structured and text content."
 
   [[capability.output]]
   name = "serial"
@@ -4443,6 +4486,30 @@ effects = ["read", "device", "process"]
   type = "string"
   required = true
   summary = "Explicitly allowed ADB serial."
+
+  [[capability.input]]
+  name = "text_contains"
+  type = "string"
+  required = false
+  summary = "Case-insensitive filter over node text and accessibility description."
+
+  [[capability.input]]
+  name = "resource_id"
+  type = "string"
+  required = false
+  summary = "Exact Android resource ID filter."
+
+  [[capability.input]]
+  name = "region"
+  type = "string"
+  required = false
+  summary = "Device-space filter in [left,top][right,bottom] form."
+
+  [[capability.input]]
+  name = "visible_only"
+  type = "bool"
+  required = false
+  summary = "Keep only nodes with non-empty bounds."
 
   [[capability.output]]
   name = "nodes"

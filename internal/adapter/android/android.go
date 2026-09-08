@@ -12,6 +12,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"os/exec"
 	"regexp"
@@ -34,6 +35,7 @@ const (
 	DefaultTimeout      = 15 * time.Second
 	DefaultFrameTTL     = 30 * time.Second
 	maxScreenshotBytes  = 12 << 20
+	defaultImageMaxSide = 1280
 
 	CapabilityDevices    = "android.devices"
 	CapabilityScreenshot = "android.screenshot"
@@ -321,16 +323,48 @@ func (r *Runner) screenshot(ctx context.Context, payload map[string]any) (map[st
 	if err != nil {
 		return nil, err
 	}
+	presented, imageWidth, imageHeight, err := presentScreenshot(body, width, height, payload)
+	if err != nil {
+		return nil, err
+	}
 	id := "android-" + uuid.NewString()
 	r.mu.Lock()
 	r.pruneFramesLocked()
 	r.frames[id] = frame{serial: serial, generation: r.generations[serial], digest: digest, width: width, height: height, expires: r.now().Add(r.frameTTL)}
 	r.mu.Unlock()
 	return map[string]any{
-		"png_base64": base64.StdEncoding.EncodeToString(body),
-		"width":      width, "height": height, "bytes": len(body),
-		"serial": serial, "untrusted": true, "frame_id": id,
+		"png_base64": base64.StdEncoding.EncodeToString(presented),
+		"width":      width, "height": height, "bytes": len(presented),
+		"source_bytes": len(body), "image_width": imageWidth, "image_height": imageHeight,
+		"scaled":        imageWidth != width || imageHeight != height,
+		"legacy_base64": boolean(payload["legacy_base64"]),
+		"serial":        serial, "untrusted": true, "frame_id": id,
 	}, nil
+}
+
+func presentScreenshot(body []byte, width, height int, payload map[string]any) ([]byte, int, int, error) {
+	if payload["resolution"] != "adaptive" || max(width, height) <= defaultImageMaxSide {
+		return body, width, height, nil
+	}
+	source, err := png.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, 0, contract.Fail(contract.FailureUnavailable, "android: decode screenshot for scaling: %v", err)
+	}
+	ratio := float64(defaultImageMaxSide) / float64(max(width, height))
+	targetWidth, targetHeight := max(1, int(float64(width)*ratio)), max(1, int(float64(height)*ratio))
+	target := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	for y := 0; y < targetHeight; y++ {
+		sy := min(height-1, int(float64(y)/ratio))
+		for x := 0; x < targetWidth; x++ {
+			sx := min(width-1, int(float64(x)/ratio))
+			target.Set(x, y, source.At(sx, sy))
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, target); err != nil {
+		return nil, 0, 0, contract.Fail(contract.FailureUnavailable, "android: encode scaled screenshot: %v", err)
+	}
+	return encoded.Bytes(), targetWidth, targetHeight, nil
 }
 
 func (r *Runner) capture(ctx context.Context, serial string) ([]byte, int, int, [sha256.Size]byte, error) {
@@ -423,11 +457,59 @@ func (r *Runner) inspect(ctx context.Context, payload map[string]any) (map[strin
 		}
 	}
 	walk(tree.Nodes, 0)
+	nodes = filterNodes(nodes, payload)
 	result := map[string]any{"nodes": nodes, "count": len(nodes), "serial": serial, "untrusted": true}
 	if truncated != "" {
 		result["truncated"] = truncated
 	}
 	return result, nil
+}
+
+func filterNodes(nodes []map[string]any, payload map[string]any) []map[string]any {
+	text, _ := payload["text_contains"].(string)
+	resourceID, _ := payload["resource_id"].(string)
+	region, _ := payload["region"].(string)
+	visible := boolean(payload["visible_only"])
+	if text == "" && resourceID == "" && region == "" && !visible {
+		return nodes
+	}
+	needle := strings.ToLower(text)
+	var regionBounds [4]int
+	hasRegion := false
+	if match := boundsPattern.FindStringSubmatch(region); len(match) == 5 {
+		for i := range regionBounds {
+			regionBounds[i], _ = strconv.Atoi(match[i+1])
+		}
+		hasRegion = true
+	}
+	filtered := make([]map[string]any, 0, len(nodes))
+	for _, node := range nodes {
+		if resourceID != "" && node["resource_id"] != resourceID {
+			continue
+		}
+		if needle != "" && !strings.Contains(strings.ToLower(fmt.Sprint(node["text"])), needle) && !strings.Contains(strings.ToLower(fmt.Sprint(node["content_desc"])), needle) {
+			continue
+		}
+		raw, hasBounds := node["bounds"].(string)
+		match := boundsPattern.FindStringSubmatch(raw)
+		if (visible || hasRegion) && (!hasBounds || len(match) != 5) {
+			continue
+		}
+		if len(match) == 5 {
+			var bounds [4]int
+			for i := range bounds {
+				bounds[i], _ = strconv.Atoi(match[i+1])
+			}
+			if visible && (bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) {
+				continue
+			}
+			if hasRegion && (bounds[2] <= regionBounds[0] || bounds[0] >= regionBounds[2] || bounds[3] <= regionBounds[1] || bounds[1] >= regionBounds[3]) {
+				continue
+			}
+		}
+		filtered = append(filtered, node)
+	}
+	return filtered
 }
 
 func (r *Runner) tap(ctx context.Context, payload map[string]any) (map[string]any, error) {
@@ -752,6 +834,8 @@ func integer(value any) (int, bool) {
 	}
 	return 0, false
 }
+
+func boolean(value any) bool { out, _ := value.(bool); return out }
 
 func actionResult(capability, serial string) map[string]any {
 	return map[string]any{"did": capability, "serial": serial}
