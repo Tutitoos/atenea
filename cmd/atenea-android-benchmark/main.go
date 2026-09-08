@@ -60,6 +60,7 @@ func main() {
 	repetitions := flag.Int("repetitions", 30, "recorded repetitions per operation")
 	output := flag.String("output", "", "directory for benchmark JSON and Markdown")
 	semanticHelper := flag.Bool("semantic-helper", false, "benchmark the installed Atenea helper fixture through semantic selectors")
+	requireSuccess := flag.Bool("require-success", false, "return non-zero after writing reports if any operation has a failed sample")
 	flag.Parse()
 	if strings.TrimSpace(*serial) == "" || *warmup < 0 || *repetitions < 1 || strings.TrimSpace(*output) == "" {
 		fatal(errors.New("--serial, a non-negative --warmup, positive --repetitions and --output are required"))
@@ -125,6 +126,12 @@ func main() {
 	write(filepath.Join(*output, "android-bridge.json"), out)
 	writeMarkdown(filepath.Join(*output, "android-bridge.md"), out)
 	fmt.Printf("android benchmark serial=%s operations=%d output=%s\n", *serial, len(out.Operations), *output)
+	if *requireSuccess && hasFailedOperation(out) {
+		fatal(errors.New("one or more required benchmark operations had failed samples; inspect the written report"))
+	}
+	if *semanticHelper && hasFailedNamedOperation(out, "semantic_selector_key_home") {
+		fatal(errors.New("the semantic helper benchmark had failed samples; inspect the written report"))
+	}
 }
 
 func measureScreenshot(ctx context.Context, runner *android.Runner, serial string) (int, string, error) {
@@ -270,6 +277,24 @@ func summarize(op *operation) {
 	if len(sizes) > 0 {
 		op.MedianB = sizes[(len(sizes)-1)/2]
 	}
+}
+
+func hasFailedOperation(value report) bool {
+	for _, op := range value.Operations {
+		if op.Failed != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFailedNamedOperation(value report, name string) bool {
+	for _, op := range value.Operations {
+		if op.Name == name && op.Failed != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func percentile(values []float64, p float64) float64 { return values[int(float64(len(values)-1)*p)] }
