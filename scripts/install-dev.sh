@@ -15,6 +15,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="${ATENEA_BIN:-$HOME/.local/bin/atenea}"
 helper="${ATENEA_HELPER:-$HOME/.local/libexec/atenea-desktop-helper}"
+build_dir=""
+build_bin=""
 
 # Any identity works: what matters is that the requirement stops being
 # hash-pinned, not which certificate did it. An Apple Development certificate is
@@ -51,6 +53,12 @@ previous_bin=""
 previous_helper=""
 rollback() {
 	local status=$?
+	if [ -n "$build_bin" ]; then
+		rm -f -- "$build_bin" || true
+	fi
+	if [ -n "$build_dir" ]; then
+		rmdir -- "$build_dir" || true
+	fi
 	if [ "$status" -eq 0 ]; then
 		return
 	fi
@@ -71,6 +79,9 @@ trap rollback EXIT
 echo "building"
 cd "$root"
 bash "$root/scripts/dashboard-build.sh"
+build_dir="$(mktemp -d "${TMPDIR:-/tmp}/atenea-install.XXXXXX")"
+chmod 0700 "$build_dir"
+build_bin="$build_dir/atenea"
 revision="$(git rev-parse --verify HEAD)"
 case "$revision" in
 	""|*[!0-9a-f]*)
@@ -88,13 +99,14 @@ fi
 # the Codex certification builder. Dirty development installs remain possible,
 # but deliberately receive no clean fallback stamp and cannot satisfy a
 # certification gate by pretending to represent HEAD exactly.
-if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
+source_status="$(git status --porcelain --untracked-files=normal)"
+if [ -z "$source_status" ]; then
 	go build -trimpath -buildvcs=false \
 		"-ldflags=-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$revision" \
-		-o /tmp/atenea-install ./cmd/atenea
+		-o "$build_bin" ./cmd/atenea
 else
 	echo "  warning: dirty source; the installed binary will not carry a certifiable HEAD stamp" >&2
-	go build -trimpath -o /tmp/atenea-install ./cmd/atenea
+	go build -trimpath -o "$build_bin" ./cmd/atenea
 fi
 if [ "$(uname -s)" = "Darwin" ]; then
 	swift build -c release --package-path helper >/dev/null
@@ -113,7 +125,7 @@ previous_bin="$(backup_file "$bin")"
 if [ "$(uname -s)" = "Darwin" ]; then
 	previous_helper="$(backup_file "$helper")"
 fi
-cp /tmp/atenea-install "$bin"
+cp "$build_bin" "$bin"
 sign "$bin" com.tutitoos.atenea
 if [ "$(uname -s)" = "Darwin" ]; then
 	cp "$root/helper/.build/release/atenea-desktop-helper" "$helper"

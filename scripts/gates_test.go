@@ -224,7 +224,10 @@ func TestTheDevInstallerStampsOnlyCleanBuildsWithAnObservableRevision(t *testing
 	script := string(body)
 	for _, required := range []string{
 		`git rev-parse --verify HEAD`,
-		`git status --porcelain --untracked-files=normal`,
+		`source_status="$(git status --porcelain --untracked-files=normal)"`,
+		`if [ -z "$source_status" ]; then`,
+		`mktemp -d "${TMPDIR:-/tmp}/atenea-install.XXXXXX"`,
+		`chmod 0700 "$build_dir"`,
 		`-buildvcs=false`,
 		`github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$revision`,
 	} {
@@ -232,8 +235,10 @@ func TestTheDevInstallerStampsOnlyCleanBuildsWithAnObservableRevision(t *testing
 			t.Errorf("install-dev.sh does not preserve %q", required)
 		}
 	}
-	if !strings.Contains(script, `if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then`) {
-		t.Error("the certification revision is not guarded by a clean-tree check")
+	for _, unsafe := range []string{`-o /tmp/atenea-install`, `cp /tmp/atenea-install`} {
+		if strings.Contains(script, unsafe) {
+			t.Errorf("install-dev.sh still uses predictable temporary output %q", unsafe)
+		}
 	}
 }
 
