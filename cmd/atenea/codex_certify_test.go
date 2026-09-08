@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,12 @@ func TestCertificationRebuildAcceptsAnInstalledExecutableDirectory(t *testing.T)
 	command.Env = append(os.Environ(), "GOFLAGS=")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture: %v: %s", err, output)
+	}
+	if runtime.GOOS == "darwin" {
+		sign := exec.Command("/usr/bin/codesign", "--force", "--options", "runtime", "--sign", "-", binary)
+		if output, err := sign.CombinedOutput(); err != nil {
+			t.Fatalf("sign fixture: %v: %s", err, output)
+		}
 	}
 	if err := verifyCertificationRebuild(binary, revision); err != nil {
 		t.Fatalf("verify from traversable install directory: %v", err)

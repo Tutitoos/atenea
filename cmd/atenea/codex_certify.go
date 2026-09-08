@@ -765,11 +765,11 @@ func verifyCertificationRebuild(self, commit string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rebuild certified ATENEA checkout: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	rebuilt, err := codexcert.ReproducibleFileSHA256(candidate)
+	rebuilt, err := unsignedCertificationSHA256(candidate, rebuildDir, "rebuilt")
 	if err != nil {
 		return err
 	}
-	original, err := codexcert.ReproducibleFileSHA256(self)
+	original, err := unsignedCertificationSHA256(self, rebuildDir, "installed")
 	if err != nil {
 		return err
 	}
@@ -777,6 +777,38 @@ func verifyCertificationRebuild(self, commit string) error {
 		return fmt.Errorf("ATENEA binary does not match a reproducible build of commit %s", commit)
 	}
 	return nil
+}
+
+func unsignedCertificationSHA256(source, scratch, name string) (string, error) {
+	copyPath := filepath.Join(scratch, name)
+	input, err := os.Open(source)
+	if err != nil {
+		return "", err
+	}
+	output, err := os.OpenFile(copyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		_ = input.Close()
+		return "", err
+	}
+	_, copyErr := io.Copy(output, input)
+	closeOutputErr := output.Close()
+	closeInputErr := input.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeOutputErr != nil {
+		return "", closeOutputErr
+	}
+	if closeInputErr != nil {
+		return "", closeInputErr
+	}
+	if runtime.GOOS == "darwin" {
+		command := exec.Command("/usr/bin/codesign", "--remove-signature", copyPath)
+		if commandOutput, commandErr := command.CombinedOutput(); commandErr != nil {
+			return "", fmt.Errorf("remove Mach-O signature for reproducible comparison: %w: %s", commandErr, strings.TrimSpace(string(commandOutput)))
+		}
+	}
+	return codexcert.ReproducibleFileSHA256(copyPath)
 }
 
 func verifyCertificationCheckout(commit string) error {

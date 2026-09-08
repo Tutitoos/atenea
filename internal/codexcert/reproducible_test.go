@@ -70,6 +70,34 @@ func TestReproducibleMachOHashIgnoresDerivedIdentityOnly(t *testing.T) {
 	}
 }
 
+func TestReproducibleMachOHashIgnoresCodesignLinkEditGrowthOnly(t *testing.T) {
+	one := machOSegmentFixture(4096, 512, 3)
+	two := machOSegmentFixture(8192, 512, 3)
+	content := machOSegmentFixture(4096, 512, 4)
+	fileSize := machOSegmentFixture(4096, 1024, 3)
+	if err := canonicalizeMachO(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := canonicalizeMachO(two); err != nil {
+		t.Fatal(err)
+	}
+	if err := canonicalizeMachO(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := canonicalizeMachO(fileSize); err != nil {
+		t.Fatal(err)
+	}
+	if string(one) != string(two) {
+		t.Fatal("derived __LINKEDIT virtual size changed canonical bytes")
+	}
+	if string(one) == string(content) {
+		t.Fatal("executable content change disappeared from canonical bytes")
+	}
+	if string(one) == string(fileSize) {
+		t.Fatal("__LINKEDIT file size change disappeared from canonical bytes")
+	}
+}
+
 func machOFixture(uuid, signature, content byte) []byte {
 	data := make([]byte, 196)
 	binary.LittleEndian.PutUint32(data[0:4], machO64Little)
@@ -105,6 +133,24 @@ func machOFixture(uuid, signature, content byte) []byte {
 	copy(data[160:164], "app\x00")
 	for i := 164; i < 196; i++ {
 		data[i] = signature
+	}
+	return data
+}
+
+func machOSegmentFixture(virtualSize, fileSize uint64, content byte) []byte {
+	data := make([]byte, 144)
+	binary.LittleEndian.PutUint32(data[0:4], machO64Little)
+	binary.LittleEndian.PutUint32(data[16:20], 2)
+	binary.LittleEndian.PutUint32(data[20:24], 96)
+	binary.LittleEndian.PutUint32(data[32:36], lcSegment64)
+	binary.LittleEndian.PutUint32(data[36:40], 72)
+	copy(data[40:56], "__LINKEDIT")
+	binary.LittleEndian.PutUint64(data[64:72], virtualSize)
+	binary.LittleEndian.PutUint64(data[80:88], fileSize)
+	binary.LittleEndian.PutUint32(data[104:108], lcUUID)
+	binary.LittleEndian.PutUint32(data[108:112], 24)
+	for index := 128; index < len(data); index++ {
+		data[index] = content
 	}
 	return data
 }
