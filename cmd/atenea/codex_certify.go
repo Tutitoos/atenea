@@ -765,11 +765,11 @@ func verifyCertificationRebuild(self, commit string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rebuild certified ATENEA checkout: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	rebuilt, err := unsignedCertificationSHA256(candidate, rebuildDir, "rebuilt")
+	rebuilt, err := normalizedCertificationSHA256(candidate, rebuildDir, "rebuilt")
 	if err != nil {
 		return err
 	}
-	original, err := unsignedCertificationSHA256(self, rebuildDir, "installed")
+	original, err := normalizedCertificationSHA256(self, rebuildDir, "installed")
 	if err != nil {
 		return err
 	}
@@ -779,7 +779,7 @@ func verifyCertificationRebuild(self, commit string) error {
 	return nil
 }
 
-func unsignedCertificationSHA256(source, scratch, name string) (string, error) {
+func normalizedCertificationSHA256(source, scratch, name string) (string, error) {
 	copyPath := filepath.Join(scratch, name)
 	input, err := os.Open(source)
 	if err != nil {
@@ -803,9 +803,18 @@ func unsignedCertificationSHA256(source, scratch, name string) (string, error) {
 		return "", closeInputErr
 	}
 	if runtime.GOOS == "darwin" {
-		command := exec.Command("/usr/bin/codesign", "--remove-signature", copyPath)
-		if commandOutput, commandErr := command.CombinedOutput(); commandErr != nil {
-			return "", fmt.Errorf("remove Mach-O signature for reproducible comparison: %w: %s", commandErr, strings.TrimSpace(string(commandOutput)))
+		// Removing differently sized Go and hardened-runtime signatures does not
+		// restore identical Mach-O layouts on Intel. Re-sign both private copies
+		// with one policy and signature footprint before stripping that normalized
+		// signature. ReproducibleFileSHA256 then ignores only the remaining derived
+		// UUID and link-edit growth.
+		sign := exec.Command("/usr/bin/codesign", "--force", "--sign", "-", copyPath)
+		if commandOutput, commandErr := sign.CombinedOutput(); commandErr != nil {
+			return "", fmt.Errorf("normalize Mach-O signature for reproducible comparison: %w: %s", commandErr, strings.TrimSpace(string(commandOutput)))
+		}
+		remove := exec.Command("/usr/bin/codesign", "--remove-signature", copyPath)
+		if commandOutput, commandErr := remove.CombinedOutput(); commandErr != nil {
+			return "", fmt.Errorf("remove normalized Mach-O signature for reproducible comparison: %w: %s", commandErr, strings.TrimSpace(string(commandOutput)))
 		}
 	}
 	return codexcert.ReproducibleFileSHA256(copyPath)
