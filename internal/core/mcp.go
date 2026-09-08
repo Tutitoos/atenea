@@ -1481,7 +1481,14 @@ func (v *conversation) repositoryCapabilities(repo contract.Repository) []map[st
 // renders and the same thing structured, which are one payload written twice
 // rather than two payloads that could disagree.
 func toolResult(result map[string]any) (any, *rpcError) {
-	body, err := json.Marshal(result)
+	presentation := result
+	image, hasImage := result["png_base64"].(string)
+	if hasImage && image != "" && !booleanResult(result["legacy_base64"]) {
+		presentation = maps.Clone(result)
+		delete(presentation, "png_base64")
+		presentation["image_attached"] = true
+	}
+	body, err := json.Marshal(presentation)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: "serializing the answer: " + err.Error()}
 	}
@@ -1492,7 +1499,7 @@ func toolResult(result map[string]any) (any, *rpcError) {
 		}
 	}
 	content = append(content, map[string]any{"type": "text", "text": string(body)})
-	if image, ok := result["png_base64"].(string); ok && image != "" {
+	if hasImage && image != "" {
 		content = append(content, map[string]any{
 			"type":     "image",
 			"data":     image,
@@ -1501,10 +1508,12 @@ func toolResult(result map[string]any) (any, *rpcError) {
 	}
 	return map[string]any{
 		"content":           content,
-		"structuredContent": result,
+		"structuredContent": presentation,
 		"isError":           false,
 	}, nil
 }
+
+func booleanResult(value any) bool { out, _ := value.(bool); return out }
 
 // notInitialized refuses work to a client that never said who it was.
 //

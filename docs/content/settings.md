@@ -756,11 +756,29 @@ capture and refuses the action if the screen changed. This is intentionally
 strict: an animation can require a fresh screenshot, but an old coordinate can
 otherwise press a different control without warning.
 
+Frame identifiers are random and tied to the current observed device
+connection generation, so identical pixels from separate captures or devices
+cannot share an action token. Actions for one serial are serialized; separate
+allowed devices can still operate independently.
+
+By default, MCP receives the screenshot as one native image block and keeps
+Base64 out of the JSON text and structured result. Set
+`legacy_base64 = true` in an `android.screenshot` call only for a client that
+requires the old field. `resolution = "adaptive"` delivers a PNG with its
+longest side at most 1280 pixels and reports both delivered dimensions and the
+native device dimensions; coordinate actions always use the latter. Native
+resolution remains the default because local PNG scaling may cost more than it
+saves for a local client.
+
 `android.inspect` reads a bounded UIAutomator hierarchy and marks it untrusted,
 because an application controls its text. `android.mirror` starts scrcpy with
 fixed arguments for the selected serial; `android.unmirror` can stop only the
 process that the same adapter started. scrcpy is the live operator view. ADB is
 the action path, so window size, scaling and occlusion do not move a tap.
+
+`android.inspect` may filter that hierarchy with `text_contains`, exact
+`resource_id`, a device-space `region`, or `visible_only = true`. Omitting all
+of them preserves the complete bounded tree.
 
 Typing is deliberately limited to bounded safe ASCII. Unicode, arbitrary shell
 text and credentials need a separately reviewed input helper rather than being
