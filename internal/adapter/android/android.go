@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -22,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Tutitoos/atenea/pkg/contract"
 )
 
@@ -32,6 +33,7 @@ const (
 	DefaultScrcpyBinary = "scrcpy"
 	DefaultTimeout      = 15 * time.Second
 	DefaultFrameTTL     = 30 * time.Second
+	maxScreenshotBytes  = 12 << 20
 
 	CapabilityDevices    = "android.devices"
 	CapabilityScreenshot = "android.screenshot"
@@ -102,11 +104,12 @@ type Options struct {
 }
 
 type frame struct {
-	serial  string
-	digest  [sha256.Size]byte
-	width   int
-	height  int
-	expires time.Time
+	serial     string
+	generation uint64
+	digest     [sha256.Size]byte
+	width      int
+	height     int
+	expires    time.Time
 }
 
 // Runner implements the typed ADB, UIAutomator and scrcpy capability surface.
@@ -120,9 +123,12 @@ type Runner struct {
 	start           StartCommand
 	now             func() time.Time
 
-	mu      sync.Mutex
-	frames  map[string]frame
-	mirrors map[string]Process
+	mu          sync.Mutex
+	frames      map[string]frame
+	mirrors     map[string]Process
+	states      map[string]string
+	generations map[string]uint64
+	actions     map[string]*sync.Mutex
 }
 
 // New constructs an allow-listed Android runner.
@@ -176,6 +182,7 @@ func New(opts Options) (*Runner, error) {
 		adb:             adb, scrcpy: scrcpy, timeout: timeout, frameTTL: frameTTL,
 		command: command, start: start, now: now,
 		frames: make(map[string]frame), mirrors: make(map[string]Process),
+		states: make(map[string]string), generations: make(map[string]uint64), actions: make(map[string]*sync.Mutex),
 	}, nil
 }
 
@@ -212,6 +219,15 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	if isActionCapability(capability) {
+		serial, err := r.serialFromPayload(req.Payload)
+		if err != nil {
+			return contract.Outcome{}, err
+		}
+		lock := r.actionLock(serial)
+		lock.Lock()
+		defer lock.Unlock()
+	}
 	started := time.Now()
 	var result map[string]any
 	var err error
@@ -243,6 +259,21 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 		Spent:    contract.Sample{Duration: time.Since(started)},
 		SpentUSD: 0, SpentUSDKnown: true,
 	}, nil
+}
+
+func isActionCapability(capability string) bool {
+	return capability == CapabilityTap || capability == CapabilitySwipe || capability == CapabilityType || capability == CapabilityKey
+}
+
+func (r *Runner) actionLock(serial string) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lock := r.actions[serial]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.actions[serial] = lock
+	}
+	return lock
 }
 
 func (r *Runner) devices(ctx context.Context) (map[string]any, error) {
@@ -290,10 +321,10 @@ func (r *Runner) screenshot(ctx context.Context, payload map[string]any) (map[st
 	if err != nil {
 		return nil, err
 	}
-	id := "android-" + hex.EncodeToString(digest[:12])
+	id := "android-" + uuid.NewString()
 	r.mu.Lock()
 	r.pruneFramesLocked()
-	r.frames[id] = frame{serial: serial, digest: digest, width: width, height: height, expires: r.now().Add(r.frameTTL)}
+	r.frames[id] = frame{serial: serial, generation: r.generations[serial], digest: digest, width: width, height: height, expires: r.now().Add(r.frameTTL)}
 	r.mu.Unlock()
 	return map[string]any{
 		"png_base64": base64.StdEncoding.EncodeToString(body),
@@ -306,6 +337,10 @@ func (r *Runner) capture(ctx context.Context, serial string) ([]byte, int, int, 
 	body, err := r.run(ctx, r.adb, "-s", serial, "exec-out", "screencap", "-p")
 	if err != nil {
 		return nil, 0, 0, [sha256.Size]byte{}, err
+	}
+	if len(body) > maxScreenshotBytes {
+		return nil, 0, 0, [sha256.Size]byte{}, contract.Fail(contract.FailureUnavailable,
+			"android: screenshot exceeds the %d MiB safety ceiling", maxScreenshotBytes>>20)
 	}
 	cfg, err := png.DecodeConfig(bytes.NewReader(body))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
@@ -541,7 +576,15 @@ func (r *Runner) serial(ctx context.Context, payload map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(string(body)) != "device" {
+	state := strings.TrimSpace(string(body))
+	r.mu.Lock()
+	if previous, known := r.states[serial]; !known || previous != state {
+		r.states[serial] = state
+		r.generations[serial]++
+		r.invalidateSerialFramesLocked(serial)
+	}
+	r.mu.Unlock()
+	if state != "device" {
 		return "", contract.Fail(contract.FailureUnavailable,
 			"android: device %q is not online", serial)
 	}
@@ -574,7 +617,7 @@ func (r *Runner) validateFrame(ctx context.Context, payload map[string]any) (str
 		delete(r.frames, id) // one-shot even when the following freshness check fails
 	}
 	r.mu.Unlock()
-	if id == "" || !ok || known.serial != serial {
+	if id == "" || !ok || known.serial != serial || known.generation != r.generation(serial) {
 		return "", frame{}, contract.Fail(contract.FailureInvalidInput,
 			"android: a fresh frame_id from android.screenshot for %q is required", serial)
 	}
@@ -587,6 +630,20 @@ func (r *Runner) validateFrame(ctx context.Context, payload map[string]any) (str
 			"android: the device screen changed after that frame; capture a fresh screenshot before acting")
 	}
 	return serial, known, nil
+}
+
+func (r *Runner) generation(serial string) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generations[serial]
+}
+
+func (r *Runner) invalidateSerialFramesLocked(serial string) {
+	for id, known := range r.frames {
+		if known.serial == serial {
+			delete(r.frames, id)
+		}
+	}
 }
 
 func (r *Runner) pruneFramesLocked() {
@@ -606,6 +663,10 @@ func (r *Runner) run(ctx context.Context, binary string, args ...string) ([]byte
 		}
 		return nil, commandFailure(binary, err, string(body))
 	}
+	if binary == r.adb && adbInputCommand(args) && inputSecurityFailure(body) {
+		return nil, contract.Fail(contract.FailurePermissionDenied,
+			"android: adb input was refused: enable the device vendor's USB debugging security/input setting").WithRaw(strings.TrimSpace(string(body)))
+	}
 	return body, nil
 }
 
@@ -619,7 +680,19 @@ func runCommand(ctx context.Context, binary string, args ...string) ([]byte, err
 	if err != nil {
 		return append(stdout.Bytes(), stderr.Bytes()...), err
 	}
+	if adbInputCommand(args) && inputSecurityFailure(stderr.Bytes()) {
+		return stderr.Bytes(), nil
+	}
 	return stdout.Bytes(), nil
+}
+
+func adbInputCommand(args []string) bool {
+	return len(args) >= 5 && args[2] == "shell" && args[3] == "input"
+}
+
+func inputSecurityFailure(body []byte) bool {
+	text := string(body)
+	return strings.Contains(text, "SecurityException") || strings.Contains(text, "INJECT_EVENTS")
 }
 
 type osProcess struct{ cmd *exec.Cmd }

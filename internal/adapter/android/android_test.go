@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -297,5 +299,103 @@ func TestVendorInputRestrictionIsPermissionDenied(t *testing.T) {
 	if err == nil || contract.KindOf(err) != contract.FailurePermissionDenied ||
 		!strings.Contains(err.Error(), "USB debugging") || !strings.Contains(contract.RawOf(err), "INJECT_EVENTS") {
 		t.Fatalf("error = %v raw = %q", err, contract.RawOf(err))
+	}
+}
+
+func TestZeroExitVendorInputRestrictionIsPermissionDenied(t *testing.T) {
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"},
+		Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if args[len(args)-1] == "get-state" {
+				return []byte("device"), nil
+			}
+			if args[len(args)-1] == "-p" {
+				return screenshot(t, 1), nil
+			}
+			return []byte("SecurityException: INJECT_EVENTS permission required"), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), request(android.CapabilityKey, android.ImplementationKey,
+		map[string]any{"serial": "phone", "frame_id": shot.Result["frame_id"], "key": "home"}))
+	if err == nil || contract.KindOf(err) != contract.FailurePermissionDenied || !strings.Contains(contract.RawOf(err), "INJECT_EVENTS") {
+		t.Fatalf("error = %v raw = %q", err, contract.RawOf(err))
+	}
+}
+
+func TestIdenticalScreenshotsReceiveDistinctFrameTokens(t *testing.T) {
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"},
+		Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if args[len(args)-1] == "get-state" {
+				return []byte("device"), nil
+			}
+			return screenshot(t, 1), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Result["frame_id"] == second.Result["frame_id"] {
+		t.Fatalf("frame IDs must be unique: %q", first.Result["frame_id"])
+	}
+}
+
+func TestActionsForOneDeviceDoNotOverlap(t *testing.T) {
+	var active, maximum atomic.Int32
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"},
+		Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if args[len(args)-1] == "get-state" {
+				return []byte("device"), nil
+			}
+			if args[len(args)-1] == "-p" {
+				return screenshot(t, 1), nil
+			}
+			current := active.Add(1)
+			for seen := maximum.Load(); current > seen && !maximum.CompareAndSwap(seen, current); seen = maximum.Load() {
+			}
+			time.Sleep(25 * time.Millisecond)
+			active.Add(-1)
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot, map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	for _, frameID := range []string{first.Result["frame_id"].(string), second.Result["frame_id"].(string)} {
+		group.Add(1)
+		go func(id string) {
+			defer group.Done()
+			_, _ = runner.Run(t.Context(), request(android.CapabilityKey, android.ImplementationKey, map[string]any{"serial": "phone", "frame_id": id, "key": "home"}))
+		}(frameID)
+	}
+	group.Wait()
+	if maximum.Load() != 1 {
+		t.Fatalf("concurrent actions = %d, want 1", maximum.Load())
 	}
 }
