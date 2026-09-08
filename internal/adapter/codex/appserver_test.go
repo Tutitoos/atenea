@@ -109,11 +109,63 @@ func appServerFake() *fakeAppTransport {
 		"initialize":                      json.RawMessage(`{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos","userAgent":"codex-app-server/0.151.0"}`),
 		"model/list":                      json.RawMessage(`{"data":[{"id":"model-1","model":"gpt-5.6-sol","displayName":"Sol","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"balanced"}]}],"nextCursor":""}`),
 		"modelProvider/capabilities/read": json.RawMessage(`{"imageGeneration":false,"namespaceTools":true,"webSearch":true}`),
+		"account/read":                    json.RawMessage(`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}`),
+		"thread/read":                     json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}}`),
 		"thread/start":                    json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}`),
 		"thread/fork":                     json.RawMessage(`{"thread":{"id":"thread-child","status":{"type":"idle"}},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}`),
 		"turn/start":                      json.RawMessage(`{"turn":{"id":"turn-1","threadId":"thread-1","status":"started"}}`),
 		"thread/list":                     json.RawMessage(`{"data":[{"id":"thread-1","status":{"type":"active","activeFlags":[]}}],"nextCursor":"","backwardsCursor":""}`),
 	}}
+}
+
+func TestAccountAndThreadReadRequireObservableIdentity(t *testing.T) {
+	transport := appServerFake()
+	client, err := NewAppServerClient(AppServerOptions{Transport: transport, NativeTransport: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	account, err := client.AccountRead(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedAccount, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedAccount), "account") || strings.Contains(string(encodedAccount), "chatgpt") {
+		t.Fatalf("public account receipt exposed opaque provider data: %s", encodedAccount)
+	}
+	thread, err := client.ThreadRead(t.Context(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.Model != "gpt-5.6-sol" || thread.ReasoningEffort != "medium" || thread.ModelProvider != "openai" {
+		t.Fatalf("thread=%+v", thread)
+	}
+	transport.responses["account/read"] = json.RawMessage(`{"account":null,"requiresOpenaiAuth":true}`)
+	if _, err := client.AccountRead(t.Context()); err == nil {
+		t.Fatal("unauthenticated account accepted")
+	}
+	transport.responses["account/read"] = json.RawMessage(`{"account":{},"requiresOpenaiAuth":false}`)
+	if _, err := client.AccountRead(t.Context()); err == nil {
+		t.Fatal("account without a recognized type accepted")
+	}
+	transport.responses["account/read"] = json.RawMessage(`{"account":{"type":"chatgpt"}}`)
+	if _, err := client.AccountRead(t.Context()); err == nil {
+		t.Fatal("account without requiresOpenaiAuth accepted")
+	}
+	transport.responses["account/read"] = json.RawMessage(`{"account":{"type":"chatgpt"},"requiresOpenaiAuth":null}`)
+	if _, err := client.AccountRead(t.Context()); err == nil {
+		t.Fatal("null authentication flag accepted")
+	}
+	transport.responses["thread/read"] = json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`)
+	if _, err := client.ThreadRead(t.Context(), "thread-1"); err == nil {
+		t.Fatal("thread without identity accepted")
+	}
 }
 
 func TestAppServerNativeLifecycleCarriesDurabilityAndIdentity(t *testing.T) {
@@ -231,7 +283,7 @@ func TestThreadForkFailsClosedAndRejectsParentAsChild(t *testing.T) {
 	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
 		t.Fatal(err)
 	}
-	transport.responses["thread/fork"] = json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}},"model":"gpt-5.6-sol"}`)
+	transport.responses["thread/fork"] = json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"medium"}`)
 	if _, err := client.ThreadFork(t.Context(), req); err == nil || !strings.Contains(err.Error(), "invalid child thread id") {
 		t.Fatalf("parent-as-child error = %v", err)
 	}
@@ -304,6 +356,28 @@ func TestAppServerRerouteBlocksTurnAndTypedEvents(t *testing.T) {
 	second := <-client.UsageEvents()
 	if first.Revision != 1 || second.Revision != 2 {
 		t.Fatalf("usage event revisions = %d, %d", first.Revision, second.Revision)
+	}
+}
+
+func TestTurnIdentityMustRemainExactlyCorrelated(t *testing.T) {
+	transport := appServerFake()
+	client, err := NewAppServerClient(AppServerOptions{Transport: transport, NativeTransport: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Initialize(t.Context(), InitializeRequest{ClientInfo: ClientInfo{Name: "atenea", Version: "test"}}); err != nil {
+		t.Fatal(err)
+	}
+	transport.responses["turn/start"] = json.RawMessage(`{"turn":{"id":"turn-1","threadId":"different","status":"started"}}`)
+	if _, err := client.TurnStart(t.Context(), TurnStartRequest{ThreadID: "thread-1", Prompt: "inspect"}); err == nil {
+		t.Fatal("turn/start with a different thread id was accepted")
+	}
+	if _, err := ParseTurnCompleted(Notification{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","threadId":"different","status":"completed"}}`)}); err == nil {
+		t.Fatal("turn/completed with conflicting thread ids was accepted")
+	}
+	if _, err := ParseTurnCompleted(Notification{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)}); err != nil {
+		t.Fatal(err)
 	}
 }
 

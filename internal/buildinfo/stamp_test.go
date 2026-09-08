@@ -61,3 +61,18 @@ func TestTheRevisionIsBuildMetadataAndNotAPreRelease(t *testing.T) {
 			got, got[len(Version)])
 	}
 }
+
+func TestCertificationRevisionFallbackIsFullHexAndNeverOverridesVCS(t *testing.T) {
+	const revision = "9b34dd0215c098a22a0ff7bd6e2be40b2aacac02"
+	if got, modified, fallback := source("real", true, revision); got != "real" || !modified || fallback {
+		t.Fatalf("embedded fallback overrode VCS: %q %v %v", got, modified, fallback)
+	}
+	if got, modified, fallback := source("", false, revision); got != revision || modified || !fallback {
+		t.Fatalf("valid fallback = %q %v %v", got, modified, fallback)
+	}
+	for _, invalid := range []string{"short", "zz34dd0215c098a22a0ff7bd6e2be40b2aacac02", revision + "00"} {
+		if got, _, _ := source("", false, invalid); got != "" {
+			t.Fatalf("invalid fallback %q accepted as %q", invalid, got)
+		}
+	}
+}

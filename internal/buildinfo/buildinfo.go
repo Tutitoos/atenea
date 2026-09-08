@@ -2,6 +2,7 @@
 package buildinfo
 
 import (
+	"encoding/hex"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -32,6 +33,39 @@ const Version = "1.1.0"
 // Build metadata is ignored when SemVer versions are compared, which is the
 // right meaning: this IS 1.1.0, built from that tree.
 var Full = sync.OnceValue(func() string { return stamp(vcs()) })
+
+// certificationRevision is set only by the documented P30 build command on
+// toolchains that omit VCS settings. It must remain the full Git object id.
+var certificationRevision string
+
+// Source returns the full VCS revision embedded by Go and whether the build
+// contained uncommitted files. Certification uses it instead of the caller's
+// current directory so a moved binary cannot be attributed to another repo.
+func Source() (revision string, modified bool) {
+	revision, modified = vcs()
+	revision, modified, _ = source(revision, modified, certificationRevision)
+	return revision, modified
+}
+
+// CertificationSource additionally reports whether the revision came from the
+// link-time fallback. Callers must verify that build against the clean checkout.
+func CertificationSource() (revision string, modified, fallback bool) {
+	revision, modified = vcs()
+	return source(revision, modified, certificationRevision)
+}
+
+func source(revision string, modified bool, fallback string) (string, bool, bool) {
+	if revision != "" {
+		return revision, modified, false
+	}
+	stamped := strings.TrimSpace(fallback)
+	if (len(stamped) == 40 || len(stamped) == 64) && validHex(stamped) {
+		return stamped, false, true
+	}
+	return "", false, false
+}
+
+func validHex(value string) bool { _, err := hex.DecodeString(value); return err == nil }
 
 // vcs reads where this build came from. It answers empty for the normal shape
 // of a release artifact: `go install atenea@v1.1.0` and a build from an

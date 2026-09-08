@@ -31,6 +31,9 @@ func TestRealAppServerThreadFork(t *testing.T) {
 	if _, err := client.Initialize(ctx, InitializeRequest{ClientInfo: ClientInfo{Name: "atenea-provider-real-test", Version: "1"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.AccountRead(ctx); err != nil {
+		t.Fatal(err)
+	}
 	models, err := client.ModelList(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -54,8 +57,19 @@ func TestRealAppServerThreadFork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.WaitTurn(ctx, parent.Thread.ID, turn.Turn.ID); err != nil {
+	observation, err := client.WaitTurn(ctx, parent.Thread.ID, turn.Turn.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if observation.Completed == nil || observation.Completed.Turn.Status != "completed" || observation.UsageRevision == 0 || observation.Reroute != nil {
+		t.Fatalf("incomplete observable turn: %+v", observation)
+	}
+	thread, err := client.ThreadRead(ctx, parent.Thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.Model != model || thread.ReasoningEffort != "medium" || thread.ModelProvider != "openai" {
+		t.Fatalf("post-turn identity: %+v", thread)
 	}
 	child, err := client.ThreadFork(ctx, ThreadForkRequest{ParentThreadID: parent.Thread.ID, Model: model, Sandbox: "read-only", ApprovalPolicy: "never", DeveloperInstructions: "Provider-real protocol validation only; do not run tools.", VisibilityRequired: true})
 	if err != nil {
