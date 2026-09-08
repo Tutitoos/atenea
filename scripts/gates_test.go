@@ -211,6 +211,32 @@ func TestThePrePushHookDoesNotHandGitDirToTheSuite(t *testing.T) {
 	}
 }
 
+// Go omits VCS metadata for some linked worktrees. install-dev.sh used to
+// produce a binary that worked but could not even evaluate the live Codex
+// certificate because its source revision was unknowable. The explicit stamp
+// is safe only for a clean tree: otherwise HEAD would describe source bytes
+// that were never committed.
+func TestTheDevInstallerStampsOnlyCleanBuildsWithAnObservableRevision(t *testing.T) {
+	body, err := os.ReadFile("install-dev.sh")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	script := string(body)
+	for _, required := range []string{
+		`git rev-parse --verify HEAD`,
+		`git status --porcelain --untracked-files=normal`,
+		`-buildvcs=false`,
+		`github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$revision`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("install-dev.sh does not preserve %q", required)
+		}
+	}
+	if !strings.Contains(script, `if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then`) {
+		t.Error("the certification revision is not guarded by a clean-tree check")
+	}
+}
+
 // A workflow that installs a floating tag runs code nobody chose and leaves no
 // record of which code that was. host-footer.yml installed opencode-ai@latest
 // on a daily schedule and then executed the binary inside it, while the other

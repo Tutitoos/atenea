@@ -70,3 +70,31 @@ No se declara un porcentaje de mejora. Las únicas comparaciones aceptadas son l
 | Instalación de ATENEA, merge, despliegue o migración | No realizado. |
 
 La aceptación global local quedó completada: las verificaciones finales pasaron y Sol y Astra no encontraron bloqueadores materiales en el árbol completo. Esto no amplía la evidencia pendiente de proveedores y clientes reales.
+
+## Actualización operativa P19-P30
+
+El cierre posterior a la aceptación local está publicado en
+`benchmarks/runs/intelligent-orchestration-closure-2026-09-07/`. Esta sección
+sustituye los estados operativos históricos de las tablas anteriores, sin
+reescribir lo que se conocía el 7 de septiembre.
+
+| Alcance | Estado actualizado |
+|---|---|
+| P19-P22 | Aceptados con alcance explícito; P21 conserva la identidad histórica como desconocida y P30 acredita por separado la configuración observable actual de los cuatro perfiles Codex. |
+| P23 | Codex validado con cuatro perfiles observables y sin reroute; el coste facturable continúa desconocido porque App Server no lo expone. |
+| P24 | Codex CLI y Desktop validados. Claude Code, Oh My Pi, OpenCode y ChatGPT conservan su evidencia anterior por exclusión explícita de esta actualización. |
+| P25 | Llamadas, uso histórico, latencia de fork y tamaño del seguimiento medidos; tokens atribuibles al seguimiento y precio del proveedor permanecen desconocidos con motivo. |
+| P26-P29 | Checks, revisiones, auditoría, merges, instalación, smoke y reporte final completados. |
+| P30 | Certificación Codex firmada y vigente hasta el 8 de octubre de 2026. |
+
+PR #47 se fusionó como `e0c02577b8a64febf6b1acd4e03a04794c17e4ee` y
+PR #50 como `0de5257c211af20c126b6e4e0df3eec8399de15e`. El CI posterior
+al segundo merge pasó sobre ese SHA. La instalación local verificada ejecuta
+ATENEA 1.1.0, contrato 4.1.0, con el servicio instalado, habilitado y activo.
+El comando instalado valida la firma y la vigencia del artefacto P30 mediante
+`codex certify check --require-valid --certificate certifications/codex.json
+--public-key certifications/codex-certifier.pub`. Esta comprobación no vuelve a
+certificar el binario instalado. La comprobación separada del entorno instalado
+falló porque la compilación desde el worktree no contenía una revisión VCS
+observable; `scripts/install-dev.sh` ya incorpora la revisión exacta en builds
+limpios y mantiene los builds sucios explícitamente fuera de certificación.

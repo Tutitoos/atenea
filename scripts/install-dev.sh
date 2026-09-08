@@ -71,7 +71,31 @@ trap rollback EXIT
 echo "building"
 cd "$root"
 bash "$root/scripts/dashboard-build.sh"
-go build -trimpath -o /tmp/atenea-install ./cmd/atenea
+revision="$(git rev-parse --verify HEAD)"
+case "$revision" in
+	""|*[!0-9a-f]*)
+		echo "Cannot determine a full lowercase Git revision for this build." >&2
+		exit 1
+		;;
+esac
+if [ "${#revision}" -ne 40 ] && [ "${#revision}" -ne 64 ]; then
+	echo "Git revision must contain 40 or 64 hexadecimal characters." >&2
+	exit 1
+fi
+
+# Go does not currently discover VCS metadata from every linked worktree. A
+# clean build therefore carries the same explicit, verifiable revision used by
+# the Codex certification builder. Dirty development installs remain possible,
+# but deliberately receive no clean fallback stamp and cannot satisfy a
+# certification gate by pretending to represent HEAD exactly.
+if [ -z "$(git status --porcelain --untracked-files=normal)" ]; then
+	go build -trimpath -buildvcs=false \
+		"-ldflags=-buildid= -X github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$revision" \
+		-o /tmp/atenea-install ./cmd/atenea
+else
+	echo "  warning: dirty source; the installed binary will not carry a certifiable HEAD stamp" >&2
+	go build -trimpath -o /tmp/atenea-install ./cmd/atenea
+fi
 if [ "$(uname -s)" = "Darwin" ]; then
 	swift build -c release --package-path helper >/dev/null
 fi
