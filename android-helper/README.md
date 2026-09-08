@@ -18,6 +18,8 @@ adb -s SERIAL install -r app/build/outputs/apk/androidTest/debug/app-debug-andro
 adb -s SERIAL shell am instrument -w io.atenea.androidhelper.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The smoke test launches a local fixture and proves that UIAutomator observes
-an accessibility description and Unicode text. It does not grant Atenea extra
-device permissions or replace the ADB safety boundary.
+The smoke test launches its local fixture through the fixed UIAutomation shell
+command used by the host-side bridge. This avoids MIUI's cross-UID background
+Activity restriction and proves that UIAutomator observes an accessibility
+description and Unicode text. It does not grant Atenea extra device permissions
+or replace the ADB safety boundary.
