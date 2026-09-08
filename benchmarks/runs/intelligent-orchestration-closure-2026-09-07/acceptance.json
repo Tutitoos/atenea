@@ -11,7 +11,7 @@
     "codex_head_sha": "811ee0ccee4b7d5916bf3e6b12a8638e718e3571",
     "codex_merge_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
     "closure_update_issue": 51,
-    "closure_update_branch": "docs/51-close-p19-p30-evidence"
+    "closure_update_branch": "fix/51-stamp-installed-revision"
   },
   "excluded_scope": {
     "requested_by_user": true,
