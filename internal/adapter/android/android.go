@@ -872,7 +872,7 @@ func (r *Runner) validateSemanticFrame(ctx context.Context, serial string, known
 			"android: orientation changed after that frame; capture a fresh screenshot before acting")
 	}
 	nodes, _ := flattenHierarchy(tree, serial)
-	matches := matchingVisibleNodes(nodes, selector)
+	matches := matchingVisibleNodes(nodes, selector, known.width, known.height)
 	if len(matches) == 0 {
 		return nil, contract.Fail(contract.FailureNotFound,
 			"android: selector no longer identifies a visible enabled control")
@@ -892,10 +892,10 @@ func (r *Runner) validateSemanticFrame(ctx context.Context, serial string, known
 	return matches[0], nil
 }
 
-func matchingVisibleNodes(nodes []map[string]any, selector selector) []map[string]any {
+func matchingVisibleNodes(nodes []map[string]any, selector selector, width, height int) []map[string]any {
 	matches := make([]map[string]any, 0, 1)
 	for _, node := range nodes {
-		if node["enabled"] != true || !isVisibleNode(node) {
+		if node["enabled"] != true || !isVisibleNode(node, width, height) {
 			continue
 		}
 		if selector.resourceID != "" && node["resource_id"] != selector.resourceID {
@@ -912,13 +912,16 @@ func matchingVisibleNodes(nodes []map[string]any, selector selector) []map[strin
 	return matches
 }
 
-func isVisibleNode(node map[string]any) bool {
+func isVisibleNode(node map[string]any, width, height int) bool {
 	raw, ok := node["bounds"].(string)
 	match := boundsPattern.FindStringSubmatch(raw)
 	if !ok || len(match) != 5 {
 		return false
 	}
-	return match[1] != match[3] && match[2] != match[4]
+	x, xok := integer(node["center_x"])
+	y, yok := integer(node["center_y"])
+	return match[1] != match[3] && match[2] != match[4] &&
+		xok && yok && x >= 0 && y >= 0 && x < width && y < height
 }
 
 var focusedWindowPattern = regexp.MustCompile(`(?m)^\s*mCurrentFocus=Window\{[^ ]+ u\d+ ([^}]+)\}`)

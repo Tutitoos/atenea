@@ -322,6 +322,41 @@ func TestSelectorRequiresSemanticFrame(t *testing.T) {
 	}
 }
 
+func TestSemanticSelectorRefusesAnOffscreenMatch(t *testing.T) {
+	pngBody := screenshot(t, 20)
+	window := []byte("mCurrentFocus=Window{abc u0 app.example/app.example.MainActivity}\n")
+	tree := []byte(`<?xml version="1.0"?><hierarchy rotation="0"><node text="Save" enabled="true" bounds="[30,30][40,40]"/></hierarchy>`)
+	runner, err := android.New(android.Options{AllowedSerials: []string{"phone"}, Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case args[len(args)-1] == "get-state":
+			return []byte("device"), nil
+		case args[len(args)-1] == "-p":
+			return pngBody, nil
+		case reflect.DeepEqual(args[len(args)-2:], []string{"dumpsys", "window"}):
+			return window, nil
+		case reflect.DeepEqual(args[len(args)-3:], []string{"uiautomator", "dump", "/dev/tty"}):
+			return tree, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+			return nil, nil
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shot, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone", "semantic": true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), request(android.CapabilityTap, android.ImplementationTap, map[string]any{
+		"serial": "phone", "frame_id": shot.Result["frame_id"], "selector": map[string]any{"text": "Save"},
+	}))
+	if err == nil || contract.KindOf(err) != contract.FailureNotFound {
+		t.Fatalf("offscreen selector error = %v", err)
+	}
+}
+
 func TestExpiredFrameIsRefused(t *testing.T) {
 	now := time.Unix(10, 0)
 	runner, err := android.New(android.Options{
