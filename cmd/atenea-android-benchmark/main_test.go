@@ -10,6 +10,14 @@ func TestSummarizeUsesOnlySuccessfulSamples(t *testing.T) {
 	}
 }
 
+func TestSummarizeMarksAnAllFailedOperationUnknown(t *testing.T) {
+	op := operation{Samples: []sample{{DurationMS: 10, Outcome: "failed", Verification: "unknown"}}}
+	summarize(&op)
+	if op.Verification != "unknown" || op.MedianMS != 0 || op.P95MS != 0 {
+		t.Fatalf("summary = %#v", op)
+	}
+}
+
 func TestVerificationForDistinguishesSentAndSelectorVerified(t *testing.T) {
 	if got := verificationFor("sent"); got != "action_sent" {
 		t.Fatalf("sent verification = %q", got)

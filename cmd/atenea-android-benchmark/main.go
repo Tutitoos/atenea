@@ -267,6 +267,9 @@ func summarize(op *operation) {
 			}
 		}
 	}
+	if verification == "" {
+		verification = "unknown"
+	}
 	op.Verification = verification
 	sort.Float64s(latencies)
 	sort.Ints(sizes)
