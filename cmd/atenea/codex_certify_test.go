@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"debug/elf"
+	"debug/macho"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,11 +83,37 @@ func TestCertificationRebuildAcceptsAnInstalledExecutableDirectory(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revisionOffset := bytes.Index(contents, []byte(revision))
-	if revisionOffset < 0 {
-		t.Fatal("built fixture does not contain its stamped revision")
+	var textOffset int
+	if runtime.GOOS == "darwin" {
+		machOFile, openErr := macho.Open(binary)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		text := machOFile.Section("__text")
+		if text == nil || text.Size == 0 {
+			_ = machOFile.Close()
+			t.Fatal("built fixture has no Mach-O __text section")
+		}
+		textOffset = int(text.Offset)
+		if closeErr := machOFile.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	} else {
+		elfFile, openErr := elf.Open(binary)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		text := elfFile.Section(".text")
+		if text == nil || text.Size == 0 {
+			_ = elfFile.Close()
+			t.Fatal("built fixture has no ELF .text section")
+		}
+		textOffset = int(text.Offset)
+		if closeErr := elfFile.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
 	}
-	contents[revisionOffset] ^= 1
+	contents[textOffset] ^= 1
 	if err := os.WriteFile(binary, contents, 0o700); err != nil {
 		t.Fatal(err)
 	}
