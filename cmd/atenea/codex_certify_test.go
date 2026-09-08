@@ -77,6 +77,21 @@ func TestCertificationRebuildAcceptsAnInstalledExecutableDirectory(t *testing.T)
 	if err := verifyCertificationRebuild(binary, revision); err != nil {
 		t.Fatalf("verify from traversable install directory: %v", err)
 	}
+	contents, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionOffset := bytes.Index(contents, []byte(revision))
+	if revisionOffset < 0 {
+		t.Fatal("built fixture does not contain its stamped revision")
+	}
+	contents[revisionOffset] ^= 1
+	if err := os.WriteFile(binary, contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCertificationRebuild(binary, revision); err == nil {
+		t.Fatal("modified executable matched the reproducible rebuild")
+	}
 }
 
 func TestPinnedCertificationKeyCannotBeReplacedOrSymlinked(t *testing.T) {
