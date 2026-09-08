@@ -33,6 +33,13 @@ Android screenshot and select one exact accessible control. Atenea rechecks the
 focused window, orientation and that control immediately before acting; raw
 coordinate actions remain strict pixel-validated fallbacks.
 
+The optional Android helper fixture supplies a safe, non-personal-app target
+for selector benchmarks. Its report distinguishes `observed`, `action_sent`,
+`selector_verified_action_sent` and `unknown`; an accepted ADB process command
+does not by itself prove the requested UI outcome. A system overlay such as
+MIUI's notification shade blocks the semantic fixture rather than being
+silently retried or scored as a successful action.
+
 Enable the `android` runner, add exact ADB serials under `[android]
 allowed_serials`, and grant `device` plus `process` to the relevant floor.
 Mutating capabilities additionally require their declared `write` or

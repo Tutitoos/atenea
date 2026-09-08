@@ -23,3 +23,25 @@ command used by the host-side bridge. This avoids MIUI's cross-UID background
 Activity restriction and proves that UIAutomator observes an accessibility
 description and Unicode text. It does not grant Atenea extra device permissions
 or replace the ADB safety boundary.
+
+## Semantic benchmark
+
+After installing the fixture, measure its selector-validated action without
+writing personal application data:
+
+```sh
+go run ./cmd/atenea-android-benchmark \
+  --serial SERIAL --warmup 5 --repetitions 30 --semantic-helper \
+  --output benchmarks/runs/android-helper-YYYY-MM-DD
+```
+
+The command stores JSON samples and a Markdown summary. A semantic sample is
+successful only when the fixture is the current focused window, the exact
+accessibility description is still visible and enabled, and Atenea sent the
+action. `action_sent` is deliberately distinct from a verified task result.
+
+On MIUI, an open notification shade can cover the fixture even though Android
+reports that the activity was started. The benchmark makes one bounded attempt
+to close that shade. If it remains, it records the repetition as `failed` with
+verification `unknown`; close the system overlay on the device and rerun rather
+than treating it as a selector or input success.
