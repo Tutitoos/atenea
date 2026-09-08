@@ -1,13 +1,32 @@
 {
-  "schema_version": 1,
-  "date": "2026-09-07",
-  "issue": 48,
-  "pull_request": 47,
-  "branch": "feat/atenea-intelligent-orchestration",
+  "schema_version": 2,
+  "date": "2026-09-08",
+  "delivery": {
+    "implementation_issue": 48,
+    "implementation_pull_request": 47,
+    "implementation_head_sha": "846d2a074ea8959a70a63d4a87a9bdd5b157b41d",
+    "implementation_merge_sha": "e0c02577b8a64febf6b1acd4e03a04794c17e4ee",
+    "codex_issue": 49,
+    "codex_pull_request": 50,
+    "codex_head_sha": "811ee0ccee4b7d5916bf3e6b12a8638e718e3571",
+    "codex_merge_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
+    "closure_update_issue": 51,
+    "closure_update_branch": "fix/51-stamp-installed-revision"
+  },
+  "excluded_scope": {
+    "requested_by_user": true,
+    "description": "No additional real-client presentation or ATENEA-use validation was run for Claude Code, Oh My Pi, OpenCode, or ChatGPT.",
+    "clients": [
+      "Claude Code",
+      "Oh My Pi",
+      "OpenCode",
+      "ChatGPT"
+    ]
+  },
   "evidence": {
     "p19_github_delivery": {
       "state": "pass",
-      "scope": "local",
+      "scope": "local_and_github",
       "checks": [
         "behavioral fixtures",
         "repository structural validator",
@@ -15,51 +34,68 @@
         "independent Sol review"
       ]
     },
+    "p20_environment_protocol": {
+      "state": "pass",
+      "scope": "sanitized_local_snapshot",
+      "os": "darwin",
+      "architecture": "arm64",
+      "atenea_version": "1.1.0",
+      "codex_cli_version": "0.153.4",
+      "codex_desktop_version": "26.901.31953",
+      "app_server_schema": "codex-app-server/v2-experimental",
+      "app_server_schema_sha256": "060abc18d84e368cde6eee8aa3b9d62d0ad7c872d62c51a5798ce7165958f76d"
+    },
     "p21_agents": {
       "state": "partial",
-      "scope": "local_and_provider_attempt",
-      "profile_digest": "2cc0389ceb09152eb926943ebaf7e34a852a8a78fd0dfc6f0c6c53bd21821c62",
-      "files_mode": "0600",
-      "profiles": [
+      "scope": "historical_usage_and_current_codex_observable_contract",
+      "historical_profile_probe": {
+        "input_tokens": 63745,
+        "cached_input_tokens": 8960,
+        "output_tokens": 52,
+        "observed_model": "unknown",
+        "observed_effort": "unknown"
+      },
+      "current_codex_profiles": [
         {
-          "role": "research",
+          "role": "planning",
           "requested_model": "gpt-5.6-sol",
+          "observed_model": "gpt-5.6-sol",
           "requested_effort": "medium",
-          "observed_model": "unknown",
-          "input_tokens": 16475,
-          "cached_input_tokens": 0,
-          "output_tokens": 13
+          "observed_effort": "medium",
+          "provider": "openai",
+          "source": "app_server_thread_receipt"
         },
         {
-          "role": "implement",
+          "role": "implementation",
           "requested_model": "gpt-5.6-luna",
+          "observed_model": "gpt-5.6-luna",
           "requested_effort": "xhigh",
-          "observed_model": "unknown",
-          "input_tokens": 14295,
-          "cached_input_tokens": 8960,
-          "output_tokens": 13
+          "observed_effort": "xhigh",
+          "provider": "openai",
+          "source": "app_server_thread_receipt"
         },
         {
           "role": "review",
           "requested_model": "gpt-5.6-sol",
+          "observed_model": "gpt-5.6-sol",
           "requested_effort": "medium",
-          "observed_model": "unknown",
-          "input_tokens": 15723,
-          "cached_input_tokens": 0,
-          "output_tokens": 13
+          "observed_effort": "medium",
+          "provider": "openai",
+          "source": "app_server_thread_receipt"
         },
         {
           "role": "audit",
           "requested_model": "gpt-6-astra",
+          "observed_model": "gpt-6-astra",
           "requested_effort": "medium",
-          "observed_model": "unknown",
-          "input_tokens": 17252,
-          "cached_input_tokens": 0,
-          "output_tokens": 13
+          "observed_effort": "medium",
+          "provider": "openai",
+          "source": "app_server_thread_receipt"
         }
       ],
-      "limitation": "Requested profiles executed and produced usage, but the client exposed no observed model or effort identity.",
-      "point_status": "accepted"
+      "current_profile_evidence": "certifications/codex.json",
+      "limitation": "P30 proves the current observable model and effort configuration but cannot retroactively attribute the historical probe token totals to an observed model or effort.",
+      "point_status": "accepted_with_split_evidence"
     },
     "p22_native_delegation": {
       "state": "pass",
@@ -67,24 +103,19 @@
       "client_operation": "thread/fork",
       "codex_cli": "0.153.4",
       "real_gate_seconds": 9.81,
-      "limitations": "Provider-real thread/fork passed; productive reserve, publish, fork, persist, dispatch and manual recovery are locally tested. Provider identity remains bounded by App Server receipts.",
       "schema_sha256": "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a",
-      "runtime_integration": {
-        "state": "independently_reviewed",
-        "reviewed_commit_sha": "488f376e72b07a2f08dad4bd039ee31e16dc49f7",
-        "evidence_scope": "prior_head"
-      },
-      "point_status": "accepted"
+      "runtime_integration_reviewed_sha": "488f376e72b07a2f08dad4bd039ee31e16dc49f7",
+      "limitation": "The operation proves the observable App Server contract, not model-internal collaboration tools."
     },
     "p23_real_providers": {
-      "state": "partial",
-      "scope": "provider_attempt",
-      "successful_codex_profiles": 0,
+      "state": "pass",
+      "scope": "codex_provider_real",
+      "successful_codex_profiles": 4,
       "successful_app_server_gate": 1,
+      "rerouted_profiles": 0,
       "provider_cost_usd": "unknown",
-      "requested_codex_profile_executions": 4,
-      "limitation": "All requests returned usage, but observed model and effort identity and provider cost remain unknown.",
-      "point_status": "accepted"
+      "provider_cost_reason": "Codex App Server exposes correlated usage revisions but no billable price receipt.",
+      "superseding_evidence": "certifications/codex.json"
     },
     "p24_clients": {
       "state": "partial",
@@ -93,64 +124,181 @@
         {
           "name": "Codex CLI",
           "version": "0.153.4",
-          "server_probe": "pass",
-          "isolated_model_auth": "unavailable",
-          "presentation": "unknown"
+          "mcp_correlated": "pass",
+          "presentation": "pass",
+          "reconnect_without_duplicates": "pass"
+        },
+        {
+          "name": "Codex Desktop",
+          "version": "26.901.31953",
+          "presentation": "pass",
+          "observation": "read_only_accessibility"
         },
         {
           "name": "Claude Code",
           "version": "2.1.236",
           "mcp_connected": "pass",
           "isolated_model_auth": "unavailable",
-          "presentation": "unknown"
+          "presentation": "unknown",
+          "additional_validation": "excluded_by_user"
         },
         {
           "name": "Oh My Pi",
           "version": "18.0.11",
           "isolated_integration": "pass",
-          "presentation": "unknown"
+          "presentation": "unknown",
+          "additional_validation": "excluded_by_user"
         },
         {
           "name": "OpenCode",
           "version": "1.18.20",
           "isolated_gate": "timeout",
           "mcp_connected": "unknown",
-          "presentation": "unknown"
+          "presentation": "unknown",
+          "additional_validation": "excluded_by_user"
         },
         {
-          "name": "ChatGPT Desktop",
-          "version": "26.901.31953",
-          "server_probe": "pass",
-          "presentation": "manual-current-chat-only"
+          "name": "ChatGPT",
+          "presentation": "manual-current-chat-only",
+          "additional_validation": "excluded_by_user"
         }
       ],
-      "point_status": "accepted"
+      "codex_evidence": "certifications/codex.json",
+      "point_status": "accepted_with_declared_scope"
     },
     "p25_efficiency": {
-      "state": "partial",
-      "scope": "measured",
+      "state": "pass",
+      "scope": "measured_where_observable",
       "profile_probe_calls": 4,
       "profile_probe_input_tokens": 63745,
       "profile_probe_cached_input_tokens": 8960,
       "profile_probe_output_tokens": 52,
       "native_fork_gate_calls": 1,
       "native_fork_gate_seconds": 9.81,
+      "tracking_contract": {
+        "method": "UTF-8 byte, Unicode character, whitespace-word, and rendered-line counts over the deterministic P30 notice and completed payload templates, using the certified identifier lengths and including the command's trailing newline in byte and character totals.",
+        "notice_utf8_bytes": 111,
+        "notice_unicode_characters": 108,
+        "notice_whitespace_words": 11,
+        "notice_lines": 1,
+        "completed_payload_utf8_bytes": 466,
+        "completed_payload_unicode_characters": 424,
+        "completed_payload_whitespace_words": 20,
+        "completed_payload_lines": 11,
+        "combined_utf8_bytes": 579,
+        "combined_unicode_characters": 534,
+        "combined_whitespace_words": 31,
+        "combined_lines": 13
+      },
       "tracking_overhead_tokens": "unknown",
+      "tracking_overhead_reason": "No matched control turn exists, and the sanitized P30 certificate deliberately retains usage revisions rather than raw token totals.",
       "provider_cost_usd": "unknown",
-      "improvement_percent": "not_claimed",
-      "point_status": "accepted"
+      "provider_cost_reason": "No provider price receipt is exposed by the certified App Server contract.",
+      "improvement_percent": "not_claimed"
     },
     "p26_ci_reviews": {
-      "state": "pending"
+      "state": "pass",
+      "implementation_pr_head": "846d2a074ea8959a70a63d4a87a9bdd5b157b41d",
+      "codex_pr_head": "811ee0ccee4b7d5916bf3e6b12a8638e718e3571",
+      "implementation_review_threads": 13,
+      "codex_review_threads": 6,
+      "unresolved_review_threads": 0,
+      "post_merge_main_ci": {
+        "run_id": 34198102106,
+        "head_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
+        "state": "pass"
+      }
     },
     "p27_independent_audit": {
-      "state": "pending"
+      "state": "pass",
+      "implementation_review": "Sol",
+      "implementation_audit": "Astra",
+      "codex_review": "Sol",
+      "codex_audit": "Astra",
+      "result": "No material blocker remained before either accepted delivery."
     },
     "p28_merge_install": {
-      "state": "pending"
+      "state": "pass",
+      "implementation_merge_sha": "e0c02577b8a64febf6b1acd4e03a04794c17e4ee",
+      "codex_merge_sha": "0de5257c211af20c126b6e4e0df3eec8399de15e",
+      "installed_version": "1.1.0",
+      "installed_contract": "4.1.0",
+      "installed_binary_raw_sha256": "a57b1528b6ba4d32a2103e45ac3d9ae7cc442f80b26d5652fc0965d25602f722",
+      "service_installed": true,
+      "service_enabled": true,
+      "service_active": true,
+      "status_source": "running_service",
+      "certificate_artifact_validation": {
+        "state": "pass",
+        "command": "atenea codex certify check --require-valid --certificate certifications/codex.json --public-key certifications/codex-certifier.pub",
+        "scope": "artifact_signature_and_expiry",
+        "certifies_installed_binary": false
+      },
+      "installed_environment_certificate_attempts": [
+        {
+          "state": "failed",
+          "source_commit": "0de5257c211af20c126b6e4e0df3eec8399de15e",
+          "reason": "installed linked-worktree build had no observable VCS revision",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "failed",
+          "source_commit": "696283d9ccf2bb64b9640a852ddd95153bd6581f",
+          "reason": "reproducible rebuild required the installed executable directory itself to be private",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "failed",
+          "source_commit": "d6a0d5cf56501c392eeb24e62742059f5c9afb81",
+          "reason": "reproducible hashing did not yet normalize a real hardened-runtime signature",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "stale",
+          "source_commit": "e33318cf5b44b32bcea82646c6781bc62faaa86e",
+          "exit_code_nonzero": true,
+          "reason": "exact comparison correctly rejected the earlier P30 commit and fingerprint",
+          "hidden_by_retry": false
+        },
+        {
+          "state": "stale",
+          "source_commit": "a4ef77b5144b7401ce5589d629842d5670f06762",
+          "exit_code_nonzero": true,
+          "reason": "final installed build reached exact comparison and correctly rejected the earlier P30 commit and fingerprint",
+          "hidden_by_retry": false
+        }
+      ],
+      "installer_remediation": {
+        "state": "passed",
+        "behavior": "clean builds carry the exact Git revision; Git inspection fails closed; build staging is private; dirty builds remain explicitly uncertifiable; signed installs are compared through a private signature-free copy"
+      },
+      "installed_source_commit": "a4ef77b5144b7401ce5589d629842d5670f06762"
     },
     "p29_final_report": {
-      "state": "in_progress"
+      "state": "pass",
+      "artifact": "benchmarks/runs/intelligent-orchestration-closure-2026-09-07/README.md",
+      "evidence_scope": [
+        "local",
+        "github",
+        "installed",
+        "codex_provider_real",
+        "codex_client_real",
+        "partial",
+        "unknown"
+      ]
+    },
+    "p30_codex_certification": {
+      "state": "pass",
+      "certificate_id": "c5f1408a5b662030bf2ece3fe53edf16",
+      "certificate": "certifications/codex.json",
+      "certified_code_commit": "b1825c4b4cff965b621f81e8705ff8b6814d3258",
+      "expires_at": "2026-10-08T06:45:22Z",
+      "gates": {
+        "app_server_identity": "pass",
+        "codex_cli": "pass",
+        "codex_desktop": "pass",
+        "cleanup": "pass"
+      }
     }
   }
 }

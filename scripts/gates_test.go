@@ -211,6 +211,37 @@ func TestThePrePushHookDoesNotHandGitDirToTheSuite(t *testing.T) {
 	}
 }
 
+// Go omits VCS metadata for some linked worktrees. install-dev.sh used to
+// produce a binary that worked but could not even evaluate the live Codex
+// certificate because its source revision was unknowable. The explicit stamp
+// is safe only for a clean tree: otherwise HEAD would describe source bytes
+// that were never committed.
+func TestTheDevInstallerStampsOnlyCleanBuildsWithAnObservableRevision(t *testing.T) {
+	body, err := os.ReadFile("install-dev.sh")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	script := string(body)
+	for _, required := range []string{
+		`git rev-parse --verify HEAD`,
+		`source_status="$(git status --porcelain --untracked-files=normal)"`,
+		`if [ -z "$source_status" ]; then`,
+		`mktemp -d "${TMPDIR:-/tmp}/atenea-install.XXXXXX"`,
+		`chmod 0700 "$build_dir"`,
+		`-buildvcs=false`,
+		`github.com/Tutitoos/atenea/internal/buildinfo.certificationRevision=$revision`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("install-dev.sh does not preserve %q", required)
+		}
+	}
+	for _, unsafe := range []string{`-o /tmp/atenea-install`, `cp /tmp/atenea-install`} {
+		if strings.Contains(script, unsafe) {
+			t.Errorf("install-dev.sh still uses predictable temporary output %q", unsafe)
+		}
+	}
+}
+
 // A workflow that installs a floating tag runs code nobody chose and leaves no
 // record of which code that was. host-footer.yml installed opencode-ai@latest
 // on a daily schedule and then executed the binary inside it, while the other

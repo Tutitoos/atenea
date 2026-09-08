@@ -1,6 +1,7 @@
 package codexcert
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -12,17 +13,18 @@ const (
 	machO64Little    = 0xfeedfacf
 	lcUUID           = 0x1b
 	lcCodeSignature  = 0x1d
+	lcSegment64      = 0x19
 	machO64HeaderLen = 32
 	csEmbedded       = 0xfade0cc0
 	csCodeDirectory  = 0xfade0c02
 	csAdHoc          = 0x2
 )
 
-// ReproducibleFileSHA256 hashes executable content while excluding the two
-// derived Mach-O fields that Apple linkers may regenerate for identical code:
-// LC_UUID and ad-hoc CodeDirectory page hashes. Signature policy metadata is
-// preserved, and signatures with special slots are rejected. Other formats
-// are hashed byte-for-byte.
+// ReproducibleFileSHA256 hashes executable content while excluding Mach-O
+// fields that Apple linkers or codesign may regenerate for identical code:
+// LC_UUID, the derived __LINKEDIT virtual size, and ad-hoc CodeDirectory page
+// hashes. Signature policy metadata is preserved, and signatures with special
+// slots are rejected. Other formats are hashed byte-for-byte.
 func ReproducibleFileSHA256(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -57,6 +59,16 @@ func canonicalizeMachO(data []byte) error {
 			return errors.New("invalid Mach-O load command size")
 		}
 		switch command {
+		case lcSegment64:
+			if size < 72 {
+				return errors.New("invalid Mach-O 64-bit segment command")
+			}
+			if string(bytes.TrimRight(data[offset+8:offset+24], "\x00")) == "__LINKEDIT" {
+				// codesign grows __LINKEDIT's virtual size to cover the
+				// replacement signature. Removing that signature truncates the
+				// file but deliberately leaves this derived value behind.
+				clear(data[offset+32 : offset+40])
+			}
 		case lcUUID:
 			if size != 24 {
 				return errors.New("invalid Mach-O UUID command")

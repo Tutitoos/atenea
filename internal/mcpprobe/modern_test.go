@@ -3,6 +3,7 @@ package mcpprobe_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -171,11 +172,33 @@ func TestAutoStdioDoesNotDowngradeAfterProbeTimeoutOrCallerCancellation(t *testi
 		count := filepath.Join(t.TempDir(), "starts")
 		command := []string{"sh", "-c", `echo start >> "$COUNT"; read -r line; sleep 1`}
 		ctx, cancel := context.WithCancel(t.Context())
+		canceled := make(chan error, 1)
 		go func() {
-			time.Sleep(35 * time.Millisecond)
-			cancel()
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				marker, err := os.ReadFile(count)
+				if err == nil && strings.Contains(string(marker), "start") {
+					cancel()
+					canceled <- nil
+					return
+				}
+				if err != nil && !os.IsNotExist(err) {
+					cancel()
+					canceled <- fmt.Errorf("wait for child start marker: %w", err)
+					return
+				}
+				if time.Now().After(deadline) {
+					cancel()
+					canceled <- errors.New("wait for child start marker: no content before deadline")
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
 		}()
-		got := mcpprobe.Probe(ctx, mcpprobe.Server{Command: command, Env: map[string]string{"COUNT": count}, Timeout: time.Second, ProtocolMode: mcpprobe.ProtocolAuto})
+		got := mcpprobe.Probe(ctx, mcpprobe.Server{Command: command, Env: map[string]string{"COUNT": count}, Timeout: 3 * time.Second, ProtocolMode: mcpprobe.ProtocolAuto})
+		if err := <-canceled; err != nil {
+			t.Fatal(err)
+		}
 		if got.OK {
 			t.Fatal("caller cancellation was accepted")
 		}
