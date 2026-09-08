@@ -3,6 +3,7 @@ package mcpprobe_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -175,15 +176,20 @@ func TestAutoStdioDoesNotDowngradeAfterProbeTimeoutOrCallerCancellation(t *testi
 		go func() {
 			deadline := time.Now().Add(2 * time.Second)
 			for {
-				_, err := os.Stat(count)
-				if err == nil {
+				marker, err := os.ReadFile(count)
+				if err == nil && strings.Contains(string(marker), "start") {
 					cancel()
 					canceled <- nil
 					return
 				}
-				if !os.IsNotExist(err) || time.Now().After(deadline) {
+				if err != nil && !os.IsNotExist(err) {
 					cancel()
 					canceled <- fmt.Errorf("wait for child start marker: %w", err)
+					return
+				}
+				if time.Now().After(deadline) {
+					cancel()
+					canceled <- errors.New("wait for child start marker: no content before deadline")
 					return
 				}
 				time.Sleep(time.Millisecond)
