@@ -14,6 +14,14 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class HelperSmokeTest {
     @Test
+    fun capabilityManifestIsVersionedAndReadOnly() {
+        val manifest = CapabilityReceiver.CAPABILITY_MANIFEST
+        assertTrue(manifest, manifest.contains("\"protocol\":1"))
+        assertTrue(manifest, manifest.contains("\"version\":\"0.2.0\""))
+        assertTrue(manifest, manifest.contains("helper.capability_manifest"))
+    }
+
+    @Test
     fun fixtureExposesUnicodeToUIAutomator() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         // MIUI treats the test APK as a different UID and refuses its background

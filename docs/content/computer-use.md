@@ -40,6 +40,13 @@ does not by itself prove the requested UI outcome. A system overlay such as
 MIUI's notification shade blocks the semantic fixture rather than being
 silently retried or scored as a successful action.
 
+Helper discovery is explicit and versioned. `helper_mode = "auto"` accepts
+only the supported manifest and otherwise keeps the ADB path; `adb` never
+invokes the helper receiver, while `helper` fails closed if negotiation cannot
+prove compatibility. Use `android.diagnose` to refresh and inspect that state.
+Observation results name both the actual ADB observation transport and the
+optional backend selected by negotiation, without claiming task verification.
+
 Enable the `android` runner, add exact ADB serials under `[android]
 allowed_serials`, and grant `device` plus `process` to the relevant floor.
 Mutating capabilities additionally require their declared `write` or

@@ -3,11 +3,14 @@ package android_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +95,200 @@ func TestWildcardDeviceAccessIsRefused(t *testing.T) {
 	_, err := android.New(android.Options{AllowedSerials: []string{"*"}})
 	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput {
 		t.Fatalf("New error = %v, want invalid input", err)
+	}
+}
+
+func helperBroadcast(t *testing.T, protocol int, version string, capabilities []string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"schema": android.HelperManifestSchema, "protocol": protocol,
+		"version": version, "capabilities": capabilities,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []byte("Broadcasting: Intent { act=" + android.HelperManifestAction + " }\nBroadcast completed: result=0, data=\"" +
+		base64.RawURLEncoding.EncodeToString(body) + "\"\n")
+}
+
+func TestHelperModeMustBeKnown(t *testing.T) {
+	_, err := android.New(android.Options{HelperMode: "sometimes"})
+	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput {
+		t.Fatalf("New error = %v, want invalid input", err)
+	}
+}
+
+func TestADBModeNeverProbesTheHelper(t *testing.T) {
+	var calls []call
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"}, HelperMode: android.HelperModeADB,
+		Command: func(_ context.Context, binary string, args ...string) ([]byte, error) {
+			calls = append(calls, call{binary: binary, args: slices.Clone(args)})
+			if reflect.DeepEqual(args, []string{"-s", "phone", "get-state"}) {
+				return []byte("device"), nil
+			}
+			t.Fatalf("ADB mode invoked an unexpected command: %s %v", binary, args)
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityDiagnose, android.ImplementationDiagnose,
+		map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.Result["backend_selection"].(map[string]any)
+	if selection["selected"] != android.HelperModeADB || selection["helper_status"] != "not_probed" || len(calls) != 1 {
+		t.Fatalf("diagnosis = %#v, calls = %#v", out.Result, calls)
+	}
+}
+
+func TestAutoModeSelectsOnlyACompatibleHelper(t *testing.T) {
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"}, HelperMode: android.HelperModeAuto,
+		Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			switch {
+			case reflect.DeepEqual(args, []string{"-s", "phone", "get-state"}):
+				return []byte("device"), nil
+			case slices.Contains(args, android.HelperManifestAction):
+				return helperBroadcast(t, android.HelperProtocolVersion, "0.2.0",
+					[]string{"helper.fixture.unicode_observation", "helper.capability_manifest"}), nil
+			default:
+				t.Fatalf("unexpected command: %v", args)
+				return nil, nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityDiagnose, android.ImplementationDiagnose,
+		map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.Result["backend_selection"].(map[string]any)
+	if selection["selected"] != android.HelperModeHelper || selection["helper_status"] != "compatible" ||
+		selection["helper_version"] != "0.2.0" || selection["helper_protocol"] != android.HelperProtocolVersion {
+		t.Fatalf("diagnosis = %#v", out.Result)
+	}
+	if out.Result["task_result"] != "not_run" || out.Result["verified"] != false {
+		t.Fatalf("diagnosis claimed a task result: %#v", out.Result)
+	}
+}
+
+func TestObservationSeparatesTransportSelectionAndVerification(t *testing.T) {
+	pngBody := screenshot(t, 12)
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{"phone"}, HelperMode: android.HelperModeAuto,
+		Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			switch {
+			case args[len(args)-1] == "get-state":
+				return []byte("device"), nil
+			case slices.Contains(args, android.HelperManifestAction):
+				return helperBroadcast(t, android.HelperProtocolVersion, "0.2.0", []string{"helper.capability_manifest"}), nil
+			case args[len(args)-1] == "-p":
+				return pngBody, nil
+			default:
+				t.Fatalf("unexpected command: %v", args)
+				return nil, nil
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityScreenshot, android.ImplementationScreenshot,
+		map[string]any{"serial": "phone"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.Result["backend_selection"].(map[string]any)
+	if out.Result["observation_backend"] != android.HelperModeADB || selection["selected"] != android.HelperModeHelper ||
+		out.Result["task_result"] != "observed" || out.Result["verified"] != false {
+		t.Fatalf("observation metadata = %#v", out.Result)
+	}
+}
+
+func TestAutoModeFallsBackButHelperModeRefusesAnIncompatibleHelper(t *testing.T) {
+	for _, tc := range []struct {
+		mode    string
+		wantErr bool
+	}{
+		{mode: android.HelperModeAuto},
+		{mode: android.HelperModeHelper, wantErr: true},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			runner, err := android.New(android.Options{
+				AllowedSerials: []string{"phone"}, HelperMode: tc.mode,
+				Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+					if args[len(args)-1] == "get-state" {
+						return []byte("device"), nil
+					}
+					return helperBroadcast(t, android.HelperProtocolVersion+1, "0.2.0", []string{"helper.capability_manifest"}), nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := runner.Run(t.Context(), request(android.CapabilityDiagnose, android.ImplementationDiagnose,
+				map[string]any{"serial": "phone"}))
+			if tc.wantErr {
+				if err == nil || contract.KindOf(err) != contract.FailureUnavailable || !strings.Contains(err.Error(), "protocol") {
+					t.Fatalf("error = %v, want incompatible helper refusal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			selection := out.Result["backend_selection"].(map[string]any)
+			if selection["selected"] != android.HelperModeADB || selection["helper_status"] != "incompatible" {
+				t.Fatalf("fallback diagnosis = %#v", out.Result)
+			}
+		})
+	}
+}
+
+func TestMissingHelperIsReportedAndStrictModeRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		mode    string
+		wantErr bool
+	}{
+		{mode: android.HelperModeAuto},
+		{mode: android.HelperModeHelper, wantErr: true},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			runner, err := android.New(android.Options{
+				AllowedSerials: []string{"phone"}, HelperMode: tc.mode,
+				Command: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+					if args[len(args)-1] == "get-state" {
+						return []byte("device"), nil
+					}
+					return []byte("Error: receiver not found; unable to resolve Intent"), nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := runner.Run(t.Context(), request(android.CapabilityDiagnose, android.ImplementationDiagnose,
+				map[string]any{"serial": "phone"}))
+			if tc.wantErr {
+				if err == nil || contract.KindOf(err) != contract.FailureUnavailable || !strings.Contains(err.Error(), "not installed") {
+					t.Fatalf("error = %v, want missing helper refusal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			selection := out.Result["backend_selection"].(map[string]any)
+			if selection["selected"] != android.HelperModeADB || selection["helper_status"] != "not_installed" {
+				t.Fatalf("fallback diagnosis = %#v", out.Result)
+			}
+		})
 	}
 }
 

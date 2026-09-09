@@ -8,6 +8,35 @@ import (
 	"github.com/Tutitoos/atenea/internal/adapter/android"
 )
 
+// TestRealAndroidHelperNegotiation is a read-only provider-real gate. The APK
+// must already be installed; the test only reads its privileged static
+// capability broadcast through ADB and never opens an activity.
+func TestRealAndroidHelperNegotiation(t *testing.T) {
+	serial := os.Getenv("ATENEA_TEST_ANDROID_HELPER_SERIAL")
+	if serial == "" {
+		t.Skip("set ATENEA_TEST_ANDROID_HELPER_SERIAL after installing android-helper")
+	}
+	runner, err := android.New(android.Options{
+		AllowedSerials: []string{serial}, HelperMode: android.HelperModeAuto,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.Run(t.Context(), request(android.CapabilityDiagnose, android.ImplementationDiagnose,
+		map[string]any{"serial": serial}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := out.Result["backend_selection"].(map[string]any)
+	if selection["selected"] != android.HelperModeHelper || selection["helper_status"] != "compatible" ||
+		selection["helper_protocol"] != android.HelperProtocolVersion {
+		t.Fatalf("helper negotiation = %#v", out.Result)
+	}
+	if out.Result["task_result"] != "not_run" || out.Result["verified"] != false {
+		t.Fatalf("diagnosis claimed a UI outcome: %#v", out.Result)
+	}
+}
+
 // TestRealAndroidBridge is an opt-in device-real gate. It reads the selected
 // device, presses only Home, and starts/stops only the scrcpy process it owns.
 func TestRealAndroidBridge(t *testing.T) {

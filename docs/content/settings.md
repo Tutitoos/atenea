@@ -322,6 +322,11 @@ by `android.screenshot`; coordinate actions recapture the device and refuse
 the token when the pixels changed, while explicit semantic selector actions
 validate the window, orientation and current UI target instead. Naming
 `android` in `runners` enables the provider, but authorizes no device by itself.
+`helper_mode` is a closed choice: `auto` uses the optional helper only when its
+installed manifest has the supported schema and protocol, `adb` never probes
+the helper, and `helper` refuses the call when the helper is absent or
+incompatible. The shipped setting is `auto`; direct Go embedders that omit the
+option retain the historical ADB-only behavior.
 
 `device` is the one effect that argues the other way, and it is on neither
 floor as shipped. It marks a capability that reaches the pointer, the keyboard
@@ -740,6 +745,7 @@ allowed_serials = ["emulator-5554"]
 [orchestrator.android]
 adb_binary = "adb"
 scrcpy_binary = "scrcpy"
+helper_mode = "auto" # auto, adb, or helper
 timeout = "15s"
 frame_ttl = "30s"
 ```
@@ -790,6 +796,14 @@ the action path, so window size, scaling and occlusion do not move a tap.
 `android.inspect` may filter that hierarchy with `text_contains`, exact
 `resource_id`, a device-space `region`, or `visible_only = true`. Omitting all
 of them preserves the complete bounded tree.
+
+`android.diagnose` refreshes the helper probe for one explicitly allowed
+serial. It reports the configured mode, selected backend, helper package,
+version, protocol and capabilities, plus `task_result = "not_run"` and
+`verified = false`. Screenshot and inspection results carry the same cached
+selection alongside `observation_backend = "adb"`: negotiation does not
+mislabel ADB pixels or UIAutomator XML as helper-produced, and it is not a
+verified task outcome. Reconnection invalidates the cached selection.
 
 Typing is deliberately limited to bounded safe ASCII. Unicode, arbitrary shell
 text and credentials need a separately reviewed input helper rather than being

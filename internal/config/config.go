@@ -739,6 +739,7 @@ type AndroidAdapter struct {
 	Implementations []string
 	ADBBinary       string
 	ScrcpyBinary    string
+	HelperMode      string
 	Timeout         time.Duration
 	FrameTTL        time.Duration
 }
@@ -1557,6 +1558,7 @@ type fileAndroidAdapter struct {
 	Implementations *[]string `toml:"implementations"`
 	ADBBinary       string    `toml:"adb_binary"`
 	ScrcpyBinary    string    `toml:"scrcpy_binary"`
+	HelperMode      string    `toml:"helper_mode"`
 	Timeout         string    `toml:"timeout"`
 	FrameTTL        string    `toml:"frame_ttl"`
 }
@@ -2407,6 +2409,7 @@ func (o fileOrchestrator) build(source string) (Orchestrator, error) {
 			Implementations: android.DefaultImplementations(),
 			ADBBinary:       android.DefaultADBBinary,
 			ScrcpyBinary:    android.DefaultScrcpyBinary,
+			HelperMode:      android.HelperModeAuto,
 			Timeout:         android.DefaultTimeout,
 			FrameTTL:        android.DefaultFrameTTL,
 		},
@@ -3075,6 +3078,13 @@ func (a fileAndroidAdapter) build(source string, out AndroidAdapter) (AndroidAda
 	}
 	if value := strings.TrimSpace(a.ScrcpyBinary); value != "" {
 		out.ScrcpyBinary = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(a.HelperMode)); value != "" {
+		if value != android.HelperModeAuto && value != android.HelperModeADB && value != android.HelperModeHelper {
+			return AndroidAdapter{}, contract.Fail(contract.FailureInvalidInput,
+				"settings %s: orchestrator.android.helper_mode must be auto, adb, or helper, got %q", source, a.HelperMode)
+		}
+		out.HelperMode = value
 	}
 	if a.Timeout != "" {
 		timeout, err := time.ParseDuration(a.Timeout)

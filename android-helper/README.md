@@ -1,8 +1,8 @@
 # Atenea Android helper
 
-This optional Kotlin fixture validates the Android-side prerequisites for the
-future helper protocol. Atenea keeps ADB as its fallback when this APK is not
-installed.
+This optional Kotlin fixture exposes a versioned, read-only capability
+manifest and validates Android-side UIAutomator prerequisites. Atenea keeps
+ADB as its fallback when this APK is absent or incompatible.
 
 Build it with:
 
@@ -18,11 +18,32 @@ adb -s SERIAL install -r app/build/outputs/apk/androidTest/debug/app-debug-andro
 adb -s SERIAL shell am instrument -w io.atenea.androidhelper.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The smoke test launches its local fixture through the fixed UIAutomation shell
-command used by the host-side bridge. This avoids MIUI's cross-UID background
-Activity restriction and proves that UIAutomator observes an accessibility
+Verify the installed helper contract without opening its activity or writing
+application data:
+
+```sh
+adb -s SERIAL shell am broadcast --receiver-foreground \
+  -a io.atenea.androidhelper.CAPABILITIES \
+  -n io.atenea.androidhelper/.CapabilityReceiver
+```
+
+The `data` value is unpadded Base64URL JSON. Version `0.2.0` advertises helper
+protocol `1`. Only the ADB shell may call the receiver because the component
+requires Android's privileged `DUMP` permission. An installed APK with another
+schema or protocol is incompatible, not silently accepted.
+
+The smoke tests check that manifest and launch the local fixture through the
+fixed UIAutomation shell command used by the host-side bridge. This avoids
+MIUI's cross-UID background Activity restriction and proves that UIAutomator observes an accessibility
 description and Unicode text. It does not grant Atenea extra device permissions
-or replace the ADB safety boundary.
+or replace the ADB safety boundary. Capability negotiation proves only which
+optional helper contract is available; it never proves that a requested UI
+task completed.
+
+MIUI may keep a newly installed or force-stopped package from starting its
+manifest receiver. Open `io.atenea.androidhelper/.MainActivity` once after
+installation if the broadcast returns no `data`; Atenea reports that state as
+incompatible and `auto` falls back to ADB instead of opening the app itself.
 
 ## Semantic benchmark
 
