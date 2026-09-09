@@ -330,6 +330,138 @@ func TestToolsListIsTheShippedCatalogue(t *testing.T) {
 	}
 }
 
+func TestDecisionPlanBuildsADryRunWorkflowForCodexPlanMode(t *testing.T) {
+	atenea := buildService(t, decisionPlanSettings(t))
+	defer serve(t, atenea)()
+
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	listed := result(t, c.call("tools/list", nil), "tools/list")
+	var advertised map[string]any
+	for _, raw := range listed["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if tool["name"] == "decision.plan" {
+			advertised = tool
+			break
+		}
+	}
+	if advertised == nil || !strings.Contains(advertised["description"].(string), "WITHOUT executing") {
+		t.Fatalf("decision.plan was not advertised as a dry run: %v", advertised)
+	}
+
+	got := result(t, c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective":  "planificar el flujo de autenticación",
+			"repository": "work",
+			"budget_usd": 10,
+		},
+	}), "decision.plan")
+	structured := got["structuredContent"].(map[string]any)
+	if structured["dry_run"] != true || structured["execution_authorized"] != false {
+		t.Fatalf("execution boundary = %v", structured)
+	}
+	if structured["intent"] != "plan" || structured["valid"] != true {
+		t.Fatalf("decision = %v", structured)
+	}
+	workflowGraph := structured["workflow"].(map[string]any)
+	steps := workflowGraph["Steps"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("steps = %d, want coordinator, exploration and plan", len(steps))
+	}
+	for _, rawStep := range steps {
+		step := rawStep.(map[string]any)
+		if step["status"] != nil {
+			t.Fatalf("dry-run step acquired runtime state: %v", step)
+		}
+	}
+	store, err := workflow.Open(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	runs, err := store.List(t.Context(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("decision.plan persisted %d workflow(s)", len(runs))
+	}
+}
+
+func TestDecisionPlanValidatesLimitsBeforePlanning(t *testing.T) {
+	atenea := buildService(t, decisionPlanSettings(t))
+	defer serve(t, atenea)()
+	c := dial(t)
+	result(t, c.handshake("codex"), "initialize")
+	answer := c.call("tools/call", map[string]any{
+		"name": "decision.plan",
+		"arguments": map[string]any{
+			"objective":  "planificar el flujo",
+			"repository": "work",
+			"max_tokens": 100,
+		},
+	})
+	errObject, ok := answer["error"].(map[string]any)
+	if !ok || !strings.Contains(fmt.Sprint(errObject["message"]), "max_tokens requires max_duration") {
+		t.Fatalf("answer = %v", answer)
+	}
+}
+
+func decisionPlanSettings(t *testing.T) string {
+	t.Helper()
+	return mcpSettings(t) + `
+
+[model]
+binary = "claude"
+explore = "sonnet"
+plan = "claude-opus-5"
+
+[[agent]]
+name = "atenea-coordinator"
+kind = "orchestrator"
+command = "$atenea"
+args = ["agent-exec", "explore"]
+context = ["repository"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 200000
+  [[agent.result]]
+  name = "result"
+  type = "string"
+  required = true
+
+[[agent]]
+name = "explore"
+kind = "specialized"
+command = "$atenea"
+args = ["agent-exec", "explore"]
+context = ["repository"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 200000
+  [[agent.result]]
+  name = "result"
+  type = "string"
+  required = true
+
+[[agent]]
+name = "plan"
+kind = "specialized"
+command = "$atenea"
+args = ["agent-exec", "plan"]
+reads_subject = true
+context = ["repository"]
+effects = ["read"]
+max_duration = "10m"
+max_tokens = 200000
+  [[agent.result]]
+  name = "result"
+  type = "string"
+  required = true
+`
+}
+
 // The unit of work is the repository, and a tool nobody can aim is a tool
 // nobody can use. The capability's own declaration says nothing about which
 // repository to search, because that is Atenea's question rather than the

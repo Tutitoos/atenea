@@ -587,7 +587,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		return nil, notInitialized()
 	}
 	capabilities := v.core.catalog.Capabilities()
-	tools := make([]map[string]any, 0, 4+len(capabilities))
+	tools := make([]map[string]any, 0, 5+len(capabilities))
 	tools = append(tools, map[string]any{
 		"name":        commandTool,
 		"description": "Run a closed, read-only Atenea chat command. Markdown is returned by default for desktop clients; use format=json for integrations.",
@@ -609,6 +609,7 @@ func (v *conversation) toolsList(ctx context.Context) (any, *rpcError) {
 		}, "required": []string{"name"}},
 	})
 	tools = append(tools, v.repositoriesTool())
+	tools = append(tools, v.decisionPlanTool())
 	tools = append(tools, v.workspaceContextTool())
 	if v.core.knowledgeSurfaceEnabled() {
 		tools = append(tools, v.knowledgeContextTool())
@@ -907,6 +908,9 @@ func (v *conversation) toolsCall(ctx context.Context, raw json.RawMessage) (resu
 	}
 	if params.Name == toolWorkspaceContext {
 		return v.workspaceContext(ctx, arguments)
+	}
+	if params.Name == toolDecisionPlan {
+		return v.decisionPlan(ctx, arguments)
 	}
 	if params.Name == toolKnowledgeContext {
 		return v.knowledgeContext(ctx, arguments)
