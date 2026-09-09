@@ -121,6 +121,10 @@ Commands:
                          Sync canonical native Codex agent profiles atomically
   codex agents check [--global|--project PATH]
                          Check native Codex agent profile receipts
+  codex plan-mode sync --global|--project PATH [--prune]
+                         Install the automatic Plan-mode decision skill
+  codex plan-mode check [--global|--project PATH]
+                         Check the Plan-mode integration without changing it
   codex certify start --desktop [--ttl 30d]
                          Certify observable App Server identity and real Codex
                          CLI/Desktop presentation with disposable authentication
@@ -157,6 +161,8 @@ unknown usage remain separate; this command does not invoke a model.
 `,
 	"codex": `Usage: atenea codex agents sync --global|--project PATH [--prune]
        atenea codex agents check [--global|--project PATH]
+       atenea codex plan-mode sync --global|--project PATH [--prune]
+       atenea codex plan-mode check [--global|--project PATH]
        atenea codex certify start --desktop [--ttl 30d]
        atenea codex certify status [CERTIFICATE_ID] [--json|--markdown]
        atenea codex certify complete CERTIFICATE_ID [--helper PATH]
@@ -173,6 +179,11 @@ Global profiles live under $CODEX_HOME/agents (or ~/.codex/agents); project
 profiles live under <repository>/.codex/agents. Sync uses atomic writes,
 preserves foreign files, and only removes obsolete Atenea-managed profiles
 with --prune. It never invokes Codex and never writes a real home in tests.
+
+Plan-mode sync installs a managed Codex skill under $CODEX_HOME/skills or
+<repository>/.agents/skills. When Codex reports that the active collaboration
+mode is Plan, the skill calls ATENEA's dry-run decision.plan tool. It never
+launches a workflow or treats mode selection as approval of effects.
 
 Certification uses a fresh CODEX_HOME and device login, deletes credentials
 after the App Server and CLI gates, and requires a manual Codex Desktop

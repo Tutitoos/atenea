@@ -8,6 +8,13 @@ title: Decision router
 commission into a durable coordination plan. It is deliberately a dry run
 unless `--run` is supplied. `task` remains the compatibility entry point.
 
+The same dry-run compiler is exposed to Codex chats as the MCP tool
+`decision.plan`. It accepts one explicit repository and returns the complete
+plan with `dry_run = true` and `execution_authorized = false`; it neither
+persists nor launches the workflow. The managed `atenea-plan-mode` Codex skill
+uses this surface automatically only while the active collaboration mode is
+Plan.
+
 ```sh
 atenea decide "buscar el flujo de autenticación" --trace
 atenea decide "diseñar el flujo de pagos" --repo taxiprime-backend --json

@@ -14,6 +14,16 @@ A release tag is `vMAJOR.MINOR.PATCH` and names the product version.
 
 ## [Unreleased]
 
+### Added
+
+Codex Plan mode can opt into ATENEA automatically through a managed
+`atenea-plan-mode` skill. `atenea codex plan-mode sync` installs the skill
+globally or per project without replacing foreign or locally modified files,
+and `check` verifies it without writing. The new read-only `decision.plan` MCP
+tool returns ATENEA's intent, agent/model routing, policy, budget and compiled
+workflow graph as an explicit dry run. Selecting Plan mode still does not
+launch, resume or approve a workflow.
+
 ### Removed
 
 Serena is retired as an adapter, runner, managed process and MCP provider.

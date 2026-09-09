@@ -56,6 +56,38 @@ atenea codex agents sync --project /path/to/repository
 atenea codex agents check --global
 ```
 
+## Automatic ATENEA planning in Codex Plan mode
+
+Install the Plan-mode bridge globally for every Codex repository chat, or only
+for one project:
+
+```sh
+atenea codex plan-mode sync --global
+atenea codex plan-mode sync --project /path/to/repository
+atenea codex plan-mode check --global
+```
+
+The command installs the managed `atenea-plan-mode` skill under
+`$CODEX_HOME/skills` (or `~/.codex/skills`) globally and under
+`<repository>/.agents/skills` for a project. Writes are atomic. A foreign or
+locally modified file with the same name is preserved, and `--prune` removes
+only files whose complete ATENEA ownership digest still matches.
+
+The bridge activates from Codex's collaboration-mode developer context, not
+from the word "plan" in a prompt. In Plan mode it first resolves the current
+working directory through `catalog.repositories`, then calls `decision.plan`
+with the complete user objective and matched repository. That tool returns
+ATENEA's deterministic intent, agent/model routing, policy, budget and compiled
+workflow graph as a dry run. It writes no workflow record and launches no
+agent. Codex reconciles that evidence with read-only repository inspection and
+uses it to present the final plan.
+
+Selecting Plan mode is not approval to execute the plan. The skill explicitly
+forbids `workflow.launch`, `workflow.resume`, `workflow.answer` and
+`atenea decide --run`; the existing launch and effect gates remain separate.
+Codex discovers skills when a chat starts, so open a new chat after the first
+sync or after changing the managed skill.
+
 Global files are written under `$CODEX_HOME/agents/` (or `~/.codex/agents/`),
 and project files under `<repository>/.codex/agents/`. Each `atenea-*.toml`
 file carries a digest marker and top-level `name`, `description`,
