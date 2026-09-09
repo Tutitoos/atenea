@@ -30,6 +30,7 @@ Declared interfaces audited in September 2026. Tests validate Atenea routing and
 | desktop.type | macos.type | Declaration and local contracts |
 | desktop.key | macos.key | Declaration and local contracts |
 | android.devices | adb.devices | Local contracts and Pixel 10 device-real gate |
+| android.diagnose | adb.helper-diagnose | Local contracts and Xiaomi provider-real helper negotiation |
 | android.screenshot | adb.screenshot | Local contracts and Pixel 10 device-real gate |
 | android.inspect | uiautomator.inspect | Local contracts and Pixel 10 device-real gate |
 | android.tap | adb.tap | Local command-construction contracts |

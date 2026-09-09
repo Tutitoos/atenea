@@ -187,6 +187,7 @@ const (
 
 const (
 	androidDevicesCapability    = "android.devices"
+	androidDiagnoseCapability   = "android.diagnose"
 	androidInspectCapability    = "android.inspect"
 	androidScreenshotCapability = "android.screenshot"
 	androidTapCapability        = "android.tap"
@@ -311,6 +312,7 @@ var card = contract.Agent{
 		desktopTypeCapability,
 		desktopKeyCapability,
 		androidDevicesCapability,
+		androidDiagnoseCapability,
 		androidInspectCapability,
 		androidScreenshotCapability,
 		androidTapCapability,

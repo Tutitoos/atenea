@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -35,9 +36,11 @@ const (
 	DefaultTimeout      = 15 * time.Second
 	DefaultFrameTTL     = 30 * time.Second
 	maxScreenshotBytes  = 12 << 20
+	maxHelperProbeBytes = 64 << 10
 	defaultImageMaxSide = 1280
 
 	CapabilityDevices    = "android.devices"
+	CapabilityDiagnose   = "android.diagnose"
 	CapabilityScreenshot = "android.screenshot"
 	CapabilityInspect    = "android.inspect"
 	CapabilityTap        = "android.tap"
@@ -48,6 +51,7 @@ const (
 	CapabilityUnmirror   = "android.unmirror"
 
 	ImplementationDevices    = "adb.devices"
+	ImplementationDiagnose   = "adb.helper-diagnose"
 	ImplementationScreenshot = "adb.screenshot"
 	ImplementationInspect    = "uiautomator.inspect"
 	ImplementationTap        = "adb.tap"
@@ -56,10 +60,21 @@ const (
 	ImplementationKey        = "adb.key"
 	ImplementationMirror     = "scrcpy.mirror"
 	ImplementationUnmirror   = "scrcpy.unmirror"
+
+	HelperModeAuto   = "auto"
+	HelperModeADB    = "adb"
+	HelperModeHelper = "helper"
+
+	HelperPackage         = "io.atenea.androidhelper"
+	HelperReceiver        = HelperPackage + "/.CapabilityReceiver"
+	HelperManifestAction  = HelperPackage + ".CAPABILITIES"
+	HelperManifestSchema  = "io.atenea.android-helper.capabilities"
+	HelperProtocolVersion = 1
 )
 
 var implementations = map[string]string{
 	ImplementationDevices:    CapabilityDevices,
+	ImplementationDiagnose:   CapabilityDiagnose,
 	ImplementationScreenshot: CapabilityScreenshot,
 	ImplementationInspect:    CapabilityInspect,
 	ImplementationTap:        CapabilityTap,
@@ -100,6 +115,7 @@ type Options struct {
 	ScrcpyBinary    string
 	Timeout         time.Duration
 	FrameTTL        time.Duration
+	HelperMode      string
 	Command         Command
 	Start           StartCommand
 	Now             func() time.Time
@@ -116,6 +132,23 @@ type frame struct {
 	expires     time.Time
 }
 
+type helperManifest struct {
+	Schema       string   `json:"schema"`
+	Protocol     int      `json:"protocol"`
+	Version      string   `json:"version"`
+	Capabilities []string `json:"capabilities"`
+}
+
+type helperSelection struct {
+	mode         string
+	selected     string
+	capabilities []string
+	status       string
+	version      string
+	protocol     int
+	reason       string
+}
+
 // Runner implements the typed ADB, UIAutomator and scrcpy capability surface.
 type Runner struct {
 	implementations []string
@@ -123,6 +156,7 @@ type Runner struct {
 	adb, scrcpy     string
 	timeout         time.Duration
 	frameTTL        time.Duration
+	helperMode      string
 	command         Command
 	start           StartCommand
 	now             func() time.Time
@@ -133,6 +167,7 @@ type Runner struct {
 	states      map[string]string
 	generations map[string]uint64
 	actions     map[string]*sync.Mutex
+	helper      map[string]helperSelection
 }
 
 // New constructs an allow-listed Android runner.
@@ -168,6 +203,16 @@ func New(opts Options) (*Runner, error) {
 	if frameTTL <= 0 {
 		frameTTL = DefaultFrameTTL
 	}
+	helperMode := strings.ToLower(strings.TrimSpace(opts.HelperMode))
+	if helperMode == "" {
+		// Direct embedders preserve the historical ADB-only behavior unless
+		// they opt into negotiation. Atenea's shipped config passes auto.
+		helperMode = HelperModeADB
+	}
+	if helperMode != HelperModeAuto && helperMode != HelperModeADB && helperMode != HelperModeHelper {
+		return nil, contract.Fail(contract.FailureInvalidInput,
+			"android: helper_mode must be auto, adb, or helper, got %q", opts.HelperMode)
+	}
 	command := opts.Command
 	if command == nil {
 		command = runCommand
@@ -183,10 +228,11 @@ func New(opts Options) (*Runner, error) {
 	return &Runner{
 		implementations: impls,
 		allowed:         slices.Clone(opts.AllowedSerials),
-		adb:             adb, scrcpy: scrcpy, timeout: timeout, frameTTL: frameTTL,
+		adb:             adb, scrcpy: scrcpy, timeout: timeout, frameTTL: frameTTL, helperMode: helperMode,
 		command: command, start: start, now: now,
 		frames: make(map[string]frame), mirrors: make(map[string]Process),
 		states: make(map[string]string), generations: make(map[string]uint64), actions: make(map[string]*sync.Mutex),
+		helper: make(map[string]helperSelection),
 	}, nil
 }
 
@@ -195,7 +241,7 @@ func (r *Runner) ID() string { return "android" }
 
 // Surface summarizes the configured local executables and device scope.
 func (r *Runner) Surface() string {
-	return fmt.Sprintf("adb:%s scrcpy:%s allowed:%d", r.adb, r.scrcpy, len(r.allowed))
+	return fmt.Sprintf("adb:%s scrcpy:%s helper:%s allowed:%d", r.adb, r.scrcpy, r.helperMode, len(r.allowed))
 }
 
 // Serves reports whether this runner exposes an implementation ID.
@@ -238,6 +284,8 @@ func (r *Runner) Run(ctx context.Context, req contract.RunRequest) (contract.Out
 	switch capability {
 	case CapabilityDevices:
 		result, err = r.devices(ctx)
+	case CapabilityDiagnose:
+		result, err = r.diagnose(ctx, req.Payload)
 	case CapabilityScreenshot:
 		result, err = r.screenshot(ctx, req.Payload)
 	case CapabilityInspect:
@@ -289,6 +337,24 @@ func (r *Runner) devices(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"devices": devices}, nil
 }
 
+func (r *Runner) diagnose(ctx context.Context, payload map[string]any) (map[string]any, error) {
+	serial, err := r.serial(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := r.selectHelper(ctx, serial, true)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"serial":            serial,
+		"backend_selection": selection.result(),
+		"task_result":       "not_run",
+		"verified":          false,
+	}
+	return result, nil
+}
+
 func parseDevices(body string, allowed []string) []map[string]any {
 	var out []map[string]any
 	for _, line := range strings.Split(body, "\n") {
@@ -316,8 +382,163 @@ func parseDevices(body string, allowed []string) []map[string]any {
 	return out
 }
 
+func (s helperSelection) result() map[string]any {
+	result := map[string]any{
+		"mode":           s.mode,
+		"selected":       s.selected,
+		"capabilities":   slices.Clone(s.capabilities),
+		"helper_package": HelperPackage,
+		"helper_status":  s.status,
+	}
+	if s.version != "" {
+		result["helper_version"] = s.version
+	}
+	if s.protocol != 0 {
+		result["helper_protocol"] = s.protocol
+	}
+	if s.reason != "" {
+		result["helper_reason"] = s.reason
+	}
+	return result
+}
+
+func (r *Runner) selectHelper(ctx context.Context, serial string, refresh bool) (helperSelection, error) {
+	if r.helperMode == HelperModeADB {
+		return helperSelection{
+			mode: HelperModeADB, selected: HelperModeADB,
+			capabilities: r.Capabilities(), status: "not_probed",
+		}, nil
+	}
+	generation := r.generation(serial)
+	cacheKey := fmt.Sprintf("%s:%d", serial, generation)
+	if !refresh {
+		r.mu.Lock()
+		cached, ok := r.helper[cacheKey]
+		r.mu.Unlock()
+		if ok {
+			if r.helperMode == HelperModeHelper && cached.selected != HelperModeHelper {
+				return helperSelection{}, helperRequiredError(cached)
+			}
+			return cached, nil
+		}
+	}
+
+	selection := r.probeHelper(ctx, serial)
+	selection.mode = r.helperMode
+	if selection.status == "compatible" {
+		selection.selected = HelperModeHelper
+	} else {
+		selection.selected = HelperModeADB
+		selection.capabilities = r.Capabilities()
+	}
+	r.mu.Lock()
+	for key := range r.helper {
+		if strings.HasPrefix(key, serial+":") {
+			delete(r.helper, key)
+		}
+	}
+	r.helper[cacheKey] = selection
+	r.mu.Unlock()
+	if r.helperMode == HelperModeHelper && selection.selected != HelperModeHelper {
+		return helperSelection{}, helperRequiredError(selection)
+	}
+	return selection, nil
+}
+
+func helperRequiredError(selection helperSelection) error {
+	reason := selection.reason
+	if reason == "" {
+		reason = selection.status
+	}
+	return contract.Fail(contract.FailureUnavailable,
+		"android: helper mode requires a compatible %s helper: %s", HelperPackage, reason)
+}
+
+func (r *Runner) probeHelper(ctx context.Context, serial string) helperSelection {
+	body, err := r.run(ctx, r.adb, "-s", serial, "shell", "am", "broadcast", "--receiver-foreground",
+		"-a", HelperManifestAction, "-n", HelperReceiver)
+	if err != nil {
+		return helperSelection{status: "unavailable", reason: boundedHelperReason(err.Error())}
+	}
+	if len(body) > maxHelperProbeBytes {
+		return helperSelection{status: "incompatible", reason: "helper response exceeds the 64 KiB safety ceiling"}
+	}
+	text := strings.TrimSpace(string(body))
+	if helperUnavailableOutput(text) {
+		return helperSelection{status: "not_installed", reason: "capability receiver is not installed"}
+	}
+	manifest, err := decodeHelperManifest(text)
+	if err != nil {
+		return helperSelection{status: "incompatible", reason: err.Error()}
+	}
+	return helperSelection{
+		status: "compatible", version: manifest.Version, protocol: manifest.Protocol,
+		capabilities: slices.Clone(manifest.Capabilities),
+	}
+}
+
+func boundedHelperReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 512 {
+		return reason[:512] + "..."
+	}
+	return reason
+}
+
+func helperUnavailableOutput(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "unable to resolve intent") ||
+		strings.Contains(lower, "unknown package") ||
+		strings.Contains(lower, "no receiver received") ||
+		strings.Contains(lower, "receiver not found")
+}
+
+var helperManifestPattern = regexp.MustCompile(`(?m)^Broadcast completed: result=-?\d+, data="?([A-Za-z0-9_-]+)"?\s*$`)
+var helperVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+var helperCapabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{2,127}$`)
+
+func decodeHelperManifest(body string) (helperManifest, error) {
+	match := helperManifestPattern.FindStringSubmatch(body)
+	if len(match) != 2 {
+		return helperManifest{}, errors.New("helper returned no capability manifest")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(match[1])
+	if err != nil {
+		return helperManifest{}, fmt.Errorf("helper capability manifest is not valid base64url: %w", err)
+	}
+	var manifest helperManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return helperManifest{}, fmt.Errorf("helper capability manifest is not valid JSON: %w", err)
+	}
+	if manifest.Schema != HelperManifestSchema {
+		return helperManifest{}, fmt.Errorf("unsupported helper manifest schema %q", manifest.Schema)
+	}
+	if manifest.Protocol != HelperProtocolVersion {
+		return helperManifest{}, fmt.Errorf("unsupported helper protocol %d; host supports %d", manifest.Protocol, HelperProtocolVersion)
+	}
+	if !helperVersionPattern.MatchString(manifest.Version) {
+		return helperManifest{}, fmt.Errorf("invalid helper version %q", manifest.Version)
+	}
+	if len(manifest.Capabilities) == 0 || len(manifest.Capabilities) > 64 {
+		return helperManifest{}, errors.New("helper capability list must contain 1-64 entries")
+	}
+	seen := make(map[string]bool, len(manifest.Capabilities))
+	for _, capability := range manifest.Capabilities {
+		if !helperCapabilityPattern.MatchString(capability) || seen[capability] {
+			return helperManifest{}, fmt.Errorf("invalid or duplicate helper capability %q", capability)
+		}
+		seen[capability] = true
+	}
+	slices.Sort(manifest.Capabilities)
+	return manifest, nil
+}
+
 func (r *Runner) screenshot(ctx context.Context, payload map[string]any) (map[string]any, error) {
 	serial, err := r.serial(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := r.selectHelper(ctx, serial, false)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +574,10 @@ func (r *Runner) screenshot(ctx context.Context, payload map[string]any) (map[st
 		"scaled":        imageWidth != width || imageHeight != height,
 		"legacy_base64": boolean(payload["legacy_base64"]),
 		"serial":        serial, "untrusted": true, "frame_id": id,
+		"observation_backend": "adb",
+		"backend_selection":   selection.result(),
+		"task_result":         "observed",
+		"verified":            false,
 	}
 	if known.window != "" {
 		result["semantic"] = true
@@ -422,13 +647,21 @@ func (r *Runner) inspect(ctx context.Context, payload map[string]any) (map[strin
 	if err != nil {
 		return nil, err
 	}
+	selection, err := r.selectHelper(ctx, serial, false)
+	if err != nil {
+		return nil, err
+	}
 	tree, err := r.dumpHierarchy(ctx, serial)
 	if err != nil {
 		return nil, err
 	}
 	nodes, truncated := flattenHierarchy(tree, serial)
 	nodes = filterNodes(nodes, payload)
-	result := map[string]any{"nodes": nodes, "count": len(nodes), "serial": serial, "untrusted": true}
+	result := map[string]any{
+		"nodes": nodes, "count": len(nodes), "serial": serial, "untrusted": true,
+		"observation_backend": "adb", "backend_selection": selection.result(),
+		"task_result": "observed", "verified": false,
+	}
 	if truncated != "" {
 		result["truncated"] = truncated
 	}
@@ -727,6 +960,11 @@ func (r *Runner) serial(ctx context.Context, payload map[string]any) (string, er
 		r.states[serial] = state
 		r.generations[serial]++
 		r.invalidateSerialFramesLocked(serial)
+		for key := range r.helper {
+			if strings.HasPrefix(key, serial+":") {
+				delete(r.helper, key)
+			}
+		}
 	}
 	r.mu.Unlock()
 	if state != "device" {

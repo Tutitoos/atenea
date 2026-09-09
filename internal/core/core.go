@@ -724,6 +724,7 @@ func buildRunner(name string, cfg config.Config, procs *supervisor.Supervisor) (
 			AllowedSerials:  cfg.Android.AllowedSerials,
 			ADBBinary:       cfg.Orchestrator.Android.ADBBinary,
 			ScrcpyBinary:    cfg.Orchestrator.Android.ScrcpyBinary,
+			HelperMode:      cfg.Orchestrator.Android.HelperMode,
 			Timeout:         cfg.Orchestrator.Android.Timeout,
 			FrameTTL:        cfg.Orchestrator.Android.FrameTTL,
 		})

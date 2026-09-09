@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Tutitoos/atenea/internal/adapter/android"
 	"github.com/Tutitoos/atenea/internal/adapter/kivgraph"
 	"github.com/Tutitoos/atenea/internal/config"
 	"github.com/Tutitoos/atenea/internal/selector"
@@ -45,7 +46,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		ids[i] = capability.ID
 	}
 	slices.Sort(ids)
-	wantIDs := []string{"android.devices", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
+	wantIDs := []string{"android.devices", "android.diagnose", "android.inspect", "android.key", "android.mirror", "android.screenshot", "android.swipe", "android.tap", "android.type", "android.unmirror", "code.context", "code.impact", "code.search", "desktop.apps", "desktop.click", "desktop.drag", "desktop.inspect", "desktop.key",
 		"desktop.move", "desktop.screenshot", "desktop.scroll", "desktop.type", "graph.ensure_fresh", "graph.repositories", "graph.status", "repository.index", "symbol.calls", "symbol.consumers", "symbol.definition", "symbol.dependencies", "symbol.get", "symbol.impact", "symbol.implementations", "symbol.intent_search", "symbol.overview", "symbol.references", "symbol.search", "symbol.source", "symbol.unresolved", "web.crawl", "web.extract", "web.fetch"}
 	if !slices.Equal(ids, wantIDs) {
 		t.Fatalf("capabilities = %v, want %v", ids, wantIDs)
@@ -71,7 +72,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 			want = []contract.Effect{contract.EffectRead, contract.EffectWrite, contract.EffectProcess}
 		case "desktop.apps", "desktop.inspect", "desktop.screenshot", "desktop.move":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice}
-		case "android.devices", "android.inspect", "android.screenshot", "android.mirror", "android.unmirror":
+		case "android.devices", "android.diagnose", "android.inspect", "android.screenshot", "android.mirror", "android.unmirror":
 			want = []contract.Effect{contract.EffectRead, contract.EffectDevice, contract.EffectProcess}
 		// Rearranges what is there or what is visible, without sending.
 		case "desktop.drag", "desktop.scroll":
@@ -128,6 +129,7 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 	slices.Sort(shipped)
 	want := []string{
 		"adb.devices",
+		"adb.helper-diagnose",
 		"adb.key",
 		"adb.screenshot",
 		"adb.swipe",
@@ -489,6 +491,9 @@ func TestAndroidBridgeDefaultsDenyEveryDevice(t *testing.T) {
 	if cfg.Orchestrator.Android.ADBBinary != "adb" || cfg.Orchestrator.Android.ScrcpyBinary != "scrcpy" {
 		t.Fatalf("android binaries = %q %q", cfg.Orchestrator.Android.ADBBinary, cfg.Orchestrator.Android.ScrcpyBinary)
 	}
+	if cfg.Orchestrator.Android.HelperMode != android.HelperModeAuto {
+		t.Fatalf("android helper mode = %q, want auto", cfg.Orchestrator.Android.HelperMode)
+	}
 	if cfg.Orchestrator.Android.Timeout != 15*time.Second || cfg.Orchestrator.Android.FrameTTL != 30*time.Second {
 		t.Fatalf("android durations = %v %v", cfg.Orchestrator.Android.Timeout, cfg.Orchestrator.Android.FrameTTL)
 	}
@@ -502,6 +507,7 @@ allowed_serials = ["emulator-5554", "phone-1"]
 [orchestrator.android]
 adb_binary = "/opt/android/adb"
 scrcpy_binary = "/opt/android/scrcpy"
+helper_mode = "helper"
 timeout = "8s"
 frame_ttl = "12s"
 implementations = ["adb.devices"]
@@ -515,9 +521,20 @@ implementations = ["adb.devices"]
 	}
 	got := cfg.Orchestrator.Android
 	if got.ADBBinary != "/opt/android/adb" || got.ScrcpyBinary != "/opt/android/scrcpy" ||
+		got.HelperMode != android.HelperModeHelper ||
 		got.Timeout != 8*time.Second || got.FrameTTL != 12*time.Second ||
 		!slices.Equal(got.Implementations, []string{"adb.devices"}) {
 		t.Fatalf("android adapter = %+v", got)
+	}
+}
+
+func TestAndroidHelperModeIsClosed(t *testing.T) {
+	_, err := config.Load(write(t, minimal+`
+[orchestrator.android]
+helper_mode = "prefer-helper-sometimes"
+`))
+	if err == nil || contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "helper_mode") {
+		t.Fatalf("error = %v, want invalid helper_mode", err)
 	}
 }
 

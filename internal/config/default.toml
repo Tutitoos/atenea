@@ -340,6 +340,7 @@ runners = ["omp"]
   # list. It is off unless `runners` names "android".
   implementations = [
     "adb.devices",
+    "adb.helper-diagnose",
     "adb.key",
     "adb.screenshot",
     "adb.swipe",
@@ -351,6 +352,7 @@ runners = ["omp"]
   ]
   adb_binary = "adb"
   scrcpy_binary = "scrcpy"
+  helper_mode = "auto"
   timeout = "15s"
   frame_ttl = "30s"
 
@@ -4378,8 +4380,97 @@ effects = ["read", "device", "process"]
     summary = "Model reported by ADB, when present."
 
 [[capability]]
-id = "android.screenshot"
+id = "android.diagnose"
 version = "1.0.0"
+summary = "Negotiate the optional Android helper without changing application data."
+semantics = "Reports backend selection and helper compatibility only. It does not claim that a UI task ran or succeeded."
+effects = ["read", "device", "process"]
+
+  [[capability.input]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Explicitly allowed ADB serial."
+
+  [[capability.output]]
+  name = "serial"
+  type = "string"
+  required = true
+  summary = "Diagnosed ADB serial."
+
+  [[capability.output]]
+  name = "backend_selection"
+  type = "record"
+  required = true
+  summary = "Configured mode, selected backend and negotiated helper contract."
+
+    [[capability.output.field]]
+    name = "mode"
+    type = "string"
+    required = true
+    enum = ["auto", "adb", "helper"]
+    summary = "Configured helper selection mode."
+
+    [[capability.output.field]]
+    name = "selected"
+    type = "string"
+    required = true
+    enum = ["adb", "helper"]
+    summary = "Backend selected by negotiation."
+
+    [[capability.output.field]]
+    name = "capabilities"
+    type = "string_list"
+    required = true
+    summary = "Capabilities reported for the selected backend."
+
+    [[capability.output.field]]
+    name = "helper_package"
+    type = "string"
+    required = true
+    summary = "Fixed Android helper package."
+
+    [[capability.output.field]]
+    name = "helper_status"
+    type = "string"
+    required = true
+    enum = ["not_probed", "not_installed", "unavailable", "incompatible", "compatible"]
+    summary = "Outcome of the helper probe."
+
+    [[capability.output.field]]
+    name = "helper_version"
+    type = "string"
+    required = false
+    summary = "Compatible helper version."
+
+    [[capability.output.field]]
+    name = "helper_protocol"
+    type = "int"
+    required = false
+    summary = "Compatible helper protocol version."
+
+    [[capability.output.field]]
+    name = "helper_reason"
+    type = "string"
+    required = false
+    summary = "Bounded explanation when the helper was not selected."
+
+  [[capability.output]]
+  name = "task_result"
+  type = "string"
+  required = true
+  enum = ["not_run"]
+  summary = "Always not_run: diagnosis is not a UI task."
+
+  [[capability.output]]
+  name = "verified"
+  type = "bool"
+  required = true
+  summary = "Always false: negotiation does not verify a UI outcome."
+
+[[capability]]
+id = "android.screenshot"
+version = "1.1.0"
 summary = "Capture one explicitly allowed Android device."
 semantics = "Returns untrusted device pixels and a one-shot frame token. Actions recapture the screen and refuse the token if the pixels changed."
 effects = ["read", "device", "process"]
@@ -4475,9 +4566,86 @@ effects = ["read", "device", "process"]
   required = true
   summary = "One-shot token required by a later action."
 
+  [[capability.output]]
+  name = "observation_backend"
+  type = "string"
+  required = true
+  enum = ["adb"]
+  summary = "Transport that produced this observation; helper negotiation does not change it."
+
+  [[capability.output]]
+  name = "backend_selection"
+  type = "record"
+  required = true
+  summary = "Configured mode, selected optional backend and its capabilities."
+
+    [[capability.output.field]]
+    name = "mode"
+    type = "string"
+    required = true
+    enum = ["auto", "adb", "helper"]
+    summary = "Configured helper selection mode."
+
+    [[capability.output.field]]
+    name = "selected"
+    type = "string"
+    required = true
+    enum = ["adb", "helper"]
+    summary = "Backend selected by capability negotiation."
+
+    [[capability.output.field]]
+    name = "capabilities"
+    type = "string_list"
+    required = true
+    summary = "Capabilities reported for the selected backend."
+
+    [[capability.output.field]]
+    name = "helper_package"
+    type = "string"
+    required = true
+    summary = "Fixed Android helper package."
+
+    [[capability.output.field]]
+    name = "helper_status"
+    type = "string"
+    required = true
+    enum = ["not_probed", "not_installed", "unavailable", "incompatible", "compatible"]
+    summary = "Outcome of the helper probe."
+
+    [[capability.output.field]]
+    name = "helper_version"
+    type = "string"
+    required = false
+    summary = "Compatible helper version."
+
+    [[capability.output.field]]
+    name = "helper_protocol"
+    type = "int"
+    required = false
+    summary = "Compatible helper protocol version."
+
+    [[capability.output.field]]
+    name = "helper_reason"
+    type = "string"
+    required = false
+    summary = "Bounded explanation when the helper was not selected."
+
+  [[capability.output]]
+  name = "task_result"
+  type = "string"
+  required = true
+  enum = ["observed"]
+  summary = "The screen was observed; no requested UI outcome was verified."
+
+  [[capability.output]]
+  name = "verified"
+  type = "bool"
+  required = true
+  summary = "Always false for an observation-only result."
+
 [[capability]]
 id = "android.inspect"
-version = "1.0.0"
+version = "1.1.0"
 summary = "Read a bounded UIAutomator hierarchy from an allowed Android device."
 effects = ["read", "device", "process"]
 
@@ -4654,6 +4822,83 @@ effects = ["read", "device", "process"]
   type = "string"
   required = false
   summary = "Safety ceiling that stopped the walk, when any."
+
+  [[capability.output]]
+  name = "observation_backend"
+  type = "string"
+  required = true
+  enum = ["adb"]
+  summary = "Transport that produced this observation; helper negotiation does not change it."
+
+  [[capability.output]]
+  name = "backend_selection"
+  type = "record"
+  required = true
+  summary = "Configured mode, selected optional backend and its capabilities."
+
+    [[capability.output.field]]
+    name = "mode"
+    type = "string"
+    required = true
+    enum = ["auto", "adb", "helper"]
+    summary = "Configured helper selection mode."
+
+    [[capability.output.field]]
+    name = "selected"
+    type = "string"
+    required = true
+    enum = ["adb", "helper"]
+    summary = "Backend selected by capability negotiation."
+
+    [[capability.output.field]]
+    name = "capabilities"
+    type = "string_list"
+    required = true
+    summary = "Capabilities reported for the selected backend."
+
+    [[capability.output.field]]
+    name = "helper_package"
+    type = "string"
+    required = true
+    summary = "Fixed Android helper package."
+
+    [[capability.output.field]]
+    name = "helper_status"
+    type = "string"
+    required = true
+    enum = ["not_probed", "not_installed", "unavailable", "incompatible", "compatible"]
+    summary = "Outcome of the helper probe."
+
+    [[capability.output.field]]
+    name = "helper_version"
+    type = "string"
+    required = false
+    summary = "Compatible helper version."
+
+    [[capability.output.field]]
+    name = "helper_protocol"
+    type = "int"
+    required = false
+    summary = "Compatible helper protocol version."
+
+    [[capability.output.field]]
+    name = "helper_reason"
+    type = "string"
+    required = false
+    summary = "Bounded explanation when the helper was not selected."
+
+  [[capability.output]]
+  name = "task_result"
+  type = "string"
+  required = true
+  enum = ["observed"]
+  summary = "The UI tree was observed; no requested UI outcome was verified."
+
+  [[capability.output]]
+  name = "verified"
+  type = "bool"
+  required = true
+  summary = "Always false for an observation-only result."
 
 [[capability]]
 id = "android.tap"
@@ -4881,6 +5126,20 @@ scope_guarantee = "confined"
   [implementation.cost]
   estimated_duration = "100ms"
   estimated_tokens = 300
+
+[[implementation]]
+id = "adb.helper-diagnose"
+provider = "android"
+capability = "android.diagnose"
+scope_guarantee = "confined"
+  [implementation.constraints]
+  languages = []
+  requires_index = false
+  min_scale = ""
+  max_scale = ""
+  [implementation.cost]
+  estimated_duration = "300ms"
+  estimated_tokens = 500
 
 [[implementation]]
 id = "adb.screenshot"
