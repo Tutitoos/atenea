@@ -28,6 +28,54 @@ func TestUntrustedHostIsRejected(t *testing.T) {
 	}
 }
 
+func TestTailscaleDNSHostIsAllowedOnlyForTailscaleListener(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		host string
+		want bool
+	}{
+		{name: "tailscale hostname", mode: "tailscale", host: "macbook-air.tail1234.ts.net", want: true},
+		{name: "tailscale hostname and port", mode: "tailscale", host: "macbook-air.tail1234.ts.net:8443", want: true},
+		{name: "loopback mode", mode: "loopback", host: "macbook-air.tail1234.ts.net"},
+		{name: "suffix trick", mode: "tailscale", host: "macbook-air.tail1234.ts.net.attacker.example"},
+		{name: "empty node name", mode: "tailscale", host: "ts.net"},
+		{name: "empty label", mode: "tailscale", host: "macbook-air..tail1234.ts.net"},
+		{name: "invalid label", mode: "tailscale", host: "-macbook.tail1234.ts.net"},
+		{name: "arbitrary external host", mode: "tailscale", host: "attacker.example"},
+		{name: "tailscale IPv4", mode: "tailscale", host: "100.78.253.91:4444", want: true},
+		{name: "LAN IPv4", mode: "tailscale", host: "192.168.1.137:4444"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:8788", Mode: tc.mode}}}}
+			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8788/", nil)
+			req.Host = tc.host
+			if got := s.allowedHost(req); got != tc.want {
+				t.Fatalf("allowedHost(%q) = %t, want %t", tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWildcardTailscaleListenerAuthorizesOnlyTailnetPeers(t *testing.T) {
+	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "0.0.0.0:4444", Mode: "tailscale"}}}}
+	for _, tc := range []struct {
+		remote string
+		want   bool
+	}{
+		{remote: "100.78.253.91:50000", want: true},
+		{remote: "[fd7a:115c:a1e0::1234]:50000", want: true},
+		{remote: "192.168.1.20:50000"},
+		{remote: "127.0.0.1:50000"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://100.78.253.91:4444/api/v1/snapshot", nil)
+		req.RemoteAddr = tc.remote
+		if got := s.authorized(req); got != tc.want {
+			t.Errorf("authorized(%q) = %t, want %t", tc.remote, got, tc.want)
+		}
+	}
+}
+
 // TestLANListenerUsesConnection preserves LAN authorization when listener ports coincide.
 func TestLANListenerUsesConnection(t *testing.T) {
 	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:7779", Mode: "loopback"}, {Addr: "192.168.1.20:7779", Mode: "lan"}}}, authSessions: map[string]time.Time{"valid": time.Now().Add(time.Hour)}}

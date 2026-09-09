@@ -117,9 +117,13 @@ func validateListener(listener Listener) error {
 	}
 	ip := net.ParseIP(host)
 	switch mode {
-	case "loopback", "tailscale":
+	case "loopback":
 		if ip == nil || !ip.IsLoopback() {
 			return fmt.Errorf("dashboard: %s listener must bind a loopback IP", mode)
+		}
+	case "tailscale":
+		if ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+			return errors.New("dashboard: tailscale listener must bind a loopback or wildcard IP")
 		}
 	case "lan":
 		if ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
@@ -197,6 +201,10 @@ func (s *Server) allowedHost(r *http.Request) bool {
 	if ip != nil && ip.IsLoopback() {
 		return true
 	}
+	listener := s.listenerForRequest(r)
+	if strings.EqualFold(listener.Mode, "tailscale") && (isTailscaleDNSName(host) || isTailscaleIP(ip)) {
+		return true
+	}
 	for _, listener := range s.cfg.Listeners {
 		h, _, err := net.SplitHostPort(listener.Addr)
 		if err == nil && ip != nil && ip.Equal(net.ParseIP(h)) {
@@ -204,6 +212,34 @@ func (s *Server) allowedHost(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func isTailscaleDNSName(host string) bool {
+	const suffix = ".ts.net"
+	prefix, ok := strings.CutSuffix(host, suffix)
+	if !ok || prefix == "" {
+		return false
+	}
+	for _, label := range strings.Split(prefix, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, char := range label {
+			if char != '-' && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isTailscaleIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	_, ipv4, _ := net.ParseCIDR("100.64.0.0/10")
+	_, ipv6, _ := net.ParseCIDR("fd7a:115c:a1e0::/48")
+	return ipv4.Contains(ip) || ipv6.Contains(ip)
 }
 
 func (s *Server) static() http.Handler {
@@ -577,6 +613,10 @@ func (s *Server) authorized(r *http.Request) bool {
 	case "loopback":
 		return remote != nil && remote.IsLoopback()
 	case "tailscale":
+		listenerIP := net.ParseIP(listenerHost(l.Addr))
+		if listenerIP != nil && listenerIP.IsUnspecified() {
+			return isTailscaleIP(remote)
+		}
 		return remote != nil && remote.IsLoopback() && strings.TrimSpace(r.Header.Get("Tailscale-User-Login")) != ""
 	case "lan":
 		if r.TLS == nil {
@@ -597,6 +637,14 @@ func (s *Server) authorized(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+func listenerHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 func remoteIP(raw string) net.IP {

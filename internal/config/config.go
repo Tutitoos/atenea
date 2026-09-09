@@ -2664,22 +2664,22 @@ func (d fileDashboard) build(source string) (Dashboard, error) {
 	if d.Enabled != nil {
 		out.Enabled = *d.Enabled
 	}
+	if strings.TrimSpace(d.Access) != "" {
+		out.Access = strings.ToLower(strings.TrimSpace(d.Access))
+	}
+	if out.Access != "tailscale" && out.Access != "loopback" {
+		return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.access must be tailscale or loopback", source)
+	}
 	if strings.TrimSpace(d.Listen) != "" {
 		host, _, err := net.SplitHostPort(d.Listen)
 		if err != nil {
 			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen %q: %v", source, d.Listen, err)
 		}
 		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen must bind a loopback IP", source)
+		if ip == nil || !ip.IsLoopback() && (out.Access != "tailscale" || !ip.IsUnspecified()) {
+			return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.listen must bind a loopback IP, or a wildcard IP with tailscale access", source)
 		}
 		out.Listen = d.Listen
-	}
-	if strings.TrimSpace(d.Access) != "" {
-		out.Access = strings.ToLower(strings.TrimSpace(d.Access))
-	}
-	if out.Access != "tailscale" && out.Access != "loopback" {
-		return Dashboard{}, contract.Fail(contract.FailureInvalidInput, "settings %s: dashboard.access must be tailscale or loopback", source)
 	}
 	if d.PageLimit != nil {
 		if *d.PageLimit <= 0 || *d.PageLimit > 1000 {
