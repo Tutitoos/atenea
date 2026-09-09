@@ -145,6 +145,7 @@ func ServeWithParent(ctx context.Context, cfg config.Config, tracePath, reposito
 		MaxBudgetUSD:     cfg.Workflow.MaxBudgetUSD,
 		MaxDuration:      cfg.Workflow.MaxDuration,
 		MaxRetries:       cfg.Workflow.MaxRetries,
+		Watchdog:         watchdogFor(cfg.Agents),
 		Surface:          surface,
 		Repository:       workspace.RepositoryID,
 		RepositoryRoot:   workspace.RepositoryRoot,
@@ -170,6 +171,33 @@ func ServeWithParent(ctx context.Context, cfg config.Config, tracePath, reposito
 		_ = state.Close()
 		_ = traces.Close()
 	}, nil
+}
+
+const watchdogTurnGrace = time.Minute
+
+// watchdogFor keeps abandoned workflows bounded without racing a healthy
+// agent against a shorter silence deadline. Native model clients may emit no
+// durable activity between dispatch and their final report, so the watchdog
+// must outlive the longest configured turn plus enough time to settle that
+// report. Explicit Options.Watchdog values still override this production
+// default in focused engine tests.
+func watchdogFor(types []config.AgentType) time.Duration {
+	watchdog := defaultWatchdog
+	const maxDuration = time.Duration(1<<63 - 1)
+	for _, typeDef := range types {
+		limit := typeDef.Limits.MaxDuration
+		if limit <= 0 {
+			continue
+		}
+		candidate := maxDuration
+		if limit <= maxDuration-watchdogTurnGrace {
+			candidate = limit + watchdogTurnGrace
+		}
+		if candidate > watchdog {
+			watchdog = candidate
+		}
+	}
+	return watchdog
 }
 
 // WorkspaceFor resolves which repository an agent serves at the repository

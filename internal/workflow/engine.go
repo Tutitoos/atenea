@@ -230,6 +230,8 @@ type Engine struct {
 	toolOpen         bool
 }
 
+const defaultWatchdog = 5 * time.Minute
+
 type toolActivityRequest struct {
 	ctx        context.Context
 	workflowID string
@@ -563,7 +565,7 @@ func New(opts Options) (*Engine, error) {
 		e.poll = 250 * time.Millisecond
 	}
 	if e.watchdog <= 0 {
-		e.watchdog = 5 * time.Minute
+		e.watchdog = defaultWatchdog
 	}
 	if e.surface == "" {
 		e.surface = "cli"

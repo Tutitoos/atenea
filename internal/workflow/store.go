@@ -2087,7 +2087,7 @@ func (s *Store) TouchProgress(ctx context.Context, id string, at time.Time) erro
 // step carried a write, external, or device effect.
 func (s *Store) Watchdog(ctx context.Context, id string, now time.Time, timeout time.Duration) (Run, bool, error) {
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = defaultWatchdog
 	}
 	run, err := s.Load(ctx, id)
 	if err != nil {
