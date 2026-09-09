@@ -28,6 +28,33 @@ func TestUntrustedHostIsRejected(t *testing.T) {
 	}
 }
 
+func TestTailscaleDNSHostIsAllowedOnlyForTailscaleListener(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		host string
+		want bool
+	}{
+		{name: "tailscale hostname", mode: "tailscale", host: "macbook-air.tail1234.ts.net", want: true},
+		{name: "tailscale hostname and port", mode: "tailscale", host: "macbook-air.tail1234.ts.net:8443", want: true},
+		{name: "loopback mode", mode: "loopback", host: "macbook-air.tail1234.ts.net"},
+		{name: "suffix trick", mode: "tailscale", host: "macbook-air.tail1234.ts.net.attacker.example"},
+		{name: "empty node name", mode: "tailscale", host: "ts.net"},
+		{name: "empty label", mode: "tailscale", host: "macbook-air..tail1234.ts.net"},
+		{name: "invalid label", mode: "tailscale", host: "-macbook.tail1234.ts.net"},
+		{name: "arbitrary external host", mode: "tailscale", host: "attacker.example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:8788", Mode: tc.mode}}}}
+			req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8788/", nil)
+			req.Host = tc.host
+			if got := s.allowedHost(req); got != tc.want {
+				t.Fatalf("allowedHost(%q) = %t, want %t", tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLANListenerUsesConnection preserves LAN authorization when listener ports coincide.
 func TestLANListenerUsesConnection(t *testing.T) {
 	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:7779", Mode: "loopback"}, {Addr: "192.168.1.20:7779", Mode: "lan"}}}, authSessions: map[string]time.Time{"valid": time.Now().Add(time.Hour)}}

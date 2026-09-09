@@ -197,6 +197,10 @@ func (s *Server) allowedHost(r *http.Request) bool {
 	if ip != nil && ip.IsLoopback() {
 		return true
 	}
+	listener := s.listenerForRequest(r)
+	if strings.EqualFold(listener.Mode, "tailscale") && isTailscaleDNSName(host) {
+		return true
+	}
 	for _, listener := range s.cfg.Listeners {
 		h, _, err := net.SplitHostPort(listener.Addr)
 		if err == nil && ip != nil && ip.Equal(net.ParseIP(h)) {
@@ -204,6 +208,25 @@ func (s *Server) allowedHost(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func isTailscaleDNSName(host string) bool {
+	const suffix = ".ts.net"
+	prefix, ok := strings.CutSuffix(host, suffix)
+	if !ok || prefix == "" {
+		return false
+	}
+	for _, label := range strings.Split(prefix, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, char := range label {
+			if char != '-' && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Server) static() http.Handler {
