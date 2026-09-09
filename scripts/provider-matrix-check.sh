@@ -51,6 +51,7 @@ required=(
 	"desktop.type|macos.type"
 	"desktop.key|macos.key"
 	"android.devices|adb.devices"
+	"android.diagnose|adb.helper-diagnose"
 	"android.screenshot|adb.screenshot"
 	"android.inspect|uiautomator.inspect"
 	"android.tap|adb.tap"
