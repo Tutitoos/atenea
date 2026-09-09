@@ -51,7 +51,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb/v2" // database/sql driver "duckdb"
+	_ "github.com/duckdb/duckdb-go/v2" // database/sql driver "duckdb"
 
 	"github.com/Tutitoos/atenea/internal/dbaccess"
 	"github.com/Tutitoos/atenea/internal/platform"
