@@ -9,7 +9,7 @@ import (
 
 	"github.com/Tutitoos/atenea/internal/dbaccess"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 // Boundary buckets can be reconstructed only while ALL their folded detail remains.
