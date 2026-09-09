@@ -87,8 +87,8 @@ var mutations = map[string]struct {
 	"desktop.move":   {"macos.move", "move", []string{"x", "y", "frame_id"}},
 	"desktop.drag":   {"macos.drag", "drag", []string{"from_x", "from_y", "to_x", "to_y", "frame_id"}},
 	"desktop.scroll": {"macos.scroll", "scroll", []string{"x", "y", "dx", "dy", "frame_id"}},
-	"desktop.type":   {"macos.type", "type", []string{"text"}},
-	"desktop.key":    {"macos.key", "key", []string{"key", "modifiers"}},
+	"desktop.type":   {"macos.type", "type", []string{"text", "frame_id"}},
+	"desktop.key":    {"macos.key", "key", []string{"key", "modifiers", "frame_id"}},
 }
 
 // Ceilings for one inspect call, and the first of them is the one that binds.
@@ -149,6 +149,10 @@ type Options struct {
 	// somebody's machine must not be enabled by a settings file that forgot
 	// to mention it.
 	Allowed []string
+	// ActionAllowed is which applications may receive mutations. It is
+	// resolved independently from Allowed so readable applications need not be
+	// writable applications.
+	ActionAllowed []string
 	// Denied always wins over Allowed. Two lists rather than one because a
 	// single list would make "never look at my password manager" a thing you
 	// state by omission, and omission is what happens when somebody adds an
@@ -170,13 +174,13 @@ type Options struct {
 
 // Runner is the far side of the desktop capabilities.
 type Runner struct {
-	implementations []string
-	timeout         time.Duration
-	session         func(ctx context.Context) (*mcpstdio.Session, error)
-	responsible     func() bool
-	signature       func() (bool, string)
-	allowed, denied []string
-	visualFeedback  bool
+	implementations                []string
+	timeout                        time.Duration
+	session                        func(ctx context.Context) (*mcpstdio.Session, error)
+	responsible                    func() bool
+	signature                      func() (bool, string)
+	allowed, actionAllowed, denied []string
+	visualFeedback                 bool
 }
 
 // New prepares the adapter. Nothing is dialed here: the helper is started by
@@ -209,6 +213,10 @@ func New(opts Options) (*Runner, error) {
 	if signature == nil {
 		signature = platform.SelfSignedStably
 	}
+	actionAllowed := opts.ActionAllowed
+	if actionAllowed == nil {
+		actionAllowed = opts.Allowed
+	}
 	return &Runner{
 		implementations: implementations,
 		timeout:         timeout,
@@ -216,6 +224,7 @@ func New(opts Options) (*Runner, error) {
 		responsible:     responsible,
 		signature:       signature,
 		allowed:         slices.Clone(opts.Allowed),
+		actionAllowed:   slices.Clone(actionAllowed),
 		denied:          slices.Clone(opts.Denied),
 		visualFeedback:  opts.VisualFeedback,
 	}, nil
@@ -530,15 +539,18 @@ const AllApplications = "*"
 // answer -- the token says which applications are allowed, not that the target
 // no longer has to be resolved -- and Denied is still read first, so the widest
 // allow-list an operator can write still cannot reach a password manager.
-func (r *Runner) mayLookAt(bundleID string) bool {
+func (r *Runner) allowedBy(bundleID string, allowed []string) bool {
 	if bundleID == "" || slices.Contains(r.denied, bundleID) {
 		return false
 	}
-	if slices.Contains(r.allowed, AllApplications) {
+	if slices.Contains(allowed, AllApplications) {
 		return true
 	}
-	return slices.Contains(r.allowed, bundleID)
+	return slices.Contains(allowed, bundleID)
 }
+
+func (r *Runner) mayLookAt(bundleID string) bool { return r.allowedBy(bundleID, r.allowed) }
+func (r *Runner) mayActOn(bundleID string) bool  { return r.allowedBy(bundleID, r.actionAllowed) }
 
 // target resolves which application a call is about and refuses one the
 // allow-list does not name.
@@ -553,6 +565,14 @@ func (r *Runner) mayLookAt(bundleID string) bool {
 // application" stops being the caller's claim and becomes a fact the machine
 // checked.
 func (r *Runner) target(ctx context.Context, bundleID string) (int, string, error) {
+	return r.targetAllowed(ctx, bundleID, r.mayLookAt(bundleID), "applications")
+}
+
+func (r *Runner) actionTarget(ctx context.Context, bundleID string) (int, string, error) {
+	return r.targetAllowed(ctx, bundleID, r.mayActOn(bundleID), "action_applications")
+}
+
+func (r *Runner) targetAllowed(ctx context.Context, bundleID string, allowed bool, setting string) (int, string, error) {
 	// Two refusals, because the two causes are different facts and the remedy
 	// for one does not work on the other. Denied is checked first and named on
 	// its own: telling somebody to add an application they already allowed --
@@ -564,11 +584,11 @@ func (r *Runner) target(ctx context.Context, bundleID string) (int, string, erro
 				"adding it to applications will not change this; remove it from denied if that is "+
 				"deliberate", bundleID, AllApplications)
 	}
-	if !r.mayLookAt(bundleID) {
+	if !allowed {
 		return 0, "", contract.Fail(contract.FailurePermissionDenied,
-			"desktop: %q is not in the desktop allow-list -- add it to [desktop] applications "+
+			"desktop: %q is not in the desktop action/read allow-list -- add it to [desktop] %s "+
 				"in the settings file, or %q for every application denied does not name",
-			bundleID, AllApplications)
+			bundleID, setting, AllApplications)
 	}
 	text, err := r.call(ctx, "list_apps", map[string]any{})
 	if err != nil {
@@ -674,12 +694,24 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 		return contract.Outcome{}, err
 	}
 	var answer struct {
-		PNG     string  `json:"png_base64"`
-		Width   int     `json:"width"`
-		Height  int     `json:"height"`
-		Scale   float64 `json:"scale"`
-		Bytes   int     `json:"bytes"`
-		FrameID string  `json:"frame_id"`
+		PNG                    string           `json:"png_base64"`
+		Width                  int              `json:"width"`
+		Height                 int              `json:"height"`
+		Scale                  float64          `json:"scale"`
+		Bytes                  int              `json:"bytes"`
+		FrameID                string           `json:"frame_id"`
+		WindowID               int              `json:"window_id"`
+		WindowOriginX          float64          `json:"window_origin_x"`
+		WindowOriginY          float64          `json:"window_origin_y"`
+		WindowWidth            float64          `json:"window_width"`
+		WindowHeight           float64          `json:"window_height"`
+		ScaleX                 float64          `json:"scale_x"`
+		ScaleY                 float64          `json:"scale_y"`
+		DominantDisplayID      int              `json:"dominant_display_id"`
+		IntersectingDisplayIDs []string         `json:"intersecting_display_ids"`
+		IntersectingDisplays   []map[string]any `json:"intersecting_displays"`
+		GeometryGeneration     string           `json:"geometry_generation"`
+		CoordinateSpace        string           `json:"coordinate_space"`
 	}
 	if err := json.Unmarshal([]byte(text), &answer); err != nil {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
@@ -688,6 +720,11 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 	if answer.FrameID == "" {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"desktop: screenshot did not return a frame_id; a fresh capture is required before acting")
+	}
+	if answer.WindowID == 0 || answer.DominantDisplayID == 0 || len(answer.IntersectingDisplays) == 0 ||
+		answer.GeometryGeneration == "" || answer.CoordinateSpace != "screenshot_pixels_top_left" {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: screenshot did not return complete window/display geometry; update the helper and capture again")
 	}
 	return contract.Outcome{
 		Result: map[string]any{
@@ -703,12 +740,24 @@ func (r *Runner) screenshot(ctx context.Context, req contract.RunRequest) (contr
 			// one for a diagnostic would be the tail wagging the dog. Nothing
 			// reads it to compute with: coordinates are already in the
 			// returned image's own space.
-			"scale":       strconv.FormatFloat(answer.Scale, 'g', -1, 64),
-			"bytes":       answer.Bytes,
-			"application": name,
-			"bundle_id":   bundleID,
-			"untrusted":   true,
-			"frame_id":    answer.FrameID,
+			"scale":                    strconv.FormatFloat(answer.Scale, 'g', -1, 64),
+			"bytes":                    answer.Bytes,
+			"application":              name,
+			"bundle_id":                bundleID,
+			"untrusted":                true,
+			"frame_id":                 answer.FrameID,
+			"window_id":                answer.WindowID,
+			"window_origin_x":          answer.WindowOriginX,
+			"window_origin_y":          answer.WindowOriginY,
+			"window_width":             answer.WindowWidth,
+			"window_height":            answer.WindowHeight,
+			"scale_x":                  answer.ScaleX,
+			"scale_y":                  answer.ScaleY,
+			"dominant_display_id":      answer.DominantDisplayID,
+			"intersecting_display_ids": answer.IntersectingDisplayIDs,
+			"intersecting_displays":    answer.IntersectingDisplays,
+			"geometry_generation":      answer.GeometryGeneration,
+			"coordinate_space":         answer.CoordinateSpace,
 		},
 		Verdict:       contract.VerdictOK,
 		Spent:         contract.Sample{Duration: time.Since(started)},
@@ -791,11 +840,16 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 			"desktop: nothing here answers implementation %q", req.Implementation.ID)
 	}
 	spec := mutations[capability]
+	frameID, ok := req.Payload["frame_id"].(string)
+	if !ok || strings.TrimSpace(frameID) == "" {
+		return contract.Outcome{}, contract.Fail(contract.FailureInvalidInput,
+			"desktop: %s requires frame_id from a fresh desktop.screenshot", capability)
+	}
 
 	// The allow-list applies to acting exactly as it applies to reading, and
 	// the target is resolved rather than taken on the caller's word.
 	bundleID, _ := req.Payload["application"].(string)
-	pid, name, err := r.target(ctx, bundleID)
+	pid, name, err := r.actionTarget(ctx, bundleID)
 	if err != nil {
 		return contract.Outcome{}, err
 	}
@@ -824,26 +878,34 @@ func (r *Runner) mutate(ctx context.Context, req contract.RunRequest) (contract.
 	if err != nil {
 		return contract.Outcome{}, err
 	}
-	var acknowledged map[string]any
+	var acknowledged struct {
+		ActionSent         bool   `json:"action_sent"`
+		FrameID            string `json:"frame_id"`
+		WindowID           int    `json:"window_id"`
+		DominantDisplayID  int    `json:"dominant_display_id"`
+		GeometryGeneration string `json:"geometry_generation"`
+	}
 	if err := json.Unmarshal([]byte(text), &acknowledged); err != nil {
 		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
 			"desktop: the helper's answer to %s is not the shape this expects: %v", spec.tool, err)
 	}
-	// What was done and to whom, and nothing else.
-	//
-	// The helper's own acknowledgement is read -- it has to parse, which is
-	// what proves the far side did the thing rather than merely accepting the
-	// message -- and then dropped. Two reasons. The contract refuses output
-	// fields a capability did not declare, and it is right to: a result that
-	// grew a field per implementation would stop being a capability. And what
-	// it acknowledges for `type` is a character count, which is a fact about
-	// somebody's keystrokes that has no business in a receipt.
-	_ = acknowledged
-	_ = pid
+	// The helper acknowledges only that the input event was sent and binds that
+	// statement to the geometry it validated. It deliberately reports no UI
+	// success: only a later observation can establish the resulting state.
+	if !acknowledged.ActionSent || acknowledged.FrameID != frameID || acknowledged.WindowID == 0 ||
+		acknowledged.DominantDisplayID == 0 || acknowledged.GeometryGeneration == "" {
+		return contract.Outcome{}, contract.Fail(contract.FailureUnavailable,
+			"desktop: %s did not return a geometry-bound action_sent acknowledgement", spec.tool)
+	}
 	result := map[string]any{
-		"did":         capability,
-		"application": name,
-		"bundle_id":   bundleID,
+		"did":                 capability,
+		"action_sent":         true,
+		"application":         name,
+		"bundle_id":           bundleID,
+		"frame_id":            acknowledged.FrameID,
+		"window_id":           acknowledged.WindowID,
+		"dominant_display_id": acknowledged.DominantDisplayID,
+		"geometry_generation": acknowledged.GeometryGeneration,
 	}
 	return contract.Outcome{
 		Result: result, Verdict: contract.VerdictOK,

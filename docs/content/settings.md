@@ -670,6 +670,7 @@ only ever be used to make it lose the entry it exists to keep.
 ```toml
 [desktop]
 applications = []           # bundle identifiers that may be looked at; EMPTY DENIES ALL
+action_applications = []    # bundle identifiers that may be acted on; absent inherits applications
 denied = ["com.apple.keychainaccess", "com.1password.1password"]  # always wins
 look_then_act = false       # may a chat act on the screen it just read?
 visual_feedback = true      # show the ephemeral Atenea overlay and miniature
@@ -681,6 +682,14 @@ than *everything*, and the inversion is deliberate. `desktop.inspect` and
 that must not be switched on by a settings file that forgot to mention it. Find
 the identifiers with `desktop.apps`, which needs no entry here because it
 returns names and identifiers and nothing about what any window contains.
+
+`action_applications` independently governs `desktop.click`, `desktop.move`,
+`desktop.drag`, `desktop.scroll`, `desktop.type`, and `desktop.key`. If the key
+is absent it inherits `applications`, preserving older configuration files. If
+it is present as `[]`, every mutation is denied while observation can remain
+enabled. For an iOS Simulator-only action surface use
+`action_applications = ["com.apple.iphonesimulator"]`; Finder and TextEdit can
+remain in `applications` without becoming actionable.
 
 `denied` always wins, and it is seeded rather than empty. Two lists rather than
 one, because a single list would make "never look at my password manager" a
@@ -727,9 +736,12 @@ visuals while retaining frame validation and cross-window safety checks.
 
 If human mouse or keyboard activity is detected, the current action is
 cancelled and the preview shows `Paused` with a `Resume` button. Resume enables
-future actions but never retries the interrupted one. Coordinate actions may
-include the opaque `frame_id` returned by `desktop.screenshot`; stale or moved
-windows are refused until a fresh screenshot is taken.
+future actions but never retries the interrupted one. All six actions require
+the opaque `frame_id` returned by `desktop.screenshot`; no action implicitly
+reuses the latest frame. Expired frames and any window move, resize, display,
+scale, rotation, or topology change are refused until a fresh screenshot is
+taken. An action result says only `action_sent`; a later observation must
+verify the UI result.
 
 Neither list is a permission on its own. The capabilities behind them cause the
 `device` effect, which no floor grants by default, and the adapter refuses them

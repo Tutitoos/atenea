@@ -800,6 +800,12 @@ type Desktop struct {
 	// list reading "everything, and also these two" is an operator who does not
 	// know which of the two sentences is in force.
 	Applications []string
+	// ActionApplications is the independent allow-list for mutations. When
+	// ActionApplicationsInherited is true it is an effective copy of
+	// Applications, preserving the pre-2.0 configuration behavior. An
+	// explicitly empty list is therefore distinguishable and denies all acts.
+	ActionApplications          []string
+	ActionApplicationsInherited bool
 	// Denied always wins, and is seeded rather than empty. The defaults are
 	// the applications where a single screenshot is a credential: password
 	// managers, the keychain, banking. An operator who deletes the block gets
@@ -845,8 +851,10 @@ const AllApplications = desktop.AllApplications
 // hazards refused even if somebody allows them later.
 func DefaultDesktop() Desktop {
 	return Desktop{
-		Applications:   nil,
-		VisualFeedback: true,
+		Applications:                nil,
+		ActionApplications:          nil,
+		ActionApplicationsInherited: true,
+		VisualFeedback:              true,
 		Denied: []string{
 			"com.apple.keychainaccess",
 			"com.1password.1password",
@@ -1609,10 +1617,11 @@ type fileSecurity struct {
 }
 
 type fileDesktop struct {
-	Applications   *[]string `toml:"applications"`
-	Denied         *[]string `toml:"denied"`
-	LookThenAct    *bool     `toml:"look_then_act"`
-	VisualFeedback *bool     `toml:"visual_feedback"`
+	Applications       *[]string `toml:"applications"`
+	ActionApplications *[]string `toml:"action_applications"`
+	Denied             *[]string `toml:"denied"`
+	LookThenAct        *bool     `toml:"look_then_act"`
+	VisualFeedback     *bool     `toml:"visual_feedback"`
 }
 
 type fileAndroid struct {
@@ -3308,6 +3317,13 @@ func (d fileDesktop) build(source string) (Desktop, error) {
 	if d.Applications != nil {
 		out.Applications = *d.Applications
 	}
+	if d.ActionApplications == nil {
+		out.ActionApplications = slices.Clone(out.Applications)
+		out.ActionApplicationsInherited = true
+	} else {
+		out.ActionApplications = *d.ActionApplications
+		out.ActionApplicationsInherited = false
+	}
 	if d.Denied != nil {
 		out.Denied = *d.Denied
 	}
@@ -3324,6 +3340,12 @@ func (d fileDesktop) build(source string) (Desktop, error) {
 	if slices.Contains(out.Applications, AllApplications) && len(out.Applications) > 1 {
 		return Desktop{}, contract.Fail(contract.FailureInvalidInput,
 			"settings %s: desktop.applications lists %q beside named applications; %q already means every "+
+				"application desktop.denied does not name, so remove one or the other",
+			source, AllApplications, AllApplications)
+	}
+	if slices.Contains(out.ActionApplications, AllApplications) && len(out.ActionApplications) > 1 {
+		return Desktop{}, contract.Fail(contract.FailureInvalidInput,
+			"settings %s: desktop.action_applications lists %q beside named applications; %q already means every "+
 				"application desktop.denied does not name, so remove one or the other",
 			source, AllApplications, AllApplications)
 	}

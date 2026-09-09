@@ -89,7 +89,10 @@ the device effect otherwise rather than succeeding on a terminal's permission.
 On macOS 14+, the helper owns an ephemeral click-through border and a floating
 preview with an Atenea virtual cursor. The preview is composed locally from the
 window-only ScreenCaptureKit image; no overlay pixels or cursor metadata are
-sent back in `desktop.screenshot`, and no frames are written to disk. It pauses
+sent back in `desktop.screenshot`, and no frames are written to disk. Every
+desktop mutation requires that exact frame token and returns only
+`action_sent` plus its window/display geometry receipt; UI success requires a
+new observation. It pauses
 when the passive session event tap sees human input and exposes `Resume` only
 to clear that pause (the interrupted action is never retried). If input
 monitoring cannot be created, observations still work but mutating calls are

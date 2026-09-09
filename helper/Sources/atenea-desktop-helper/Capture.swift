@@ -40,6 +40,38 @@ enum Capture {
         let target: WindowTarget
     }
 
+    static func displayID(_ screen: NSScreen) -> UInt32 {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    static func displayTargets() -> [DisplayTarget] {
+        NSScreen.screens.map {
+            let id = displayID($0)
+            return DisplayTarget(id: id, frame: CGDisplayBounds(id), scale: $0.backingScaleFactor)
+        }
+    }
+
+    static func intersectionArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        return intersection.isNull ? 0 : intersection.width * intersection.height
+    }
+
+    static func displays(for frame: CGRect, from screens: [DisplayTarget]) -> (DisplayTarget?, [DisplayTarget]) {
+        let intersecting = screens.filter { intersectionArea(frame, $0.frame) > 0 }.sorted { $0.id < $1.id }
+        let dominant = intersecting.max {
+            let left = intersectionArea(frame, $0.frame)
+            let right = intersectionArea(frame, $1.frame)
+            return left == right ? $0.id > $1.id : left < right
+        }
+        return (dominant, intersecting)
+    }
+
+    static func geometryGeneration(_ screens: [DisplayTarget]) -> String {
+        screens.sorted { $0.id < $1.id }.map {
+            "\($0.id):\($0.frame.origin.x):\($0.frame.origin.y):\($0.frame.width):\($0.frame.height):\($0.scale)"
+        }.joined(separator: "|")
+    }
+
     private static func png(_ image: CGImage) -> Data? {
         let out = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(
@@ -82,7 +114,10 @@ enum Capture {
                                             appName: target.appName, windowID: target.windowID,
                                             frame: target.frame, imageWidth: image.width,
                                             imageHeight: image.height, scale: effective,
-                                            visible: target.visible, capturedAt: target.capturedAt)
+                                            visible: target.visible, capturedAt: target.capturedAt,
+                                            dominantDisplayID: target.dominantDisplayID,
+                                            intersectingDisplays: target.intersectingDisplays,
+                                            geometryGeneration: target.geometryGeneration)
                 return Shot(png: data, width: image.width, height: image.height,
                             scale: scale, frameID: frameID, target: adjusted)
             }
@@ -99,19 +134,23 @@ extension Capture {
     static func currentTarget(pid: pid_t, bundleID: String, appName: String) async throws -> WindowTarget {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         let candidates = content.windows.filter { $0.owningApplication?.processID == pid }
-        let preferredID = try? await CaptureContexts.shared.latest(pid: pid, frameID: nil).target.windowID
+        let preferredID = try? await CaptureContexts.shared.current(pid: pid).target.windowID
         let window = (preferredID.flatMap { id in candidates.first(where: { $0.windowID == id }) })
             ?? candidates.sorted(by: { $0.frame.width * $0.frame.height > $1.frame.width * $1.frame.height }).first
         guard let window else {
             throw RPCError.denied("that application has no window on screen right now")
         }
-        let scale = NSScreen.screens.first(where: { $0.frame.intersects(window.frame) })?.backingScaleFactor ?? 1
+        let screens = displayTargets()
+        let (dominant, intersecting) = displays(for: window.frame, from: screens)
+        let scale = dominant?.scale ?? 1
         return WindowTarget(pid: pid, bundleID: window.owningApplication?.bundleIdentifier ?? bundleID,
                             appName: window.owningApplication?.applicationName ?? appName,
                             windowID: window.windowID, frame: window.frame,
                             imageWidth: max(1, Int(window.frame.width * scale)),
                             imageHeight: max(1, Int(window.frame.height * scale)),
-                            scale: CGSize(width: scale, height: scale), visible: true, capturedAt: Date())
+                            scale: CGSize(width: scale, height: scale), visible: true, capturedAt: Date(),
+                            dominantDisplayID: dominant?.id ?? 0, intersectingDisplays: intersecting,
+                            geometryGeneration: geometryGeneration(screens))
     }
 
     /// Captures the frontmost window belonging to one process.
@@ -138,7 +177,7 @@ extension Capture {
         // menu-bar item and a panel as well, and the biggest one is the
         // document somebody means.
         let candidates = content.windows.filter { $0.owningApplication?.processID == pid }
-        let preferredID = try? await CaptureContexts.shared.latest(pid: pid, frameID: nil).target.windowID
+        let preferredID = try? await CaptureContexts.shared.current(pid: pid).target.windowID
         let target = (preferredID.flatMap { id in candidates.first(where: { $0.windowID == id }) })
             ?? candidates.sorted { ($0.frame.width * $0.frame.height) > ($1.frame.width * $1.frame.height) }.first
         guard let target else {
@@ -147,17 +186,21 @@ extension Capture {
         let resolvedBundle = target.owningApplication?.bundleIdentifier ?? bundleID
         let resolvedName = target.owningApplication?.applicationName ?? appName
         let token = UUID().uuidString
+        let screens = displayTargets()
+        let (dominant, intersecting) = displays(for: target.frame, from: screens)
         let geometry = WindowTarget(pid: pid, bundleID: resolvedBundle, appName: resolvedName,
                                     windowID: target.windowID, frame: target.frame,
                                     imageWidth: 1, imageHeight: 1,
                                     scale: CGSize(width: 1, height: 1), visible: true,
-                                    capturedAt: Date())
+                                    capturedAt: Date(), dominantDisplayID: dominant?.id ?? 0,
+                                    intersectingDisplays: intersecting,
+                                    geometryGeneration: geometryGeneration(screens))
         let config = SCStreamConfiguration()
         // The pixels the display actually holds, not the points the frame
         // reports. fit() reduces from here; capturing at point size on a
         // Retina display would throw away half the detail before anybody could
         // decide whether they needed it.
-        let displayScale = NSScreen.screens.first(where: { $0.frame.intersects(target.frame) })?.backingScaleFactor ?? 1
+        let displayScale = dominant?.scale ?? 1
         config.width = max(1, Int(target.frame.width * displayScale))
         config.height = max(1, Int(target.frame.height * displayScale))
         let filter = SCContentFilter(desktopIndependentWindow: target)
@@ -175,8 +218,8 @@ extension Capture {
         return shot
     }
 
-    static func globalPoint(pid: pid_t, bundleID: String, appName: String,
-                            frameID: String?, x: Double, y: Double) async throws -> (CGPoint, CaptureFrame) {
+    static func validatedFrame(pid: pid_t, bundleID: String, appName: String,
+                               frameID: String) async throws -> CaptureFrame {
         let frame = try await CaptureContexts.shared.latest(pid: pid, frameID: frameID)
         guard frame.target.bundleID == bundleID, frame.target.appName == appName else {
             throw RPCError.denied("the application identity changed; request a new screenshot")
@@ -192,6 +235,20 @@ extension Capture {
             await CaptureContexts.shared.invalidate(pid: pid)
             throw RPCError.denied("the captured window moved or resized; request a new screenshot")
         }
+        let screens = displayTargets()
+        let (dominant, intersecting) = displays(for: current.frame, from: screens)
+        guard geometryGeneration(screens) == frame.target.geometryGeneration,
+              dominant?.id == frame.target.dominantDisplayID,
+              intersecting == frame.target.intersectingDisplays else {
+            await CaptureContexts.shared.invalidate(pid: pid)
+            throw RPCError.denied("the display geometry, scale, rotation or topology changed; request a new screenshot")
+        }
+        return frame
+    }
+
+    static func globalPoint(pid: pid_t, bundleID: String, appName: String,
+                            frameID: String, x: Double, y: Double) async throws -> (CGPoint, CaptureFrame) {
+        let frame = try await validatedFrame(pid: pid, bundleID: bundleID, appName: appName, frameID: frameID)
         let point = try frame.target.globalPoint(forImagePoint: CGPoint(x: x, y: y))
         return (point, frame)
     }

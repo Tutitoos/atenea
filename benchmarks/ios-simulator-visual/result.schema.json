@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "iOS Simulator visual fallback certification",
+  "type": "object",
+  "required": ["schema_version", "commit", "environment", "cycles"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "commit": {"type": "string", "minLength": 40, "maxLength": 40},
+    "environment": {
+      "type": "object",
+      "required": ["device", "runtime", "displays", "geometry_generation", "versions"],
+      "properties": {
+        "device": {"const": "iPhone 14"},
+        "runtime": {"const": "iOS 16.4"},
+        "displays": {"type": "array", "minItems": 2, "items": {"type": "object"}},
+        "geometry_generation": {"type": "string", "minLength": 1},
+        "versions": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "cycles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fixture", "scenario", "backend_requested", "backend_actual", "cycle", "warmup", "classification", "cause", "latency_ms", "action_sent", "verified", "fallbacks", "unknown_actions", "duplicate_actions", "evidence"],
+        "properties": {
+          "fixture": {"enum": ["R34w-30", "S34CG50"]},
+          "scenario": {"enum": ["centered", "fitted", "moved", "spanning", "rescaled_capture", "flutter_canvas_no_ax", "rotation", "resize", "human_interrupt"]},
+          "backend_requested": {"enum": ["official_computer_use", "atenea_desktop_visual", "agent_device"]},
+          "backend_actual": {"enum": ["official_computer_use", "atenea_desktop_visual", "agent_device", "none"]},
+          "cycle": {"type": "integer", "minimum": 1, "maximum": 30},
+          "warmup": {"type": "boolean"},
+          "classification": {"enum": ["success", "unavailable", "unsupported", "recoverable_denied", "unverified", "unknown_after_mutation", "terminal_denied", "human_interrupted"]},
+          "cause": {"type": "string"},
+          "latency_ms": {
+            "type": "object",
+            "required": ["observation", "selection", "action", "verification", "total"],
+            "additionalProperties": {"type": "number", "minimum": 0}
+          },
+          "action_sent": {"type": "boolean"},
+          "verified": {"type": "boolean"},
+          "fallbacks": {"type": "integer", "minimum": 0},
+          "unknown_actions": {"type": "integer", "minimum": 0},
+          "duplicate_actions": {"const": 0},
+          "evidence": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -881,6 +881,7 @@ func buildDesktopRunner(cfg config.Config, procs *supervisor.Supervisor) (contra
 		Implementations: cfg.Orchestrator.Desktop.Implementations,
 		Timeout:         cfg.Orchestrator.Desktop.Timeout,
 		Allowed:         cfg.Desktop.Applications,
+		ActionAllowed:   cfg.Desktop.ActionApplications,
 		Denied:          cfg.Desktop.Denied,
 		VisualFeedback:  cfg.Desktop.VisualFeedback,
 		Session: func(context.Context) (*mcpstdio.Session, error) {

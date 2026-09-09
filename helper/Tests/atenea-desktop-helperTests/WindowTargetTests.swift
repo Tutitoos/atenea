@@ -20,4 +20,25 @@ final class WindowTargetTests: XCTestCase {
                                   capturedAt: Date())
         XCTAssertThrowsError(try target.globalPoint(forImagePoint: CGPoint(x: 101, y: 10)))
     }
+
+    func testDominantDisplayUsesLargestIntersectionAndKeepsEveryDisplay() {
+        let displays = [
+            DisplayTarget(id: 11, frame: CGRect(x: -1200, y: 0, width: 1200, height: 900), scale: 1.25),
+            DisplayTarget(id: 22, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117), scale: 2.0),
+        ]
+        let (dominant, intersecting) = Capture.displays(
+            for: CGRect(x: -300, y: 100, width: 900, height: 600), from: displays)
+        XCTAssertEqual(dominant?.id, 22)
+        XCTAssertEqual(intersecting.map(\.id), [11, 22])
+    }
+
+    func testTopologyGenerationChangesForScaleRotationAndArrangement() {
+        let original = [DisplayTarget(id: 1, frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1.5)]
+        let rescaled = [DisplayTarget(id: 1, frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 2.0)]
+        let rotated = [DisplayTarget(id: 1, frame: CGRect(x: 0, y: 0, width: 800, height: 1000), scale: 1.5)]
+        let moved = [DisplayTarget(id: 1, frame: CGRect(x: -1000, y: 0, width: 1000, height: 800), scale: 1.5)]
+        XCTAssertNotEqual(Capture.geometryGeneration(original), Capture.geometryGeneration(rescaled))
+        XCTAssertNotEqual(Capture.geometryGeneration(original), Capture.geometryGeneration(rotated))
+        XCTAssertNotEqual(Capture.geometryGeneration(original), Capture.geometryGeneration(moved))
+    }
 }

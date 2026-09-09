@@ -375,10 +375,14 @@ type OrchestratorStatus struct {
 	// VisualFeedbackState is the operator-facing presentation state. The
 	// helper may refine it to active/paused/degraded at runtime; the service
 	// snapshot always at least reports whether the feature is configured.
-	VisualFeedbackState string
-	DesktopScope        string
-	Checkpoints         string
-	Light               Light
+	VisualFeedbackState       string
+	DesktopScope              string
+	DesktopActionScope        string
+	DesktopActionsInherited   bool
+	DesktopApplications       []string
+	DesktopActionApplications []string
+	Checkpoints               string
+	Light                     Light
 }
 
 // desktopScope describes the allow-list in one phrase, counting rather than
@@ -386,15 +390,23 @@ type OrchestratorStatus struct {
 // the status screen, and one who allowed none needs to be told that plainly
 // rather than shown an empty space.
 func desktopScope(screen config.Desktop) string {
+	return applicationScope(screen.Applications, screen.Denied)
+}
+
+func desktopActionScope(screen config.Desktop) string {
+	return applicationScope(screen.ActionApplications, screen.Denied)
+}
+
+func applicationScope(applications, denied []string) string {
 	switch {
-	case slices.Contains(screen.Applications, config.AllApplications):
-		return fmt.Sprintf("every application except %d denied", len(screen.Denied))
-	case len(screen.Applications) == 0:
+	case slices.Contains(applications, config.AllApplications):
+		return fmt.Sprintf("every application except %d denied", len(denied))
+	case len(applications) == 0:
 		return "no application"
-	case len(screen.Applications) == 1:
+	case len(applications) == 1:
 		return "1 application"
 	default:
-		return fmt.Sprintf("%d applications", len(screen.Applications))
+		return fmt.Sprintf("%d applications", len(applications))
 	}
 }
 
@@ -819,6 +831,10 @@ func (c *Core) orchestratorStatus() OrchestratorStatus {
 		out.VisualFeedbackState = "disabled"
 	}
 	out.DesktopScope = desktopScope(c.settings.Desktop)
+	out.DesktopActionScope = desktopActionScope(c.settings.Desktop)
+	out.DesktopActionsInherited = c.settings.Desktop.ActionApplicationsInherited
+	out.DesktopApplications = slices.Clone(c.settings.Desktop.Applications)
+	out.DesktopActionApplications = slices.Clone(c.settings.Desktop.ActionApplications)
 	for _, effect := range orchestrator.StandingEffects {
 		out.Standing = append(out.Standing, effect.String())
 	}

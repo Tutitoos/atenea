@@ -101,6 +101,32 @@ func TestCommandReadsCoreBackedViews(t *testing.T) {
 	}
 }
 
+func TestConfigDoctorAndStatusExposeDesktopActionInheritance(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg := config.Config{Desktop: config.Desktop{Applications: []string{"com.apple.finder"},
+		ActionApplications: []string{"com.apple.iphonesimulator"}, ActionApplicationsInherited: false}}
+	service, err := New(cfg, Command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := service.Status().Orchestrator
+	if status.DesktopActionsInherited || len(status.DesktopApplications) != 1 ||
+		len(status.DesktopActionApplications) != 1 {
+		t.Fatalf("desktop status = %#v", status)
+	}
+	for _, name := range []string{"config", "doctor"} {
+		response, err := service.Command(context.Background(), CommandRequest{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ := json.Marshal(response.Data)
+		if !strings.Contains(string(encoded), "action_applications") ||
+			!strings.Contains(string(encoded), "com.apple.iphonesimulator") {
+			t.Fatalf("%s omitted action applications: %s", name, encoded)
+		}
+	}
+}
+
 func TestCommandAliasesAndSafeErrors(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	service, err := New(config.Config{}, Command)
