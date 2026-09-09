@@ -22,24 +22,28 @@ func TestDashboardDefaultsAreDisabledAndLoopback(t *testing.T) {
 	}
 }
 
-func TestDashboardRejectsNonLoopbackOrIncompleteLAN(t *testing.T) {
+func TestDashboardAcceptsWildcardOnlyForTailscale(t *testing.T) {
 	shipped, err := os.ReadFile("default.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := string(shipped)
-	cases := map[string]string{
-		"public listener": strings.Replace(base, "listen = \"127.0.0.1:8788\"", "listen = \"0.0.0.0:8788\"", 1),
-		"LAN missing TLS": strings.Replace(base, "session_ttl = \"12h\"", "session_ttl = \"12h\"\nlan_listen = \"192.168.10.8:8789\"", 1),
-	}
-	for name, raw := range cases {
+	for name, tc := range map[string]struct {
+		raw  string
+		want bool
+	}{
+		"tailscale wildcard": {raw: strings.Replace(base, "listen = \"127.0.0.1:8788\"", "listen = \"0.0.0.0:4444\"", 1), want: true},
+		"loopback wildcard":  {raw: strings.Replace(strings.Replace(base, "listen = \"127.0.0.1:8788\"", "listen = \"0.0.0.0:4444\"", 1), "access = \"tailscale\"", "access = \"loopback\"", 1)},
+		"LAN missing TLS":    {raw: strings.Replace(base, "session_ttl = \"12h\"", "session_ttl = \"12h\"\nlan_listen = \"192.168.10.8:8789\"", 1)},
+	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "atenea.toml")
-			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(tc.raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := config.Load(path); err == nil {
-				t.Fatal("invalid dashboard configuration loaded")
+			_, err := config.Load(path)
+			if (err == nil) != tc.want {
+				t.Fatalf("Load error = %v, want success %t", err, tc.want)
 			}
 		})
 	}

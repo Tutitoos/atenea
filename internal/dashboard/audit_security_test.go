@@ -43,6 +43,8 @@ func TestTailscaleDNSHostIsAllowedOnlyForTailscaleListener(t *testing.T) {
 		{name: "empty label", mode: "tailscale", host: "macbook-air..tail1234.ts.net"},
 		{name: "invalid label", mode: "tailscale", host: "-macbook.tail1234.ts.net"},
 		{name: "arbitrary external host", mode: "tailscale", host: "attacker.example"},
+		{name: "tailscale IPv4", mode: "tailscale", host: "100.78.253.91:4444", want: true},
+		{name: "LAN IPv4", mode: "tailscale", host: "192.168.1.137:4444"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{cfg: Config{Listeners: []Listener{{Addr: "127.0.0.1:8788", Mode: tc.mode}}}}
@@ -52,6 +54,25 @@ func TestTailscaleDNSHostIsAllowedOnlyForTailscaleListener(t *testing.T) {
 				t.Fatalf("allowedHost(%q) = %t, want %t", tc.host, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWildcardTailscaleListenerAuthorizesOnlyTailnetPeers(t *testing.T) {
+	s := &Server{cfg: Config{Listeners: []Listener{{Addr: "0.0.0.0:4444", Mode: "tailscale"}}}}
+	for _, tc := range []struct {
+		remote string
+		want   bool
+	}{
+		{remote: "100.78.253.91:50000", want: true},
+		{remote: "[fd7a:115c:a1e0::1234]:50000", want: true},
+		{remote: "192.168.1.20:50000"},
+		{remote: "127.0.0.1:50000"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://100.78.253.91:4444/api/v1/snapshot", nil)
+		req.RemoteAddr = tc.remote
+		if got := s.authorized(req); got != tc.want {
+			t.Errorf("authorized(%q) = %t, want %t", tc.remote, got, tc.want)
+		}
 	}
 }
 

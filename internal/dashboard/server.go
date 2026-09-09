@@ -117,9 +117,13 @@ func validateListener(listener Listener) error {
 	}
 	ip := net.ParseIP(host)
 	switch mode {
-	case "loopback", "tailscale":
+	case "loopback":
 		if ip == nil || !ip.IsLoopback() {
 			return fmt.Errorf("dashboard: %s listener must bind a loopback IP", mode)
+		}
+	case "tailscale":
+		if ip == nil || !ip.IsLoopback() && !ip.IsUnspecified() {
+			return errors.New("dashboard: tailscale listener must bind a loopback or wildcard IP")
 		}
 	case "lan":
 		if ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
@@ -198,7 +202,7 @@ func (s *Server) allowedHost(r *http.Request) bool {
 		return true
 	}
 	listener := s.listenerForRequest(r)
-	if strings.EqualFold(listener.Mode, "tailscale") && isTailscaleDNSName(host) {
+	if strings.EqualFold(listener.Mode, "tailscale") && (isTailscaleDNSName(host) || isTailscaleIP(ip)) {
 		return true
 	}
 	for _, listener := range s.cfg.Listeners {
@@ -227,6 +231,15 @@ func isTailscaleDNSName(host string) bool {
 		}
 	}
 	return true
+}
+
+func isTailscaleIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	_, ipv4, _ := net.ParseCIDR("100.64.0.0/10")
+	_, ipv6, _ := net.ParseCIDR("fd7a:115c:a1e0::/48")
+	return ipv4.Contains(ip) || ipv6.Contains(ip)
 }
 
 func (s *Server) static() http.Handler {
@@ -600,6 +613,10 @@ func (s *Server) authorized(r *http.Request) bool {
 	case "loopback":
 		return remote != nil && remote.IsLoopback()
 	case "tailscale":
+		listenerIP := net.ParseIP(listenerHost(l.Addr))
+		if listenerIP != nil && listenerIP.IsUnspecified() {
+			return isTailscaleIP(remote)
+		}
 		return remote != nil && remote.IsLoopback() && strings.TrimSpace(r.Header.Get("Tailscale-User-Login")) != ""
 	case "lan":
 		if r.TLS == nil {
@@ -620,6 +637,14 @@ func (s *Server) authorized(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+func listenerHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 func remoteIP(raw string) net.IP {
