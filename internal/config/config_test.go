@@ -96,6 +96,20 @@ func TestBuiltInDefaultsAreValid(t *testing.T) {
 		if !slices.Equal(capability.Effects, want) {
 			t.Errorf("%s effects = %v, want %v", capability.ID, capability.Effects, want)
 		}
+		if strings.HasPrefix(capability.ID, "desktop.") && slices.Contains(
+			[]string{"desktop.click", "desktop.move", "desktop.drag", "desktop.scroll", "desktop.type", "desktop.key"}, capability.ID) {
+			if capability.Version.Major != 2 {
+				t.Errorf("%s version = %s, want 2.0.0 contract", capability.ID, capability.Version.String())
+			}
+			frame := slices.IndexFunc(capability.Inputs, func(field contract.Field) bool { return field.Name == "frame_id" })
+			if frame < 0 || !capability.Inputs[frame].Required {
+				t.Errorf("%s does not require frame_id", capability.ID)
+			}
+			actionSent := slices.IndexFunc(capability.Outputs, func(field contract.Field) bool { return field.Name == "action_sent" })
+			if actionSent < 0 || !capability.Outputs[actionSent].Required {
+				t.Errorf("%s does not declare action_sent", capability.ID)
+			}
+		}
 	}
 
 	// code.search's output shape from the design: a list of records, each
@@ -463,6 +477,45 @@ look_then_act = true
 	}
 	if !cfg.Desktop.LookThenAct {
 		t.Error("look_then_act was written true and did not survive the load")
+	}
+}
+
+func TestDesktopActionApplicationsDistinguishInheritanceFromExplicitEmpty(t *testing.T) {
+	inherited, err := config.Load(write(t, minimal+`
+[desktop]
+applications = ["com.apple.finder"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inherited.Desktop.ActionApplicationsInherited ||
+		!slices.Equal(inherited.Desktop.ActionApplications, []string{"com.apple.finder"}) {
+		t.Fatalf("inherited actions = %v, inherited = %v",
+			inherited.Desktop.ActionApplications, inherited.Desktop.ActionApplicationsInherited)
+	}
+	explicit, err := config.Load(write(t, minimal+`
+[desktop]
+applications = ["com.apple.finder"]
+action_applications = []
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Desktop.ActionApplicationsInherited || explicit.Desktop.ActionApplications == nil ||
+		len(explicit.Desktop.ActionApplications) != 0 {
+		t.Fatalf("explicit actions = %#v, inherited = %v",
+			explicit.Desktop.ActionApplications, explicit.Desktop.ActionApplicationsInherited)
+	}
+}
+
+func TestDesktopActionWildcardUsesTheSameValidation(t *testing.T) {
+	_, err := config.Load(write(t, minimal+`
+[desktop]
+action_applications = ["*", "com.apple.iphonesimulator"]
+`))
+	if got := contract.KindOf(err); got != contract.FailureInvalidInput ||
+		!strings.Contains(err.Error(), "action_applications") {
+		t.Fatalf("error = %v, kind = %v", err, got)
 	}
 }
 

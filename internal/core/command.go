@@ -213,10 +213,12 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 			"client_effects":             effects,
 			"client_denied_capabilities": settings.Orchestrator.ClientDeniedCapabilities,
 			"desktop_scope": map[string]any{
-				"applications":    len(settings.Desktop.Applications),
-				"denied":          len(settings.Desktop.Denied),
-				"look_then_act":   settings.Desktop.LookThenAct,
-				"visual_feedback": settings.Desktop.VisualFeedback,
+				"applications":                  settings.Desktop.Applications,
+				"action_applications":           settings.Desktop.ActionApplications,
+				"action_applications_inherited": settings.Desktop.ActionApplicationsInherited,
+				"denied":                        settings.Desktop.Denied,
+				"look_then_act":                 settings.Desktop.LookThenAct,
+				"visual_feedback":               settings.Desktop.VisualFeedback,
 			},
 			"repositories": len(settings.Repositories),
 			"capabilities": len(settings.Capabilities),
@@ -231,6 +233,12 @@ func (c *Core) Command(ctx context.Context, req CommandRequest) (CommandResponse
 			"client":    client,
 			"profile":   req.Profile,
 			"telemetry": ReadCompatibilitySummaryFor(client, req.Profile),
+			"desktop_policy": map[string]any{
+				"applications":                  c.settings.Desktop.Applications,
+				"action_applications":           c.settings.Desktop.ActionApplications,
+				"action_applications_inherited": c.settings.Desktop.ActionApplicationsInherited,
+				"denied":                        c.settings.Desktop.Denied,
+			},
 		}
 		for _, runner := range c.runners {
 			candidate := runner

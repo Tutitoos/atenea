@@ -626,7 +626,9 @@ func TestScaleIsReportedAndCoordinatesAreNotTransformed(t *testing.T) {
 				"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 			"screenshot": map[string]any{
 				"png_base64": "iVBORw0KGgo=", "width": 1568, "height": 980,
-				"scale": tc.scale, "bytes": 4096, "frame_id": "test-frame"},
+				"scale": tc.scale, "bytes": 4096, "frame_id": "test-frame", "window_id": 9,
+				"dominant_display_id": 1, "intersecting_displays": []any{map[string]any{"id": 1}},
+				"geometry_generation": "g1", "coordinate_space": "screenshot_pixels_top_left"},
 		})
 		runner, err := desktop.New(desktop.Options{
 			Session: session, Responsible: func() bool { return true },
@@ -690,7 +692,8 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 		"health": map[string]any{"accessibility": true, "screen_recording": true, "input_monitor_active": true},
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 42, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
-		"click": map[string]any{"clicked": true},
+		"click": map[string]any{"action_sent": true, "frame_id": "frame-1", "window_id": 9,
+			"dominant_display_id": 2, "geometry_generation": "topology-1"},
 	})
 	runner, err := desktop.New(desktop.Options{
 		Session: session, Responsible: func() bool { return true },
@@ -707,10 +710,13 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 	capability.Inputs = []contract.Field{
 		{Name: "application", Type: contract.TypeString, Required: true},
 		{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
-		{Name: "frame_id", Type: contract.TypeString},
+		{Name: "frame_id", Type: contract.TypeString, Required: true},
 	}
 	capability.Outputs = []contract.Field{{Name: "did", Type: contract.TypeString, Required: true},
-		{Name: "application", Type: contract.TypeString, Required: true}, {Name: "bundle_id", Type: contract.TypeString, Required: true}}
+		{Name: "application", Type: contract.TypeString, Required: true}, {Name: "bundle_id", Type: contract.TypeString, Required: true},
+		{Name: "action_sent", Type: contract.TypeBool, Required: true}, {Name: "frame_id", Type: contract.TypeString, Required: true},
+		{Name: "window_id", Type: contract.TypeInt, Required: true}, {Name: "dominant_display_id", Type: contract.TypeInt, Required: true},
+		{Name: "geometry_generation", Type: contract.TypeString, Required: true}}
 	out, err := runner.Run(t.Context(), contract.RunRequest{
 		Capability:     capability,
 		Implementation: contract.Implementation{ID: "macos.click", Capability: capability.ID},
@@ -737,6 +743,124 @@ func TestCoordinateActionForwardsFrameAndResolvedIdentity(t *testing.T) {
 	}
 }
 
+func TestObservationAndActionApplicationListsAreIndependent(t *testing.T) {
+	session := fakeHelper(t, map[string]any{
+		"health":  map[string]any{"accessibility": true, "screen_recording": true},
+		"inspect": map[string]any{"nodes": []any{}, "count": 0},
+		"click": map[string]any{"action_sent": true, "frame_id": "frame-1", "window_id": 4,
+			"dominant_display_id": 1, "geometry_generation": "g1"},
+		"list_apps": map[string]any{"apps": []any{
+			map[string]any{"pid": 10, "name": "Finder", "bundle_id": "com.apple.finder"},
+			map[string]any{"pid": 11, "name": "Simulator", "bundle_id": "com.apple.iphonesimulator"},
+		}},
+	})
+	runner, err := desktop.New(desktop.Options{Session: session, Responsible: func() bool { return true },
+		Allowed:       []string{"com.apple.finder", "com.apple.iphonesimulator"},
+		ActionAllowed: []string{"com.apple.iphonesimulator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspect := inspectCapability()
+	_, err = runner.Run(t.Context(), contract.RunRequest{Capability: inspect,
+		Implementation: contract.Implementation{ID: desktop.ImplementationInspect, Capability: inspect.ID},
+		Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+		Payload:        map[string]any{"application": "com.apple.finder"},
+		Permission:     contract.Permission{Task: "observe", Effects: inspect.Effects}})
+	if err != nil {
+		t.Fatalf("Finder observation refused: %v", err)
+	}
+	action := contract.Capability{ID: "desktop.click", Version: contract.Version{Major: 2},
+		Effects: []contract.Effect{contract.EffectRead, contract.EffectDevice},
+		Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true},
+			{Name: "x", Type: contract.TypeInt, Required: true}, {Name: "y", Type: contract.TypeInt, Required: true},
+			{Name: "frame_id", Type: contract.TypeString, Required: true}}}
+	runAction := func(bundle string) error {
+		_, err := runner.Run(t.Context(), contract.RunRequest{Capability: action,
+			Implementation: contract.Implementation{ID: "macos.click", Capability: action.ID},
+			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+			Payload:        map[string]any{"application": bundle, "x": 1, "y": 1, "frame_id": "frame-1"},
+			Permission:     contract.Permission{Task: "act", Effects: action.Effects}})
+		return err
+	}
+	if err := runAction("com.apple.finder"); contract.KindOf(err) != contract.FailurePermissionDenied {
+		t.Fatalf("Finder action error = %v", err)
+	}
+	if err := runAction("com.apple.iphonesimulator"); err != nil {
+		t.Fatalf("Simulator action refused: %v", err)
+	}
+}
+
+func TestEveryMutationRequiresAFrameIDBeforeCallingTheHelper(t *testing.T) {
+	for capability, implementation := range map[string]string{
+		"desktop.click": "macos.click", "desktop.move": "macos.move", "desktop.drag": "macos.drag",
+		"desktop.scroll": "macos.scroll", "desktop.type": "macos.type", "desktop.key": "macos.key",
+	} {
+		runner, err := desktop.New(desktop.Options{Session: fakeHelper(t, nil),
+			Responsible: func() bool { return true }, Allowed: []string{"com.apple.Notes"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		declared := contract.Capability{ID: capability, Version: contract.Version{Major: 2},
+			Effects: []contract.Effect{contract.EffectRead, contract.EffectDevice},
+			Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true},
+				{Name: "frame_id", Type: contract.TypeString, Required: true}}}
+		_, err = runner.Run(t.Context(), contract.RunRequest{Capability: declared,
+			Implementation: contract.Implementation{ID: implementation, Capability: capability},
+			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+			Payload:        map[string]any{"application": "com.apple.Notes"},
+			Permission:     contract.Permission{Task: "act", Effects: declared.Effects}})
+		if contract.KindOf(err) != contract.FailureInvalidInput || !strings.Contains(err.Error(), "frame_id") {
+			t.Errorf("%s error = %v", capability, err)
+		}
+	}
+}
+
+func TestTypeAndKeyForwardTheValidatedFrameToken(t *testing.T) {
+	for _, tc := range []struct {
+		capability, implementation, tool string
+		field, value                     string
+	}{
+		{"desktop.type", "macos.type", "type", "text", "hello"},
+		{"desktop.key", "macos.key", "key", "key", "return"},
+	} {
+		session := fakeHelper(t, map[string]any{
+			"health": map[string]any{"accessibility": true, "screen_recording": true, "input_monitor_active": true},
+			"list_apps": map[string]any{"apps": []any{map[string]any{
+				"pid": 42, "name": "Simulator", "bundle_id": "com.apple.iphonesimulator"}}},
+			tc.tool: map[string]any{"action_sent": true, "frame_id": "frame-2", "window_id": 8,
+				"dominant_display_id": 1, "geometry_generation": "g2"},
+		})
+		runner, err := desktop.New(desktop.Options{Session: session, Responsible: func() bool { return true },
+			Allowed: []string{"com.apple.iphonesimulator"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		declared := contract.Capability{ID: tc.capability, Version: contract.Version{Major: 2},
+			Effects: []contract.Effect{contract.EffectRead, contract.EffectDevice},
+			Inputs: []contract.Field{{Name: "application", Type: contract.TypeString, Required: true},
+				{Name: tc.field, Type: contract.TypeString, Required: true},
+				{Name: "frame_id", Type: contract.TypeString, Required: true}}}
+		_, err = runner.Run(t.Context(), contract.RunRequest{Capability: declared,
+			Implementation: contract.Implementation{ID: tc.implementation, Capability: tc.capability},
+			Repository:     contract.Repository{ID: "work", Path: t.TempDir()},
+			Payload:        map[string]any{"application": "com.apple.iphonesimulator", tc.field: tc.value, "frame_id": "frame-2"},
+			Permission:     contract.Permission{Task: "act", Effects: declared.Effects}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			params := <-callsSeen
+			if params["name"] == tc.tool {
+				args, _ := params["arguments"].(map[string]any)
+				if args["frame_id"] != "frame-2" || args["bundle_id"] != "com.apple.iphonesimulator" {
+					t.Errorf("%s arguments = %#v", tc.tool, args)
+				}
+				break
+			}
+		}
+	}
+}
+
 // Nothing platform-shaped crosses the seam. The helper owns every macOS type
 // and every pixel ratio; what arrives here is numbers and strings, and a
 // result that started carrying something else would mean the scaling had
@@ -747,7 +871,9 @@ func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
 		"list_apps": map[string]any{"apps": []any{map[string]any{
 			"pid": 7, "name": "Notes", "bundle_id": "com.apple.Notes"}}},
 		"screenshot": map[string]any{"png_base64": "iVBOR", "width": 800,
-			"height": 600, "scale": 0.5, "bytes": 12, "frame_id": "test-frame"},
+			"height": 600, "scale": 0.5, "bytes": 12, "frame_id": "test-frame", "window_id": 9,
+			"dominant_display_id": 1, "intersecting_displays": []any{map[string]any{"id": 1}},
+			"geometry_generation": "g1", "coordinate_space": "screenshot_pixels_top_left"},
 	})
 	runner, err := desktop.New(desktop.Options{
 		Session: session, Responsible: func() bool { return true },
@@ -769,7 +895,7 @@ func TestNothingPlatformShapedCrossesTheSeam(t *testing.T) {
 	}
 	for key, value := range out.Result {
 		switch value.(type) {
-		case string, int, float64, bool:
+		case string, int, float64, bool, []string, []map[string]any:
 		default:
 			t.Errorf("%s carries %T across the seam; only plain values may", key, value)
 		}

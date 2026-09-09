@@ -640,6 +640,10 @@ keep = 5
 # explicitly empty list is a statement and is honored. It outranks "*" too,
 # which is what keeps the widest allow-list survivable.
 applications = []
+# What the desktop mutation capabilities may act on. If this field is absent,
+# it inherits `applications` for compatibility with older settings. Present as
+# `[]` it denies every mutation even when observation remains allowed.
+action_applications = []
 denied = [
   "com.apple.keychainaccess",
   "com.1password.1password",
@@ -2599,7 +2603,7 @@ effects = ["read", "device"]
 
 [[capability]]
 id = "desktop.screenshot"
-version = "1.1.0"
+version = "1.2.0"
 summary = "Capture one application's frontmost window."
 semantics = """
 One window, never the whole screen. A full-screen grab carries whatever else \
@@ -2676,9 +2680,117 @@ effects = ["read", "device"]
   required = true
   summary = "Opaque capture frame token required to safely target a later coordinate action."
 
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "Window Server identity bound to the frame."
+
+  [[capability.output]]
+  name = "window_origin_x"
+  type = "float"
+  required = true
+  summary = "Global horizontal window origin in macOS points; may be negative."
+
+  [[capability.output]]
+  name = "window_origin_y"
+  type = "float"
+  required = true
+  summary = "Global vertical window origin in macOS points; may be negative."
+
+  [[capability.output]]
+  name = "window_width"
+  type = "float"
+  required = true
+  summary = "Global window width in macOS points."
+
+  [[capability.output]]
+  name = "window_height"
+  type = "float"
+  required = true
+  summary = "Global window height in macOS points."
+
+  [[capability.output]]
+  name = "scale_x"
+  type = "float"
+  required = true
+  summary = "Returned image pixels per horizontal window point."
+
+  [[capability.output]]
+  name = "scale_y"
+  type = "float"
+  required = true
+  summary = "Returned image pixels per vertical window point."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "Display with the greatest intersection area with the captured window."
+
+  [[capability.output]]
+  name = "intersecting_display_ids"
+  type = "string_list"
+  required = true
+  summary = "Every display intersected by the captured window."
+
+  [[capability.output]]
+  name = "intersecting_displays"
+  type = "record_list"
+  required = true
+  summary = "Identity, global frame and scale of every display intersected by the window."
+
+    [[capability.output.field]]
+    name = "id"
+    type = "int"
+    required = true
+    summary = "CoreGraphics display identity."
+
+    [[capability.output.field]]
+    name = "origin_x"
+    type = "float"
+    required = true
+    summary = "Global horizontal display origin."
+
+    [[capability.output.field]]
+    name = "origin_y"
+    type = "float"
+    required = true
+    summary = "Global vertical display origin."
+
+    [[capability.output.field]]
+    name = "width"
+    type = "float"
+    required = true
+    summary = "Display width in global points."
+
+    [[capability.output.field]]
+    name = "height"
+    type = "float"
+    required = true
+    summary = "Display height in global points."
+
+    [[capability.output.field]]
+    name = "scale"
+    type = "float"
+    required = true
+    summary = "Display backing scale factor."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "Opaque generation fingerprint for the complete display topology."
+
+  [[capability.output]]
+  name = "coordinate_space"
+  type = "string"
+  required = true
+  summary = "Always screenshot_pixels_top_left."
+
 [[capability]]
 id = "desktop.click"
-version = "1.1.0"
+version = "2.0.0"
 summary = "Click inside one application's window."
 semantics = """
 A button may delete something or send something, and nothing can know which before it is pressed. \
@@ -2694,7 +2806,7 @@ effects = ["read", "device", "write", "external"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "x"
@@ -2717,8 +2829,8 @@ effects = ["read", "device", "write", "external"]
   [[capability.input]]
   name = "frame_id"
   type = "string"
-  required = false
-  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -2738,9 +2850,40 @@ effects = ["read", "device", "write", "external"]
   required = true
   summary = "That application's bundle identifier."
 
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
+
 [[capability]]
 id = "desktop.move"
-version = "1.1.0"
+version = "2.0.0"
 summary = "Move the pointer without pressing anything."
 semantics = """
 Moves the pointer and changes nothing else; it is here because hover reveals interface that is otherwise invisible. \
@@ -2756,7 +2899,7 @@ effects = ["read", "device"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "x"
@@ -2773,8 +2916,8 @@ effects = ["read", "device"]
   [[capability.input]]
   name = "frame_id"
   type = "string"
-  required = false
-  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -2794,9 +2937,40 @@ effects = ["read", "device"]
   required = true
   summary = "That application's bundle identifier."
 
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
+
 [[capability]]
 id = "desktop.drag"
-version = "1.1.0"
+version = "2.0.0"
 summary = "Press at one point, drag to another, release."
 semantics = """
 Moves something from one place to another. It rearranges rather than sends, which is why it declares no external effect. \
@@ -2812,7 +2986,7 @@ effects = ["read", "device", "write"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "from_x"
@@ -2841,8 +3015,8 @@ effects = ["read", "device", "write"]
   [[capability.input]]
   name = "frame_id"
   type = "string"
-  required = false
-  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -2862,9 +3036,40 @@ effects = ["read", "device", "write"]
   required = true
   summary = "That application's bundle identifier."
 
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
+
 [[capability]]
 id = "desktop.scroll"
-version = "1.1.0"
+version = "2.0.0"
 summary = "Scroll at a point."
 semantics = """
 Changes what is visible rather than what is there, which is why it declares no external effect. \
@@ -2880,7 +3085,7 @@ effects = ["read", "device", "write"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "x"
@@ -2909,8 +3114,8 @@ effects = ["read", "device", "write"]
   [[capability.input]]
   name = "frame_id"
   type = "string"
-  required = false
-  summary = "Opaque screenshot frame token; omitted only when the helper has a recent valid frame."
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -2930,9 +3135,40 @@ effects = ["read", "device", "write"]
   required = true
   summary = "That application's bundle identifier."
 
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
+
 [[capability]]
 id = "desktop.type"
-version = "1.0.0"
+version = "2.0.0"
 summary = "Type literal text into whatever has keyboard focus."
 semantics = """
 Refused twice over: text that reads as a credential never leaves this process, and macOS's own secure text fields are refused at the moment of typing, because focus moves and an earlier check is a check about a different field. \
@@ -2948,13 +3184,19 @@ effects = ["read", "device", "write", "external"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "text"
   type = "string"
   required = true
   summary = "The text to type. Anything that reads as a credential is refused."
+
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -2974,9 +3216,40 @@ effects = ["read", "device", "write", "external"]
   required = true
   summary = "That application's bundle identifier."
 
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
+
 [[capability]]
 id = "desktop.key"
-version = "1.0.0"
+version = "2.0.0"
 summary = "Press one key, with optional modifiers."
 semantics = """
 A shortcut is a command with no label. cmd+w and cmd+q are one letter apart and neither asks first. \
@@ -2992,7 +3265,7 @@ effects = ["read", "device", "write", "external"]
   name = "application"
   type = "string"
   required = true
-  summary = "Bundle identifier of the application to act on. Must be in the [desktop] allow-list."
+  summary = "Bundle identifier of the application to act on. Must be in [desktop] action_applications."
 
   [[capability.input]]
   name = "key"
@@ -3005,6 +3278,12 @@ effects = ["read", "device", "write", "external"]
   type = "string_list"
   required = false
   summary = "Any of cmd, shift, alt, ctrl."
+
+  [[capability.input]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "Opaque screenshot frame token required for this exact action."
 
   [[capability.output]]
   name = "did"
@@ -3023,6 +3302,37 @@ effects = ["read", "device", "write", "external"]
   type = "string"
   required = true
   summary = "That application's bundle identifier."
+
+  [[capability.output]]
+  name = "action_sent"
+  type = "bool"
+  required = true
+  summary = "True only when the helper sent the input event; it does not verify the resulting UI."
+
+  [[capability.output]]
+  name = "frame_id"
+  type = "string"
+  required = true
+  summary = "The exact screenshot frame validated for the action."
+
+  [[capability.output]]
+  name = "window_id"
+  type = "int"
+  required = true
+  summary = "The exact Window Server identity validated for the action."
+
+  [[capability.output]]
+  name = "dominant_display_id"
+  type = "int"
+  required = true
+  summary = "The dominant display identity bound to the frame."
+
+  [[capability.output]]
+  name = "geometry_generation"
+  type = "string"
+  required = true
+  summary = "The display-topology generation bound to the frame."
+
 
 [[implementation]]
 id = "ripgrep"

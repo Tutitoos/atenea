@@ -3,11 +3,22 @@ title: Computer Use
 weight: 7
 ---
 
-# Computer Use through Atenea
+# Visual Computer Use with Atenea fallback
 
-Atenea exposes macOS Computer Use as typed `desktop.*` capabilities. Clients
-connect to the `atenea mcp` bridge; they do not connect directly to the helper
-or to a second Computer Use MCP server.
+For iOS Simulator the stable priority is:
+
+```text
+official Computer Use -> Atenea desktop visual -> agent-device
+```
+
+Official Computer Use remains external to Atenea and is attempted first. A
+new Codex task must explicitly start it with `@Computer` after its server and
+skill are enabled. Atenea exposes the governed `desktop.*` fallback through
+its MCP bridge; `agent-device` is the final route. Do not modify the
+proprietary Computer Use plugin to create this chain.
+
+The setup and explicit `@Computer` start follow OpenAI's
+[Computer Use documentation](https://learn.chatgpt.com/docs/computer-use).
 
 ## Android bridge
 
@@ -77,6 +88,13 @@ list denies every application. Use `denied` for password managers, keychain,
 banking and any other application that must never be inspected, even when a
 wildcard allow-list is used.
 
+`action_applications` is the independent mutation allow-list. If absent it
+inherits `applications` for backward compatibility; an explicit empty list
+denies all mutations. The certified activation observes Finder, TextEdit and
+Simulator as needed but sets
+`action_applications = ["com.apple.iphonesimulator"]`. `denied` always wins
+over both lists and their wildcard.
+
 The helper needs Accessibility for accessibility-tree inspection and input
 control. It needs Screen Recording for window captures. Atenea reports a
 missing permission as a typed refusal and does not retry a mutating operation
@@ -91,10 +109,14 @@ ephemeral: it adapts between observation and action rates, blurs after idle,
 closes after 30 seconds, and never records video, screenshots or event history
 on disk. Closing it suppresses only the visuals; Atenea continues working.
 
-`desktop.screenshot` returns an opaque `frame_id`. Pass that token to
-coordinate actions when available. Atenea validates the PID, bundle, window
-ID, geometry, scale and visibility again before sending an event, and refuses
-stale frames or a point covered by another application. Accessible controls use
+`desktop.screenshot` returns an opaque `frame_id`. Every click, move, drag,
+scroll, type and key action requires that token. Atenea validates the PID,
+bundle, window ID and rectangle, image dimensions, dominant and intersecting
+displays, horizontal and vertical scale, topology generation and visibility
+again before sending an event. It refuses expiry, movement, resizing,
+rotation, display or scale changes, topology changes, and points covered by
+another application. Public coordinates remain
+`screenshot_pixels_top_left`; callers never apply display scaling. Accessible controls use
 their Accessibility action first; canvas and emulator surfaces use a guarded
 foreground CGEvent fallback, so a target may briefly take focus.
 
@@ -116,7 +138,38 @@ injection tradeoff. The CLI's `atenea desktop ... --confirm` remains the
 manual confirmation path.
 
 Receipts retain the capability, application, non-sensitive coordinates or key,
-effects, result and denial reason. Typed text and image content are excluded.
+effects, result and denial reason. Action results and receipts carry
+`action_sent`, frame, window, dominant display and geometry generation. They do
+not claim the UI reached its intended state; only a later observation can do
+that. Typed text and image content are excluded.
+
+## Fallback classification
+
+The caller records both requested and actual backend, the classification,
+cause, observation/selection/action/verification/total latency and final
+evidence. Use these stable classes:
+
+- `unavailable`: server, skill, tool or runtime is absent.
+- `unsupported`: the operation or surface is not supported.
+- `recoverable_denied`: a permission, window or geometry condition can be corrected.
+- `unverified`: the post-action observation does not confirm the destination.
+- `unknown_after_mutation`: an event may have been sent, so observe and classify before considering any fallback.
+
+A terminal denial or human interruption stops the whole chain. It never starts
+another backend. `windowNotFoundAtPosition` is an official Computer Use
+backend failure, not an Atenea failure. An unknown result after mutation must
+not produce a second action.
+
+The official-backend preflight verifies the configured server and skill,
+`node_repl`, importing `@oai/sky`, access to Simulator and a first observation.
+If any preflight element is absent, classify it before entering the Atenea
+fallback. Android remains unchanged: `android.*` precedes `agent-device`.
+`simctl` is limited to inventory, boot, installation, launch and diagnosis.
+
+The repository's `benchmarks/ios-simulator-visual/` protocol fixes the two
+fixtures, nine geometry/safety scenarios, five warm-ups, 30 measured cycles,
+result schema and local report template. A missing required device, runtime or
+display leaves certification pending rather than silently changing the matrix.
 
 ## Centralization limit
 

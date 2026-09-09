@@ -1,6 +1,12 @@
 import Foundation
 import CoreGraphics
 
+struct DisplayTarget: Sendable, Equatable {
+    let id: UInt32
+    let frame: CGRect
+    let scale: Double
+}
+
 /// The exact window and image geometry associated with one screenshot.
 ///
 /// A frame token is deliberately opaque. Callers can pass it back to an
@@ -16,6 +22,28 @@ struct WindowTarget: Sendable {
     let scale: CGSize
     let visible: Bool
     let capturedAt: Date
+    let dominantDisplayID: UInt32
+    let intersectingDisplays: [DisplayTarget]
+    let geometryGeneration: String
+
+    init(pid: pid_t, bundleID: String, appName: String, windowID: CGWindowID,
+         frame: CGRect, imageWidth: Int, imageHeight: Int, scale: CGSize,
+         visible: Bool, capturedAt: Date, dominantDisplayID: UInt32 = 0,
+         intersectingDisplays: [DisplayTarget] = [], geometryGeneration: String = "") {
+        self.pid = pid
+        self.bundleID = bundleID
+        self.appName = appName
+        self.windowID = windowID
+        self.frame = frame
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.scale = scale
+        self.visible = visible
+        self.capturedAt = capturedAt
+        self.dominantDisplayID = dominantDisplayID
+        self.intersectingDisplays = intersectingDisplays
+        self.geometryGeneration = geometryGeneration
+    }
 
     func contains(imagePoint point: CGPoint) -> Bool {
         point.x >= 0 && point.y >= 0 && point.x <= CGFloat(imageWidth) && point.y <= CGFloat(imageHeight)
@@ -50,13 +78,21 @@ actor CaptureContexts {
         byPID[frame.target.pid] = frame
     }
 
-    func latest(pid: pid_t, frameID: String?) throws -> CaptureFrame {
+    func latest(pid: pid_t, frameID: String) throws -> CaptureFrame {
         guard let frame = byPID[pid], Date().timeIntervalSince(frame.target.capturedAt) <= lifetime else {
             byPID[pid] = nil
             throw RPCError.denied("no valid screenshot frame exists; request a new screenshot")
         }
-        if let frameID, frameID != frame.id {
+        if frameID != frame.id {
             throw RPCError.denied("frame_id does not belong to the current application window; request a new screenshot")
+        }
+        return frame
+    }
+
+    func current(pid: pid_t) throws -> CaptureFrame {
+        guard let frame = byPID[pid], Date().timeIntervalSince(frame.target.capturedAt) <= lifetime else {
+            byPID[pid] = nil
+            throw RPCError.denied("no valid screenshot frame exists; request a new screenshot")
         }
         return frame
     }

@@ -51,7 +51,9 @@ func checkedPoint(_ args: [String: Any]) async throws -> (CGPoint, CaptureFrame,
     guard let x = args["x"] as? Double, let y = args["y"] as? Double else {
         throw RPCError.invalidParams("x and y are required")
     }
-    let frameID = args["frame_id"] as? String
+    guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
+        throw RPCError.invalidParams("frame_id is required")
+    }
     let (point, frame) = try await Capture.globalPoint(pid: target.pid, bundleID: target.bundleID,
                                                        appName: target.appName, frameID: frameID,
                                                        x: x, y: y)
@@ -65,6 +67,16 @@ func checkedPoint(_ args: [String: Any]) async throws -> (CGPoint, CaptureFrame,
     }
     await VisualFeedbackController.shared.animateCursor(globalPoint: point)
     return (point, frame, target)
+}
+
+func actionReceipt(_ frame: CaptureFrame) -> [String: Any] {
+    [
+        "action_sent": true,
+        "frame_id": frame.id,
+        "window_id": Int(frame.target.windowID),
+        "dominant_display_id": Int(frame.target.dominantDisplayID),
+        "geometry_generation": frame.target.geometryGeneration,
+    ]
 }
 
 func ensureInputMonitor(_ visualFeedback: Bool) async throws {
@@ -192,6 +204,21 @@ let tools: [Tool] = [
                 "scale": shot.scale,
                 "bytes": shot.png.count,
                 "frame_id": shot.frameID,
+                "window_id": Int(shot.target.windowID),
+                "window_origin_x": shot.target.frame.origin.x,
+                "window_origin_y": shot.target.frame.origin.y,
+                "window_width": shot.target.frame.width,
+                "window_height": shot.target.frame.height,
+                "scale_x": shot.target.scale.width,
+                "scale_y": shot.target.scale.height,
+                "dominant_display_id": Int(shot.target.dominantDisplayID),
+                "intersecting_display_ids": shot.target.intersectingDisplays.map { String($0.id) },
+                "intersecting_displays": shot.target.intersectingDisplays.map {
+                    ["id": Int($0.id), "origin_x": $0.frame.origin.x, "origin_y": $0.frame.origin.y,
+                     "width": $0.frame.width, "height": $0.frame.height, "scale": $0.scale]
+                },
+                "geometry_generation": shot.target.geometryGeneration,
+                "coordinate_space": "screenshot_pixels_top_left",
             ]
         }
     ),
@@ -204,7 +231,7 @@ let tools: [Tool] = [
     Tool(
         name: "click",
         description: "Click at a point, once or twice.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
                                      "app": ["type": "string"], "x": ["type": "number"], "y": ["type": "number"],
                                      "clicks": ["type": "integer"], "frame_id": ["type": "string"],
@@ -223,14 +250,13 @@ let tools: [Tool] = [
                 try await Input.click(at: point, clicks: args["clicks"] as? Int ?? 1, visualFeedback: target.visualFeedback)
             }
             await MainActor.run { VisualFeedbackController.shared.setState(.observing) }
-            let x = args["x"] as? Double ?? 0; let y = args["y"] as? Double ?? 0
-            return ["clicked": ["x": x, "y": y]]
+            return actionReceipt(frame)
         }
     ),
     Tool(
         name: "move",
         description: "Move the pointer without clicking.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
                                      "app": ["type": "string"], "x": ["type": "number"], "y": ["type": "number"],
                                      "frame_id": ["type": "string"], "visual_feedback": ["type": "boolean"]] as [String: Any]],
@@ -240,14 +266,13 @@ let tools: [Tool] = [
             let target = try targetArguments(args)
             try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
             try await Input.move(to: point, visualFeedback: target.visualFeedback)
-            let x = args["x"] as? Double ?? 0; let y = args["y"] as? Double ?? 0
-            return ["moved": ["x": x, "y": y]]
+            return actionReceipt(frame)
         }
     ),
     Tool(
         name: "drag",
         description: "Press at one point, drag to another, release.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "from_x", "from_y", "to_x", "to_y"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "from_x", "from_y", "to_x", "to_y", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"], "app": ["type": "string"],
                                      "from_x": ["type": "number"], "from_y": ["type": "number"],
                                      "to_x": ["type": "number"], "to_y": ["type": "number"], "frame_id": ["type": "string"],
@@ -259,8 +284,11 @@ let tools: [Tool] = [
                   let tx = args["to_x"] as? Double, let ty = args["to_y"] as? Double else {
                 throw RPCError.invalidParams("from_x, from_y, to_x and to_y are required")
             }
+            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
+                throw RPCError.invalidParams("frame_id is required")
+            }
             let (start, frame) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
-                appName: identity.appName, frameID: args["frame_id"] as? String, x: fx, y: fy)
+                appName: identity.appName, frameID: frameID, x: fx, y: fy)
             let (end, _) = try await Capture.globalPoint(pid: identity.pid, bundleID: identity.bundleID,
                 appName: identity.appName, frameID: frame.id, x: tx, y: ty)
             if identity.visualFeedback {
@@ -269,13 +297,13 @@ let tools: [Tool] = [
             }
             try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID, point: start)
             try await Input.drag(from: start, to: end, visualFeedback: identity.visualFeedback)
-            return ["dragged": true]
+            return actionReceipt(frame)
         }
     ),
     Tool(
         name: "scroll",
         description: "Scroll at a point.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "x", "y", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"], "app": ["type": "string"],
                                      "x": ["type": "number"], "y": ["type": "number"],
                                      "dx": ["type": "integer"], "dy": ["type": "integer"], "frame_id": ["type": "string"],
@@ -287,15 +315,15 @@ let tools: [Tool] = [
             try WindowSafety.ensure(pid: target.pid, windowID: frame.target.windowID, point: point)
             try await Input.scroll(at: point, dx: args["dx"] as? Int ?? 0, dy: args["dy"] as? Int ?? 0,
                                    visualFeedback: target.visualFeedback)
-            return ["scrolled": true]
+            return actionReceipt(frame)
         }
     ),
     Tool(
         name: "type",
         description: "Type literal text into whatever has keyboard focus.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "text"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "text", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
-                                     "app": ["type": "string"], "text": ["type": "string"],
+                                     "app": ["type": "string"], "text": ["type": "string"], "frame_id": ["type": "string"],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
             let identity = try targetArguments(args)
@@ -303,25 +331,29 @@ let tools: [Tool] = [
             guard let text = args["text"] as? String else {
                 throw RPCError.invalidParams("text is required")
             }
+            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
+                throw RPCError.invalidParams("frame_id is required")
+            }
+            let frame = try await Capture.validatedFrame(pid: identity.pid, bundleID: identity.bundleID,
+                                                         appName: identity.appName, frameID: frameID)
+            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID,
+                                    point: CGPoint(x: frame.target.frame.midX, y: frame.target.frame.midY))
             if identity.visualFeedback {
-                let target = try await Capture.currentTarget(pid: identity.pid, bundleID: identity.bundleID, appName: identity.appName)
-                try WindowSafety.ensure(pid: identity.pid, windowID: target.windowID,
-                                        point: CGPoint(x: target.frame.midX, y: target.frame.midY))
-                await MainActor.run { VisualFeedbackController.shared.show(target: target, state: .typing) }
+                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .typing) }
             }
             try await Input.type(text, visualFeedback: identity.visualFeedback)
             // The length and not the text. A helper that echoed what it typed
             // would put it in a log, a receipt and a model's context, which is
             // three copies of something somebody may have meant to keep.
-            return ["typed": text.count]
+            return actionReceipt(frame)
         }
     ),
     Tool(
         name: "key",
         description: "Press one key, with optional modifiers.",
-        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "key"],
+        inputSchema: ["type": "object", "required": ["pid", "bundle_id", "app", "key", "frame_id"],
                       "properties": ["pid": ["type": "integer"], "bundle_id": ["type": "string"],
-                                     "app": ["type": "string"], "key": ["type": "string"],
+                                     "app": ["type": "string"], "key": ["type": "string"], "frame_id": ["type": "string"],
                                      "modifiers": ["type": "array", "items": ["type": "string"]],
                                      "visual_feedback": ["type": "boolean"]] as [String: Any]],
         run: { args in
@@ -330,15 +362,19 @@ let tools: [Tool] = [
             guard let name = args["key"] as? String else {
                 throw RPCError.invalidParams("key is required")
             }
+            guard let frameID = args["frame_id"] as? String, !frameID.isEmpty else {
+                throw RPCError.invalidParams("frame_id is required")
+            }
+            let frame = try await Capture.validatedFrame(pid: identity.pid, bundleID: identity.bundleID,
+                                                         appName: identity.appName, frameID: frameID)
+            try WindowSafety.ensure(pid: identity.pid, windowID: frame.target.windowID,
+                                    point: CGPoint(x: frame.target.frame.midX, y: frame.target.frame.midY))
             if identity.visualFeedback {
-                let target = try await Capture.currentTarget(pid: identity.pid, bundleID: identity.bundleID, appName: identity.appName)
-                try WindowSafety.ensure(pid: identity.pid, windowID: target.windowID,
-                                        point: CGPoint(x: target.frame.midX, y: target.frame.midY))
-                await MainActor.run { VisualFeedbackController.shared.show(target: target, state: .typing) }
+                await MainActor.run { VisualFeedbackController.shared.show(target: frame.target, state: .typing) }
             }
             try await Input.key(name, modifiers: (args["modifiers"] as? [String]) ?? [],
                                 visualFeedback: identity.visualFeedback)
-            return ["pressed": name]
+            return actionReceipt(frame)
         }
     ),
 ]

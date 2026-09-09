@@ -34,4 +34,23 @@ final class CaptureContextTests: XCTestCase {
             XCTAssertEqual(error.kind, "denied")
         }
     }
+
+    func testNewCaptureReplacesThePreviousToken() async throws {
+        let contexts = CaptureContexts()
+        let target = WindowTarget(pid: 8, bundleID: "x", appName: "X", windowID: 5,
+                                  frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                  imageWidth: 100, imageHeight: 100,
+                                  scale: CGSize(width: 1, height: 1), visible: true,
+                                  capturedAt: Date())
+        await contexts.store(CaptureFrame(id: "first", target: target))
+        await contexts.store(CaptureFrame(id: "second", target: target))
+        do {
+            _ = try await contexts.latest(pid: 8, frameID: "first")
+            XCTFail("replaced frame accepted")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.kind, "denied")
+        }
+        let current = try await contexts.latest(pid: 8, frameID: "second")
+        XCTAssertEqual(current.id, "second")
+    }
 }

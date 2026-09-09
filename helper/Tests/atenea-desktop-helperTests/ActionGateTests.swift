@@ -18,4 +18,23 @@ final class ActionGateTests: XCTestCase {
         try await gate.checkpoint()
         await gate.finish()
     }
+
+    func testPartiallyAppliedSequenceIsCanceledWithoutRepeatingSentEvents() async throws {
+        let gate = ActionGate()
+        var sentEvents = 0
+        try await gate.begin()
+        sentEvents += 1
+        await gate.interrupt()
+        do {
+            try await gate.checkpoint()
+            XCTFail("partially applied action continued after interruption")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.kind, "canceled")
+        }
+        await gate.finish()
+        await gate.resume()
+        XCTAssertEqual(sentEvents, 1)
+        let paused = await gate.isPaused()
+        XCTAssertFalse(paused)
+    }
 }
