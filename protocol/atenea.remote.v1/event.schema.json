@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/event.schema.json",
+  "title": "ATENEA remote v1 event",
+  "description": "A bounded session event with a typed event payload.",
+  "type": "object",
+  "required": ["event_id", "event_type", "occurred_at", "data"],
+  "properties": {
+    "event_id": {
+      "$ref": "definitions.schema.json#/$defs/eventId"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "revoked",
+        "mode_changed",
+        "session_closed",
+        "capabilities_changed",
+        "heartbeat_timeout"
+      ]
+    },
+    "occurred_at": {
+      "$ref": "definitions.schema.json#/$defs/timestamp"
+    },
+    "data": {
+      "oneOf": [
+        {
+          "$ref": "definitions.schema.json#/$defs/revocationEvent"
+        },
+        {
+          "$ref": "definitions.schema.json#/$defs/modeChangedEvent"
+        },
+        {
+          "$ref": "definitions.schema.json#/$defs/sessionClosedEvent"
+        },
+        {
+          "$ref": "definitions.schema.json#/$defs/capabilitiesChangedEvent"
+        },
+        {
+          "$ref": "definitions.schema.json#/$defs/heartbeatTimeoutEvent"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "revoked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "definitions.schema.json#/$defs/revocationEvent"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "mode_changed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "definitions.schema.json#/$defs/modeChangedEvent"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "session_closed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "definitions.schema.json#/$defs/sessionClosedEvent"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "capabilities_changed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "definitions.schema.json#/$defs/capabilitiesChangedEvent"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "heartbeat_timeout"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "definitions.schema.json#/$defs/heartbeatTimeoutEvent"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 4
+}

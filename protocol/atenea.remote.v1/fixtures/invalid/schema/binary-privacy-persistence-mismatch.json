@@ -1,0 +1,25 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "binary_frame",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "request-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "kind": "binary_frame",
+    "binary_id": "binary-1",
+    "frame_id": "frame-1",
+    "purpose": "screenshot",
+    "content_type": "image/png",
+    "size_bytes": 1,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "privacy": {
+      "sensitivity": "non_sensitive",
+      "ephemeral": false,
+      "retention_ms": 1,
+      "artifact_persistence_authorized": false
+    }
+  }
+}

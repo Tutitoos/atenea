@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/result.schema.json",
+  "title": "ATENEA remote v1 result payload",
+  "description": "A bounded successful response. Its request correlation is carried only by the enclosing envelope request_id; this payload has no nested correlation field or capability authority. Screenshot data carries one complete, non-sensitive, ephemeral-by-default binary frame descriptor. The typed data shape is the explicit result discriminator, while request/result capability agreement is a later runtime semantic check.",
+  "type": "object",
+  "required": ["status", "completed_at", "data"],
+  "properties": {
+    "status": {
+      "const": "succeeded"
+    },
+    "completed_at": {
+      "$ref": "definitions.schema.json#/$defs/timestamp"
+    },
+    "data": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/targetsResult"
+        }
+      }
+    },
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/appsResult"
+        }
+      }
+    },
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/inspectionResult"
+        }
+      }
+    },
+    {
+      "description": "A screenshot result's binary descriptor is a complete frame with explicit image media type and closed privacy metadata.",
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/screenshotResult"
+        }
+      }
+    },
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/waitResult"
+        }
+      }
+    },
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/stateResult"
+        }
+      }
+    },
+    {
+      "required": ["data"],
+      "properties": {
+        "data": {
+          "$ref": "definitions.schema.json#/$defs/ackResult"
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 3
+}

@@ -1,0 +1,18 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "result",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefg",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "status": "succeeded",
+    "completed_at": 0,
+    "data": {
+      "kind": "ack",
+      "accepted": true
+    }
+  }
+}

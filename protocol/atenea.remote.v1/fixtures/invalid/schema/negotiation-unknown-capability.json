@@ -1,0 +1,27 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "negotiation",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "phase": "offer",
+    "role": "agent",
+    "agent_version": "1",
+    "platform": "windows",
+    "architecture": "x86_64",
+    "supported_versions": [
+      "1.0.0"
+    ],
+    "modes": [
+      "background",
+      "attended",
+      "isolated"
+    ],
+    "capabilities": [
+      "remote.desktop.unknown"
+    ]
+  }
+}

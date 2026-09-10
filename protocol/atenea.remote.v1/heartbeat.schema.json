@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/heartbeat.schema.json",
+  "title": "ATENEA remote v1 heartbeat payload",
+  "description": "Bounded ping and pong payload for session liveness.",
+  "type": "object",
+  "required": ["kind", "interval_ms", "liveness_deadline_ms", "monotonic_tick"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["ping", "pong"]
+    },
+    "interval_ms": {
+      "$ref": "definitions.schema.json#/$defs/heartbeatIntervalMs"
+    },
+    "liveness_deadline_ms": {
+      "$ref": "definitions.schema.json#/$defs/livenessDeadlineMs"
+    },
+    "monotonic_tick": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "echo_sequence": {
+      "$ref": "definitions.schema.json#/$defs/sequence"
+    },
+    "acknowledged_sequence": {
+      "$ref": "definitions.schema.json#/$defs/sequence"
+    }
+  },
+  "if": {
+    "properties": {
+      "kind": {
+        "const": "pong"
+      }
+    }
+  },
+  "then": {
+    "required": ["echo_sequence"]
+  },
+  "additionalProperties": false,
+  "maxProperties": 6
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/error.schema.json",
+  "title": "ATENEA remote v1 typed error or refusal",
+  "description": "A bounded error or refusal. Its request correlation is carried only by the enclosing envelope request_id; this payload has no nested correlation field and its details must not repeat that identity.",
+  "type": "object",
+  "required": ["status", "code", "message", "occurred_at", "retryable", "details"],
+  "properties": {
+    "status": {
+      "enum": ["error", "refused"]
+    },
+    "code": {
+      "$ref": "definitions.schema.json#/$defs/errorCode"
+    },
+    "message": {
+      "$ref": "definitions.schema.json#/$defs/message"
+    },
+    "occurred_at": {
+      "$ref": "definitions.schema.json#/$defs/timestamp"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "details": {
+      "description": "The closed diagnostic detail object selected by the code discriminator in definitions.errorMapping.",
+      "type": "object",
+      "maxProperties": 4
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "definitions.schema.json#/$defs/errorMapping"
+    },
+    {
+      "description": "Keep the overflow diagnostic directly tied to its oversize error code as well as to the shared complete error matrix.",
+      "if": {
+        "properties": {
+          "code": {
+            "const": "oversize"
+          }
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "definitions.schema.json#/$defs/oversizeDetails"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 6
+}

@@ -1,0 +1,15 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "heartbeat",
+  "session_id": "bad space",
+  "device_id": "device-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "kind": "ping",
+    "interval_ms": 1000,
+    "liveness_deadline_ms": 1000,
+    "monotonic_tick": 0
+  }
+}

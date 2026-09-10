@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/request.schema.json",
+  "title": "ATENEA remote v1 request payload",
+  "description": "A bounded, granted request in the remote.desktop.* namespace.",
+  "type": "object",
+  "required": ["capability", "mode", "authorization", "timeout_ms", "arguments"],
+  "properties": {
+    "capability": {
+      "$ref": "definitions.schema.json#/$defs/capability"
+    },
+    "mode": {
+      "$ref": "definitions.schema.json#/$defs/mode"
+    },
+    "authorization": {
+      "$ref": "definitions.schema.json#/$defs/authorization"
+    },
+    "timeout_ms": {
+      "$ref": "definitions.schema.json#/$defs/timeoutMs"
+    },
+    "target": {
+      "type": "object"
+    },
+    "safety_gate": {
+      "oneOf": [
+        {
+          "$ref": "definitions.schema.json#/$defs/attendedGate"
+        },
+        {
+          "$ref": "definitions.schema.json#/$defs/isolatedGate"
+        }
+      ]
+    },
+    "arguments": {
+      "type": "object"
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["capability", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.targets"},
+        "target": false,
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/targetsArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.apps"},
+        "target": false,
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/appsArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.inspect"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/targetRef"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/emptyArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.screenshot"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/targetRef"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/emptyArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.open"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/emptyArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.close"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/emptyArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.invoke"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/invokeArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.set"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/setArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.select"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/selectArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.toggle"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/toggleArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.expand"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/emptyArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.scroll"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/observationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/scrollArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.wait"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/targetRef"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/waitArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments"],
+      "properties": {
+        "capability": {"const": "remote.desktop.get"},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/targetRef"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/getArguments"
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments", "safety_gate"],
+      "properties": {
+        "capability": {"const": "remote.desktop.click"},
+        "mode": {"enum": ["attended", "isolated"]},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/inputObservationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/clickArguments"
+        },
+        "safety_gate": {
+          "oneOf": [
+            {"$ref": "definitions.schema.json#/$defs/attendedGate"},
+            {"$ref": "definitions.schema.json#/$defs/isolatedGate"}
+          ]
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments", "safety_gate"],
+      "properties": {
+        "capability": {"const": "remote.desktop.type"},
+        "mode": {"enum": ["attended", "isolated"]},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/inputObservationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/typeArguments"
+        },
+        "safety_gate": {
+          "oneOf": [
+            {"$ref": "definitions.schema.json#/$defs/attendedGate"},
+            {"$ref": "definitions.schema.json#/$defs/isolatedGate"}
+          ]
+        }
+      }
+    },
+    {
+      "required": ["capability", "target", "arguments", "safety_gate"],
+      "properties": {
+        "capability": {"const": "remote.desktop.key"},
+        "mode": {"enum": ["attended", "isolated"]},
+        "target": {
+          "$ref": "definitions.schema.json#/$defs/inputObservationProof"
+        },
+        "arguments": {
+          "$ref": "definitions.schema.json#/$defs/keyArguments"
+        },
+        "safety_gate": {
+          "oneOf": [
+            {"$ref": "definitions.schema.json#/$defs/attendedGate"},
+            {"$ref": "definitions.schema.json#/$defs/isolatedGate"}
+          ]
+        }
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {"mode": {"const": "attended"}},
+        "required": ["safety_gate"]
+      },
+      "then": {
+        "properties": {
+          "safety_gate": {
+            "$ref": "definitions.schema.json#/$defs/attendedGate"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"mode": {"const": "isolated"}},
+        "required": ["safety_gate"]
+      },
+      "then": {
+        "properties": {
+          "safety_gate": {
+            "$ref": "definitions.schema.json#/$defs/isolatedGate"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 8
+}

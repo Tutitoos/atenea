@@ -1,0 +1,1650 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/definitions.schema.json",
+  "title": "ATENEA remote v1 shared definitions",
+  "description": "Closed, bounded definitions shared by the atenea.remote.v1 contract assets.",
+  "$defs": {
+    "protocol": {
+      "const": "atenea.remote.v1"
+    },
+    "version": {
+      "const": "1.0.0"
+    },
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "grantReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "targetId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "binaryId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "frameId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Fa-f0-9]+$"
+    },
+    "timestamp": {
+      "description": "Unix epoch milliseconds as a bounded integer from 0 through 253402300799999 inclusive. Ordering, expiration, current-time, and freshness relationships are runtime semantic validation; wire values are numeric rather than textual.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 253402300799999
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "shortString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "fieldName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+    },
+    "fieldPath": {
+      "description": "A bounded diagnostic path made from ordinary JSON property identifiers. Each non-empty segment starts with an ASCII letter or underscore and continues with ASCII letters, digits, or underscores; segments are separated only by dots. This deliberately excludes JSON Pointer, JSONPath, quoting, indexing, whitespace, control characters, and other ambiguous spellings. Producers must use an opaque bounded identifier when the original path cannot be represented within this limit.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "agentVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$"
+    },
+    "protocolVersion": {
+      "const": "1.0.0"
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "remote.desktop.targets",
+        "remote.desktop.open",
+        "remote.desktop.apps",
+        "remote.desktop.inspect",
+        "remote.desktop.screenshot",
+        "remote.desktop.close",
+        "remote.desktop.invoke",
+        "remote.desktop.set",
+        "remote.desktop.select",
+        "remote.desktop.toggle",
+        "remote.desktop.expand",
+        "remote.desktop.scroll",
+        "remote.desktop.wait",
+        "remote.desktop.get",
+        "remote.desktop.click",
+        "remote.desktop.type",
+        "remote.desktop.key"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["background", "attended", "isolated"]
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["windows", "macos", "linux"]
+    },
+    "architecture": {
+      "type": "string",
+      "enum": ["x86_64", "arm64", "armv7"]
+    },
+    "capabilityArray": {
+      "description": "A bounded, explicit offer list. Acceptance is not inferred from these values or from similar names; the later stateful semantic validator checks any accepted capability set against the prior offer.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 17,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "modeArray": {
+      "description": "A bounded, explicit offer list. The later stateful semantic validator checks an accepted mode as the appropriate intersection with the prior offer; it is not inferred from another mode or field.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/mode"
+      }
+    },
+    "protocolVersionArray": {
+      "description": "A bounded, explicit offer list. The later stateful semantic validator checks the accepted version against the prior offer; it is not inferred from an array position or another field.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/protocolVersion"
+      }
+    },
+    "timeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30000
+    },
+    "heartbeatIntervalMs": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 15000
+    },
+    "livenessDeadlineMs": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 45000
+    },
+    "leaseMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5000
+    },
+    "validityMs": {
+      "description": "Relative grant validity duration measured from granted_at; the resulting expiry instant is derived at runtime and is not carried as a second absolute field.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30000
+    },
+    "safeValue": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1024
+        },
+        {
+          "type": "integer",
+          "minimum": -1000000000,
+          "maximum": 1000000000
+        },
+        {
+          "type": "number",
+          "minimum": -1000000000,
+          "maximum": 1000000000
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "keyName": {
+      "type": "string",
+      "enum": [
+        "enter",
+        "escape",
+        "tab",
+        "space",
+        "backspace",
+        "delete",
+        "home",
+        "end",
+        "page_up",
+        "page_down",
+        "arrow_up",
+        "arrow_down",
+        "arrow_left",
+        "arrow_right",
+        "insert",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m",
+        "n",
+        "o",
+        "p",
+        "q",
+        "r",
+        "s",
+        "t",
+        "u",
+        "v",
+        "w",
+        "x",
+        "y",
+        "z",
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+      ]
+    },
+    "targetRef": {
+      "type": "object",
+      "required": ["target_id", "target_kind", "owner_process", "sensitivity"],
+      "properties": {
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["application", "window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "inputTarget": {
+      "type": "object",
+      "required": ["target_id", "target_kind", "owner_process", "sensitivity", "visible"],
+      "properties": {
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        },
+        "visible": {
+          "const": true
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 5
+    },
+    "observation": {
+      "type": "object",
+      "required": [
+        "generation",
+        "observed_at",
+        "target_id",
+        "target_fingerprint",
+        "owner_process",
+        "visibility",
+        "focus",
+        "sensitivity"
+      ],
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["visible", "hidden", "unknown"]
+        },
+        "focus": {
+          "type": "string",
+          "enum": ["focused", "not_focused", "unknown"]
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 8
+    },
+    "inputObservation": {
+      "type": "object",
+      "required": [
+        "generation",
+        "observed_at",
+        "target_id",
+        "target_fingerprint",
+        "owner_process",
+        "visibility",
+        "focus",
+        "sensitivity"
+      ],
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "visibility": {
+          "const": "visible"
+        },
+        "focus": {
+          "const": "focused"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 8
+    },
+    "observationProof": {
+      "type": "object",
+      "description": "One point-in-time target identity and observation. The identity is not repeated inside a separate observation object, so the proof cannot bind different targets.",
+      "required": [
+        "target_id",
+        "target_kind",
+        "owner_process",
+        "sensitivity",
+        "generation",
+        "observed_at",
+        "target_fingerprint",
+        "visibility",
+        "focus"
+      ],
+      "properties": {
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["application", "window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["visible", "hidden", "unknown"]
+        },
+        "focus": {
+          "type": "string",
+          "enum": ["focused", "not_focused", "unknown"]
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 9
+    },
+    "inputObservationProof": {
+      "type": "object",
+      "description": "A visible, focused direct-input target with its single bound observation.",
+      "required": [
+        "target_id",
+        "target_kind",
+        "owner_process",
+        "sensitivity",
+        "visible",
+        "generation",
+        "observed_at",
+        "target_fingerprint",
+        "visibility",
+        "focus"
+      ],
+      "properties": {
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        },
+        "visible": {
+          "const": true
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "visibility": {
+          "const": "visible"
+        },
+        "focus": {
+          "const": "focused"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 10
+    },
+    "authorization": {
+      "description": "A request authorization with one grant instant and one source for each lifetime. Runtime semantic validation binds the grant to the session/device/capability and evaluates granted_at plus validity_ms and lease_ms against the current monotonic and wall-clock state.",
+      "type": "object",
+      "required": ["grant_reference", "granted_at", "validity_ms", "lease_ms"],
+      "properties": {
+        "grant_reference": {
+          "$ref": "#/$defs/grantReference"
+        },
+        "granted_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "validity_ms": {
+          "$ref": "#/$defs/validityMs"
+        },
+        "lease_ms": {
+          "$ref": "#/$defs/leaseMs"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "attendedGate": {
+      "type": "object",
+      "required": ["kind", "consent", "local_user_present", "interruptible", "expires_at"],
+      "properties": {
+        "kind": {
+          "const": "attended"
+        },
+        "consent": {
+          "const": "explicit"
+        },
+        "local_user_present": {
+          "const": true
+        },
+        "interruptible": {
+          "const": true
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 5
+    },
+    "isolatedGate": {
+      "type": "object",
+      "required": ["kind", "boundary", "boundary_verified", "environment_id", "expires_at"],
+      "properties": {
+        "kind": {
+          "const": "isolated"
+        },
+        "boundary": {
+          "const": "hyperv"
+        },
+        "boundary_verified": {
+          "const": true
+        },
+        "environment_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 5
+    },
+    "capabilityGrant": {
+      "description": "One grant value in the grants map. The map property name is the sole capability identity; repeating that identity inside the value is forbidden. The grant has one granted_at instant, with validity_ms and lease_ms as the sole relative lifetime sources; their expiry instants are derived by runtime semantic validation.",
+      "type": "object",
+      "required": ["grant_reference", "granted_at", "validity_ms", "lease_ms"],
+      "properties": {
+        "grant_reference": {
+          "$ref": "#/$defs/grantReference"
+        },
+        "granted_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "validity_ms": {
+          "$ref": "#/$defs/validityMs"
+        },
+        "lease_ms": {
+          "$ref": "#/$defs/leaseMs"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "capabilityGrants": {
+      "description": "The sole accepted-capability authority. Each known capability can occur at most once as an object property; the property names encode the accepted capability set exactly once and each value is that capability's grant. There is no separate accepted-capability list. Whether these keys are the appropriate subset/intersection of an earlier offer and valid for current session state is checked by the later stateful semantic validator; no capability is inferred from a similar name.",
+      "type": "object",
+      "properties": {
+        "remote.desktop.targets": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.open": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.apps": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.inspect": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.screenshot": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.close": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.invoke": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.set": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.select": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.toggle": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.expand": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.scroll": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.wait": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.get": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.click": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.type": {"$ref": "#/$defs/capabilityGrant"},
+        "remote.desktop.key": {"$ref": "#/$defs/capabilityGrant"}
+      },
+      "additionalProperties": false,
+      "minProperties": 0,
+      "maxProperties": 17
+    },
+    "binaryMetadata": {
+      "description": "Metadata for one complete screenshot frame owned by the enclosing request-associated message. It deliberately carries no request_id; the enclosing envelope is the sole correlation source.",
+      "type": "object",
+      "required": [
+        "kind",
+        "binary_id",
+        "frame_id",
+        "purpose",
+        "content_type",
+        "size_bytes",
+        "sha256",
+        "privacy"
+      ],
+      "properties": {
+        "kind": {
+          "const": "binary_frame"
+        },
+        "binary_id": {
+          "$ref": "#/$defs/binaryId"
+        },
+        "frame_id": {
+          "$ref": "#/$defs/frameId"
+        },
+        "purpose": {
+          "const": "screenshot"
+        },
+        "content_type": {
+          "type": "string",
+          "enum": ["image/png", "image/jpeg"]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "privacy": {
+          "$ref": "#/$defs/screenshotPrivacyMetadata"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 8
+    },
+    "privacyMetadata": {
+      "description": "Closed, bounded privacy metadata. Persistence is never implied: frames are ephemeral by default and artifact persistence requires separate authorization.",
+      "type": "object",
+      "required": [
+        "sensitivity",
+        "ephemeral",
+        "retention_ms",
+        "artifact_persistence_authorized"
+      ],
+      "properties": {
+        "sensitivity": {
+          "type": "string",
+          "enum": ["non_sensitive", "sensitive"]
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "default": true
+        },
+        "retention_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        },
+        "artifact_persistence_authorized": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Ephemeral frames cannot authorize artifact persistence.",
+          "properties": {
+            "ephemeral": {
+              "const": true
+            },
+            "artifact_persistence_authorized": {
+              "const": false
+            }
+          }
+        },
+        {
+          "description": "Persistent frames require explicit artifact persistence authorization.",
+          "properties": {
+            "ephemeral": {
+              "const": false
+            },
+            "artifact_persistence_authorized": {
+              "const": true
+            }
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "screenshotPrivacyMetadata": {
+      "description": "Privacy metadata for a screenshot frame. Screenshot capture is classified as non-sensitive; persistence remains opt-in and separately authorized.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/privacyMetadata"
+        },
+        {
+          "properties": {
+            "sensitivity": {
+              "const": "non_sensitive"
+            }
+          }
+        }
+      ]
+    },
+    "targetsResult": {
+      "type": "object",
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": {
+          "const": "targets"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/targetRef"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "appsResult": {
+      "type": "object",
+      "required": ["kind", "items"],
+      "properties": {
+        "kind": {
+          "const": "apps"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": ["application_id", "process", "window_count"],
+            "properties": {
+              "application_id": {
+                "$ref": "#/$defs/targetId"
+              },
+              "process": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+              },
+              "window_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            },
+            "additionalProperties": false,
+            "maxProperties": 3
+          }
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "inspectionResult": {
+      "type": "object",
+      "required": [
+        "kind",
+        "target_id",
+        "target_kind",
+        "owner_process",
+        "sensitivity",
+        "visible",
+        "generation",
+        "observed_at",
+        "target_fingerprint",
+        "visibility",
+        "focus",
+        "fields"
+      ],
+      "properties": {
+        "kind": {
+          "const": "inspect"
+        },
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["application", "window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["visible", "hidden", "unknown"]
+        },
+        "focus": {
+          "type": "string",
+          "enum": ["focused", "not_focused", "unknown"]
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/fieldName"
+              },
+              "value": {
+                "$ref": "#/$defs/safeValue"
+              }
+            },
+            "additionalProperties": false,
+            "maxProperties": 2
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "visible": {"const": true},
+            "visibility": {"const": "visible"}
+          }
+        },
+        {
+          "properties": {
+            "visible": {"const": false},
+            "visibility": {"enum": ["hidden", "unknown"]}
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "maxProperties": 12
+    },
+    "ackResult": {
+      "type": "object",
+      "required": ["kind", "accepted"],
+      "properties": {
+        "kind": {
+          "const": "ack"
+        },
+        "accepted": {
+          "const": true
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "stateResult": {
+      "type": "object",
+      "required": ["kind", "field", "value"],
+      "properties": {
+        "kind": {
+          "const": "state"
+        },
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "value": {
+          "$ref": "#/$defs/safeValue"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "screenshotResult": {
+      "type": "object",
+      "required": [
+        "kind",
+        "target_id",
+        "target_kind",
+        "owner_process",
+        "sensitivity",
+        "visible",
+        "generation",
+        "observed_at",
+        "target_fingerprint",
+        "visibility",
+        "focus",
+        "binary"
+      ],
+      "properties": {
+        "kind": {
+          "const": "screenshot"
+        },
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "target_kind": {
+          "type": "string",
+          "enum": ["application", "window", "control", "document"]
+        },
+        "owner_process": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._ -]{1,128}$"
+        },
+        "sensitivity": {
+          "const": "non_sensitive"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "target_fingerprint": {
+          "$ref": "#/$defs/fingerprint"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["visible", "hidden", "unknown"]
+        },
+        "focus": {
+          "type": "string",
+          "enum": ["focused", "not_focused", "unknown"]
+        },
+        "binary": {
+          "$ref": "#/$defs/binaryMetadata"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "visible": {"const": true},
+            "visibility": {"const": "visible"}
+          }
+        },
+        {
+          "properties": {
+            "visible": {"const": false},
+            "visibility": {"enum": ["hidden", "unknown"]}
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "maxProperties": 12
+    },
+    "waitResult": {
+      "type": "object",
+      "required": ["kind", "condition_met", "elapsed_ms"],
+      "properties": {
+        "kind": {
+          "const": "wait"
+        },
+        "condition_met": {
+          "type": "boolean"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "expired",
+        "revoked",
+        "duplicate",
+        "out_of_order",
+        "missing_capability",
+        "unknown_field",
+        "oversize",
+        "stale_target",
+        "unsupported_version",
+        "mode_required",
+        "capability_denied",
+        "target_unavailable",
+        "sensitive_surface",
+        "invalid_envelope",
+        "liveness_timeout"
+      ]
+    },
+    "errorMapping": {
+      "description": "The closed status, retry policy, and diagnostic detail schema for each declared error code. Each code has exactly one wire mapping.",
+      "oneOf": [
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "expired"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/expiryDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "revoked"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/revocationDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "duplicate"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/duplicateDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "out_of_order"},
+            "status": {"const": "error"},
+            "retryable": {"const": true},
+            "details": {"$ref": "#/$defs/outOfOrderDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "missing_capability"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/missingCapabilityDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "unknown_field"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/unknownFieldDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "oversize"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/oversizeDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "stale_target"},
+            "status": {"const": "error"},
+            "retryable": {"const": true},
+            "details": {"$ref": "#/$defs/staleTargetDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "unsupported_version"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "mode_required"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "capability_denied"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "target_unavailable"},
+            "status": {"const": "error"},
+            "retryable": {"const": true},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "sensitive_surface"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "invalid_envelope"},
+            "status": {"const": "refused"},
+            "retryable": {"const": false},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        },
+        {
+          "required": ["code", "status", "retryable", "details"],
+          "properties": {
+            "code": {"const": "liveness_timeout"},
+            "status": {"const": "error"},
+            "retryable": {"const": true},
+            "details": {"$ref": "#/$defs/genericErrorDetails"}
+          }
+        }
+      ]
+    },
+    "expiryDetails": {
+      "type": "object",
+      "required": ["scope", "expired_at"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["deadline", "grant", "lease", "enrollment"]
+        },
+        "expired_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "revocationDetails": {
+      "type": "object",
+      "required": ["scope", "revocation_id", "revoked_at"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["device", "session", "grant"]
+        },
+        "revocation_id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "revoked_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "duplicateDetails": {
+      "type": "object",
+      "required": ["sequence"],
+      "properties": {
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "outOfOrderDetails": {
+      "type": "object",
+      "required": ["expected_sequence", "received_sequence"],
+      "properties": {
+        "expected_sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "received_sequence": {
+          "$ref": "#/$defs/sequence"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "missingCapabilityDetails": {
+      "type": "object",
+      "required": ["capability"],
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/capability"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "unknownFieldDetails": {
+      "type": "object",
+      "required": ["field", "scope"],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldPath"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["envelope", "payload", "arguments"]
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "oversizeDetails": {
+      "description": "A bounded diagnostic for a value larger than the protocol's 16 MiB accepted limit. The exact alternative reports a measured integer above that limit through MAX_SAFE_INTEGER. The overflow alternative reports MAX_SAFE_INTEGER only as a lower bound, so a larger measurement is never presented as an exact value.",
+      "type": "object",
+      "required": ["field", "actual", "maximum", "actual_is_lower_bound"],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "actual": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maximum": {
+          "const": 16777216
+        },
+        "actual_is_lower_bound": {
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        {
+          "description": "An exact size is represented directly.",
+          "required": ["actual_is_lower_bound"],
+          "properties": {
+            "actual": {
+              "type": "integer",
+              "minimum": 16777217,
+              "maximum": 9007199254740991
+            },
+            "maximum": {
+              "const": 16777216
+            },
+            "actual_is_lower_bound": {
+              "const": false
+            }
+          }
+        },
+        {
+          "description": "An unrepresentable size is represented by a bounded lower bound at the safe integer cap.",
+          "required": ["actual_is_lower_bound"],
+          "properties": {
+            "actual": {
+              "const": 9007199254740991
+            },
+            "actual_is_lower_bound": {
+              "const": true
+            }
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "staleTargetDetails": {
+      "type": "object",
+      "required": ["target_id", "observed_generation", "observed_at"],
+      "properties": {
+        "target_id": {
+          "$ref": "#/$defs/targetId"
+        },
+        "observed_generation": {
+          "$ref": "#/$defs/generation"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["generation_expired", "identity_changed", "owner_changed", "focus_changed", "visibility_changed", "sensitivity_changed"]
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "genericErrorDetails": {
+      "type": "object",
+      "maxProperties": 0,
+      "additionalProperties": false
+    },
+    "rejection": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["unsupported_version", "mode_unavailable", "capability_denied", "device_revoked", "invalid_negotiation"]
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "revocationEvent": {
+      "type": "object",
+      "required": ["kind", "scope", "revocation_id", "reason", "effective_at"],
+      "properties": {
+        "kind": {
+          "const": "revoked"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["device", "session", "grant"]
+        },
+        "revocation_id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["administrator", "certificate", "policy", "unknown_state"]
+        },
+        "effective_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 5
+    },
+    "modeChangedEvent": {
+      "type": "object",
+      "required": ["kind", "previous_mode", "next_mode", "changed_at"],
+      "properties": {
+        "kind": {
+          "const": "mode_changed"
+        },
+        "previous_mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "next_mode": {
+          "$ref": "#/$defs/mode"
+        },
+        "changed_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    "sessionClosedEvent": {
+      "type": "object",
+      "required": ["kind", "reason", "closed_at"],
+      "properties": {
+        "kind": {
+          "const": "session_closed"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["revoked", "heartbeat_timeout", "administrator", "protocol_error"]
+        },
+        "closed_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "capabilitiesChangedEvent": {
+      "type": "object",
+      "required": ["kind", "capabilities", "changed_at"],
+      "properties": {
+        "kind": {
+          "const": "capabilities_changed"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilityArray"
+        },
+        "changed_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "heartbeatTimeoutEvent": {
+      "type": "object",
+      "required": ["kind", "deadline_at"],
+      "properties": {
+        "kind": {
+          "const": "heartbeat_timeout"
+        },
+        "deadline_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "targetsArguments": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {
+          "const": "registered"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "appsArguments": {
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {
+          "const": "policy_visible"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "emptyArguments": {
+      "type": "object",
+      "maxProperties": 0,
+      "additionalProperties": false
+    },
+    "invokeArguments": {
+      "type": "object",
+      "required": ["action_name"],
+      "properties": {
+        "action_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "setArguments": {
+      "type": "object",
+      "required": ["field", "value"],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        },
+        "value": {
+          "$ref": "#/$defs/safeValue"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "selectArguments": {
+      "type": "object",
+      "required": ["option_id"],
+      "properties": {
+        "option_id": {
+          "$ref": "#/$defs/shortString"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "toggleArguments": {
+      "type": "object",
+      "required": ["desired_state"],
+      "properties": {
+        "desired_state": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "scrollArguments": {
+      "type": "object",
+      "required": ["delta_x", "delta_y"],
+      "properties": {
+        "delta_x": {
+          "type": "integer",
+          "minimum": -2000,
+          "maximum": 2000
+        },
+        "delta_y": {
+          "type": "integer",
+          "minimum": -2000,
+          "maximum": 2000
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "waitArguments": {
+      "type": "object",
+      "required": ["condition", "max_wait_ms"],
+      "properties": {
+        "condition": {
+          "type": "string",
+          "enum": ["visible", "focused", "state_changed", "gone"]
+        },
+        "max_wait_ms": {
+          "$ref": "#/$defs/timeoutMs"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "getArguments": {
+      "type": "object",
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/fieldName"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    },
+    "clickArguments": {
+      "type": "object",
+      "properties": {
+        "button": {
+          "enum": ["primary", "secondary"]
+        },
+        "offset_x": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000
+        },
+        "offset_y": {
+          "type": "integer",
+          "minimum": -1000,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    },
+    "typeArguments": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "replace": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "keyArguments": {
+      "type": "object",
+      "required": ["keys"],
+      "properties": {
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/keyName"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 1
+    }
+  },
+  "type": "object",
+  "maxProperties": 0,
+  "additionalProperties": false
+}
