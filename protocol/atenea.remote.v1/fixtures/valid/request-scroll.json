@@ -1,0 +1,36 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "request",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "request-scroll",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "capability": "remote.desktop.scroll",
+    "mode": "background",
+    "authorization": {
+      "grant_reference": "grant-1",
+      "granted_at": 0,
+      "validity_ms": 1,
+      "lease_ms": 1
+    },
+    "timeout_ms": 30000,
+    "target": {
+      "target_id": "window-1",
+      "target_kind": "window",
+      "owner_process": "demo",
+      "sensitivity": "non_sensitive",
+      "generation": 1,
+      "observed_at": 0,
+      "target_fingerprint": "0123456789abcdef",
+      "visibility": "visible",
+      "focus": "focused"
+    },
+    "arguments": {
+      "delta_x": -2000,
+      "delta_y": 2000
+    }
+  }
+}

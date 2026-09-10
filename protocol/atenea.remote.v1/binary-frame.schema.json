@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/binary-frame.schema.json",
+  "title": "ATENEA remote v1 binary-frame metadata",
+  "description": "Bounded metadata describing one complete binary frame.",
+  "type": "object",
+  "required": [
+    "kind",
+    "binary_id",
+    "frame_id",
+    "purpose",
+    "content_type",
+    "size_bytes",
+    "sha256",
+    "privacy"
+  ],
+  "properties": {
+    "kind": {
+      "const": "binary_frame"
+    },
+    "binary_id": {
+      "$ref": "definitions.schema.json#/$defs/binaryId"
+    },
+    "frame_id": {
+      "$ref": "definitions.schema.json#/$defs/frameId"
+    },
+    "purpose": {
+      "const": "screenshot"
+    },
+    "content_type": {
+      "type": "string",
+      "enum": ["image/png", "image/jpeg"]
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16777216
+    },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "privacy": {
+      "$ref": "definitions.schema.json#/$defs/screenshotPrivacyMetadata"
+    }
+  },
+  "additionalProperties": false,
+  "maxProperties": 8
+}

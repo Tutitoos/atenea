@@ -1,0 +1,18 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "event",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "event_id": "event-1",
+    "event_type": "heartbeat_timeout",
+    "occurred_at": 0,
+    "data": {
+      "kind": "heartbeat_timeout",
+      "deadline_at": 0
+    }
+  }
+}

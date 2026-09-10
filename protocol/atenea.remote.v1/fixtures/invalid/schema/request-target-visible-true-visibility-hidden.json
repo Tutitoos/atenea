@@ -1,0 +1,45 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "request",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "request-click",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "capability": "remote.desktop.click",
+    "mode": "attended",
+    "authorization": {
+      "grant_reference": "grant-1",
+      "granted_at": 0,
+      "validity_ms": 1,
+      "lease_ms": 1
+    },
+    "timeout_ms": 30000,
+    "target": {
+      "target_id": "control-1",
+      "target_kind": "control",
+      "owner_process": "demo",
+      "sensitivity": "non_sensitive",
+      "visible": true,
+      "generation": 1,
+      "observed_at": 0,
+      "target_fingerprint": "0123456789abcdef",
+      "visibility": "hidden",
+      "focus": "focused"
+    },
+    "safety_gate": {
+      "kind": "attended",
+      "consent": "explicit",
+      "local_user_present": true,
+      "interruptible": true,
+      "expires_at": 253402300799999
+    },
+    "arguments": {
+      "button": "primary",
+      "offset_x": 0,
+      "offset_y": 0
+    }
+  }
+}

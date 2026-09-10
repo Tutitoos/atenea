@@ -7,6 +7,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.5.6
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-isatty v0.0.24
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.57.0
 )
@@ -33,6 +34,7 @@ require (
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260625142307-59b4966ccb57 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	modernc.org/libc v1.74.4 // indirect

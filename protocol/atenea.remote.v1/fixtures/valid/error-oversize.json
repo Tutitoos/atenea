@@ -1,0 +1,23 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "error",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "request-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {
+    "status": "refused",
+    "code": "oversize",
+    "message": "oversize",
+    "occurred_at": 0,
+    "retryable": false,
+    "details": {
+      "field": "payload",
+      "actual": 16777217,
+      "maximum": 16777216,
+      "actual_is_lower_bound": false
+    }
+  }
+}

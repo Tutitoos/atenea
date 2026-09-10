@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/envelope.schema.json",
+  "title": "ATENEA remote v1 top-level envelope",
+  "description": "The bounded wire envelope for every atenea.remote.v1 message. For requests, results, refusals, and binary frames, this envelope's request_id is the sole correlation identifier; it is required for those request-associated messages and is forbidden on unsolicited events, negotiation, and heartbeat messages. Correlation is not repeated in a payload. Binary frames are request-associated only in v1; non-request binary events are not part of this contract.",
+  "type": "object",
+  "required": [
+    "protocol",
+    "version",
+    "message_type",
+    "session_id",
+    "device_id",
+    "sequence",
+    "sent_at",
+    "payload"
+  ],
+  "properties": {
+    "protocol": {
+      "$ref": "definitions.schema.json#/$defs/protocol"
+    },
+    "version": {
+      "$ref": "definitions.schema.json#/$defs/version"
+    },
+    "message_type": {
+      "type": "string",
+      "enum": [
+        "negotiation",
+        "heartbeat",
+        "request",
+        "result",
+        "error",
+        "event",
+        "binary_frame"
+      ]
+    },
+    "session_id": {
+      "$ref": "definitions.schema.json#/$defs/sessionId"
+    },
+    "device_id": {
+      "$ref": "definitions.schema.json#/$defs/deviceId"
+    },
+    "sequence": {
+      "$ref": "definitions.schema.json#/$defs/sequence"
+    },
+    "sent_at": {
+      "$ref": "definitions.schema.json#/$defs/timestamp"
+    },
+    "request_id": {
+      "description": "The sole request-correlation value. Its presence is controlled by message_type and it must not be repeated in payload data.",
+      "$ref": "definitions.schema.json#/$defs/requestId"
+    },
+    "payload": {
+      "oneOf": [
+        {
+          "$ref": "negotiation.schema.json"
+        },
+        {
+          "$ref": "heartbeat.schema.json"
+        },
+        {
+          "$ref": "request.schema.json"
+        },
+        {
+          "$ref": "result.schema.json"
+        },
+        {
+          "$ref": "error.schema.json"
+        },
+        {
+          "$ref": "event.schema.json"
+        },
+        {
+          "$ref": "binary-frame.schema.json"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "negotiation"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "request_id": {}
+          },
+          "required": ["request_id"]
+        },
+        "properties": {
+          "payload": {
+            "$ref": "negotiation.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "heartbeat"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "request_id": {}
+          },
+          "required": ["request_id"]
+        },
+        "properties": {
+          "payload": {
+            "$ref": "heartbeat.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "request"
+          }
+        },
+        "required": ["message_type"]
+      },
+      "then": {
+        "required": ["request_id"],
+        "properties": {
+          "payload": {
+            "$ref": "request.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "result"
+          }
+        }
+      },
+      "then": {
+        "required": ["request_id"],
+        "properties": {
+          "payload": {
+            "$ref": "result.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": ["request_id"],
+        "properties": {
+          "payload": {
+            "$ref": "error.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "event"
+          }
+        }
+      },
+      "then": {
+        "description": "Unsolicited events have no request correlation.",
+        "not": {
+          "properties": {
+            "request_id": {}
+          },
+          "required": ["request_id"]
+        },
+        "properties": {
+          "payload": {
+            "$ref": "event.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "binary_frame"
+          }
+        }
+      },
+      "then": {
+        "description": "Binary frames are request-associated only in v1.",
+        "required": ["request_id"],
+        "properties": {
+          "payload": {
+            "$ref": "binary-frame.schema.json"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 9
+}

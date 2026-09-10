@@ -1,0 +1,11 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.0.0",
+  "message_type": "result",
+  "session_id": "session-1",
+  "device_id": "device-1",
+  "request_id": "request-1",
+  "sequence": 0,
+  "sent_at": 0,
+  "payload": {"status": "succeeded", "completed_at": 0, "data": {"kind": "inspect", "target_id": "window-1", "target_kind": "window", "owner_process": "demo", "sensitivity": "non_sensitive", "visible": false, "generation": 1, "observed_at": 0, "target_fingerprint": "0123456789abcdef", "visibility": "hidden", "focus": "not_focused", "fields": []}}
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/negotiation.schema.json",
+  "title": "ATENEA remote v1 negotiation payload",
+  "description": "Three mutually exclusive, closed negotiation messages: an agent offer/hello, a coordinator accept, or a coordinator reject. The agent declares its version, platform, architecture, supported versions, modes, and capabilities; the coordinator selects one version and mode and grants or rejects capabilities. Cross-message agreement remains a later stateful semantic check.",
+  "type": "object",
+  "properties": {
+    "phase": {
+      "type": "string",
+      "enum": ["offer", "accept", "reject"]
+    },
+    "role": {
+      "type": "string",
+      "enum": ["agent", "coordinator"]
+    },
+    "agent_version": {
+      "$ref": "definitions.schema.json#/$defs/agentVersion"
+    },
+    "platform": {
+      "$ref": "definitions.schema.json#/$defs/platform"
+    },
+    "architecture": {
+      "$ref": "definitions.schema.json#/$defs/architecture"
+    },
+    "supported_versions": {
+      "$ref": "definitions.schema.json#/$defs/protocolVersionArray"
+    },
+    "modes": {
+      "$ref": "definitions.schema.json#/$defs/modeArray"
+    },
+    "capabilities": {
+      "$ref": "definitions.schema.json#/$defs/capabilityArray"
+    },
+    "accepted_version": {
+      "$ref": "definitions.schema.json#/$defs/protocolVersion"
+    },
+    "accepted_mode": {
+      "$ref": "definitions.schema.json#/$defs/mode"
+    },
+    "grants": {
+      "$ref": "definitions.schema.json#/$defs/capabilityGrants"
+    },
+    "heartbeat_interval_ms": {
+      "$ref": "definitions.schema.json#/$defs/heartbeatIntervalMs"
+    },
+    "liveness_deadline_ms": {
+      "$ref": "definitions.schema.json#/$defs/livenessDeadlineMs"
+    },
+    "rejection": {
+      "$ref": "definitions.schema.json#/$defs/rejection"
+    }
+  },
+  "oneOf": [
+    {
+      "description": "Agent offer/hello: only the agent may send this phase. It explicitly declares agent_version, platform, architecture, supported_versions, modes, and capabilities; none may be inferred from another field. The later stateful semantic validator checks the coordinator's selected version, mode, and grants against this declaration.",
+      "type": "object",
+      "required": ["phase", "role", "agent_version", "platform", "architecture", "supported_versions", "modes", "capabilities"],
+      "properties": {
+        "phase": {"const": "offer"},
+        "role": {"const": "agent"},
+        "agent_version": {"$ref": "definitions.schema.json#/$defs/agentVersion"},
+        "platform": {"$ref": "definitions.schema.json#/$defs/platform"},
+        "architecture": {"$ref": "definitions.schema.json#/$defs/architecture"},
+        "supported_versions": {"$ref": "definitions.schema.json#/$defs/protocolVersionArray"},
+        "modes": {"$ref": "definitions.schema.json#/$defs/modeArray"},
+        "capabilities": {"$ref": "definitions.schema.json#/$defs/capabilityArray"}
+      },
+      "additionalProperties": false,
+      "maxProperties": 8
+    },
+    {
+      "description": "Coordinator acceptance: only the coordinator may send this phase. It selects one accepted version and mode and uses grants as the sole authority for accepted capabilities; unique object keys encode each granted capability once. The later stateful semantic validator checks these selections against the prior agent offer and current session state.",
+      "type": "object",
+      "required": ["phase", "role", "accepted_version", "accepted_mode", "grants", "heartbeat_interval_ms", "liveness_deadline_ms"],
+      "properties": {
+        "phase": {"const": "accept"},
+        "role": {"const": "coordinator"},
+        "accepted_version": {"$ref": "definitions.schema.json#/$defs/protocolVersion"},
+        "accepted_mode": {"$ref": "definitions.schema.json#/$defs/mode"},
+        "grants": {"$ref": "definitions.schema.json#/$defs/capabilityGrants"},
+        "heartbeat_interval_ms": {"$ref": "definitions.schema.json#/$defs/heartbeatIntervalMs"},
+        "liveness_deadline_ms": {"$ref": "definitions.schema.json#/$defs/livenessDeadlineMs"}
+      },
+      "additionalProperties": false,
+      "maxProperties": 7
+    },
+    {
+      "description": "Coordinator rejection: only the coordinator may reject the agent's offer in this contract. No offer or acceptance fields, including grants, may accompany the typed refusal.",
+      "type": "object",
+      "required": ["phase", "role", "rejection"],
+      "properties": {
+        "phase": {"const": "reject"},
+        "role": {"const": "coordinator"},
+        "rejection": {"$ref": "definitions.schema.json#/$defs/rejection"}
+      },
+      "additionalProperties": false,
+      "maxProperties": 3
+    }
+  ],
+  "additionalProperties": false,
+  "maxProperties": 17
+}
