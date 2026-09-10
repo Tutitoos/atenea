@@ -14,6 +14,10 @@ platform support described on this page.
 mode, capability, and protocol behavior below is therefore a plan, not a claim
 that Atenea or an agent currently implements or supports it.
 
+The canonical precise wire contract is [`protocol/atenea.remote.v1`](../../protocol/atenea.remote.v1/);
+this ADR remains planned architecture and evidence, not a replacement for that
+contract.
+
 ## Context
 
 Atenea needs a governed way to observe and operate a user’s remote desktop
@@ -56,12 +60,16 @@ path, TLS validation fails, or the negotiated subprotocol is not exactly
 `atenea.remote.v1`. Public DNS, public inbound ports, port forwarding, and
 direct Internet fallback are not part of this design.
 
-Each frame is bounded and carries an opaque request ID, device identity,
-capability name, mode, deadline, and server grant reference. A mutating frame
-also carries the observation generation on which it relies. A response names
-the same request ID and returns a typed result or typed refusal. Unknown frame
-versions, malformed fields, expired deadlines, missing grants, and unknown
-capabilities are refusals, never best-effort execution.
+Every envelope carries the common fields `protocol`, `version`, `message_type`,
+`session_id`, `device_id`, `sequence`, `sent_at`, and `payload`. `request_id` is
+an envelope field only for request-associated message families: `request`,
+`result`, `error`, and `binary_frame`; it is absent from `negotiation`,
+`heartbeat`, and `event`. Request payloads carry `capability`, `mode`,
+`authorization`, `timeout_ms`, and, where required, a target observation proof.
+Results and errors correlate through `request_id` on the enclosing envelope and
+return a typed result or typed refusal. Unknown frame versions, malformed
+fields, expired deadlines, missing grants, and unknown capabilities are
+refusals, never best-effort execution.
 
 ### 2. One-time enrollment and persistent identity
 
@@ -98,13 +106,12 @@ unknown state as valid.
 
 ### 3. Session lifecycle, heartbeat, and negotiation
 
-After authentication, the agent and control plane exchange a version and
-capability hello. The hello declares the agent build, platform, architecture,
-mode support, and exact capability identifiers. The server returns an explicit
-accepted protocol version, identity, policy, and capability set. The accepted
-set is the intersection of policy and the agent’s declared set; no capability
-is inferred from a similar name, and no unsupported capability is silently
-replaced by another one.
+After authentication, the agent sends the offer/hello declaring its build,
+platform, architecture, supported versions, modes, and capabilities. The
+coordinator accepts one version and mode with grants and heartbeat/liveness
+bounds, or rejects the offer. The grants are the wire authority for accepted
+capabilities; no capability is inferred from a similar name, and no unsupported
+capability is silently replaced by another one.
 
 The planned heartbeat is a server-bounded ping every 15 seconds with a
 45-second liveness deadline. A missed deadline marks the session unavailable,
@@ -137,7 +144,8 @@ No mutating request is queued or replayed after revocation, lease expiry,
 disconnect, or reconnect. If revocation state is unavailable, new work is
 refused and active work is stopped at its lease boundary.
 
-Every mutating action carries a fresh `observation_generation` no older than
+Every mutating action carries a fresh target observation proof containing
+`generation`. As a planned runtime policy, the proof must be no older than
 2 seconds at dispatch. For this ADR, mutating actions are `open`, `close`,
 `invoke`, `set`, `select`, `toggle`, `expand`, `scroll`, `click`, `type`, and
 `key`. Immediately before dispatch, the agent revalidates the target identity,
@@ -263,8 +271,8 @@ Authorization is fail-closed at the audit boundary. Before any capability is
 dispatched, a sanitized authorization-start record must be durably appended
 and its append and integrity acknowledgement verified. The record includes
 only the opaque request and session identifiers, capability, target class,
-mode, grant reference, lease, observation generation and age, and authorizing
-policy identity. Audit unavailability or an integrity failure returns a typed
+mode, grant reference, lease, target observation proof generation and age, and
+authorizing policy identity. Audit unavailability or an integrity failure returns a typed
 refusal and prevents dispatch. After dispatch, completion must also be
 durably appended. Failure to append completion closes the session and blocks
 further work on it.
@@ -336,8 +344,8 @@ platform.
 
 Define the `atenea.remote.v1` envelope, typed refusal codes, enrollment state
 machine, certificate policy, revocation events, monotonic request leases,
-heartbeat deadlines, mode transitions, capability schemas, observation
-generations, sanitization rules, and audit event schema. Implement the shared
+heartbeat deadlines, mode transitions, capability schemas, target observation
+proofs, sanitization rules, and audit event schema. Implement the shared
 control-plane coordinator for authentication, negotiation, authorization,
 dispatch gates, revocation, and audit ordering. This stage has no native
 agent, observation, or action implementation.
@@ -419,7 +427,7 @@ reduce authority when it cannot establish its preconditions.
 | Revocation state | CA/policy store ↔ session registry ↔ agent | Revoked device continues operating | Check before authorization; connected-agent acknowledgement; active socket closure; agent-enforced monotonic request lease of at most 5 seconds | Unknown state denies new work immediately; connected work stops on acknowledgement and partitioned work stops no later than lease expiry |
 | Heartbeat/liveness | Session registry ↔ agent | Dead or partitioned agent appears live; queued action after reconnect | Bounded heartbeat and deadline; no mutating replay; session generation | Deadline expiry cancels pending work and closes session |
 | Screen pixels and UI text | Agent capture ↔ control plane/client | Secret leakage, log exfiltration, replay | Sensitive-surface policy; sanitization; bounded in-memory lifetime; no default persistence | Uncertain classification or persistence-policy failure refuses observation |
-| Direct input | Control plane ↔ local user/session ↔ OS input APIs | Unattended typing/clicking, stale-target action confusion, local-user interference | Mode gate; explicit grants; attended interruption; isolated VM option; observation generation at most 2 seconds old; immediate identity, owner, focus/visibility and sensitivity revalidation | Background, stale generation, changed target, or missing mode/grant yields a typed refusal and no input event |
+| Direct input | Control plane ↔ local user/session ↔ OS input APIs | Unattended typing/clicking, stale-target action confusion, local-user interference | Mode gate; explicit grants; attended interruption; isolated VM option; target observation proof no older than 2 seconds under planned runtime policy; immediate identity, owner, focus/visibility and sensitivity revalidation | Background, stale proof, changed target, or missing mode/grant yields a typed refusal and no input event |
 | Sensitive applications | OS surface ↔ target classifier/policy | Credential, banking, payment, keychain, or private-message access | Deny list and conservative classification; no secrets in diagnostics | Unknown or sensitive target cannot be opened, inspected, or acted on |
 | Agent executable | Installer/update authority ↔ local host | Tampered artifact, plugin injection, dynamic code execution | Signed/versioned native artifacts; self-contained Windows build; no remote code loading | Signature, version, or install-integrity failure prevents launch/update |
 | Provider credentials | Atenea provider boundary ↔ agent boundary | API-key theft or privilege expansion | Keep provider keys and model credentials in the control plane/provider boundary | Any request needing a provider key on the agent is unsupported/refused |
