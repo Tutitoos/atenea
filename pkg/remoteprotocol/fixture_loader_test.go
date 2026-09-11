@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -204,6 +205,33 @@ func TestDiscoverFixtureCorpus(t *testing.T) {
 				t.Fatalf("discoverFixtureCorpus error = %q, want stable text fragment %q", err, test.wantText)
 			}
 		})
+	}
+}
+
+func TestDiscoverEmbeddedFixtureCorporaAreOrderIndependent(t *testing.T) {
+	orderedValid, err := discoverFixtureCorpus(protocolv1.FS, "fixtures/valid")
+	if err != nil {
+		t.Fatalf("discover ordered valid corpus: %v", err)
+	}
+	reversed := reversedReadDirFS{ReadDirFS: protocolv1.FS}
+	reversedValid, err := discoverFixtureCorpus(reversed, "fixtures/valid")
+	if err != nil {
+		t.Fatalf("discover reversed valid corpus: %v", err)
+	}
+	if !reflect.DeepEqual(orderedValid, reversedValid) {
+		t.Fatal("valid fixture discovery depends on directory enumeration order")
+	}
+
+	orderedInvalid, err := discoverInvalidFixtureCorpus(protocolv1.FS, "fixtures/invalid", invalidFixtureFileCategories)
+	if err != nil {
+		t.Fatalf("discover ordered invalid corpus: %v", err)
+	}
+	reversedInvalid, err := discoverInvalidFixtureCorpus(reversed, "fixtures/invalid", invalidFixtureFileCategories)
+	if err != nil {
+		t.Fatalf("discover reversed invalid corpus: %v", err)
+	}
+	if !reflect.DeepEqual(orderedInvalid, reversedInvalid) {
+		t.Fatal("invalid fixture discovery depends on directory enumeration order")
 	}
 }
 

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-const validHeartbeat = `{"protocol":"atenea.remote.v1","version":"1.0.0","message_type":"heartbeat","session_id":"s","device_id":"d","sequence":0,"sent_at":0,"payload":{"kind":"ping","interval_ms":1000,"liveness_deadline_ms":1000,"monotonic_tick":0}}`
+const validHeartbeat = `{"protocol":"atenea.remote.v1","version":"1.1.0","message_type":"heartbeat","session_id":"s","device_id":"d","sequence":0,"sent_at":0,"payload":{"kind":"ping","interval_ms":1000,"liveness_deadline_ms":1000,"monotonic_tick":0}}`
 
-const validNegotiationOffer = `{"protocol":"atenea.remote.v1","version":"1.0.0","message_type":"negotiation","session_id":"s","device_id":"d","sequence":0,"sent_at":0,"payload":{"phase":"offer","role":"agent","agent_version":"1","platform":"windows","architecture":"x86_64","supported_versions":["1.0.0"],"modes":["attended"],"capabilities":[]}}`
+const validNegotiationOffer = `{"protocol":"atenea.remote.v1","version":"1.1.0","message_type":"negotiation","session_id":"s","device_id":"d","sequence":0,"sent_at":0,"payload":{"phase":"offer","role":"agent","agent_version":"1","platform":"windows","architecture":"x86_64","supported_versions":["1.1.0"],"modes":["attended"],"capabilities":[]}}`
 
 func TestValidatorAcceptsRepresentativeEnvelope(t *testing.T) {
 	validator, err := NewValidator()

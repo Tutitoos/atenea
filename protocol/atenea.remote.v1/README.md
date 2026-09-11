@@ -13,9 +13,9 @@ The exact WSS subprotocol token is:
 atenea.remote.v1
 ```
 
-The current wire version is `1.0.0`. A compatible WebSocket peer must offer
+The current wire version is `1.1.0`. A compatible WebSocket peer must offer
 and accept that exact subprotocol and must validate the envelope fields
-`protocol: "atenea.remote.v1"` and `version: "1.0.0"`. This is a closed v1
+`protocol: "atenea.remote.v1"` and `version: "1.1.0"`. This is a closed v1
 contract; a different token or version is unsupported.
 
 The JSON negotiation payload has three closed forms:
@@ -40,7 +40,7 @@ and `invalid_envelope`; they do not implement the runtime decision.
 
 ## Canonical assets and fixtures
 
-The canonical assets are the nine Draft 2020-12 schemas in this directory:
+The canonical assets are the ten Draft 2020-12 schemas in this directory:
 
 | Asset | Role |
 | --- | --- |
@@ -52,6 +52,7 @@ The canonical assets are the nine Draft 2020-12 schemas in this directory:
 | `result.schema.json` | typed successful results |
 | `error.schema.json` | typed errors/refusals and their fixed mappings |
 | `event.schema.json` | unsolicited session events |
+| `event-ack.schema.json` | revocation event acknowledgements |
 | `binary-frame.schema.json` | standalone binary-frame metadata |
 
 `embed.go` exposes these schemas and the recursive fixture tree through the
@@ -72,7 +73,7 @@ fixtures/
   embed-probe/non-json.txt
 ```
 
-The current corpus contains 68 valid fixtures and 86 invalid fixtures. The
+The current corpus contains 70 valid fixtures and 102 invalid fixtures. The
 invalid validation inventory covers parser/resource failures and schema
 counterexamples; the Go tests keep its category and witness inventory closed,
 deterministic, and tied to the schemas.
@@ -88,10 +89,34 @@ bounded Unix epoch milliseconds (`0..253402300799999`).
 
 `request_id` is the sole request correlation value and is never repeated in a
 payload. It is required on `request`, `result`, `error`, and `binary_frame`
-messages, and forbidden on `negotiation`, `heartbeat`, and unsolicited
-`event` messages. It is a bounded identifier of 1--128 characters. The
-envelope's session/device identity and sequence provide the other wire-level
-correlation context; binding them to live state is a runtime responsibility.
+messages, and forbidden on `negotiation`, `heartbeat`, unsolicited `event`,
+and `event_ack` messages. It is a bounded identifier of 1--128 characters.
+The envelope's session/device identity and sequence provide the other
+wire-level correlation context; binding them to live state is a runtime
+responsibility.
+
+### Revocation event acknowledgement
+
+A revoked event carries the durable closure-intent identifier as its
+`payload.event_id`, the administrative `payload.data.revocation_id`, and a
+positive JSON-safe integer `payload.data.fence` in the inclusive range
+`1..9007199254740991`. The event's envelope has no `request_id`.
+
+The receiving peer acknowledges it with a separate `message_type: "event_ack"`
+whose closed payload is exactly `kind: "event_ack"`,
+`event_type: "revoked"`, `event_id`, `fence`, and `acknowledged_at`. An
+acknowledgement has no `request_id`; `result` and its existing request
+correlation remain unchanged.
+
+Each direction maintains its own monotonic envelope `sequence` stream. A
+duplicate event or acknowledgement may be delivered again and is handled by
+the runtime using the event identity and fence; replay and stale fences fail
+closed. An out-of-order message is rejected or held according to the owning
+session's runtime policy and must not be applied speculatively. JSON Schema
+can enforce the local shape and numeric bounds only: it cannot prove that an
+acknowledgement's `event_id`, `fence`, `session_id`, or `device_id` equals a
+previous event or current live session. Owner binding, replay handling,
+redelivery, and socket closure remain later runtime issues.
 
 JSON is the control representation. A `binary_frame` payload is metadata for
 one complete associated binary payload, not the bytes themselves. Its closed

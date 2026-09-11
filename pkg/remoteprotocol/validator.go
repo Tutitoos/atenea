@@ -256,6 +256,7 @@ func (embeddedSchemaLoader) Load(location string) (any, error) {
 	name := path.Base(u.Path)
 	switch name {
 	case "binary-frame.schema.json", "definitions.schema.json", "envelope.schema.json",
+		"event-ack.schema.json",
 		"error.schema.json", "event.schema.json", "heartbeat.schema.json",
 		"negotiation.schema.json", "request.schema.json", "result.schema.json":
 	default:

@@ -33,7 +33,7 @@ var invalidFixtureProgrammaticCategories = []ErrorCategory{
 // request-id-over-maximum intentionally violates both maxLength and the
 // requestId pattern's embedded 128-character bound; the schema does not
 // isolate those two keyword failures.
-const expectedInvalidFixtureCount = 86
+const expectedInvalidFixtureCount = 102
 
 type fixtureIsolationCase struct {
 	filename      string
@@ -42,6 +42,22 @@ type fixtureIsolationCase struct {
 }
 
 var schemaIsolationCases = []fixtureIsolationCase{
+	{filename: "event-ack-message-type-event.json", validFilename: "event-revocation-ack.json", pointer: "/message_type"},
+	{filename: "event-ack-missing-device-id.json", validFilename: "event-revocation-ack.json", pointer: "/device_id"},
+	{filename: "event-ack-missing-session-id.json", validFilename: "event-revocation-ack.json", pointer: "/session_id"},
+	{filename: "event-ack-fence-fractional.json", validFilename: "event-revocation-ack.json", pointer: "/payload/fence"},
+	{filename: "event-ack-fence-over-maximum.json", validFilename: "event-revocation-ack-fence-maximum.json", pointer: "/payload/fence"},
+	{filename: "event-ack-fence-zero.json", validFilename: "event-revocation-ack.json", pointer: "/payload/fence"},
+	{filename: "event-ack-missing-event-id.json", validFilename: "event-revocation-ack.json", pointer: "/payload/event_id"},
+	{filename: "event-ack-missing-fence.json", validFilename: "event-revocation-ack.json", pointer: "/payload/fence"},
+	{filename: "event-ack-request-id.json", validFilename: "event-revocation-ack.json", pointer: "/request_id"},
+	{filename: "event-ack-unknown-field.json", validFilename: "event-revocation-ack.json", pointer: "/payload/extra"},
+	{filename: "event-ack-wrong-event-type.json", validFilename: "event-revocation-ack.json", pointer: "/payload/event_type"},
+	{filename: "event-ack-wrong-kind.json", validFilename: "event-revocation-ack.json", pointer: "/payload/kind"},
+	{filename: "event-revoked-fence-fractional.json", validFilename: "event-revoked.json", pointer: "/payload/data/fence"},
+	{filename: "event-revoked-fence-over-maximum.json", validFilename: "event-revoked.json", pointer: "/payload/data/fence"},
+	{filename: "event-revoked-fence-zero.json", validFilename: "event-revoked.json", pointer: "/payload/data/fence"},
+	{filename: "event-revoked-missing-fence.json", validFilename: "event-revoked.json", pointer: "/payload/data/fence"},
 	{filename: "binary-invalid-hash.json", validFilename: "binary-frame.json", pointer: "/payload/sha256"},
 	{filename: "binary-privacy-persistence-mismatch.json", validFilename: "binary-frame-persistent.json", pointer: "/payload/privacy/artifact_persistence_authorized"},
 	{filename: "binary-size-over-maximum.json", validFilename: "binary-frame-max-size.json", pointer: "/payload/size_bytes"},
@@ -154,8 +170,8 @@ func TestInvalidFixtureCorpus(t *testing.T) {
 }
 
 func TestSchemaFixtureIsolationCases(t *testing.T) {
-	if len(schemaIsolationCases) != 64 {
-		t.Fatalf("schema isolation table has %d entries, want 64", len(schemaIsolationCases))
+	if len(schemaIsolationCases) != 80 {
+		t.Fatalf("schema isolation table has %d entries, want 80", len(schemaIsolationCases))
 	}
 	if len(errorMappingIsolationCases) != 15 {
 		t.Fatalf("error mapping isolation table has %d entries, want 15", len(errorMappingIsolationCases))

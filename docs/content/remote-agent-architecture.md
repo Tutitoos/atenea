@@ -6,9 +6,12 @@ weight: 8
 
 # ADR: Remote agent architecture
 
-**Issues:** #88 (architecture), #90 (protocol), #94 (device registry)
-**Status:** The `atenea.remote.v1` schema contract and fixtures are merged
-through PR #93. The coordinator-side registry slice from Issue #94 is merged
+**Issues:** #88 (architecture), #90 (protocol), #94 (device registry), #102
+(revocation acknowledgement)
+**Status:** The existing `atenea.remote.v1` schema contract and fixtures are
+merged. Issue #102 adds the versioned v1.1 revocation-acknowledgement
+extension; its implementation is local/CI evidence until its PR is merged.
+The coordinator-side registry slice from Issue #94 is merged
 through PR #95: reviewed head
 `ec605455fc3f36f8917a5cf64328fcf0faf2d64d`, merged as
 `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. The broader remote-agent
@@ -372,15 +375,33 @@ path, TLS validation fails, or the negotiated subprotocol is not exactly
 direct Internet fallback are not part of this design.
 
 Every envelope carries the common fields `protocol`, `version`, `message_type`,
-`session_id`, `device_id`, `sequence`, `sent_at`, and `payload`. `request_id` is
-an envelope field only for request-associated message families: `request`,
-`result`, `error`, and `binary_frame`; it is absent from `negotiation`,
-`heartbeat`, and `event`. Request payloads carry `capability`, `mode`,
+`session_id`, `device_id`, `sequence`, `sent_at`, and `payload`. The current
+wire version is `1.1.0`; the WebSocket subprotocol remains
+`atenea.remote.v1`. `request_id` is an envelope field only for
+request-associated message families: `request`, `result`, `error`, and
+`binary_frame`; it is absent from `negotiation`, `heartbeat`, `event`, and
+`event_ack`. Request payloads carry `capability`, `mode`,
 `authorization`, `timeout_ms`, and, where required, a target observation proof.
 Results and errors correlate through `request_id` on the enclosing envelope and
-return a typed result or typed refusal. Unknown frame versions, malformed
-fields, expired deadlines, missing grants, and unknown capabilities are
-refusals, never best-effort execution.
+return a typed result or typed refusal. A `revoked` event uses the durable
+closure-intent identifier as `payload.event_id`, carries the administrative
+`payload.data.revocation_id`, and carries a positive JSON-safe `fence` in
+`1..9007199254740991`. Its receiving peer acknowledges it with a separate
+`event_ack` payload containing exactly `kind`, `event_type: "revoked"`,
+`event_id`, `fence`, and `acknowledged_at`; `event_ack` has no `request_id` and
+does not repurpose `result`/`ack`. Unknown frame versions, malformed fields,
+expired deadlines, missing grants, and unknown capabilities are refusals,
+never best-effort execution.
+
+Each direction owns an independent monotonic `sequence` stream. Duplicate
+events or acknowledgements may be redelivered and must be handled
+idempotently; replay or a stale fence fails closed. Out-of-order messages are
+rejected or held by the owning session policy and are never applied
+speculatively. The JSON Schema checks only each message's local shape and
+numeric bounds: it cannot prove cross-message equality of `event_id` or
+`fence`, nor bind the enclosing `session_id`/`device_id` to live state. Runtime
+owner binding, replay/redelivery handling, and forced socket closure are later
+coordinator work.
 
 ### 2. One-time enrollment and persistent identity
 

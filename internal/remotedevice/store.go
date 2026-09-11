@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	ProtocolVersion      = "1.0.0"
+	ProtocolVersion      = "1.1.0"
 	defaultEnrollmentTTL = 10 * time.Minute
 	maxEnrollmentTTL     = 15 * time.Minute
 	maxChallengeTTL      = 2 * time.Minute

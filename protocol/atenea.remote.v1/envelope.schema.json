@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "atenea.remote.v1/envelope.schema.json",
   "title": "ATENEA remote v1 top-level envelope",
-  "description": "The bounded wire envelope for every atenea.remote.v1 message. For requests, results, refusals, and binary frames, this envelope's request_id is the sole correlation identifier; it is required for those request-associated messages and is forbidden on unsolicited events, negotiation, and heartbeat messages. Correlation is not repeated in a payload. Binary frames are request-associated only in v1; non-request binary events are not part of this contract.",
+  "description": "The bounded wire envelope for every atenea.remote.v1 message. For requests, results, refusals, and binary frames, this envelope's request_id is the sole correlation identifier; it is required for those request-associated messages and is forbidden on unsolicited events, event acknowledgements, negotiation, and heartbeat messages. Correlation is not repeated in a payload. Binary frames are request-associated only in v1; non-request binary events are not part of this contract.",
   "type": "object",
   "required": [
     "protocol",
@@ -30,6 +30,7 @@
         "result",
         "error",
         "event",
+        "event_ack",
         "binary_frame"
       ]
     },
@@ -68,6 +69,9 @@
         },
         {
           "$ref": "event.schema.json"
+        },
+        {
+          "$ref": "event-ack.schema.json"
         },
         {
           "$ref": "binary-frame.schema.json"
@@ -191,6 +195,29 @@
         "properties": {
           "payload": {
             "$ref": "event.schema.json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "message_type": {
+            "const": "event_ack"
+          }
+        }
+      },
+      "then": {
+        "description": "Event acknowledgements have no request correlation and are bound to a revoked event by event_id, fence, and the enclosing session/device runtime state.",
+        "not": {
+          "properties": {
+            "request_id": {}
+          },
+          "required": ["request_id"]
+        },
+        "properties": {
+          "payload": {
+            "$ref": "event-ack.schema.json"
           }
         }
       }

@@ -8,7 +8,7 @@
       "const": "atenea.remote.v1"
     },
     "version": {
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "requestId": {
       "type": "string",
@@ -110,7 +110,7 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$"
     },
     "protocolVersion": {
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "capability": {
       "type": "string",
@@ -1379,7 +1379,7 @@
     },
     "revocationEvent": {
       "type": "object",
-      "required": ["kind", "scope", "revocation_id", "reason", "effective_at"],
+      "required": ["kind", "scope", "revocation_id", "reason", "effective_at", "fence"],
       "properties": {
         "kind": {
           "const": "revoked"
@@ -1396,6 +1396,39 @@
           "enum": ["administrator", "certificate", "policy", "unknown_state"]
         },
         "effective_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "fence": {
+          "$ref": "#/$defs/revocationFence"
+        }
+      },
+      "additionalProperties": false,
+      "maxProperties": 6
+    },
+    "revocationFence": {
+      "description": "A positive JSON-safe integer fencing one device/session revocation state. Runtime validation binds it to the enclosing session and the acknowledged event; this schema only checks the numeric range.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "eventAck": {
+      "description": "An acknowledgement sent for one unsolicited revoked event. It has no request correlation; event_id and fence are bound to the event by the enclosing session/device runtime state.",
+      "type": "object",
+      "required": ["kind", "event_type", "event_id", "fence", "acknowledged_at"],
+      "properties": {
+        "kind": {
+          "const": "event_ack"
+        },
+        "event_type": {
+          "const": "revoked"
+        },
+        "event_id": {
+          "$ref": "#/$defs/eventId"
+        },
+        "fence": {
+          "$ref": "#/$defs/revocationFence"
+        },
+        "acknowledged_at": {
           "$ref": "#/$defs/timestamp"
         }
       },

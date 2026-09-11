@@ -1,6 +1,6 @@
 {
   "protocol": "atenea.remote.v1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "message_type": "negotiation",
   "session_id": "session-1",
   "device_id": "device-1",
@@ -9,7 +9,7 @@
   "payload": {
     "phase": "accept",
     "role": "coordinator",
-    "accepted_version": "1.0.0",
+    "accepted_version": "1.1.0",
     "accepted_mode": "background",
     "grants": {
       "remote.desktop.targets": {
