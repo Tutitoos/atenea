@@ -1,0 +1,15 @@
+{
+  "protocol": "atenea.remote.v1",
+  "version": "1.1.0",
+  "message_type": "event_ack",
+  "session_id": "session-1",
+  "sequence": 1,
+  "sent_at": 1,
+  "payload": {
+    "kind": "event_ack",
+    "event_type": "revoked",
+    "event_id": "closure-intent-1",
+    "fence": 1,
+    "acknowledged_at": 1
+  }
+}

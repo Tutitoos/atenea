@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atenea.remote.v1/event-ack.schema.json",
+  "title": "ATENEA remote v1 revocation event acknowledgement",
+  "description": "A closed acknowledgement for one unsolicited revoked event. It has no request_id; event_id and fence must be matched to the event and enclosing session/device by stateful runtime validation.",
+  "$ref": "definitions.schema.json#/$defs/eventAck"
+}

@@ -416,7 +416,7 @@ func TestOfferValidationAndAuthenticationFailuresAreSanitized(t *testing.T) {
 		}, code: websocket.ClosePolicyViolation, reason: CloseReasonEnvelope},
 		{name: "trailing", mutate: func(raw []byte) []byte { return append(raw, []byte(" trailing")...) }, code: websocket.ClosePolicyViolation, reason: CloseReasonEnvelope},
 		{name: "wrong version", mutate: func(raw []byte) []byte {
-			return bytes.Replace(raw, []byte(`"version":"1.0.0"`), []byte(`"version":"1.1.0"`), 1)
+			return bytes.Replace(raw, []byte(`"version":"1.1.0"`), []byte(`"version":"1.0.0"`), 1)
 		}, code: websocket.ClosePolicyViolation, reason: CloseReasonEnvelope},
 		{name: "wrong sequence", mutate: func(raw []byte) []byte { return bytes.Replace(raw, []byte(`"sequence":0`), []byte(`"sequence":1`), 1) }, code: websocket.ClosePolicyViolation, reason: CloseReasonPolicy},
 		{name: "wrong platform", mutate: func(raw []byte) []byte {
