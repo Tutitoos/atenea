@@ -36,6 +36,7 @@ type recordingAuthenticator struct {
 	err      error
 	entered  chan struct{}
 	release  <-chan struct{}
+	closed   chan remotedevice.CloseSessionRequest
 	once     sync.Once
 }
 
@@ -54,6 +55,27 @@ func (a *recordingAuthenticator) Authenticate(_ context.Context, request remoted
 		return remotedevice.Device{}, a.err
 	}
 	return a.device, nil
+}
+
+func (a *recordingAuthenticator) AuthenticateAndRegisterSession(ctx context.Context, request remotedevice.AuthenticateAndRegisterSessionRequest) (remotedevice.Session, error) {
+	device, err := a.Authenticate(ctx, remotedevice.AuthenticateRequest{DeviceID: request.DeviceID, CertificateID: request.CertificateID, Fingerprint: request.Fingerprint, PublicKeyDigest: request.PublicKeyDigest, RequestID: request.RequestID})
+	if err != nil {
+		return remotedevice.Session{}, err
+	}
+	if request.DeviceID != device.ID {
+		return remotedevice.Session{}, remotedevice.ErrAuthentication
+	}
+	if request.Platform != "" && request.Platform != device.Platform || request.Architecture != "" && request.Architecture != device.Architecture {
+		return remotedevice.Session{}, remotedevice.ErrAuthentication
+	}
+	return remotedevice.Session{ID: request.SessionID, DeviceID: request.DeviceID, State: "active", Fence: device.Fence, CreatedAt: time.Now().UTC()}, nil
+}
+
+func (a *recordingAuthenticator) CloseSession(_ context.Context, request remotedevice.CloseSessionRequest) (remotedevice.Session, error) {
+	if a.closed != nil {
+		a.closed <- request
+	}
+	return remotedevice.Session{ID: request.SessionID, DeviceID: request.DeviceID, State: "closed", Reason: request.Reason}, nil
 }
 
 func (a *recordingAuthenticator) snapshot() (int, remotedevice.AuthenticateRequest) {
@@ -246,8 +268,8 @@ func TestAuthenticatedWSSNegotiationUsesVerifiedLeafIdentity(t *testing.T) {
 	}
 	_, _, err = conn.ReadMessage()
 	var closeErr *websocket.CloseError
-	if !errors.As(err, &closeErr) || closeErr.Code != websocket.CloseNormalClosure || closeErr.Text != CloseReasonAccepted {
-		t.Fatalf("close = %v, want normal %q", err, CloseReasonAccepted)
+	if !errors.As(err, &closeErr) || closeErr.Code != websocket.ClosePolicyViolation || closeErr.Text != CloseReasonPolicy {
+		t.Fatalf("close = %v, want policy %q", err, CloseReasonPolicy)
 	}
 	calls, request := auth.snapshot()
 	spkiDigest := sha256.Sum256(material.clientCert.RawSubjectPublicKeyInfo)
@@ -589,7 +611,9 @@ func TestExactControlMessageLimitIsAccepted(t *testing.T) {
 	if err := remoteprotocol.New().Validate(raw); err != nil {
 		t.Fatalf("exact-limit acceptance validation: %v", err)
 	}
-	readCloseWithCode(t, conn, websocket.CloseNormalClosure, CloseReasonAccepted)
+	if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if calls, _ := auth.snapshot(); calls != 1 {
 		t.Fatalf("authentication calls = %d, want one", calls)
 	}
@@ -631,5 +655,123 @@ func readCloseWithCode(t *testing.T, conn *websocket.Conn, wantCode int, wantRea
 	var closeErr *websocket.CloseError
 	if !errors.As(err, &closeErr) || closeErr.Code != wantCode || closeErr.Text != wantReason {
 		t.Fatalf("close = %v, want code=%d reason=%q", err, wantCode, wantReason)
+	}
+}
+
+func TestSessionOwnersCloseIsTerminalAndDeviceScoped(t *testing.T) {
+	owners := newSessionOwners()
+	first, ok := owners.reserve("session-one", "device-one", nil)
+	if !ok {
+		t.Fatal("first reservation failed")
+	}
+	second, ok := owners.reserve("session-two", "device-two", nil)
+	if !ok {
+		t.Fatal("second reservation failed")
+	}
+	owners.activate(first, remotedevice.Session{ID: first.sessionID, DeviceID: first.deviceID, Fence: 0, State: "active"})
+	owners.activate(second, remotedevice.Session{ID: second.sessionID, DeviceID: second.deviceID, Fence: 0, State: "active"})
+	intent := remotedevice.ClosureIntent{ID: "closure-one", DeviceID: "device-one", SessionID: "session-one", Fence: 1, State: "pending"}
+	if got := owners.forIntent(intent); got != first {
+		t.Fatalf("intent owner = %p, want %p", got, first)
+	}
+	if second.closed {
+		t.Fatal("revoking one device closed another device owner")
+	}
+	if got := owners.forDevice("device-one", 1); len(got) != 0 {
+		t.Fatalf("already revoked owner returned again: %v", got)
+	}
+	if got := owners.forDevice("device-two", 1); len(got) != 1 || got[0] != second {
+		t.Fatalf("device-scoped owner selection = %v", got)
+	}
+}
+
+func TestSessionOwnersClosePreventsLaterReservationsAndIsIdempotent(t *testing.T) {
+	owners := newSessionOwners()
+	owner, ok := owners.reserve("session-one", "device-one", nil)
+	if !ok {
+		t.Fatal("reservation failed")
+	}
+	handler := NewHandler(&recordingAuthenticator{}, PeerGateFunc(func(context.Context, string) bool { return true }))
+	var wg sync.WaitGroup
+	reserved := make(chan bool, 1)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		owners.closeAll(handler, CloseReasonTransport)
+	}()
+	go func() {
+		defer wg.Done()
+		candidate, candidateOK := owners.reserve("session-race", "device-one", nil)
+		if candidateOK && candidate == nil {
+			t.Errorf("successful reservation returned nil owner")
+		}
+		reserved <- candidateOK
+	}()
+	wg.Wait()
+	select {
+	case candidateOK := <-reserved:
+		if candidateOK {
+			if _, exists := owners.owners["session-race"]; !exists {
+				t.Fatal("race reservation reported success but owner was absent")
+			}
+		}
+	default:
+		t.Fatal("reservation race produced no outcome")
+	}
+	if _, ok := owners.reserve("session-after-close", "device-one", nil); ok {
+		t.Fatal("reservation succeeded after terminal close")
+	}
+	if !owners.isClosed(owner) {
+		t.Fatal("existing owner not marked closed")
+	}
+	owners.closeAll(handler, CloseReasonTransport)
+}
+
+func TestHandlerCloseRacingAdmissionClosesAndCleansReservedOwner(t *testing.T) {
+	material := newTLSMaterial(t)
+	release := make(chan struct{})
+	auth := &recordingAuthenticator{entered: make(chan struct{}), release: release, closed: make(chan remotedevice.CloseSessionRequest, 1)}
+	server, offer, _ := configuredHandler(t, material, auth)
+	conn := dialTLS(t, server, material, http.Header{"Sec-WebSocket-Protocol": []string{remoteprotocol.Subprotocol}})
+	if err := conn.WriteMessage(websocket.TextMessage, offer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-auth.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admission did not reach its barrier")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- server.Config.Handler.(*Handler).Close() }()
+	readCloseWithCode(t, conn, websocket.ClosePolicyViolation, CloseReasonTransport)
+	closeReturned := false
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeReturned = true
+	case <-time.After(2 * time.Second):
+		t.Fatal("Handler.Close did not close the reserved owner")
+	}
+	close(release)
+	if !closeReturned {
+		select {
+		case err := <-closeDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Handler.Close did not complete after admission release")
+		}
+	}
+	select {
+	case request := <-auth.closed:
+		if request.SessionID != "session-1" || request.Reason != remotedevice.SessionCloseReasonAdministrator {
+			t.Fatalf("cleanup request = %+v", request)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reserved owner was not durably cleaned")
 	}
 }

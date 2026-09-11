@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,19 +21,30 @@ import (
 )
 
 type testClock struct {
-	mu  sync.Mutex
-	now time.Time
+	mu    sync.Mutex
+	now   time.Time
+	onNow func()
 }
 
 func (c *testClock) Now() time.Time {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
+	now, hook := c.now, c.onNow
+	c.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return now
 }
 
 func (c *testClock) Set(value time.Time) {
 	c.mu.Lock()
 	c.now = value
+	c.mu.Unlock()
+}
+
+func (c *testClock) SetOnNow(hook func()) {
+	c.mu.Lock()
+	c.onNow = hook
 	c.mu.Unlock()
 }
 
@@ -431,6 +443,402 @@ func TestTypedAdministrativeTransitionsAndRevocation(t *testing.T) {
 	if _, err := store.Authenticate(context.Background(), AuthenticateRequest{DeviceID: device.ID, Fingerprint: "fp-1"}); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("revoked authentication: %v", err)
 	}
+}
+
+func TestAuthenticateAndRegisterSessionIsAtomicAndNonReopenable(t *testing.T) {
+	now := time.Date(2026, 9, 11, 13, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x47}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := Actor{ID: "operator-1", PolicyID: "policy-1"}
+	req := AuthenticateAndRegisterSessionRequest{SessionID: "session-atomic", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: append([]byte(nil), device.Certificate.PublicKeyDigest...), Actor: actor, RequestID: "admit-1", Platform: device.Platform, Architecture: device.Architecture}
+	session, err := store.AuthenticateAndRegisterSession(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.State != "active" || session.Fence != device.Fence {
+		t.Fatalf("session = %+v, want active at fence %d", session, device.Fence)
+	}
+	if _, err := store.AuthenticateAndRegisterSession(context.Background(), req); !errors.Is(err, ErrSessionConflict) {
+		t.Fatalf("active replay error = %v, want ErrSessionConflict", err)
+	}
+	if _, err := store.AuthenticateAndRegisterSession(context.Background(), AuthenticateAndRegisterSessionRequest{SessionID: "session-bad-auth", DeviceID: device.ID, Fingerprint: "wrong", PublicKeyDigest: req.PublicKeyDigest, Actor: actor, RequestID: "admit-bad"}); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("bad identity error = %v, want ErrAuthentication", err)
+	}
+	if _, err := store.CloseSession(context.Background(), CloseSessionRequest{SessionID: req.SessionID, DeviceID: device.ID, Actor: actor, Reason: SessionCloseReasonAdministrator, RequestID: "close-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateAndRegisterSession(context.Background(), req); !errors.Is(err, ErrSessionConflict) {
+		t.Fatalf("closed replay error = %v, want ErrSessionConflict", err)
+	}
+	var registrations int
+	if err := store.db.QueryRow(`SELECT count(*) FROM audit_events WHERE event_kind='session.registered' AND session_id=?`, req.SessionID).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 1 {
+		t.Fatalf("session.registered events = %d, want one", registrations)
+	}
+}
+
+func TestAuthenticateAndRegisterSessionRechecksRenewedCertificate(t *testing.T) {
+	now := time.Date(2026, 9, 11, 14, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x48}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := Actor{ID: "operator-1", PolicyID: "policy-1"}
+	if _, err := store.RecordCertificateRenewal(context.Background(), RecordCertificateRenewalRequest{
+		DeviceID:              device.ID,
+		PreviousCertificateID: device.Certificate.ID,
+		Actor:                 actor,
+		Metadata: CertificateMetadata{
+			ID:              "cert-renewed",
+			IssuerID:        "issuer-renewed",
+			Serial:          "serial-renewed",
+			Fingerprint:     "fp-renewed",
+			PublicKeyDigest: append([]byte(nil), device.Certificate.PublicKeyDigest...),
+			NotBefore:       now.Add(-time.Minute),
+			NotAfter:        now.Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale := AuthenticateAndRegisterSessionRequest{SessionID: "session-stale", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: device.Certificate.PublicKeyDigest, Actor: actor, RequestID: "admit-stale"}
+	if _, err := store.AuthenticateAndRegisterSession(context.Background(), stale); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("stale certificate admission error = %v, want ErrAuthentication", err)
+	}
+	var staleSessions int
+	if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, stale.SessionID).Scan(&staleSessions); err != nil {
+		t.Fatal(err)
+	}
+	if staleSessions != 0 {
+		t.Fatalf("stale certificate created %d session rows", staleSessions)
+	}
+	current := stale
+	current.SessionID = "session-current"
+	current.RequestID = "admit-current"
+	current.CertificateID = "cert-renewed"
+	current.Fingerprint = "fp-renewed"
+	if _, err := store.AuthenticateAndRegisterSession(context.Background(), current); err != nil {
+		t.Fatalf("current certificate admission: %v", err)
+	}
+}
+
+func TestAuthenticateAndRegisterSessionConcurrentDuplicateHasOneWinner(t *testing.T) {
+	now := time.Date(2026, 9, 11, 14, 30, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x49}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := AuthenticateAndRegisterSessionRequest{SessionID: "session-concurrent", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: append([]byte(nil), device.Certificate.PublicKeyDigest...), Actor: Actor{ID: "operator-1", PolicyID: "policy-1"}}
+	const attempts = 8
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			req := base
+			req.RequestID = "admit-concurrent-" + strconv.Itoa(index)
+			_, callErr := store.AuthenticateAndRegisterSession(context.Background(), req)
+			results <- callErr
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	winners, conflicts := 0, 0
+	for callErr := range results {
+		switch {
+		case callErr == nil:
+			winners++
+		case errors.Is(callErr, ErrSessionConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected duplicate admission error: %v", callErr)
+		}
+	}
+	if winners != 1 || conflicts != attempts-1 {
+		t.Fatalf("duplicate outcomes winners=%d conflicts=%d", winners, conflicts)
+	}
+	var registrations int
+	if err := store.db.QueryRow(`SELECT count(*) FROM audit_events WHERE event_kind='session.registered' AND session_id=?`, base.SessionID).Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 1 {
+		t.Fatalf("session.registered events = %d, want one", registrations)
+	}
+}
+
+func TestAuthenticateAndRegisterSessionAuditFailureRollsBackSession(t *testing.T) {
+	now := time.Date(2026, 9, 11, 15, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x4a}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE TRIGGER block_session_audit BEFORE INSERT ON audit_events WHEN NEW.event_kind='session.registered' BEGIN SELECT RAISE(ABORT, 'session audit failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AuthenticateAndRegisterSession(context.Background(), AuthenticateAndRegisterSessionRequest{SessionID: "session-rollback", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: device.Certificate.PublicKeyDigest, Actor: Actor{ID: "operator-1", PolicyID: "policy-1"}, RequestID: "admit-rollback"})
+	if err == nil {
+		t.Fatal("audit failure unexpectedly admitted session")
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, "session-rollback").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rolled-back session rows = %d, want zero", count)
+	}
+}
+
+func TestConcurrentRenewalAndAtomicAdmissionUseOneIdentitySnapshot(t *testing.T) {
+	now := time.Date(2026, 9, 11, 15, 30, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	issuer := &testIssuer{clock: clock}
+	store := openTestStore(t, clock, issuer, bytes.Repeat([]byte{0x4b}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissionClock := &testClock{now: now}
+	second, err := Open(context.Background(), store.path, WithClock(admissionClock.Now), WithRandomReader(bytes.NewReader(bytes.Repeat([]byte{0x4c}, 64))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	actor := Actor{ID: "operator-1", PolicyID: "policy-1"}
+	transactionStarted := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseAdmission:
+		default:
+			close(releaseAdmission)
+		}
+	}()
+	var transactionOnce sync.Once
+	admissionClock.SetOnNow(func() {
+		transactionOnce.Do(func() {
+			close(transactionStarted)
+			<-releaseAdmission
+		})
+	})
+	var wg sync.WaitGroup
+	admissionErr := make(chan error, 1)
+	renewalErr := make(chan error, 1)
+	renewalAttempted := make(chan struct{})
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, callErr := second.AuthenticateAndRegisterSession(context.Background(), AuthenticateAndRegisterSessionRequest{SessionID: "session-renewal-race", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: device.Certificate.PublicKeyDigest, Actor: actor, RequestID: "admit-race"})
+		admissionErr <- callErr
+	}()
+	go func() {
+		defer wg.Done()
+		<-transactionStarted
+		close(renewalAttempted)
+		_, callErr := store.RecordCertificateRenewal(context.Background(), RecordCertificateRenewalRequest{DeviceID: device.ID, PreviousCertificateID: device.Certificate.ID, Actor: actor, RequestID: "renew-race", Metadata: CertificateMetadata{ID: "cert-race", IssuerID: "issuer-race", Serial: "serial-race", Fingerprint: "fp-race", PublicKeyDigest: device.Certificate.PublicKeyDigest, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}})
+		renewalErr <- callErr
+	}()
+	select {
+	case <-transactionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admission did not acquire its immediate transaction")
+	}
+	select {
+	case <-renewalAttempted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("renewal did not enter the concurrent race")
+	}
+	close(releaseAdmission)
+	wg.Wait()
+	if err := <-renewalErr; err != nil {
+		t.Fatalf("renewal race: %v", err)
+	}
+	if err := <-admissionErr; err != nil {
+		t.Fatalf("admission held BEGIN IMMEDIATE but failed: %v", err)
+	}
+	var oldState, state, activeCertificateID string
+	if err := store.db.QueryRow(`SELECT state FROM certificates WHERE id=?`, device.Certificate.ID).Scan(&oldState); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT state FROM certificates WHERE id=?`, "cert-race").Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT active_certificate_id FROM devices WHERE id=?`, device.ID).Scan(&activeCertificateID); err != nil {
+		t.Fatal(err)
+	}
+	if oldState != "superseded" || state != "active" || activeCertificateID != "cert-race" {
+		t.Fatalf("certificate ordering old=%q new=%q active=%q", oldState, state, activeCertificateID)
+	}
+	var sessions int
+	if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, "session-renewal-race").Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("session rows = %d, want one", sessions)
+	}
+	var registrations int
+	if err := store.db.QueryRow(`SELECT count(*) FROM audit_events WHERE event_kind='session.registered' AND session_id=?`, "session-renewal-race").Scan(&registrations); err != nil {
+		t.Fatal(err)
+	}
+	if registrations != 1 {
+		t.Fatalf("session.registered events = %d, want one", registrations)
+	}
+}
+
+func TestConcurrentAdmissionAndRevocationHaveOnlySafeOutcomes(t *testing.T) {
+	now := time.Date(2026, 9, 11, 16, 0, 0, 0, time.UTC)
+	clock := &testClock{now: now}
+	spki, private := testKeys(t)
+	store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x4d}, 64))
+	enrollment := createEnrollment(t, store)
+	challenge := issueChallenge(t, store, enrollment, spki)
+	device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(context.Background(), store.path, WithClock(clock.Now), WithRandomReader(bytes.NewReader(bytes.Repeat([]byte{0x4e}, 64))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	actor := Actor{ID: "operator-1", PolicyID: "policy-1"}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	admissionErr := make(chan error, 1)
+	type revocationOutcome struct {
+		result RevokeDeviceResponse
+		err    error
+	}
+	revokeOutcome := make(chan revocationOutcome, 1)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, callErr := second.AuthenticateAndRegisterSession(context.Background(), AuthenticateAndRegisterSessionRequest{SessionID: "session-revocation-race", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: device.Certificate.PublicKeyDigest, Actor: actor, RequestID: "admit-revoke-race"})
+		admissionErr <- callErr
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		result, callErr := store.RevokeDevice(context.Background(), RevokeDeviceRequest{DeviceID: device.ID, Actor: actor, Reason: RevocationReasonAdministrator, RequestID: "revoke-race"})
+		revokeOutcome <- revocationOutcome{result: result, err: callErr}
+	}()
+	close(start)
+	wg.Wait()
+	outcome := <-revokeOutcome
+	if outcome.err != nil {
+		t.Fatal(outcome.err)
+	}
+	result := outcome.result
+	admitErr := <-admissionErr
+	var sessionCount, intentCount int
+	if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, "session-revocation-race").Scan(&sessionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT count(*) FROM closure_intents WHERE session_id=?`, "session-revocation-race").Scan(&intentCount); err != nil {
+		t.Fatal(err)
+	}
+	switch {
+	case admitErr == nil:
+		if sessionCount != 1 || intentCount != 1 || len(result.Intents) != 1 {
+			t.Fatalf("admission wins outcome session=%d intents=%d result=%+v", sessionCount, intentCount, result.Intents)
+		}
+	case errors.Is(admitErr, ErrAuthentication):
+		if sessionCount != 0 || intentCount != 0 || len(result.Intents) != 0 {
+			t.Fatalf("revocation wins outcome session=%d intents=%d result=%+v", sessionCount, intentCount, result.Intents)
+		}
+	default:
+		t.Fatalf("unexpected admission/revocation error: %v", admitErr)
+	}
+}
+
+func TestAdmissionAndRevocationForcedSerialOrders(t *testing.T) {
+	setup := func(t *testing.T, now time.Time) (*Store, Device, AuthenticateAndRegisterSessionRequest, Actor) {
+		t.Helper()
+		clock := &testClock{now: now}
+		spki, private := testKeys(t)
+		store := openTestStore(t, clock, &testIssuer{clock: clock}, bytes.Repeat([]byte{0x5c}, 64))
+		enrollment := createEnrollment(t, store)
+		challenge := issueChallenge(t, store, enrollment, spki)
+		device, err := store.CompleteEnrollment(context.Background(), CompleteEnrollmentRequest{ChallengeID: challenge.ID, Nonce: challenge.Nonce, Signature: signChallenge(challenge, enrollment, private)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actor := Actor{ID: "operator-1", PolicyID: "policy-1"}
+		request := AuthenticateAndRegisterSessionRequest{SessionID: "session-order", DeviceID: device.ID, CertificateID: device.Certificate.ID, Fingerprint: device.Certificate.Fingerprint, PublicKeyDigest: device.Certificate.PublicKeyDigest, Actor: actor, RequestID: "admit-order"}
+		return store, device, request, actor
+	}
+
+	t.Run("admission first", func(t *testing.T) {
+		store, device, request, actor := setup(t, time.Date(2026, 9, 11, 16, 30, 0, 0, time.UTC))
+		if _, err := store.AuthenticateAndRegisterSession(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		result, err := store.RevokeDevice(context.Background(), RevokeDeviceRequest{DeviceID: device.ID, Actor: actor, Reason: RevocationReasonAdministrator, RequestID: "revoke-after-admit"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Device.State != "revoked" || len(result.Intents) != 1 || result.Intents[0].SessionID != request.SessionID || result.Intents[0].State != "pending" {
+			t.Fatalf("admission-first revocation intents = %+v", result.Intents)
+		}
+		var sessions, intents int
+		if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=? AND state='active'`, request.SessionID).Scan(&sessions); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.db.QueryRow(`SELECT count(*) FROM closure_intents WHERE session_id=? AND state='pending'`, request.SessionID).Scan(&intents); err != nil {
+			t.Fatal(err)
+		}
+		if sessions != 1 || intents != 1 {
+			t.Fatalf("admission-first durable state sessions=%d intents=%d", sessions, intents)
+		}
+	})
+
+	t.Run("revocation first", func(t *testing.T) {
+		store, device, request, actor := setup(t, time.Date(2026, 9, 11, 16, 31, 0, 0, time.UTC))
+		result, err := store.RevokeDevice(context.Background(), RevokeDeviceRequest{DeviceID: device.ID, Actor: actor, Reason: RevocationReasonAdministrator, RequestID: "revoke-before-admit"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Device.State != "revoked" || len(result.Intents) != 0 {
+			t.Fatalf("revocation-first intents = %+v", result.Intents)
+		}
+		if _, err := store.AuthenticateAndRegisterSession(context.Background(), request); !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("revocation-first admission error = %v, want ErrAuthentication", err)
+		}
+		var sessions int
+		if err := store.db.QueryRow(`SELECT count(*) FROM sessions WHERE id=?`, request.SessionID).Scan(&sessions); err != nil {
+			t.Fatal(err)
+		}
+		if sessions != 0 {
+			t.Fatalf("revocation-first created %d session rows", sessions)
+		}
+	})
 }
 
 func TestSchemaAndFilesArePrivate(t *testing.T) {
