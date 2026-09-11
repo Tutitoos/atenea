@@ -1,24 +1,32 @@
 ---
 title: "ADR: Remote agent architecture"
-description: "Planned remote-agent architecture (issue #88) and repository-grounded device-registry design (issue #94)."
+description: "Planned remote-agent architecture (issue #88), merged v1 contract, and merged device-registry evidence."
 weight: 8
 ---
 
 # ADR: Remote agent architecture
 
-**Issues:** #88 (architecture), #94 (device registry implementation design)
-**Status:** High-level direction recorded; Issue #94 is a candidate local,
-partial implementation pending review and audit.
-**Implementation:** Local candidate code and focused tests exist only for the
-registry package. No delivery, coordinator, WSS, native agent, or device
-installation is implemented here.
+**Issues:** #88 (architecture), #90 (protocol), #94 (device registry)
+**Status:** The `atenea.remote.v1` schema contract and fixtures are merged
+through PR #93. The coordinator-side registry slice from Issue #94 is merged
+through PR #95: reviewed head
+`ec605455fc3f36f8917a5cf64328fcf0faf2d64d`, merged as
+`eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. The broader remote-agent
+architecture remains planned.
+**Implementation:** `internal/remotedevice` is implemented and merged as a
+local registry package. Its focused/full local validation and the required PR
+checks passed for the reviewed head. No live certificate authority or
+certificate delivery, WSS, coordinator runtime integration, native agent,
+installation, deployment, or real-device execution is implemented here.
 **Scope:** The remote-agent transport, identity, lifecycle, capabilities, and
 platform support described on this page.
-**Evidence:** The Issue #94 design below is grounded in the repository sources
-named in that section. No runtime subject evidence was supplied: every
-platform, mode, capability, protocol, persistence, and lifecycle behavior
-below remains planned and unsupported unless a later stage publishes the
-required evidence. Local tests are not runtime or client-real evidence.
+**Evidence:** The merged protocol schemas/fixtures and registry package are
+supported by repository-local validation and the required PR #95 CI for their
+respective SHAs. This is local/CI evidence for contract and coordinator-side
+registry behavior only. It is not provider-real transport, live CA,
+installation, deployment, or client-real device evidence; platform, mode,
+capability, WSS, and socket-lifecycle claims below remain planned until their
+own evidence is published.
 
 The canonical precise wire contract is [`protocol/atenea.remote.v1`](../../protocol/atenea.remote.v1/);
 this ADR remains planned architecture and evidence, not a replacement for that
@@ -48,7 +56,7 @@ share a downloaded runtime, load one another’s modules, or accept arbitrary
 code from Atenea. A platform-specific implementation may report a capability
 as unavailable; it may not pretend that another implementation executed it.
 
-### Issue #94 implementation design: remote device registry
+### Issue #94 merged implementation slice: remote device registry
 
 Issue #94 is the first persistence slice of the remote-agent control plane. It
 owns a small, local SQLite registry and no transport, native desktop adapter,
@@ -57,24 +65,28 @@ than the surrounding architecture: it establishes durable identity and
 fail-closed lifecycle transitions that later callers can use without storing
 bearer material or desktop content.
 
-The surrounding ADR describes later protocol, coordinator, delivery, and
-platform-agent phases; those phases are not part of this Issue #94 candidate.
+The surrounding ADR describes later transport, coordinator-runtime, delivery,
+and platform-agent phases; those phases are not part of this merged Issue #94
+registry slice.
 In particular, the `## Decisions` section below describes the target
 architecture for later phases. It is not an implementation claim for #94;
-#94 is only the registry slice permitted by its issue body.
+#94 is only the merged registry slice permitted by its issue body.
 
 This section is an auditable implementation contract. Its evidence status is
-limited to design and local implementation tests. A passing test does not
-prove a live certificate authority, WSS peer, Tailscale route, native agent,
-installation, or real device. Those claims remain follow-ups until they have
-their own provider-real or client-real evidence.
+the merged package implementation, local tests, and the required CI checks.
+Those checks do not prove a live certificate authority, WSS peer, Tailscale
+route, native agent, installation, deployment, or real device. Those claims
+remain follow-ups until they have their own provider-real or client-real
+evidence.
 
-#### Ownership and public boundary
+#### Functional boundary and public API
 
-Workflow 2 owns only `internal/remotedevice/**` and this section of the ADR.
-It does not change `protocol/`, `go.mod`, generated files, fixtures, callers,
-native clients, or deployment configuration. The package is an internal
-control-plane component; its exported API is intentionally small:
+The stable functional boundary of `internal/remotedevice` is coordinator-side
+device persistence and fail-closed lifecycle management. It has no behavior
+for wire transport, native clients, deployment, or desktop control; those
+concerns remain separate consumers and follow-up implementations. The package
+is an internal control-plane component and its exported API is intentionally
+small:
 
 - `Open(ctx context.Context, path string, options ...OpenOption)` and
   `Store.Close` own one SQLite connection and
@@ -318,9 +330,9 @@ scoped revocation. Those concerns must be separate, bounded follow-up issues
 with their own design, review, audit, tests, and evidence. They must not be
 reintroduced by expanding this section or by hidden fallback behavior.
 
-#### Required local evidence
+#### Registry evidence (local/CI)
 
-The focused test suite currently covers real Ed25519 and ECDSA P-256
+The focused test suite in the merged package covers real Ed25519 and ECDSA P-256
 proof-of-possession; plaintext and decoded transient-secret non-persistence;
 issuer retry and the post-issuer expiry check; certificate and enrollment
 bounds; secure parent and symlink rejection; binding-mismatch terminal state;
@@ -328,17 +340,19 @@ typed actor, platform, architecture, and operation-specific reason validation;
 revoked authentication; certificate renewal and supersession;
 revocation/intents and immutable audit sequence; rollback and restart/
 concurrency checks; and schema v1 creation, reopen, future/corrupt rejection,
-critical-trigger/index verification, and private files. These are local
-implementation tests only; they do not claim CSR transport, WSS, DER
-delivery/acknowledgement, installation, or client-real desktop evidence.
+critical-trigger/index verification, and private files. These local
+implementation tests and the corresponding repository CI provide local/CI
+evidence only; they do not claim CSR transport, WSS, live CA or DER
+delivery/acknowledgement, installation, deployment, or client-real desktop
+evidence.
 
 The required commands are `gofmt`,
 `go test -count=1 ./internal/remotedevice`,
 `go test -race -count=1 ./internal/remotedevice`,
 `go vet ./internal/remotedevice`, `git diff --check`, and the Hugo build.
-The result is reported as local evidence tied to the exact reviewed worktree;
-it is not a commit, push, PR, merge, installation, deployment, or client-real
-claim.
+The result is recorded against the exact reviewed head and its merge commit;
+it is not provider-real transport, installation, deployment, or client-real
+evidence.
 ## Decisions
 
 ### 1. Connection and protocol
@@ -370,62 +384,51 @@ refusals, never best-effort execution.
 
 ### 2. One-time enrollment and persistent identity
 
-Enrollment is an explicit administrative action in this five-step ceremony:
+The merged registry implements the coordinator-side portion of enrollment in
+four explicit transitions. This is the current token-to-activation sequence:
 
-1. The control plane creates a short-lived, single-use enrollment record for a
-   named device and intended platform.
-2. The new agent generates its private key locally and presents the one-time
-   enrollment token and bounded PKCS#10 DER CSR over the tailnet. Before any
-   challenge exists, the control plane parses the CSR, verifies its
-   self-signature, accepts only Ed25519 or P-256, derives the canonical SPKI
-   DER and its SHA-256 digest, and in one immediate transaction authenticates
-   the token, atomically persists identical `verified_public_key_spki_der` and
-   `verified_public_key_digest` values on the enrollment and challenge, and
-   issues the fresh nonce and challenge context.
-3. The agent signs the challenge with its generated private key. The control
-   plane verifies proof of possession against the exact token-authenticated
-   context and stored public-key binding; activation preflight only
-   revalidates that stored binding and never reparses or accepts a new CSR.
-   After a process restart, it reconstructs `CertificateIssueRequest` from
-   both locked enrollment/challenge SPKI DER values and their digests, with no
-   CSR, before invoking the issuer. Proof checks are mandatory and precede
-   issuance.
-4. Only after those checks succeed, the control plane invokes the bounded
-   `CertificateIssuer` outside SQLite and validates the returned certificate
-   DER/chain, key binding, metadata, policy, validity, and absence of private
-   key material. The output remains untrusted until the final transaction.
-5. Before the final transaction, the activation call's transient response
-   owner generates exactly 32 random acknowledgement-nonce bytes with
-   `io.ReadFull` and computes the domain-separated digest. It fails without
-   opening a transaction if entropy is unavailable or short; the final
-   transaction derives the fixed expiry from its commit-time clock.
-   The control plane then uses one immediate `activate_device` transaction to
-   revalidate locked state, increment the successful attempt, store certificate
-   metadata as `issued -> active`, consume challenge and enrollment, activate
-   the device, create the pending public delivery artifact containing only the
-   nonce digest/expiry, store the operation result, and append exactly
-   `challenge.verified`, `certificate.issued`, `challenge.consumed`,
-   `enrollment.consumed`, `device.enrolled`, `device.activated`,
-   `certificate.delivery_created`, `operation.applied`, in that order. Only
-   after commit may the response owner serialize the artifact and raw nonce;
-   rollback, cancellation, failure, or response completion drops/zeroes the
-   raw nonce and persists no partial identity.
+1. `CreateEnrollment` creates a short-lived, single-use record for a named
+   device and intended platform. It returns exactly one transient 32-byte raw
+   token; only its domain-separated digest is persisted.
+2. `IssueChallenge` accepts the enrollment ID, device/context metadata, the
+   token presentation, an idempotency key, and a canonical Ed25519 or P-256
+   SPKI. Inside one immediate transaction it re-reads the pending, unexpired
+   enrollment, verifies and consumes the token, fixes the device/context and
+   public-key binding, stores only a nonce digest, and returns the raw nonce
+   transiently. Token consumption happens before challenge issuance; a later
+   call cannot issue a second challenge with that token.
+3. `CompleteEnrollment` accepts the challenge ID, raw nonce, and bounded
+   signature; it accepts no token. It revalidates persisted challenge and
+   enrollment state/expiry, compares the nonce digest, reconstructs the
+   persisted challenge message, and verifies real Ed25519 or ECDSA P-256 proof
+   of possession. Invalid proof terminally fails the challenge; issuer failure
+   leaves it pending for retry.
+4. After proof succeeds, the bounded local `CertificateIssuer` receives only
+   public-key-bound metadata. The final transaction revalidates state and
+   expiry, validates certificate metadata, activates the device, persists
+   certificate metadata, consumes the challenge and enrollment, and appends
+   ordered audit events atomically. No token is accepted or rechecked during
+   activation.
+
+This package-level sequence is covered by local implementation tests and the
+required CI for PR #95. It does not deliver certificate bytes, implement CSR
+transport, perform live CA signing, or prove any remote-agent connection.
+Those are separate future slices.
 
 The private key and device identity are persistent across reconnects and
-restarts. They are stored using the platform’s protected local facility and
-are not sent to Atenea, copied into logs, or exportable through a remote
-capability. Every later connection presents the device certificate and proves
-possession using a fresh X.509-bound challenge; tailnet reachability alone is
-not identity.
+restarts in the later native-agent design. The registry stores coordinator-side
+device identity and certificate metadata; it does not store an agent private
+key or implement the protected OS key facility. Native agents must keep the
+private key local and prove possession when a future transport is implemented;
+tailnet reachability alone is not identity.
 
-The control plane owns certificate issuance, renewal, and revocation. A
-revoked device is marked unavailable before a new request can be authorized;
-the bounded revocation behavior for active requests is defined below. The
-revocation path also walks the active-session registry, sends a typed
-revocation close, and closes every active socket for that device. Reconnects
-remain refused until a new enrollment is completed. If revocation state cannot
-be read, the control plane fails closed for that device rather than treating
-unknown state as valid.
+The merged registry records certificate metadata, renewal, revocation, active
+sessions, and durable closure intents. It rejects new authentication and
+sessions for a revoked device, but it does not deliver a revocation event or
+close a socket. A later WSS/session owner must apply each closure intent and
+provide provider-real evidence of socket closure and reconnect refusal. Live CA
+issuance, certificate bytes/DER delivery, and certificate acknowledgement are
+also future work; none is implied by registry activation.
 
 ### 3. Session lifecycle, heartbeat, and negotiation
 
@@ -662,31 +665,45 @@ Costs and trade-offs:
 
 ## Staged delivery
 
-Every stage below is planned and must publish evidence separately from design
-approval. Passing a local unit test does not prove support on a real client or
-platform.
+Evidence is tracked per slice and separately from architecture approval. The
+merged protocol/registry foundation has local and CI evidence; passing those
+checks does not prove support on a real client or platform.
 
-### Stage 0 — Shared protocol and control-plane coordinator
+### Stage 0 — Shared protocol and registry foundation
 
-Define the `atenea.remote.v1` envelope, typed refusal codes, enrollment state
-machine, certificate policy, revocation events, monotonic request leases,
-heartbeat deadlines, mode transitions, capability schemas, target observation
-proofs, sanitization rules, and audit event schema. Implement the shared
-control-plane coordinator for authentication, negotiation, authorization,
-dispatch gates, revocation, and audit ordering. This stage has no native
-agent, observation, or action implementation.
+The versioned `atenea.remote.v1` schemas and conformance fixtures are merged
+through PR #93 at `7b27095aeda455a618a65f33745adbb6422172e1`. The
+coordinator-side `internal/remotedevice` registry is merged through PR #95;
+its reviewed head is `ec605455fc3f36f8917a5cf64328fcf0faf2d64d` and its merge
+commit is `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. Together they provide
+the current contract and durable token/challenge/proof/activation,
+certificate-metadata, session, revocation-intent, and audit foundation.
 
-**Exit evidence:** planned protocol and security fixtures; no platform or
-capability is called supported.
+The remaining Stage 0 work is future coordinator-runtime integration for
+authentication, negotiation, authorization, dispatch gates, revocation event
+delivery, and audit ordering. Live CA/certificate delivery, WSS transport,
+and native agents are separate later slices; this stage has no native agent,
+desktop observation, or action implementation.
+
+**Current evidence:** repository-local schema/fixture and registry tests plus
+the required CI checks passed for their respective merged SHAs. This evidence
+does not establish provider-real transport, live CA delivery, installation,
+deployment, or client-real device support.
+
+**Remaining exit evidence:** an integrated coordinator and its conformance,
+security, and provider-real checks must be published before any transport or
+platform capability is called supported.
 
 ### Stage 1 — Native control-plane baselines
 
-Implement the outbound Tailscale-only WSS client, one-time X.509 enrollment,
-persistent identity, authentication, negotiation, heartbeat, forced close,
-sanitized diagnostics, and common refusal contract in the independent Windows
-C#/.NET 10, macOS Swift, and Linux Rust agents. This baseline advertises no
-desktop observation or action capability. A deterministic reference harness
-exercises the same wire contract before any platform claim is promoted.
+Build the independent Windows C#/.NET 10, macOS Swift, and Linux Rust agents
+on top of the merged `atenea.remote.v1` protocol and `internal/remotedevice`
+registry foundation. Each agent adds the outbound Tailscale-only WSS client,
+live X.509 enrollment/certificate delivery, persistent agent identity,
+authentication, negotiation, heartbeat, forced close, sanitized diagnostics,
+and common refusal contract. This baseline advertises no desktop observation
+or action capability. A deterministic reference harness exercises the same
+wire contract before any platform claim is promoted.
 
 **Exit evidence:** protocol-conformance fixtures plus provider-real tailnet
 enrollment, reconnect, heartbeat, and revocation traces for each baseline.
@@ -747,7 +764,7 @@ reduce authority when it cannot establish its preconditions.
 | Asset | Trust boundary | Threat | Mitigation | Fail-closed behavior |
 | --- | --- | --- | --- | --- |
 | Device private key and identity | Agent protected storage ↔ control plane CA | Theft, export, replay, or impersonation | Generate locally; protected storage; X.509 proof of possession; one-time enrollment; certificate policy | Failed proof, missing key, or invalid certificate prevents session creation |
-| Enrollment record | Administrator ↔ enrollment service ↔ new agent | Brute force, replay, wrong-device enrollment | Short-lived single-use record bound to device/platform; locked-row token digest verification before challenge and again before activation; nonce challenge; consume atomically | Missing, wrong, expired enrollment, replayed, or mismatched token, or challenge failure creates no identity or partial trusted state |
+| Enrollment record | Administrator ↔ enrollment service ↔ new agent | Brute force, replay, wrong-device enrollment | Short-lived single-use record bound to device/platform; token digest verification and consumption before challenge; persisted challenge binding and proof-of-possession revalidation before activation | Missing, wrong, expired enrollment, replayed, or mismatched token, or challenge failure creates no identity or partial trusted state |
 | WSS session | Agent ↔ Tailscale-only endpoint | MITM, endpoint substitution, public exposure, downgrade | Outbound-only tailnet route; TLS validation; exact `atenea.remote.v1`; bounded frames; ACLs | No tailnet route, TLS failure, wrong subprotocol, or unknown version closes the socket |
 | Active authorization | Control-plane policy/grants ↔ agent | Stale grant, confused deputy, cross-device request | Server-owned grant reference, device/session binding, mode and deadline on every request | Missing, expired, mismatched, or unreadable grant returns typed refusal |
 | Revocation state | CA/policy store ↔ session registry ↔ agent | Revoked device continues operating | Check before authorization; connected-agent acknowledgement; active socket closure; agent-enforced monotonic request lease of at most 5 seconds | Unknown state denies new work immediately; connected work stops on acknowledgement and partitioned work stops no later than lease expiry |
@@ -762,8 +779,12 @@ reduce authority when it cannot establish its preconditions.
 
 ## Support and evidence matrix
 
-This matrix describes the intended support envelope, not current support. Every
-row is **planned — not validated** until the required evidence is produced.
+This matrix separates merged coordinator-side registry evidence from intended
+transport, native-agent, and desktop support. A registry row marked
+**Implemented — local/CI only** means that the bounded package behavior is
+present and covered by repository validation; it does not promote a provider,
+platform, installation, deployment, or client-real claim. Every other row is
+**Planned — not validated** until its required evidence is produced.
 
 ### Platforms and modes
 
@@ -780,13 +801,18 @@ row is **planned — not validated** until the required evidence is produced.
 
 | Surface | Required evidence before support can be claimed | Status |
 | --- | --- | --- |
-| Tailscale-only outbound WSS and `atenea.remote.v1` | Tailnet-only connection trace, negative public-route test, TLS/subprotocol refusal tests | **Planned — not validated** |
-| One-time enrollment and X.509 challenge | Replay, expiry, wrong-device, key-possession, and successful enrollment traces | **Planned — not validated** |
-| Persistent device identity | Restart/reconnect proof with protected key handling and no key export | **Planned — not validated** |
-| Revocation closes active sessions | Provider-real revocation event showing forced close and blocked reconnect | **Planned — not validated** |
+| Merged `atenea.remote.v1` contract, schemas, and conformance fixtures | Local schema/fixture tests and required CI for the merged contract | **Implemented — local/CI only** |
+| Tailscale-only outbound WSS | Tailnet-only connection trace, negative public-route test, TLS/subprotocol refusal tests | **Planned — not validated** |
+| Registry enrollment token → challenge → proof-of-possession → activation metadata | Local package tests and required CI for replay, expiry, binding, key possession, atomic activation, and rollback | **Implemented — local/CI only** |
+| Live X.509 enrollment and certificate delivery | Provider-real enrollment trace, live CA/certificate validation, delivery, and acknowledgement | **Planned — not validated** |
+| Persistent coordinator registry identity | Local restart/reopen, protected-file, and no-secret-persistence tests plus required CI | **Implemented — local/CI only** |
+| Native key persistence and reconnect authentication | Client-real restart/reconnect proof with protected key handling and no key export | **Planned — not validated** |
+| Registry revocation and active-session closure intents | Local multi-handle/restart/concurrency tests proving fail-closed authentication and durable intents plus required CI | **Implemented — local/CI only** |
+| Live revocation event, socket closure, and blocked reconnect | Provider-real revocation event showing forced close and blocked reconnect | **Planned — not validated** |
 | Heartbeat and liveness deadline | Missed-heartbeat cancellation and reconnect negotiation trace | **Planned — not validated** |
 | Version/capability negotiation | Compatible and incompatible hello traces; no downgrade or silent fallback | **Planned — not validated** |
-| Sanitized diagnostics and audit boundaries | Redaction tests and audit inspection proving payloads/secrets are absent | **Planned — not validated** |
+| Registry audit metadata boundary | Local append-only, opaque-ID, no-secret, and rollback tests plus required CI | **Implemented — local/CI only** |
+| Agent diagnostics and desktop redaction | Client-real redaction tests and audit inspection proving payloads/secrets are absent | **Planned — not validated** |
 
 ### Remote capabilities
 
@@ -810,18 +836,19 @@ row is **planned — not validated** until the required evidence is produced.
 | `remote.desktop.type` | Attended or isolated only | Secret-field refusal, no-persistence test, and client-real action evidence | **Planned — not validated** |
 | `remote.desktop.key` | Attended or isolated only | Background typed refusal, allowlist, and client-real action evidence | **Planned — not validated** |
 
-No matrix cell is promoted by documentation alone. A local protocol test is
-local evidence; a tailnet connection is provider-real transport evidence; and
-a successful operation on a real supported device is client-real evidence.
-Until all required evidence for a cell exists, its support level remains
-planned and unvalidated.
+No provider or client support cell is promoted by documentation or registry
+tests alone. A local protocol/registry test is local/CI evidence; a tailnet
+connection is provider-real transport evidence; and a successful operation on
+a real supported device is client-real evidence. Registry rows remain bounded
+to their implemented package scope, while every unobserved transport, native,
+platform, mode, and capability cell remains planned and unvalidated.
 
 ## Unresolved evidence and follow-up decisions
 
-The high-level ADR direction is recorded. The Issue #94 design may be marked
-decision-complete only after its documented design gates pass; this writer step
-does not claim that approval. Implementation and runtime evidence remain
-absent, and the following evidence remains unresolved:
+The high-level ADR direction is recorded, and the bounded Issue #94 registry
+slice is implemented and merged with local/CI evidence. That evidence does
+not establish the following provider-real, installation, deployment, or
+client-real outcomes, which remain unresolved:
 
 - No agent exists here that proves the Windows C#/.NET 10, macOS Swift, or
   Linux Rust targets.
@@ -835,9 +862,10 @@ absent, and the following evidence remains unresolved:
 - The exact macOS versions, Linux distributions, Tailscale ACL layout,
   certificate rotation schedule, audit retention, and sensitive-surface
   classifier remain implementation details to resolve before the relevant
-  Stage 1 or Stage 2 exit evidence can be claimed; the Issue #94 implementation
-  must also turn the explicit token, digest, verifier, ledger, recovery, and
-  audit rules above into code and tests.
+  Stage 1 or Stage 2 exit evidence can be claimed. The registry's explicit
+  token, digest, verifier, activation, recovery, and audit rules are covered
+  only within the merged package boundary; transport, delivery, and native
+  agent behavior still require separate issues and evidence.
 - The semantics and outcome verification for each native application need
   client-real fixtures; an accepted command or captured screen alone is not
   proof of the requested UI result.
