@@ -1,18 +1,24 @@
 ---
 title: "ADR: Remote agent architecture"
-description: "Planned architecture and security boundary for remote desktop agents (issue #88)."
+description: "Planned remote-agent architecture (issue #88) and repository-grounded device-registry design (issue #94)."
 weight: 8
 ---
 
 # ADR: Remote agent architecture
 
-**Issue:** #88
-**Status:** Decision-complete design direction; planned, not validated
+**Issues:** #88 (architecture), #94 (device registry implementation design)
+**Status:** High-level direction recorded; Issue #94 is a candidate local,
+partial implementation pending review and audit.
+**Implementation:** Local candidate code and focused tests exist only for the
+registry package. No delivery, coordinator, WSS, native agent, or device
+installation is implemented here.
 **Scope:** The remote-agent transport, identity, lifecycle, capabilities, and
 platform support described on this page.
-**Evidence:** No subject evidence was supplied for this ADR. Every platform,
-mode, capability, and protocol behavior below is therefore a plan, not a claim
-that Atenea or an agent currently implements or supports it.
+**Evidence:** The Issue #94 design below is grounded in the repository sources
+named in that section. No runtime subject evidence was supplied: every
+platform, mode, capability, protocol, persistence, and lifecycle behavior
+below remains planned and unsupported unless a later stage publishes the
+required evidence. Local tests are not runtime or client-real evidence.
 
 The canonical precise wire contract is [`protocol/atenea.remote.v1`](../../protocol/atenea.remote.v1/);
 this ADR remains planned architecture and evidence, not a replacement for that
@@ -42,6 +48,297 @@ share a downloaded runtime, load one another’s modules, or accept arbitrary
 code from Atenea. A platform-specific implementation may report a capability
 as unavailable; it may not pretend that another implementation executed it.
 
+### Issue #94 implementation design: remote device registry
+
+Issue #94 is the first persistence slice of the remote-agent control plane. It
+owns a small, local SQLite registry and no transport, native desktop adapter,
+live CA, or provider integration. The implementation is deliberately narrower
+than the surrounding architecture: it establishes durable identity and
+fail-closed lifecycle transitions that later callers can use without storing
+bearer material or desktop content.
+
+The surrounding ADR describes later protocol, coordinator, delivery, and
+platform-agent phases; those phases are not part of this Issue #94 candidate.
+In particular, the `## Decisions` section below describes the target
+architecture for later phases. It is not an implementation claim for #94;
+#94 is only the registry slice permitted by its issue body.
+
+This section is an auditable implementation contract. Its evidence status is
+limited to design and local implementation tests. A passing test does not
+prove a live certificate authority, WSS peer, Tailscale route, native agent,
+installation, or real device. Those claims remain follow-ups until they have
+their own provider-real or client-real evidence.
+
+#### Ownership and public boundary
+
+Workflow 2 owns only `internal/remotedevice/**` and this section of the ADR.
+It does not change `protocol/`, `go.mod`, generated files, fixtures, callers,
+native clients, or deployment configuration. The package is an internal
+control-plane component; its exported API is intentionally small:
+
+- `Open(ctx context.Context, path string, options ...OpenOption)` and
+  `Store.Close` own one SQLite connection and
+  schema v1. Open options and administrative requests are typed; actor and
+  policy IDs are mandatory for administrative transitions.
+- `CreateEnrollment` creates a pending enrollment and returns its raw token
+  exactly once in a transient response.
+- `IssueChallenge` authenticates that token, validates a canonical public SPKI
+  (Ed25519 or ECDSA P-256), fixes its SHA-256 binding, and returns one
+  transient nonce.
+- `CompleteEnrollment` verifies proof of possession, asks a local bounded
+  issuer for certificate metadata, and activates the device atomically.
+- `Authenticate`/`GetDevice` read the current device identity fail closed.
+- `RegisterSession` and `CloseSession` manage durable session state.
+- `RevokeDevice` revokes the device and certificates, records an immutable
+  revocation, and records closure intents for active sessions without
+  pretending that sockets are closed. Each intent links to its revocation.
+- `RecordCertificateRenewal` supersedes the current certificate and records
+  bounded replacement metadata atomically when the device and key binding are
+  still current.
+- `PendingClosureIntents` lists durable work for a later connection owner.
+- `Audit` reads sanitized append-only metadata; no open payload is accepted.
+
+Request and response structs are transient views. Persistent structs contain
+identifiers, state, timestamps, counters, digests, and bounded certificate
+metadata only. No persistent type may contain a raw token, nonce, proof, CSR,
+private key, certificate bytes, diagnostic text, screen text, or arbitrary
+payload. The package never logs secret-bearing inputs and never returns a raw
+secret from a read or retry path. Issue #94 does not implement CSR transport,
+certificate DER production or delivery, delivery acknowledgement, WSS, the
+coordinator, or an operation ledger.
+
+#### State machine
+
+An enrollment starts as `pending`, becomes `challenged`, and ends as `active`,
+`failed`, or `expired`. A challenge starts as `pending`, then becomes
+`consumed`, `failed`, or `expired`. It belongs to exactly one enrollment and
+one device. A device is
+created only by the successful final enrollment transaction, and starts
+`active`; it can become `revoked` but is never silently reactivated. A
+certificate metadata row is `active`, `superseded`, or `revoked`. A session is
+`active` or `closed`. A closure intent is `pending` or `applied`; creating it
+does not close its session or socket.
+
+The database enforces valid state values, one enrollment per device, one
+challenge per enrollment, one active certificate binding per device, and
+foreign-key ownership. Mutating methods use immediate transactions for their
+durable transition. Completion deliberately performs read/verification and
+issuer work before a final transaction that revalidates state and applies the
+CAS. The transition and its bounded audit event either commit together or are
+absent together.
+
+#### Enrollment token
+
+`CreateEnrollment` generates exactly 32 bytes with `io.ReadFull` from the
+injected `RandomReader`. A short read or error fails closed and writes nothing.
+The only external form is unpadded `base64.RawURLEncoding`, exactly 43 ASCII
+characters. The raw token is returned by the creation call once and is not
+recoverable, regenerated, logged, audited, cached, or included in an error.
+
+Only the digest is persisted. Define the one canonical digest function:
+
+```text
+F(x) = u32be(len(x)) || x
+D(domain, fields...) = SHA-256(
+  UTF-8("atenea.remote.device.registry/v1") || 0x00 ||
+  F(UTF-8(domain)) || F(field1) || ... || F(fieldN)
+)
+```
+
+`x` is the exact supplied byte sequence; text is exact UTF-8 without
+normalization. The domain separator and field framing are applied exactly
+once. No caller pre-frames a field and no implementation frames a whole
+already-framed digest a second time. The persisted token value is
+`D("enrollment-token", raw_token)` as lower-case hexadecimal. Comparisons use
+fixed-size digest validation and constant-time comparison. The schema stores
+only this digest, never the token or a reversible encoding.
+
+#### IssueChallenge
+
+`IssueChallenge` accepts the enrollment ID, device ID, name/platform/
+architecture context, a token presentation, an idempotency key, and a public
+SPKI DER key no larger than 1 KiB. It parses and canonicalizes the key before
+the immediate transaction and permits only Ed25519 or ECDSA P-256. After
+acquiring the immediate transaction lock, it takes the current clock reading,
+re-reads the enrollment, and requires `pending` and unexpired state. It
+atomically consumes the token presentation while fixing canonical SPKI
+and its SHA-256 digest.
+
+The token presentation is consumed exactly once, atomically with challenge
+creation. The successful transaction
+moves the enrollment to `challenged`, fixes the name, platform, architecture,
+public-key binding and context, creates one challenge record, and stores only
+a nonce digest. Challenge TTL is at most two minutes and never exceeds
+enrollment expiry. The raw nonce is returned only in the transient response;
+no fallible operation runs after commit before that return.
+
+A second presentation of the same enrollment token cannot issue another
+challenge or another nonce, even with another idempotency key. A same-key
+retry may return a stable non-secret already-issued result, but it never
+returns the original nonce. A different key is a typed single-use conflict.
+If a valid token is presented with a mismatched device, name, platform, or
+architecture, the pending enrollment is consumed into terminal `failed` state
+and `enrollment.failed(binding_mismatch)` is written in the same transaction;
+the typed mismatch is not retryable.
+No challenge exists when token validation, expiry, context validation,
+randomness, audit, or commit fails.
+
+The challenge context binds protocol version, enrollment ID, device ID,
+challenge ID, fixed metadata, expiry, and the persisted authorization state.
+It never contains raw token, raw nonce, CSR, proof, or open payload.
+The nonce is exactly 32 random bytes and only its digest is durable.
+
+#### CompleteEnrollment
+
+`CompleteEnrollment` accepts no token. It accepts the challenge ID, a raw
+nonce presentation, and a bounded signature. The store re-reads the issued
+challenge, checks expiry, validates the nonce digest in constant time,
+reconstructs a deterministic message from persisted rows, and verifies a real
+Ed25519 or ECDSA P-256 signature. There is no accepting verifier hook.
+Invalid proof is a terminal CAS to `failed` with audit; issuer failure leaves
+the challenge pending so it can be retried. A successful proof is followed by
+the final transaction, where `challenged -> active` and device activation are
+committed atomically.
+
+The signature and nonce are transient and are discarded at the boundary. The
+typed issuer receives copies of canonical SPKI and its digest and returns
+metadata only. It runs outside the final immediate transaction; that
+transaction revalidates state/version and uses CAS so concurrent completion
+has one winner.
+
+After proof succeeds, `CompleteEnrollment` calls a local bounded
+`CertificateIssuer` with the challenge's stored public-key binding and
+metadata. The issuer receives no token, nonce, proof, CSR, private key, or
+caller-provided certificate claims. The issuer result is untrusted until
+validated by the caller and must contain metadata only for this MVP. The final
+transaction takes a fresh clock reading after issuer return and re-checks
+challenge/enrollment expiry, certificate current validity, and total lifetime
+before its CAS. It then creates the device, persists certificate metadata,
+consumes the enrollment, and appends ordered audit records atomically. If
+issuer validation, audit, or commit fails, all trusted writes roll back and no
+device exists. Concurrent completion has one winner;
+losers observe a stable consumed/failed result and cannot create a second
+identity.
+
+The MVP does not deliver certificate bytes or implement CA lifecycle. It stores
+only bounded metadata such as certificate ID, issuer ID, serial, fingerprint,
+public-key digest, not-before, and not-after. `RecordCertificateRenewal`
+accepts metadata already issued and validated by a local caller, requires the
+active device and the same public-key digest, marks the previous row
+`superseded`, inserts the replacement as `active`, updates the device binding,
+and appends `certificate.renewed` in one transaction. Certificate delivery,
+real CA validation, and artifact acknowledgement remain follow-ups.
+
+#### Revocation and sessions
+
+`Authenticate` reads the device and active certificate binding inside a
+transaction and returns a sanitized identity view only when the device and
+certificate are active and current. Any missing, malformed, revoked, or
+inconsistent state fails closed. It never authorizes from a stale unlocked
+snapshot.
+
+`RegisterSession` requires an active device and records a session with the
+current device fence. `CloseSession` is idempotent and records a closed
+`SessionCloseReason` and mandatory `Actor{ID,PolicyID}`. Administrative transitions
+require the same typed actor identity. `SessionCloseReason` is restricted to
+`revoked`, `heartbeat_timeout`, `administrator`, and `protocol_error`;
+`RevocationReason` is restricted to `administrator`, `certificate`, `policy`,
+and `unknown_state`. Neither method stores transport frames or desktop
+content.
+
+`RevokeDevice` runs one immediate transaction. It changes the device to
+`revoked`, increments its monotonic fence, marks the current certificate
+revoked, inserts one immutable applied revocation, and inserts exactly one
+durable closure intent linked to that revocation for every active session. It
+does not mark sessions or sockets `closed`: a later connection owner must
+deliver and apply each intent. Repeated or concurrent revocation is
+idempotent: the exact actor/policy/reason returns the same revocation and
+intents, while incompatible values return a typed conflict without mutation.
+New
+authentication and new sessions fail closed immediately. Certificate-only,
+session-only, lease/reclaim, and universal operation-ledger revocation are
+follow-up work.
+
+`PendingClosureIntents` returns only bounded IDs, device/session IDs, fence,
+reason, and timestamps. Applying an intent and proving live socket closure is
+outside this MVP; no local database row may claim that a remote socket was
+closed without that later evidence.
+
+#### Audit boundary
+
+Audit is an allowlisted append-only relation with a durable monotonic sequence.
+Each event stores event ID,
+created time, event kind, aggregate type/ID, device/session/enrollment IDs,
+request ID, outcome/reason, and bounded digest/reference fields. It does not
+accept a free-form JSON payload, screen data, accessibility data, typed text,
+CSR, token, nonce, proof, certificate bytes, private key, provider key, or
+arbitrary arguments. Audit inputs are validated before the transaction.
+
+SQLite triggers reject every audit update and delete. Audit insertion is part
+of the same transaction as the state transition. A rejected or failed audit
+write rolls back the transition. Audit reads return copies of sanitized
+metadata and never reconstruct secrets. Retention, export, signatures, and
+cross-store audit replication are follow-ups.
+
+The implementation emits ordered events for creation, challenge issuance,
+challenge consumption/failure/expiry, enrollment consumption/failure/expiry,
+certificate issuance/renewal/revocation, device activation/revocation, session
+registration/closure, and each requested closure intent. Every emitted event
+carries the persisted actor and policy identity, including
+session registration. An unknown token is refused before any secret-bearing
+attribution or durable audit record exists; the refusal is intentionally not
+attributable or durable.
+
+#### Persistence and recovery guarantees
+
+The store uses `modernc.org/sqlite`, a path-safe file DSN, WAL,
+`foreign_keys=ON`, `busy_timeout`, `synchronous=FULL`, and `_txlock=immediate`.
+It limits the store to one database connection, uses context cancellation,
+and runs schema v1 setup transactionally. This new package creates v1, accepts
+v1 again after reopen, and rejects corrupt or future versions; it does not claim
+migrations from versions that do not exist. A future migration runner must
+start from v1. Foreign keys, checks, unique indexes,
+and append-only triggers are verified at open.
+
+The injected clock is read at explicit transition points; tests use a fixed
+clock. Entropy is injected and must satisfy `io.ReadFull` for every 32-byte
+secret. Enrollment lifetime is capped at 15 minutes (10-minute default) and
+challenge lifetime at two minutes. Restart/reopen tests prove that a consumed
+token cannot issue another challenge, an issued nonce cannot be recovered,
+and a consumed/failed challenge cannot be replayed. SQLite rollback tests
+prove that issuer errors leave the challenge pending and invalid proof
+performs a terminal failed CAS. Certificate metadata must be current at
+`now` and within its maximum lifetime.
+
+The package deliberately does not implement CSR transport, certificate DER,
+delivery acknowledgement, certificate bytes, real CA interaction, closure
+delivery lifecycle, session
+leases/reclaim/recovery, a universal operation ledger, or certificate/session
+scoped revocation. Those concerns must be separate, bounded follow-up issues
+with their own design, review, audit, tests, and evidence. They must not be
+reintroduced by expanding this section or by hidden fallback behavior.
+
+#### Required local evidence
+
+The focused test suite currently covers real Ed25519 and ECDSA P-256
+proof-of-possession; plaintext and decoded transient-secret non-persistence;
+issuer retry and the post-issuer expiry check; certificate and enrollment
+bounds; secure parent and symlink rejection; binding-mismatch terminal state;
+typed actor, platform, architecture, and operation-specific reason validation;
+revoked authentication; certificate renewal and supersession;
+revocation/intents and immutable audit sequence; rollback and restart/
+concurrency checks; and schema v1 creation, reopen, future/corrupt rejection,
+critical-trigger/index verification, and private files. These are local
+implementation tests only; they do not claim CSR transport, WSS, DER
+delivery/acknowledgement, installation, or client-real desktop evidence.
+
+The required commands are `gofmt`,
+`go test -count=1 ./internal/remotedevice`,
+`go test -race -count=1 ./internal/remotedevice`,
+`go vet ./internal/remotedevice`, `git diff --check`, and the Hugo build.
+The result is reported as local evidence tied to the exact reviewed worktree;
+it is not a commit, push, PR, merge, installation, deployment, or client-real
+claim.
 ## Decisions
 
 ### 1. Connection and protocol
@@ -73,20 +370,46 @@ refusals, never best-effort execution.
 
 ### 2. One-time enrollment and persistent identity
 
-Enrollment is an explicit administrative action:
+Enrollment is an explicit administrative action in this five-step ceremony:
 
 1. The control plane creates a short-lived, single-use enrollment record for a
    named device and intended platform.
-2. The new agent generates its private key locally and sends a certificate
-   signing request plus the one-time enrollment proof over the tailnet.
-3. The control plane sends an X.509 challenge containing a fresh nonce and
-   challenge context. The agent signs it with the generated private key.
-4. The control plane verifies proof of private-key possession, the enrollment
-   record, platform declaration, and certificate policy before issuing the
-   device certificate.
-5. The enrollment record is consumed. Reuse, replay, expiration, a mismatched
-   device, or a failed challenge terminates enrollment and does not create a
-   partially trusted device.
+2. The new agent generates its private key locally and presents the one-time
+   enrollment token and bounded PKCS#10 DER CSR over the tailnet. Before any
+   challenge exists, the control plane parses the CSR, verifies its
+   self-signature, accepts only Ed25519 or P-256, derives the canonical SPKI
+   DER and its SHA-256 digest, and in one immediate transaction authenticates
+   the token, atomically persists identical `verified_public_key_spki_der` and
+   `verified_public_key_digest` values on the enrollment and challenge, and
+   issues the fresh nonce and challenge context.
+3. The agent signs the challenge with its generated private key. The control
+   plane verifies proof of possession against the exact token-authenticated
+   context and stored public-key binding; activation preflight only
+   revalidates that stored binding and never reparses or accepts a new CSR.
+   After a process restart, it reconstructs `CertificateIssueRequest` from
+   both locked enrollment/challenge SPKI DER values and their digests, with no
+   CSR, before invoking the issuer. Proof checks are mandatory and precede
+   issuance.
+4. Only after those checks succeed, the control plane invokes the bounded
+   `CertificateIssuer` outside SQLite and validates the returned certificate
+   DER/chain, key binding, metadata, policy, validity, and absence of private
+   key material. The output remains untrusted until the final transaction.
+5. Before the final transaction, the activation call's transient response
+   owner generates exactly 32 random acknowledgement-nonce bytes with
+   `io.ReadFull` and computes the domain-separated digest. It fails without
+   opening a transaction if entropy is unavailable or short; the final
+   transaction derives the fixed expiry from its commit-time clock.
+   The control plane then uses one immediate `activate_device` transaction to
+   revalidate locked state, increment the successful attempt, store certificate
+   metadata as `issued -> active`, consume challenge and enrollment, activate
+   the device, create the pending public delivery artifact containing only the
+   nonce digest/expiry, store the operation result, and append exactly
+   `challenge.verified`, `certificate.issued`, `challenge.consumed`,
+   `enrollment.consumed`, `device.enrolled`, `device.activated`,
+   `certificate.delivery_created`, `operation.applied`, in that order. Only
+   after commit may the response owner serialize the artifact and raw nonce;
+   rollback, cancellation, failure, or response completion drops/zeroes the
+   raw nonce and persists no partial identity.
 
 The private key and device identity are persistent across reconnects and
 restarts. They are stored using the platform’s protected local facility and
@@ -136,10 +459,13 @@ lease is no longer valid.
 Revocation is fail-closed and takes effect in this order: the control plane
 marks the device, grant, or session unavailable and rejects new work
 immediately; it then sends a typed revocation event to each connected agent.
-Connected agents must acknowledge the event, stop in-flight work, and close
-the affected session. A missing acknowledgement does not extend a lease and
-closes the session. A partitioned agent cannot receive the event, so its
-monotonic lease is the upper bound: it stops in-flight work at lease expiry.
+Connected agents must acknowledge the event, stop in-flight work, and use the
+same-session, same-fence closure intent. The live acknowledgement and
+`apply_closure` transaction are the one ordinary-revocation path to durable
+`revoking -> closed`; a missing acknowledgement does not extend a lease and
+does not by itself record `session.closed`. A partitioned agent cannot receive
+the event, so its monotonic lease is the upper bound: it stops in-flight work
+at lease expiry and the separate recovery/expiry rules apply.
 No mutating request is queued or replayed after revocation, lease expiry,
 disconnect, or reconnect. If revocation state is unavailable, new work is
 refused and active work is stopped at its lease boundary.
@@ -421,7 +747,7 @@ reduce authority when it cannot establish its preconditions.
 | Asset | Trust boundary | Threat | Mitigation | Fail-closed behavior |
 | --- | --- | --- | --- | --- |
 | Device private key and identity | Agent protected storage ↔ control plane CA | Theft, export, replay, or impersonation | Generate locally; protected storage; X.509 proof of possession; one-time enrollment; certificate policy | Failed proof, missing key, or invalid certificate prevents session creation |
-| Enrollment record | Administrator ↔ enrollment service ↔ new agent | Brute force, replay, wrong-device enrollment | Short-lived single-use record bound to device/platform; nonce challenge; consume atomically | Reuse, expiry, mismatch, or challenge failure creates no identity |
+| Enrollment record | Administrator ↔ enrollment service ↔ new agent | Brute force, replay, wrong-device enrollment | Short-lived single-use record bound to device/platform; locked-row token digest verification before challenge and again before activation; nonce challenge; consume atomically | Missing, wrong, expired enrollment, replayed, or mismatched token, or challenge failure creates no identity or partial trusted state |
 | WSS session | Agent ↔ Tailscale-only endpoint | MITM, endpoint substitution, public exposure, downgrade | Outbound-only tailnet route; TLS validation; exact `atenea.remote.v1`; bounded frames; ACLs | No tailnet route, TLS failure, wrong subprotocol, or unknown version closes the socket |
 | Active authorization | Control-plane policy/grants ↔ agent | Stale grant, confused deputy, cross-device request | Server-owned grant reference, device/session binding, mode and deadline on every request | Missing, expired, mismatched, or unreadable grant returns typed refusal |
 | Revocation state | CA/policy store ↔ session registry ↔ agent | Revoked device continues operating | Check before authorization; connected-agent acknowledgement; active socket closure; agent-enforced monotonic request lease of at most 5 seconds | Unknown state denies new work immediately; connected work stops on acknowledgement and partitioned work stops no later than lease expiry |
@@ -492,8 +818,10 @@ planned and unvalidated.
 
 ## Unresolved evidence and follow-up decisions
 
-The design is decision-complete for this ADR, but implementation evidence is
-intentionally unresolved:
+The high-level ADR direction is recorded. The Issue #94 design may be marked
+decision-complete only after its documented design gates pass; this writer step
+does not claim that approval. Implementation and runtime evidence remain
+absent, and the following evidence remains unresolved:
 
 - No agent exists here that proves the Windows C#/.NET 10, macOS Swift, or
   Linux Rust targets.
@@ -507,7 +835,9 @@ intentionally unresolved:
 - The exact macOS versions, Linux distributions, Tailscale ACL layout,
   certificate rotation schedule, audit retention, and sensitive-surface
   classifier remain implementation details to resolve before the relevant
-  Stage 1 or Stage 2 exit evidence can be claimed.
+  Stage 1 or Stage 2 exit evidence can be claimed; the Issue #94 implementation
+  must also turn the explicit token, digest, verifier, ledger, recovery, and
+  audit rules above into code and tests.
 - The semantics and outcome verification for each native application need
   client-real fixtures; an accepted command or captured screen alone is not
   proof of the requested UI result.
