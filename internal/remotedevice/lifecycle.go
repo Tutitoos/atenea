@@ -47,6 +47,27 @@ type AuthenticateRequest struct {
 	RequestID       string
 }
 
+// AuthenticateAndRegisterSessionRequest combines certificate authentication
+// and session admission.  The registry evaluates all identity material and
+// creates the session while holding the same immediate SQLite transaction;
+// callers cannot authorize from a snapshot that can be renewed or revoked
+// before registration.
+type AuthenticateAndRegisterSessionRequest struct {
+	SessionID       string
+	DeviceID        string
+	CertificateID   string
+	Fingerprint     string
+	PublicKeyDigest []byte
+	Platform        Platform
+	Architecture    Architecture
+	Actor           Actor
+	RequestID       string
+}
+
+// ErrSessionConflict means that the requested session identifier already has
+// a durable history.  Session IDs are never reopened or rebound.
+var ErrSessionConflict = errors.New("remote device: session already exists")
+
 type Session struct {
 	ID        string             `json:"id"`
 	DeviceID  string             `json:"device_id"`
@@ -580,6 +601,79 @@ func (s *Store) Authenticate(ctx context.Context, req AuthenticateRequest) (Devi
 		return Device{}, err
 	}
 	return device, nil
+}
+
+// AuthenticateAndRegisterSession authenticates the current device
+// certificate and registers a new active session as one atomic transition.
+// The immediate transaction is important: certificate renewal and device
+// revocation cannot interleave between identity validation and session
+// insertion.  An existing identifier is always rejected, including a closed
+// tombstone; it is never an idempotent recovery path.
+func (s *Store) AuthenticateAndRegisterSession(ctx context.Context, req AuthenticateAndRegisterSessionRequest) (Session, error) {
+	if err := s.ensureOpen(); err != nil {
+		return Session{}, err
+	}
+	if err := validateID(req.SessionID, "session id"); err != nil {
+		return Session{}, err
+	}
+	if err := validateID(req.DeviceID, "device id"); err != nil {
+		return Session{}, err
+	}
+	if err := validateActor(req.Actor); err != nil {
+		return Session{}, err
+	}
+	requestID, err := validateRequestID(req.RequestID)
+	if err != nil {
+		return Session{}, err
+	}
+	// A new admission must always prove both certificate bindings.  Keeping
+	// these checks at the combined boundary prevents callers from accidentally
+	// selecting the permissive legacy Authenticate API for session creation.
+	if req.Fingerprint == "" || len(req.PublicKeyDigest) == 0 {
+		return Session{}, ErrAuthentication
+	}
+
+	identityDigest := append([]byte(nil), req.PublicKeyDigest...)
+	defer wipeBytes(identityDigest)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return Session{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The SQLite DSN uses _txlock=immediate.  Take the clock only after the
+	// transaction has acquired that lock so expiry and audit timestamps belong
+	// to the same serialization point as renewal and revocation.
+	now := s.currentTime()
+	device, err := readDevice(ctx, tx, req.DeviceID, now)
+	if err != nil {
+		return Session{}, ErrAuthentication
+	}
+	if subtleString(device.Certificate.Fingerprint, req.Fingerprint) != 1 ||
+		(req.CertificateID != "" && subtleString(device.Certificate.ID, req.CertificateID) != 1) ||
+		subtleCompare(device.Certificate.PublicKeyDigest, identityDigest) != 1 {
+		return Session{}, ErrAuthentication
+	}
+	if (req.Platform != "" && req.Platform != device.Platform) ||
+		(req.Architecture != "" && req.Architecture != device.Architecture) {
+		return Session{}, ErrAuthentication
+	}
+
+	var existingID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id=?`, req.SessionID).Scan(&existingID); err == nil {
+		return Session{}, fmt.Errorf("%w: %s", ErrSessionConflict, req.SessionID)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Session{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(id,device_id,state,fence,reason,created_at) VALUES (?,?, 'active',?,'',?)`, req.SessionID, req.DeviceID, device.Fence, now.UnixNano()); err != nil {
+		return Session{}, err
+	}
+	if err := insertAudit(ctx, tx, auditEvent{Kind: EventSessionRegistered, AggregateType: "session", AggregateID: req.SessionID, DeviceID: req.DeviceID, SessionID: req.SessionID, RequestID: requestID, Actor: req.Actor, Outcome: OutcomeAllow, Reason: ReasonRegistered, CreatedAt: now}); err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Session{}, err
+	}
+	return Session{ID: req.SessionID, DeviceID: req.DeviceID, State: "active", Fence: device.Fence, CreatedAt: now}, nil
 }
 
 func (s *Store) RegisterSession(ctx context.Context, req RegisterSessionRequest) (Session, error) {
