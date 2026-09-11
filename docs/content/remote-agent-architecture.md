@@ -7,15 +7,20 @@ weight: 8
 # ADR: Remote agent architecture
 
 **Issues:** #88 (architecture), #90 (protocol), #94 (device registry), #102
-(revocation acknowledgement)
+(revocation acknowledgement), #104 (closure-intent application)
 **Status:** The existing `atenea.remote.v1` schema contract and fixtures are
 merged. Issue #102 adds the versioned v1.1 revocation-acknowledgement
-extension; its implementation is local/CI evidence until its PR is merged.
+extension, merged through PR #103 at reviewed head
+`edf06a80f2e2440329a899884997cdd83e59c095` (merge commit
+`412ba6ccd453f3adf0e0226a87f0715620694c3b`).
 The coordinator-side registry slice from Issue #94 is merged
 through PR #95: reviewed head
 `ec605455fc3f36f8917a5cf64328fcf0faf2d64d`, merged as
 `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. The broader remote-agent
 architecture remains planned.
+Issue #104 extends that registry locally with atomic application of one
+acknowledged closure intent; its implementation remains local/CI evidence
+until its own reviewed PR is merged.
 **Implementation:** `internal/remotedevice` is implemented and merged as a
 local registry package. Its focused/full local validation and the required PR
 checks passed for the reviewed head. No live certificate authority or
@@ -111,6 +116,14 @@ small:
   bounded replacement metadata atomically when the device and key binding are
   still current.
 - `PendingClosureIntents` lists durable work for a later connection owner.
+- `ApplyClosureIntent` accepts one validated event acknowledgement and applies
+  its exact device/session/fence binding atomically. It closes an active
+  session, applies the intent, and records ordered bounded audit events; an
+  already-closed session retains its original reason and timestamp. A matching
+  terminal replay, including a fresh request ID, is read-only and returns
+  stable timestamps with no duplicate audits. Its `Actor` is the original
+  administrative authority read from the durable revocation, not a peer
+  identity or socket owner; the wire `event_ack` carries no actor.
 - `Audit` reads sanitized append-only metadata; no open payload is accepted.
 
 Request and response structs are transient views. Persistent structs contain
@@ -119,8 +132,9 @@ metadata only. No persistent type may contain a raw token, nonce, proof, CSR,
 private key, certificate bytes, diagnostic text, screen text, or arbitrary
 payload. The package never logs secret-bearing inputs and never returns a raw
 secret from a read or retry path. Issue #94 does not implement CSR transport,
-certificate DER production or delivery, delivery acknowledgement, WSS, the
-coordinator, or an operation ledger.
+certificate DER production or delivery, WSS, the coordinator transport
+runtime, or an operation ledger. Issue #102 defines the wire acknowledgement;
+Issue #104 applies its durable closure intent in the store only.
 
 #### State machine
 
@@ -270,14 +284,26 @@ deliver and apply each intent. Repeated or concurrent revocation is
 idempotent: the exact actor/policy/reason returns the same revocation and
 intents, while incompatible values return a typed conflict without mutation.
 New
-authentication and new sessions fail closed immediately. Certificate-only,
+authentication and new sessions fail closed immediately. `ApplyClosureIntent`
+is the store-real acknowledgement transition for one of those durable
+intents; it does not accept a syntactically valid acknowledgement as
+authorization without checking the durable revocation actor and all row
+bindings. Certificate-only,
 session-only, lease/reclaim, and universal operation-ledger revocation are
 follow-up work.
 
 `PendingClosureIntents` returns only bounded IDs, device/session IDs, fence,
-reason, and timestamps. Applying an intent and proving live socket closure is
-outside this MVP; no local database row may claim that a remote socket was
-closed without that later evidence.
+reason, and timestamps. `ApplyClosureIntent` requires the intent ID to equal
+the acknowledged `event_id`, the device to remain revoked at the current
+fence, the linked revocation to remain applied, and the supplied actor to
+match the immutable revocation actor. The session must belong to that device
+and have the immediately preceding admission fence. An active session is
+closed for `revoked` before the intent becomes `applied`; an already-closed
+session is not rewritten. The intent transition and its bounded audit are
+one immediate transaction, and a matching applied replay is event-free.
+Applying the store intent still does not prove live socket closure: transport
+owner binding, redelivery, and forced socket closure remain later coordinator
+work.
 
 #### Audit boundary
 
@@ -298,7 +324,8 @@ cross-store audit replication are follow-ups.
 The implementation emits ordered events for creation, challenge issuance,
 challenge consumption/failure/expiry, enrollment consumption/failure/expiry,
 certificate issuance/renewal/revocation, device activation/revocation, session
-registration/closure, and each requested closure intent. Every emitted event
+registration/closure, each requested closure intent, and each applied closure
+intent. Every emitted event
 carries the persisted actor and policy identity, including
 session registration. An unknown token is refused before any secret-bearing
 attribution or durable audit record exists; the refusal is intentionally not
@@ -341,8 +368,9 @@ issuer retry and the post-issuer expiry check; certificate and enrollment
 bounds; secure parent and symlink rejection; binding-mismatch terminal state;
 typed actor, platform, architecture, and operation-specific reason validation;
 revoked authentication; certificate renewal and supersession;
-revocation/intents and immutable audit sequence; rollback and restart/
-concurrency checks; and schema v1 creation, reopen, future/corrupt rejection,
+revocation/intents, acknowledged intent application, and immutable audit
+sequence; rollback and restart/concurrency checks; and schema v1 creation,
+reopen, future/corrupt rejection,
 critical-trigger/index verification, and private files. These local
 implementation tests and the corresponding repository CI provide local/CI
 evidence only; they do not claim CSR transport, WSS, live CA or DER
@@ -828,7 +856,7 @@ platform, installation, deployment, or client-real claim. Every other row is
 | Live X.509 enrollment and certificate delivery | Provider-real enrollment trace, live CA/certificate validation, delivery, and acknowledgement | **Planned — not validated** |
 | Persistent coordinator registry identity | Local restart/reopen, protected-file, and no-secret-persistence tests plus required CI | **Implemented — local/CI only** |
 | Native key persistence and reconnect authentication | Client-real restart/reconnect proof with protected key handling and no key export | **Planned — not validated** |
-| Registry revocation and active-session closure intents | Local multi-handle/restart/concurrency tests proving fail-closed authentication and durable intents plus required CI | **Implemented — local/CI only** |
+| Registry revocation, acknowledged intent application, and active-session closure | Local multi-handle/restart/concurrency/rollback tests proving exact bindings, atomic session closure, terminal replay, and durable intents plus required CI | **Implemented — local/CI only** |
 | Live revocation event, socket closure, and blocked reconnect | Provider-real revocation event showing forced close and blocked reconnect | **Planned — not validated** |
 | Heartbeat and liveness deadline | Missed-heartbeat cancellation and reconnect negotiation trace | **Planned — not validated** |
 | Version/capability negotiation | Compatible and incompatible hello traces; no downgrade or silent fallback | **Planned — not validated** |
