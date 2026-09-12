@@ -670,6 +670,12 @@ func TestSessionOwnersCloseIsTerminalAndDeviceScoped(t *testing.T) {
 	}
 	owners.activate(first, remotedevice.Session{ID: first.sessionID, DeviceID: first.deviceID, Fence: 0, State: "active"})
 	owners.activate(second, remotedevice.Session{ID: second.sessionID, DeviceID: second.deviceID, Fence: 0, State: "active"})
+	if _, ok := owners.markAccepted(first); !ok {
+		t.Fatal("first owner acceptance publication failed")
+	}
+	if _, ok := owners.markAccepted(second); !ok {
+		t.Fatal("second owner acceptance publication failed")
+	}
 	intent := remotedevice.ClosureIntent{ID: "closure-one", DeviceID: "device-one", SessionID: "session-one", Fence: 1, State: "pending"}
 	if got := owners.forIntent(intent); got != first {
 		t.Fatalf("intent owner = %p, want %p", got, first)
@@ -677,11 +683,12 @@ func TestSessionOwnersCloseIsTerminalAndDeviceScoped(t *testing.T) {
 	if second.closed {
 		t.Fatal("revoking one device closed another device owner")
 	}
-	if got := owners.forDevice("device-one", 1); len(got) != 0 {
-		t.Fatalf("already revoked owner returned again: %v", got)
+	if first.closed {
+		t.Fatal("owner selection mutated first owner before delivery")
 	}
-	if got := owners.forDevice("device-two", 1); len(got) != 1 || got[0] != second {
-		t.Fatalf("device-scoped owner selection = %v", got)
+	otherIntent := remotedevice.ClosureIntent{ID: "closure-two", DeviceID: "device-two", SessionID: "session-two", Fence: 1, State: "pending"}
+	if got := owners.forIntent(otherIntent); got != second {
+		t.Fatalf("exact owner selection = %p, want %p", got, second)
 	}
 }
 
@@ -725,6 +732,95 @@ func TestSessionOwnersClosePreventsLaterReservationsAndIsIdempotent(t *testing.T
 		t.Fatal("existing owner not marked closed")
 	}
 	owners.closeAll(handler, CloseReasonTransport)
+}
+
+func TestSessionOwnerRevocationSequenceNeverWraps(t *testing.T) {
+	owners := newSessionOwners()
+	owner, ok := owners.reserve("session-sequence", "device-sequence", nil)
+	if !ok {
+		t.Fatal("reservation failed")
+	}
+	owners.activate(owner, remotedevice.Session{ID: owner.sessionID, DeviceID: owner.deviceID, Fence: 0, State: "active"})
+	if _, ok := owners.markAccepted(owner); !ok {
+		t.Fatal("owner acceptance publication failed")
+	}
+	intent := remotedevice.ClosureIntent{ID: "closure-sequence", DeviceID: owner.deviceID, SessionID: owner.sessionID, Fence: 1, State: "pending"}
+	owner.outboundSequence = maxWireSequence
+	if _, status := owners.reserveRevocationDelivery(owner, intent, remotedevice.Actor{ID: "operator", PolicyID: "policy"}); status == revocationDeliveryReserved {
+		t.Fatal("outbound sequence wrapped at protocol maximum")
+	}
+	owner.outboundSequence = 0
+	delivery, status := owners.reserveRevocationDelivery(owner, intent, remotedevice.Actor{ID: "operator", PolicyID: "policy"})
+	if status != revocationDeliveryReserved || delivery.sequence != 1 {
+		t.Fatalf("first outbound delivery = %+v status=%d", delivery, status)
+	}
+	if _, ok := owners.beginRevocationAcknowledgement(owner, 1, intent.ID, intent.Fence); ok {
+		t.Fatal("premature acknowledgement became eligible before write publication")
+	}
+	if !owners.markRevocationDelivered(owner, delivery) {
+		t.Fatal("successful write was not published to owner state")
+	}
+	owner.inboundSequence = maxWireSequence
+	if _, ok := owners.beginRevocationAcknowledgement(owner, maxWireSequence, intent.ID, intent.Fence); ok {
+		t.Fatal("inbound sequence wrapped at protocol maximum")
+	}
+}
+
+func TestRevocationWriteFailureNeverPublishesPrematureAcknowledgement(t *testing.T) {
+	serverConnections := make(chan *websocket.Conn, 1)
+	releaseServer := make(chan struct{})
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnections <- conn
+		<-releaseServer
+		_ = conn.Close()
+	}))
+	defer func() {
+		close(releaseServer)
+		server.Close()
+	}()
+	client, response, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	serverConn := <-serverConnections
+
+	handler := NewHandler(&recordingAuthenticator{}, PeerGateFunc(func(context.Context, string) bool { return true }))
+	owner, ok := handler.owners.reserve("session-write-failure", "device-write-failure", serverConn)
+	if !ok {
+		t.Fatal("owner reservation failed")
+	}
+	handler.owners.activate(owner, remotedevice.Session{ID: owner.sessionID, DeviceID: owner.deviceID, Fence: 0, State: "active"})
+	if _, ok := handler.owners.markAccepted(owner); !ok {
+		t.Fatal("owner acceptance publication failed")
+	}
+	if err := serverConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	intent := remotedevice.ClosureIntent{ID: "closure-write-failure", DeviceID: owner.deviceID, SessionID: owner.sessionID, Fence: 1, State: "pending", RevocationID: "revoke-write-failure", Reason: remotedevice.RevocationReasonAdministrator, CreatedAt: time.UnixMilli(1)}
+	if outcome := handler.deliverRevocation(owner, intent, remotedevice.Actor{ID: "operator", PolicyID: "policy"}); outcome.status != revocationDeliveryFailed {
+		t.Fatal("closed socket write unexpectedly succeeded")
+	}
+	handler.failRevocationOwner(owner, CloseReasonTransport)
+	handler.owners.mu.Lock()
+	pending := owner.pending
+	closed := owner.closed
+	terminal := owner.terminal
+	handler.owners.mu.Unlock()
+	if pending != nil || !closed || terminal != ownerTerminalRevocationPending {
+		t.Fatalf("failed write state = pending=%v closed=%v terminal=%d", pending != nil, closed, terminal)
+	}
+	if _, ok := handler.owners.beginRevocationAcknowledgement(owner, 1, intent.ID, intent.Fence); ok {
+		t.Fatal("acknowledgement became eligible after failed write")
+	}
 }
 
 func TestHandlerCloseRacingAdmissionClosesAndCleansReservedOwner(t *testing.T) {

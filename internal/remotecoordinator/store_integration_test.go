@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -45,6 +46,31 @@ type admissionBarrierStore struct {
 	entered chan struct{}
 	release <-chan struct{}
 	once    sync.Once
+}
+
+type applyRecordingStore struct {
+	*remotedevice.Store
+	entered chan struct{}
+	release <-chan struct{}
+	err     error
+	request chan remotedevice.ApplyClosureIntentRequest
+	once    sync.Once
+}
+
+func (s *applyRecordingStore) ApplyClosureIntent(ctx context.Context, request remotedevice.ApplyClosureIntentRequest) (remotedevice.ApplyClosureIntentResponse, error) {
+	if s.request != nil {
+		s.request <- request
+	}
+	if s.entered != nil {
+		s.once.Do(func() { close(s.entered) })
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	if s.err != nil {
+		return remotedevice.ApplyClosureIntentResponse{}, s.err
+	}
+	return s.Store.ApplyClosureIntent(ctx, request)
 }
 
 func (s *admissionBarrierStore) AuthenticateAndRegisterSession(ctx context.Context, request remotedevice.AuthenticateAndRegisterSessionRequest) (remotedevice.Session, error) {
@@ -209,6 +235,74 @@ func readClose(t *testing.T, conn *websocket.Conn, wantCode int, wantReason stri
 	if !errors.As(err, &closeErr) || closeErr.Code != wantCode || closeErr.Text != wantReason {
 		t.Fatalf("close = %v, want code=%d reason=%q", err, wantCode, wantReason)
 	}
+}
+
+type revokedEventInfo struct {
+	Protocol, Version, MessageType, SessionID, DeviceID string
+	Sequence                                            uint64
+	SentAt                                              int64
+	EventID, EventType                                  string
+	OccurredAt                                          int64
+	Kind, Scope, RevocationID, Reason                   string
+	EffectiveAt, Fence                                  int64
+}
+
+func readRevokedEvent(t *testing.T, conn *websocket.Conn) revokedEventInfo {
+	t.Helper()
+	messageType, raw, err := conn.ReadMessage()
+	if err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("revoked event read: type=%d err=%v", messageType, err)
+	}
+	if err := remoteprotocol.New().Validate(raw); err != nil {
+		t.Fatalf("revoked event validation: %v", err)
+	}
+	var event struct {
+		Protocol  string `json:"protocol"`
+		Version   string `json:"version"`
+		Type      string `json:"message_type"`
+		SessionID string `json:"session_id"`
+		DeviceID  string `json:"device_id"`
+		Sequence  uint64 `json:"sequence"`
+		SentAt    int64  `json:"sent_at"`
+		Payload   struct {
+			EventID    string `json:"event_id"`
+			EventType  string `json:"event_type"`
+			OccurredAt int64  `json:"occurred_at"`
+			Data       struct {
+				Kind         string `json:"kind"`
+				Scope        string `json:"scope"`
+				RevocationID string `json:"revocation_id"`
+				Reason       string `json:"reason"`
+				EffectiveAt  int64  `json:"effective_at"`
+				Fence        int64  `json:"fence"`
+			} `json:"data"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Protocol != remoteprotocol.Subprotocol || event.Version != remotedevice.ProtocolVersion || event.Type != "event" || event.SessionID == "" || event.DeviceID == "" || event.Payload.EventID == "" || event.Payload.EventType != "revoked" || event.Payload.OccurredAt < 0 || event.Payload.Data.Kind != "revoked" || event.Payload.Data.Scope != "session" || event.Payload.Data.RevocationID == "" || event.Payload.Data.Reason == "" || event.Payload.Data.EffectiveAt < 0 || event.Payload.Data.Fence < 1 {
+		t.Fatalf("revoked event fields are not exact: %+v", event)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := envelope["request_id"]; ok {
+		t.Fatal("revoked event unexpectedly contains request_id")
+	}
+	return revokedEventInfo{Protocol: event.Protocol, Version: event.Version, MessageType: event.Type, SessionID: event.SessionID, DeviceID: event.DeviceID, Sequence: event.Sequence, SentAt: event.SentAt, EventID: event.Payload.EventID, EventType: event.Payload.EventType, OccurredAt: event.Payload.OccurredAt, Kind: event.Payload.Data.Kind, Scope: event.Payload.Data.Scope, RevocationID: event.Payload.Data.RevocationID, Reason: event.Payload.Data.Reason, EffectiveAt: event.Payload.Data.EffectiveAt, Fence: event.Payload.Data.Fence}
+}
+
+func revokedEventAckJSON(sessionID, deviceID, eventID string, sequence uint64, fence int64) []byte {
+	ack := map[string]any{
+		"protocol": remoteprotocol.Subprotocol, "version": remotedevice.ProtocolVersion,
+		"message_type": "event_ack", "session_id": sessionID, "device_id": deviceID,
+		"sequence": sequence, "sent_at": 1,
+		"payload": map[string]any{"kind": "event_ack", "event_type": "revoked", "event_id": eventID, "fence": fence, "acknowledged_at": 1},
+	}
+	raw, _ := json.Marshal(ack)
+	return raw
 }
 
 func TestStoreBackedWSSAcceptAndDenialsHaveNoDurableSession(t *testing.T) {
@@ -501,23 +595,37 @@ func TestStoreBackedRevocationClosesOnlyLinkedOwner(t *testing.T) {
 	if len(result.Intents) != 1 || result.Intents[0].SessionID != "session-revocation" || result.Intents[0].State != "pending" {
 		t.Fatalf("revocation intents = %+v", result.Intents)
 	}
+	event := readRevokedEvent(t, conn)
+	if event.Sequence != 1 || event.EventID != result.Intents[0].ID || event.DeviceID != "device-1" || event.SessionID != "session-revocation" || event.RevocationID != result.Revocation.ID || event.Reason != string(result.Intents[0].Reason) || event.Fence != result.Intents[0].Fence || event.EffectiveAt != event.OccurredAt {
+		t.Fatalf("revoked event = %+v", event)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-revocation", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
 	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
 
 	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(intents) != 1 || intents[0].State != "pending" {
+	if len(intents) != 0 {
 		t.Fatalf("pending intents = %+v", intents)
 	}
 	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
+	var applied, closed int
 	for _, event := range events {
-		if event.EventKind == remotedevice.EventClosureApplied || event.EventKind == remotedevice.EventSessionClosed {
-			t.Fatalf("transport close wrote durable acknowledgement: %+v", event)
+		if event.EventKind == remotedevice.EventClosureApplied {
+			applied++
 		}
+		if event.EventKind == remotedevice.EventSessionClosed && event.SessionID == "session-revocation" && event.Reason == remotedevice.ReasonRevoked {
+			closed++
+		}
+	}
+	if applied != 1 || closed != 1 {
+		t.Fatalf("durable acknowledgement evidence applied=%d closed=%d", applied, closed)
 	}
 
 	reconnect := dialWithCertificate(t, server, material, material.clientTLS)
@@ -525,6 +633,948 @@ func TestStoreBackedRevocationClosesOnlyLinkedOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	readClose(t, reconnect, websocket.ClosePolicyViolation, CloseReasonAuthentication)
+}
+
+func TestStoreBackedImmediateAcknowledgementWaitsForDeliveryPublication(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	writeEntered := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	var writeOnce sync.Once
+	applyEntered := make(chan struct{})
+	authenticator := &applyRecordingStore{Store: store, entered: applyEntered}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	handler.options.afterRevocationWrite = func() {
+		writeOnce.Do(func() { close(writeEntered) })
+		<-releaseWrite
+	}
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-immediate-ack", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	revokeDone := make(chan error, 1)
+	go func() {
+		_, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-immediate-ack"})
+		revokeDone <- err
+	}()
+	select {
+	case <-writeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation did not reach in-flight write barrier")
+	}
+	event := readRevokedEvent(t, conn)
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-immediate-ack", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-applyEntered:
+		t.Fatal("ACK applied before delivery publication")
+	default:
+	}
+	close(releaseWrite)
+	select {
+	case err := <-revokeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation did not finish after write publication")
+	}
+	select {
+	case <-applyEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("legitimate immediate ACK did not reach apply")
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreBackedRevocationWaitsForAcceptancePublication(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	acceptEntered := make(chan struct{})
+	releaseAccept := make(chan struct{})
+	var acceptOnce sync.Once
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	handler.options.beforeAcceptanceWrite = func() {
+		acceptOnce.Do(func() { close(acceptEntered) })
+		<-releaseAccept
+	}
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-accept-order", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-acceptEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("acceptance did not reach deterministic barrier")
+	}
+	owner := func() *sessionOwner {
+		handler.owners.mu.Lock()
+		defer handler.owners.mu.Unlock()
+		return handler.owners.owners["session-accept-order"]
+	}()
+	if owner == nil {
+		t.Fatal("owner was not reserved before acceptance")
+	}
+	handler.owners.mu.Lock()
+	acceptedBeforeWrite := owner.accepted
+	queuedBeforeWrite := owner.queued
+	handler.owners.mu.Unlock()
+	if acceptedBeforeWrite || queuedBeforeWrite != nil {
+		t.Fatalf("owner state before accept accepted=%v queued=%+v", acceptedBeforeWrite, queuedBeforeWrite)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	revokeDone := make(chan remotedevice.RevokeDeviceResponse, 1)
+	revokeErr := make(chan error, 1)
+	go func() {
+		result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-accept-order"})
+		revokeDone <- result
+		revokeErr <- err
+	}()
+	var result remotedevice.RevokeDeviceResponse
+	select {
+	case result = <-revokeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation did not complete while acceptance was paused")
+	}
+	if err := <-revokeErr; err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revocation result = %+v err=%v", result, err)
+	}
+	handler.owners.mu.Lock()
+	acceptedAfterRevoke := owner.accepted
+	queuedAfterRevoke := owner.queued
+	pendingAfterRevoke := owner.pending
+	handler.owners.mu.Unlock()
+	if acceptedAfterRevoke || queuedAfterRevoke == nil || pendingAfterRevoke != nil {
+		t.Fatalf("owner state while accept paused accepted=%v queued=%+v pending=%+v", acceptedAfterRevoke, queuedAfterRevoke, pendingAfterRevoke)
+	}
+	close(releaseAccept)
+	messageType, raw, err := conn.ReadMessage()
+	if err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	var acceptance struct {
+		Sequence uint64 `json:"sequence"`
+	}
+	if err := json.Unmarshal(raw, &acceptance); err != nil {
+		t.Fatal(err)
+	}
+	if acceptance.Sequence != 0 {
+		t.Fatalf("acceptance sequence = %d, want 0", acceptance.Sequence)
+	}
+	event := readRevokedEvent(t, conn)
+	if event.Sequence != 1 || event.EventID != result.Intents[0].ID || event.SessionID != "session-accept-order" || event.DeviceID != "device-1" {
+		t.Fatalf("post-accept revoked event = %+v", event)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-accept-order", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreBackedAcceptanceWriteFailureNeverPublishesOwner(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	acceptEntered := make(chan struct{})
+	releaseAccept := make(chan struct{})
+	var acceptOnce sync.Once
+	var releaseOnce sync.Once
+	cleanup := make(chan remotedevice.Session, 1)
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }), WithSessionCleanupHook(func(session remotedevice.Session, cleanupErr error) {
+		if cleanupErr == nil {
+			cleanup <- session
+		}
+	}))
+	handler.options.beforeAcceptanceWrite = func() {
+		acceptOnce.Do(func() { close(acceptEntered) })
+		<-releaseAccept
+	}
+	defer func() { releaseOnce.Do(func() { close(releaseAccept) }) }()
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-accept-write-failure", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-acceptEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("acceptance did not reach deterministic barrier")
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	revokeDone := make(chan struct {
+		result remotedevice.RevokeDeviceResponse
+		err    error
+	}, 1)
+	go func() {
+		result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-accept-write-failure"})
+		revokeDone <- struct {
+			result remotedevice.RevokeDeviceResponse
+			err    error
+		}{result: result, err: err}
+	}()
+	var revoke struct {
+		result remotedevice.RevokeDeviceResponse
+		err    error
+	}
+	select {
+	case revoke = <-revokeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation did not complete while acceptance was paused")
+	}
+	if revoke.err != nil || len(revoke.result.Intents) != 1 {
+		t.Fatalf("revocation result = %+v err=%v", revoke.result, revoke.err)
+	}
+	handler.owners.mu.Lock()
+	owner := handler.owners.owners["session-accept-write-failure"]
+	accepted := owner != nil && owner.accepted
+	queued := owner != nil && owner.queued != nil
+	handler.owners.mu.Unlock()
+	if owner == nil || accepted || !queued {
+		t.Fatalf("owner before failed accept = present=%v accepted=%v queued=%v", owner != nil, accepted, queued)
+	}
+	// Closing the server-side transport makes the subsequent accept
+	// WriteMessage fail deterministically instead of allowing the kernel to
+	// buffer a frame after the peer has gone away.
+	if err := owner.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	releaseOnce.Do(func() { close(releaseAccept) })
+	select {
+	case session := <-cleanup:
+		if session.ID != "session-accept-write-failure" {
+			t.Fatalf("cleaned session = %+v", session)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed acceptance did not terminate and clean up")
+	}
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].State != "pending" {
+		t.Fatalf("failed acceptance changed intent: %+v", intents)
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, audit := range events {
+		if audit.EventKind == remotedevice.EventClosureApplied {
+			t.Fatalf("failed acceptance produced closure.applied audit: %+v", audit)
+		}
+	}
+}
+
+func TestStoreBackedRevocationAcknowledgementPreservesSessionClosedBetweenEventAndAck(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-close-between", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-close-between"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	closed, err := store.CloseSession(context.Background(), remotedevice.CloseSessionRequest{
+		SessionID: "session-close-between", DeviceID: "device-1", Actor: actor,
+		Reason: remotedevice.SessionCloseReasonAdministrator, RequestID: "close-between",
+	})
+	if err != nil || closed.State != "closed" || closed.Reason != remotedevice.SessionCloseReasonAdministrator || closed.ClosedAt.IsZero() {
+		t.Fatalf("session closed between event and ack = %+v err=%v", closed, err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-close-between", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 0 {
+		t.Fatalf("closed-between intent remains pending: %+v", intents)
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var administratorClosed, revokedClosed, applied int
+	for _, audit := range events {
+		if audit.EventKind == remotedevice.EventSessionClosed && audit.SessionID == "session-close-between" {
+			switch audit.Reason {
+			case remotedevice.ReasonAdministrator:
+				administratorClosed++
+			case remotedevice.ReasonRevoked:
+				revokedClosed++
+			}
+			if audit.Actor != actor {
+				t.Fatalf("session.closed actor = %+v, want original actor %+v", audit.Actor, actor)
+			}
+		}
+		if audit.EventKind == remotedevice.EventClosureApplied && audit.SessionID == "session-close-between" {
+			if audit.Actor != actor {
+				t.Fatalf("closure.applied actor = %+v, want durable actor %+v", audit.Actor, actor)
+			}
+			applied++
+		}
+	}
+	if administratorClosed != 1 || revokedClosed != 0 || applied != 1 {
+		t.Fatalf("closed-between evidence administrator=%d revoked=%d applied=%d", administratorClosed, revokedClosed, applied)
+	}
+}
+
+func TestStoreBackedRevocationAcknowledgementRejectsInvalidBindings(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func([]byte, uint64, string, int64) (int, []byte)
+		wantCode   int
+		wantReason string
+	}{
+		{name: "foreign event", wantCode: websocket.ClosePolicyViolation, wantReason: CloseReasonPolicy, mutate: func(_ []byte, sequence uint64, _ string, fence int64) (int, []byte) {
+			return websocket.TextMessage, revokedEventAckJSON("session-revocation-invalid", "device-1", "closure-foreign", sequence, fence)
+		}},
+		{name: "foreign session", wantCode: websocket.ClosePolicyViolation, wantReason: CloseReasonPolicy, mutate: func(_ []byte, sequence uint64, eventID string, fence int64) (int, []byte) {
+			return websocket.TextMessage, revokedEventAckJSON("session-foreign", "device-1", eventID, sequence, fence)
+		}},
+		{name: "foreign device", wantCode: websocket.ClosePolicyViolation, wantReason: CloseReasonPolicy, mutate: func(_ []byte, sequence uint64, eventID string, fence int64) (int, []byte) {
+			return websocket.TextMessage, revokedEventAckJSON("session-revocation-invalid", "device-foreign", eventID, sequence, fence)
+		}},
+		{name: "out of order", wantCode: websocket.ClosePolicyViolation, wantReason: CloseReasonPolicy, mutate: func(_ []byte, _ uint64, eventID string, fence int64) (int, []byte) {
+			return websocket.TextMessage, revokedEventAckJSON("session-revocation-invalid", "device-1", eventID, 2, fence)
+		}},
+		{name: "malformed", wantCode: websocket.ClosePolicyViolation, wantReason: CloseReasonEnvelope, mutate: func(_ []byte, _ uint64, _ string, _ int64) (int, []byte) {
+			return websocket.TextMessage, []byte(`{"protocol":`)
+		}},
+		{name: "binary", wantCode: websocket.CloseUnsupportedData, wantReason: CloseReasonBinary, mutate: func(raw []byte, _ uint64, _ string, _ int64) (int, []byte) {
+			return websocket.BinaryMessage, raw
+		}},
+		{name: "invalid utf8", wantCode: websocket.CloseInvalidFramePayloadData, wantReason: CloseReasonInvalidUTF8, mutate: func(_ []byte, _ uint64, _ string, _ int64) (int, []byte) {
+			return websocket.TextMessage, []byte{0xc3, 0x28}
+		}},
+		{name: "oversized", wantCode: websocket.CloseMessageTooBig, wantReason: CloseReasonOversize, mutate: func(_ []byte, _ uint64, _ string, _ int64) (int, []byte) {
+			return websocket.TextMessage, bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			material := newTLSMaterial(t)
+			store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+			handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+			server := startTLSServer(t, handler, material)
+			conn := dialWithCertificate(t, server, material, material.clientTLS)
+			if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-revocation-invalid", "linux", "x86_64")); err != nil {
+				t.Fatal(err)
+			}
+			if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+				t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+			}
+			result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-invalid-" + strings.ReplaceAll(test.name, " ", "-")})
+			if err != nil || len(result.Intents) != 1 {
+				t.Fatalf("revoke result = %+v err=%v", result, err)
+			}
+			event := readRevokedEvent(t, conn)
+			messageType, payload := test.mutate(revokedEventAckJSON("session-revocation-invalid", "device-1", event.EventID, 1, event.Fence), event.Sequence, event.EventID, event.Fence)
+			if err := conn.WriteMessage(messageType, payload); err != nil {
+				t.Fatal(err)
+			}
+			_, _, closeErr := conn.ReadMessage()
+			var websocketClose *websocket.CloseError
+			if !errors.As(closeErr, &websocketClose) {
+				t.Fatalf("invalid acknowledgement close = %v", closeErr)
+			}
+			if websocketClose.Code != test.wantCode || websocketClose.Text != test.wantReason {
+				t.Fatalf("%s close = code=%d reason=%q, want code=%d reason=%q", test.name, websocketClose.Code, websocketClose.Text, test.wantCode, test.wantReason)
+			}
+			intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(intents) != 1 || intents[0].State != "pending" {
+				t.Fatalf("invalid acknowledgement changed intents: %+v", intents)
+			}
+			events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if event.EventKind == remotedevice.EventClosureApplied || event.EventKind == remotedevice.EventSessionClosed {
+					t.Fatalf("invalid acknowledgement wrote durable closure evidence: %+v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestStoreBackedRevocationAcknowledgementTimeoutClosesIncompleteFrameAndStaysPending(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }), WithAcknowledgementTimeout(20*time.Millisecond))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-ack-timeout", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-ack-timeout"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	_ = readRevokedEvent(t, conn)
+	// A non-FIN text frame gives Gorilla a message reader, then deliberately
+	// withholds its continuation. The event deadline must bound ReadAll rather
+	// than waiting indefinitely for the fragmented body.
+	mask := [4]byte{0x11, 0x22, 0x33, 0x44}
+	payload := byte('x') ^ mask[0]
+	frame := []byte{0x01, 0x81, mask[0], mask[1], mask[2], mask[3], payload}
+	if _, err := conn.UnderlyingConn().Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonTimeout)
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].State != "pending" {
+		t.Fatalf("timeout changed durable intent: %+v", intents)
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, audit := range events {
+		if audit.EventKind == remotedevice.EventClosureApplied || audit.EventKind == remotedevice.EventSessionClosed {
+			t.Fatalf("timeout wrote durable closure evidence: %+v", audit)
+		}
+	}
+}
+
+func TestStoreBackedRevocationAcknowledgementApplyUsesDurableActorAndBoundedRequest(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	requests := make(chan remotedevice.ApplyClosureIntentRequest, 1)
+	authenticator := &applyRecordingStore{Store: store, request: requests}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }), WithSessionActor(remotedevice.Actor{ID: "different-coordinator", PolicyID: "different-policy"}))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-durable-actor", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-durable-actor"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-durable-actor", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case request := <-requests:
+		if request.Actor != actor {
+			t.Fatalf("apply actor = %+v, want durable actor %+v", request.Actor, actor)
+		}
+		if len(request.RequestID) == 0 || len(request.RequestID) > 128 || strings.Contains(request.RequestID, "session-durable-actor") {
+			t.Fatalf("internal request id = %q", request.RequestID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("apply was not invoked")
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+}
+
+func TestStoreBackedPendingRevocationRedeliveryAdvancesOutboundOnly(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-redelivery", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	first, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-redelivery"})
+	if err != nil || len(first.Intents) != 1 {
+		t.Fatalf("first revoke = %+v err=%v", first, err)
+	}
+	firstEvent := readRevokedEvent(t, conn)
+	second, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-redelivery-retry"})
+	if err != nil || len(second.Intents) != 1 || second.Intents[0].State != "pending" {
+		t.Fatalf("pending retry = %+v err=%v", second, err)
+	}
+	secondEvent := readRevokedEvent(t, conn)
+	if firstEvent.Sequence != 1 || secondEvent.Sequence != 2 || firstEvent.EventID != secondEvent.EventID || firstEvent.Fence != secondEvent.Fence {
+		t.Fatalf("redelivery sequence/event = (%+v), (%+v)", firstEvent, secondEvent)
+	}
+	// Inbound sequencing is independent from outbound redelivery: the first
+	// acknowledgement slot remains sequence 1 even for outbound event 2.
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-redelivery", "device-1", firstEvent.EventID, 1, firstEvent.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 0 {
+		t.Fatalf("applied redelivery remains pending: %+v", intents)
+	}
+	historical, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-redelivery-history"})
+	if err != nil || len(historical.Intents) != 1 || historical.Intents[0].State != "applied" {
+		t.Fatalf("historical retry = %+v err=%v", historical, err)
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied, closed int
+	for _, event := range events {
+		if event.EventKind == remotedevice.EventClosureApplied {
+			applied++
+		}
+		if event.EventKind == remotedevice.EventSessionClosed && event.SessionID == "session-redelivery" {
+			closed++
+		}
+	}
+	if applied != 1 || closed != 1 {
+		t.Fatalf("historical retry duplicated evidence applied=%d closed=%d", applied, closed)
+	}
+}
+
+func TestStoreBackedDuplicateAcknowledgementAppliesAndClosesOnce(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	requests := make(chan remotedevice.ApplyClosureIntentRequest, 2)
+	authenticator := &applyRecordingStore{Store: store, entered: entered, release: release, request: requests}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-duplicate-ack", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-duplicate-ack"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	ack := revokedEventAckJSON("session-duplicate-ack", "device-1", event.EventID, 1, event.Fence)
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first acknowledgement did not reach apply")
+	}
+	// The durable apply is blocked, so this duplicate is admitted to the peer
+	// socket before the first acknowledgement can close it. It must never start
+	// a second apply or produce a second closure.
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-requests:
+	default:
+		t.Fatal("first apply request was not recorded")
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("duplicate acknowledgement started second apply: %+v", request)
+	default:
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied, closed int
+	for _, event := range events {
+		if event.EventKind == remotedevice.EventClosureApplied && event.SessionID == "session-duplicate-ack" {
+			applied++
+		}
+		if event.EventKind == remotedevice.EventSessionClosed && event.SessionID == "session-duplicate-ack" && event.Reason == remotedevice.ReasonRevoked {
+			closed++
+		}
+	}
+	if applied != 1 || closed != 1 {
+		t.Fatalf("duplicate acknowledgement evidence applied=%d closed=%d", applied, closed)
+	}
+}
+
+func TestStoreBackedRevocationReplaySkipsOwnerApplyingBeforeLifecycle(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	requests := make(chan remotedevice.ApplyClosureIntentRequest, 2)
+	authenticator := &applyRecordingStore{Store: store, request: requests}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-replay-applying", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-replay-applying"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	handler.owners.mu.Lock()
+	owner := handler.owners.owners["session-replay-applying"]
+	handler.owners.mu.Unlock()
+	if owner == nil {
+		t.Fatal("replay owner not found")
+	}
+	delivery, ok := handler.owners.beginRevocationAcknowledgement(owner, 1, event.EventID, event.Fence)
+	if !ok {
+		t.Fatal("acknowledgement was not marked applying")
+	}
+	applyStarted := make(chan struct{})
+	releaseApply := make(chan struct{})
+	applyDone := make(chan bool, 1)
+	go func() {
+		close(applyStarted)
+		<-releaseApply
+		applyDone <- handler.applyRevocationAcknowledgement(context.Background(), owner, delivery)
+	}()
+	select {
+	case <-applyStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("apply gate did not start")
+	}
+	replayDone := make(chan error, 1)
+	go func() {
+		_, replayErr := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-replay-applying-again"})
+		replayDone <- replayErr
+	}()
+	select {
+	case replayErr := <-replayDone:
+		if replayErr != nil {
+			t.Fatalf("idempotent replay: %v", replayErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idempotent replay blocked behind an apply that had not acquired lifecycleMu")
+	}
+	handler.owners.mu.Lock()
+	stillPending := owner.pending != nil && owner.pending.intent.ID == delivery.intent.ID && owner.pending.sequence == delivery.sequence && owner.pending.delivered
+	outboundSequence := owner.outboundSequence
+	handler.owners.mu.Unlock()
+	if !stillPending || outboundSequence != event.Sequence {
+		t.Fatalf("replay changed applying delivery pending=%v outbound=%d want sequence=%d", stillPending, outboundSequence, event.Sequence)
+	}
+	close(releaseApply)
+	select {
+	case applied := <-applyDone:
+		if !applied {
+			t.Fatal("durable apply failed after replay")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("durable apply did not terminate")
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-requests:
+	default:
+		t.Fatal("durable apply request was not recorded")
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("replay caused a second apply: %+v", request)
+	default:
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var appliedAudits, closedAudits int
+	for _, audit := range events {
+		if audit.EventKind == remotedevice.EventClosureApplied && audit.SessionID == "session-replay-applying" {
+			appliedAudits++
+		}
+		if audit.EventKind == remotedevice.EventSessionClosed && audit.SessionID == "session-replay-applying" && audit.Reason == remotedevice.ReasonRevoked {
+			closedAudits++
+		}
+	}
+	if appliedAudits != 1 || closedAudits != 1 {
+		t.Fatalf("replay applying evidence applied=%d closed=%d", appliedAudits, closedAudits)
+	}
+}
+
+func TestStoreBackedBlockedApplyKeepsSocketOpenAndJoinsHandlerClose(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	authenticator := &applyRecordingStore{Store: store, entered: entered, release: release}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-blocked-apply", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-blocked-apply"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-blocked-apply", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("apply did not reach blocking barrier")
+	}
+	readResult := make(chan error, 1)
+	go func() {
+		_, _, readErr := conn.ReadMessage()
+		readResult <- readErr
+	}()
+	select {
+	case err := <-readResult:
+		t.Fatalf("socket closed while durable apply was blocked: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- handler.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Handler.Close returned before blocked apply completed: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Handler.Close did not join durable apply")
+	}
+	select {
+	case err := <-readResult:
+		var closeErr *websocket.CloseError
+		if !errors.As(err, &closeErr) || closeErr.Code != websocket.ClosePolicyViolation || closeErr.Text != CloseReasonDeviceRevoked {
+			t.Fatalf("post-apply close = %v, want device_revoked", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("socket did not close after durable apply")
+	}
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 0 {
+		t.Fatalf("blocked apply remained pending after release: %+v", intents)
+	}
+}
+
+func TestStoreBackedForeignSocketCannotAcknowledgeRevocation(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	deviceTwo := enrollAdditionalDevice(t, store, material, "enrollment-foreign", "device-foreign")
+	handler := NewHandler(store, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	first := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := first.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-owner", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := first.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("owner acceptance: type=%d err=%v", messageType, err)
+	}
+	foreign := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := foreign.WriteMessage(websocket.TextMessage, validOfferJSON(deviceTwo.ID, "session-foreign", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := foreign.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("foreign acceptance: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-foreign-owner"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, first)
+	if err := foreign.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-owner", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, foreign, websocket.ClosePolicyViolation, CloseReasonPolicy)
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].State != "pending" {
+		t.Fatalf("foreign ACK changed owner intent: %+v", intents)
+	}
+	if err := first.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-owner", "device-1", event.EventID, 1, event.Fence)); err != nil {
+		t.Fatal(err)
+	}
+	readClose(t, first, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+}
+
+func TestStoreBackedRevocationAcknowledgementLeavesPendingOnApplyFailureOrDisconnect(t *testing.T) {
+	tests := []struct {
+		name string
+		fail bool
+	}{
+		{name: "apply failure", fail: true},
+		{name: "disconnect", fail: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			material := newTLSMaterial(t)
+			store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+			var authenticator Authenticator = store
+			if test.fail {
+				authenticator = &applyRecordingStore{Store: store, err: errors.New("apply failure")}
+			}
+			handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+			server := startTLSServer(t, handler, material)
+			conn := dialWithCertificate(t, server, material, material.clientTLS)
+			if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-pending-failure", "linux", "x86_64")); err != nil {
+				t.Fatal(err)
+			}
+			if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+				t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+			}
+			result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-pending-failure-" + strings.ReplaceAll(test.name, " ", "-")})
+			if err != nil || len(result.Intents) != 1 {
+				t.Fatalf("revoke result = %+v err=%v", result, err)
+			}
+			event := readRevokedEvent(t, conn)
+			if test.fail {
+				if err := conn.WriteMessage(websocket.TextMessage, revokedEventAckJSON("session-pending-failure", "device-1", event.EventID, 1, event.Fence)); err != nil {
+					t.Fatal(err)
+				}
+				readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonPolicy)
+			} else {
+				if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(intents) != 1 || intents[0].State != "pending" {
+				t.Fatalf("failure changed intent = %+v", intents)
+			}
+			events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if event.EventKind == remotedevice.EventClosureApplied || event.EventKind == remotedevice.EventSessionClosed {
+					t.Fatalf("failure wrote durable closure evidence: %+v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestStoreBackedCanceledRevocationAcknowledgementFailsClosedAndStaysPending(t *testing.T) {
+	material := newTLSMaterial(t)
+	store, _, _ := seedActiveStore(t, material, time.Now().UTC().Add(time.Hour))
+	authenticator := &applyRecordingStore{Store: store}
+	handler := NewHandler(authenticator, PeerGateFunc(func(_ context.Context, remoteAddr string) bool { return strings.HasPrefix(remoteAddr, "127.0.0.1:") }))
+	server := startTLSServer(t, handler, material)
+	conn := dialWithCertificate(t, server, material, material.clientTLS)
+	if err := conn.WriteMessage(websocket.TextMessage, validOfferJSON("device-1", "session-canceled-ack", "linux", "x86_64")); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.TextMessage {
+		t.Fatalf("acceptance read: type=%d err=%v", messageType, err)
+	}
+	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
+	result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{DeviceID: "device-1", Actor: actor, Reason: remotedevice.RevocationReasonAdministrator, RequestID: "revoke-canceled-ack"})
+	if err != nil || len(result.Intents) != 1 {
+		t.Fatalf("revoke result = %+v err=%v", result, err)
+	}
+	event := readRevokedEvent(t, conn)
+	handler.owners.mu.Lock()
+	owner := handler.owners.owners["session-canceled-ack"]
+	handler.owners.mu.Unlock()
+	if owner == nil {
+		t.Fatal("canceled acknowledgement owner not found")
+	}
+	delivery, ok := handler.owners.beginRevocationAcknowledgement(owner, 1, event.EventID, event.Fence)
+	if !ok {
+		t.Fatal("canceled acknowledgement was not admitted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if handler.applyRevocationAcknowledgement(ctx, owner, delivery) {
+		t.Fatal("canceled acknowledgement unexpectedly applied")
+	}
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonPolicy)
+	intents, err := store.PendingClosureIntents(context.Background(), remotedevice.ClosureIntentFilter{DeviceID: "device-1", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].State != "pending" {
+		t.Fatalf("canceled acknowledgement changed intent: %+v", intents)
+	}
+	events, err := store.Audit(context.Background(), remotedevice.AuditFilter{DeviceID: "device-1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, audit := range events {
+		if audit.EventKind == remotedevice.EventClosureApplied || audit.EventKind == remotedevice.EventSessionClosed {
+			t.Fatalf("canceled acknowledgement wrote durable closure evidence: %+v", audit)
+		}
+	}
 }
 
 func TestHandlerCloseJoinsOwnerClosePausedAfterMarkingClosed(t *testing.T) {
@@ -551,30 +1601,18 @@ func TestHandlerCloseJoinsOwnerClosePausedAfterMarkingClosed(t *testing.T) {
 	owner.closePause = &ownerClosePause{reached: reached, release: release}
 	handler.owners.mu.Unlock()
 
-	type revokeOutcome struct {
-		result remotedevice.RevokeDeviceResponse
-		err    error
-	}
-	revokeDone := make(chan revokeOutcome, 1)
-	go func() {
-		result, err := handler.RevokeDevice(context.Background(), remotedevice.RevokeDeviceRequest{
-			DeviceID: "device-1", Actor: remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"},
-			Reason: remotedevice.RevocationReasonAdministrator, RequestID: "close-join-revoke",
-		})
-		revokeDone <- revokeOutcome{result: result, err: err}
-	}()
-	select {
-	case <-reached:
-	case <-time.After(2 * time.Second):
-		t.Fatal("revocation did not reach the pre-close barrier")
-	}
-
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- handler.Close() }()
 	closeDoneAgain := make(chan error, 1)
 	go func() { closeDoneAgain <- handler.Close() }()
-	// The owner is already marked closed, but its closeOne is paused. Close must
-	// join that operation instead of returning while the socket remains open.
+	select {
+	case <-reached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Handler.Close did not reach the pre-close barrier")
+	}
+	// The owner is already marked closed, but its closeOne is paused. A second
+	// Close must join that operation instead of returning while the socket is
+	// still open.
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Handler.Close returned before owner close completed: %v", err)
@@ -599,15 +1637,7 @@ func TestHandlerCloseJoinsOwnerClosePausedAfterMarkingClosed(t *testing.T) {
 			t.Fatalf("%s did not join owner close", item.name)
 		}
 	}
-	select {
-	case outcome := <-revokeDone:
-		if outcome.err != nil || len(outcome.result.Intents) != 1 || outcome.result.Intents[0].State != "pending" {
-			t.Fatalf("revocation outcome = %+v", outcome)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("revocation did not complete after owner close")
-	}
-	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	readClose(t, conn, websocket.ClosePolicyViolation, CloseReasonTransport)
 }
 
 func TestStoreBackedRevocationClosesClosedOwnerAndPreservesOtherDevice(t *testing.T) {
@@ -632,9 +1662,9 @@ func TestStoreBackedRevocationClosesClosedOwnerAndPreservesOtherDevice(t *testin
 		t.Fatalf("second acceptance: type=%d err=%v", messageType, err)
 	}
 
-	// CloseSession is durable state only; the owner remains live until the
-	// transport observes a terminal event. RevokeDevice must therefore still
-	// close this socket, while producing no new closure intent for it.
+	// A session closed before revocation produces no closure intent. Its live
+	// owner is not a target for the device-revocation event; the exact pending
+	// intent routing below remains scoped to the other device.
 	actor := remotedevice.Actor{ID: "operator-1", PolicyID: "policy-1"}
 	if _, err := store.CloseSession(context.Background(), remotedevice.CloseSessionRequest{
 		SessionID: "session-closed-owner", DeviceID: "device-1", Actor: actor,
@@ -652,7 +1682,9 @@ func TestStoreBackedRevocationClosesClosedOwnerAndPreservesOtherDevice(t *testin
 	if len(result.Intents) != 0 {
 		t.Fatalf("closed session unexpectedly produced intents: %+v", result.Intents)
 	}
-	readClose(t, first, websocket.ClosePolicyViolation, CloseReasonDeviceRevoked)
+	if err := first.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	// A pong is an explicit protocol-level proof that the unrelated owner was
 	// not closed. The read goroutine is joined before test exit to avoid leaks.

@@ -7,7 +7,8 @@ weight: 8
 # ADR: Remote agent architecture
 
 **Issues:** #88 (architecture), #90 (protocol), #94 (device registry), #102
-(revocation acknowledgement), #104 (closure-intent application)
+(revocation acknowledgement), #104 (closure-intent application), #106
+(revocation event delivery)
 **Status:** The existing `atenea.remote.v1` schema contract and fixtures are
 merged. Issue #102 adds the versioned v1.1 revocation-acknowledgement
 extension, merged through PR #103 at reviewed head
@@ -18,14 +19,25 @@ through PR #95: reviewed head
 `ec605455fc3f36f8917a5cf64328fcf0faf2d64d`, merged as
 `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. The broader remote-agent
 architecture remains planned.
-Issue #104 extends that registry locally with atomic application of one
-acknowledged closure intent; its implementation remains local/CI evidence
-until its own reviewed PR is merged.
+Issue #104 extends that registry with atomic application of one acknowledged
+closure intent. It is merged through PR #105 at reviewed head
+`374b515fcd690b6f80019d5b5bbc4a7ebdc9a802` (merge commit
+`d6ff46d8c5e937349a776d3e91f19531e5523dba`).
+Issue #106 adds the coordinator's bounded WSS delivery boundary locally: a
+pending intent is emitted only to its exact live owner, canonical textual
+acknowledgements are sequence- and binding-checked, and the socket receives
+`device_revoked` only after `ApplyClosureIntent` succeeds. Applied historical
+intents are filtered; failed delivery, disconnect, invalid acknowledgement,
+or failed application leaves the durable intent pending. Its implementation
+and local WSS/SQLite tests remain local/CI evidence until its own reviewed PR
+is merged.
 **Implementation:** `internal/remotedevice` is implemented and merged as a
 local registry package. Its focused/full local validation and the required PR
-checks passed for the reviewed head. No live certificate authority or
-certificate delivery, WSS, coordinator runtime integration, native agent,
-installation, deployment, or real-device execution is implemented here.
+checks passed for the reviewed head. Issue #106 provides a bounded
+coordinator/runtime WSS slice with local `httptest` and SQLite evidence. No
+live certificate authority or certificate delivery, production listener,
+native agent, installation, deployment, or real-device execution is
+implemented here.
 **Scope:** The remote-agent transport, identity, lifecycle, capabilities, and
 platform support described on this page.
 **Evidence:** The merged protocol schemas/fixtures and registry package are
@@ -33,8 +45,10 @@ supported by repository-local validation and the required PR #95 CI for their
 respective SHAs. This is local/CI evidence for contract and coordinator-side
 registry behavior only. It is not provider-real transport, live CA,
 installation, deployment, or client-real device evidence; platform, mode,
-capability, WSS, and socket-lifecycle claims below remain planned until their
-own evidence is published.
+capability, production WSS, and real socket/device lifecycle claims below
+remain planned until their own evidence is published. Issue #106's local WSS
+tests do not prove a deployed coordinator, Tailscale route, installation, or
+client-real agent behavior.
 
 The canonical precise wire contract is [`protocol/atenea.remote.v1`](../../protocol/atenea.remote.v1/);
 this ADR remains planned architecture and evidence, not a replacement for that
@@ -134,7 +148,9 @@ payload. The package never logs secret-bearing inputs and never returns a raw
 secret from a read or retry path. Issue #94 does not implement CSR transport,
 certificate DER production or delivery, WSS, the coordinator transport
 runtime, or an operation ledger. Issue #102 defines the wire acknowledgement;
-Issue #104 applies its durable closure intent in the store only.
+Issue #104 applies its durable closure intent in the store only; Issue #106
+delivers that event to a live coordinator-owned WSS session and routes the
+acknowledgement back to the store.
 
 #### State machine
 
@@ -473,11 +489,13 @@ tailnet reachability alone is not identity.
 
 The merged registry records certificate metadata, renewal, revocation, active
 sessions, and durable closure intents. It rejects new authentication and
-sessions for a revoked device, but it does not deliver a revocation event or
-close a socket. A later WSS/session owner must apply each closure intent and
-provide provider-real evidence of socket closure and reconnect refusal. Live CA
-issuance, certificate bytes/DER delivery, and certificate acknowledgement are
-also future work; none is implied by registry activation.
+sessions for a revoked device. Issue #106 adds the bounded local
+coordinator-owned WSS/session-owner delivery and acknowledgement path on top of
+that registry; it does not establish a deployed listener, tailnet transport,
+or client-real proof. Provider-real socket closure and reconnect refusal remain
+future evidence. Live CA issuance, certificate bytes/DER delivery, and
+certificate acknowledgement are also future work; none is implied by registry
+activation.
 
 ### 3. Session lifecycle, heartbeat, and negotiation
 
@@ -724,20 +742,25 @@ The versioned `atenea.remote.v1` schemas and conformance fixtures are merged
 through PR #93 at `7b27095aeda455a618a65f33745adbb6422172e1`. The
 coordinator-side `internal/remotedevice` registry is merged through PR #95;
 its reviewed head is `ec605455fc3f36f8917a5cf64328fcf0faf2d64d` and its merge
-commit is `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. Together they provide
+commit is `eeb6af5ccc026e7959b88549c1e5e7ec2bed3159`. Issue #104 is merged
+through PR #105 at reviewed head `374b515fcd690b6f80019d5b5bbc4a7ebdc9a802`
+and merge commit `d6ff46d8c5e937349a776d3e91f19531e5523dba`. Together they provide
 the current contract and durable token/challenge/proof/activation,
 certificate-metadata, session, revocation-intent, and audit foundation.
 
-The remaining Stage 0 work is future coordinator-runtime integration for
-authentication, negotiation, authorization, dispatch gates, revocation event
-delivery, and audit ordering. Live CA/certificate delivery, WSS transport,
-and native agents are separate later slices; this stage has no native agent,
-desktop observation, or action implementation.
+Issue #106 supplies the bounded coordinator-owned WSS revocation-event and
+acknowledgement slice in local `httptest`/SQLite evidence. Remaining Stage 0
+work is coordinator-runtime integration beyond that slice: authentication,
+negotiation, authorization, dispatch gates, and production audit ordering.
+Live CA/certificate delivery, production WSS deployment, and native agents are
+separate later slices; this stage has no native agent, desktop observation, or
+action implementation.
 
 **Current evidence:** repository-local schema/fixture and registry tests plus
-the required CI checks passed for their respective merged SHAs. This evidence
-does not establish provider-real transport, live CA delivery, installation,
-deployment, or client-real device support.
+Issue #106's focused coordinator `httptest`/SQLite tests; the required CI
+checks passed for the respective merged SHAs. This evidence does not establish
+provider-real transport, live CA delivery, installation, deployment, or
+client-real device support.
 
 **Remaining exit evidence:** an integrated coordinator and its conformance,
 security, and provider-real checks must be published before any transport or
