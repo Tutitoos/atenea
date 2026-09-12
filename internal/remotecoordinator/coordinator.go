@@ -19,9 +19,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +44,9 @@ const (
 	DefaultReadTimeout = 10 * time.Second
 	// DefaultWriteTimeout bounds acceptance and close writes.
 	DefaultWriteTimeout = 5 * time.Second
+	// DefaultAcknowledgementTimeout bounds the interval from a delivered
+	// revocation event to the complete textual event_ack message.
+	DefaultAcknowledgementTimeout = 30 * time.Second
 
 	// HeartbeatIntervalMillis is the fixed planned interval in the skeleton.
 	HeartbeatIntervalMillis = 15000
@@ -69,6 +74,12 @@ const (
 	// CloseReasonDeviceRevoked is the only revocation close reason.  It is
 	// intentionally mapped to the RFC 6455 policy-violation code (1008).
 	CloseReasonDeviceRevoked = "device_revoked"
+
+	// maxWireSequence is the largest sequence accepted by atenea.remote.v1.
+	// Sequence arithmetic never wraps: when this value is reached, another
+	// message cannot be sent or accepted on that owner.
+	maxWireSequence    uint64 = 4294967295
+	maxRevocationFence int64  = 9007199254740991
 )
 
 var (
@@ -108,6 +119,13 @@ type DeviceRevoker interface {
 	RevokeDevice(context.Context, remotedevice.RevokeDeviceRequest) (remotedevice.RevokeDeviceResponse, error)
 }
 
+// ClosureIntentApplier is the durable acknowledgement boundary. The
+// coordinator invokes it only after a canonical event_ack has been bound to
+// the exact authenticated socket owner and delivered intent.
+type ClosureIntentApplier interface {
+	ApplyClosureIntent(context.Context, remotedevice.ApplyClosureIntentRequest) (remotedevice.ApplyClosureIntentResponse, error)
+}
+
 // PeerGate authorizes the trusted network peer represented by net/http's
 // RemoteAddr. Forwarded headers and URL data are never passed to this hook.
 type PeerGate interface {
@@ -123,12 +141,15 @@ func (f PeerGateFunc) Allow(ctx context.Context, remoteAddr string) bool {
 }
 
 type options struct {
-	clock        func() time.Time
-	validator    *remoteprotocol.Validator
-	readTimeout  time.Duration
-	writeTimeout time.Duration
-	actor        remotedevice.Actor
-	cleanupHook  SessionCleanupHook
+	clock                 func() time.Time
+	validator             *remoteprotocol.Validator
+	readTimeout           time.Duration
+	writeTimeout          time.Duration
+	ackTimeout            time.Duration
+	actor                 remotedevice.Actor
+	cleanupHook           SessionCleanupHook
+	beforeAcceptanceWrite func()
+	afterRevocationWrite  func()
 }
 
 // Option configures only testable, bounded dependencies of Handler.
@@ -179,6 +200,16 @@ func WithWriteTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithAcknowledgementTimeout bounds the interval allowed for an event_ack
+// after a revoked event is delivered. A non-positive value is ignored.
+func WithAcknowledgementTimeout(timeout time.Duration) Option {
+	return func(config *options) {
+		if timeout > 0 {
+			config.ackTimeout = timeout
+		}
+	}
+}
+
 // WithSessionActor configures the coordinator-owned actor recorded for
 // durable session registration.  A valid default keeps the walking skeleton
 // usable while allowing deployments to provide their explicit policy actor.
@@ -201,18 +232,66 @@ func WithSessionCleanupHook(hook SessionCleanupHook) Option {
 }
 
 type sessionOwner struct {
-	conn       *websocket.Conn
-	deviceID   string
-	sessionID  string
-	fence      int64
-	closed     bool
-	terminal   ownerTerminalCause
-	registered bool
-	registry   *sessionOwners
-	writeMu    sync.Mutex
-	closeOne   sync.Once
-	closePause *ownerClosePause
+	conn             *websocket.Conn
+	deviceID         string
+	sessionID        string
+	fence            int64
+	closed           bool
+	terminal         ownerTerminalCause
+	registered       bool
+	registry         *sessionOwners
+	writeMu          sync.Mutex
+	closeOne         sync.Once
+	closePause       *ownerClosePause
+	accepted         bool
+	inboundSequence  uint64
+	outboundSequence uint64
+	pending          *ownerRevocationDelivery
+	queued           *ownerRevocationRequest
+	applying         bool
+	applyDone        chan struct{}
 }
+
+type ownerRevocationDelivery struct {
+	intent    remotedevice.ClosureIntent
+	actor     remotedevice.Actor
+	sequence  uint64
+	delivered bool
+}
+
+type ownerRevocationRequest struct {
+	intent remotedevice.ClosureIntent
+	actor  remotedevice.Actor
+}
+
+type revocationDeliveryReservation uint8
+
+const (
+	revocationDeliveryRejected revocationDeliveryReservation = iota
+	revocationDeliverySkippedApplying
+	revocationDeliveryReserved
+)
+
+type revocationDeliveryStatus uint8
+
+const (
+	revocationDeliveryFailed revocationDeliveryStatus = iota
+	revocationDeliverySkipped
+	revocationDeliverySucceeded
+)
+
+type revocationDeliveryResult struct {
+	status revocationDeliveryStatus
+	reason string
+}
+
+type revocationOwnerRoute uint8
+
+const (
+	revocationOwnerRejected revocationOwnerRoute = iota
+	revocationOwnerQueuedBeforeAcceptance
+	revocationOwnerDeliver
+)
 
 // ownerClosePause is a deterministic test seam for the close/join boundary.
 // It is nil for production owners and cannot alter terminal-cause selection.
@@ -230,6 +309,7 @@ const (
 	ownerTerminalProtocol
 	ownerTerminalShutdown
 	ownerTerminalRevocation
+	ownerTerminalRevocationPending
 )
 
 type sessionOwners struct {
@@ -272,6 +352,21 @@ func (r *sessionOwners) activate(owner *sessionOwner, session remotedevice.Sessi
 	owner.registered = true
 }
 
+func (r *sessionOwners) markAccepted(owner *sessionOwner) (*ownerRevocationRequest, bool) {
+	if owner == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; !ok || current != owner || owner.closed || owner.terminal != ownerTerminalNone {
+		return nil, false
+	}
+	owner.accepted = true
+	queued := owner.queued
+	owner.queued = nil
+	return queued, true
+}
+
 func (r *sessionOwners) isClosed(owner *sessionOwner) bool {
 	if owner == nil {
 		return true
@@ -285,37 +380,182 @@ func (r *sessionOwners) forIntent(intent remotedevice.ClosureIntent) *sessionOwn
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	owner := r.owners[intent.SessionID]
-	if owner == nil || owner.terminal == ownerTerminalRevocation || owner.deviceID != intent.DeviceID {
+	if owner == nil || owner.closed || owner.terminal == ownerTerminalRevocation || owner.terminal == ownerTerminalRevocationPending || owner.applying || !owner.accepted || owner.deviceID != intent.DeviceID {
 		return nil
 	}
 	// A session records the fence that admitted it; RevokeDevice increments the
 	// device fence before creating the intent.  A still-reserved owner has no
 	// fence yet, and is also safe to close because an admission racing after
 	// revocation will fail in the store transaction.
-	if owner.fence != 0 && intent.Fence != owner.fence+1 {
+	if owner.fence < 0 || owner.fence == maxRevocationFence || intent.Fence != owner.fence+1 {
 		return nil
 	}
-	owner.closed = true
-	owner.terminal = ownerTerminalRevocation
 	return owner
 }
 
-func (r *sessionOwners) forDevice(deviceID string, fence int64) []*sessionOwner {
+func (r *sessionOwners) routeRevocationIntent(intent remotedevice.ClosureIntent, actor remotedevice.Actor) (*sessionOwner, *ownerRevocationRequest, revocationOwnerRoute) {
+	if intent.State != "pending" || actor.ID == "" || actor.PolicyID == "" {
+		return nil, nil, revocationOwnerRejected
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	owners := make([]*sessionOwner, 0)
-	for _, owner := range r.owners {
-		if owner.terminal == ownerTerminalRevocation || owner.deviceID != deviceID {
-			continue
-		}
-		if owner.fence != 0 && owner.fence+1 != fence {
-			continue
-		}
-		owner.closed = true
-		owner.terminal = ownerTerminalRevocation
-		owners = append(owners, owner)
+	owner := r.owners[intent.SessionID]
+	if owner == nil || owner.closed || owner.terminal == ownerTerminalRevocation || owner.terminal == ownerTerminalRevocationPending || owner.applying || owner.deviceID != intent.DeviceID || owner.fence < 0 || owner.fence == maxRevocationFence || intent.Fence != owner.fence+1 {
+		return nil, nil, revocationOwnerRejected
 	}
-	return owners
+	if !owner.accepted {
+		if owner.queued == nil {
+			owner.queued = &ownerRevocationRequest{intent: intent, actor: actor}
+		}
+		return nil, owner.queued, revocationOwnerQueuedBeforeAcceptance
+	}
+	return owner, nil, revocationOwnerDeliver
+}
+
+func (r *sessionOwners) reserveRevocationDelivery(owner *sessionOwner, intent remotedevice.ClosureIntent, actor remotedevice.Actor) (*ownerRevocationDelivery, revocationDeliveryReservation) {
+	if owner == nil || intent.State != "pending" || actor.ID == "" || actor.PolicyID == "" {
+		return nil, revocationDeliveryRejected
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; !ok || current != owner || owner.closed || owner.terminal != ownerTerminalNone || !owner.accepted || owner.deviceID != intent.DeviceID || owner.sessionID != intent.SessionID {
+		return nil, revocationDeliveryRejected
+	}
+	if owner.applying {
+		return nil, revocationDeliverySkippedApplying
+	}
+	if owner.fence < 0 || owner.fence == maxRevocationFence || intent.Fence != owner.fence+1 {
+		return nil, revocationDeliveryRejected
+	}
+	sequence, ok := nextWireSequence(owner.outboundSequence)
+	if !ok {
+		return nil, revocationDeliveryRejected
+	}
+	delivery := &ownerRevocationDelivery{intent: intent, actor: actor, sequence: sequence}
+	owner.outboundSequence = sequence
+	owner.pending = delivery
+	return delivery, revocationDeliveryReserved
+}
+
+func (r *sessionOwners) failRevocationDelivery(owner *sessionOwner, delivery *ownerRevocationDelivery) {
+	if owner == nil || delivery == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; ok && current == owner && owner.pending == delivery {
+		owner.pending = nil
+		owner.closed = true
+		if owner.terminal == ownerTerminalNone {
+			owner.terminal = ownerTerminalRevocationPending
+		}
+	}
+}
+
+func (r *sessionOwners) beginRevocationAcknowledgement(owner *sessionOwner, sequence uint64, eventID string, fence int64) (*ownerRevocationDelivery, bool) {
+	if owner == nil {
+		return nil, false
+	}
+	// Delivery holds writeMu from WriteMessage through the delivered-state
+	// publication. Waiting here makes an immediate ACK observe the final write
+	// outcome instead of racing the publication window.
+	owner.writeMu.Lock()
+	defer owner.writeMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; !ok || current != owner || owner.closed || owner.terminal != ownerTerminalNone || owner.pending == nil || !owner.pending.delivered || owner.applying || owner.pending.intent.ID != eventID || owner.pending.intent.Fence != fence {
+		return nil, false
+	}
+	expected, ok := nextWireSequence(owner.inboundSequence)
+	if !ok || sequence != expected {
+		return nil, false
+	}
+	owner.inboundSequence = sequence
+	owner.applying = true
+	owner.applyDone = make(chan struct{})
+	delivery := *owner.pending
+	return &delivery, true
+}
+
+func (r *sessionOwners) markRevocationDelivered(owner *sessionOwner, delivery *ownerRevocationDelivery) bool {
+	if owner == nil || delivery == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; !ok || current != owner || owner.pending != delivery || owner.closed || owner.terminal != ownerTerminalNone {
+		return false
+	}
+	delivery.delivered = true
+	return true
+}
+
+func (r *sessionOwners) finishRevocationAcknowledgement(owner *sessionOwner, delivery *ownerRevocationDelivery, applied bool) {
+	if owner == nil {
+		return
+	}
+	r.mu.Lock()
+	if current, ok := r.owners[owner.sessionID]; ok && current == owner {
+		if owner.pending != nil && delivery != nil && owner.pending.sequence == delivery.sequence && owner.pending.intent.ID == delivery.intent.ID {
+			owner.pending = nil
+		}
+		owner.applying = false
+		if applied {
+			owner.closed = true
+			owner.terminal = ownerTerminalRevocation
+		} else {
+			owner.closed = true
+			owner.terminal = ownerTerminalRevocationPending
+		}
+		if owner.applyDone != nil {
+			close(owner.applyDone)
+			owner.applyDone = nil
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *sessionOwners) markRevocationFailure(owner *sessionOwner) {
+	if owner == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.owners[owner.sessionID]; ok && current == owner {
+		owner.pending = nil
+		owner.closed = true
+		if owner.terminal == ownerTerminalNone {
+			owner.terminal = ownerTerminalRevocationPending
+		}
+	}
+}
+
+func (r *sessionOwners) hasPendingRevocation(owner *sessionOwner) bool {
+	if owner == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return owner.pending != nil || owner.applying || owner.terminal == ownerTerminalRevocationPending
+}
+
+func (r *sessionOwners) waitForApply(owner *sessionOwner) {
+	if owner == nil {
+		return
+	}
+	r.mu.Lock()
+	done := owner.applyDone
+	r.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+func nextWireSequence(current uint64) (uint64, bool) {
+	if current >= maxWireSequence {
+		return 0, false
+	}
+	return current + 1, true
 }
 
 func (r *sessionOwners) closeAll(h *Handler, reason string) {
@@ -329,6 +569,13 @@ func (r *sessionOwners) closeAll(h *Handler, reason string) {
 	r.closed = true
 	owners := make([]*sessionOwner, 0, len(r.owners))
 	for _, owner := range r.owners {
+		if owner.applying {
+			// An acknowledgement is in the durable apply critical section. The
+			// close operation below waits for that section so shutdown cannot
+			// close the socket before the store commit decides its terminal cause.
+			owners = append(owners, owner)
+			continue
+		}
 		if !owner.closed {
 			owner.closed = true
 			owner.terminal = ownerTerminalShutdown
@@ -371,6 +618,9 @@ func (r *sessionOwners) finish(owner *sessionOwner) (session remotedevice.Sessio
 func (owner *sessionOwner) close(h *Handler, reason string) {
 	if owner == nil || h == nil {
 		return
+	}
+	if owner.registry != nil {
+		owner.registry.waitForApply(owner)
 	}
 	if owner.registry != nil {
 		owner.registry.markClose(owner, reason)
@@ -458,6 +708,7 @@ func NewHandler(authenticator Authenticator, peerGate PeerGate, opts ...Option) 
 		validator:    remoteprotocol.New(),
 		readTimeout:  DefaultReadTimeout,
 		writeTimeout: DefaultWriteTimeout,
+		ackTimeout:   DefaultAcknowledgementTimeout,
 		actor:        remotedevice.Actor{ID: "coordinator", PolicyID: "remote"},
 	}
 	for _, option := range opts {
@@ -513,24 +764,235 @@ func (h *Handler) RevokeDevice(ctx context.Context, req remotedevice.RevokeDevic
 	// point: either cleanup wins and revocation sees a closed session, or
 	// revocation wins and cleanup must preserve the active/pending intent.
 	h.owners.lifecycleMu.Lock()
-	defer h.owners.lifecycleMu.Unlock()
 	result, err := revoker.RevokeDevice(ctx, req)
 	if err != nil {
+		h.owners.lifecycleMu.Unlock()
 		return remotedevice.RevokeDeviceResponse{}, err
 	}
-	owners := make([]*sessionOwner, 0, len(result.Intents))
+	type deliveryTarget struct {
+		owner  *sessionOwner
+		intent remotedevice.ClosureIntent
+	}
+	owners := make([]deliveryTarget, 0, len(result.Intents))
 	for _, intent := range result.Intents {
-		if owner := h.owners.forIntent(intent); owner != nil {
-			owners = append(owners, owner)
+		// RevokeDevice returns the durable history on an idempotent retry. Only
+		// pending intents are delivery work; an applied historical intent must
+		// never be emitted again.
+		if intent.State != "pending" {
+			continue
+		}
+		owner, _, route := h.owners.routeRevocationIntent(intent, result.Revocation.Actor)
+		if route == revocationOwnerDeliver && owner != nil {
+			owners = append(owners, deliveryTarget{owner: owner, intent: intent})
 		}
 	}
-	deviceID := result.Device.ID
-	if deviceID == "" {
-		deviceID = req.DeviceID
+	type deliveryFailure struct {
+		owner  *sessionOwner
+		reason string
 	}
-	owners = append(owners, h.owners.forDevice(deviceID, result.Device.Fence)...)
-	closeOwners(h, owners, CloseReasonDeviceRevoked)
+	failures := make([]deliveryFailure, 0)
+	for _, target := range owners {
+		// The actor comes from the durable revocation returned by the store. It
+		// is deliberately never substituted with the peer identity or the
+		// handler's session-registration actor.
+		outcome := h.deliverRevocation(target.owner, target.intent, result.Revocation.Actor)
+		if outcome.status == revocationDeliveryFailed {
+			// Defer owner.close until after lifecycleMu is released. An owner may
+			// concurrently be in ApplyClosureIntent; owner.close joins that apply,
+			// which itself needs lifecycleMu.
+			failures = append(failures, deliveryFailure{owner: target.owner, reason: outcome.reason})
+		}
+	}
+	h.owners.lifecycleMu.Unlock()
+	for _, failure := range failures {
+		// Delivery failure closes this owner with a non-revocation reason and
+		// leaves the durable intent pending for a later retry.
+		h.failRevocationOwner(failure.owner, failure.reason)
+	}
 	return result, nil
+}
+
+func (h *Handler) deliverRevocation(owner *sessionOwner, intent remotedevice.ClosureIntent, actor remotedevice.Actor) revocationDeliveryResult {
+	if h == nil || owner == nil {
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonTransport}
+	}
+	delivery, reservation := h.owners.reserveRevocationDelivery(owner, intent, actor)
+	if reservation == revocationDeliverySkippedApplying {
+		return revocationDeliveryResult{status: revocationDeliverySkipped}
+	}
+	if reservation != revocationDeliveryReserved {
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonTransport}
+	}
+	event := revokedEventEnvelope{
+		Protocol:    remoteprotocol.Subprotocol,
+		Version:     remotedevice.ProtocolVersion,
+		MessageType: "event",
+		SessionID:   intent.SessionID,
+		DeviceID:    intent.DeviceID,
+		Sequence:    delivery.sequence,
+		SentAt:      wireTimestamp(h.now()),
+		Payload: revokedEventPayload{
+			EventID:    intent.ID,
+			EventType:  "revoked",
+			OccurredAt: wireTimestamp(intent.CreatedAt),
+			Data: revokedEventData{
+				Kind:         "revoked",
+				Scope:        "session",
+				RevocationID: intent.RevocationID,
+				Reason:       string(intent.Reason),
+				EffectiveAt:  wireTimestamp(intent.CreatedAt),
+				Fence:        intent.Fence,
+			},
+		},
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil || h.options.validator == nil || h.options.validator.Validate(encoded) != nil {
+		h.owners.failRevocationDelivery(owner, delivery)
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonEnvelope}
+	}
+	if owner.conn == nil {
+		h.owners.failRevocationDelivery(owner, delivery)
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonTransport}
+	}
+	owner.writeMu.Lock()
+	if err := owner.conn.SetWriteDeadline(h.deadline(h.options.writeTimeout)); err != nil {
+		owner.writeMu.Unlock()
+		h.owners.failRevocationDelivery(owner, delivery)
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonTransport}
+	}
+	err = owner.conn.WriteMessage(websocket.TextMessage, encoded)
+	if err == nil {
+		if hook := h.options.afterRevocationWrite; hook != nil {
+			// The hook is a deterministic test seam. It runs while writeMu is
+			// held so an ACK cannot pass the write outcome publication.
+			hook()
+		}
+		// Set the deadline on the underlying net.Conn rather than calling the
+		// Gorilla read method from this writer goroutine. Gorilla permits one
+		// reader, but does not permit concurrent read-method calls; net.Conn
+		// deadline updates are safe while that reader is blocked.
+		if underlying := owner.conn.UnderlyingConn(); underlying == nil {
+			err = errors.New("remote coordinator: owner connection has no underlying transport")
+		} else {
+			err = underlying.SetReadDeadline(h.deadline(h.options.ackTimeout))
+		}
+	}
+	if err == nil {
+		// Publish the delivery while the writer lock is still held. A reader
+		// may observe an ACK as soon as the frame reaches the peer; it must not
+		// be eligible for ApplyClosureIntent until this successful write is
+		// durably reflected in the owner state.
+		if !h.owners.markRevocationDelivered(owner, delivery) {
+			err = errors.New("remote coordinator: owner delivery was superseded")
+		}
+	}
+	owner.writeMu.Unlock()
+	if err != nil {
+		h.owners.failRevocationDelivery(owner, delivery)
+		return revocationDeliveryResult{status: revocationDeliveryFailed, reason: CloseReasonTransport}
+	}
+	return revocationDeliveryResult{status: revocationDeliverySucceeded}
+}
+
+func (h *Handler) deliverQueuedRevocation(owner *sessionOwner, request *ownerRevocationRequest) bool {
+	if h == nil || owner == nil || request == nil {
+		return true
+	}
+	// Acceptance is published while its write lock is held. Serialize the
+	// queued flush with administrative replay, but release the lifecycle lock
+	// before any failure path can wait for an in-flight apply.
+	h.owners.lifecycleMu.Lock()
+	if h.owners.hasPendingRevocation(owner) {
+		h.owners.lifecycleMu.Unlock()
+		return true
+	}
+	outcome := h.deliverRevocation(owner, request.intent, request.actor)
+	h.owners.lifecycleMu.Unlock()
+	if outcome.status == revocationDeliveryFailed {
+		h.failRevocationOwner(owner, outcome.reason)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) failRevocationOwner(owner *sessionOwner, reason string) {
+	if h == nil || owner == nil {
+		return
+	}
+	h.owners.markRevocationFailure(owner)
+	owner.close(h, reason)
+}
+
+func (h *Handler) rejectRevocationOwner(owner *sessionOwner, reason string) {
+	if h == nil || owner == nil {
+		return
+	}
+	if h.owners.hasPendingRevocation(owner) {
+		h.failRevocationOwner(owner, reason)
+		return
+	}
+	owner.close(h, reason)
+}
+
+func (h *Handler) applyRevocationAcknowledgement(ctx context.Context, owner *sessionOwner, delivery *ownerRevocationDelivery) bool {
+	if h == nil || owner == nil || delivery == nil {
+		return false
+	}
+	applier, ok := h.authenticator.(ClosureIntentApplier)
+	if !ok {
+		h.owners.finishRevocationAcknowledgement(owner, delivery, false)
+		h.failRevocationOwner(owner, CloseReasonAuthentication)
+		return false
+	}
+	requestID := acknowledgementRequestID(owner, delivery)
+	// The lifecycle mutex is the coordinator's single serialization point for
+	// admission, revocation, cleanup, and durable acknowledgement application.
+	h.owners.lifecycleMu.Lock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	response, err := applier.ApplyClosureIntent(ctx, remotedevice.ApplyClosureIntentRequest{
+		EventID: delivery.intent.ID, DeviceID: delivery.intent.DeviceID, SessionID: delivery.intent.SessionID,
+		Fence: delivery.intent.Fence, Actor: delivery.actor, RequestID: requestID,
+	})
+	h.owners.lifecycleMu.Unlock()
+	if err != nil || response.Intent.ID != delivery.intent.ID || response.Intent.DeviceID != delivery.intent.DeviceID || response.Intent.SessionID != delivery.intent.SessionID || response.Intent.Fence != delivery.intent.Fence || response.Intent.State != "applied" {
+		h.owners.finishRevocationAcknowledgement(owner, delivery, false)
+		h.failRevocationOwner(owner, CloseReasonPolicy)
+		return false
+	}
+	h.owners.finishRevocationAcknowledgement(owner, delivery, true)
+	owner.close(h, CloseReasonDeviceRevoked)
+	return true
+}
+
+func acknowledgementRequestID(owner *sessionOwner, delivery *ownerRevocationDelivery) string {
+	if owner == nil || delivery == nil {
+		return "ack-invalid"
+	}
+	hash := sha256.New()
+	for _, value := range []string{"atenea.remote.ack", owner.deviceID, owner.sessionID, delivery.intent.ID, strconv.FormatInt(delivery.intent.Fence, 10), strconv.FormatUint(delivery.sequence, 10)} {
+		_, _ = hash.Write([]byte(value))
+		_, _ = hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("ack-%x", hash.Sum(nil))
+}
+
+func wireTimestamp(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	value = value.UTC()
+	millis := value.UnixMilli()
+	if millis < 0 || millis > 253402300799999 {
+		return 0
+	}
+	return millis
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // ServeHTTP implements http.Handler.
@@ -679,35 +1141,118 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		owner.close(h, CloseReasonEnvelope)
 		return
 	}
-	if err := conn.SetWriteDeadline(h.deadline(h.options.writeTimeout)); err != nil {
-		owner.close(h, CloseReasonTimeout)
-		return
+	if hook := h.options.beforeAcceptanceWrite; hook != nil {
+		// Deterministic test seam: the durable admission has completed, but the
+		// acceptance frame has not been written or published yet.
+		hook()
 	}
 	owner.writeMu.Lock()
-	err = conn.WriteMessage(websocket.TextMessage, encoded)
+	err = conn.SetWriteDeadline(h.deadline(h.options.writeTimeout))
+	deadlineFailed := err != nil
+	if err == nil {
+		err = conn.WriteMessage(websocket.TextMessage, encoded)
+	}
+	var queued *ownerRevocationRequest
+	accepted := false
+	if err == nil {
+		// Clear the admission deadline before publishing acceptance. Once
+		// markAccepted succeeds, an administrative replay may install the
+		// acknowledgement deadline concurrently; there must be no later reset
+		// that could erase it.
+		if err = conn.SetReadDeadline(time.Time{}); err == nil {
+			queued, accepted = h.owners.markAccepted(owner)
+		}
+	}
 	owner.writeMu.Unlock()
 	if err != nil {
+		// A failed accept never publishes an eligible owner. The durable
+		// session is cleaned up by finishOwner after this transport close.
+		if deadlineFailed {
+			owner.close(h, CloseReasonTimeout)
+		} else {
+			owner.close(h, CloseReasonTransport)
+		}
+		return
+	}
+	if !accepted {
+		owner.close(h, CloseReasonTransport)
 		return
 	}
 	if registered {
 		// A registered connection is owned until its peer closes it or a linked
 		// pending revocation intent closes it.  No heartbeat or recovery loop is
 		// introduced in this issue.
-		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		if queued != nil && !h.deliverQueuedRevocation(owner, queued) {
 			return
 		}
 		for {
-			messageType, _, readErr := conn.NextReader()
+			messageType, reader, readErr := conn.NextReader()
 			if readErr != nil {
+				if h.owners.hasPendingRevocation(owner) && isTimeoutError(readErr) {
+					h.rejectRevocationOwner(owner, CloseReasonTimeout)
+					return
+				}
 				h.owners.markReadTermination(owner, readErr)
 				return
 			}
-			// v1 has no post-negotiation dispatch in this bounded slice. Do not
-			// read the returned payload: a fragmented data frame without a
-			// continuation must be rejected immediately instead of waiting for an
-			// unbounded reader completion.
-			if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
-				owner.close(h, CloseReasonPolicy)
+			// Before a revoked event is delivered, v1 has no post-negotiation
+			// dispatch in this bounded slice. Do not drain arbitrary frames: an
+			// incomplete fragment must be rejected immediately. Once an intent is
+			// pending, the bounded body read below is the acknowledgement parser.
+			if !h.owners.hasPendingRevocation(owner) {
+				if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
+					owner.close(h, CloseReasonPolicy)
+					return
+				}
+				owner.close(h, CloseReasonEnvelope)
+				return
+			}
+			if messageType == websocket.BinaryMessage {
+				// The message type is known from the frame header. Reject before
+				// consuming an attacker-controlled binary body.
+				h.rejectRevocationOwner(owner, CloseReasonBinary)
+				return
+			}
+			raw, bodyErr := readControlMessage(reader)
+			if bodyErr != nil {
+				reason := CloseReasonEnvelope
+				if isTimeoutError(bodyErr) {
+					reason = CloseReasonTimeout
+				}
+				h.rejectRevocationOwner(owner, reason)
+				return
+			}
+			if err := conn.SetReadDeadline(time.Time{}); err != nil {
+				h.rejectRevocationOwner(owner, CloseReasonTransport)
+				return
+			}
+			if len(raw) > remoteprotocol.MaxControlMessageSize {
+				h.rejectRevocationOwner(owner, CloseReasonOversize)
+				return
+			}
+			if messageType != websocket.TextMessage || !utf8.Valid(raw) {
+				if messageType == websocket.TextMessage && !utf8.Valid(raw) {
+					h.rejectRevocationOwner(owner, CloseReasonInvalidUTF8)
+					return
+				}
+				h.rejectRevocationOwner(owner, CloseReasonEnvelope)
+				return
+			}
+			if h.options.validator == nil || h.options.validator.Validate(raw) != nil {
+				h.rejectRevocationOwner(owner, CloseReasonEnvelope)
+				return
+			}
+			ack, ok := decodeEventAck(raw)
+			if !ok || ack.Protocol != remoteprotocol.Subprotocol || ack.Version != remotedevice.ProtocolVersion || ack.MessageType != "event_ack" || ack.SessionID != owner.sessionID || ack.DeviceID != owner.deviceID || ack.Payload.Kind != "event_ack" || ack.Payload.EventType != "revoked" {
+				h.rejectRevocationOwner(owner, CloseReasonPolicy)
+				return
+			}
+			delivery, ok := h.owners.beginRevocationAcknowledgement(owner, ack.Sequence, ack.Payload.EventID, ack.Payload.Fence)
+			if !ok {
+				h.rejectRevocationOwner(owner, CloseReasonPolicy)
+				return
+			}
+			if !h.applyRevocationAcknowledgement(r.Context(), owner, delivery) {
 				return
 			}
 		}
@@ -724,7 +1269,11 @@ func (h *Handler) finishOwner(owner *sessionOwner) {
 	closer, hasCloser := h.authenticator.(SessionCloser)
 	hook := h.options.cleanupHook
 	var cleanupErr error
-	shouldHook := registered && cause != ownerTerminalRevocation
+	// A revoked event that was delivered but not durably applied must not be
+	// converted into a normal session.closed audit when the peer disconnects.
+	// The intent remains pending for a later owner; successful application uses
+	// ownerTerminalRevocation and also skips this cleanup.
+	shouldHook := registered && cause != ownerTerminalRevocation && cause != ownerTerminalRevocationPending && !h.owners.hasPendingRevocation(owner)
 	if shouldHook && hasCloser {
 		cleanupReason := remotedevice.SessionCloseReasonProtocolError
 		if cause == ownerTerminalNormal || cause == ownerTerminalShutdown {
@@ -846,6 +1395,67 @@ type wireEnvelope struct {
 	DeviceID    string          `json:"device_id"`
 	Sequence    uint64          `json:"sequence"`
 	Payload     json.RawMessage `json:"payload"`
+}
+
+type revokedEventEnvelope struct {
+	Protocol    string              `json:"protocol"`
+	Version     string              `json:"version"`
+	MessageType string              `json:"message_type"`
+	SessionID   string              `json:"session_id"`
+	DeviceID    string              `json:"device_id"`
+	Sequence    uint64              `json:"sequence"`
+	SentAt      int64               `json:"sent_at"`
+	Payload     revokedEventPayload `json:"payload"`
+}
+
+type revokedEventPayload struct {
+	EventID    string           `json:"event_id"`
+	EventType  string           `json:"event_type"`
+	OccurredAt int64            `json:"occurred_at"`
+	Data       revokedEventData `json:"data"`
+}
+
+type revokedEventData struct {
+	Kind         string `json:"kind"`
+	Scope        string `json:"scope"`
+	RevocationID string `json:"revocation_id"`
+	Reason       string `json:"reason"`
+	EffectiveAt  int64  `json:"effective_at"`
+	Fence        int64  `json:"fence"`
+}
+
+type eventAckEnvelope struct {
+	Protocol    string          `json:"protocol"`
+	Version     string          `json:"version"`
+	MessageType string          `json:"message_type"`
+	SessionID   string          `json:"session_id"`
+	DeviceID    string          `json:"device_id"`
+	Sequence    uint64          `json:"sequence"`
+	SentAt      int64           `json:"sent_at"`
+	Payload     eventAckPayload `json:"payload"`
+}
+
+type eventAckPayload struct {
+	Kind           string `json:"kind"`
+	EventType      string `json:"event_type"`
+	EventID        string `json:"event_id"`
+	Fence          int64  `json:"fence"`
+	AcknowledgedAt int64  `json:"acknowledged_at"`
+}
+
+func readControlMessage(reader io.Reader) ([]byte, error) {
+	if reader == nil {
+		return nil, errors.New("remote coordinator: nil message reader")
+	}
+	return io.ReadAll(io.LimitReader(reader, remoteprotocol.MaxControlMessageSize+1))
+}
+
+func decodeEventAck(raw []byte) (eventAckEnvelope, bool) {
+	var ack eventAckEnvelope
+	if json.Unmarshal(raw, &ack) != nil {
+		return eventAckEnvelope{}, false
+	}
+	return ack, true
 }
 
 type negotiationOffer struct {
