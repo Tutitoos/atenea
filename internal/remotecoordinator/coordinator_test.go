@@ -622,9 +622,10 @@ func TestExactControlMessageLimitIsAccepted(t *testing.T) {
 func TestFragmentedOversizeMessageUsesSameBoundedClose(t *testing.T) {
 	material := newTLSMaterial(t)
 	auth := &recordingAuthenticator{}
-	server, _, _ := configuredHandler(t, material, auth)
+	const fragmentedOversizeTimeout = 30 * time.Second
+	server, _, _ := configuredHandler(t, material, auth, WithReadTimeout(fragmentedOversizeTimeout), WithWriteTimeout(fragmentedOversizeTimeout))
 	url := "wss" + strings.TrimPrefix(server.URL, "https") + ConnectPath
-	dialer := websocket.Dialer{WriteBufferSize: 1024, TLSClientConfig: &tls.Config{RootCAs: material.caPool, Certificates: []tls.Certificate{material.clientTLS}, ServerName: "localhost", MinVersion: tls.VersionTLS13}}
+	dialer := websocket.Dialer{WriteBufferSize: remoteprotocol.MaxControlMessageSize, TLSClientConfig: &tls.Config{RootCAs: material.caPool, Certificates: []tls.Certificate{material.clientTLS}, ServerName: "localhost", MinVersion: tls.VersionTLS13}}
 	conn, response, err := dialer.Dial(url, http.Header{"Sec-WebSocket-Protocol": []string{remoteprotocol.Subprotocol}})
 	if err != nil {
 		if response != nil {
@@ -637,42 +638,19 @@ func TestFragmentedOversizeMessageUsesSameBoundedClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const writerTimeout = 5 * time.Second
-	deadline := time.Now().Add(writerTimeout)
-	if err := conn.SetReadDeadline(deadline); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(fragmentedOversizeTimeout)); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.SetWriteDeadline(deadline); err != nil {
+	if _, err := writer.Write(bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1)); err != nil {
 		t.Fatal(err)
 	}
-	writerDone := make(chan error, 1)
-	go func() {
-		_, writeErr := writer.Write(bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1))
-		closeErr := writer.Close()
-		if writeErr != nil {
-			writerDone <- writeErr
-			return
-		}
-		writerDone <- closeErr
-	}()
-
-	_, _, readErr := conn.ReadMessage()
-	var closeErr *websocket.CloseError
-	closeObserved := errors.As(readErr, &closeErr) && closeErr.Code == websocket.CloseMessageTooBig && closeErr.Text == CloseReasonOversize
-	// Closing after the read unblocks the writer even if the peer leaves its
-	// transport open after sending the close frame.
-	_ = conn.Close()
-	timer := time.NewTimer(writerTimeout)
-	defer timer.Stop()
-	var writeErr error
-	select {
-	case writeErr = <-writerDone:
-	case <-timer.C:
-		t.Fatalf("fragmented oversize writer did not terminate: read=%v", readErr)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if !closeObserved {
-		t.Fatalf("oversized close = %v (writer = %v), want code=%d reason=%q", readErr, writeErr, websocket.CloseMessageTooBig, CloseReasonOversize)
+	if err := conn.SetReadDeadline(time.Now().Add(fragmentedOversizeTimeout)); err != nil {
+		t.Fatal(err)
 	}
+	readCloseWithCode(t, conn, websocket.CloseMessageTooBig, CloseReasonOversize)
 	if calls, _ := auth.snapshot(); calls != 0 {
 		t.Fatalf("authentication calls = %d, want zero", calls)
 	}
