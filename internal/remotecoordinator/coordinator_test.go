@@ -622,9 +622,10 @@ func TestExactControlMessageLimitIsAccepted(t *testing.T) {
 func TestFragmentedOversizeMessageUsesSameBoundedClose(t *testing.T) {
 	material := newTLSMaterial(t)
 	auth := &recordingAuthenticator{}
-	server, _, _ := configuredHandler(t, material, auth)
+	const fragmentedOversizeTimeout = 30 * time.Second
+	server, _, _ := configuredHandler(t, material, auth, WithReadTimeout(fragmentedOversizeTimeout), WithWriteTimeout(fragmentedOversizeTimeout))
 	url := "wss" + strings.TrimPrefix(server.URL, "https") + ConnectPath
-	dialer := websocket.Dialer{WriteBufferSize: 1024, TLSClientConfig: &tls.Config{RootCAs: material.caPool, Certificates: []tls.Certificate{material.clientTLS}, ServerName: "localhost", MinVersion: tls.VersionTLS13}}
+	dialer := websocket.Dialer{WriteBufferSize: remoteprotocol.MaxControlMessageSize, TLSClientConfig: &tls.Config{RootCAs: material.caPool, Certificates: []tls.Certificate{material.clientTLS}, ServerName: "localhost", MinVersion: tls.VersionTLS13}}
 	conn, response, err := dialer.Dial(url, http.Header{"Sec-WebSocket-Protocol": []string{remoteprotocol.Subprotocol}})
 	if err != nil {
 		if response != nil {
@@ -637,10 +638,16 @@ func TestFragmentedOversizeMessageUsesSameBoundedClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := conn.SetWriteDeadline(time.Now().Add(fragmentedOversizeTimeout)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := writer.Write(bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1)); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(fragmentedOversizeTimeout)); err != nil {
 		t.Fatal(err)
 	}
 	readCloseWithCode(t, conn, websocket.CloseMessageTooBig, CloseReasonOversize)
