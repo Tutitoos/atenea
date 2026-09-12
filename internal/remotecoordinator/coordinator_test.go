@@ -637,13 +637,42 @@ func TestFragmentedOversizeMessageUsesSameBoundedClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Write(bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1)); err != nil {
+	const writerTimeout = 5 * time.Second
+	deadline := time.Now().Add(writerTimeout)
+	if err := conn.SetReadDeadline(deadline); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Close(); err != nil {
+	if err := conn.SetWriteDeadline(deadline); err != nil {
 		t.Fatal(err)
 	}
-	readCloseWithCode(t, conn, websocket.CloseMessageTooBig, CloseReasonOversize)
+	writerDone := make(chan error, 1)
+	go func() {
+		_, writeErr := writer.Write(bytes.Repeat([]byte("x"), remoteprotocol.MaxControlMessageSize+1))
+		closeErr := writer.Close()
+		if writeErr != nil {
+			writerDone <- writeErr
+			return
+		}
+		writerDone <- closeErr
+	}()
+
+	_, _, readErr := conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	closeObserved := errors.As(readErr, &closeErr) && closeErr.Code == websocket.CloseMessageTooBig && closeErr.Text == CloseReasonOversize
+	// Closing after the read unblocks the writer even if the peer leaves its
+	// transport open after sending the close frame.
+	_ = conn.Close()
+	timer := time.NewTimer(writerTimeout)
+	defer timer.Stop()
+	var writeErr error
+	select {
+	case writeErr = <-writerDone:
+	case <-timer.C:
+		t.Fatalf("fragmented oversize writer did not terminate: read=%v", readErr)
+	}
+	if !closeObserved {
+		t.Fatalf("oversized close = %v (writer = %v), want code=%d reason=%q", readErr, writeErr, websocket.CloseMessageTooBig, CloseReasonOversize)
+	}
 	if calls, _ := auth.snapshot(); calls != 0 {
 		t.Fatalf("authentication calls = %d, want zero", calls)
 	}
