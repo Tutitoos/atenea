@@ -49,6 +49,17 @@ func Discover(ctx context.Context, root string) (Identity, error) {
 	h := sha256.New()
 	part(h, "root", physical)
 	if identity.Git {
+		// Porcelain v1 reports paths relative to the Git top level even when
+		// Discover was called for a configured subdirectory. Keep the configured
+		// root in the identity, but read dirty files from the Git root.
+		top, err := gitOutput(ctx, physical, "rev-parse", "--show-toplevel")
+		if err != nil {
+			return Identity{}, err
+		}
+		gitRoot := strings.TrimSuffix(strings.TrimSuffix(top, "\n"), "\r")
+		if resolved, err := filepath.EvalSymlinks(gitRoot); err == nil {
+			gitRoot = resolved
+		}
 		identity.Head = strings.TrimSpace(head)
 		part(h, "head", identity.Head)
 		part(h, "status", status)
@@ -61,7 +72,7 @@ func Discover(ctx context.Context, root string) (Identity, error) {
 			if strings.HasPrefix(statusPathStatus([]byte(status), rel), "??") {
 				identity.Untracked = true
 			}
-			if err := hashFile(h, physical, rel); err != nil {
+			if err := hashFile(h, gitRoot, rel); err != nil {
 				return Identity{}, err
 			}
 		}
@@ -175,7 +186,7 @@ func dirtyPaths(status []byte) []string {
 }
 
 func addPath(seen map[string]bool, raw string) {
-	path := strings.TrimSpace(raw)
+	path := raw
 	if path == "" || filepath.IsAbs(path) || path == "." || strings.HasPrefix(path, "../") {
 		return
 	}
@@ -191,7 +202,7 @@ func statusPathStatus(status []byte, rel string) string {
 		}
 		entry := string(rest[:n])
 		offset += n + 1
-		if len(entry) >= 4 && strings.TrimSpace(entry[3:]) == rel {
+		if len(entry) >= 4 && entry[3:] == rel {
 			return entry[:2]
 		}
 	}
