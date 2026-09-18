@@ -20,6 +20,20 @@ describe("dashboard API boundary", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses the server's configured limit for collection requests", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: { items: [] } }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.overview("24h");
+    await api.sessions();
+    await api.runs();
+    await api.metrics();
+    await api.incidents();
+    for (const [path] of fetchMock.mock.calls) {
+      expect(new URL(String(path), "http://localhost").searchParams.has("limit")).toBe(false);
+    }
+    vi.unstubAllGlobals();
+  });
+
   it("accepts the cookie-setting login response without persisting the token", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
