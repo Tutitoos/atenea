@@ -55,11 +55,25 @@ func (w *stdioWire) send(value any) error {
 }
 
 func (w *stdioWire) run(handler func(map[string]any)) {
+	w.runWith(handler, true)
+}
+
+// runOrdered records messages in pipe order for tests that assert protocol
+// sequencing. Other fixture users keep concurrent handlers for cancellation.
+func (w *stdioWire) runOrdered(handler func(map[string]any)) {
+	w.runWith(handler, false)
+}
+
+func (w *stdioWire) runWith(handler func(map[string]any), concurrent bool) {
 	scanner := bufio.NewScanner(w.toChild)
 	for scanner.Scan() {
 		var message map[string]any
 		if json.Unmarshal(scanner.Bytes(), &message) == nil {
-			go handler(message)
+			if concurrent {
+				go handler(message)
+			} else {
+				handler(message)
+			}
 		}
 	}
 }
@@ -190,7 +204,7 @@ func TestAutoFallsBackOnlyOnExplicitMethodNotFound(t *testing.T) {
 	w := newStdioWire(t, mcpstdio.Options{ProtocolMode: mcpstdio.ProtocolAuto})
 	var mu sync.Mutex
 	var methods []string
-	go w.run(func(message map[string]any) {
+	go w.runOrdered(func(message map[string]any) {
 		method := messageMethod(message)
 		mu.Lock()
 		methods = append(methods, method)
