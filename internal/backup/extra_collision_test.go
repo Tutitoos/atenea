@@ -104,3 +104,32 @@ func TestExtraCollisionAfterRestorePreservesOlderSnapshot(t *testing.T) {
 		t.Fatalf("canceled snapshot modified first snapshot: %q, %v", got, err)
 	}
 }
+
+func TestExtraParentSymlinkCannotWriteOutsideSnapshot(t *testing.T) {
+	source, dir, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(source, "config")); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(outside, "atenea.toml")
+	if err := os.WriteFile(sentinel, []byte("untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(t.TempDir(), "atenea.toml")
+	if err := os.WriteFile(extra, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(Options{Source: source, Dir: dir, Keep: 2,
+		Extras: []Extra{{Source: extra, Dest: "config/atenea.toml"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := store.Snapshot(t.Context(), time.Now()); err == nil || snapshot.Name != "" {
+		t.Fatalf("symlinked extra parent published a snapshot: %+v, %v", snapshot, err)
+	}
+	if body, err := os.ReadFile(sentinel); err != nil || string(body) != "untouched" {
+		t.Fatalf("extra changed file outside snapshot: %q, %v", body, err)
+	}
+	if snapshots, err := store.List(); err != nil || len(snapshots) != 0 {
+		t.Fatalf("failed snapshot was published: %+v, %v", snapshots, err)
+	}
+}

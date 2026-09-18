@@ -32,6 +32,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -868,7 +869,7 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 			"backup: extra %s is not a regular file", extra.Source)
 	}
 	destination := filepath.Join(target, extra.Dest)
-	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+	if err := prepareExtraParent(target, filepath.Dir(destination)); err != nil {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot create parent directory for %s: %v", destination, err)
 	}
@@ -908,6 +909,37 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 		return Snapshot{}, err
 	}
 	return Snapshot{Files: 1, Copied: 1, Bytes: written}, nil
+}
+
+// prepareExtraParent refuses links in the staged tree before opening the
+// destination. Otherwise an extra can follow a symlink copied from the state
+// and write outside the unpublished snapshot.
+func prepareExtraParent(target, parent string) error {
+	rel, err := filepath.Rel(target, parent)
+	if err != nil {
+		return err
+	}
+	current := target
+	if rel == "." {
+		return nil
+	}
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := os.Mkdir(current, 0o700); err != nil {
+				return err
+			}
+			info, err = os.Lstat(current)
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", current)
+		}
+	}
+	return nil
 }
 
 // syncUpTo makes dir durable and then every directory above it as far as
