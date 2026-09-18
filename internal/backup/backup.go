@@ -612,6 +612,28 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	for _, extra := range s.extras {
+		// A restored snapshot can put an extra back into the source tree.
+		// copyTree has already counted that path; the extra replaces it.
+		destination := filepath.Join(partial, extra.Dest)
+		previous, statErr := os.Lstat(destination)
+		if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+			_ = os.RemoveAll(partial)
+			return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot inspect %s: %v", destination, statErr)
+		}
+		// Missing extras leave the copyTree entry in place.
+		extraInfo, extraErr := os.Stat(extra.Source)
+		if extraErr != nil && !errors.Is(extraErr, fs.ErrNotExist) {
+			_ = os.RemoveAll(partial)
+			return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot inspect %s: %v", extra.Source, extraErr)
+		}
+		wasLinked := false
+		if previous != nil && extraInfo != nil && previous.Mode().IsRegular() && base != "" {
+			if old, oldErr := os.Stat(filepath.Join(base, extra.Dest)); oldErr == nil {
+				wasLinked = os.SameFile(previous, old)
+			}
+		}
 		counts, err := copyExtra(ctx, extra, partial, base)
 		if err != nil {
 			_ = os.RemoveAll(partial)
@@ -621,6 +643,14 @@ func (s *Store) Snapshot(ctx context.Context, now time.Time) (Snapshot, error) {
 		snapshot.Linked += counts.Linked
 		snapshot.Copied += counts.Copied
 		snapshot.Bytes += counts.Bytes
+		if previous != nil && counts.Files != 0 {
+			snapshot.Files--
+			if wasLinked {
+				snapshot.Linked--
+			} else {
+				snapshot.Copied--
+			}
+		}
 	}
 	// A second run inside the same second answers to the same name. The later
 	// one holds the fresher state so it replaces: its copy is already on disk,
@@ -841,6 +871,23 @@ func copyExtra(ctx context.Context, extra Extra, target, base string) (Snapshot,
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
 			"backup: cannot create parent directory for %s: %v", destination, err)
+	}
+	// copyTree may have hard-linked this path to an older snapshot. Remove
+	// only the new directory entry before writing: truncating it would also
+	// rewrite the older snapshot's inode. A failed copy is discarded with the
+	// partial tree by Snapshot.
+	if existing, err := os.Lstat(destination); err == nil {
+		if existing.IsDir() {
+			return Snapshot{}, contract.Fail(contract.FailureInvalidInput,
+				"backup: extra destination %s is a directory", destination)
+		}
+		if err := os.Remove(destination); err != nil {
+			return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+				"backup: cannot replace %s: %v", destination, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return Snapshot{}, contract.Fail(contract.FailurePermissionDenied,
+			"backup: cannot inspect %s: %v", destination, err)
 	}
 	// Extras land after copyTree has already made the tree durable, so each
 	// one syncs its own way back up to the snapshot root: a hard-linked extra
