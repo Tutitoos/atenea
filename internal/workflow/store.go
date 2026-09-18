@@ -2040,6 +2040,28 @@ func (s *Store) SetAcceptedWriteFingerprint(ctx context.Context, id, stepID, fin
 	return tx.Commit()
 }
 
+// SetObservedWriteFingerprint records the tree left by a failed or incomplete
+// effectful step. Its answer stays unaccepted, but a configured reviewer must
+// see the tree that actually exists after the partial write.
+func (s *Store) SetObservedWriteFingerprint(ctx context.Context, id, stepID, fingerprint string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return unavailable(err, "workflow: recording observed write source")
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE workflow_step SET source_fingerprint=? WHERE workflow_id=? AND id=? AND status IN ('failed','incomplete')`, fingerprint, id, stepID)
+	if err != nil {
+		return unavailable(err, "workflow: recording %s step %s observed source", id, stepID)
+	}
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		return contract.Fail(contract.FailureInvalidInput, "workflow %s step %s is not a failed or incomplete write", id, stepID)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workflow SET source_fingerprint=? WHERE id=?`, fingerprint, id); err != nil {
+		return unavailable(err, "workflow: recording observed source state for %s", id)
+	}
+	return tx.Commit()
+}
+
 // BindKnowledgeCandidate adds the host-derived candidate identity to an
 // already accepted implementation result without replacing any agent output.
 func (s *Store) BindKnowledgeCandidate(ctx context.Context, id, stepID, candidateID, digest string) error {
