@@ -18,4 +18,11 @@ test.describe("Atenea dashboard shell", () => {
     await expect(page.getByRole("button", { name: "Abrir menú" })).toBeVisible();
     await expect(page.locator("nav").last()).toBeVisible();
   });
+
+  test("loads collections with the fixture server's page limit of 25", async ({ page }) => {
+    await page.goto("/sessions");
+    await expect(page.getByText("Validación dashboard").filter({ visible: true }).first()).toBeVisible();
+    await page.goto("/runs");
+    await expect(page.getByText("Validación dashboard").filter({ visible: true }).first()).toBeVisible();
+  });
 });

@@ -20,14 +20,14 @@ const query = (values: Record<string, string | undefined>) => {
 };
 
 export const api = {
-  overview: (range: string) => request<Overview>(`/api/v1/overview?${query({ range, limit: "100" })}`),
-  sessions: (values: Record<string, string | undefined> = {}) => request<{ items?: Session[]; total?: number }>(`/api/v1/sessions?${query({ limit: "100", ...values })}`),
+  overview: (range: string) => request<Overview>(`/api/v1/overview?${query({ range })}`),
+  sessions: (values: Record<string, string | undefined> = {}) => request<{ items?: Session[]; total?: number }>(`/api/v1/sessions?${query(values)}`),
   session: (id: string) => request<Session>(`/api/v1/sessions/${encodeURIComponent(id)}`),
-  runs: (values: Record<string, string | undefined> = {}) => request<{ items?: Run[]; total?: number }>(`/api/v1/runs?${query({ limit: "100", ...values })}`),
+  runs: (values: Record<string, string | undefined> = {}) => request<{ items?: Run[]; total?: number }>(`/api/v1/runs?${query(values)}`),
   run: (id: string) => request<Run>(`/api/v1/runs/${encodeURIComponent(id)}`),
   workflow: (id: string) => request<WorkflowDetail>(`/api/v1/workflows/${encodeURIComponent(id)}`),
-  metrics: (values: Record<string, string | undefined> = {}) => request<unknown>(`/api/v1/metrics?${query({ limit: "100", ...values })}`),
-  incidents: () => request<unknown>("/api/v1/incidents?limit=100"),
+  metrics: (values: Record<string, string | undefined> = {}) => request<unknown>(`/api/v1/metrics?${query(values)}`),
+  incidents: () => request<unknown>("/api/v1/incidents"),
   catalog: () => request<unknown>("/api/v1/catalog"),
   login: async (token: string) => {
     // Login intentionally is the one non-envelope endpoint: the server only
