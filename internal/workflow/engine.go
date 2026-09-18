@@ -2277,6 +2277,7 @@ type done struct {
 type queuedDispatch struct {
 	stepID            string
 	dispatch          agent.Dispatch
+	sourceFingerprint string
 	slot              globalSlot
 	activity          ActivityNotice
 	activityPublished bool
@@ -2367,6 +2368,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 		workflowLanes = config.Workflow{MaxParallelAgent: run.Policy.MaxParallelAgent, MaxParallelReview: run.Policy.MaxParallelReview}
 	}
 	running := make(map[string]bool)
+	reviewSources := make(map[string]string)
 	resultCapacity := len(plan.Graph.Steps)
 	if resultCapacity < 1 {
 		resultCapacity = 1
@@ -2423,6 +2425,32 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 			}
 		}
 		for _, item := range queued {
+			if plan.Pool(item.stepID) != config.PoolReview || e.repoRoot == "" {
+				continue
+			}
+			current, err := sourceFingerprint(e.repoRoot)
+			if err == nil && current == item.sourceFingerprint {
+				continue
+			}
+			for _, pending := range queued {
+				pending.slot.Release()
+				_ = e.store.InterruptBeforeDispatch(write, id, pending.stepID, pending.dispatch.ID,
+					"repository sources changed before review dispatch", e.now())
+				delete(running, pending.stepID)
+				lanes[plan.Pool(pending.stepID)]--
+				status[pending.stepID] = StatusInterrupted
+			}
+			if err != nil {
+				return contract.Fail(contract.FailureUnavailable,
+					"workflow %s cannot verify sources before review %s: %v", id, item.stepID, err)
+			}
+			return contract.Fail(contract.FailureInvalidInput,
+				"workflow %s sources changed before review %s", id, item.stepID)
+		}
+		for _, item := range queued {
+			if plan.Pool(item.stepID) == config.PoolReview {
+				reviewSources[item.stepID] = item.sourceFingerprint
+			}
 			wg.Add(1)
 			go runDispatch(activeCtx, e.runner, item, results, &wg)
 		}
@@ -2749,6 +2777,13 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 				var nativeParentThreadID string
 				var nativePreparer nativeChildPreparer
 				if nativeForkRequired {
+					if pool == config.PoolReview && e.repoRoot != "" {
+						current, fingerprintErr := sourceFingerprint(e.repoRoot)
+						if fingerprintErr != nil || current != run.SourceFingerprint {
+							return failBeforeQueue(contract.Fail(contract.FailureInvalidInput,
+								"workflow %s sources changed before native review %s", id, step.ID))
+						}
+					}
 					nativeParentThreadID = strings.TrimSpace(dispatch.Parent.Route.ThreadID)
 					if nativeParentThreadID == "" {
 						return failBeforeQueue(contract.Fail(contract.FailureInvalidInput,
@@ -2839,6 +2874,15 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 							"workflow progress could not be published before native fork"))
 					}
 					activityPublished = true
+					if pool == config.PoolReview && e.repoRoot != "" {
+						current, fingerprintErr := sourceFingerprint(e.repoRoot)
+						if fingerprintErr != nil || current != run.SourceFingerprint {
+							_ = e.store.InterruptBeforeDispatch(write, id, step.ID, traceID,
+								"repository sources changed before native review fork", e.now())
+							return failBeforeQueue(contract.Fail(contract.FailureInvalidInput,
+								"workflow %s sources changed before native review %s", id, step.ID))
+						}
+					}
 					reserved, reserveErr := e.store.ReserveNativeFork(write, id, step.ID, nativeParentThreadID)
 					if reserveErr != nil {
 						_ = e.store.InterruptBeforeDispatch(write, id, step.ID, traceID, "native fork reservation failed", e.now())
@@ -2861,7 +2905,7 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 				lanes[pool]++
 				running[step.ID] = true
 				status[step.ID] = StatusRunning
-				queued = append(queued, queuedDispatch{stepID: step.ID, dispatch: dispatch, slot: slot, activity: activity, activityPublished: activityPublished})
+				queued = append(queued, queuedDispatch{stepID: step.ID, dispatch: dispatch, sourceFingerprint: run.SourceFingerprint, slot: slot, activity: activity, activityPublished: activityPublished})
 			}
 		}
 		if len(queued) > 0 {
@@ -2876,6 +2920,18 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 		finished := <-results
 		delete(running, finished.stepID)
 		lanes[plan.Pool(finished.stepID)]--
+		staleReview := false
+		if expected, reviewing := reviewSources[finished.stepID]; reviewing && e.repoRoot != "" && finished.status != StatusInterrupted {
+			current, fingerprintErr := sourceFingerprint(e.repoRoot)
+			if fingerprintErr != nil || current != expected {
+				staleReview = true
+				finished.status = StatusIncomplete
+				finished.report.Verdict = contract.VerdictIncomplete
+				finished.report.Reason = contract.Reason{Kind: contract.FailureInvalidInput,
+					Text: "repository sources changed during review; result cannot be accepted"}
+			}
+		}
+		delete(reviewSources, finished.stepID)
 
 		// A step cut mid-flight was never judged. Which steps those are is
 		// read off their own death -- a canceled run comes back with
@@ -2976,6 +3032,11 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 			Result:     finished.report.Result,
 			Discovered: finished.report.Discovered,
 			Spent:      finished.report.Spent,
+		}
+		if staleReview {
+			automaticRetryExhausted = true
+			recoveryBlockedReason = "repository sources changed during review"
+			continue
 		}
 
 		if watchdogTriggered {
