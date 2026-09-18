@@ -1,107 +1,52 @@
 ---
 title: "Atenea SSH: local control window"
-description: "Proposed multi-host Codex bridge, visibility modes, credentials and audit boundary (issue #141)."
+description: "Reviewed delivery contract for epic #141 and documentation issue #142; implementation pending."
 weight: 43
 ---
 
-# Atenea SSH: local control window
+# Atenea SSH phased delivery
 
-**Status:** Proposed contract for issue #141. No implementation or real-device
-validation is claimed by this page.
+Tracking epic. Child issues are the implementation units; all remain open. The local documentation draft is not published or validated as runtime behavior.
 
-## Purpose and entry points
+## Phases and dependencies
 
-`atenea-ssh` in a terminal and the `atenea-ssh` request in a local client with
-the Atenea MCP installed open the same control window on the computer running
-Atenea. A remote or cloud chat cannot open a window on an unrelated computer.
-The window uses a separate loopback-only action service. It is not a route in
-the existing read-only dashboard, which may be served over Tailscale or LAN.
+- [ ] [#142](https://github.com/Tutitoos/atenea/issues/142) — Architecture, protocol and platform contract. Prerequisites: none.
+- [ ] [#143](https://github.com/Tutitoos/atenea/issues/143) — Side-effect-free SSH inventory and trust diagnostics. Prerequisites: [#142](https://github.com/Tutitoos/atenea/issues/142).
+- [ ] [#144](https://github.com/Tutitoos/atenea/issues/144) — Native vaults and safe authentication. Prerequisites: [#143](https://github.com/Tutitoos/atenea/issues/143).
+- [ ] [#145](https://github.com/Tutitoos/atenea/issues/145) — Encrypted history, keys and recovery receipts. Prerequisites: [#144](https://github.com/Tutitoos/atenea/issues/144).
+- [ ] [#146](https://github.com/Tutitoos/atenea/issues/146) — Windows connector, installer and early compatibility canary. Prerequisites: [#142](https://github.com/Tutitoos/atenea/issues/142), [#143](https://github.com/Tutitoos/atenea/issues/143), [#144](https://github.com/Tutitoos/atenea/issues/144), [#145](https://github.com/Tutitoos/atenea/issues/145).
+- [ ] [#147](https://github.com/Tutitoos/atenea/issues/147) — Visible/hidden execution and distributed admission. Prerequisites: [#143](https://github.com/Tutitoos/atenea/issues/143), [#144](https://github.com/Tutitoos/atenea/issues/144), [#145](https://github.com/Tutitoos/atenea/issues/145), [#146](https://github.com/Tutitoos/atenea/issues/146).
+- [ ] [#148](https://github.com/Tutitoos/atenea/issues/148) — Local UI, controller packaging and Terminal launcher. Prerequisites: [#143](https://github.com/Tutitoos/atenea/issues/143), [#144](https://github.com/Tutitoos/atenea/issues/144), [#145](https://github.com/Tutitoos/atenea/issues/145), [#146](https://github.com/Tutitoos/atenea/issues/146), [#147](https://github.com/Tutitoos/atenea/issues/147).
+- [ ] [#149](https://github.com/Tutitoos/atenea/issues/149) — Effectful local chat opener. Prerequisites: [#148](https://github.com/Tutitoos/atenea/issues/148).
+- [ ] [#150](https://github.com/Tutitoos/atenea/issues/150) — Two-PC acceptance and controller support matrix. Prerequisites: [#142](https://github.com/Tutitoos/atenea/issues/142), [#143](https://github.com/Tutitoos/atenea/issues/143), [#144](https://github.com/Tutitoos/atenea/issues/144), [#145](https://github.com/Tutitoos/atenea/issues/145), [#146](https://github.com/Tutitoos/atenea/issues/146), [#147](https://github.com/Tutitoos/atenea/issues/147), [#148](https://github.com/Tutitoos/atenea/issues/148), [#149](https://github.com/Tutitoos/atenea/issues/149).
 
-The host list comes from concrete OpenSSH `Host` aliases in the current user's
-configuration, including `Include` files. Wildcards, negated patterns, and
-`Match` blocks do not become selectable devices. OpenSSH itself resolves each
-selected alias's effective settings. Listing a host makes no connection;
-diagnosis happens only when requested or while that host is selected. The
-connection retains strict host-key verification. A changed or unknown host key
-requires a separate, explicit trust decision outside task dispatch.
+Follow the declared dependencies for delivery. [#146](https://github.com/Tutitoos/atenea/issues/146) now depends on inventory, credentials and audit because installer mutations need those controls. [#147](https://github.com/Tutitoos/atenea/issues/147) waits for the early Windows compatibility results.
 
-## Host and connector state
+## Product contract
 
-The selected host shows the effective alias and user, connection and
-authentication state, operating system, connector version and installation
-state, Codex availability, active request, last diagnostic error and bounded
-logs. The UI distinguishes at least `unchecked`, `offline`,
-`authentication_required`, `connector_absent`, `version_mismatch`, `ready`,
-`busy` and `error`. It does not call a host ready merely because port 22 is
-open. Installation or update is explicit, checks artifact integrity and
-preserves pending requests and a rollback copy. The first connector target is
-Windows and runs work in the logged-in user's session; its account and Codex
-login stay on that PC.
+Atenea SSH opens the same local control UI from `atenea-ssh` in Terminal or an installed local chat integration. It lists concrete SSH aliases, lets the user select and explicitly connect/check one host, shows connector/Codex state, stores SSH passwords and key passphrases in native vaults, sends a prompt with visible/hidden and permission choices, and exposes logs and encrypted action history.
 
-## Credentials
+- **Platforms:** controller OS and remote target OS are separate. macOS, Windows and Linux vault/controller rows need their own implementation and native validation; the current Atenea Unix IPC and service code do not imply a working Windows controller. The first remote connector is Windows. Other SSH targets stay listed with unsupported connector state. Missing SSH/network/Codex prerequisites require local bootstrap; the connector cannot install SSH on an unreachable PC.
+- **SSH config and trust:** list parsing is side-effect free. `ssh -G` can execute Match exec, so it must never render the list. Selected-host resolution handles executable config/proxies explicitly; keep supported OpenSSH semantics and refuse unsupported cases. Unknown and changed host keys require a reviewed trust flow; never auto-accept them. Aliases/IPs are labels, not durable device identity.
+- **Credentials:** passwords bind to verified destination/account; passphrases bind to the local private-key identity with separate per-destination use authorization. Reuse SSH agents, handle native vault failures, and protect the askpass/IPC exchange. Secret values from the vault never enter args/environment/history/logs. Metadata-only credential events are auditable. Windows controller readiness is not established by a Credential Manager adapter alone.
+- **Visibility:** visible is default and must support NEW and EXISTING app conversations through target-version-verified paths. The prototype queue only covers an existing thread; [#146](https://github.com/Tutitoos/atenea/issues/146) performs the early canary. Hidden uses `codex exec --ephemeral` and must be shown absent from the target app; --ephemeral help alone is not visual proof. Hidden tasks remain in Atenea history and may cause ordinary OS effects; they are not invisible activity or a provider-retention guarantee. An ephemeral task is not resumed or silently converted to visible; required app-only capabilities are refused.
+- **Permissions and outcomes:** visibility does not grant permission. Existing app permissions are inherited unless enforcement is proven. Turn completion, agent-reported success and independently verified action results are distinct. Tool-by-tool history is partial/unavailable unless the provider exposes it.
+- **Recovery:** both controller and connector have durable UUID/digest receipts. Locks use stable target/account/session resources, including duplicate aliases and multiple controllers. Ambiguous receipt/start/enqueue/ack windows remain pending and retain locks until reconciled. Connector locks do not lock out the human using the desktop. No automatic new UUID or blind replay; do not promise exactly-once arbitrary side effects. Page through remote history instead of only the last ten turns. Wait expiry and cancellation request are not remote termination.
+- **History/privacy:** encrypt full prompts/results locally, protect remote connector payloads and temporary files too, and disclose the provider's own transcript retention. Record connection/trust/credential metadata/install/dispatch/cancel/cleanup events and evidence coverage. Vault-sourced secrets must not enter audit payloads; user prompt text is retained encrypted and may itself be sensitive. Key loss, backup, deletion, export and receipt retention need explicit behavior.
+- **Audit availability:** a failed pre-action receipt blocks new mutations. Failure after dispatch stops new work but must not block same-ID status or targeted cancellation. Reconcile audit gaps after recovery without inventing evidence.
+- **Window boundary:** dedicated local control page with authenticated session bootstrap, exact Host/Origin, CSRF and bounded inputs. Loopback is not user authentication and HTTP does not supply Unix peer identity. Full prompts/actions are unavailable on the published dashboard. Test actual controller OS packaging; do not promise a native window if the OS browser opens a tab.
+- **Chat entry:** an effectful typed opener with explicit installation/discovery, not an unannotated mutation in the existing read-only atenea.command surface. A URL launch acknowledgment is not rendering proof.
 
-An SSH password and a private-key passphrase are separate credential types,
-bound to the resolved host identity and login user. Atenea uses the operating
-system's protected credential store on the controller: macOS Keychain, Windows
-Credential Manager or Linux Secret Service, with an explicit unavailable state
-where no protected store exists. A key passphrase already managed by the
-system SSH agent is not copied into Atenea. No secret is stored in OpenSSH
-config, Atenea configuration, a command argument, process environment,
-request receipt, log or history row. Credential retrieval and SSH prompting
-are local to the controller; the remote connector never receives the store's
-master key or unrelated credentials.
+## Completion criteria
 
-## Task visibility
+All nine child issues must meet their own acceptance gates. [#150](https://github.com/Tutitoos/atenea/issues/150) repeats the full product flow on two real Windows PCs and separately reports each claimed controller platform. Required unobserved behavior remains open, unless the user explicitly changes scope. Individual source PRs may merge with accurately bounded evidence; this does not by itself complete the epic.
 
-Visibility is chosen on each request and defaults to `visible`. It is
-independent of the task's permission mode and is recorded with the request.
+## Review evidence and delivery
 
-| Mode | Codex execution | PC app | Atenea history |
-| --- | --- | --- | --- |
-| `visible` | A durable app-owned conversation, new or explicitly selected | May be opened and continued on the PC | Full request and state history |
-| `hidden` | An independent `codex exec --ephemeral` turn | No app conversation is created or opened | Full request and state history |
+The review reproduced Match exec during ssh -G using a temporary local fixture; see [OpenSSH configuration](https://man.openbsd.org/ssh_config). Local Codex CLI help confirms queue targets existing sessions and --ephemeral avoids persisted session files, neither proving new app-owned creation nor target app invisibility. Repository `internal/ipc/ipc.go`, `internal/platform/service_other.go` and `internal/core/command.go` establish the platform and read-only-command constraints.
 
-`--no-open` by itself does **not** implement hidden mode: it only suppresses
-window opening and may leave a durable conversation. An existing app-owned
-thread cannot be continued in hidden mode, and a hidden turn cannot later be
-resumed as a visible app conversation. Requests needing that thread or its
-desktop capabilities refuse hidden mode before dispatch. The UI shows this
-constraint and requires the user to choose visible mode. The selected sandbox
-(`read-only` or an explicitly permitted write mode) is still enforced
-independently of visibility. App-owned threads keep their existing app
-permissions; Atenea must not describe them as read-only merely because the
-control window defaults to read-only for new CLI work.
+Every code/documentation phase owns a branch/PR and its required checks. The final acceptance issue can close with reviewed operational evidence; it need not invent a code PR. No direct Closes [#141](https://github.com/Tutitoos/atenea/issues/141) implementation PR. No runtime changes, PC installs or full-feature completion are implied by these planning corrections.
 
-## Dispatch, recovery and history
+## Out of scope
 
-Before dispatch, Atenea persists an immutable receipt keyed by host identity
-and UUID. The receipt binds the prompt, visibility, permission mode, selected
-thread and timeout. A second submission of the same UUID and same bytes
-returns its existing state; different bytes are refused. An uncertain SSH
-failure is reconciled through the original UUID and host, never by sending a
-new request. Each host serializes its own connector requests; independent
-hosts may run concurrently. `queued`, `running`, `completed`,
-`needs_attention`, `failed`, `app_pending`, `cancelled`, `timed_out` and
-`orphaned` remain distinct states. Cancellation does not undo work already
-completed on the PC.
-
-The local history records when, which SSH alias and verified host identity,
-request UUID, prompt, visibility, permission mode, remote thread when present,
-state transitions, result and errors. Prompts and sensitive result bodies are
-encrypted at rest under a data key protected by the controller's native
-credential store. The UI may decrypt them for the local user; the published
-dashboard and ordinary operational logs do not expose them. Diagnostic logs
-are bounded and sanitized before rendering. If the key store or durable
-history is unavailable, dispatch refuses before contacting the host rather
-than performing an unaudited action.
-
-## Evidence needed before release
-
-Local tests must cover SSH config enumeration, identity changes, credential
-store failures, action-service authorization, idempotency, concurrent hosts,
-history encryption/restart and visible/hidden refusal paths. A real Windows
-test must separately prove connector installation, a visible app conversation,
-a hidden ephemeral turn absent from the app, reconnect without duplicate
-dispatch and history retrieval. Repeat host-specific checks on a second PC
-before calling the feature multi-host validated. Source checks and unit tests
-alone are not evidence of those real-device behaviors.
+Restoring the retired native desktop-agent coordinator, an arbitrary remote shell UI, moving ChatGPT account credentials between PCs, automatic fleet installation, or claiming exact external side-effect execution from receipts.
