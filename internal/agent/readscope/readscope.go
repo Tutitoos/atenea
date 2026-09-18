@@ -90,6 +90,13 @@ func ReadFile(root, name string, allowed []string) ([]byte, error) {
 func openNoFollow(directory *os.Root, rel string) (*os.File, error) {
 	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
 	current := directory
+	// The caller owns directory. We own only the current child root, which
+	// must be closed on every return, including errors in later components.
+	defer func() {
+		if current != directory {
+			_ = current.Close()
+		}
+	}()
 	for _, part := range parts[:len(parts)-1] {
 		info, err := current.Lstat(part)
 		if err != nil {
@@ -114,9 +121,6 @@ func openNoFollow(directory *os.Root, rel string) (*os.File, error) {
 			_ = current.Close()
 		}
 		current = next
-	}
-	if current != directory {
-		defer func() { _ = current.Close() }()
 	}
 	name := parts[len(parts)-1]
 	info, err := current.Lstat(name)
