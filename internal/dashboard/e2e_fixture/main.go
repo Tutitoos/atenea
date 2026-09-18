@@ -43,7 +43,7 @@ func main() {
 		},
 		Events: hub,
 	}
-	server, err := dashboard.NewServer(dashboard.Config{Enabled: true, Listeners: []dashboard.Listener{{Addr: "127.0.0.1:" + *port, Mode: "loopback"}}}, provider)
+	server, err := dashboard.NewServer(dashboard.Config{Enabled: true, PageLimit: 25, Listeners: []dashboard.Listener{{Addr: "127.0.0.1:" + *port, Mode: "loopback"}}}, provider)
 	if err != nil {
 		panic(err)
 	}
