@@ -2915,7 +2915,13 @@ func (e *Engine) execute(ctx context.Context, id string, plan Plan, worktree *wo
 			if fingerprintErr != nil || fingerprint == "" {
 				fingerprint = "unavailable"
 			}
-			if err := e.store.SetAcceptedWriteFingerprint(write, id, finished.stepID, fingerprint); err != nil {
+			var recordErr error
+			if finished.status == StatusOK {
+				recordErr = e.store.SetAcceptedWriteFingerprint(write, id, finished.stepID, fingerprint)
+			} else {
+				recordErr = e.store.SetObservedWriteFingerprint(write, id, finished.stepID, fingerprint)
+			}
+			if err := recordErr; err != nil {
 				return accountingFailure(err, finished)
 			}
 			evidenceFingerprint = fingerprint
