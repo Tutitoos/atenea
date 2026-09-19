@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This is a virtual Wayland lifecycle test, not a visual desktop test.
+# This is a virtual Wayland render and lifecycle test, not a real desktop test.
 shell=build/bin/atenea-ssh
 controller=build/bin/atenea-ssh-controller
+capture=${ATENEA_SSH_CAPTURE:-build/ci-artifacts/linux-wayland.png}
 test_root=$(mktemp -d)
 weston_pid=''
 first_pid=''
@@ -18,7 +19,7 @@ cleanup() {
   done
   "$controller" --stop >/dev/null 2>&1 || true
   if [[ -f "$test_root/failed" ]]; then
-    for name in weston first second; do
+    for name in weston first second screenshooter; do
       if [[ -s "$test_root/$name.log" ]]; then
         echo "=== $name log ===" >&2
         cat "$test_root/$name.log" >&2
@@ -36,9 +37,14 @@ export WAYLAND_DISPLAY=atenea-ssh-test
 export GDK_BACKEND=wayland
 export XDG_SESSION_TYPE=wayland
 unset DISPLAY
-mkdir -m 700 "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
+mkdir -m 700 "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$test_root/pictures"
+mkdir -p "$(dirname "$capture")"
+capture_dir=$(cd "$(dirname "$capture")" && pwd)
+capture_name=$(basename "$capture")
+export XDG_PICTURES_DIR="$test_root/pictures"
 
-weston --backend=headless --renderer=pixman --socket="$WAYLAND_DISPLAY" --idle-time=0 >"$test_root/weston.log" 2>&1 &
+# Weston debug exposes output capture, safe only on this isolated synthetic CI socket.
+weston --no-config --debug --backend=headless --renderer=pixman --socket="$WAYLAND_DISPLAY" --idle-time=0 >"$test_root/weston.log" 2>&1 &
 weston_pid=$!
 for _ in {1..60}; do
   if [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then break; fi
@@ -78,6 +84,19 @@ for _ in {1..60}; do
 done
 test "$(controller_count)" == 1
 echo 'Wayland: two shell processes share one responsive controller'
+
+sleep 3
+weston-screenshooter >"$test_root/screenshooter.log" 2>&1
+shopt -s nullglob
+screenshots=("$XDG_PICTURES_DIR"/wayland-screenshot-*.png)
+if ((${#screenshots[@]} != 1)); then
+  cat "$test_root/screenshooter.log" >&2
+  echo "Expected one virtual Wayland screenshot, found ${#screenshots[@]}" >&2
+  exit 1
+fi
+mv "${screenshots[0]}" "$capture_dir/$capture_name"
+test -s "$capture_dir/$capture_name"
+echo "Captured virtual Wayland output: $capture"
 
 kill "$first_pid"
 wait "$first_pid" 2>/dev/null || true

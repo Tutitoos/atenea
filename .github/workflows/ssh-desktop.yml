@@ -91,4 +91,5 @@ jobs:
             desktop/ssh/build/ci-artifacts/linux-render-smoke.png
             desktop/ssh/build/ci-artifacts/linux-bridge-probe.png
             desktop/ssh/build/ci-artifacts/linux-navigation-probe.png
+            desktop/ssh/build/ci-artifacts/linux-wayland.png
           if-no-files-found: ignore
