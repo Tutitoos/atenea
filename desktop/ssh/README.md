@@ -57,7 +57,7 @@ is absent from the bundled JavaScript.
 
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
-| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. A diagnostic build showed direct WebView screen and clipboard reads blocked without displaying returned data | Not tested | WKWebView supplied by macOS |
+| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. A diagnostic build showed direct WebView screen and clipboard reads blocked without displaying returned data | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
 
