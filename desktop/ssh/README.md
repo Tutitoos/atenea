@@ -78,11 +78,11 @@ is absent from the bundled JavaScript.
 | --- | --- | --- | --- | --- |
 | macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
-| PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
+| Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal and diagnostic window captures showed fixture UI, `Controlador disponible`, and screen/clipboard calls timing out after 1.5 seconds; real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
-`2de550f`. The PC-SFONT trial used a temporary interactive scheduled task to
+`2de550f`. The Windows workstation trial used a temporary interactive scheduled task to
 launch the two verified EXEs in the active user session. The capture selected
 only the Atenea window. A second trial used `probe-build`; its original
 `Puente bloqueado` label conflated rejection with a timeout. The revised probe
