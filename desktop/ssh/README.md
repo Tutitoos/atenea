@@ -41,7 +41,9 @@ The only permitted JavaScript binding is the zero-argument status call; native
 window close (`Q`) and framework readiness signals remain available. Browser,
 clipboard, notification, window-control, drag/resize/file-drop and obfuscated
 binding messages are rejected before their framework handlers. The frontend
-also sets a packaged-assets-only CSP.
+also sets a packaged-assets-only CSP. The guarded Windows Wails copy changes
+WebView2's global permission setting from allow to deny; the fixture UI does
+not request native browser permissions.
 
 The guarded macOS WKWebView cancels navigation and new windows outside the
 packaged `wails://wails/` page. The guarded Linux WebKitGTK window applies
@@ -49,8 +51,8 @@ the same restriction through its native navigation policy. Windows WebView2
 uses native navigation-starting and new-window events to keep its document
 at `http://wails.localhost/`. The build script checks exact source hashes and
 compiles these hooks into temporary copies of Wails and go-webview2. Broader
-navigation trials and the Linux probe remain necessary before this
-boundary is accepted.
+navigation trials and native Linux desktop sessions remain necessary before
+this boundary is accepted.
 
 The per-user installation ID is written completely to a private temporary
 file before being published atomically. Concurrent first launches therefore
@@ -93,7 +95,7 @@ is absent from the bundled JavaScript.
 | macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout. A separate navigation-probe build left the fixture UI visible after the loopback attempt in an inspected window capture | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds. At `3b111b9`, a separate navigation-probe build attempted a loopback page; the captured fixture window remained visible after 7 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
-| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal and diagnostic window captures showed fixture UI, `Controlador disponible`, and screen/clipboard calls timing out after 1.5 seconds; real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
+| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal, bridge diagnostic and navigation-probe captures showed fixture UI and `Controlador disponible`. The navigation probe left the packaged page visible after the loopback attempt; screen/clipboard calls timed out after 1.5 seconds. Real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
 `2de550f`. The Windows workstation trial used a temporary interactive scheduled task to
@@ -123,7 +125,10 @@ was verified separately by inspecting the artifact. A second Xvfb run at
 `f183222` captured the diagnostic window. Both direct calls reported `sin
 respuesta` after 1.5 seconds while controller status succeeded. This does not
 prove explicit rejection or exclude a later response. It also does not establish
-behavior in a real Linux desktop session or Wayland. A CI build
+behavior in a real Linux desktop session or Wayland. At `0013f86`, another
+Xvfb capture showed the fixture UI and probe survival message after the
+loopback navigation attempt. The CI step captured the window; its visible
+content was inspected separately. A CI build
 does not prove a graphical session, WebView behavior, installation or runtime
 availability on a clean user machine. OS logout and sleep/resume remain
 unobserved. Wails' [installation guide](https://wails.io/docs/gettingstarted/installation/)
