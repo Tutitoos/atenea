@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -71,6 +72,47 @@ func TestFixtureControllerLifecycle(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("stop did not terminate")
+	}
+}
+
+func TestInstallationIDConcurrentCreation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "controller")
+	const callers = 64
+	start := make(chan struct{})
+	results := make(chan struct {
+		id  string
+		err error
+	}, callers)
+	var workers sync.WaitGroup
+	for range callers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			id, err := InstallationID(root)
+			results <- struct {
+				id  string
+				err error
+			}{id, err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	want := ""
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent installation ID: %v", result.err)
+		}
+		if want == "" {
+			want = result.id
+		} else if result.id != want {
+			t.Fatalf("two installation IDs: %q and %q", want, result.id)
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "installation.id" {
+		t.Fatalf("unexpected installation files: %v, %v", entries, err)
 	}
 }
 

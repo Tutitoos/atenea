@@ -43,6 +43,13 @@ clipboard, notification, window-control, drag/resize/file-drop and obfuscated
 binding messages are rejected before their framework handlers. The frontend
 also sets a packaged-assets-only CSP.
 
+The per-user installation ID is written completely to a private temporary
+file before being published atomically. Concurrent first launches therefore
+read the same completed ID. Native endpoint ownership still allows only one
+controller listener. The concurrent-ID test covers simultaneous callers in
+one process; simultaneous desktop processes and logout/restart remain separate
+acceptance checks.
+
 The guard has direct dispatcher tests, a shared ingress-policy test and
 rendered macOS and Windows launch checks. Diagnostic screen and clipboard
 calls did not return data in the tested WebViews. The current Windows and
