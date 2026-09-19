@@ -5,6 +5,7 @@ set -euo pipefail
 shell=build/bin/atenea-ssh
 controller=build/bin/atenea-ssh-controller
 capture=${ATENEA_SSH_CAPTURE:-build/ci-artifacts/linux-wayland.png}
+capture_delay=${ATENEA_SSH_CAPTURE_DELAY:-3}
 test_root=$(mktemp -d)
 weston_pid=''
 first_pid=''
@@ -85,7 +86,7 @@ done
 test "$(controller_count)" == 1
 echo 'Wayland: two shell processes share one responsive controller'
 
-sleep 3
+sleep "$capture_delay"
 weston-screenshooter >"$test_root/screenshooter.log" 2>&1
 shopt -s nullglob
 screenshots=("$XDG_PICTURES_DIR"/wayland-screenshot-*.png)

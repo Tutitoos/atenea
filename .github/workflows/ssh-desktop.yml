@@ -82,6 +82,11 @@ jobs:
           python scripts/restricted_wails.py navigation-probe-build
           (cd ../.. && go build -o desktop/ssh/build/bin/atenea-ssh-controller ./cmd/atenea-ssh-controller)
           ATENEA_SSH_CAPTURE=build/ci-artifacts/linux-navigation-probe.png dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
+      - name: Capture Linux WebView navigation probe in virtual Wayland
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: ATENEA_SSH_CAPTURE=build/ci-artifacts/linux-wayland-navigation-probe.png ATENEA_SSH_CAPTURE_DELAY=7 dbus-run-session -- bash scripts/linux_wayland_lifecycle.sh
       - name: Save Linux window capture
         if: runner.os == 'Linux' && always()
         uses: actions/upload-artifact@v4
@@ -92,4 +97,5 @@ jobs:
             desktop/ssh/build/ci-artifacts/linux-bridge-probe.png
             desktop/ssh/build/ci-artifacts/linux-navigation-probe.png
             desktop/ssh/build/ci-artifacts/linux-wayland.png
+            desktop/ssh/build/ci-artifacts/linux-wayland-navigation-probe.png
           if-no-files-found: ignore
