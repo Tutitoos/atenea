@@ -144,7 +144,7 @@ def main() -> None:
                 env=env,
             )
             assets = list((ROOT / "frontend/dist/assets").glob("*.js"))
-            has_probe = any(b"Puente bloqueado" in asset.read_bytes() for asset in assets)
+            has_probe = any(b"Runtime no disponible" in asset.read_bytes() for asset in assets)
             if not assets or has_probe != (sys.argv[1] == "probe-build"):
                 raise RuntimeError("frontend probe mode does not match requested build")
 

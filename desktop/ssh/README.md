@@ -44,15 +44,20 @@ binding messages are rejected before their framework handlers. The frontend
 also sets a packaged-assets-only CSP.
 
 The guard has direct dispatcher tests, a shared ingress-policy test and
-rendered macOS and Windows launch checks. Direct screen and clipboard calls
-were denied in both macOS and Windows diagnostic WebViews. Other hostile calls,
-Linux WebView behavior, hostile navigation probes and clean installation are still open in
-issue #151. Do not ship this shell with real SSH data or credentials until
-those gates pass. Development preview uses only synthetic fixtures.
+rendered macOS and Windows launch checks. Diagnostic screen and clipboard
+calls did not return data in either WebView. The current Windows probe
+distinguishes a rejection from a timeout: both calls timed out after 1.5
+seconds, while the permitted controller status call succeeded. A timeout alone
+does not prove explicit rejection or exclude a later response. Other hostile
+calls, Linux WebView behavior, hostile navigation probes and clean installation
+remain open in issue #151. Do not ship this shell with real SSH data or
+credentials until those gates pass. Development preview uses only synthetic
+fixtures.
 
 The optional `probe-build` command creates a local synthetic diagnostic app
 that calls framework screen and clipboard read methods directly from its
-WebView. It reports only whether each call resolved, never a returned value.
+WebView. It reports resolved, rejected, timed out or unavailable for each
+call, never a returned value.
 The normal `build` command removes the probe flag and verifies that its label
 is absent from the bundled JavaScript.
 
@@ -60,17 +65,20 @@ is absent from the bundled JavaScript.
 
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
-| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. A diagnostic build showed direct WebView screen and clipboard reads blocked without displaying returned data | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
+| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
-| PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; a diagnostic build showed direct WebView screen and clipboard calls denied | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
+| PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
 `2de550f`. The PC-SFONT trial used a temporary interactive scheduled task to
 launch the two verified EXEs in the active user session. The capture selected
-only the Atenea window. A second trial used `probe-build` and showed `Puente
-bloqueado` after direct framework screen and clipboard read calls from the
-Windows WebView; the diagnostic never displays or records returned values.
+only the Atenea window. A second trial used `probe-build`; its original
+`Puente bloqueado` label conflated rejection with a timeout. The revised probe
+showed `Pantalla: sin respuesta · Portapapeles: sin respuesta` after direct
+framework read calls from the Windows WebView. It never displays or records
+returned values. This is observed non-response within 1.5 seconds, not proof
+of an explicit rejection.
 Both preview processes, the two temporary tasks and the temporary directory
 were removed after each trial. The normal build was restored afterward. This
 does not verify every framework operation, remote SSH, credential storage or

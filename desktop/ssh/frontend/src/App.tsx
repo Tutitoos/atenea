@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 
 type ControllerView = { state: string; detail: string }
 type Host = { alias: string; address: string; platform: string; agent: string; tone: 'ready' | 'pending' | 'error' }
+type ProbeOutcome = 'resolved' | 'rejected' | 'timeout' | 'unavailable'
+type ProbeView = { detail: string; tone: 'pending' | 'safe' | 'warning' }
 
 declare global {
   interface Window {
@@ -26,7 +28,7 @@ function App() {
   const [selected, setSelected] = useState(hosts[0].alias)
   const [visibility, setVisibility] = useState<'visible' | 'oculto'>('visible')
   const [controller, setController] = useState<ControllerView>({ state: 'checking', detail: 'Comprobando controlador…' })
-  const [bridgeProbe, setBridgeProbe] = useState('Comprobando puente…')
+  const [bridgeProbe, setBridgeProbe] = useState<ProbeView>({ detail: 'Comprobando puente…', tone: 'pending' })
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const filtered = useMemo(() => hosts.filter(host => `${host.alias} ${host.address} ${host.platform}`.toLowerCase().includes(query.toLowerCase())), [query])
   const host = hosts.find(item => item.alias === selected) ?? hosts[0]
@@ -43,22 +45,29 @@ function App() {
 
   useEffect(() => {
     if (import.meta.env.VITE_ATENEA_BRIDGE_PROBE !== '1') return
-    if (!window.runtime) { setBridgeProbe('ERROR: runtime ausente'); return }
-    const check = async (call: (() => Promise<unknown>) | undefined): Promise<boolean> => {
-      if (!call) return false
+    if (!window.runtime) { setBridgeProbe({ detail: 'Runtime no disponible', tone: 'warning' }); return }
+    const check = async (call: (() => Promise<unknown>) | undefined): Promise<ProbeOutcome> => {
+      if (!call) return 'unavailable'
       // Never inspect or render a framework result, which could contain local data.
       try {
-        const outcome = await Promise.race([
-          call().then(() => 'resolved', () => 'blocked'),
-          new Promise<string>(resolve => window.setTimeout(() => resolve('blocked'), 1500)),
+        return await Promise.race<ProbeOutcome>([
+          Promise.resolve().then(call).then<ProbeOutcome, ProbeOutcome>(() => 'resolved', () => 'rejected'),
+          new Promise<ProbeOutcome>(resolve => window.setTimeout(() => resolve('timeout'), 1500)),
         ])
-        return outcome === 'blocked'
-      } catch { return true }
+      } catch { return 'rejected' }
     }
     void Promise.all([
       check(window.runtime?.ScreenGetAll),
       check(window.runtime?.ClipboardGetText),
-    ]).then(results => setBridgeProbe(results.every(Boolean) ? 'Puente bloqueado' : 'FALLO: puente accesible'))
+    ]).then(([screen, clipboard]) => {
+      const outcomes: Record<ProbeOutcome, string> = {
+        resolved: 'respondió', rejected: 'rechazada', timeout: 'sin respuesta', unavailable: 'no disponible',
+      }
+      setBridgeProbe({
+        detail: `Pantalla: ${outcomes[screen]} · Portapapeles: ${outcomes[clipboard]}`,
+        tone: screen === 'rejected' && clipboard === 'rejected' ? 'safe' : 'warning',
+      })
+    })
   }, [])
 
   return <main className="shell">
@@ -72,7 +81,7 @@ function App() {
     <div className="workspace">
       <header className="topbar"><div><span className="breadcrumb">Espacio de trabajo</span><span className="slash">/</span><strong>Dispositivos</strong></div><button className="theme-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={theme === 'light' ? 'Activar modo oscuro' : 'Activar modo claro'}>{theme === 'light' ? '◐' : '☀'}</button></header>
       <div className="content">
-        {import.meta.env.VITE_ATENEA_BRIDGE_PROBE === '1' && <div className="bridge-probe" role="status">{bridgeProbe}</div>}
+        {import.meta.env.VITE_ATENEA_BRIDGE_PROBE === '1' && <div className="bridge-probe" data-tone={bridgeProbe.tone} role="status">{bridgeProbe.detail}</div>}
         <div className="heading"><div><div className="eyebrow">CONEXIONES SSH</div><h1>Tus dispositivos</h1><p>Consulta el estado de tus equipos y elige dónde trabajar.</p></div><span className="fixture-badge">DATOS DE EJEMPLO</span></div>
         <div className="controller-state" role="status"><span className={`state-dot ${controller.state}`}></span><span><strong>Controlador local</strong> · {controller.detail}</span></div>
         <div className="columns"><section className="list-panel" aria-label="Dispositivos de ejemplo"><div className="panel-heading"><h2>Dispositivos</h2><span>{filtered.length} de {hosts.length}</span></div><label className="search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar dispositivo…" aria-label="Buscar dispositivo" /></label><div className="host-list">{filtered.map(item => <button type="button" key={item.alias} className={`host-row ${selected === item.alias ? 'selected' : ''}`} onClick={() => setSelected(item.alias)}><span className="device-icon">▣</span><span className="host-copy"><strong>{item.alias}</strong><small>{item.address} · {item.platform}</small></span><span className={`status-dot ${item.tone}`} aria-label={item.agent} /></button>)}{filtered.length === 0 && <p className="empty">No hay dispositivos con ese nombre.</p>}</div></section>
