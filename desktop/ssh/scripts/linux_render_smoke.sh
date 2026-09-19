@@ -3,7 +3,7 @@ set -euo pipefail
 
 shell=build/bin/atenea-ssh
 controller=build/bin/atenea-ssh-controller
-capture=build/bin/linux-render-smoke.png
+capture=${ATENEA_SSH_CAPTURE:-build/ci-artifacts/linux-render-smoke.png}
 log_file=$(mktemp)
 app_pid=''
 
@@ -37,6 +37,7 @@ fi
 
 # Let the packaged WebView finish loading before capturing this synthetic UI.
 sleep 3
+mkdir -p "$(dirname "$capture")"
 import -window "$window_id" "$capture"
 test -s "$capture"
 echo "Captured Atenea SSH window: $capture"
