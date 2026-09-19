@@ -30,7 +30,7 @@ SOURCE_HASHES = {
     "pkg/options/options.go": "9ec72bb753c04f7bf1f5d09ab973db41791028df3f13051d5fac5c19143a6d2e",
 }
 MARKER = "AteneaSSHBridgeGuard"
-GUARD_CALL = "\tif !ateneaSSHAllowedMessage(message) {\n\t\treturn \"\", errors.New(\"atenea ssh: bridge operation denied\")\n\t}\n"
+GUARD_CALL = "\tif !ateneaSSHAllowedMessage(message) {\n\t\treturn \"\", nil // Drop untrusted messages without logging their contents.\n\t}\n"
 
 
 def run(*args: str, env: dict[str, str] | None = None, cwd: Path = ROOT) -> None:
@@ -103,6 +103,10 @@ def prepare_workspace(tmp: Path) -> Path:
                 raise RuntimeError("Wails dispatcher anchors changed")
             content = content.replace(import_anchor, import_anchor + '\t"encoding/json"\n')
             content = content.replace(function_anchor, function_anchor + GUARD_CALL)
+            log_anchor = 'd.log.Error("process message error: %s -> %s", message, err)'
+            if content.count(log_anchor) != 1:
+                raise RuntimeError("Wails dispatcher error logger changed")
+            content = content.replace(log_anchor, 'd.log.Error("process message error")')
             content += (ROOT / "bridge/guard.go.txt").read_text(encoding="utf-8")
         elif relative.endswith("frontend.go"):
             if "darwin" in relative or "linux" in relative:
@@ -181,7 +185,10 @@ def main() -> None:
             tags = ("-tags", "webkit2_41") if sys.platform.startswith("linux") else ()
             run("go", "test", "-count=1", WAILS + "/internal/frontend/dispatcher", env=env)
             if sys.platform == "win32":
-                run("go", "test", "-count=1", WEBVIEW2 + "/pkg/edge", env=env)
+                # The dependency's own graphical tests need an interactive COM
+                # session that CI runners do not provide. Run our URL policy
+                # test, then compile the complete guarded shell below.
+                run("go", "test", "-count=1", "-run", "^TestAteneaAllowedNavigation$", WEBVIEW2 + "/pkg/edge", env=env)
             probe_env = dict(env)
             probe_env["GOWORK"] = "off"
             run("go", "test", "-count=1", "./...", cwd=Path(directory) / "ingress-probe", env=probe_env)

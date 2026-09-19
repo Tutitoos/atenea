@@ -20,8 +20,19 @@ func ateneaSSHAllowedMessage(message string) bool {
 	if json.Unmarshal(payload["args"], &args) != nil || len(args) != 0 {
 		return false
 	}
-	if json.Unmarshal(payload["callbackID"], &callbackID) != nil || len(callbackID) == 0 || len(callbackID) > 128 {
+	if json.Unmarshal(payload["callbackID"], &callbackID) != nil {
 		return false
+	}
+	// Wails generates this ID from the binding name and a numeric random value.
+	// Restrict it before the dispatcher can include it in a trace message.
+	const prefix = "main.App.ControllerStatus-"
+	if len(callbackID) <= len(prefix) || len(callbackID) > len(prefix)+32 || callbackID[:len(prefix)] != prefix {
+		return false
+	}
+	for _, c := range callbackID[len(prefix):] {
+		if c < '0' || c > '9' {
+			if c != '.' && c != 'e' && c != '+' && c != '-' { return false }
+		}
 	}
 	return true
 }
