@@ -131,9 +131,16 @@ def main() -> None:
                 env["VITE_ATENEA_BRIDGE_PROBE"] = "1"
             else:
                 env.pop("VITE_ATENEA_BRIDGE_PROBE", None)
+            platform = env.pop("ATENEA_WAILS_PLATFORM", "")
+            if platform and platform not in {"darwin/arm64", "windows/amd64", "windows/arm64", "linux/amd64"}:
+                raise RuntimeError(f"unsupported Wails target: {platform}")
+            build_args = ["go", "run", WAILS + "/cmd/wails", "build", "-clean"]
+            if platform:
+                build_args.extend(["-platform", platform])
+            target_linux = platform.startswith("linux/") if platform else sys.platform.startswith("linux")
+            build_args.extend(["-tags", "atenea_ssh_restricted" + (",webkit2_41" if target_linux else "")])
             run(
-                "go", "run", WAILS + "/cmd/wails", "build", "-clean",
-                "-tags", "atenea_ssh_restricted" + (",webkit2_41" if sys.platform.startswith("linux") else ""),
+                *build_args,
                 env=env,
             )
             assets = list((ROOT / "frontend/dist/assets").glob("*.js"))
