@@ -12,6 +12,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// The build fails if the reviewed host-side Wails overlay is missing.
+var _ = options.AteneaSSHBridgeGuard
+
 func main() {
 	app := &App{}
 	if err := wails.Run(&options.App{

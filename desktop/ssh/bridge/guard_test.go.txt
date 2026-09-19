@@ -1,0 +1,31 @@
+package dispatcher
+
+import "testing"
+
+func TestAteneaSSHBridgeGuard(t *testing.T) {
+	allowed := `C{"name":"main.App.ControllerStatus","args":[],"callbackID":"main.App.ControllerStatus-123"}`
+	if !ateneaSSHAllowedMessage(allowed) { t.Fatal("fixture status binding blocked") }
+	if !ateneaSSHAllowedMessage("Q") { t.Fatal("native close blocked") }
+	for _, message := range []string{
+		`BOpen:https://example.invalid`,
+		`Wz`, `S`, `H`, `Ddrop`, `LSecret`, `Eevent`,
+		`C{"name":"wails.ClipboardGetText","args":[],"callbackID":"1"}`,
+		`C{"name":"wails.Environment","args":[],"callbackID":"1"}`,
+		`C{"name":"main.App.ControllerStatus","args":["/tmp"],"callbackID":"1"}`,
+		`C{"name":"main.App.ControllerStatus","args":[],"callbackID":"1","extra":true}`,
+		`c{"id":1,"args":[],"callbackID":"1"}`,
+	} {
+		if ateneaSSHAllowedMessage(message) { t.Fatalf("unauthorized bridge message accepted: %s", message) }
+	}
+}
+
+func TestAteneaSSHDispatcherRejectsDirectMessages(t *testing.T) {
+	var d Dispatcher
+	for _, message := range []string{
+		`BO:https://example.invalid`, `Wz`, `S`, `H`, `Ddrop`,
+		`C{"name":"wails.ClipboardGetText","args":[],"callbackID":"1"}`,
+		`C{"name":"wails.Environment","args":[],"callbackID":"1"}`,
+	} {
+		if _, err := d.ProcessMessage(message, nil); err == nil { t.Fatalf("dispatcher accepted %s", message) }
+	}
+}

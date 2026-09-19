@@ -1,0 +1,27 @@
+
+// ateneaSSHAllowedMessage is checked before Wails' framework dispatcher. This
+// fixture shell needs only its zero-argument controller status binding.
+func ateneaSSHAllowedMessage(message string) bool {
+	// Native window close on macOS/Linux is delivered to this dispatcher as Q.
+	// A page can also request quit; it cannot reach controller state by doing so.
+	if message == "Q" { return true }
+	if len(message) < 2 || len(message) > 4096 || message[0] != 'C' {
+		return false
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal([]byte(message[1:]), &payload) != nil || len(payload) != 3 {
+		return false
+	}
+	var name, callbackID string
+	var args []json.RawMessage
+	if json.Unmarshal(payload["name"], &name) != nil || name != "main.App.ControllerStatus" {
+		return false
+	}
+	if json.Unmarshal(payload["args"], &args) != nil || len(args) != 0 {
+		return false
+	}
+	if json.Unmarshal(payload["callbackID"], &callbackID) != nil || len(callbackID) == 0 || len(callbackID) > 128 {
+		return false
+	}
+	return true
+}

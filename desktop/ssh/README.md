@@ -7,10 +7,11 @@ documentation network `192.0.2.0/24`.
 
 ## Local build
 
-Use Go 1.26.7, Bun 1.4.2 and the Wails CLI v2.15.0. From this directory:
+Use Go 1.26.7, Python 3.12 and Bun 1.4.2. From this directory:
 
 ```sh
-GOTOOLCHAIN=go1.26.7 go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean
+GOTOOLCHAIN=go1.26.7 python3 scripts/restricted_wails.py test
+GOTOOLCHAIN=go1.26.7 python3 scripts/restricted_wails.py build
 # On macOS, from the repository root:
 GOTOOLCHAIN=go1.26.7 go build -o desktop/ssh/build/bin/atenea-ssh.app/Contents/MacOS/atenea-ssh-controller ./cmd/atenea-ssh-controller
 ```
@@ -29,17 +30,28 @@ is unavailable.
 
 The application Bind list exposes only `ControllerStatus`, which takes no
 JavaScript arguments. The controller accepts only `status` and `stop` operations
-after native peer authentication and protocol negotiation. Wails itself still
-offers framework runtime operations through its dispatcher. The complete
-host-side bridge restriction, hostile navigation probes and native platform
-installation checks required by issue #151 remain open. Do not ship this shell
-with real SSH data or credentials until those gates pass.
+after native peer authentication and protocol negotiation. The pinned Wails
+source is copied into a temporary Go workspace during build. Exact upstream
+source hashes are checked before the script restricts the dispatcher and the
+three platform message entry points. The app references a marker available only
+in that patched copy, so `go build ./...` without the script fails to compile.
+The only permitted JavaScript binding is the zero-argument status call; native
+window close (`Q`) and framework readiness signals remain available. Browser,
+clipboard, notification, window-control, drag/resize/file-drop and obfuscated
+binding messages are rejected before their framework handlers. The frontend
+also sets a packaged-assets-only CSP.
+
+The guard has direct dispatcher tests, a shared ingress-policy test and a
+macOS rendered launch/close check. Direct calls from actual WebViews on all
+three OSes, hostile navigation probes and clean installation are still open in
+issue #151. Do not ship this shell with real SSH data or credentials until
+those gates pass. Development preview uses only synthetic fixtures.
 
 ## Platform evidence
 
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
-| macOS 26.6.2 arm64 | Local Wails production build passed | Local `.app` opened and displayed fixture UI; controller started and reused after window process restart | Not tested | WKWebView supplied by macOS |
+| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it | Not tested | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
 
