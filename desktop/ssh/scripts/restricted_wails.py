@@ -54,7 +54,7 @@ def prepare_workspace(tmp: Path) -> Path:
     shutil.copytree(module_dir, patched)
     for relative in SOURCE_HASHES:
         target = patched / relative
-        content = target.read_text()
+        content = target.read_text(encoding="utf-8")
         if relative.endswith("dispatcher.go"):
             import_anchor = 'import (\n\t"context"\n'
             function_anchor = 'func (d *Dispatcher) ProcessMessage(message string, sender frontend.Frontend) (_ string, err error) {\n'
@@ -62,7 +62,7 @@ def prepare_workspace(tmp: Path) -> Path:
                 raise RuntimeError("Wails dispatcher anchors changed")
             content = content.replace(import_anchor, import_anchor + '\t"encoding/json"\n')
             content = content.replace(function_anchor, function_anchor + GUARD_CALL)
-            content += (ROOT / "bridge/guard.go.txt").read_text()
+            content += (ROOT / "bridge/guard.go.txt").read_text(encoding="utf-8")
         elif relative.endswith("frontend.go"):
             if "darwin" in relative or "linux" in relative:
                 anchor = "func (f *Frontend) processMessage(message string) {\n"
@@ -71,7 +71,7 @@ def prepare_workspace(tmp: Path) -> Path:
             if content.count(anchor) != 1:
                 raise RuntimeError(f"Wails ingress anchor changed: {relative}")
             content = content.replace(anchor, anchor + "\tif !ateneaSSHIngressMessage(message) { return }\n")
-            content += (ROOT / "bridge/ingress.go.txt").read_text()
+            content += (ROOT / "bridge/ingress.go.txt").read_text(encoding="utf-8")
             if "windows" in relative:
                 extra_anchor = "func (f *Frontend) processMessageWithAdditionalObjects(message string, sender *edge.ICoreWebView2, args *edge.ICoreWebView2WebMessageReceivedEventArgs) {\n"
                 if content.count(extra_anchor) != 1:
@@ -81,24 +81,24 @@ def prepare_workspace(tmp: Path) -> Path:
             content += f'\n// {MARKER} proves this app was built with the reviewed Wails overlay.\nconst {MARKER} = "wails-v2.15.0-guard-v1"\n'
         target.parent.chmod(0o700)
         target.chmod(0o600)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")
         subprocess.run(["gofmt", "-w", str(target)], check=True)
     dispatcher_dir = patched / "internal/frontend/dispatcher"
     dispatcher_dir.chmod(0o700)
     (dispatcher_dir / "atenea_guard_test.go").write_text(
-        (ROOT / "bridge/guard_test.go.txt").read_text()
+        (ROOT / "bridge/guard_test.go.txt").read_text(encoding="utf-8"), encoding="utf-8"
     )
     subprocess.run(["gofmt", "-w", str(dispatcher_dir / "atenea_guard_test.go")], check=True)
     for platform in ("darwin", "linux", "windows"):
         ingress_test = patched / f"internal/frontend/desktop/{platform}/atenea_ingress_test.go"
-        ingress_test.write_text((ROOT / "bridge/ingress_test.go.txt").read_text().replace("PLATFORM", platform, 1))
+        ingress_test.write_text((ROOT / "bridge/ingress_test.go.txt").read_text(encoding="utf-8").replace("PLATFORM", platform, 1), encoding="utf-8")
         subprocess.run(["gofmt", "-w", str(ingress_test)], check=True)
     probe = tmp / "ingress-probe"
     probe.mkdir()
-    (probe / "go.mod").write_text("module atenea-ssh-ingress-probe\n\ngo 1.25.0\n")
-    (probe / "ingress.go").write_text("package ingressprobe\n" + (ROOT / "bridge/ingress.go.txt").read_text())
+    (probe / "go.mod").write_text("module atenea-ssh-ingress-probe\n\ngo 1.25.0\n", encoding="utf-8")
+    (probe / "ingress.go").write_text("package ingressprobe\n" + (ROOT / "bridge/ingress.go.txt").read_text(encoding="utf-8"), encoding="utf-8")
     (probe / "ingress_test.go").write_text(
-        (ROOT / "bridge/ingress_test.go.txt").read_text().replace("PLATFORM", "ingressprobe", 1)
+        (ROOT / "bridge/ingress_test.go.txt").read_text(encoding="utf-8").replace("PLATFORM", "ingressprobe", 1), encoding="utf-8"
     )
     workspace = tmp / "go.work"
     workspace.write_text(
@@ -106,7 +106,7 @@ def prepare_workspace(tmp: Path) -> Path:
         + f"    {json.dumps(str(ROOT.parents[1]))}\n"
         + f"    {json.dumps(str(ROOT))}\n"
         + f"    {json.dumps(str(patched))}\n"
-        + ")\n"
+        + ")\n", encoding="utf-8"
     )
     return workspace
 
