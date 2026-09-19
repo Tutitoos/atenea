@@ -112,8 +112,8 @@ def prepare_workspace(tmp: Path) -> Path:
 
 
 def main() -> None:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"test", "build"}:
-        raise SystemExit("usage: restricted_wails.py test|build")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"test", "build", "probe-build"}:
+        raise SystemExit("usage: restricted_wails.py test|build|probe-build")
     with tempfile.TemporaryDirectory(prefix="atenea-wails-") as directory:
         workspace = prepare_workspace(Path(directory))
         env = dict(os.environ)
@@ -127,11 +127,19 @@ def main() -> None:
             run("go", "vet", *tags, "./...", env=env)
             run("go", "test", *tags, "./...", env=env)
         else:
+            if sys.argv[1] == "probe-build":
+                env["VITE_ATENEA_BRIDGE_PROBE"] = "1"
+            else:
+                env.pop("VITE_ATENEA_BRIDGE_PROBE", None)
             run(
                 "go", "run", WAILS + "/cmd/wails", "build", "-clean",
                 "-tags", "atenea_ssh_restricted" + (",webkit2_41" if sys.platform.startswith("linux") else ""),
                 env=env,
             )
+            assets = list((ROOT / "frontend/dist/assets").glob("*.js"))
+            has_probe = any(b"Puente bloqueado" in asset.read_bytes() for asset in assets)
+            if not assets or has_probe != (sys.argv[1] == "probe-build"):
+                raise RuntimeError("frontend probe mode does not match requested build")
 
 
 if __name__ == "__main__":
