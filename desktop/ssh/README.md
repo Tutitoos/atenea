@@ -99,7 +99,7 @@ is absent from the bundled JavaScript.
 | macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. Two simultaneous windows and a reopened third window showed the fixture UI and one shared controller in a separate temporary user-state root. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout. A separate navigation-probe build left the fixture UI visible after the loopback attempt in an inspected window capture | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. A later console-session trial rendered two simultaneous fixture windows and a reopened third window with one shared controller. Window-only captures showed `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds. At `3b111b9`, a separate navigation-probe build attempted a loopback page; the captured fixture window remained visible after 7 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
-| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal, bridge diagnostic and navigation-probe captures showed fixture UI and `Controlador disponible`. The navigation probe left the packaged page visible after the loopback attempt; screen/clipboard calls timed out after 1.5 seconds. A separate headless Weston session exercised two Wayland shell processes sharing one controller, window-process close and explicit controller stop. Its inspected output capture showed the synthetic device list and `Controlador disponible`. Real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
+| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal, bridge diagnostic and navigation-probe captures showed fixture UI and `Controlador disponible`. The navigation probe left the packaged page visible after the loopback attempt; screen/clipboard calls timed out after 1.5 seconds. A separate headless Weston session exercised two Wayland shell processes sharing one controller, window-process close and explicit controller stop. Its inspected normal and navigation-probe captures showed the synthetic device list and `Controlador disponible`; the latter also showed the packaged-page survival message after the loopback attempt. Real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 At `9a0ceca`, a locally signed macOS build and sibling controller were launched
 with a temporary `HOME`, so this trial did not use the normal Atenea state.
@@ -172,7 +172,14 @@ that one nonempty PNG was written; it does not interpret the pixels. Weston's
 debug capture was enabled only for the isolated temporary compositor using
 synthetic data. The image shows one foreground window, while the process check
 covers the two simultaneous shells. This still does not test a real desktop,
-user interaction or Wayland navigation policy. A CI build
+user interaction or Wayland navigation policy. At `2758583`, the Ubuntu CI job
+also captured the navigation-probe build under the same virtual Wayland setup,
+seven seconds after its loopback navigation attempt. The inspected 1024×640
+PNG showed the fixture UI, available controller and `La página empaquetada
+sigue visible tras el intento`. The test checks process survival and that a
+PNG exists; the visual content was confirmed separately. This observes that
+the packaged page remained visible, without identifying which browser or
+native layer prevented navigation or covering other navigation types. A CI build
 does not prove a graphical session, WebView behavior, installation or runtime
 availability on a clean user machine. OS logout and sleep/resume remain
 unobserved. Wails' [installation guide](https://wails.io/docs/gettingstarted/installation/)
