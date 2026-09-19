@@ -1,0 +1,80 @@
+name: SSH desktop foundation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ssh-desktop.yml'
+      - 'cmd/atenea-ssh-controller/**'
+      - 'internal/sshcontrol/**'
+      - 'desktop/ssh/**'
+      - 'go.mod'
+      - 'go.sum'
+
+jobs:
+  native-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.7'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux WebView build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick dbus-x11
+      - name: Frontend check and build
+        working-directory: desktop/ssh/frontend
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun run build
+      - name: Native controller tests
+        shell: bash
+        run: go test -race -count=1 ./internal/sshcontrol/...
+      - name: Build Wails shell
+        working-directory: desktop/ssh
+        shell: bash
+        run: |
+          python scripts/restricted_wails.py test
+          python scripts/restricted_wails.py build
+      - name: Bundle controller beside window
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            macOS) target=desktop/ssh/build/bin/atenea-ssh.app/Contents/MacOS/atenea-ssh-controller ;;
+            Windows) target=desktop/ssh/build/bin/atenea-ssh-controller.exe ;;
+            Linux) target=desktop/ssh/build/bin/atenea-ssh-controller ;;
+          esac
+          go build -o "$target" ./cmd/atenea-ssh-controller
+      - name: Render Linux window in a virtual X11 session
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
+      - name: Probe Linux WebView bridge in virtual X11
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: |
+          python scripts/restricted_wails.py probe-build
+          (cd ../.. && go build -o desktop/ssh/build/bin/atenea-ssh-controller ./cmd/atenea-ssh-controller)
+          ATENEA_SSH_CAPTURE=build/ci-artifacts/linux-bridge-probe.png dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
+      - name: Save Linux window capture
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atenea-ssh-linux-window
+          path: |
+            desktop/ssh/build/ci-artifacts/linux-render-smoke.png
+            desktop/ssh/build/ci-artifacts/linux-bridge-probe.png
+          if-no-files-found: ignore

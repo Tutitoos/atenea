@@ -4,6 +4,7 @@ go 1.25.13
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/duckdb/duckdb-go/v2 v2.5.6
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-isatty v0.0.24
