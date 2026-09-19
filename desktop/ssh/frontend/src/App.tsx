@@ -29,6 +29,7 @@ function App() {
   const [visibility, setVisibility] = useState<'visible' | 'oculto'>('visible')
   const [controller, setController] = useState<ControllerView>({ state: 'checking', detail: 'Comprobando controlador…' })
   const [bridgeProbe, setBridgeProbe] = useState<ProbeView>({ detail: 'Comprobando puente…', tone: 'pending' })
+  const [navigationProbe, setNavigationProbe] = useState('Preparando intento de navegación…')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const filtered = useMemo(() => hosts.filter(host => `${host.alias} ${host.address} ${host.platform}`.toLowerCase().includes(query.toLowerCase())), [query])
   const host = hosts.find(item => item.alias === selected) ?? hosts[0]
@@ -70,6 +71,19 @@ function App() {
     })
   }, [])
 
+  useEffect(() => {
+    if (import.meta.env.VITE_ATENEA_NAVIGATION_PROBE !== '1') return
+    const timer = window.setTimeout(() => {
+      try {
+        window.location.assign('http://127.0.0.1:9/atenea-navigation-probe')
+        window.setTimeout(() => setNavigationProbe('La página empaquetada sigue visible tras el intento'), 1500)
+      } catch {
+        setNavigationProbe('El navegador rechazó el intento de navegación')
+      }
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [])
+
   return <main className="shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">✳</span><span><strong>Atenea SSH</strong><small>Espacio de trabajo</small></span></div>
@@ -82,6 +96,7 @@ function App() {
       <header className="topbar"><div><span className="breadcrumb">Espacio de trabajo</span><span className="slash">/</span><strong>Dispositivos</strong></div><button className="theme-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={theme === 'light' ? 'Activar modo oscuro' : 'Activar modo claro'}>{theme === 'light' ? '◐' : '☀'}</button></header>
       <div className="content">
         {import.meta.env.VITE_ATENEA_BRIDGE_PROBE === '1' && <div className="bridge-probe" data-tone={bridgeProbe.tone} role="status">{bridgeProbe.detail}</div>}
+        {import.meta.env.VITE_ATENEA_NAVIGATION_PROBE === '1' && <div className="bridge-probe" role="status">{navigationProbe}</div>}
         <div className="heading"><div><div className="eyebrow">CONEXIONES SSH</div><h1>Tus dispositivos</h1><p>Consulta el estado de tus equipos y elige dónde trabajar.</p></div><span className="fixture-badge">DATOS DE EJEMPLO</span></div>
         <div className="controller-state" role="status"><span className={`state-dot ${controller.state}`}></span><span><strong>Controlador local</strong> · {controller.detail}</span></div>
         <div className="columns"><section className="list-panel" aria-label="Dispositivos de ejemplo"><div className="panel-heading"><h2>Dispositivos</h2><span>{filtered.length} de {hosts.length}</span></div><label className="search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar dispositivo…" aria-label="Buscar dispositivo" /></label><div className="host-list">{filtered.map(item => <button type="button" key={item.alias} className={`host-row ${selected === item.alias ? 'selected' : ''}`} onClick={() => setSelected(item.alias)}><span className="device-icon">▣</span><span className="host-copy"><strong>{item.alias}</strong><small>{item.address} · {item.platform}</small></span><span className={`status-dot ${item.tone}`} aria-label={item.agent} /></button>)}{filtered.length === 0 && <p className="empty">No hay dispositivos con ese nombre.</p>}</div></section>

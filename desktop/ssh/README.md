@@ -48,9 +48,9 @@ packaged `wails://wails/` page. The guarded Linux WebKitGTK window applies
 the same restriction through its native navigation policy. Windows WebView2
 uses native navigation-starting and new-window events to keep its document
 at `http://wails.localhost/`. The build script checks exact source hashes and
-compiles these hooks into temporary copies of Wails and go-webview2. Hostile
-navigation trials on each platform remain necessary before this boundary is
-accepted.
+compiles these hooks into temporary copies of Wails and go-webview2. Broader
+navigation trials and the Linux probe remain necessary before this
+boundary is accepted.
 
 The per-user installation ID is written completely to a private temporary
 file before being published atomically. Concurrent first launches therefore
@@ -68,8 +68,8 @@ calls did not return data in the tested WebViews. The current Windows and
 virtual X11 probes distinguish a rejection from a timeout: both calls timed
 out after 1.5 seconds, while the permitted controller status call succeeded.
 A timeout alone does not prove explicit rejection or exclude a later response.
-Other hostile calls, real Linux desktop and Wayland WebView behavior, hostile
-navigation probes and clean installation
+Other hostile calls, real Linux desktop and Wayland WebView behavior, broader
+navigation probes, and clean installation
 remain open in issue #151. Do not ship this shell with real SSH data or
 credentials until those gates pass. Development preview uses only synthetic
 fixtures.
@@ -80,14 +80,19 @@ WebView. It reports resolved, rejected, timed out or unavailable for each
 call, never a returned value.
 The normal `build` command removes the probe flag and verifies that its label
 is absent from the bundled JavaScript.
+The separate `navigation-probe-build` attempts a top-level navigation to a
+loopback URL with no SSH data. A surviving fixture window after the attempt
+is an observation of blocked navigation; it does not alone identify which
+browser or native policy stopped it. Normal builds verify that the probe URL
+is absent from the bundled JavaScript.
 
 ## Platform evidence
 
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
-| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
+| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout. A separate navigation-probe build left the fixture UI visible after the loopback attempt in an inspected window capture | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
-| Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
+| Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds. At `3b111b9`, a separate navigation-probe build attempted a loopback page; the captured fixture window remained visible after 7 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal and diagnostic window captures showed fixture UI, `Controlador disponible`, and screen/clipboard calls timing out after 1.5 seconds; real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
@@ -102,7 +107,15 @@ of an explicit rejection.
 Both preview processes, the two temporary tasks and the temporary directory
 were removed after each trial. The normal build was restored afterward. This
 does not verify every framework operation, remote SSH, credential storage or
-an installer. On Ubuntu 24.04 CI at `a6db23f`, Xvfb launched the packaged
+an installer. A separate Windows user-session trial used a temporary
+`navigation-probe-build` based on `3b111b9`. The transferred window and
+controller hashes matched the cross-built binaries. Seven seconds after the
+loopback navigation attempt, a window-only capture still showed the fixture
+UI, the available controller and the probe's survival message. The test
+processes, scheduled task and temporary directory were removed afterward.
+This confirms that the window remained on its packaged page in that trial;
+it does not prove which layer rejected the navigation or cover other
+navigation types. On Ubuntu 24.04 CI at `a6db23f`, Xvfb launched the packaged
 window and a controller in a virtual X11 session. The captured window was
 inspected and visibly contained the fixture list and available controller.
 The CI smoke step checks that a visible window can be captured; visual content

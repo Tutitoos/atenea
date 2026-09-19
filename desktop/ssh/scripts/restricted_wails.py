@@ -167,8 +167,8 @@ def prepare_workspace(tmp: Path) -> Path:
 
 
 def main() -> None:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"test", "build", "probe-build"}:
-        raise SystemExit("usage: restricted_wails.py test|build|probe-build")
+    if len(sys.argv) != 2 or sys.argv[1] not in {"test", "build", "probe-build", "navigation-probe-build"}:
+        raise SystemExit("usage: restricted_wails.py test|build|probe-build|navigation-probe-build")
     with tempfile.TemporaryDirectory(prefix="atenea-wails-") as directory:
         workspace = prepare_workspace(Path(directory))
         env = dict(os.environ)
@@ -188,6 +188,10 @@ def main() -> None:
                 env["VITE_ATENEA_BRIDGE_PROBE"] = "1"
             else:
                 env.pop("VITE_ATENEA_BRIDGE_PROBE", None)
+            if sys.argv[1] == "navigation-probe-build":
+                env["VITE_ATENEA_NAVIGATION_PROBE"] = "1"
+            else:
+                env.pop("VITE_ATENEA_NAVIGATION_PROBE", None)
             platform = env.pop("ATENEA_WAILS_PLATFORM", "")
             if platform and platform not in {"darwin/arm64", "windows/amd64", "windows/arm64", "linux/amd64"}:
                 raise RuntimeError(f"unsupported Wails target: {platform}")
@@ -204,6 +208,9 @@ def main() -> None:
             has_probe = any(b"Runtime no disponible" in asset.read_bytes() for asset in assets)
             if not assets or has_probe != (sys.argv[1] == "probe-build"):
                 raise RuntimeError("frontend probe mode does not match requested build")
+            has_navigation_probe = any(b"atenea-navigation-probe" in asset.read_bytes() for asset in assets)
+            if has_navigation_probe != (sys.argv[1] == "navigation-probe-build"):
+                raise RuntimeError("frontend navigation probe mode does not match requested build")
 
 
 if __name__ == "__main__":

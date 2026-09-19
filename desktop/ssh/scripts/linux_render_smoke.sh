@@ -36,7 +36,7 @@ if [[ -z "$window_id" ]]; then
 fi
 
 # Let the packaged WebView finish loading before capturing this synthetic UI.
-sleep 3
+sleep 4
 mkdir -p "$(dirname "$capture")"
 import -window "$window_id" "$capture"
 test -s "$capture"
