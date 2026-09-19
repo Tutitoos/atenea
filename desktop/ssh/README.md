@@ -45,10 +45,12 @@ also sets a packaged-assets-only CSP.
 
 The guarded macOS WKWebView cancels navigation and new windows outside the
 packaged `wails://wails/` page. The guarded Linux WebKitGTK window applies
-the same restriction through its native navigation policy. These hooks are
-compiled into the temporary pinned Wails copy. Windows WebView2 navigation
-still needs an equivalent native policy and a hostile navigation trial on
-each platform before the navigation boundary is accepted.
+the same restriction through its native navigation policy. Windows WebView2
+uses native navigation-starting and new-window events to keep its document
+at `http://wails.localhost/`. The build script checks exact source hashes and
+compiles these hooks into temporary copies of Wails and go-webview2. Hostile
+navigation trials on each platform remain necessary before this boundary is
+accepted.
 
 The per-user installation ID is written completely to a private temporary
 file before being published atomically. Concurrent first launches therefore

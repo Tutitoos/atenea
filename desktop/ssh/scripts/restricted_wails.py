@@ -18,6 +18,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 WAILS = "github.com/wailsapp/wails/v2"
+WEBVIEW2 = "github.com/wailsapp/go-webview2"
+WEBVIEW2_CHROMIUM_HASH = "6013bea6dc614888de282a37febebdfb31984377b317b3911671b20209b8b671"
 SOURCE_HASHES = {
     "internal/frontend/dispatcher/dispatcher.go": "baa6bc120411c07323e66476bb14a9872088a970449a600a765890012beb3133",
     "internal/frontend/desktop/darwin/frontend.go": "96b4e064ea8178a0ae26e65eab5c92c4200eca3f0f241c2035f88de6eaead35e",
@@ -47,6 +49,19 @@ def prepare_workspace(tmp: Path) -> Path:
             ["go", "list", "-m", "-f", "{{.Dir}}", WAILS], cwd=ROOT, text=True
         ).strip()
     )
+    webview_version = subprocess.check_output(
+        ["go", "list", "-m", "-f", "{{.Version}}", WEBVIEW2], cwd=ROOT, text=True
+    ).strip()
+    if webview_version != "v1.0.22":
+        raise RuntimeError(f"expected go-webview2 v1.0.22, found {webview_version or 'local replacement'}")
+    webview_dir = Path(
+        subprocess.check_output(
+            ["go", "list", "-m", "-f", "{{.Dir}}", WEBVIEW2], cwd=ROOT, text=True
+        ).strip()
+    )
+    chromium_source = webview_dir / "pkg/edge/chromium.go"
+    if hashlib.sha256(chromium_source.read_bytes()).hexdigest() != WEBVIEW2_CHROMIUM_HASH:
+        raise RuntimeError("go-webview2 Chromium source changed; audit before updating guard")
     for relative, expected_hash in SOURCE_HASHES.items():
         original = module_dir / relative
         source = original.read_bytes()
@@ -54,6 +69,31 @@ def prepare_workspace(tmp: Path) -> Path:
             raise RuntimeError(f"Wails source changed: {relative}; audit before updating guard")
     patched = tmp / "wails"
     shutil.copytree(module_dir, patched)
+    patched_webview = tmp / "go-webview2"
+    shutil.copytree(webview_dir, patched_webview)
+    chromium = patched_webview / "pkg/edge/chromium.go"
+    content = chromium.read_text(encoding="utf-8")
+    webview_anchors = {
+        '"github.com/wailsapp/go-webview2/internal/w32"\n': '"github.com/wailsapp/go-webview2/internal/w32"\n\t"github.com/wailsapp/go-webview2/pkg/webview2"\n',
+        "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n": "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n\tnavigationStarting               *webview2.ICoreWebView2NavigationStartingEventHandler\n\tnewWindowRequested               *webview2.ICoreWebView2NewWindowRequestedEventHandler\n",
+        "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n": "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n\te.navigationStarting = webview2.NewICoreWebView2NavigationStartingEventHandler(e)\n\te.newWindowRequested = webview2.NewICoreWebView2NewWindowRequestedEventHandler(e)\n",
+    }
+    for anchor, replacement in webview_anchors.items():
+        if content.count(anchor) != 1:
+            raise RuntimeError("go-webview2 Chromium navigation anchor changed")
+        content = content.replace(anchor, replacement)
+    registration = "err = e.webview.AddNavigationCompleted(e.navigationCompleted, &token)\n\tif err != nil {\n\t\te.errorCallback(err)\n\t}\n"
+    if content.count(registration) != 1:
+        raise RuntimeError("go-webview2 Chromium registration anchor changed")
+    content = content.replace(registration, registration + "\tnative := (*webview2.ICoreWebView2)(unsafe.Pointer(e.webview))\n\tif _, err = native.AddNavigationStarting(e.navigationStarting); err != nil {\n\t\te.errorCallback(err)\n\t}\n\tif _, err = native.AddNewWindowRequested(e.newWindowRequested); err != nil {\n\t\te.errorCallback(err)\n\t}\n")
+    chromium.parent.chmod(0o700)
+    chromium.chmod(0o600)
+    chromium.write_text(content, encoding="utf-8")
+    subprocess.run(["gofmt", "-w", str(chromium)], check=True)
+    for filename in ("navigation_windows.go.txt", "navigation_windows_test.go.txt"):
+        target = patched_webview / "pkg/edge" / filename.removesuffix(".txt").replace("navigation_windows", "atenea_navigation")
+        target.write_text((ROOT / "bridge" / filename).read_text(encoding="utf-8"), encoding="utf-8")
+        subprocess.run(["gofmt", "-w", str(target)], check=True)
     for relative in SOURCE_HASHES:
         target = patched / relative
         content = target.read_text(encoding="utf-8")
@@ -121,6 +161,7 @@ def prepare_workspace(tmp: Path) -> Path:
         + f"    {json.dumps(str(ROOT.parents[1]))}\n"
         + f"    {json.dumps(str(ROOT))}\n"
         + f"    {json.dumps(str(patched))}\n"
+        + f"    {json.dumps(str(patched_webview))}\n"
         + ")\n", encoding="utf-8"
     )
     return workspace
@@ -136,6 +177,8 @@ def main() -> None:
         if sys.argv[1] == "test":
             tags = ("-tags", "webkit2_41") if sys.platform.startswith("linux") else ()
             run("go", "test", "-count=1", WAILS + "/internal/frontend/dispatcher", env=env)
+            if sys.platform == "win32":
+                run("go", "test", "-count=1", WEBVIEW2 + "/pkg/edge", env=env)
             probe_env = dict(env)
             probe_env["GOWORK"] = "off"
             run("go", "test", "-count=1", "./...", cwd=Path(directory) / "ingress-probe", env=probe_env)

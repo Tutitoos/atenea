@@ -1,0 +1,41 @@
+package edge
+
+import (
+	"strings"
+	"unsafe"
+
+	"github.com/wailsapp/go-webview2/pkg/webview2"
+	"golang.org/x/sys/windows"
+)
+
+// Only the bundled root document may occupy the Atenea window. Fragment
+// navigation is local to that document. No external or alternate local origin
+// is permitted, including URLs that merely share its host suffix.
+func ateneaAllowedNavigation(uri string) bool {
+	return uri == "http://wails.localhost/" || strings.HasPrefix(uri, "http://wails.localhost/#")
+}
+
+func (e *Chromium) NavigationStarting(_ *webview2.ICoreWebView2, args *webview2.ICoreWebView2NavigationStartingEventArgs) uintptr {
+	var rawURI *uint16
+	hr, _, _ := args.Vtbl.GetUri.Call(uintptr(unsafe.Pointer(args)), uintptr(unsafe.Pointer(&rawURI)))
+	allowed := false
+	if windows.Handle(hr) == windows.S_OK && rawURI != nil {
+		allowed = ateneaAllowedNavigation(windows.UTF16PtrToString(rawURI))
+		windows.CoTaskMemFree(unsafe.Pointer(rawURI))
+	}
+	if !allowed {
+		hr, _, _ = args.Vtbl.PutCancel.Call(uintptr(unsafe.Pointer(args)), 1)
+		if windows.Handle(hr) != windows.S_OK {
+			e.errorCallback(windows.Errno(hr))
+		}
+	}
+	return 0
+}
+
+func (e *Chromium) NewWindowRequested(_ *webview2.ICoreWebView2, args *webview2.ICoreWebView2NewWindowRequestedEventArgs) uintptr {
+	hr, _, _ := args.Vtbl.PutHandled.Call(uintptr(unsafe.Pointer(args)), 1)
+	if windows.Handle(hr) != windows.S_OK {
+		e.errorCallback(windows.Errno(hr))
+	}
+	return 0
+}
