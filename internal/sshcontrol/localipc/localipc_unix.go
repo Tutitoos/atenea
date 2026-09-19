@@ -43,8 +43,16 @@ func Listen(root string) (*Listener, error) {
 	if err := ensureRoot(root); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(root, "run", socketName)
-	release, err := pidlock.Claim(filepath.Join(root, "run", "atenea-ssh.lock"))
+	run := filepath.Join(root, "run")
+	if err := ensureRun(run); err != nil {
+		return nil, err
+	}
+	lock := filepath.Join(run, "atenea-ssh.lock")
+	if err := privateLock(lock); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(run, socketName)
+	release, err := pidlock.Claim(lock)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +150,29 @@ func privateDir(path string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 || !ownedByUs(info) {
+		return ErrPrivateRoot
+	}
+	return nil
+}
+
+func ensureRun(run string) error {
+	if err := os.Mkdir(run, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	// Lstat rejects a pre-existing symlink before pidlock or ipc can follow it.
+	return privateDir(run)
+}
+
+func privateLock(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || !ownedByUs(info) || info.Mode().Perm()&0o077 != 0 || st.Nlink != 1 {
 		return ErrPrivateRoot
 	}
 	return nil

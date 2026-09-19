@@ -107,6 +107,61 @@ func TestPrivateRootAndSocketMode(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("run symlink", func(t *testing.T) {
+		root := shortRoot(t)
+		target := shortRoot(t)
+		if err := os.Symlink(target, filepath.Join(root, "run")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Listen(root); !errors.Is(err, ErrPrivateRoot) {
+			t.Fatalf("run symlink accepted: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(target, "atenea-ssh.lock")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("lock created outside private root: %v", err)
+		}
+	})
+	t.Run("lock symlink", func(t *testing.T) {
+		root := shortRoot(t)
+		run := filepath.Join(root, "run")
+		if err := os.Mkdir(run, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(root, "numeric-file")
+		if err := os.WriteFile(target, []byte("99999999"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(run, "atenea-ssh.lock")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Listen(root); !errors.Is(err, ErrPrivateRoot) {
+			t.Fatalf("lock symlink accepted: %v", err)
+		}
+		got, err := os.ReadFile(target)
+		if err != nil || string(got) != "99999999" {
+			t.Fatalf("linked file changed: %q, %v", got, err)
+		}
+	})
+	t.Run("lock hardlink", func(t *testing.T) {
+		root := shortRoot(t)
+		run := filepath.Join(root, "run")
+		if err := os.Mkdir(run, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(root, "numeric-file")
+		if err := os.WriteFile(target, []byte("99999999"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(target, filepath.Join(run, "atenea-ssh.lock")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Listen(root); !errors.Is(err, ErrPrivateRoot) {
+			t.Fatalf("lock hardlink accepted: %v", err)
+		}
+		got, err := os.ReadFile(target)
+		if err != nil || string(got) != "99999999" {
+			t.Fatalf("linked file changed: %q, %v", got, err)
+		}
+	})
 	t.Run("socket widened", func(t *testing.T) {
 		root := shortRoot(t)
 		listener, err := Listen(root)

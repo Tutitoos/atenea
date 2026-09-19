@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -124,13 +123,42 @@ func pipePath(root string) (string, peerIdentity, error) {
 	if err := CheckRoot(root); err != nil {
 		return "", peerIdentity{}, err
 	}
+	physicalID, err := rootIdentity(root)
+	if err != nil {
+		return "", peerIdentity{}, err
+	}
 	id, err := currentIdentity()
 	if err != nil {
 		return "", peerIdentity{}, err
 	}
-	digest := sha256.Sum256([]byte(strings.ToLower(root)))
+	// Directory file identity is stable across case, short-path and junction
+	// aliases. Hashing the path text would let two controllers own one store.
+	digest := sha256.Sum256([]byte(physicalID + ":" + id.sid))
 	name := `\\.\pipe\atenea-ssh-` + hex.EncodeToString(digest[:12]) + fmt.Sprintf("-%d", id.session)
 	return name, id, nil
+}
+
+func rootIdentity(root string) (string, error) {
+	path, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrPrivateRoot, err)
+	}
+	handle, err := windows.CreateFile(path, windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrPrivateRoot, err)
+	}
+	defer windows.CloseHandle(handle)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrPrivateRoot, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
+		(info.VolumeSerialNumber == 0 && info.FileIndexHigh == 0 && info.FileIndexLow == 0) {
+		return "", ErrPrivateRoot
+	}
+	return fmt.Sprintf("%08x-%08x-%08x", info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow), nil
 }
 
 func currentIdentity() (peerIdentity, error) {
