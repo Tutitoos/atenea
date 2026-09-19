@@ -150,7 +150,7 @@ func (s *scanner) file(path, includeRoot string, inherited []condition, depth in
 				if blocked {
 					continue
 				}
-				key := strings.ToLower(alias)
+				key := alias
 				if index, exists := s.seen[key]; exists {
 					if s.result.Hosts[index].Conditional && !unknown {
 						s.result.Hosts[index] = Host{Alias: alias, Source: path, Line: line}
@@ -222,7 +222,7 @@ func evaluate(conditions []condition, alias string) (blocked, unknown bool) {
 		positive := false
 		for _, pattern := range c.patterns {
 			negated := strings.HasPrefix(pattern, "!")
-			matched, err := filepath.Match(strings.ToLower(strings.TrimPrefix(pattern, "!")), strings.ToLower(alias))
+			matched, err := filepath.Match(strings.TrimPrefix(pattern, "!"), alias)
 			if err != nil {
 				unknown = true
 				continue

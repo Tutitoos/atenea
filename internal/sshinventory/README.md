@@ -4,7 +4,8 @@
 the selected user's config and then the system config. It reads regular local
 files and expands `Include` globs in lexical order. Relative includes stay
 relative to the top-level config directory (`~/.ssh` or `/etc/ssh` in a normal
-installation). Each alias carries a file and line number. The snapshot digest
+installation). Each alias carries a file and line number. Keywords are
+case-insensitive; Host patterns and aliases match case-sensitively. The snapshot digest
 changes when a traversed file or Include expansion changes.
 
 The parser never invokes `ssh`, a shell, `Match exec`, a proxy, or a network

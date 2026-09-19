@@ -127,12 +127,12 @@ func TestScanCaseAndStaticIncludeConditions(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
 	writeFixture(t, filepath.Join(root, "child"), "Host mixed.lab blocked.lab\n")
-	writeFixture(t, config, "Host *.LAB !blocked.lab\n Include child\nHost MIXED.LAB\nHost mixed.lab\n")
+	writeFixture(t, config, "Host *.lab !blocked.lab\n Include child\nHost MIXED.LAB\nHost mixed.lab\n")
 	got, err := Scan(config, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"mixed.lab"}; !reflect.DeepEqual(aliases(got.Hosts), want) {
+	if want := []string{"mixed.lab", "MIXED.LAB"}; !reflect.DeepEqual(aliases(got.Hosts), want) {
 		t.Fatalf("aliases = %q, want %q", aliases(got.Hosts), want)
 	}
 	if got.Hosts[0].Conditional || got.Hosts[0].Source != filepath.Join(root, "child") {
