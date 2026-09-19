@@ -1,0 +1,58 @@
+name: SSH desktop foundation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ssh-desktop.yml'
+      - 'cmd/atenea-ssh-controller/**'
+      - 'internal/sshcontrol/**'
+      - 'desktop/ssh/**'
+      - 'go.mod'
+      - 'go.sum'
+
+jobs:
+  native-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.7'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install Linux WebView build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Frontend check and build
+        working-directory: desktop/ssh/frontend
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun run build
+      - name: Native controller tests
+        shell: bash
+        run: go test -race -count=1 ./internal/sshcontrol/...
+      - name: Build Wails shell
+        working-directory: desktop/ssh
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = Linux ]; then
+            go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean -tags webkit2_41
+          else
+            go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -clean
+          fi
+      - name: Bundle controller beside window
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            macOS) target=desktop/ssh/build/bin/atenea-ssh.app/Contents/MacOS/atenea-ssh-controller ;;
+            Windows) target=desktop/ssh/build/bin/atenea-ssh-controller.exe ;;
+            Linux) target=desktop/ssh/build/bin/atenea-ssh-controller ;;
+          esac
+          go build -o "$target" ./cmd/atenea-ssh-controller

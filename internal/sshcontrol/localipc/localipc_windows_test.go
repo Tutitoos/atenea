@@ -45,3 +45,17 @@ func TestRootIdentityRejectsNonDirectory(t *testing.T) {
 		t.Fatalf("ordinary file accepted as an installation root: %v", err)
 	}
 }
+
+func TestNamedPipeHasOneOwner(t *testing.T) {
+	root := t.TempDir()
+	first, err := Listen(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := Listen(root)
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("second controller took the same endpoint")
+	}
+}
