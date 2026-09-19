@@ -25,3 +25,15 @@ snapshot digest alone as a target identity or permission to connect.
 The parser follows the [OpenSSH client configuration manual](https://man.openbsd.org/ssh_config)
 for Host syntax and Include roots. Its conservative handling of dynamic
 conditions deliberately reports unresolved state rather than running them.
+
+`ResolveStatic` is the first selected-alias boundary. It applies active
+`Host` blocks, ordered `Include` files and OpenSSH's first-value rule for
+`HostName`, `User`, `Port`, `HostKeyAlias`, `ProxyJump` and `ProxyCommand`;
+`IdentityFile` entries accumulate. The proxy command is returned as text and
+is never run by resolution. `Match all` is supported; other `Match` criteria,
+canonicalization, dynamic target tokens and unrecognized active options fail
+with `ErrUnresolved`. A before/after inventory fingerprint detects ordinary
+configuration changes during this read. The selected values are provisional:
+the later probe must review the route and known-host policy, verify the
+fingerprint again and bind an authenticated destination and account before
+trust or credentials can be used.
