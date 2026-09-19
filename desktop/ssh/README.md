@@ -40,10 +40,11 @@ with real SSH data or credentials until those gates pass.
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
 | macOS 26.6.2 arm64 | Local Wails production build passed | Local `.app` opened and displayed fixture UI; controller started and reused after window process restart | Not tested | WKWebView supplied by macOS |
-| Windows 10/11 amd64 or arm64 | Controller cross-build passed; native Wails CI pending | Not tested | Not tested | WebView2 runtime |
-| Ubuntu 24.04 amd64 | Controller cross-build passed; native Wails CI pending | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
+| Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
+| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
 
-The build matrix runs on native macOS, Windows and Ubuntu runners. A CI build
+The build matrix passed on native macOS, Windows and Ubuntu runners at
+`abee0d5`. A CI build
 does not prove a graphical session, WebView behavior, installation or runtime
 availability on a clean user machine. OS logout and sleep/resume remain
 unobserved. Wails' [installation guide](https://wails.io/docs/gettingstarted/installation/)
