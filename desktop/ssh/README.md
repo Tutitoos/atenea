@@ -45,11 +45,12 @@ also sets a packaged-assets-only CSP.
 
 The guard has direct dispatcher tests, a shared ingress-policy test and
 rendered macOS and Windows launch checks. Diagnostic screen and clipboard
-calls did not return data in either WebView. The current Windows probe
-distinguishes a rejection from a timeout: both calls timed out after 1.5
-seconds, while the permitted controller status call succeeded. A timeout alone
-does not prove explicit rejection or exclude a later response. Other hostile
-calls, Linux WebView behavior, hostile navigation probes and clean installation
+calls did not return data in the tested WebViews. The current Windows and
+virtual X11 probes distinguish a rejection from a timeout: both calls timed
+out after 1.5 seconds, while the permitted controller status call succeeded.
+A timeout alone does not prove explicit rejection or exclude a later response.
+Other hostile calls, real Linux desktop and Wayland WebView behavior, hostile
+navigation probes and clean installation
 remain open in issue #151. Do not ship this shell with real SSH data or
 credentials until those gates pass. Development preview uses only synthetic
 fixtures.
@@ -68,7 +69,7 @@ is absent from the bundled JavaScript.
 | macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
-| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. A window-only CI capture was inspected and showed fixture UI and `Controlador disponible`; real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
+| Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal and diagnostic window captures showed fixture UI, `Controlador disponible`, and screen/clipboard calls timing out after 1.5 seconds; real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
 `2de550f`. The PC-SFONT trial used a temporary interactive scheduled task to
@@ -86,7 +87,10 @@ an installer. On Ubuntu 24.04 CI at `a6db23f`, Xvfb launched the packaged
 window and a controller in a virtual X11 session. The captured window was
 inspected and visibly contained the fixture list and available controller.
 The CI smoke step checks that a visible window can be captured; visual content
-was verified separately by inspecting the artifact. This does not establish
+was verified separately by inspecting the artifact. A second Xvfb run at
+`f183222` captured the diagnostic window. Both direct calls reported `sin
+respuesta` after 1.5 seconds while controller status succeeded. This does not
+prove explicit rejection or exclude a later response. It also does not establish
 behavior in a real Linux desktop session or Wayland. A CI build
 does not prove a graphical session, WebView behavior, installation or runtime
 availability on a clean user machine. OS logout and sleep/resume remain
