@@ -47,6 +47,11 @@ jobs:
         run: |
           python scripts/restricted_wails.py test
           python scripts/restricted_wails.py build
+      - name: Check Linux launcher diagnostics
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: bash scripts/linux_launcher_test.sh
       - name: Bundle controller beside window
         shell: bash
         run: |

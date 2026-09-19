@@ -222,6 +222,13 @@ def main() -> None:
             has_navigation_probe = any(b"atenea-navigation-probe" in asset.read_bytes() for asset in assets)
             if has_navigation_probe != (sys.argv[1] == "navigation-probe-build"):
                 raise RuntimeError("frontend navigation probe mode does not match requested build")
+            if target_linux:
+                native = ROOT / "build/bin/atenea-ssh"
+                if not native.is_file():
+                    raise RuntimeError("Linux Wails executable missing after build")
+                native.rename(native.with_name("atenea-ssh-bin"))
+                shutil.copy2(ROOT / "scripts/linux_launcher.sh", native)
+                native.chmod(0o755)
 
 
 if __name__ == "__main__":
