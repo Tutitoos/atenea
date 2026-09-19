@@ -1,0 +1,24 @@
+static gboolean ateneaNavigationPolicy(WebKitWebView *webview, WebKitPolicyDecision *decision,
+                                       WebKitPolicyDecisionType type, gpointer data)
+{
+    if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION)
+    {
+        webkit_policy_decision_ignore(decision);
+        return TRUE;
+    }
+    if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)
+    {
+        return FALSE;
+    }
+    WebKitNavigationPolicyDecision *navigation = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+    WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(navigation);
+    WebKitURIRequest *request = action == NULL ? NULL : webkit_navigation_action_get_request(action);
+    const gchar *uri = request == NULL ? NULL : webkit_uri_request_get_uri(request);
+    if (g_strcmp0(uri, "wails://wails/") == 0 ||
+        (uri != NULL && g_str_has_prefix(uri, "wails://wails/#")))
+    {
+        return FALSE;
+    }
+    webkit_policy_decision_ignore(decision);
+    return TRUE;
+}

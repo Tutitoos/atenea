@@ -21,7 +21,9 @@ WAILS = "github.com/wailsapp/wails/v2"
 SOURCE_HASHES = {
     "internal/frontend/dispatcher/dispatcher.go": "baa6bc120411c07323e66476bb14a9872088a970449a600a765890012beb3133",
     "internal/frontend/desktop/darwin/frontend.go": "96b4e064ea8178a0ae26e65eab5c92c4200eca3f0f241c2035f88de6eaead35e",
+    "internal/frontend/desktop/darwin/WailsContext.m": "ffb03f12a11f4af78b3ea2fac0ef5b2b931bc5de0b0e835ed75554fd7ad91e72",
     "internal/frontend/desktop/linux/frontend.go": "2610e740979055e636a30d05670126aad3fa6b77071c3f9af20e2fb6c47c89f5",
+    "internal/frontend/desktop/linux/window.c": "76529ab2c6eb8a3b195823f934ca14adac937b300ad0420cd6e3e6e6630b5643",
     "internal/frontend/desktop/windows/frontend.go": "9598c7f21779e2332db788a9e09f3b4856d563ab5fc2c93bf7035743b9d7befa",
     "pkg/options/options.go": "9ec72bb753c04f7bf1f5d09ab973db41791028df3f13051d5fac5c19143a6d2e",
 }
@@ -77,12 +79,25 @@ def prepare_workspace(tmp: Path) -> Path:
                 if content.count(extra_anchor) != 1:
                     raise RuntimeError("Wails Windows additional-objects anchor changed")
                 content = content.replace(extra_anchor, extra_anchor + "\tif len(message) == 0 || message[0] != 'C' { return }\n")
+        elif relative.endswith("WailsContext.m"):
+            anchor = "- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {\n"
+            if content.count(anchor) != 1:
+                raise RuntimeError("Wails macOS navigation anchor changed")
+            content = content.replace(anchor, (ROOT / "bridge/navigation_darwin.m.txt").read_text(encoding="utf-8") + anchor)
+        elif relative.endswith("window.c"):
+            function_anchor = "static void webviewLoadChanged(WebKitWebView *web_view, WebKitLoadEvent load_event, gpointer data)\n"
+            signal_anchor = '    g_signal_connect(G_OBJECT(webview), "load-changed", G_CALLBACK(webviewLoadChanged), NULL);\n'
+            if content.count(function_anchor) != 1 or content.count(signal_anchor) != 1:
+                raise RuntimeError("Wails Linux navigation anchors changed")
+            content = content.replace(function_anchor, (ROOT / "bridge/navigation_linux.c.txt").read_text(encoding="utf-8") + function_anchor)
+            content = content.replace(signal_anchor, signal_anchor + '    g_signal_connect(G_OBJECT(webview), "decide-policy", G_CALLBACK(ateneaNavigationPolicy), NULL);\n')
         else:
             content += f'\n// {MARKER} proves this app was built with the reviewed Wails overlay.\nconst {MARKER} = "wails-v2.15.0-guard-v1"\n'
         target.parent.chmod(0o700)
         target.chmod(0o600)
         target.write_text(content, encoding="utf-8")
-        subprocess.run(["gofmt", "-w", str(target)], check=True)
+        if target.suffix == ".go":
+            subprocess.run(["gofmt", "-w", str(target)], check=True)
     dispatcher_dir = patched / "internal/frontend/dispatcher"
     dispatcher_dir.chmod(0o700)
     (dispatcher_dir / "atenea_guard_test.go").write_text(

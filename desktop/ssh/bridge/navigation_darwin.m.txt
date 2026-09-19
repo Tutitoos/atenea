@@ -1,0 +1,15 @@
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action
+    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *url = action.request.URL;
+    BOOL packaged = url != nil &&
+        [[url scheme] isEqualToString:@"wails"] &&
+        [[url host] isEqualToString:@"wails"] &&
+        [url port] == nil && [url user] == nil &&
+        [[url path] isEqualToString:@"/"];
+    if (!packaged || action.targetFrame == nil || !action.targetFrame.isMainFrame) {
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+

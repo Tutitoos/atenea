@@ -43,6 +43,13 @@ clipboard, notification, window-control, drag/resize/file-drop and obfuscated
 binding messages are rejected before their framework handlers. The frontend
 also sets a packaged-assets-only CSP.
 
+The guarded macOS WKWebView cancels navigation and new windows outside the
+packaged `wails://wails/` page. The guarded Linux WebKitGTK window applies
+the same restriction through its native navigation policy. These hooks are
+compiled into the temporary pinned Wails copy. Windows WebView2 navigation
+still needs an equivalent native policy and a hostile navigation trial on
+each platform before the navigation boundary is accepted.
+
 The per-user installation ID is written completely to a private temporary
 file before being published atomically. Concurrent first launches therefore
 read the same completed ID. Native endpoint ownership still allows only one
