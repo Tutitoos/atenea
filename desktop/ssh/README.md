@@ -63,8 +63,9 @@ controller, checks that a different installation cannot stop it and that an
 incompatible protocol is closed before any operation, then verifies the
 legitimate client still works. It also checks that a second controller cannot
 take the endpoint, kills the owner, restarts it and verifies status and explicit
-stop. This exercises stale endpoint recovery with synthetic state; simultaneous
-GUI activation, logout and sleep/resume remain separate acceptance checks.
+stop. This exercises stale endpoint recovery with synthetic state. A real
+macOS graphical-session trial of simultaneous GUI activation is recorded below;
+the other platforms, logout and sleep/resume remain separate acceptance checks.
 
 The guard has direct dispatcher tests, a shared ingress-policy test and
 rendered macOS and Windows launch checks. Diagnostic screen and clipboard
@@ -94,10 +95,22 @@ is absent from the bundled JavaScript.
 
 | Platform | Build | Render/launch | Installed package | Runtime dependency |
 | --- | --- | --- | --- | --- |
-| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout. A separate navigation-probe build left the fixture UI visible after the loopback attempt in an inspected window capture | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
+| macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. Two simultaneous windows and a reopened third window showed the fixture UI and one shared controller in a separate temporary user-state root. An earlier diagnostic build showed no resolved screen or clipboard read within 1.5 seconds, without displaying returned data; that build did not distinguish rejection from timeout. A separate navigation-probe build left the fixture UI visible after the loopback attempt in an inspected window capture | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
 | Windows 11 Pro build 26200 test workstation, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; the revised diagnostic showed both direct WebView screen and clipboard calls timed out after 1.5 seconds. At `3b111b9`, a separate navigation-probe build attempted a loopback page; the captured fixture window remained visible after 7 seconds | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Passed in virtual X11 with Xvfb. Inspected normal, bridge diagnostic and navigation-probe captures showed fixture UI and `Controlador disponible`. The navigation probe left the packaged page visible after the loopback attempt; screen/clipboard calls timed out after 1.5 seconds. Real desktop X11 and Wayland remain open | Not tested | GTK3 and WebKit2GTK 4.1 |
+
+At `9a0ceca`, a locally signed macOS build and sibling controller were launched
+with a temporary `HOME`, so this trial did not use the normal Atenea state.
+Two separate `open -n` launches rendered separate windows; inspected captures
+of each contained the synthetic device list and `Controlador disponible`.
+Process inspection showed two GUI processes and exactly one controller. Closing
+the first window through its native close button ended only that GUI process.
+A third launch rendered the same available-controller state and reused the
+original controller process. Closing the remaining windows left that process
+running; its explicit `--stop` terminated it. The temporary processes and state
+were then removed. This observes one macOS graphical session, not another
+user, Windows/Linux GUI concurrency, sleep, logout or clean-system installation.
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
 `2de550f`. The Windows workstation trial used a temporary interactive scheduled task to
