@@ -44,8 +44,9 @@ binding messages are rejected before their framework handlers. The frontend
 also sets a packaged-assets-only CSP.
 
 The guard has direct dispatcher tests, a shared ingress-policy test and
-rendered macOS and Windows launch checks. Direct hostile calls from Windows
-and Linux WebViews, hostile navigation probes and clean installation are still open in
+rendered macOS and Windows launch checks. Direct screen and clipboard calls
+were denied in both macOS and Windows diagnostic WebViews. Other hostile calls,
+Linux WebView behavior, hostile navigation probes and clean installation are still open in
 issue #151. Do not ship this shell with real SSH data or credentials until
 those gates pass. Development preview uses only synthetic fixtures.
 
@@ -61,16 +62,19 @@ is absent from the bundled JavaScript.
 | --- | --- | --- | --- | --- |
 | macOS 26.6.2 arm64 | Local restricted Wails production build passed | Local `.app` opened with CSP and displayed fixture UI; native window close left controller running and explicit stop terminated it. A diagnostic build showed direct WebView screen and clipboard reads blocked without displaying returned data | User-level copy in `~/Applications` was signed locally, verified, opened with its sibling controller, then removed from Applications; clean-system install remains open | WKWebView supplied by macOS |
 | Windows 2025 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested | Not tested | WebView2 runtime |
-| PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. A window-only capture showed the fixture UI, synthetic devices and `Controlador disponible` | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
+| PC-SFONT, Windows 11 Pro build 26200, amd64 | Guarded shell and controller cross-built from macOS; transferred EXE hashes matched | Both processes started in the active user session. Window-only captures showed fixture UI and `Controlador disponible`; a diagnostic build showed direct WebView screen and clipboard calls denied | Temporary per-user EXEs launched and removed; no installer or clean-system test | WebView2 rendered the fixture window |
 | Ubuntu 24.04 CI runner, amd64 | Native Wails shell, controller build and controller tests passed | Not tested (X11 and Wayland both pending) | Not tested | GTK3 and WebKit2GTK 4.1 |
 
 The guarded build matrix passed on native macOS, Windows and Ubuntu runners at
 `2de550f`. The PC-SFONT trial used a temporary interactive scheduled task to
 launch the two verified EXEs in the active user session. The capture selected
-only the Atenea window. Both preview processes, the two temporary tasks and
-the temporary directory were removed after the trial. This verifies a rendered
-Windows session with the local controller, not direct hostile WebView calls,
-remote SSH, credential storage or an installer. A CI build
+only the Atenea window. A second trial used `probe-build` and showed `Puente
+bloqueado` after direct framework screen and clipboard read calls from the
+Windows WebView; the diagnostic never displays or records returned values.
+Both preview processes, the two temporary tasks and the temporary directory
+were removed after each trial. The normal build was restored afterward. This
+does not verify every framework operation, remote SSH, credential storage or
+an installer. A CI build
 does not prove a graphical session, WebView behavior, installation or runtime
 availability on a clean user machine. OS logout and sleep/resume remain
 unobserved. Wails' [installation guide](https://wails.io/docs/gettingstarted/installation/)
