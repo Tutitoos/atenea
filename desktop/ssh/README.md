@@ -47,7 +47,10 @@ The per-user installation ID is written completely to a private temporary
 file before being published atomically. Concurrent first launches therefore
 read the same completed ID. Native endpoint ownership still allows only one
 controller listener. The concurrent-ID test covers simultaneous callers in
-one process; simultaneous desktop processes and logout/restart remain separate
+one process. A separate process test starts a controller, checks that a second
+controller cannot take its endpoint, kills the owner, restarts it and verifies
+status and explicit stop. This exercises stale endpoint recovery with synthetic
+state; simultaneous GUI activation, logout and sleep/resume remain separate
 acceptance checks.
 
 The guard has direct dispatcher tests, a shared ingress-policy test and
