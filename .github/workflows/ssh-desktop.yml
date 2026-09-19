@@ -30,7 +30,7 @@ jobs:
           python-version: '3.12'
       - name: Install Linux WebView build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick dbus-x11
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick dbus-x11 weston
       - name: Frontend check and build
         working-directory: desktop/ssh/frontend
         shell: bash
@@ -61,6 +61,11 @@ jobs:
         working-directory: desktop/ssh
         shell: bash
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
+      - name: Exercise Linux lifecycle in a virtual Wayland session
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: dbus-run-session -- bash scripts/linux_wayland_lifecycle.sh
       - name: Probe Linux WebView bridge in virtual X11
         if: runner.os == 'Linux'
         working-directory: desktop/ssh
