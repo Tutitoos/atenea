@@ -74,9 +74,8 @@ def prepare_workspace(tmp: Path) -> Path:
     chromium = patched_webview / "pkg/edge/chromium.go"
     content = chromium.read_text(encoding="utf-8")
     webview_anchors = {
-        '"github.com/wailsapp/go-webview2/internal/w32"\n': '"github.com/wailsapp/go-webview2/internal/w32"\n\t"github.com/wailsapp/go-webview2/pkg/webview2"\n',
-        "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n": "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n\tnavigationStarting               *webview2.ICoreWebView2NavigationStartingEventHandler\n\tnewWindowRequested               *webview2.ICoreWebView2NewWindowRequestedEventHandler\n",
-        "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n": "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n\te.navigationStarting = webview2.NewICoreWebView2NavigationStartingEventHandler(e)\n\te.newWindowRequested = webview2.NewICoreWebView2NewWindowRequestedEventHandler(e)\n",
+        "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n": "navigationCompleted              *ICoreWebView2NavigationCompletedEventHandler\n\tnavigationStarting               *ateneaNavigationHandler\n\tnewWindowRequested               *ateneaNewWindowHandler\n",
+        "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n": "e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)\n\te.navigationStarting = &ateneaNavigationHandler{vtbl: &ateneaNavigationVtable, owner: e}\n\te.newWindowRequested = &ateneaNewWindowHandler{vtbl: &ateneaNewWindowVtable, owner: e}\n",
     }
     for anchor, replacement in webview_anchors.items():
         if content.count(anchor) != 1:
@@ -85,7 +84,7 @@ def prepare_workspace(tmp: Path) -> Path:
     registration = "err = e.webview.AddNavigationCompleted(e.navigationCompleted, &token)\n\tif err != nil {\n\t\te.errorCallback(err)\n\t}\n"
     if content.count(registration) != 1:
         raise RuntimeError("go-webview2 Chromium registration anchor changed")
-    content = content.replace(registration, registration + "\tnative := (*webview2.ICoreWebView2)(unsafe.Pointer(e.webview))\n\tif _, err = native.AddNavigationStarting(e.navigationStarting); err != nil {\n\t\te.errorCallback(err)\n\t}\n\tif _, err = native.AddNewWindowRequested(e.newWindowRequested); err != nil {\n\t\te.errorCallback(err)\n\t}\n")
+    content = content.replace(registration, registration + "\te.ateneaRegisterNavigation()\n")
     chromium.parent.chmod(0o700)
     chromium.chmod(0o600)
     chromium.write_text(content, encoding="utf-8")

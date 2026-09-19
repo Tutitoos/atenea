@@ -4,27 +4,94 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/wailsapp/go-webview2/pkg/webview2"
 	"golang.org/x/sys/windows"
 )
 
-// Only the bundled root document may occupy the Atenea window. Fragment
-// navigation is local to that document. No external or alternate local origin
-// is permitted, including URLs that merely share its host suffix.
+// Keep these callbacks in the reviewed edge package. The older pkg/webview2
+// package has unrelated callback initializers that fail under Go 1.26.
+type ateneaNavigationArgsVtbl struct {
+	_IUnknownVtbl
+	GetUri             ComProc
+	GetIsUserInitiated ComProc
+	GetIsRedirected    ComProc
+	GetRequestHeaders  ComProc
+	GetCancel          ComProc
+	PutCancel          ComProc
+	GetNavigationId    ComProc
+}
+
+type ateneaNavigationArgs struct{ vtbl *ateneaNavigationArgsVtbl }
+
+type ateneaNewWindowArgsVtbl struct {
+	_IUnknownVtbl
+	GetUri             ComProc
+	PutNewWindow       ComProc
+	GetNewWindow       ComProc
+	PutHandled         ComProc
+	GetHandled         ComProc
+	GetIsUserInitiated ComProc
+	GetDeferral        ComProc
+	GetWindowFeatures  ComProc
+}
+
+type ateneaNewWindowArgs struct{ vtbl *ateneaNewWindowArgsVtbl }
+
+type ateneaNavigationHandlerVtbl struct {
+	_IUnknownVtbl
+	Invoke ComProc
+}
+
+type ateneaNavigationHandler struct {
+	vtbl *ateneaNavigationHandlerVtbl
+	owner *Chromium
+}
+
+type ateneaNewWindowHandlerVtbl struct {
+	_IUnknownVtbl
+	Invoke ComProc
+}
+
+type ateneaNewWindowHandler struct {
+	vtbl *ateneaNewWindowHandlerVtbl
+	owner *Chromium
+}
+
+var ateneaNavigationVtable = ateneaNavigationHandlerVtbl{
+	_IUnknownVtbl{
+		NewComProc(func(h *ateneaNavigationHandler, iid, object uintptr) uintptr { return h.owner.QueryInterface(iid, object) }),
+		NewComProc(func(h *ateneaNavigationHandler) uintptr { return h.owner.AddRef() }),
+		NewComProc(func(h *ateneaNavigationHandler) uintptr { return h.owner.Release() }),
+	},
+	NewComProc(func(h *ateneaNavigationHandler, _ *ICoreWebView2, args *ateneaNavigationArgs) uintptr {
+		return h.owner.ateneaNavigationStarting(args)
+	}),
+}
+
+var ateneaNewWindowVtable = ateneaNewWindowHandlerVtbl{
+	_IUnknownVtbl{
+		NewComProc(func(h *ateneaNewWindowHandler, iid, object uintptr) uintptr { return h.owner.QueryInterface(iid, object) }),
+		NewComProc(func(h *ateneaNewWindowHandler) uintptr { return h.owner.AddRef() }),
+		NewComProc(func(h *ateneaNewWindowHandler) uintptr { return h.owner.Release() }),
+	},
+	NewComProc(func(h *ateneaNewWindowHandler, _ *ICoreWebView2, args *ateneaNewWindowArgs) uintptr {
+		return h.owner.ateneaNewWindowRequested(args)
+	}),
+}
+
 func ateneaAllowedNavigation(uri string) bool {
 	return uri == "http://wails.localhost/" || strings.HasPrefix(uri, "http://wails.localhost/#")
 }
 
-func (e *Chromium) NavigationStarting(_ *webview2.ICoreWebView2, args *webview2.ICoreWebView2NavigationStartingEventArgs) uintptr {
+func (e *Chromium) ateneaNavigationStarting(args *ateneaNavigationArgs) uintptr {
 	var rawURI *uint16
-	hr, _, _ := args.Vtbl.GetUri.Call(uintptr(unsafe.Pointer(args)), uintptr(unsafe.Pointer(&rawURI)))
+	hr, _, _ := args.vtbl.GetUri.Call(uintptr(unsafe.Pointer(args)), uintptr(unsafe.Pointer(&rawURI)))
 	allowed := false
 	if windows.Handle(hr) == windows.S_OK && rawURI != nil {
 		allowed = ateneaAllowedNavigation(windows.UTF16PtrToString(rawURI))
 		windows.CoTaskMemFree(unsafe.Pointer(rawURI))
 	}
 	if !allowed {
-		hr, _, _ = args.Vtbl.PutCancel.Call(uintptr(unsafe.Pointer(args)), 1)
+		hr, _, _ = args.vtbl.PutCancel.Call(uintptr(unsafe.Pointer(args)), 1)
 		if windows.Handle(hr) != windows.S_OK {
 			e.errorCallback(windows.Errno(hr))
 		}
@@ -32,10 +99,26 @@ func (e *Chromium) NavigationStarting(_ *webview2.ICoreWebView2, args *webview2.
 	return 0
 }
 
-func (e *Chromium) NewWindowRequested(_ *webview2.ICoreWebView2, args *webview2.ICoreWebView2NewWindowRequestedEventArgs) uintptr {
-	hr, _, _ := args.Vtbl.PutHandled.Call(uintptr(unsafe.Pointer(args)), 1)
+func (e *Chromium) ateneaNewWindowRequested(args *ateneaNewWindowArgs) uintptr {
+	hr, _, _ := args.vtbl.PutHandled.Call(uintptr(unsafe.Pointer(args)), 1)
 	if windows.Handle(hr) != windows.S_OK {
 		e.errorCallback(windows.Errno(hr))
 	}
 	return 0
+}
+
+func (e *Chromium) ateneaRegisterNavigation() {
+	var token _EventRegistrationToken
+	hr, _, _ := e.webview.vtbl.AddNavigationStarting.Call(
+		uintptr(unsafe.Pointer(e.webview)), uintptr(unsafe.Pointer(e.navigationStarting)), uintptr(unsafe.Pointer(&token)),
+	)
+	if windows.Handle(hr) != windows.S_OK {
+		e.errorCallback(windows.Errno(hr))
+	}
+	hr, _, _ = e.webview.vtbl.AddNewWindowRequested.Call(
+		uintptr(unsafe.Pointer(e.webview)), uintptr(unsafe.Pointer(e.newWindowRequested)), uintptr(unsafe.Pointer(&token)),
+	)
+	if windows.Handle(hr) != windows.S_OK {
+		e.errorCallback(windows.Errno(hr))
+	}
 }
