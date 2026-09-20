@@ -37,3 +37,22 @@ configuration changes during this read. The selected values are provisional:
 the later probe must review the route and known-host policy, verify the
 fingerprint again and bind an authenticated destination and account before
 trust or credentials can be used.
+
+`PrepareDirectProbe` builds a restricted OpenSSH argument list for a selected
+direct route. It never starts SSH. It rejects proxy routes and unsafe target
+arguments rather than silently changing their path. The caller must provide a
+known-hosts snapshot whose fingerprints were independently reviewed; the
+builder cannot verify that review. A temporary empty config suppresses the
+user and system configuration during a later probe, while the supplied
+known-hosts copy is the sole trust source. The arguments disable remote
+commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
+connection sharing and automatic host-key updates. Password prompts are
+disabled for this diagnostic plan. `Close` removes its temporary files.
+
+This is only a command plan. No code here executes it, interprets OpenSSH
+errors, enrolls keys, proves authenticated connectivity or supplies a stable
+target identity. A future executor must recheck the config snapshot and
+reviewed trust evidence immediately before use, impose a bounded lifetime,
+and verify platform-specific private-file access (especially Windows ACLs).
+ProxyJump and ProxyCommand routes remain unresolved until they can be probed
+without changing the configured path or its security properties.
