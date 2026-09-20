@@ -143,7 +143,7 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 			defer func() { _ = plan.Close() }()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			args := append([]string{"-v"}, plan.Args...)
+			args := append([]string{"-v"}, plan.Arguments()...)
 			cmd := exec.CommandContext(ctx, ssh, args...)
 			cmd.Env = append(os.Environ(), "LC_ALL=C")
 			output, runErr := cmd.CombinedOutput()
@@ -195,7 +195,7 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	defer func() { _ = aliasPlan.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	aliasCommand := exec.CommandContext(ctx, ssh, append([]string{"-v"}, aliasPlan.Args...)...)
+	aliasCommand := exec.CommandContext(ctx, ssh, append([]string{"-v"}, aliasPlan.Arguments()...)...)
 	aliasCommand.Env = append(os.Environ(), "LC_ALL=C")
 	aliasOutput, _ := aliasCommand.CombinedOutput()
 	if !strings.Contains(string(aliasOutput), "Authenticated to") || ctx.Err() != context.DeadlineExceeded {

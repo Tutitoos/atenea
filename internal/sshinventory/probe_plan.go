@@ -14,9 +14,37 @@ var ErrProbeUnsupported = errors.New("ssh inventory: diagnostic probe unsupporte
 // ProbePlan contains a restricted OpenSSH command line and temporary files.
 // Preparing it never connects. Close removes the private files after use.
 type ProbePlan struct {
-	Args     []string
-	Snapshot string
-	root     string
+	args         []string
+	root         string
+	userConfig   string
+	systemConfig string
+	selection    Selection
+}
+
+// Arguments returns a copy of the restricted OpenSSH arguments. Changing the
+// returned slice cannot modify this plan. It is empty after Close.
+func (p *ProbePlan) Arguments() []string {
+	if p == nil || p.root == "" {
+		return nil
+	}
+	return append([]string(nil), p.args...)
+}
+
+// Snapshot returns the config digest captured when this plan was built.
+func (p *ProbePlan) Snapshot() string {
+	if p == nil || p.root == "" {
+		return ""
+	}
+	return p.selection.Snapshot
+}
+
+// Revalidate rereads the original config roots and refuses a stale or closed
+// plan. An executor must call it immediately before starting OpenSSH.
+func (p *ProbePlan) Revalidate() error {
+	if p == nil || p.root == "" {
+		return ErrUnresolved
+	}
+	return RevalidateSelection(p.userConfig, p.systemConfig, p.selection)
 }
 
 // PrepareDirectProbe builds a direct-route diagnostic plan. The caller must
@@ -96,7 +124,9 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 		cleanup()
 		return nil, err
 	}
-	return &ProbePlan{Args: args, Snapshot: selection.Snapshot, root: root}, nil
+	selection.IdentityFiles = append([]string(nil), selection.IdentityFiles...)
+	selection.Sources = append([]Diagnostic(nil), selection.Sources...)
+	return &ProbePlan{args: args, root: root, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
 }
 
 // Close removes the temporary configuration and known-hosts files.
@@ -106,6 +136,10 @@ func (p *ProbePlan) Close() error {
 	}
 	root := p.root
 	p.root = ""
+	p.args = nil
+	p.userConfig = ""
+	p.systemConfig = ""
+	p.selection = Selection{}
 	return os.RemoveAll(root)
 }
 

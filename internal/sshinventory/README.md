@@ -53,7 +53,9 @@ commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
 connection sharing and automatic host-key updates. Password prompts are
 disabled for this diagnostic plan. `Close` removes its temporary files.
 The builder revalidates the selection before and after creating the temporary
-files. A future executor must revalidate again immediately before use.
+files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
+config and refuses a stale or closed plan. A future executor must invoke it
+immediately before use.
 
 This is only a command plan. No code here executes it, interprets OpenSSH
 errors, enrolls keys, proves authenticated connectivity or supplies a stable

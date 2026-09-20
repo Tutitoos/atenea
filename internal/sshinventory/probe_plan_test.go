@@ -24,8 +24,8 @@ func TestPrepareDirectProbe(t *testing.T) {
 	}
 	root := plan.root
 	t.Cleanup(func() { _ = plan.Close() })
-	if plan.Snapshot != selection.Snapshot {
-		t.Fatalf("snapshot = %q", plan.Snapshot)
+	if plan.Snapshot() != selection.Snapshot {
+		t.Fatalf("snapshot = %q", plan.Snapshot())
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "known_hosts")); err != nil || string(got) != string(knownHosts) {
 		t.Fatalf("known_hosts = %q, %v", got, err)
@@ -38,7 +38,8 @@ func TestPrepareDirectProbe(t *testing.T) {
 			}
 		}
 	}
-	args := strings.Join(plan.Args, "\x00")
+	planArgs := plan.Arguments()
+	args := strings.Join(planArgs, "\x00")
 	for _, required := range []string{"-N", "-T", "-n", "BatchMode=yes", "ClearAllForwardings=yes", "ControlMaster=no", "ControlPath=none", "ForwardAgent=no", "IdentitiesOnly=yes", "IdentityAgent=none", "StrictHostKeyChecking=yes", "UpdateHostKeys=no", "HostKeyAlias=reviewed.example.test"} {
 		if !strings.Contains(args, required) {
 			t.Errorf("missing %q", required)
@@ -49,11 +50,25 @@ func TestPrepareDirectProbe(t *testing.T) {
 			t.Errorf("unexpected %q", forbidden)
 		}
 	}
-	if plan.Args[len(plan.Args)-1] != selection.HostName {
+	if planArgs[len(planArgs)-1] != selection.HostName {
 		t.Fatal("destination is not final argument")
+	}
+	planArgs[len(planArgs)-1] = "wrong.example.test"
+	if plan.Arguments()[len(plan.Arguments())-1] != selection.HostName {
+		t.Fatal("caller modified plan arguments")
+	}
+	if err := plan.Revalidate(); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
+	if err := plan.Revalidate(); !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale plan revalidated: %v", err)
 	}
 	if err := plan.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if len(plan.Arguments()) != 0 || plan.Snapshot() != "" || !errors.Is(plan.Revalidate(), ErrUnresolved) {
+		t.Fatal("closed plan remains usable")
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("temporary root remains: %v", err)
@@ -124,7 +139,7 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = plan.Close() }()
-	args := append([]string{"-G"}, plan.Args...)
+	args := append([]string{"-G"}, plan.Arguments()...)
 	output, err := exec.Command(ssh, args...).CombinedOutput() // -G prints config; no connection.
 	if err != nil {
 		t.Fatalf("ssh -G: %v: %s", err, output)
