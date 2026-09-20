@@ -403,9 +403,12 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if _, err := ExecuteDirectProbe(context.Background(), ssh, enrolledJumpPlan); !errors.Is(err, ErrChanged) {
 		t.Fatalf("enrolled jump plan survived gateway key rotation: %v", err)
 	}
-	for _, tt := range []struct{ name, pins string }{
-		{"changed jump pin", "target-pin " + keyText + "jump-pin " + clientFields[0] + " " + clientFields[1] + "\n"},
-		{"changed destination pin", "target-pin " + clientFields[0] + " " + clientFields[1] + "\n" + "jump-pin " + keyText},
+	for _, tt := range []struct {
+		name, pins string
+		failure    ProbeFailureKind
+	}{
+		{"changed jump pin", "target-pin " + keyText + "jump-pin " + clientFields[0] + " " + clientFields[1] + "\n", ProbeFailureHostKeyChanged},
+		{"changed destination pin", "target-pin " + clientFields[0] + " " + clientFields[1] + "\n" + "jump-pin " + keyText, ProbeFailureHostKeyChanged},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			plan, err := PrepareSingleJumpProbe(jumpConfig, "", jumpTarget, jumpHost, []byte(tt.pins))
@@ -414,8 +417,8 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 			}
 			defer func() { _ = plan.Close() }()
 			result, err := ExecuteDirectProbe(context.Background(), ssh, plan)
-			if err != nil || result.ClientReportedAuthenticated {
-				t.Fatalf("changed pin authenticated: %+v, %v", result, err)
+			if err != nil || result.ClientReportedAuthenticated || result.Failure != tt.failure {
+				t.Fatalf("changed pin diagnosis = %+v, %v; want %s", result, err, tt.failure)
 			}
 		})
 	}

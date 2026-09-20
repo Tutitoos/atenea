@@ -22,7 +22,7 @@ const (
 )
 
 // ClassifyOpenSSHFailure interprets bounded English OpenSSH diagnostics from
-// a failed, direct diagnostic attempt. It does not run SSH or return raw logs.
+// a failed diagnostic attempt. It does not run SSH or return raw logs.
 // The caller must set timedOut from its own process deadline; exitCode 255 is
 // required for stderr-based hints. An exit code of zero is never treated as
 // authenticated connectivity by this function.

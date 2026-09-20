@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,7 +57,12 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 	configureProbeProcess(cmd, plan.jump != nil)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	var proxyStderr boundedProbeStderr
+	if plan.jump != nil {
+		cmd.Stderr = &proxyStderr // ProxyJump's child writes here, never to the client's -E log.
+	} else {
+		cmd.Stderr = io.Discard
+	}
 	if err := cmd.Start(); err != nil {
 		return ProbeResult{}, err
 	}
@@ -68,7 +74,11 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 	for {
 		select {
 		case runErr := <-done:
-			return inspectProbeLog(logPath, plan.selection, plan.jump != nil, runErr, false)
+			result, err := inspectProbeLog(logPath, plan.selection, plan.jump != nil, runErr, false)
+			if err == nil && plan.jump != nil && result.Failure == ProbeFailureUnknown {
+				result.Failure = proxyStderr.classify(runErr)
+			}
+			return result, err
 		case <-ticker.C:
 			result, logErr := inspectProbeLog(logPath, plan.selection, plan.jump != nil, nil, false)
 			if logErr != nil || result.ClientReportedAuthenticated {
@@ -85,6 +95,38 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 			return inspectProbeLog(logPath, plan.selection, plan.jump != nil, nil, true)
 		}
 	}
+}
+
+// boundedProbeStderr keeps only enough child diagnostics for an advisory
+// failure label. It never exposes or persists remote banners or raw log text.
+type boundedProbeStderr struct {
+	mu       sync.Mutex
+	data     []byte
+	overflow bool
+}
+
+func (b *boundedProbeStderr) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(p) > 32<<10-len(b.data) {
+		b.overflow = true
+	} else if !b.overflow {
+		b.data = append(b.data, p...)
+	}
+	return len(p), nil
+}
+
+func (b *boundedProbeStderr) classify(runErr error) ProbeFailureKind {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.overflow {
+		return ProbeFailureUnknown
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		return ProbeFailureUnknown
+	}
+	return ClassifyOpenSSHFailure(exitErr.ExitCode(), string(b.data), false)
 }
 
 func inspectProbeLog(path string, selection Selection, viaProxy bool, runErr error, timedOut bool) (ProbeResult, error) {

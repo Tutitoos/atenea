@@ -3,6 +3,7 @@ package sshinventory
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,5 +33,19 @@ func TestNoAvailableExplicitIdentity(t *testing.T) {
 				t.Fatalf("no available selected identity = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProxyDiagnosticStderrIsBoundedAndNeverClassifiedAfterOverflow(t *testing.T) {
+	var sink boundedProbeStderr
+	input := strings.Repeat("x", 32<<10)
+	if n, err := sink.Write([]byte(input)); err != nil || n != len(input) {
+		t.Fatalf("bounded diagnostic write = %d, %v", n, err)
+	}
+	if n, err := sink.Write([]byte("y")); err != nil || n != 1 {
+		t.Fatalf("overflow write = %d, %v", n, err)
+	}
+	if len(sink.data) > 32<<10 || !sink.overflow || sink.classify(nil) != ProbeFailureUnknown {
+		t.Fatal("overflow diagnostic retained excess text or produced a trusted classification")
 	}
 }

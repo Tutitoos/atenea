@@ -133,9 +133,12 @@ Unsupported active options and unsupported option forms still fail resolution.
 an eight-second limit and stops as soon as its private `-E` diagnostic log
 reports public-key authentication. For a jump plan it requires the client's
 exact `via proxy` authentication marker. It never opens a remote command or
-returns raw logs. Server-supplied banners are discarded separately; the loopback test
-includes a forged authentication banner to guard this boundary. Failed-process
-classification is advisory. The successful result is explicitly
+returns raw logs. Server-supplied stdout banners are discarded separately;
+the loopback test includes a forged authentication banner to guard this
+boundary. For a jump, at most 32 KiB of nested-client stderr is held in
+memory to classify gateway key failures that do not reach the outer `-E` log.
+It is discarded after the probe and may contain server text, so its failure
+classification is advisory and never grants trust. The successful result is explicitly
 client-reported authentication to the supplied pin, not a durable device
 identity, authorization, agent-installation check or permission to send a
 prompt. The caller must still establish independent review of the pin and
