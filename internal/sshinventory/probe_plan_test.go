@@ -166,6 +166,49 @@ func TestPrepareDirectProbeAllowsExplicitlyDisabledProxy(t *testing.T) {
 	}
 }
 
+func TestDirectProbeSuppressesSelectedSessionCommands(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	marker := filepath.Join(root, "local-command-ran")
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n RemoteCommand echo remote-marker\n LocalCommand "+sideEffectCommand(t, marker)+"\n PermitLocalCommand yes\n RequestTTY force\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, expected := range []string{"remotecommand echo remote-marker", "localcommand ", "permitlocalcommand yes", "requesttty force"} {
+		if !strings.Contains(string(original), expected) {
+			t.Fatalf("original config lacks %q: %s", expected, original)
+		}
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ssh -G: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "remotecommand ") || strings.HasPrefix(line, "localcommand ") ||
+			line == "permitlocalcommand yes" || line == "requesttty force" {
+			t.Fatalf("selected session command survived the restricted plan: %s", line)
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("selected LocalCommand executed: %v", err)
+	}
+}
+
 func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	ssh, err := exec.LookPath("ssh")
 	if err != nil {

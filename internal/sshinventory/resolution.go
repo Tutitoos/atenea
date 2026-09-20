@@ -211,6 +211,14 @@ func (r *resolver) file(path, includeRoot string, user bool, depth int, optional
 }
 
 func (r *resolver) option(key string, args []string, raw, path string, line int) error {
+	if key == "remotecommand" || key == "localcommand" {
+		// These commands affect a normal SSH session, but the diagnostic
+		// suppresses both and never forwards their text to OpenSSH.
+		if len(args) == 0 {
+			return fmt.Errorf("%w: empty %s at %s:%d", ErrUnresolved, key, path, line)
+		}
+		return nil
+	}
 	if key == "proxycommand" {
 		// Rejoining quoted shell words would change the user's route. The
 		// first version supports only unquoted, space-separated commands.
@@ -268,6 +276,14 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 	case "canonicalizehostname":
 		if value != "no" && value != "none" {
 			return fmt.Errorf("%w: hostname canonicalization", ErrUnresolved)
+		}
+	case "permitlocalcommand":
+		if value != "yes" && value != "no" {
+			return fmt.Errorf("%w: invalid PermitLocalCommand", ErrUnresolved)
+		}
+	case "requesttty":
+		if value != "yes" && value != "no" && value != "auto" && value != "force" {
+			return fmt.Errorf("%w: invalid RequestTTY", ErrUnresolved)
 		}
 	default:
 		// Retain no implied safety for other options. A later probe plan must

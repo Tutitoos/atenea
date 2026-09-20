@@ -75,6 +75,12 @@ The builder revalidates the selection before and after creating the temporary
 files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
 config and refuses a stale or closed plan.
 
+Selected `RemoteCommand` and `LocalCommand` text, plus validated
+`PermitLocalCommand` and `RequestTTY` settings, are read but never copied into
+the restricted diagnostic plan. The plan's empty config, `-N`, `-T` and
+`PermitLocalCommand=no` prevent those selected-session actions during the
+diagnostic. Unsupported active options still fail resolution.
+
 `ExecuteDirectProbe` revalidates the plan, starts the local OpenSSH client with
 an eight-second limit and stops as soon as its private `-E` diagnostic log
 reports public-key authentication. It never opens a remote command or returns
