@@ -37,6 +37,11 @@ fi
 
 # Let the packaged WebView finish loading before capturing this synthetic UI.
 sleep 4
+actual_title=$(xdotool getwindowname "$window_id")
+if [[ "$actual_title" != 'Atenea SSH' ]]; then
+  echo 'Atenea SSH native window title changed during render' >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$capture")"
 import -window "$window_id" "$capture"
 test -s "$capture"

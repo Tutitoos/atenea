@@ -219,6 +219,9 @@ def main() -> None:
             has_probe = any(b"Runtime no disponible" in asset.read_bytes() for asset in assets)
             if not assets or has_probe != (sys.argv[1] == "probe-build"):
                 raise RuntimeError("frontend probe mode does not match requested build")
+            has_title_probe = any(b"WTAtenea SSH probe escaped" in asset.read_bytes() for asset in assets)
+            if has_title_probe != (sys.argv[1] == "probe-build"):
+                raise RuntimeError("native window-title probe mode does not match requested build")
             has_navigation_probe = any(b"atenea-navigation-probe" in asset.read_bytes() for asset in assets)
             if has_navigation_probe != (sys.argv[1] == "navigation-probe-build"):
                 raise RuntimeError("frontend navigation probe mode does not match requested build")

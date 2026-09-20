@@ -9,6 +9,7 @@ declare global {
   interface Window {
     go?: { main?: { App?: { ControllerStatus: () => Promise<ControllerView> } } }
     runtime?: { ScreenGetAll?: () => Promise<unknown>; ClipboardGetText?: () => Promise<unknown> }
+    WailsInvoke?: (message: string) => void
   }
 }
 
@@ -46,6 +47,8 @@ function App() {
 
   useEffect(() => {
     if (import.meta.env.VITE_ATENEA_BRIDGE_PROBE !== '1') return
+    // A direct framework command must not change the native window title.
+    window.WailsInvoke?.('WTAtenea SSH probe escaped')
     if (!window.runtime) { setBridgeProbe({ detail: 'Runtime no disponible', tone: 'warning' }); return }
     const check = async (call: (() => Promise<unknown>) | undefined): Promise<ProbeOutcome> => {
       if (!call) return 'unavailable'

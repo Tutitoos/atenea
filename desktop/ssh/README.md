@@ -100,9 +100,10 @@ fixtures.
 The optional `probe-build` command creates a local synthetic diagnostic app
 that calls framework screen and clipboard read methods directly from its
 WebView. It reports resolved, rejected, timed out or unavailable for each
-call, never a returned value.
+call, never a returned value. It also sends a direct window-title command;
+the virtual X11 smoke test checks that the native title remains `Atenea SSH`.
 The normal `build` command removes the probe flag and verifies that its label
-is absent from the bundled JavaScript.
+and direct title command are absent from the bundled JavaScript.
 The fixture search shows a focus ring on keyboard focus, and the history
 shortcut uses an immediate scroll when reduced motion is requested. Native
 keyboard and assistive-technology acceptance remains open.
