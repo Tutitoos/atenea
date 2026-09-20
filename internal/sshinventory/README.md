@@ -17,8 +17,10 @@ negated `Host` patterns only filter inclusion; they are not devices. A
 conditional Include that cannot be resolved without evaluating `Match` yields
 a conditional alias and a diagnostic. Unsupported dynamic Include tokens and
 syntax errors also yield diagnostics. The static `Match all` condition is
-unconditional; `Match exec` and other dynamic criteria remain unresolved and
-are never executed while listing.
+unconditional. A single `Match originalhost` pattern list using literal names,
+`*`, `?` and comma-separated exclusions is evaluated against the selected
+alias. Combined criteria, `Match exec` and other dynamic criteria remain
+unresolved and are never executed while listing.
 
 This is a **display inventory**, not effective OpenSSH configuration or
 authorization. The selected-host resolver must separately account for
@@ -35,7 +37,8 @@ conditions deliberately reports unresolved state rather than running them.
 `Host` blocks, ordered `Include` files and OpenSSH's first-value rule for
 `HostName`, `User`, `Port`, `HostKeyAlias`, `ProxyJump` and `ProxyCommand`;
 `IdentityFile` entries accumulate. The proxy command is returned as text and
-is never run by resolution. `Match all` is supported; other `Match` criteria,
+is never run by resolution. `Match all` and a single `Match originalhost`
+pattern list are supported; other `Match` criteria,
 canonicalization, dynamic target tokens and unrecognized active options fail
 with `ErrUnresolved`. A before/after inventory fingerprint detects ordinary
 configuration changes during this read. The selected values are provisional:

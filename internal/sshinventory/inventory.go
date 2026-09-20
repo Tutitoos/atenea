@@ -194,6 +194,8 @@ func (s *scanner) file(path, includeRoot string, user bool, inherited []conditio
 			// tags, or a rewritten hostname. Never evaluate it while listing.
 			if len(args) == 1 && strings.EqualFold(args[0], "all") {
 				current = condition{}
+			} else if original, ok := staticOriginalHostCondition(args); ok {
+				current = original
 			} else {
 				current = condition{unknown: true}
 				s.diagnostic(path, line, "match_requires_selected_resolution")
@@ -229,6 +231,23 @@ func (s *scanner) file(path, includeRoot string, user bool, inherited []conditio
 		s.diagnostic(path, 0, "line_limit")
 	}
 	return nil
+}
+
+func staticOriginalHostCondition(args []string) (condition, bool) {
+	if len(args) != 2 || !strings.EqualFold(args[0], "originalhost") {
+		return condition{}, false
+	}
+	patterns := strings.Split(args[1], ",")
+	for _, pattern := range patterns {
+		plain := strings.TrimPrefix(pattern, "!")
+		if plain == "" || strings.ContainsAny(plain, "[]\\%${}") {
+			return condition{}, false
+		}
+		if _, err := filepath.Match(plain, "fixture"); err != nil {
+			return condition{}, false
+		}
+	}
+	return condition{patterns: patterns}, true
 }
 
 func (s *scanner) diagnostic(path string, line int, code string) {

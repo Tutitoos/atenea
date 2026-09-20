@@ -63,8 +63,8 @@ type resolver struct {
 }
 
 // ResolveStatic applies supported Host and Include sections with OpenSSH's
-// first-value-wins rule. It rejects all Match conditions except Match all,
-// canonicalization, and target-changing tokens it cannot evaluate exactly.
+// first-value-wins rule. It supports Match all and a single originalhost
+// pattern list; other Match criteria and target-changing tokens are rejected.
 // No helper, network call, or ssh -G invocation occurs here.
 func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 	if !concrete(alias) {
@@ -164,6 +164,12 @@ func (r *resolver) file(path, includeRoot string, user bool, depth int, optional
 		case "match":
 			if len(args) == 1 && strings.EqualFold(args[0], "all") {
 				selected = true
+			} else if original, ok := staticOriginalHostCondition(args); ok {
+				blocked, unknown := evaluate([]condition{original}, r.alias)
+				if unknown {
+					return fmt.Errorf("%w: invalid originalhost pattern at %s:%d", ErrUnresolved, path, line)
+				}
+				selected = !blocked
 			} else {
 				return fmt.Errorf("%w: Match at %s:%d", ErrUnresolved, path, line)
 			}

@@ -125,6 +125,14 @@ func TestResolveStaticNeverRunsDynamicMatchOrProxy(t *testing.T) {
 	if _, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) {
 		t.Fatalf("dynamic Match accepted: %v", err)
 	}
+	writeFixture(t, config, "Match originalhost selected user fixture\nHost selected\n  HostName example.invalid\n")
+	if _, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("combined Match criteria accepted without evaluation: %v", err)
+	}
+	writeFixture(t, config, "Match originalhost [s]elected\nHost selected\n  HostName example.invalid\n")
+	if _, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("unsupported originalhost pattern syntax accepted: %v", err)
+	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("Match exec ran during resolution: %v", err)
 	}

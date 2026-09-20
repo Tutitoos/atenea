@@ -106,6 +106,44 @@ func TestScanMatchAllIsUnconditional(t *testing.T) {
 	}
 }
 
+func TestStaticOriginalHostConditionFiltersInclude(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	child := filepath.Join(root, "child")
+	writeFixture(t, child, "Host allowed.lab blocked.lab\n User fixture\n")
+	writeFixture(t, config, "Match originalhost *.lab,!blocked.lab\n Include "+child+"\nHost base\n")
+	got, err := Scan(config, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"allowed.lab", "base"}; !reflect.DeepEqual(aliases(got.Hosts), want) || len(got.Diagnostics) != 0 || got.Hosts[0].Conditional {
+		t.Fatalf("static originalhost inventory = %+v", got)
+	}
+	allowed, err := ResolveStatic(config, "", "allowed.lab")
+	if err != nil || allowed.User != "fixture" {
+		t.Fatalf("allowed alias resolution = %+v, %v", allowed, err)
+	}
+	blocked, err := ResolveStatic(config, "", "blocked.lab")
+	if err != nil || blocked.User != "" {
+		t.Fatalf("excluded alias resolution = %+v, %v", blocked, err)
+	}
+	if ssh, err := exec.LookPath("ssh"); err == nil {
+		for _, tt := range []struct {
+			alias string
+			user  string
+		}{
+			{"allowed.lab", "fixture"},
+			{"blocked.lab", ""},
+		} {
+			output, err := exec.Command(ssh, "-G", "-F", config, tt.alias).CombinedOutput()
+			if err != nil || (tt.user != "" && !strings.Contains(string(output), "user "+tt.user+"\n")) ||
+				(tt.user == "" && strings.Contains(string(output), "user fixture\n")) {
+				t.Fatalf("OpenSSH disagrees about originalhost %q: %v: %s", tt.alias, err, output)
+			}
+		}
+	}
+}
+
 func TestScanBoundsCyclesAndTracksIncludeChanges(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
