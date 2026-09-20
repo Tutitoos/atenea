@@ -11,6 +11,45 @@ import (
 	"testing"
 )
 
+func directPinFixture(host string) []byte {
+	key, _ := ed25519FixtureKey()
+	return []byte(host + " " + key + "\n")
+}
+
+func TestPrepareDirectProbeRejectsBroadTrustSnapshot(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ed25519FixtureKey()
+	for _, tt := range []struct {
+		name string
+		data []byte
+	}{
+		{"wildcard", []byte("*.test " + key + "\n")},
+		{"multiple hosts", []byte("example.test,other.test " + key + "\n")},
+		{"host CA", []byte("@cert-authority example.test " + key + "\n")},
+		{"revoked marker", []byte("@revoked example.test " + key + "\n")},
+		{"hashed host", []byte("|1|salt|digest " + key + "\n")},
+		{"two keys", append(directPinFixture("example.test"), directPinFixture("other.test")...)},
+		{"malformed key", []byte("example.test ssh-ed25519 AAAA\n")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := PrepareDirectProbe(config, "", selection, tt.data)
+			if err == nil || plan != nil {
+				t.Fatalf("broad or malformed known_hosts accepted: %v", err)
+			}
+		})
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("other.test"))
+	if err != nil {
+		t.Fatalf("unrelated concrete key should allow an unknown-key diagnosis: %v", err)
+	}
+	defer func() { _ = plan.Close() }()
+}
+
 func TestPrepareDirectProbe(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "config")
 	writeFixture(t, config, "Host selected\n HostName example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
@@ -18,7 +57,7 @@ func TestPrepareDirectProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	knownHosts := []byte("reviewed.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture\n")
+	knownHosts := directPinFixture("reviewed.example.test")
 	plan, err := PrepareDirectProbe(config, "", selection, knownHosts)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +149,7 @@ func TestProbePlanRejectsReplacedPrivateDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +199,7 @@ func TestPrepareDirectProbeRejectsUnresolvedRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			selection := base
 			tt.edit(&selection)
-			plan, err := PrepareDirectProbe(config, "", selection, []byte("fixture known hosts"))
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 			if !errors.Is(err, tt.want) || plan != nil {
 				t.Fatalf("plan = %v, err = %v, want %v", plan, err, tt.want)
 			}
@@ -175,12 +214,12 @@ func TestPrepareDirectProbeRejectsUnresolvedRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plan, err := PrepareDirectProbe(config, "", selected, []byte("fixture known hosts")); !errors.Is(err, ErrProbeUnsupported) || plan != nil {
+		if plan, err := PrepareDirectProbe(config, "", selected, directPinFixture("example.test")); !errors.Is(err, ErrProbeUnsupported) || plan != nil {
 			t.Fatalf("proxy route: plan = %v, err = %v", plan, err)
 		}
 	}
 	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person\n")
-	if plan, err := PrepareDirectProbe(config, "", base, []byte("fixture known hosts")); !errors.Is(err, ErrChanged) || plan != nil {
+	if plan, err := PrepareDirectProbe(config, "", base, directPinFixture("example.test")); !errors.Is(err, ErrChanged) || plan != nil {
 		t.Fatalf("stale config: plan = %v, err = %v", plan, err)
 	}
 }
@@ -202,7 +241,7 @@ func TestPrepareDirectProbeAllowsExplicitlyDisabledProxy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("original ssh -G: %v: %s", err, original)
 			}
-			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,7 +284,7 @@ func TestDirectProbeSuppressesSelectedSessionCommands(t *testing.T) {
 			t.Fatalf("original config lacks %q: %s", expected, original)
 		}
 	}
-	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +330,7 @@ func TestDirectProbeSuppressesSelectedForwardingAndSharing(t *testing.T) {
 			t.Fatalf("original config lacks %q: %s", expected, original)
 		}
 	}
-	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +360,7 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +406,7 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -411,7 +450,7 @@ func TestDirectProbeSuppressesSelectedAgentSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +501,7 @@ func TestDirectProbeRespectsIdentityFileNone(t *testing.T) {
 			if got := identityFileSettings(string(original)); !reflect.DeepEqual(got, want) {
 				t.Fatalf("original identity files = %v, want %v", got, want)
 			}
-			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			plan, err := PrepareDirectProbe(config, "", selection, directPinFixture("example.test"))
 			if err != nil {
 				t.Fatal(err)
 			}

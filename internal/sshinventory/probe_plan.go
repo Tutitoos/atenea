@@ -1,6 +1,7 @@
 package sshinventory
 
 import (
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -84,8 +85,8 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	if activeProxyRoute(selection) {
 		return nil, ErrProbeUnsupported // Preserve, then review the configured route separately.
 	}
-	if len(knownHostsSnapshot) == 0 || len(knownHostsSnapshot) > 1<<20 {
-		return nil, ErrUnresolved
+	if err := validateDirectPinSnapshot(knownHostsSnapshot); err != nil {
+		return nil, err
 	}
 	hasExplicitIdentity := false
 	for _, path := range selection.IdentityFiles {
@@ -160,6 +161,28 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	selection.IdentityFiles = append([]string(nil), selection.IdentityFiles...)
 	selection.Sources = append([]Diagnostic(nil), selection.Sources...)
 	return &ProbePlan{args: args, root: root, rootInfo: rootInfo, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
+}
+
+// validateDirectPinSnapshot keeps the low-level probe from accepting wildcard
+// trust, host CAs, or several approved keys hidden in a raw known_hosts copy.
+// An unrelated concrete host is allowed only to diagnose an unknown key; it
+// cannot authenticate the selected host under StrictHostKeyChecking=yes.
+func validateDirectPinSnapshot(data []byte) error {
+	if len(data) == 0 || len(data) > 8<<10 || data[len(data)-1] != '\n' || strings.Count(string(data), "\n") != 1 {
+		return ErrUnresolved
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 3 || !safeHostArgument(fields[0]) || fields[1] != "ssh-ed25519" {
+		return ErrProbeUnsupported
+	}
+	blob, err := base64.StdEncoding.DecodeString(fields[2])
+	if err != nil || !validED25519Blob(blob) {
+		return ErrUnresolved
+	}
+	if string(data) != fields[0]+" ssh-ed25519 "+base64.StdEncoding.EncodeToString(blob)+"\n" {
+		return ErrUnresolved
+	}
+	return nil
 }
 
 func createPrivateProbeFile(path string, data []byte) error {

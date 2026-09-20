@@ -65,9 +65,11 @@ arguments rather than silently changing their path.
 `ProxyJump none` and `ProxyCommand none` explicitly disable the proxy route,
 so those selected configurations can use direct fingerprint matching, private
 enrollment, provisional locking and the diagnostic. Active routes require the
-separate bounded jump API below. The caller must provide a
-known-hosts snapshot whose fingerprints were independently reviewed; the
-builder cannot verify that review. A temporary empty config suppresses the
+separate bounded jump API below. The caller must provide a single plain
+ED25519 known-hosts line whose fingerprint was independently reviewed; a
+line for another concrete host is allowed only to diagnose an unknown key.
+Wildcard, CA, hashed, multi-host and multi-key snapshots are rejected. The
+builder cannot verify the independent review. A temporary empty config suppresses the
 user and system configuration during a later probe, while the supplied
 known-hosts copy is the sole trust source. The arguments disable remote
 commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
