@@ -51,7 +51,12 @@ user and system configuration during a later probe, while the supplied
 known-hosts copy is the sole trust source. The arguments disable remote
 commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
 connection sharing and automatic host-key updates. Password prompts are
-disabled for this diagnostic plan. `Close` removes its temporary files.
+disabled for this diagnostic plan. A leading `IdentityFile=none` prevents
+OpenSSH from falling back to implicit personal keys if the selected
+`IdentityFile` is missing. When the selected config specifies no identity,
+public-key authentication is disabled and a rejected login is reported as
+`authentication_required`; this is a trust diagnostic, not a substitute for
+normal SSH default-key behavior. `Close` removes its temporary files.
 The builder revalidates the selection before and after creating the temporary
 files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
 config and refuses a stale or closed plan.

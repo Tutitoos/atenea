@@ -202,6 +202,21 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "authorized_keys"), clientPublic, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	noKeyConfig := filepath.Join(root, "no_key_config")
+	writeFixture(t, noKeyConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n", account.Username, port))
+	noKeySelection, err := ResolveStatic(noKeyConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noKeyPlan, err := PrepareDirectProbe(noKeyConfig, "", noKeySelection, []byte(hostEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = noKeyPlan.Close() }()
+	noKeyResult, err := ExecuteDirectProbe(context.Background(), ssh, noKeyPlan)
+	if err != nil || noKeyResult.ClientReportedAuthenticated || noKeyResult.Failure != ProbeFailureAuthRequired {
+		t.Fatalf("no selected credential: %+v, %v", noKeyResult, err)
+	}
 	aliasConfig := filepath.Join(root, "alias_config")
 	writeFixture(t, aliasConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias reviewed-host\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "client")))
 	aliasSelection, err := ResolveStatic(aliasConfig, "", "selected")

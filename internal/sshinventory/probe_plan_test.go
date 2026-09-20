@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -149,7 +150,7 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 		t.Fatalf("ssh -G: %v: %s", err, output)
 	}
 	settings := string(output)
-	for _, required := range []string{"batchmode yes", "clearallforwardings yes", "controlmaster false", "forwardagent no", "stricthostkeychecking true", "requesttty false", "sessiontype none"} {
+	for _, required := range []string{"batchmode yes", "clearallforwardings yes", "controlmaster false", "forwardagent no", "stricthostkeychecking true", "requesttty false", "sessiontype none", "pubkeyauthentication false", "preferredauthentications publickey"} {
 		if !strings.Contains(settings, required) {
 			t.Errorf("effective OpenSSH config lacks %q", required)
 		}
@@ -159,4 +160,60 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 			t.Errorf("effective config includes a shared or proxy route: %s", line)
 		}
 	}
+	if got := identityFileSettings(settings); !reflect.DeepEqual(got, []string{"none"}) {
+		t.Fatalf("implicit identity files remain available: %v", got)
+	}
+	for _, tt := range []struct {
+		name    string
+		create  bool
+		wantKey bool
+	}{
+		{"explicit existing key", true, true},
+		{"explicit missing key", false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			key := filepath.Join(root, "client-key")
+			if tt.create {
+				if err := os.WriteFile(key, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := filepath.Join(root, "config")
+			writeFixture(t, config, "Host selected\n HostName example.test\n User person\n IdentityFile "+key+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("ssh -G: %v: %s", err, output)
+			}
+			want := []string{"none"}
+			if tt.wantKey {
+				want = append(want, key)
+			}
+			if got := identityFileSettings(string(output)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("effective identity files = %v, want %v", got, want)
+			}
+			if !strings.Contains(string(output), "pubkeyauthentication true") {
+				t.Fatal("explicit public-key authentication was disabled")
+			}
+		})
+	}
+}
+
+func identityFileSettings(settings string) []string {
+	var files []string
+	for _, line := range strings.Split(settings, "\n") {
+		if file, ok := strings.CutPrefix(line, "identityfile "); ok {
+			files = append(files, file)
+		}
+	}
+	return files
 }

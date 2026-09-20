@@ -14,6 +14,7 @@ const (
 	ProbeFailureTimeout        ProbeFailureKind = "timeout"
 	ProbeFailureDNS            ProbeFailureKind = "dns_failure"
 	ProbeFailureRoute          ProbeFailureKind = "route_failure"
+	ProbeFailureAuthRequired   ProbeFailureKind = "authentication_required"
 	ProbeFailureAuthRejected   ProbeFailureKind = "authentication_rejected"
 	ProbeFailureHostKeyUnknown ProbeFailureKind = "host_key_unknown"
 	ProbeFailureHostKeyChanged ProbeFailureKind = "host_key_changed"

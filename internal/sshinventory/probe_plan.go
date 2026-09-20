@@ -106,6 +106,8 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 		"-o", "ForwardX11=no",
 		"-o", "IdentitiesOnly=yes",
 		"-o", "IdentityAgent=none",
+		"-o", "IdentityFile=none",
+		"-o", "PreferredAuthentications=publickey",
 		"-o", "PermitLocalCommand=no",
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", "UpdateHostKeys=no",
@@ -115,6 +117,9 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	}
 	if selection.HostKeyAlias != "" {
 		args = append(args, "-o", "HostKeyAlias="+selection.HostKeyAlias)
+	}
+	if len(selection.IdentityFiles) == 0 {
+		args = append(args, "-o", "PubkeyAuthentication=no")
 	}
 	for _, identity := range selection.IdentityFiles {
 		args = append(args, "-i", identity)

@@ -113,5 +113,9 @@ func inspectProbeLog(path string, selection Selection, runErr error, timedOut bo
 	if errors.As(runErr, &exitErr) {
 		exitCode = exitErr.ExitCode()
 	}
-	return ProbeResult{Failure: ClassifyOpenSSHFailure(exitCode, string(data), timedOut)}, nil
+	failure := ClassifyOpenSSHFailure(exitCode, string(data), timedOut)
+	if failure == ProbeFailureAuthRejected && len(selection.IdentityFiles) == 0 {
+		failure = ProbeFailureAuthRequired
+	}
+	return ProbeResult{Failure: failure}, nil
 }
