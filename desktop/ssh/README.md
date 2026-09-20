@@ -103,6 +103,9 @@ WebView. It reports resolved, rejected, timed out or unavailable for each
 call, never a returned value.
 The normal `build` command removes the probe flag and verifies that its label
 is absent from the bundled JavaScript.
+The fixture search shows a focus ring on keyboard focus, and the history
+shortcut uses an immediate scroll when reduced motion is requested. Native
+keyboard and assistive-technology acceptance remains open.
 The separate `navigation-probe-build` attempts a top-level navigation to a
 loopback URL with no SSH data. A surviving fixture window after the attempt
 is an observation of blocked navigation; it does not alone identify which

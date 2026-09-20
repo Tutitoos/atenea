@@ -89,7 +89,7 @@ function App() {
       <div className="brand"><span className="brand-mark">✳</span><span><strong>Atenea SSH</strong><small>Espacio de trabajo</small></span></div>
       <div className="sidebar-label">NAVEGACIÓN</div>
       <button className="nav-item active" type="button"><span aria-hidden="true">▦</span> Dispositivos <span className="nav-count">{hosts.length}</span></button>
-      <button className="nav-item" type="button" onClick={() => document.getElementById('history')?.scrollIntoView({ behavior: 'smooth' })}><span aria-hidden="true">◷</span> Historial</button>
+      <button className="nav-item" type="button" onClick={() => document.getElementById('history')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })}><span aria-hidden="true">◷</span> Historial</button>
       <div className="sidebar-bottom"><span className="avatar">A</span><div><strong>Mi espacio</strong><small>Interfaz de ejemplo</small></div></div>
     </aside>
     <div className="workspace">
