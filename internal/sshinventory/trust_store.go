@@ -27,7 +27,7 @@ type DirectTrustStore struct{ root string }
 // OpenPrivateDirectTrustStore creates or opens an app-owned directory whose
 // parent is trusted by the caller. It refuses symlinks and group/world access.
 func OpenPrivateDirectTrustStore(root string) (*DirectTrustStore, error) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return nil, ErrProbeUnsupported
 	}
 	if !filepath.IsAbs(root) || root == string(filepath.Separator) {
@@ -187,11 +187,18 @@ func (s *DirectTrustStore) read(path, host string) ([]byte, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 8<<10 {
 		return nil, ErrProbeUnsupported
 	}
-	file, err := os.Open(path)
+	file, err := openPrivatePin(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || opened.Mode().Perm()&0o077 != 0 || opened.Size() > 8<<10 || !os.SameFile(info, opened) {
+		return nil, ErrProbeUnsupported
+	}
 	line, err := io.ReadAll(io.LimitReader(file, 8<<10+1))
 	if err != nil || len(line) > 8<<10 {
 		return nil, ErrProbeUnsupported

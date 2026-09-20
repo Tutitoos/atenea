@@ -140,3 +140,83 @@ func TestPrivateDirectTrustStoreRejectsUnsafePaths(t *testing.T) {
 		t.Fatalf("symlinked store accepted: %v", err)
 	}
 }
+
+func TestPrivateDirectTrustStoreRejectsUnsafePin(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("private pin storage is implemented on macOS and Linux")
+	}
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName host.example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, fingerprint := ed25519FixtureKey()
+	entry, err := MatchDirectED25519HostKey(config, "", selection, candidate, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := ConfirmDirectED25519HostKey(config, "", selection, entry, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenPrivateDirectTrustStore(filepath.Join(root, "app-trust"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Enroll(config, "", selection, confirmed); err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := store.fileFor(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		make func(t *testing.T)
+	}{
+		{"symlink", func(t *testing.T) {
+			target := filepath.Join(root, "valid-pin")
+			if err := os.WriteFile(target, confirmed.entry.KnownHostsLine(), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"group-readable", func(t *testing.T) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, confirmed.entry.KnownHostsLine(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.make(t)
+			if tt.name == "symlink" {
+				file, err := openPrivatePin(path)
+				if file != nil {
+					_ = file.Close()
+				}
+				if !errors.Is(err, ErrProbeUnsupported) {
+					t.Fatalf("no-follow open accepted a symlink: %v", err)
+				}
+			}
+			if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); got != "" || !errors.Is(err, ErrProbeUnsupported) {
+				t.Fatalf("unsafe pin fingerprint = %q, %v", got, err)
+			}
+			if plan, err := store.PrepareEnrolledDirectProbe(config, "", selection); plan != nil || !errors.Is(err, ErrProbeUnsupported) {
+				t.Fatalf("unsafe pin prepared a probe: %v", err)
+			}
+		})
+	}
+}
