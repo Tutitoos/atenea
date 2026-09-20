@@ -84,7 +84,7 @@ prompt. The caller must still establish independent review of the pin and
 close the plan. Platform-specific private-file access, especially Windows
 ACLs, still needs native validation.
 
-No code here enrolls keys or supplies a stable target identity.
+No code here supplies a verified physical-device identity.
 ProxyJump and ProxyCommand routes remain unresolved until they can be probed
 without changing the configured path or its security properties.
 
@@ -137,5 +137,18 @@ It returns an in-memory `ConfirmedDirectHostKey` that
 `PrepareConfirmedDirectProbe` binds to an exact temporary known-hosts pin.
 Mismatched fingerprints, another alias and changed config are rejected. The
 library cannot prove that a person reviewed the independent source; the UI
-must collect that decision explicitly. Confirmation is not persisted, and
-neither function enrolls a key in a trust store.
+must collect that decision explicitly. Confirmation remains in memory until
+the caller explicitly invokes the private enrollment store.
+
+`OpenPrivateDirectTrustStore` opens an app-owned directory supplied by the
+caller. On macOS and Linux it requires a private, non-symlink directory and
+stores each confirmed ED25519 pin in a mode-0600 file. `Enroll` is create-only:
+the same key is idempotent, while a changed key at the same config/account/
+host binding is rejected for separate rotation review. The filename binds the
+config snapshot, account, port and OpenSSH known-hosts name, so a changed
+config cannot silently reuse the old record. `PrepareEnrolledDirectProbe`
+reloads that exact pin and still uses the restricted diagnostic plan; no
+personal `known_hosts` file is edited. The caller must choose and protect the
+parent directory, and the UI must gather the user's confirmation. Windows
+enrollment fails closed until native ACL validation is implemented. A stored
+pin does not authorize prompts, commands, credentials or agent installation.

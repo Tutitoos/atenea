@@ -92,7 +92,7 @@ func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selecti
 	if selected.ProxyJump != "" || selected.ProxyCommand != "" {
 		return DirectHostKeyEntry{}, ErrProbeUnsupported
 	}
-	plainHost, err := directKnownHostName(selected.HostName)
+	host, err := directKnownHostToken(selected)
 	if err != nil {
 		return DirectHostKeyEntry{}, err
 	}
@@ -118,17 +118,31 @@ func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selecti
 	if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
 		return DirectHostKeyEntry{}, ErrFingerprintMismatch
 	}
-	host := plainHost
-	if selected.HostKeyAlias != "" {
-		host = selected.HostKeyAlias
-	} else if selected.Port != 22 {
-		host = "[" + host + "]:" + strconv.Itoa(int(selected.Port))
-	}
 	line := fmt.Sprintf("%s ssh-ed25519 %s\n", host, base64.StdEncoding.EncodeToString(blob))
 	if err := RevalidateSelection(userConfig, systemConfig, selected); err != nil {
 		return DirectHostKeyEntry{}, err
 	}
 	return DirectHostKeyEntry{line: line, snapshot: selected.Snapshot, alias: selected.Alias, account: selected.User, keyHash: actual}, nil
+}
+
+func directKnownHostToken(selected Selection) (string, error) {
+	host, err := directKnownHostName(selected.HostName)
+	if err != nil {
+		return "", err
+	}
+	if selected.HostKeyAlias != "" {
+		if !safeHostArgument(selected.HostKeyAlias) {
+			return "", ErrUnresolved
+		}
+		return selected.HostKeyAlias, nil
+	}
+	if selected.Port == 0 {
+		return "", ErrUnresolved
+	}
+	if selected.Port != 22 {
+		host = "[" + host + "]:" + strconv.Itoa(int(selected.Port))
+	}
+	return host, nil
 }
 
 func directKnownHostName(value string) (string, error) {
