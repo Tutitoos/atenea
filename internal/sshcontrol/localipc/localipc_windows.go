@@ -111,6 +111,9 @@ func Endpoint(root string) string {
 	return path
 }
 
+// Windows named-pipe names have no Unix sun_path limit.
+func ValidateEndpoint(string) error { return nil }
+
 // CheckRoot validates the installation scope without opening a pipe.
 func CheckRoot(root string) error {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {

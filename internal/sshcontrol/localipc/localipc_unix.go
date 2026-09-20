@@ -21,6 +21,9 @@ import (
 
 const socketName = "atenea-ssh.sock"
 
+// The shared Unix listener uses the shortest supported sun_path limit.
+const maxSocketPath = 103
+
 var (
 	// ErrPrivateRoot means the endpoint's state root is unsafe for a user-owned socket.
 	ErrPrivateRoot = errors.New("ssh local ipc: private state root required")
@@ -41,6 +44,9 @@ type Listener struct {
 // absolute, user-owned state root; it must not contain an untrusted symlink.
 func Listen(root string) (*Listener, error) {
 	if err := ensureRoot(root); err != nil {
+		return nil, err
+	}
+	if err := ValidateEndpoint(root); err != nil {
 		return nil, err
 	}
 	run := filepath.Join(root, "run")
@@ -82,6 +88,9 @@ func (l *Listener) Addr() net.Addr { return l.address }
 func Dial(root string, timeout time.Duration) (net.Conn, error) {
 	if timeout <= 0 {
 		return nil, ErrPeer
+	}
+	if err := ValidateEndpoint(root); err != nil {
+		return nil, err
 	}
 	if err := privateDir(root); err != nil {
 		return nil, err
@@ -186,6 +195,14 @@ func ownedByUs(info os.FileInfo) bool {
 // Endpoint returns the socket path for diagnostics and tests, not for access
 // control. Dial still rechecks filesystem and kernel peer identity.
 func Endpoint(root string) string { return filepath.Join(root, "run", socketName) }
+
+// ValidateEndpoint rejects a path that the kernel cannot bind as a socket.
+func ValidateEndpoint(root string) error {
+	if len(Endpoint(root)) > maxSocketPath {
+		return ErrEndpointTooLong
+	}
+	return nil
+}
 
 // Refused reports connections rejected by the native server peer check.
 func (l *Listener) Refused() int64 { return l.inner.Refused() }

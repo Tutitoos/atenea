@@ -37,6 +37,12 @@ that a clean machine has every runtime requirement. The window starts the
 controller on demand. Closing the window does
 not stop it. A later lifecycle UI will provide explicit stop/restart.
 For a manual stop, run the installed controller executable with `--stop`.
+On macOS and Linux, the window checks a user-state path that exceeds the Unix
+socket address limit before launching the controller and reports the path problem.
+This does not relocate existing state or make an overlong path usable.
+A macOS 26.6.2 arm64 fixture trial used a 107-byte socket path: the window
+displayed the path error and created no user-state files. A separate shorter
+temporary path launched the sibling controller and rendered its available state.
 
 `bun run check` and `bun run build` run in `frontend/`. The browser development
 preview only renders synthetic fixtures; it reports that the controller bridge

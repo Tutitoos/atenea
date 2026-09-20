@@ -33,6 +33,9 @@ func (a *App) ControllerStatus() ControllerView {
 	if err != nil {
 		return ControllerView{"error", "No se encuentra el directorio del usuario"}
 	}
+	if err := localipc.ValidateEndpoint(root); errors.Is(err, localipc.ErrEndpointTooLong) {
+		return ControllerView{"error", "La ruta del usuario es demasiado larga para el socket local"}
+	}
 	id, err := controller.InstallationID(root)
 	if err != nil {
 		return ControllerView{"error", "No se puede abrir el estado local"}

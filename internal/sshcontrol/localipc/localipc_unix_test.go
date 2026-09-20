@@ -8,12 +8,29 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Tutitoos/atenea/internal/pidlock"
 	"github.com/Tutitoos/atenea/internal/sshcontrol/handshake"
 )
+
+func TestLongEndpointFailsBeforeSocketSideEffects(t *testing.T) {
+	root := filepath.Join(t.TempDir(), strings.Repeat("x", maxSocketPath))
+	if err := ValidateEndpoint(root); !errors.Is(err, ErrEndpointTooLong) {
+		t.Fatalf("endpoint validation: %v", err)
+	}
+	if _, err := Listen(root); !errors.Is(err, ErrEndpointTooLong) {
+		t.Fatalf("listener: %v", err)
+	}
+	if _, err := Dial(root, time.Second); !errors.Is(err, ErrEndpointTooLong) {
+		t.Fatalf("dial: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "run")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("long endpoint created a socket directory: %v", err)
+	}
+}
 
 func TestNativeSocketAndSingleOwner(t *testing.T) {
 	root := shortRoot(t)
