@@ -121,7 +121,7 @@ def prepare_workspace(tmp: Path) -> Path:
                 extra_anchor = "func (f *Frontend) processMessageWithAdditionalObjects(message string, sender *edge.ICoreWebView2, args *edge.ICoreWebView2WebMessageReceivedEventArgs) {\n"
                 if content.count(extra_anchor) != 1:
                     raise RuntimeError("Wails Windows additional-objects anchor changed")
-                content = content.replace(extra_anchor, extra_anchor + "\tif len(message) == 0 || message[0] != 'C' { return }\n")
+                content = content.replace(extra_anchor, extra_anchor + "\tif !ateneaSSHIngressMessage(message) || message[0] != 'C' { return }\n")
                 permission_anchor = "chromium.SetGlobalPermission(edge.CoreWebView2PermissionStateAllow)"
                 if content.count(permission_anchor) != 1:
                     raise RuntimeError("Wails Windows WebView2 permission anchor changed")

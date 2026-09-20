@@ -51,6 +51,9 @@ source is copied into a temporary Go workspace during build. Exact upstream
 source hashes are checked before the script restricts the dispatcher and the
 three platform message entry points. The app references a marker available only
 in that patched copy, so `go build ./...` without the script fails to compile.
+Call messages over 4096 bytes are rejected at each native entry point before
+they reach the dispatcher; the Windows additional-objects path uses the same
+limit.
 The only permitted JavaScript binding is the zero-argument status call; native
 window close (`Q`) and framework readiness signals remain available. Browser,
 clipboard, notification, window-control, drag/resize/file-drop and obfuscated
