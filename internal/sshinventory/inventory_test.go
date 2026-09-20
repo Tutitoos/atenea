@@ -32,7 +32,7 @@ func TestScanIncludesAndConditionalHost(t *testing.T) {
 	writeFixture(t, filepath.Join(root, "parts", "20-last"), "Host bravo CHARLIE\n")
 	writeFixture(t, filepath.Join(root, "parts", "10-first"), "Host alpha *.example !blocked\n")
 	writeFixture(t, filepath.Join(root, "nested", "child"), "Host beta\n")
-	writeFixture(t, config, "Include=parts/*\nHost=delta echo\nHost outer\n  Include = nested/child\nHost * !blocked\n  Hostname example.invalid\n")
+	writeFixture(t, config, "Include="+filepath.Join(root, "parts", "*")+"\nHost=delta echo\nHost outer\n  Include = "+filepath.Join(root, "nested", "child")+"\nHost * !blocked\n  Hostname example.invalid\n")
 
 	got, err := Scan(config, "")
 	if err != nil {
@@ -60,7 +60,7 @@ func TestScanNeverRunsMatchExecAndMarksConditionalIncludes(t *testing.T) {
 	marker := filepath.Join(root, "would-have-run")
 	config := filepath.Join(root, "config")
 	writeFixture(t, filepath.Join(root, "inside"), "Host uncertain\n")
-	writeFixture(t, config, "Host certain\nMatch exec \"touch "+marker+"\"\n  Include inside\nHost certain\n")
+	writeFixture(t, config, "Host certain\nMatch exec \"touch "+marker+"\"\n  Include "+filepath.Join(root, "inside")+"\nHost certain\n")
 
 	got, err := Scan(config, "")
 	if err != nil {
@@ -84,8 +84,8 @@ func TestScanBoundsCyclesAndTracksIncludeChanges(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
 	child := filepath.Join(root, "parts", "a")
-	writeFixture(t, config, "Include parts/*\nHost base\n")
-	writeFixture(t, child, "Host included\nInclude config\n")
+	writeFixture(t, config, "Include "+filepath.Join(root, "parts", "*")+"\nHost base\n")
+	writeFixture(t, child, "Host included\nInclude "+config+"\n")
 	first, err := Scan(config, "")
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestScanBoundsCyclesAndTracksIncludeChanges(t *testing.T) {
 	if want := []string{"included", "base"}; !reflect.DeepEqual(aliases(first.Hosts), want) {
 		t.Fatalf("aliases = %q, want %q", aliases(first.Hosts), want)
 	}
-	// Relative Includes always use the top-level config directory.
+	// Absolute nested Includes can still reveal a bounded cycle.
 	if len(first.Diagnostics) != 1 || first.Diagnostics[0].Code != "include_cycle" {
 		t.Fatalf("expected bounded cycle: %+v", first.Diagnostics)
 	}
@@ -127,7 +127,7 @@ func TestScanCaseAndStaticIncludeConditions(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
 	writeFixture(t, filepath.Join(root, "child"), "Host mixed.lab blocked.lab\n")
-	writeFixture(t, config, "Host *.lab !blocked.lab\n Include child\nHost MIXED.LAB\nHost mixed.lab\n")
+	writeFixture(t, config, "Host *.lab !blocked.lab\n Include "+filepath.Join(root, "child")+"\nHost MIXED.LAB\nHost mixed.lab\n")
 	got, err := Scan(config, "")
 	if err != nil {
 		t.Fatal(err)
@@ -137,5 +137,19 @@ func TestScanCaseAndStaticIncludeConditions(t *testing.T) {
 	}
 	if got.Hosts[0].Conditional || got.Hosts[0].Source != filepath.Join(root, "child") {
 		t.Fatalf("static Include lost provenance: %+v", got.Hosts[0])
+	}
+}
+
+func TestSystemRelativeIncludeUsesSystemConfigDirectory(t *testing.T) {
+	root := t.TempDir()
+	system := filepath.Join(root, "ssh_config")
+	writeFixture(t, filepath.Join(root, "system-part"), "Host included\n")
+	writeFixture(t, system, "Include system-part\nHost base\n")
+	got, err := Scan("", system)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"included", "base"}; !reflect.DeepEqual(aliases(got.Hosts), want) {
+		t.Fatalf("system Include aliases = %v, want %v", aliases(got.Hosts), want)
 	}
 }

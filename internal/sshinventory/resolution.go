@@ -80,7 +80,7 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 		}
 	}
 	r := &resolver{alias: alias, result: Selection{Alias: alias, HostName: alias, Port: 22}, set: make(map[string]bool), active: make(map[string]bool)}
-	for _, root := range []string{userConfig, systemConfig} {
+	for index, root := range []string{userConfig, systemConfig} {
 		if root == "" {
 			continue
 		}
@@ -88,7 +88,11 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 		if err != nil {
 			return Selection{}, err
 		}
-		if err := r.file(abs, filepath.Dir(abs), 0, true); err != nil {
+		includeRoot, err := includeRootForConfig(abs, index == 0)
+		if err != nil {
+			return Selection{}, err
+		}
+		if err := r.file(abs, includeRoot, 0, true); err != nil {
 			return Selection{}, err
 		}
 	}

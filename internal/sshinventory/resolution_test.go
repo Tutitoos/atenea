@@ -3,8 +3,10 @@ package sshinventory
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +16,7 @@ func TestResolveStaticFirstValuesAndConditionalIncludes(t *testing.T) {
 	system := filepath.Join(root, "system", "ssh_config")
 	writeFixture(t, filepath.Join(root, "user", "parts", "10-first"), "Host selected\n  HostName first.example.invalid\n  User first\n  IdentityFile ~/.ssh/first\n")
 	writeFixture(t, filepath.Join(root, "user", "parts", "20-second"), "Host selected\n  HostName second.example.invalid\n  Port 2202\n  IdentityFile ~/.ssh/second\n")
-	writeFixture(t, user, "Host other\n Include parts/*\nHost selected\n Include parts/*\nHost *\n Port 22\n")
+	writeFixture(t, user, "Host other\n Include "+filepath.Join(root, "user", "parts", "*")+"\nHost selected\n Include "+filepath.Join(root, "user", "parts", "*")+"\nHost *\n Port 22\n")
 	writeFixture(t, system, "Host selected\n  User system\n  HostKeyAlias reviewed-key\n")
 	got, err := ResolveStatic(user, system, "selected")
 	if err != nil {
@@ -28,6 +30,40 @@ func TestResolveStaticFirstValuesAndConditionalIncludes(t *testing.T) {
 	}
 	if got.Snapshot == "" || len(got.Sources) != 4 {
 		t.Fatalf("missing snapshot/provenance: %+v", got)
+	}
+}
+
+func TestUserRelativeIncludeUsesOpenSSHHomeRoot(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	includeName := filepath.Base(root) + "-include"
+	userRoot, err := includeRootForConfig(config, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(userRoot, includeName)); err == nil || !os.IsNotExist(err) {
+		t.Skip("test Include name already exists in the active SSH directory")
+	}
+	writeFixture(t, filepath.Join(root, includeName), "Host leaked\nHost selected\n HostName leaked.example.test\n")
+	writeFixture(t, config, "Include "+includeName+"\nHost selected\n HostName actual.example.test\n")
+	inventory, err := Scan(config, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aliases(inventory.Hosts); !reflect.DeepEqual(got, []string{"selected"}) {
+		t.Fatalf("config-adjacent file was mistaken for OpenSSH Include: %v", got)
+	}
+	selected, err := ResolveStatic(config, "", "selected")
+	if err != nil || selected.HostName != "actual.example.test" {
+		t.Fatalf("relative Include changed selected host: %+v, %v", selected, err)
+	}
+	output, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "hostname actual.example.test") {
+		t.Fatalf("OpenSSH disagrees about Include root: %v: %s", err, output)
 	}
 }
 

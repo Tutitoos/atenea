@@ -60,12 +60,13 @@ type scanner struct {
 }
 
 // Scan reads the user and system config in OpenSSH precedence order. Empty
-// paths omit a source. Include paths are relative to the source's config
-// directory, not the directory of a nested included file.
+// paths omit a source. Relative user Include paths use the active user's
+// ~/.ssh directory, even when userConfig names another file. System Include
+// paths use the system config directory. Nested files retain that root.
 func Scan(userConfig, systemConfig string) (Inventory, error) {
 	h := sha256.New()
 	s := &scanner{hash: h, active: make(map[string]bool), seen: make(map[string]int)}
-	for _, root := range []string{userConfig, systemConfig} {
+	for index, root := range []string{userConfig, systemConfig} {
 		if root == "" {
 			continue
 		}
@@ -73,13 +74,28 @@ func Scan(userConfig, systemConfig string) (Inventory, error) {
 		if err != nil {
 			return Inventory{}, err
 		}
-		fmt.Fprintf(s.hash, "root:%s\x00", abs)
-		if err := s.file(abs, filepath.Dir(abs), nil, 0, true); err != nil {
+		includeRoot, err := includeRootForConfig(abs, index == 0)
+		if err != nil {
+			return Inventory{}, err
+		}
+		fmt.Fprintf(s.hash, "root:%s\x00include-root:%s\x00", abs, includeRoot)
+		if err := s.file(abs, includeRoot, nil, 0, true); err != nil {
 			return Inventory{}, err
 		}
 	}
 	s.result.Snapshot = hex.EncodeToString(h.Sum(nil))
 	return s.result, nil
+}
+
+func includeRootForConfig(config string, user bool) (string, error) {
+	if !user {
+		return filepath.Dir(config), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ssh"), nil
 }
 
 func (s *scanner) file(path, includeRoot string, inherited []condition, depth int, optional bool) error {

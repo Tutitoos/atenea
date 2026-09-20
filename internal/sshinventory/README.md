@@ -2,11 +2,13 @@
 
 `Scan(userConfig, systemConfig)` enumerates only concrete `Host` tokens from
 the selected user's config and then the system config. It reads regular local
-files and expands `Include` globs in lexical order. Relative includes stay
-relative to the top-level config directory (`~/.ssh` or `/etc/ssh` in a normal
-installation). Each alias carries a file and line number. Keywords are
-case-insensitive; Host patterns and aliases match case-sensitively. The snapshot digest
-changes when a traversed file or Include expansion changes.
+files and expands `Include` globs in lexical order. Relative user includes
+resolve against the active user's `~/.ssh`, even when the configuration file
+is elsewhere; system includes resolve against the system configuration
+directory. Nested files keep the same root. Each alias carries a file and line
+number. Keywords are case-insensitive; Host patterns and aliases match
+case-sensitively. The snapshot digest changes when a traversed file or Include
+expansion changes.
 
 The parser never invokes `ssh`, a shell, `Match exec`, a proxy, or a network
 client. It bounds file count, nesting, bytes and line length. Wildcard and
