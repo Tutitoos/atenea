@@ -192,8 +192,12 @@ func (s *scanner) file(path, includeRoot string, user bool, inherited []conditio
 		case "match":
 			// Match can depend on exec, final-pass processing, user, network,
 			// tags, or a rewritten hostname. Never evaluate it while listing.
-			current = condition{unknown: true}
-			s.diagnostic(path, line, "match_requires_selected_resolution")
+			if len(args) == 1 && strings.EqualFold(args[0], "all") {
+				current = condition{}
+			} else {
+				current = condition{unknown: true}
+				s.diagnostic(path, line, "match_requires_selected_resolution")
+			}
 		case "include":
 			if len(args) == 0 {
 				s.diagnostic(path, line, "empty_include")

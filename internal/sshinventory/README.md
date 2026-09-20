@@ -16,7 +16,9 @@ client. It bounds file count, nesting, bytes and line length. Wildcard and
 negated `Host` patterns only filter inclusion; they are not devices. A
 conditional Include that cannot be resolved without evaluating `Match` yields
 a conditional alias and a diagnostic. Unsupported dynamic Include tokens and
-syntax errors also yield diagnostics.
+syntax errors also yield diagnostics. The static `Match all` condition is
+unconditional; `Match exec` and other dynamic criteria remain unresolved and
+are never executed while listing.
 
 This is a **display inventory**, not effective OpenSSH configuration or
 authorization. The selected-host resolver must separately account for
