@@ -67,6 +67,41 @@ func TestUserRelativeIncludeUsesOpenSSHHomeRoot(t *testing.T) {
 	}
 }
 
+func TestUserTildeIncludeUsesHomeDirectory(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(root, "child")
+	relative, err := filepath.Rel(home, child)
+	if err != nil || strings.ContainsAny(relative, " \t\r\n") {
+		t.Skip("temporary fixture cannot be expressed as a simple home-relative path")
+	}
+	writeFixture(t, child, "Host included\nHost selected\n HostName tilde.example.test\n")
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Include ~/"+filepath.ToSlash(relative)+"\nHost selected\n HostName fallback.example.test\n")
+	inventory, err := Scan(config, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := aliases(inventory.Hosts); !reflect.DeepEqual(got, []string{"included", "selected"}) {
+		t.Fatalf("home-relative Include aliases = %v", got)
+	}
+	selected, err := ResolveStatic(config, "", "selected")
+	if err != nil || selected.HostName != "tilde.example.test" {
+		t.Fatalf("home-relative Include resolution = %+v, %v", selected, err)
+	}
+	output, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "hostname tilde.example.test") {
+		t.Fatalf("OpenSSH disagrees about tilde Include: %v: %s", err, output)
+	}
+}
+
 func TestResolveStaticNeverRunsDynamicMatchOrProxy(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "would-have-run")

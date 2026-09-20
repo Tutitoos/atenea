@@ -92,7 +92,7 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 		if err != nil {
 			return Selection{}, err
 		}
-		if err := r.file(abs, includeRoot, 0, true); err != nil {
+		if err := r.file(abs, includeRoot, index == 0, 0, true); err != nil {
 			return Selection{}, err
 		}
 	}
@@ -107,7 +107,7 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 	return r.result, nil
 }
 
-func (r *resolver) file(path, includeRoot string, depth int, optional bool) error {
+func (r *resolver) file(path, includeRoot string, user bool, depth int, optional bool) error {
 	if depth > maxDepth || r.files >= maxFiles {
 		return fmt.Errorf("%w: include limit", ErrUnresolved)
 	}
@@ -175,13 +175,9 @@ func (r *resolver) file(path, includeRoot string, depth int, optional bool) erro
 				return fmt.Errorf("%w: empty Include", ErrUnresolved)
 			}
 			for _, pattern := range args {
-				if strings.ContainsAny(pattern, "%${}") || (strings.HasPrefix(pattern, "~") && !strings.HasPrefix(pattern, "~/")) {
+				pattern, supported := includePatternPath(pattern, includeRoot, user)
+				if !supported {
 					return fmt.Errorf("%w: dynamic Include at %s:%d", ErrUnresolved, path, line)
-				}
-				if strings.HasPrefix(pattern, "~/") {
-					pattern = filepath.Join(includeRoot, pattern[2:])
-				} else if !filepath.IsAbs(pattern) {
-					pattern = filepath.Join(includeRoot, pattern)
 				}
 				paths, err := filepath.Glob(pattern)
 				if err != nil {
@@ -189,7 +185,7 @@ func (r *resolver) file(path, includeRoot string, depth int, optional bool) erro
 				}
 				sort.Strings(paths)
 				for _, nested := range paths {
-					if err := r.file(nested, includeRoot, depth+1, true); err != nil {
+					if err := r.file(nested, includeRoot, user, depth+1, true); err != nil {
 						return err
 					}
 				}

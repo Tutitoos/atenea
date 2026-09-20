@@ -153,3 +153,15 @@ func TestSystemRelativeIncludeUsesSystemConfigDirectory(t *testing.T) {
 		t.Fatalf("system Include aliases = %v, want %v", aliases(got.Hosts), want)
 	}
 }
+
+func TestSystemTildeIncludeRemainsUnresolved(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "ssh_config")
+	writeFixture(t, config, "Include ~/unsupported\nHost selected\n")
+	got, err := Scan("", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Diagnostics) != 1 || got.Diagnostics[0].Code != "dynamic_include" {
+		t.Fatalf("system tilde Include was accepted: %+v", got.Diagnostics)
+	}
+}

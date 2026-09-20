@@ -79,7 +79,7 @@ func Scan(userConfig, systemConfig string) (Inventory, error) {
 			return Inventory{}, err
 		}
 		fmt.Fprintf(s.hash, "root:%s\x00include-root:%s\x00", abs, includeRoot)
-		if err := s.file(abs, includeRoot, nil, 0, true); err != nil {
+		if err := s.file(abs, includeRoot, index == 0, nil, 0, true); err != nil {
 			return Inventory{}, err
 		}
 	}
@@ -98,7 +98,20 @@ func includeRootForConfig(config string, user bool) (string, error) {
 	return filepath.Join(home, ".ssh"), nil
 }
 
-func (s *scanner) file(path, includeRoot string, inherited []condition, depth int, optional bool) error {
+func includePatternPath(pattern, includeRoot string, user bool) (string, bool) {
+	if strings.ContainsAny(pattern, "%${}") || (strings.HasPrefix(pattern, "~") && (!user || !strings.HasPrefix(pattern, "~/"))) {
+		return "", false
+	}
+	if strings.HasPrefix(pattern, "~/") {
+		return filepath.Join(filepath.Dir(includeRoot), pattern[2:]), true
+	}
+	if !filepath.IsAbs(pattern) {
+		return filepath.Join(includeRoot, pattern), true
+	}
+	return pattern, true
+}
+
+func (s *scanner) file(path, includeRoot string, user bool, inherited []condition, depth int, optional bool) error {
 	if depth > maxDepth || s.files >= maxFiles {
 		s.diagnostic(path, 0, "limit_exceeded")
 		return nil
@@ -187,14 +200,10 @@ func (s *scanner) file(path, includeRoot string, inherited []condition, depth in
 				continue
 			}
 			for _, pattern := range args {
-				if strings.ContainsAny(pattern, "%${}") || (strings.HasPrefix(pattern, "~") && !strings.HasPrefix(pattern, "~/")) {
+				pattern, supported := includePatternPath(pattern, includeRoot, user)
+				if !supported {
 					s.diagnostic(path, line, "dynamic_include")
 					continue
-				}
-				if strings.HasPrefix(pattern, "~/") {
-					pattern = filepath.Join(includeRoot, pattern[2:])
-				} else if !filepath.IsAbs(pattern) {
-					pattern = filepath.Join(includeRoot, pattern)
 				}
 				paths, err := filepath.Glob(pattern)
 				if err != nil {
@@ -205,7 +214,7 @@ func (s *scanner) file(path, includeRoot string, inherited []condition, depth in
 				fmt.Fprintf(s.hash, "include:%s\x00", pattern)
 				for _, nested := range paths {
 					fmt.Fprintf(s.hash, "%s\x00", nested)
-					if err := s.file(nested, includeRoot, conditions, depth+1, true); err != nil {
+					if err := s.file(nested, includeRoot, user, conditions, depth+1, true); err != nil {
 						return err
 					}
 				}
