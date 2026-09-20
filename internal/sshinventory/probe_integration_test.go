@@ -110,12 +110,20 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 		knownHosts string
 		want       string
 		timeout    bool
+		failure    ProbeFailureKind
+		revokeKey  bool
 	}{
-		{"known and authenticated", hostEntry, "Authenticated to", true},
-		{"unknown", unrelatedEntry, "Host key verification failed", false},
-		{"changed", wrongEntry, "REMOTE HOST IDENTIFICATION HAS CHANGED", false},
+		{"known and authenticated", hostEntry, "Authenticated to", true, ProbeFailureUnknown, false},
+		{"unknown", unrelatedEntry, "Host key verification failed", false, ProbeFailureHostKeyUnknown, false},
+		{"changed", wrongEntry, "REMOTE HOST IDENTIFICATION HAS CHANGED", false, ProbeFailureHostKeyChanged, false},
+		{"authentication rejected", hostEntry, "Permission denied (publickey)", false, ProbeFailureAuthRejected, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.revokeKey {
+				if err := os.WriteFile(filepath.Join(root, "authorized_keys"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			plan, err := PrepareDirectProbe(clientConfig, "", selection, []byte(tt.knownHosts))
 			if err != nil {
 				t.Fatal(err)
@@ -135,6 +143,15 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 			}
 			if !tt.timeout && ctx.Err() != nil {
 				t.Fatalf("host key rejection did not finish promptly: %v", runErr)
+			}
+			if !tt.timeout {
+				exitErr, ok := runErr.(*exec.ExitError)
+				if !ok {
+					t.Fatalf("expected OpenSSH failure exit: %v", runErr)
+				}
+				if got := ClassifyOpenSSHFailure(exitErr.ExitCode(), string(output), false); got != tt.failure {
+					t.Fatalf("failure hint = %q, want %q", got, tt.failure)
+				}
 			}
 			stored, err := os.ReadFile(filepath.Join(plan.root, "known_hosts"))
 			if err != nil || string(stored) != tt.knownHosts {

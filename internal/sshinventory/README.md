@@ -65,7 +65,15 @@ without changing the configured path or its security properties.
 
 The controlled `sshd` test starts a disposable server on IPv4 loopback, makes
 temporary client/server keys and checks three real OpenSSH outcomes: a known
-key with public-key authentication, an unknown key, and a changed key. It
-checks that diagnostics do not modify their known-hosts copy. The test skips
-when the local OpenSSH server fixture is unavailable and on Windows; it does
-not establish native Windows support or trust in any external host.
+key with public-key authentication, an unknown key, and a changed key. It also
+checks a rejected public-key login and that diagnostics do not modify their
+known-hosts copy. The test skips when the local OpenSSH server fixture is
+unavailable and on Windows. It does not establish native Windows support or
+trust in any external host.
+
+`ClassifyOpenSSHFailure` converts a bounded failed-process stderr into an
+advisory hint for timeout, DNS, route, host-key and authentication rejection.
+It does not keep raw logs or treat a zero exit or `Authenticated to` text as
+proof of authentication. OpenSSH diagnostics can include server-controlled
+banners, so these hints must never authorize trust or credentials. A rejected
+login alone does not show whether credentials were absent or incorrect.
