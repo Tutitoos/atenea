@@ -117,6 +117,79 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 	}
 }
 
+func TestDisabledProxyCompletesDirectTrustFlow(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("private pin storage is implemented on macOS, Linux and Windows")
+	}
+	for _, option := range []string{"ProxyJump none", "ProxyCommand none", "ProxyJump None", "ProxyCommand None"} {
+		t.Run(option, func(t *testing.T) {
+			root := t.TempDir()
+			config := filepath.Join(root, "config")
+			writeFixture(t, config, "Host selected\n HostName host.example.test\n User person\n "+option+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			lock, err := ProvisionalDirectLockKey(selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withoutProxy := selection
+			withoutProxy.ProxyJump, withoutProxy.ProxyCommand = "", ""
+			directLock, err := ProvisionalDirectLockKey(withoutProxy)
+			if err != nil || lock != directLock {
+				t.Fatalf("disabled proxy changed direct lock key: %v", err)
+			}
+			key, digest := ed25519FixtureKey()
+			entry, err := MatchDirectED25519HostKey(config, "", selection, key, digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmed, err := ConfirmDirectED25519HostKey(config, "", selection, entry, digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenPrivateDirectTrustStore(filepath.Join(root, "app-trust"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Enroll(config, "", selection, confirmed); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := store.PrepareEnrolledDirectProbe(config, "", selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Revalidate(); err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestActiveProxyCannotEnrollDirectTrust(t *testing.T) {
+	for _, option := range []string{"ProxyJump gateway.example.test", "ProxyCommand helper %h %p"} {
+		t.Run(option, func(t *testing.T) {
+			config := filepath.Join(t.TempDir(), "config")
+			writeFixture(t, config, "Host selected\n HostName host.example.test\n User person\n "+option+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, digest := ed25519FixtureKey()
+			if entry, err := MatchDirectED25519HostKey(config, "", selection, key, digest); len(entry.KnownHostsLine()) != 0 || !errors.Is(err, ErrProbeUnsupported) {
+				t.Fatalf("active route accepted for direct pin: %v", err)
+			}
+			if lock, err := ProvisionalDirectLockKey(selection); lock != "" || !errors.Is(err, ErrProbeUnsupported) {
+				t.Fatalf("active route accepted for direct lock: %v", err)
+			}
+		})
+	}
+}
+
 func TestPrivateDirectTrustStoreExplicitRotation(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("private pin storage is implemented on macOS, Linux and Windows")

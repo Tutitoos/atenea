@@ -36,7 +36,7 @@ func ProvisionalDirectLockKey(selection Selection) (string, error) {
 		!safeHostArgument(selection.HostName) || !safeAccountArgument(selection.User) {
 		return "", ErrUnresolved
 	}
-	if selection.ProxyJump != "" || selection.ProxyCommand != "" {
+	if activeProxyRoute(selection) {
 		return "", ErrProbeUnsupported
 	}
 	host := strings.TrimSuffix(strings.ToLower(selection.HostName), ".")

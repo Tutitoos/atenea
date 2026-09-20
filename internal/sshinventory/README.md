@@ -54,8 +54,9 @@ precondition check, not a verified host identity or an authorization grant.
 direct route. It never starts SSH. It rejects proxy routes and unsafe target
 arguments rather than silently changing their path.
 `ProxyJump none` and `ProxyCommand none` explicitly disable the proxy route,
-so those selected configurations can use the direct diagnostic; other proxy
-values remain unsupported. The caller must provide a
+so those selected configurations can use direct fingerprint matching, private
+enrollment, provisional locking and the diagnostic; other proxy values remain
+unsupported. The caller must provide a
 known-hosts snapshot whose fingerprints were independently reviewed; the
 builder cannot verify that review. A temporary empty config suppresses the
 user and system configuration during a later probe, while the supplied

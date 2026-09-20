@@ -70,8 +70,7 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 		(selection.HostKeyAlias != "" && !safeHostArgument(selection.HostKeyAlias)) {
 		return nil, ErrUnresolved
 	}
-	if (selection.ProxyJump != "" && !strings.EqualFold(selection.ProxyJump, "none")) ||
-		(selection.ProxyCommand != "" && !strings.EqualFold(selection.ProxyCommand, "none")) {
+	if activeProxyRoute(selection) {
 		return nil, ErrProbeUnsupported // Preserve, then review the configured route separately.
 	}
 	if len(knownHostsSnapshot) == 0 || len(knownHostsSnapshot) > 1<<20 {
@@ -143,6 +142,11 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	selection.IdentityFiles = append([]string(nil), selection.IdentityFiles...)
 	selection.Sources = append([]Diagnostic(nil), selection.Sources...)
 	return &ProbePlan{args: args, root: root, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
+}
+
+func activeProxyRoute(selection Selection) bool {
+	return (selection.ProxyJump != "" && !strings.EqualFold(selection.ProxyJump, "none")) ||
+		(selection.ProxyCommand != "" && !strings.EqualFold(selection.ProxyCommand, "none"))
 }
 
 // Close removes the temporary configuration and known-hosts files.

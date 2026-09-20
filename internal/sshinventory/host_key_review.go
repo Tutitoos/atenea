@@ -89,7 +89,7 @@ func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selecti
 		(selected.HostKeyAlias != "" && !safeHostArgument(selected.HostKeyAlias)) {
 		return DirectHostKeyEntry{}, ErrUnresolved
 	}
-	if selected.ProxyJump != "" || selected.ProxyCommand != "" {
+	if activeProxyRoute(selected) {
 		return DirectHostKeyEntry{}, ErrProbeUnsupported
 	}
 	host, err := directKnownHostToken(selected)
