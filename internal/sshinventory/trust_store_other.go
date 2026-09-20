@@ -4,4 +4,4 @@ package sshinventory
 
 import "os"
 
-func openPrivatePin(string) (*os.File, error) { return nil, ErrProbeUnsupported }
+func openPrivatePin(*os.Root, string) (*os.File, error) { return nil, ErrProbeUnsupported }

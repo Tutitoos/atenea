@@ -12,8 +12,8 @@ import (
 )
 
 func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native Windows ACL validation is required before enrollment")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("private pin storage is implemented on macOS and Linux")
 	}
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
@@ -118,8 +118,8 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 }
 
 func TestPrivateDirectTrustStoreRejectsUnsafePaths(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native Windows ACL validation is required before enrollment")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("private pin storage is implemented on macOS and Linux")
 	}
 	root := t.TempDir()
 	unsafe := filepath.Join(root, "unsafe")
@@ -138,6 +138,32 @@ func TestPrivateDirectTrustStoreRejectsUnsafePaths(t *testing.T) {
 	}
 	if store, err := OpenPrivateDirectTrustStore(link); store != nil || !errors.Is(err, ErrProbeUnsupported) {
 		t.Fatalf("symlinked store accepted: %v", err)
+	}
+	owned := filepath.Join(root, "owned")
+	store, err := OpenPrivateDirectTrustStore(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(owned, owned+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(owned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.checkRoot(); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("replaced private directory accepted: %v", err)
+	}
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName host.example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Enroll(config, "", selection, ConfirmedDirectHostKey{}); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("enrollment used replaced directory: %v", err)
+	}
+	if _, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("pin read used replaced directory: %v", err)
 	}
 }
 
@@ -203,11 +229,16 @@ func TestPrivateDirectTrustStoreRejectsUnsafePin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.make(t)
 			if tt.name == "symlink" {
-				file, err := openPrivatePin(path)
+				rootHandle, err := store.openRoot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = rootHandle.Close() }()
+				file, err := openPrivatePin(rootHandle, filepath.Base(path))
 				if file != nil {
 					_ = file.Close()
 				}
-				if !errors.Is(err, ErrProbeUnsupported) {
+				if err == nil {
 					t.Fatalf("no-follow open accepted a symlink: %v", err)
 				}
 			}

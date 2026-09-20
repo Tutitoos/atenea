@@ -22,7 +22,10 @@ var ErrTrustNotEnrolled = errors.New("ssh inventory: selected host key is not en
 // app-owned directory. Existing pins are never replaced automatically.
 // Native Windows ACL validation is still pending, so this store fails closed
 // there rather than relying on Unix permission bits.
-type DirectTrustStore struct{ root string }
+type DirectTrustStore struct {
+	root     string
+	rootInfo os.FileInfo
+}
 
 // OpenPrivateDirectTrustStore creates or opens an app-owned directory whose
 // parent is trusted by the caller. It refuses symlinks and group/world access.
@@ -36,7 +39,11 @@ func OpenPrivateDirectTrustStore(root string) (*DirectTrustStore, error) {
 	if err := os.Mkdir(root, 0o700); err != nil && !os.IsExist(err) {
 		return nil, err
 	}
-	store := &DirectTrustStore{root: root}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return nil, err
+	}
+	store := &DirectTrustStore{root: root, rootInfo: info}
 	if err := store.checkRoot(); err != nil {
 		return nil, err
 	}
@@ -44,17 +51,38 @@ func OpenPrivateDirectTrustStore(root string) (*DirectTrustStore, error) {
 }
 
 func (s *DirectTrustStore) checkRoot() error {
-	if s == nil || s.root == "" {
-		return ErrUnresolved
-	}
-	info, err := os.Lstat(s.root)
+	root, err := s.openRoot()
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-		return ErrProbeUnsupported
+	return root.Close()
+}
+
+func (s *DirectTrustStore) openRoot() (*os.Root, error) {
+	if s == nil || s.root == "" || s.rootInfo == nil {
+		return nil, ErrUnresolved
 	}
-	return nil
+	info, err := os.Lstat(s.root)
+	if err != nil {
+		return nil, err
+	}
+	if !privateTrustDirectory(info) || !os.SameFile(s.rootInfo, info) {
+		return nil, ErrProbeUnsupported
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !privateTrustDirectory(opened) || !os.SameFile(info, opened) {
+		_ = root.Close()
+		return nil, ErrProbeUnsupported
+	}
+	return root, nil
+}
+
+func privateTrustDirectory(info os.FileInfo) bool {
+	return info != nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0o077 == 0
 }
 
 func (s *DirectTrustStore) fileFor(selection Selection) (string, string, error) {
@@ -78,9 +106,11 @@ func (s *DirectTrustStore) fileFor(selection Selection) (string, string, error) 
 // identity is a conflict; the caller must handle key rotation explicitly.
 // This never edits the user's OpenSSH known_hosts file.
 func (s *DirectTrustStore) Enroll(userConfig, systemConfig string, selection Selection, confirmed ConfirmedDirectHostKey) error {
-	if err := s.checkRoot(); err != nil {
+	root, err := s.openRoot()
+	if err != nil {
 		return err
 	}
+	defer func() { _ = root.Close() }()
 	if err := validateDirectHostKeyEntry(userConfig, systemConfig, selection, confirmed.entry); err != nil {
 		return err
 	}
@@ -92,9 +122,10 @@ func (s *DirectTrustStore) Enroll(userConfig, systemConfig string, selection Sel
 	if len(line) > 8<<10 || !strings.HasPrefix(string(line), host+" ssh-ed25519 ") {
 		return ErrUnresolved
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	name := filepath.Base(path)
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if os.IsExist(err) {
-		stored, readErr := s.read(path, host)
+		stored, readErr := s.read(root, name, host)
 		if readErr != nil {
 			return readErr
 		}
@@ -115,11 +146,11 @@ func (s *DirectTrustStore) Enroll(userConfig, systemConfig string, selection Sel
 	}
 	closeErr := file.Close()
 	if writeErr != nil || closeErr != nil {
-		_ = os.Remove(path)
+		_ = root.Remove(name)
 		return errors.Join(writeErr, closeErr)
 	}
 	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
-		_ = os.Remove(path)
+		_ = root.Remove(name)
 		return err
 	}
 	return nil
@@ -129,9 +160,11 @@ func (s *DirectTrustStore) Enroll(userConfig, systemConfig string, selection Sel
 // prepares the usual restricted, noninteractive diagnostic. It does not
 // modify the pin or authorize a prompt or remote command.
 func (s *DirectTrustStore) PrepareEnrolledDirectProbe(userConfig, systemConfig string, selection Selection) (*ProbePlan, error) {
-	if err := s.checkRoot(); err != nil {
+	root, err := s.openRoot()
+	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = root.Close() }()
 	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
 		return nil, err
 	}
@@ -139,7 +172,7 @@ func (s *DirectTrustStore) PrepareEnrolledDirectProbe(userConfig, systemConfig s
 	if err != nil {
 		return nil, err
 	}
-	line, err := s.read(path, host)
+	line, err := s.read(root, filepath.Base(path), host)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +183,11 @@ func (s *DirectTrustStore) PrepareEnrolledDirectProbe(userConfig, systemConfig s
 // exact current app-owned pin. It reads only local files; it cannot establish
 // that the remote host is reachable or that its agent is installed.
 func (s *DirectTrustStore) EnrolledDirectHostKeyFingerprint(userConfig, systemConfig string, selection Selection) (string, error) {
-	if err := s.checkRoot(); err != nil {
+	root, err := s.openRoot()
+	if err != nil {
 		return "", err
 	}
+	defer func() { _ = root.Close() }()
 	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
 		return "", err
 	}
@@ -160,7 +195,7 @@ func (s *DirectTrustStore) EnrolledDirectHostKeyFingerprint(userConfig, systemCo
 	if err != nil {
 		return "", err
 	}
-	line, err := s.read(path, host)
+	line, err := s.read(root, filepath.Base(path), host)
 	if err != nil {
 		return "", err
 	}
@@ -176,8 +211,8 @@ func (s *DirectTrustStore) EnrolledDirectHostKeyFingerprint(userConfig, systemCo
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(fingerprint[:]), nil
 }
 
-func (s *DirectTrustStore) read(path, host string) ([]byte, error) {
-	info, err := os.Lstat(path)
+func (s *DirectTrustStore) read(root *os.Root, name, host string) ([]byte, error) {
+	info, err := root.Lstat(name)
 	if os.IsNotExist(err) {
 		return nil, ErrTrustNotEnrolled
 	}
@@ -187,7 +222,7 @@ func (s *DirectTrustStore) read(path, host string) ([]byte, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 8<<10 {
 		return nil, ErrProbeUnsupported
 	}
-	file, err := openPrivatePin(path)
+	file, err := openPrivatePin(root, name)
 	if err != nil {
 		return nil, err
 	}

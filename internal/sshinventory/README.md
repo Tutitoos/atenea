@@ -144,7 +144,9 @@ the caller explicitly invokes the private enrollment store.
 caller. On macOS and Linux it requires a private, non-symlink directory and
 stores each confirmed ED25519 pin in a mode-0600 file. Reads refuse a
 symlinked or newly swapped pin and recheck the opened file's identity and
-permissions. `Enroll` is create-only:
+permissions. Operations use an opened directory handle and reject a store
+directory replaced after opening, so writes remain inside the original
+app-owned directory. `Enroll` is create-only:
 the same key is idempotent, while a changed key at the same config/account/
 host binding is rejected for separate rotation review. The filename binds the
 config snapshot, account, port and OpenSSH known-hosts name, so a changed
