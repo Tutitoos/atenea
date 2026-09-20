@@ -24,7 +24,9 @@ window executable. On Linux, the build puts `atenea-ssh` (launcher),
 `atenea-ssh-bin` (native window) and `atenea-ssh-controller` in the same
 directory. Install all three together. The launcher checks for a graphical
 session and linked libraries before starting the window, with actionable
-errors on stderr. For Ubuntu 24.04, the required runtime packages include
+errors on stderr. A Terminal link to the launcher resolves to that package
+directory, with a bounded link chain; the executable and controller still stay
+together there. For Ubuntu 24.04, the required runtime packages include
 `libgtk-3-0` and `libwebkit2gtk-4.1-0`; see the [Wails Linux runtime guide](https://wails.io/docs/guides/linux-distro-support/).
 These checks do not prove that a stale display address can open a window or
 that a clean machine has every runtime requirement. The window starts the

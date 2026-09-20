@@ -2,6 +2,23 @@
 set -eu
 
 launcher=$(command -v "$0")
+case "$launcher" in
+  /*) ;;
+  *) launcher=$(pwd)/$launcher ;;
+esac
+links=0
+while [ -L "$launcher" ]; do
+  links=$((links + 1))
+  if [ "$links" -gt 16 ]; then
+    printf '%s\n' 'Atenea SSH: el enlace del lanzador tiene demasiados niveles. Reinstala el paquete completo.' >&2
+    exit 78
+  fi
+  target=$(readlink "$launcher") || exit 78
+  case "$target" in
+    /*) launcher=$target ;;
+    *) launcher=$(dirname -- "$launcher")/$target ;;
+  esac
+done
 binary=$(dirname -- "$launcher")/atenea-ssh-bin
 if [ ! -x "$binary" ]; then
   printf '%s\n' 'Atenea SSH: falta el ejecutable de la ventana junto al lanzador. Reinstala el paquete completo.' >&2

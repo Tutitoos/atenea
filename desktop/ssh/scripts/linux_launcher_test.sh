@@ -43,4 +43,12 @@ EOF
 chmod +x "$tmp/fakebin/ldd"
 actual=$(env DISPLAY=:99 PATH="$tmp/fakebin:$PATH" "$tmp/atenea-ssh" test-argument)
 [[ "$actual" == 'opened:test-argument' ]]
+ln -s ../atenea-ssh "$tmp/fakebin/atenea-ssh-link"
+actual=$(env DISPLAY=:99 PATH="$tmp/fakebin:$PATH" atenea-ssh-link linked-argument)
+[[ "$actual" == 'opened:linked-argument' ]]
+ln -s ../atenea-ssh "$tmp/fakebin/link-0"
+for index in {1..17}; do
+  ln -s "link-$((index - 1))" "$tmp/fakebin/link-$index"
+done
+expect_failure 'demasiados niveles' env DISPLAY=:99 "$tmp/fakebin/link-17"
 printf '%s\n' 'Linux launcher diagnostics passed'
