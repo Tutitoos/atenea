@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,5 +73,53 @@ func TestMatchDirectED25519HostKeyRejectsMismatchAndUnsupported(t *testing.T) {
 	}
 	if entry, err := MatchDirectED25519HostKey(config, "", malformedHost, candidate, fingerprint); !errors.Is(err, ErrUnresolved) || len(entry.KnownHostsLine()) != 0 {
 		t.Fatalf("malformed host created known_hosts entry: %v", err)
+	}
+}
+
+func TestConfirmedDirectHostKeyBindsApprovalAndProbe(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host first second\n HostName host.example.test\n User person\n Port 2222\n")
+	first, err := ResolveStatic(config, "", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, fingerprint := ed25519FixtureKey()
+	entry, err := MatchDirectED25519HostKey(config, "", first, candidate, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := "SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, sha256.Size))
+	if confirmation, err := ConfirmDirectED25519HostKey(config, "", first, entry, wrong); !errors.Is(err, ErrFingerprintMismatch) || confirmation.entry.line != "" {
+		t.Fatalf("mismatched confirmation accepted: %v", err)
+	}
+	if confirmation, err := ConfirmDirectED25519HostKey(config, "", first, entry, ""); !errors.Is(err, ErrUnresolved) || confirmation.entry.line != "" {
+		t.Fatalf("missing confirmation accepted: %v", err)
+	}
+	confirmed, err := ConfirmDirectED25519HostKey(config, "", first, entry, fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareConfirmedDirectProbe(config, "", first, confirmed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	stored, err := os.ReadFile(filepath.Join(plan.root, "known_hosts"))
+	if err != nil || string(stored) != string(entry.KnownHostsLine()) {
+		t.Fatalf("confirmed probe trust differs from matched pin: %v", err)
+	}
+	second, err := ResolveStatic(config, "", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan, err := PrepareConfirmedDirectProbe(config, "", second, confirmed); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("confirmation reused for another alias: %v", err)
+	}
+	if plan, err := PrepareConfirmedDirectProbe(config, "", first, ConfirmedDirectHostKey{}); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("empty confirmation accepted: %v", err)
+	}
+	writeFixture(t, config, "Host first\n HostName changed.example.test\n User person\n Port 2222\n")
+	if plan, err := PrepareConfirmedDirectProbe(config, "", first, confirmed); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale confirmation accepted: %v", err)
 	}
 }

@@ -17,11 +17,8 @@ import (
 // Callers must still require explicit trust confirmation and invalidate cached
 // authorization when the selection or credential changes.
 func MatchedDirectAccountKey(userConfig, systemConfig string, selection Selection, entry DirectHostKeyEntry) (string, error) {
-	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+	if err := validateDirectHostKeyEntry(userConfig, systemConfig, selection, entry); err != nil {
 		return "", err
-	}
-	if entry.line == "" || entry.snapshot != selection.Snapshot || entry.alias != selection.Alias || entry.account != selection.User {
-		return "", ErrChanged
 	}
 	h := sha256.New()
 	writeLockField(h, "atenea-ed25519-account-v1")

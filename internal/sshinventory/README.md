@@ -130,3 +130,12 @@ independent. The UI must require explicit user review before persisting or
 using it. Hashed known-host entries, host certificates, CA and revoked markers,
 other key algorithms and proxy routes remain unsupported by this helper; do
 not silently convert them to a plain ED25519 pin.
+
+`ConfirmDirectED25519HostKey` checks a separately supplied, affirmative
+fingerprint confirmation against the matched key and current selected config.
+It returns an in-memory `ConfirmedDirectHostKey` that
+`PrepareConfirmedDirectProbe` binds to an exact temporary known-hosts pin.
+Mismatched fingerprints, another alias and changed config are rejected. The
+library cannot prove that a person reviewed the independent source; the UI
+must collect that decision explicitly. Confirmation is not persisted, and
+neither function enrolls a key in a trust store.

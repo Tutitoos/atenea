@@ -33,6 +33,50 @@ func (e DirectHostKeyEntry) KnownHostsLine() []byte { return []byte(e.line) }
 // Snapshot returns the config fingerprint that this entry was matched to.
 func (e DirectHostKeyEntry) Snapshot() string { return e.snapshot }
 
+// ConfirmedDirectHostKey is an in-memory approval for one matched direct key.
+// Only a caller handling an explicit user confirmation should construct it;
+// the library cannot establish who supplied the confirmation fingerprint.
+type ConfirmedDirectHostKey struct{ entry DirectHostKeyEntry }
+
+// ConfirmDirectED25519HostKey checks a user-confirmed SHA256 fingerprint
+// against a previously matched entry and the current selected config. It
+// neither writes a trust store nor connects to the target.
+func ConfirmDirectED25519HostKey(userConfig, systemConfig string, selected Selection, entry DirectHostKeyEntry, confirmedSHA256 string) (ConfirmedDirectHostKey, error) {
+	if err := validateDirectHostKeyEntry(userConfig, systemConfig, selected, entry); err != nil {
+		return ConfirmedDirectHostKey{}, err
+	}
+	if !strings.HasPrefix(confirmedSHA256, "SHA256:") {
+		return ConfirmedDirectHostKey{}, ErrUnresolved
+	}
+	confirmed, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(confirmedSHA256, "SHA256:"))
+	if err != nil || len(confirmed) != sha256.Size {
+		return ConfirmedDirectHostKey{}, ErrUnresolved
+	}
+	if subtle.ConstantTimeCompare(confirmed, entry.keyHash[:]) != 1 {
+		return ConfirmedDirectHostKey{}, ErrFingerprintMismatch
+	}
+	return ConfirmedDirectHostKey{entry: entry}, nil
+}
+
+// PrepareConfirmedDirectProbe uses only the exact key in a current in-memory
+// confirmation. It still performs a noninteractive diagnostic, not enrollment.
+func PrepareConfirmedDirectProbe(userConfig, systemConfig string, selected Selection, confirmed ConfirmedDirectHostKey) (*ProbePlan, error) {
+	if err := validateDirectHostKeyEntry(userConfig, systemConfig, selected, confirmed.entry); err != nil {
+		return nil, err
+	}
+	return PrepareDirectProbe(userConfig, systemConfig, selected, confirmed.entry.KnownHostsLine())
+}
+
+func validateDirectHostKeyEntry(userConfig, systemConfig string, selected Selection, entry DirectHostKeyEntry) error {
+	if err := RevalidateSelection(userConfig, systemConfig, selected); err != nil {
+		return err
+	}
+	if entry.line == "" || entry.snapshot != selected.Snapshot || entry.alias != selected.Alias || entry.account != selected.User {
+		return ErrChanged
+	}
+	return nil
+}
+
 // MatchDirectED25519HostKey checks a candidate public key against a SHA256
 // fingerprint supplied from an independent channel. It accepts only a plain
 // ED25519 key, an exact direct host/port or HostKeyAlias binding, and current
