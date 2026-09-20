@@ -152,3 +152,5 @@ personal `known_hosts` file is edited. The caller must choose and protect the
 parent directory, and the UI must gather the user's confirmation. Windows
 enrollment fails closed until native ACL validation is implemented. A stored
 pin does not authorize prompts, commands, credentials or agent installation.
+The loopback `sshd` fixture exercises confirmation, enrollment, reload and
+client-observed public-key authentication with disposable host and client keys.

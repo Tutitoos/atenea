@@ -209,6 +209,26 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "authorized_keys"), clientPublic, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	confirmed, err := ConfirmDirectED25519HostKey(clientConfig, "", selection, matched, fingerprintFields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenPrivateDirectTrustStore(filepath.Join(root, "app-trust"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Enroll(clientConfig, "", selection, confirmed); err != nil {
+		t.Fatal(err)
+	}
+	enrolledPlan, err := store.PrepareEnrolledDirectProbe(clientConfig, "", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = enrolledPlan.Close() }()
+	enrolledResult, err := ExecuteDirectProbe(context.Background(), ssh, enrolledPlan)
+	if err != nil || !enrolledResult.ClientReportedAuthenticated {
+		t.Fatalf("enrolled pin did not authenticate to fixture: %+v, %v", enrolledResult, err)
+	}
 	noKeyConfig := filepath.Join(root, "no_key_config")
 	writeFixture(t, noKeyConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n", account.Username, port))
 	noKeySelection, err := ResolveStatic(noKeyConfig, "", "selected")
