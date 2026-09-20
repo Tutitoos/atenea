@@ -63,8 +63,11 @@ disabled for this diagnostic plan. A leading `IdentityFile=none` prevents
 OpenSSH from falling back to implicit personal keys if the selected
 `IdentityFile` is missing. When the selected config specifies no identity,
 public-key authentication is disabled and a rejected login is reported as
-`authentication_required`; this is a trust diagnostic, not a substitute for
-normal SSH default-key behavior. `Close` removes its temporary files.
+`authentication_required`. If every explicit identity file is definitely
+absent at the time of a rejected login, the same hint is returned. Dynamic
+paths and existing files stay `authentication_rejected`: file presence alone
+does not prove a usable private key. This is a trust diagnostic, not a
+substitute for normal SSH default-key behavior. `Close` removes its temporary files.
 The builder revalidates the selection before and after creating the temporary
 files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
 config and refuses a stale or closed plan.
@@ -98,7 +101,8 @@ advisory hint for timeout, DNS, route, host-key and authentication rejection.
 It does not keep raw logs or treat a zero exit or `Authenticated to` text as
 proof of authentication. OpenSSH diagnostics can include server-controlled
 banners, so these hints must never authorize trust or credentials. A rejected
-login alone does not show whether credentials were absent or incorrect.
+login alone does not show whether credentials were absent or incorrect; the
+missing-file hint uses a separate local file check and remains advisory.
 
 `ProvisionalDirectLockKey` hashes the normalized direct hostname, port and
 account to serialize two aliases that resolve to the same apparent endpoint.

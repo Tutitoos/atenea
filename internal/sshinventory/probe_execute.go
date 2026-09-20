@@ -114,8 +114,35 @@ func inspectProbeLog(path string, selection Selection, runErr error, timedOut bo
 		exitCode = exitErr.ExitCode()
 	}
 	failure := ClassifyOpenSSHFailure(exitCode, string(data), timedOut)
-	if failure == ProbeFailureAuthRejected && len(selection.IdentityFiles) == 0 {
+	if failure == ProbeFailureAuthRejected && noAvailableExplicitIdentity(selection.IdentityFiles) {
 		failure = ProbeFailureAuthRequired
 	}
 	return ProbeResult{Failure: failure}, nil
+}
+
+// noAvailableExplicitIdentity is a conservative diagnostic hint. An existing
+// file may still be unreadable or rejected, and dynamic paths are unknown.
+// The probe disables the SSH agent and implicit keys, so definitively absent
+// selected identity files cannot supply a credential to this probe.
+func noAvailableExplicitIdentity(paths []string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	for _, path := range paths {
+		if path == "" || strings.ContainsAny(path, "%${}") || (strings.HasPrefix(path, "~") && !strings.HasPrefix(path, "~/")) {
+			return false
+		}
+		if strings.HasPrefix(path, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return false
+			}
+			path = filepath.Join(home, path[2:])
+		}
+		_, err := os.Stat(path)
+		if !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return true
 }

@@ -60,8 +60,15 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverText := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s\nAuthorizedKeysFile %s\nPidFile %s\nBanner %s\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitRootLogin prohibit-password\nLogLevel ERROR\n", port, filepath.Join(root, "host"), filepath.Join(root, "authorized_keys"), filepath.Join(root, "sshd.pid"), banner)
-	if err := os.WriteFile(serverConfig, []byte(serverText), 0o600); err != nil {
+	// Newer sshd penalizes several expected negative fixture connections from
+	// loopback. Probe support first so older OpenSSH builds still run this test.
+	if err := os.WriteFile(serverConfig, []byte(serverText+"PerSourcePenalties no\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := exec.Command(sshd, "-t", "-f", serverConfig).Run(); err != nil {
+		if err := os.WriteFile(serverConfig, []byte(serverText), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if output, err := exec.Command(sshd, "-t", "-f", serverConfig).CombinedOutput(); err != nil {
 		t.Skipf("sshd fixture configuration unavailable: %v: %s", err, output)
@@ -217,6 +224,21 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err != nil || noKeyResult.ClientReportedAuthenticated || noKeyResult.Failure != ProbeFailureAuthRequired {
 		t.Fatalf("no selected credential: %+v, %v", noKeyResult, err)
 	}
+	missingKeyConfig := filepath.Join(root, "missing_key_config")
+	writeFixture(t, missingKeyConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "absent-client-key")))
+	missingKeySelection, err := ResolveStatic(missingKeyConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingKeyPlan, err := PrepareDirectProbe(missingKeyConfig, "", missingKeySelection, []byte(hostEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = missingKeyPlan.Close() }()
+	missingKeyResult, err := ExecuteDirectProbe(context.Background(), ssh, missingKeyPlan)
+	if err != nil || missingKeyResult.ClientReportedAuthenticated || missingKeyResult.Failure != ProbeFailureAuthRequired {
+		t.Fatalf("missing selected credential: %+v, %v", missingKeyResult, err)
+	}
 	aliasConfig := filepath.Join(root, "alias_config")
 	writeFixture(t, aliasConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias reviewed-host\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "client")))
 	aliasSelection, err := ResolveStatic(aliasConfig, "", "selected")
@@ -237,10 +259,22 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	defer func() { _ = aliasPlan.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	aliasCommand := exec.CommandContext(ctx, ssh, append([]string{"-v"}, aliasPlan.Arguments()...)...)
+	aliasLog := filepath.Join(root, "alias-client.log")
+	aliasCommand := exec.CommandContext(ctx, ssh, append([]string{"-v", "-E", aliasLog}, aliasPlan.Arguments()...)...)
 	aliasCommand.Env = append(os.Environ(), "LC_ALL=C")
-	aliasOutput, _ := aliasCommand.CombinedOutput()
-	if !strings.Contains(string(aliasOutput), "Authenticated to") || ctx.Err() != context.DeadlineExceeded {
-		t.Fatal("HostKeyAlias and nonstandard-port pin did not authenticate")
+	aliasCommand.Stdout = io.Discard
+	aliasCommand.Stderr = io.Discard
+	aliasErr := aliasCommand.Run()
+	aliasLogBytes, err := os.ReadFile(aliasLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasAuthenticated := strings.Contains(string(aliasLogBytes), "Authenticated to 127.0.0.1 (")
+	if !aliasAuthenticated || ctx.Err() != context.DeadlineExceeded {
+		code := -1
+		if exitErr, ok := aliasErr.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		}
+		t.Fatalf("HostKeyAlias and nonstandard-port pin did not authenticate: client marker=%v deadline=%v failure=%s", aliasAuthenticated, ctx.Err(), ClassifyOpenSSHFailure(code, string(aliasLogBytes), false))
 	}
 }
