@@ -128,6 +128,44 @@ func TestPrepareDirectProbeRejectsUnresolvedRoutes(t *testing.T) {
 	}
 }
 
+func TestPrepareDirectProbeAllowsExplicitlyDisabledProxy(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	for _, option := range []string{"ProxyJump none", "ProxyCommand none", "ProxyJump None", "ProxyCommand None"} {
+		t.Run(option, func(t *testing.T) {
+			config := filepath.Join(t.TempDir(), "config")
+			writeFixture(t, config, "Host selected\n HostName example.test\n User person\n "+option+"\n")
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+			if err != nil {
+				t.Fatalf("original ssh -G: %v: %s", err, original)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("ssh -G: %v: %s", err, output)
+			}
+			for _, settings := range [][]byte{original, output} {
+				for _, line := range strings.Split(string(settings), "\n") {
+					line = strings.TrimSuffix(line, "\r")
+					if strings.HasPrefix(line, "proxyjump ") || strings.HasPrefix(line, "proxycommand ") {
+						t.Fatalf("disabled proxy became an active route: %s", line)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	ssh, err := exec.LookPath("ssh")
 	if err != nil {

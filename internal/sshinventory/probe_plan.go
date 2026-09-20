@@ -70,7 +70,8 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 		(selection.HostKeyAlias != "" && !safeHostArgument(selection.HostKeyAlias)) {
 		return nil, ErrUnresolved
 	}
-	if selection.ProxyJump != "" || selection.ProxyCommand != "" {
+	if (selection.ProxyJump != "" && !strings.EqualFold(selection.ProxyJump, "none")) ||
+		(selection.ProxyCommand != "" && !strings.EqualFold(selection.ProxyCommand, "none")) {
 		return nil, ErrProbeUnsupported // Preserve, then review the configured route separately.
 	}
 	if len(knownHostsSnapshot) == 0 || len(knownHostsSnapshot) > 1<<20 {
