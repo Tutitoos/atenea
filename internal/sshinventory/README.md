@@ -93,8 +93,8 @@ classification is advisory. The successful result is explicitly
 client-reported authentication to the supplied pin, not a durable device
 identity, authorization, agent-installation check or permission to send a
 prompt. The caller must still establish independent review of the pin and
-close the plan. Platform-specific private-file access, especially Windows
-ACLs, still needs native validation.
+close the plan. This diagnostic has not established trust in a physical device
+or native GUI and agent readiness.
 
 No code here supplies a verified physical-device identity.
 ProxyJump and ProxyCommand routes remain unresolved until they can be probed
@@ -154,9 +154,12 @@ the caller explicitly invokes the private enrollment store.
 
 `OpenPrivateDirectTrustStore` opens an app-owned directory supplied by the
 caller. On macOS and Linux it requires a private, non-symlink directory and
-stores each confirmed ED25519 pin in a mode-0600 file. Reads refuse a
-symlinked or newly swapped pin and recheck the opened file's identity and
-permissions. Operations use an opened directory handle and reject a store
+stores each confirmed ED25519 pin in a mode-0600 file. On Windows it creates
+a directory with a protected DACL for the current account and LocalSystem,
+and checks the directory and pin owner and ACL before use. Record locks use
+`LockFileEx`. Reads refuse a symlinked or newly swapped pin and recheck the
+opened file's identity and permissions or ACL. Operations use an opened
+directory handle and reject a store
 directory replaced after opening, so writes remain inside the original
 app-owned directory. `Enroll` is create-only:
 the same key is idempotent, while a changed key at the same config/account/
@@ -174,8 +177,9 @@ so a plan created before rotation cannot authenticate with the retired key.
 Raw OpenSSH arguments are withheld for enrolled plans to keep this check in
 the execution path. No personal `known_hosts` file is edited. The caller must
 choose and protect the
-parent directory, and the UI must gather the user's confirmation. Windows
-enrollment fails closed until native ACL validation is implemented. A stored
+parent directory, and the UI must gather the user's confirmation. The Windows
+storage tests passed under two native account sessions; that does not establish
+Windows controller, vault, connector or GUI readiness. A stored
 pin does not authorize prompts, commands, credentials or agent installation.
 `EnrolledDirectHostKeyFingerprint` reads the current local pin without a
 network call, so the UI can show the approved fingerprint separately from

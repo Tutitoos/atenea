@@ -12,8 +12,8 @@ import (
 )
 
 func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("private pin storage is implemented on macOS and Linux")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("private pin storage is implemented on macOS, Linux and Windows")
 	}
 	root := t.TempDir()
 	config := filepath.Join(root, "config")
@@ -71,7 +71,7 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("persisted pin permissions: %v, %v", info, err)
 	}
 	if err := os.WriteFile(path, []byte("malformed pin\n"), 0o600); err != nil {
@@ -118,8 +118,8 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 }
 
 func TestPrivateDirectTrustStoreExplicitRotation(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("private pin storage is implemented on macOS and Linux")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("private pin storage is implemented on macOS, Linux and Windows")
 	}
 	root := t.TempDir()
 	config := filepath.Join(root, "config")

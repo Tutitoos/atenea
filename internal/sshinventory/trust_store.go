@@ -25,23 +25,21 @@ var ErrTrustBusy = errors.New("ssh inventory: selected host key is being updated
 
 // DirectTrustStore keeps one plain ED25519 pin per selected direct host in an
 // app-owned directory. Existing pins are never replaced automatically.
-// Native Windows ACL validation is still pending, so this store fails closed
-// there rather than relying on Unix permission bits.
 type DirectTrustStore struct {
 	root     string
 	rootInfo os.FileInfo
 }
 
 // OpenPrivateDirectTrustStore creates or opens an app-owned directory whose
-// parent is trusted by the caller. It refuses symlinks and group/world access.
+// parent is trusted by the caller. It refuses symlinks and non-private access.
 func OpenPrivateDirectTrustStore(root string) (*DirectTrustStore, error) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		return nil, ErrProbeUnsupported
 	}
 	if !filepath.IsAbs(root) || root == string(filepath.Separator) {
 		return nil, ErrUnresolved
 	}
-	if err := os.Mkdir(root, 0o700); err != nil && !os.IsExist(err) {
+	if err := createPrivateTrustDirectory(root); err != nil && !os.IsExist(err) {
 		return nil, err
 	}
 	info, err := os.Lstat(root)
@@ -71,7 +69,7 @@ func (s *DirectTrustStore) openRoot() (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !privateTrustDirectory(info) || !os.SameFile(s.rootInfo, info) {
+	if !privateTrustDirectory(s.root, info) || !os.SameFile(s.rootInfo, info) {
 		return nil, ErrProbeUnsupported
 	}
 	root, err := os.OpenRoot(s.root)
@@ -79,15 +77,11 @@ func (s *DirectTrustStore) openRoot() (*os.Root, error) {
 		return nil, err
 	}
 	opened, err := root.Stat(".")
-	if err != nil || !privateTrustDirectory(opened) || !os.SameFile(info, opened) {
+	if err != nil || !privateTrustDirectory(s.root, opened) || !os.SameFile(info, opened) {
 		_ = root.Close()
 		return nil, ErrProbeUnsupported
 	}
 	return root, nil
-}
-
-func privateTrustDirectory(info os.FileInfo) bool {
-	return info != nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0o077 == 0
 }
 
 func (s *DirectTrustStore) fileFor(selection Selection) (string, string, error) {
@@ -149,6 +143,16 @@ func (s *DirectTrustStore) Enroll(userConfig, systemConfig string, selection Sel
 	}
 	if err != nil {
 		return err
+	}
+	if err := preparePrivateTrustFile(path, file); err != nil {
+		_ = file.Close()
+		_ = root.Remove(name)
+		return err
+	}
+	if info, statErr := file.Stat(); statErr != nil || !privateTrustFile(info, file) {
+		_ = file.Close()
+		_ = root.Remove(name)
+		return ErrProbeUnsupported
 	}
 	written, writeErr := file.Write(line)
 	if writeErr == nil && written != len(line) {
@@ -221,6 +225,14 @@ func (s *DirectTrustStore) Rotate(userConfig, systemConfig string, selection Sel
 		return err
 	}
 	defer func() { _ = root.Remove(temporary) }()
+	if err := preparePrivateTrustFile(filepath.Join(s.root, temporary), file); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if info, statErr := file.Stat(); statErr != nil || !privateTrustFile(info, file) {
+		_ = file.Close()
+		return ErrProbeUnsupported
+	}
 	written, writeErr := file.Write(line)
 	if writeErr == nil && written != len(line) {
 		writeErr = io.ErrShortWrite
@@ -353,7 +365,7 @@ func (s *DirectTrustStore) read(root *os.Root, name, host string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 8<<10 {
+	if !info.Mode().IsRegular() || info.Size() > 8<<10 {
 		return nil, ErrProbeUnsupported
 	}
 	file, err := openPrivatePin(root, name)
@@ -365,7 +377,7 @@ func (s *DirectTrustStore) read(root *os.Root, name, host string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if !opened.Mode().IsRegular() || opened.Mode().Perm()&0o077 != 0 || opened.Size() > 8<<10 || !os.SameFile(info, opened) {
+	if !privateTrustFile(opened, file) || opened.Size() > 8<<10 || !os.SameFile(info, opened) {
 		return nil, ErrProbeUnsupported
 	}
 	line, err := io.ReadAll(io.LimitReader(file, 8<<10+1))
