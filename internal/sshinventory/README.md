@@ -97,7 +97,9 @@ config and refuses a stale or closed plan.
 alias on macOS and Linux. It resolves and revalidates both selections, requires
 plain ED25519 known-hosts pins for both the gateway and destination, and
 generates a private configuration for the gateway. A changed pin on either hop
-prevents authenticated success in the loopback server test. The gateway uses
+prevents authenticated success in the loopback server test. The two hops must
+have distinct known-hosts identities; a shared `HostKeyAlias` fails closed
+because it cannot bind both keys independently. The gateway uses
 the selected host, port and absolute identity files; its account must be safe
 to render in the private config. The destination uses its own selected identity
 files. Dynamic key paths, multiple hops,

@@ -214,3 +214,25 @@ func TestPrepareSingleJumpProbeRejectsUnreviewedOrChangedRoutes(t *testing.T) {
 		})
 	}
 }
+
+func TestSingleJumpRejectsCollidingKnownHostIdentity(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName target.example.test\n User destination\n HostKeyAlias shared-pin\n ProxyJump jump\nHost jump\n HostName jump.example.test\n User gateway\n HostKeyAlias shared-pin\n")
+	target, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jump, err := ResolveStatic(config, "", "jump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, digest := ed25519FixtureKey()
+	if entry, err := MatchSingleJumpED25519HostKey(config, "", target, jump, target, candidate, digest); len(entry.KnownHostsLine()) != 0 || !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("two destinations sharing a pin identity accepted: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if plan, err := PrepareSingleJumpProbe(config, "", target, jump, syntheticJumpPin("shared-pin", 'a')); plan != nil || !errors.Is(err, ErrProbeUnsupported) {
+			t.Fatalf("one pin for both hops accepted: %v", err)
+		}
+	}
+}

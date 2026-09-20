@@ -44,7 +44,7 @@ func PrepareSingleJumpProbe(userConfig, systemConfig string, target, jump Select
 	if err != nil {
 		return nil, err
 	}
-	if targetToken == jumpToken && (target.HostName != jump.HostName || target.Port != jump.Port) {
+	if targetToken == jumpToken {
 		return nil, ErrProbeUnsupported
 	}
 	if err := validateJumpPins(knownHostsSnapshot, targetToken, jumpToken); err != nil {
@@ -170,7 +170,7 @@ func validateSingleJumpRoute(userConfig, systemConfig string, target, jump Selec
 	if err != nil {
 		return err
 	}
-	if targetToken == jumpToken && (target.HostName != jump.HostName || target.Port != jump.Port) {
+	if targetToken == jumpToken {
 		return ErrProbeUnsupported
 	}
 	return nil
@@ -198,6 +198,9 @@ func safeProbeConfigAtom(value string) bool {
 }
 
 func validateJumpPins(data []byte, targetToken, jumpToken string) error {
+	if targetToken == jumpToken {
+		return ErrProbeUnsupported
+	}
 	if len(data) == 0 || len(data) > 1<<20 {
 		return ErrUnresolved
 	}
