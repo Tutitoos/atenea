@@ -117,6 +117,111 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 	}
 }
 
+func TestPrivateDirectTrustStoreExplicitRotation(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("private pin storage is implemented on macOS and Linux")
+	}
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName host.example.test\n User person\n Port 2222\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstKey, firstFingerprint := ed25519FixtureKey()
+	parts := strings.Fields(firstKey)
+	blob, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob[len(blob)-1] ^= 1
+	secondKey := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(blob)
+	secondDigest := sha256.Sum256(blob)
+	secondFingerprint := "SHA256:" + base64.RawStdEncoding.EncodeToString(secondDigest[:])
+	confirm := func(key, fingerprint string) ConfirmedDirectHostKey {
+		t.Helper()
+		entry, err := MatchDirectED25519HostKey(config, "", selection, key, fingerprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		confirmed, err := ConfirmDirectED25519HostKey(config, "", selection, entry, fingerprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return confirmed
+	}
+	first := confirm(firstKey, firstFingerprint)
+	second := confirm(secondKey, secondFingerprint)
+	store, err := OpenPrivateDirectTrustStore(filepath.Join(root, "app-trust"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rotate(config, "", selection, firstFingerprint, second); !errors.Is(err, ErrTrustNotEnrolled) {
+		t.Fatalf("rotation created trust without an old pin: %v", err)
+	}
+	if err := store.Enroll(config, "", selection, first); err != nil {
+		t.Fatal(err)
+	}
+	priorPlan, err := store.PrepareEnrolledDirectProbe(config, "", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = priorPlan.Close() }()
+	if args := priorPlan.Arguments(); len(args) != 0 {
+		t.Fatal("enrolled plan exposed arguments that bypass trust revalidation")
+	}
+	if err := store.Rotate(config, "", selection, secondFingerprint, second); !errors.Is(err, ErrFingerprintMismatch) {
+		t.Fatalf("rotation ignored old fingerprint mismatch: %v", err)
+	}
+	if err := store.Rotate(config, "", selection, firstFingerprint, ConfirmedDirectHostKey{}); !errors.Is(err, ErrChanged) {
+		t.Fatalf("rotation accepted an unconfirmed new pin: %v", err)
+	}
+	if err := store.Rotate(config, "", selection, firstFingerprint, first); !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("rotation accepted an unchanged pin: %v", err)
+	}
+	unlock, err := priorPlan.trustLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rotate(config, "", selection, firstFingerprint, second); !errors.Is(err, ErrTrustBusy) {
+		t.Fatalf("concurrent rotation bypassed lock: %v", err)
+	}
+	unlock()
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); err != nil || got != firstFingerprint {
+		t.Fatalf("rejected rotation changed pin: %q, %v", got, err)
+	}
+	if err := store.Rotate(config, "", selection, firstFingerprint, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := priorPlan.Revalidate(); !errors.Is(err, ErrChanged) {
+		t.Fatalf("pre-rotation probe retained old trust: %v", err)
+	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); err != nil || got != secondFingerprint {
+		t.Fatalf("approved rotation did not replace pin: %q, %v", got, err)
+	}
+	if err := store.Enroll(config, "", selection, first); !errors.Is(err, ErrFingerprintMismatch) {
+		t.Fatalf("old pin was re-enrolled: %v", err)
+	}
+	plan, err := store.PrepareEnrolledDirectProbe(config, "", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	stored, err := os.ReadFile(filepath.Join(plan.root, "known_hosts"))
+	if err != nil || string(stored) != string(second.entry.KnownHostsLine()) {
+		t.Fatalf("probe used wrong post-rotation pin: %v", err)
+	}
+	files, err := os.ReadDir(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.Contains(file.Name(), ".pending-") {
+			t.Fatalf("rotation left temporary trust file: %s", file.Name())
+		}
+	}
+}
+
 func TestPrivateDirectTrustStoreRejectsUnsafePaths(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("private pin storage is implemented on macOS and Linux")

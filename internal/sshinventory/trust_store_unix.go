@@ -21,3 +21,27 @@ func openPrivatePin(root *os.Root, name string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+func lockPrivateTrustRecord(root *os.Root, name string) (func(), error) {
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	info, statErr := root.Lstat(name)
+	opened, openErr := file.Stat()
+	if statErr != nil || openErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !os.SameFile(info, opened) {
+		_ = file.Close()
+		return nil, ErrProbeUnsupported
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, ErrTrustBusy
+		}
+		return nil, err
+	}
+	return func() {
+		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}

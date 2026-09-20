@@ -148,11 +148,20 @@ permissions. Operations use an opened directory handle and reject a store
 directory replaced after opening, so writes remain inside the original
 app-owned directory. `Enroll` is create-only:
 the same key is idempotent, while a changed key at the same config/account/
-host binding is rejected for separate rotation review. The filename binds the
+host binding is rejected. `Rotate` requires the approved old fingerprint and
+a separately confirmed new key. It locks the record, writes and syncs the
+replacement in a private temporary file, then replaces the old pin atomically.
+An absent, malformed, stale or unconfirmed pin fails closed. The library
+cannot verify that a person supplied either review; the UI must gather both
+explicitly. The filename binds the
 config snapshot, account, port and OpenSSH known-hosts name, so a changed
 config cannot silently reuse the old record. `PrepareEnrolledDirectProbe`
-reloads that exact pin and still uses the restricted diagnostic plan; no
-personal `known_hosts` file is edited. The caller must choose and protect the
+reloads that exact pin and still uses the restricted diagnostic plan. Its
+executor rechecks the stored pin and holds the record lock during the probe,
+so a plan created before rotation cannot authenticate with the retired key.
+Raw OpenSSH arguments are withheld for enrolled plans to keep this check in
+the execution path. No personal `known_hosts` file is edited. The caller must
+choose and protect the
 parent directory, and the UI must gather the user's confirmation. Windows
 enrollment fails closed until native ACL validation is implemented. A stored
 pin does not authorize prompts, commands, credentials or agent installation.
@@ -162,3 +171,5 @@ connectivity and remote-agent status. A stale config or malformed pin fails
 closed; the reported fingerprint alone does not authenticate a live host.
 The loopback `sshd` fixture exercises confirmation, enrollment, reload and
 client-observed public-key authentication with disposable host and client keys.
+It also rotates the stored pin to another confirmed fixture key and observes
+that the original server key is then rejected as changed.

@@ -2,6 +2,7 @@ package sshinventory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -228,6 +229,37 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	enrolledResult, err := ExecuteDirectProbe(context.Background(), ssh, enrolledPlan)
 	if err != nil || !enrolledResult.ClientReportedAuthenticated {
 		t.Fatalf("enrolled pin did not authenticate to fixture: %+v, %v", enrolledResult, err)
+	}
+	rotatedOutput, err := exec.Command(keygen, "-l", "-E", "sha256", "-f", filepath.Join(root, "client.pub")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("fixture replacement fingerprint: %v", err)
+	}
+	rotatedFields := strings.Fields(string(rotatedOutput))
+	if len(rotatedFields) < 2 {
+		t.Fatal("fixture replacement fingerprint missing")
+	}
+	rotatedEntry, err := MatchDirectED25519HostKey(clientConfig, "", selection, clientFields[0]+" "+clientFields[1], rotatedFields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := ConfirmDirectED25519HostKey(clientConfig, "", selection, rotatedEntry, rotatedFields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rotate(clientConfig, "", selection, fingerprintFields[1], rotated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExecuteDirectProbe(context.Background(), ssh, enrolledPlan); !errors.Is(err, ErrChanged) {
+		t.Fatalf("pre-rotation enrolled plan remained executable: %v", err)
+	}
+	rotatedPlan, err := store.PrepareEnrolledDirectProbe(clientConfig, "", selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rotatedPlan.Close() }()
+	rotatedResult, err := ExecuteDirectProbe(context.Background(), ssh, rotatedPlan)
+	if err != nil || rotatedResult.ClientReportedAuthenticated || rotatedResult.Failure != ProbeFailureHostKeyChanged {
+		t.Fatalf("rotated pin silently trusted the old server: %+v, %v", rotatedResult, err)
 	}
 	noKeyConfig := filepath.Join(root, "no_key_config")
 	writeFixture(t, noKeyConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n", account.Username, port))

@@ -19,12 +19,15 @@ type ProbePlan struct {
 	userConfig   string
 	systemConfig string
 	selection    Selection
+	trustCheck   func() error
+	trustLock    func() (func(), error)
 }
 
 // Arguments returns a copy of the restricted OpenSSH arguments. Changing the
-// returned slice cannot modify this plan. It is empty after Close.
+// returned slice cannot modify this plan. It is empty after Close and for an
+// enrolled plan, whose trust must be rechecked under the executor's lock.
 func (p *ProbePlan) Arguments() []string {
-	if p == nil || p.root == "" {
+	if p == nil || p.root == "" || p.trustCheck != nil {
 		return nil
 	}
 	return append([]string(nil), p.args...)
@@ -44,7 +47,13 @@ func (p *ProbePlan) Revalidate() error {
 	if p == nil || p.root == "" {
 		return ErrUnresolved
 	}
-	return RevalidateSelection(p.userConfig, p.systemConfig, p.selection)
+	if err := RevalidateSelection(p.userConfig, p.systemConfig, p.selection); err != nil {
+		return err
+	}
+	if p.trustCheck != nil {
+		return p.trustCheck()
+	}
+	return nil
 }
 
 // PrepareDirectProbe builds a direct-route diagnostic plan. The caller must
@@ -145,6 +154,8 @@ func (p *ProbePlan) Close() error {
 	p.userConfig = ""
 	p.systemConfig = ""
 	p.selection = Selection{}
+	p.trustCheck = nil
+	p.trustLock = nil
 	return os.RemoveAll(root)
 }
 
