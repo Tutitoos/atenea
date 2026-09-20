@@ -228,6 +228,13 @@ parent directory, and the UI must gather the user's confirmation. The Windows
 storage tests passed under two native account sessions; that does not establish
 Windows controller, vault, connector or GUI readiness. A stored
 pin does not authorize prompts, commands, credentials or agent installation.
+For a supported single-hop route, `EnrollSingleJumpPin` validates the current
+route and enrolls each independently confirmed hop. Enrollment is per pin: a
+failure after the first write leaves one pin, and
+`PrepareEnrolledSingleJumpProbe` refuses to proceed until both are present.
+It rechecks both records and locks them in a stable order during execution;
+rotation of either invalidates an earlier plan. This jump executor remains
+Unix-only. The two pins do not authorize a remote command or prompt.
 `EnrolledDirectHostKeyFingerprint` reads the current local pin without a
 network call, so the UI can show the approved fingerprint separately from
 connectivity and remote-agent status. A stale config or malformed pin fails
