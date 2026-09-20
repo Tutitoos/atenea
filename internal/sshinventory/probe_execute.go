@@ -77,6 +77,9 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 			result, err := inspectProbeLog(logPath, plan.selection, plan.jump != nil, runErr, false)
 			if err == nil && plan.jump != nil && result.Failure == ProbeFailureUnknown {
 				result.Failure = proxyStderr.classify(runErr)
+				if result.Failure == ProbeFailureAuthRejected && noAvailableExplicitIdentity(plan.jump.IdentityFiles) {
+					result.Failure = ProbeFailureAuthRequired
+				}
 			}
 			return result, err
 		case <-ticker.C:
