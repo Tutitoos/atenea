@@ -54,14 +54,21 @@ connection sharing and automatic host-key updates. Password prompts are
 disabled for this diagnostic plan. `Close` removes its temporary files.
 The builder revalidates the selection before and after creating the temporary
 files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
-config and refuses a stale or closed plan. A future executor must invoke it
-immediately before use.
+config and refuses a stale or closed plan.
 
-This is only a command plan. No code here executes it, interprets OpenSSH
-errors, enrolls keys, proves authenticated connectivity or supplies a stable
-target identity. A future executor must recheck the config snapshot and
-reviewed trust evidence immediately before use, impose a bounded lifetime,
-and verify platform-specific private-file access (especially Windows ACLs).
+`ExecuteDirectProbe` revalidates the plan, starts the local OpenSSH client with
+an eight-second limit and stops as soon as its private `-E` diagnostic log
+reports public-key authentication. It never opens a remote command or returns
+raw logs. Server-supplied banners are discarded separately; the loopback test
+includes a forged authentication banner to guard this boundary. Failed-process
+classification is advisory. The successful result is explicitly
+client-reported authentication to the supplied pin, not a durable device
+identity, authorization, agent-installation check or permission to send a
+prompt. The caller must still establish independent review of the pin and
+close the plan. Platform-specific private-file access, especially Windows
+ACLs, still needs native validation.
+
+No code here enrolls keys or supplies a stable target identity.
 ProxyJump and ProxyCommand routes remain unresolved until they can be probed
 without changing the configured path or its security properties.
 
@@ -73,7 +80,7 @@ known-hosts copy. The test skips when the local OpenSSH server fixture is
 unavailable and on Windows. It does not establish native Windows support or
 trust in any external host.
 
-`ClassifyOpenSSHFailure` converts a bounded failed-process stderr into an
+`ClassifyOpenSSHFailure` converts bounded failed-process diagnostics into an
 advisory hint for timeout, DNS, route, host-key and authentication rejection.
 It does not keep raw logs or treat a zero exit or `Authenticated to` text as
 proof of authentication. OpenSSH diagnostics can include server-controlled

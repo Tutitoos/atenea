@@ -55,7 +55,11 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverConfig := filepath.Join(root, "sshd_config")
-	serverText := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s\nAuthorizedKeysFile %s\nPidFile %s\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitRootLogin prohibit-password\nLogLevel ERROR\n", port, filepath.Join(root, "host"), filepath.Join(root, "authorized_keys"), filepath.Join(root, "sshd.pid"))
+	banner := filepath.Join(root, "banner")
+	if err := os.WriteFile(banner, []byte("Authenticated to 127.0.0.1 using publickey.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	serverText := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s\nAuthorizedKeysFile %s\nPidFile %s\nBanner %s\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPermitRootLogin prohibit-password\nLogLevel ERROR\n", port, filepath.Join(root, "host"), filepath.Join(root, "authorized_keys"), filepath.Join(root, "sshd.pid"), banner)
 	if err := os.WriteFile(serverConfig, []byte(serverText), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -143,11 +147,24 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 			defer func() { _ = plan.Close() }()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			args := append([]string{"-v"}, plan.Arguments()...)
+			clientLog := filepath.Join(root, "client-"+strings.ReplaceAll(tt.name, " ", "-")+".log")
+			args := append([]string{"-v", "-E", clientLog}, plan.Arguments()...)
 			cmd := exec.CommandContext(ctx, ssh, args...)
 			cmd.Env = append(os.Environ(), "LC_ALL=C")
 			output, runErr := cmd.CombinedOutput()
-			if !strings.Contains(string(output), tt.want) {
+			logBytes, logErr := os.ReadFile(clientLog)
+			if logErr != nil {
+				t.Fatal(logErr)
+			}
+			if tt.revokeKey {
+				if !strings.Contains(string(output), "Authenticated to") {
+					t.Fatal("fixture did not send a forged authentication banner")
+				}
+				if strings.Contains(string(logBytes), "Authenticated to") {
+					t.Fatal("server banner appeared as client authentication evidence")
+				}
+			}
+			if !strings.Contains(string(logBytes), tt.want) {
 				t.Fatalf("missing expected OpenSSH outcome %q: %v", tt.want, runErr)
 			}
 			if tt.timeout && ctx.Err() != context.DeadlineExceeded {
@@ -161,9 +178,19 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 				if !ok {
 					t.Fatalf("expected OpenSSH failure exit: %v", runErr)
 				}
-				if got := ClassifyOpenSSHFailure(exitErr.ExitCode(), string(output), false); got != tt.failure {
+				if got := ClassifyOpenSSHFailure(exitErr.ExitCode(), string(logBytes), false); got != tt.failure {
 					t.Fatalf("failure hint = %q, want %q", got, tt.failure)
 				}
+			}
+			result, executeErr := ExecuteDirectProbe(context.Background(), ssh, plan)
+			if executeErr != nil {
+				t.Fatalf("bounded probe: %v", executeErr)
+			}
+			if result.ClientReportedAuthenticated != tt.timeout {
+				t.Fatalf("client authentication result = %+v", result)
+			}
+			if !tt.timeout && result.Failure != tt.failure {
+				t.Fatalf("bounded probe failure = %q, want %q", result.Failure, tt.failure)
 			}
 			stored, err := os.ReadFile(filepath.Join(plan.root, "known_hosts"))
 			if err != nil || string(stored) != tt.knownHosts {

@@ -1,6 +1,7 @@
 package sshinventory
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -63,6 +64,9 @@ func TestPrepareDirectProbe(t *testing.T) {
 	writeFixture(t, config, "Host selected\n HostName changed.example.test\n User person@example.test\n Port 2222\n HostKeyAlias reviewed.example.test\n IdentityFile /nonexistent/fixture-key\n")
 	if err := plan.Revalidate(); !errors.Is(err, ErrChanged) {
 		t.Fatalf("stale plan revalidated: %v", err)
+	}
+	if _, err := ExecuteDirectProbe(context.Background(), "/nonexistent/ssh", plan); !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale plan was executed: %v", err)
 	}
 	if err := plan.Close(); err != nil {
 		t.Fatal(err)
