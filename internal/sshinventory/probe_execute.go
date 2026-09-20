@@ -136,6 +136,9 @@ func noAvailableExplicitIdentity(paths []string) bool {
 		return true
 	}
 	for _, path := range paths {
+		if path == "none" {
+			continue
+		}
 		if path == "" || strings.ContainsAny(path, "%${}") || (strings.HasPrefix(path, "~") && !strings.HasPrefix(path, "~/")) {
 			return false
 		}

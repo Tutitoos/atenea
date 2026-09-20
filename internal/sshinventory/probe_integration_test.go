@@ -276,6 +276,21 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err != nil || noKeyResult.ClientReportedAuthenticated || noKeyResult.Failure != ProbeFailureAuthRequired {
 		t.Fatalf("no selected credential: %+v, %v", noKeyResult, err)
 	}
+	noneConfig := filepath.Join(root, "none_key_config")
+	writeFixture(t, noneConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n IdentityFile none\n", account.Username, port))
+	noneSelection, err := ResolveStatic(noneConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonePlan, err := PrepareDirectProbe(noneConfig, "", noneSelection, []byte(hostEntry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = nonePlan.Close() }()
+	noneResult, err := ExecuteDirectProbe(context.Background(), ssh, nonePlan)
+	if err != nil || noneResult.ClientReportedAuthenticated || noneResult.Failure != ProbeFailureAuthRequired {
+		t.Fatalf("explicitly disabled selected identity: %+v, %v", noneResult, err)
+	}
 	missingKeyConfig := filepath.Join(root, "missing_key_config")
 	writeFixture(t, missingKeyConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "absent-client-key")))
 	missingKeySelection, err := ResolveStatic(missingKeyConfig, "", "selected")

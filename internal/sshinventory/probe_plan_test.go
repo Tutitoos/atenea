@@ -370,6 +370,64 @@ func TestDirectProbeSuppressesSelectedAgentSettings(t *testing.T) {
 	}
 }
 
+func TestDirectProbeRespectsIdentityFileNone(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	for _, mixed := range []bool{false, true} {
+		name := "none-only"
+		if mixed {
+			name = "none-and-explicit"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			config := filepath.Join(root, "config")
+			contents := "Host selected\n HostName example.test\n User person\n IdentityFile none\n"
+			want := []string{"none"}
+			if mixed {
+				key := filepath.Join(root, "client-key")
+				if err := os.WriteFile(key, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				contents += " IdentityFile " + key + "\n"
+				want = append(want, key)
+			}
+			writeFixture(t, config, contents)
+			selection, err := ResolveStatic(config, "", "selected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+			if err != nil {
+				t.Fatalf("original ssh -G: %v: %s", err, original)
+			}
+			if got := identityFileSettings(string(original)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("original identity files = %v, want %v", got, want)
+			}
+			plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("restricted ssh -G: %v: %s", err, output)
+			}
+			if got := identityFileSettings(string(output)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("restricted identity files = %v, want %v", got, want)
+			}
+			auth := "pubkeyauthentication false"
+			if mixed {
+				auth = "pubkeyauthentication true"
+			}
+			if !strings.Contains(string(output), auth) || noAvailableExplicitIdentity(selection.IdentityFiles) == mixed {
+				t.Fatalf("wrong public-key availability for %s", name)
+			}
+		})
+	}
+}
+
 func identityFileSettings(settings string) []string {
 	var files []string
 	for _, line := range strings.Split(settings, "\n") {

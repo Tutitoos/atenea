@@ -76,9 +76,13 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	if len(knownHostsSnapshot) == 0 || len(knownHostsSnapshot) > 1<<20 {
 		return nil, ErrUnresolved
 	}
+	hasExplicitIdentity := false
 	for _, path := range selection.IdentityFiles {
-		if path == "" || strings.EqualFold(path, "none") || strings.ContainsAny(path, "\x00\r\n") {
+		if path == "" || strings.ContainsAny(path, "\x00\r\n") {
 			return nil, ErrUnresolved
+		}
+		if path != "none" {
+			hasExplicitIdentity = true
 		}
 	}
 	root, err := os.MkdirTemp("", "atenea-ssh-probe-")
@@ -128,11 +132,13 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	if selection.HostKeyAlias != "" {
 		args = append(args, "-o", "HostKeyAlias="+selection.HostKeyAlias)
 	}
-	if len(selection.IdentityFiles) == 0 {
+	if !hasExplicitIdentity {
 		args = append(args, "-o", "PubkeyAuthentication=no")
 	}
 	for _, identity := range selection.IdentityFiles {
-		args = append(args, "-i", identity)
+		if identity != "none" {
+			args = append(args, "-i", identity)
+		}
 	}
 	args = append(args, selection.HostName)
 	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {

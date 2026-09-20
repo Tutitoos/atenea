@@ -68,8 +68,11 @@ commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
 connection sharing and automatic host-key updates. Password prompts are
 disabled for this diagnostic plan. A leading `IdentityFile=none` prevents
 OpenSSH from falling back to implicit personal keys if the selected
-`IdentityFile` is missing. When the selected config specifies no identity,
-public-key authentication is disabled and a rejected login is reported as
+`IdentityFile` is missing. A selected `IdentityFile none` is treated as an
+explicit absence of a key; if other identity files are selected, they remain
+eligible and `none` is not passed twice. When the selected config specifies
+no usable identity, public-key authentication is disabled and a rejected login
+is reported as
 `authentication_required`. If every explicit identity file is definitely
 absent at the time of a rejected login, the same hint is returned. Dynamic
 paths and existing files stay `authentication_rejected`: file presence alone

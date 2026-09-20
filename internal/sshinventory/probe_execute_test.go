@@ -19,6 +19,8 @@ func TestNoAvailableExplicitIdentity(t *testing.T) {
 		want  bool
 	}{
 		{"no selected identity", nil, true},
+		{"explicitly disabled identity", []string{"none"}, true},
+		{"disabled and existing identity", []string{"none", existing}, false},
 		{"selected file missing", []string{missing}, true},
 		{"all selected files missing", []string{missing, missing + "-two"}, true},
 		{"one selected file exists", []string{missing, existing}, false},
