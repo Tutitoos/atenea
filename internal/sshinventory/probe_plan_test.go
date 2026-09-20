@@ -212,7 +212,7 @@ func identityFileSettings(settings string) []string {
 	var files []string
 	for _, line := range strings.Split(settings, "\n") {
 		if file, ok := strings.CutPrefix(line, "identityfile "); ok {
-			files = append(files, file)
+			files = append(files, strings.TrimSuffix(file, "\r"))
 		}
 	}
 	return files

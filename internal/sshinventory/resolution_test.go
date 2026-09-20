@@ -105,13 +105,14 @@ func TestUserTildeIncludeUsesHomeDirectory(t *testing.T) {
 func TestResolveStaticNeverRunsDynamicMatchOrProxy(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "would-have-run")
+	command := sideEffectCommand(t, marker)
 	config := filepath.Join(root, "config")
-	writeFixture(t, config, "Host selected\n  ProxyCommand touch "+marker+"\n  HostName example.invalid\n")
+	writeFixture(t, config, "Host selected\n  ProxyCommand "+command+"\n  HostName example.invalid\n")
 	got, err := ResolveStatic(config, "", "selected")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ProxyCommand != "touch "+marker {
+	if got.ProxyCommand != command {
 		t.Fatalf("ProxyCommand was not preserved: %q", got.ProxyCommand)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -121,7 +122,7 @@ func TestResolveStaticNeverRunsDynamicMatchOrProxy(t *testing.T) {
 	if _, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) {
 		t.Fatalf("quoted ProxyCommand was reconstructed: %v", err)
 	}
-	writeFixture(t, config, "Match exec \"touch "+marker+"\"\nHost selected\n  HostName example.invalid\n")
+	writeFixture(t, config, "Match exec \""+command+"\"\nHost selected\n  HostName example.invalid\n")
 	if _, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) {
 		t.Fatalf("dynamic Match accepted: %v", err)
 	}

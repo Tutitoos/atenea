@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,17 @@ func writeFixture(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func sideEffectCommand(t *testing.T, path string) string {
+	t.Helper()
+	if strings.ContainsAny(path, " \t\r\n&|<>^\"'") {
+		t.Skip("temporary fixture path cannot be used safely as an unquoted shell argument")
+	}
+	if runtime.GOOS == "windows" {
+		return "cmd /c mkdir " + filepath.ToSlash(path)
+	}
+	return "touch " + path
 }
 
 func aliases(hosts []Host) []string {
@@ -61,7 +73,7 @@ func TestScanNeverRunsMatchExecAndMarksConditionalIncludes(t *testing.T) {
 	marker := filepath.Join(root, "would-have-run")
 	config := filepath.Join(root, "config")
 	writeFixture(t, filepath.Join(root, "inside"), "Host uncertain\n")
-	writeFixture(t, config, "Host certain\nMatch exec \"touch "+marker+"\"\n  Include "+filepath.Join(root, "inside")+"\nHost certain\n")
+	writeFixture(t, config, "Host certain\nMatch exec \""+sideEffectCommand(t, marker)+"\"\n  Include "+filepath.Join(root, "inside")+"\nHost certain\n")
 
 	got, err := Scan(config, "")
 	if err != nil {
@@ -100,7 +112,7 @@ func TestScanMatchAllIsUnconditional(t *testing.T) {
 	}
 	if ssh, err := exec.LookPath("ssh"); err == nil {
 		output, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
-		if err != nil || !strings.Contains(string(output), "port 2222\n") {
+		if err != nil || !strings.Contains(strings.ReplaceAll(string(output), "\r\n", "\n"), "port 2222\n") {
 			t.Fatalf("OpenSSH disagrees about Match all: %v: %s", err, output)
 		}
 	}
@@ -136,8 +148,9 @@ func TestStaticOriginalHostConditionFiltersInclude(t *testing.T) {
 			{"blocked.lab", ""},
 		} {
 			output, err := exec.Command(ssh, "-G", "-F", config, tt.alias).CombinedOutput()
-			if err != nil || (tt.user != "" && !strings.Contains(string(output), "user "+tt.user+"\n")) ||
-				(tt.user == "" && strings.Contains(string(output), "user fixture\n")) {
+			settings := strings.ReplaceAll(string(output), "\r\n", "\n")
+			if err != nil || (tt.user != "" && !strings.Contains(settings, "user "+tt.user+"\n")) ||
+				(tt.user == "" && strings.Contains(settings, "user fixture\n")) {
 				t.Fatalf("OpenSSH disagrees about originalhost %q: %v: %s", tt.alias, err, output)
 			}
 		}
