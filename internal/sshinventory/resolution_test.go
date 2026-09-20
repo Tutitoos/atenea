@@ -139,6 +139,25 @@ func TestResolveStaticNeverRunsDynamicMatchOrProxy(t *testing.T) {
 	}
 }
 
+func TestResolveStaticDoesNotStripProxyCommandHash(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n ProxyCommand none # extra command text\n")
+	output, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("ssh -G: %v: %s", err, output)
+	}
+	if !strings.Contains(string(output), "proxycommand none # extra command text") {
+		t.Fatalf("fixture did not preserve the command suffix: %s", output)
+	}
+	if selected, err := ResolveStatic(config, "", "selected"); !errors.Is(err, ErrUnresolved) || selected.Snapshot != "" {
+		t.Fatalf("ProxyCommand suffix was treated as a disabled proxy: %+v, %v", selected, err)
+	}
+}
+
 func TestResolveStaticRejectsDynamicTargetAndPreservesProxyOrder(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config")

@@ -232,10 +232,11 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 		return nil
 	}
 	if key == "proxycommand" {
-		// Rejoining quoted shell words would change the user's route. The
-		// first version supports only unquoted, space-separated commands.
-		if strings.ContainsAny(raw, "\"'\\") {
-			return fmt.Errorf("%w: quoted ProxyCommand", ErrUnresolved)
+		// OpenSSH treats the rest of a ProxyCommand line as command text,
+		// including a # that our generic lexer would treat as a comment.
+		// Refuse syntax that rejoining fields would silently change.
+		if strings.ContainsAny(raw, "\"'\\#") {
+			return fmt.Errorf("%w: unsupported ProxyCommand syntax", ErrUnresolved)
 		}
 		if len(args) == 0 {
 			return fmt.Errorf("%w: empty ProxyCommand", ErrUnresolved)

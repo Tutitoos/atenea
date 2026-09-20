@@ -37,7 +37,10 @@ conditions deliberately reports unresolved state rather than running them.
 `Host` blocks, ordered `Include` files and OpenSSH's first-value rule for
 `HostName`, `User`, `Port`, `HostKeyAlias`, `ProxyJump` and `ProxyCommand`;
 `IdentityFile` entries accumulate. The proxy command is returned as text and
-is never run by resolution. `Match all` and a single `Match originalhost`
+is never run by resolution. A `ProxyCommand` containing `#`, quotes or escapes
+is unresolved because OpenSSH can treat its entire suffix as command text;
+stripping it could falsely classify an active route as disabled. `Match all`
+and a single `Match originalhost`
 pattern list are supported; other `Match` criteria,
 canonicalization, dynamic target tokens and unrecognized active options fail
 with `ErrUnresolved`. A before/after inventory fingerprint detects ordinary
