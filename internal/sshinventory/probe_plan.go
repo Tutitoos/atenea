@@ -2,6 +2,7 @@ package sshinventory
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ var ErrProbeUnsupported = errors.New("ssh inventory: diagnostic probe unsupporte
 type ProbePlan struct {
 	args         []string
 	root         string
+	rootInfo     os.FileInfo
 	userConfig   string
 	systemConfig string
 	selection    Selection
@@ -46,6 +48,9 @@ func (p *ProbePlan) Snapshot() string {
 func (p *ProbePlan) Revalidate() error {
 	if p == nil || p.root == "" {
 		return ErrUnresolved
+	}
+	if !privateProbeDirectory(p.root, p.rootInfo) {
+		return ErrProbeUnsupported
 	}
 	if err := RevalidateSelection(p.userConfig, p.systemConfig, p.selection); err != nil {
 		return err
@@ -85,22 +90,23 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 			hasExplicitIdentity = true
 		}
 	}
-	root, err := os.MkdirTemp("", "atenea-ssh-probe-")
+	root, err := newPrivateProbeDirectory()
 	if err != nil {
 		return nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(root) }
-	if err := os.Chmod(root, 0o700); err != nil {
+	rootInfo, err := os.Lstat(root)
+	if err != nil || !privateProbeDirectory(root, rootInfo) {
 		cleanup()
-		return nil, err
+		return nil, ErrProbeUnsupported
 	}
 	config := filepath.Join(root, "config")
 	knownHosts := filepath.Join(root, "known_hosts")
-	if err := os.WriteFile(config, nil, 0o600); err != nil {
+	if err := createPrivateProbeFile(config, nil); err != nil {
 		cleanup()
 		return nil, err
 	}
-	if err := os.WriteFile(knownHosts, knownHostsSnapshot, 0o600); err != nil {
+	if err := createPrivateProbeFile(knownHosts, knownHostsSnapshot); err != nil {
 		cleanup()
 		return nil, err
 	}
@@ -147,7 +153,42 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 	}
 	selection.IdentityFiles = append([]string(nil), selection.IdentityFiles...)
 	selection.Sources = append([]Diagnostic(nil), selection.Sources...)
-	return &ProbePlan{args: args, root: root, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
+	return &ProbePlan{args: args, root: root, rootInfo: rootInfo, userConfig: userConfig, systemConfig: systemConfig, selection: selection}, nil
+}
+
+func createPrivateProbeFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	remove := func() {
+		_ = file.Close()
+		_ = os.Remove(path)
+	}
+	if err := preparePrivateTrustFile(path, file); err != nil {
+		remove()
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil || !privateTrustFile(info, file) {
+		remove()
+		return ErrProbeUnsupported
+	}
+	if len(data) != 0 {
+		n, err := file.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			remove()
+			return err
+		}
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 func activeProxyRoute(selection Selection) bool {
@@ -161,13 +202,18 @@ func (p *ProbePlan) Close() error {
 		return nil
 	}
 	root := p.root
+	rootInfo := p.rootInfo
 	p.root = ""
+	p.rootInfo = nil
 	p.args = nil
 	p.userConfig = ""
 	p.systemConfig = ""
 	p.selection = Selection{}
 	p.trustCheck = nil
 	p.trustLock = nil
+	if !privateProbeDirectory(root, rootInfo) {
+		return ErrProbeUnsupported
+	}
 	return os.RemoveAll(root)
 }
 

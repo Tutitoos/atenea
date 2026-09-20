@@ -65,8 +65,13 @@ builder cannot verify that review. A temporary empty config suppresses the
 user and system configuration during a later probe, while the supplied
 known-hosts copy is the sole trust source. The arguments disable remote
 commands, PTY, stdin, agent use and forwarding, port forwarding, local commands,
-connection sharing and automatic host-key updates. Password prompts are
-disabled for this diagnostic plan. A leading `IdentityFile=none` prevents
+connection sharing and automatic host-key updates. The temporary probe directory
+and its config, pin and client log are checked for private permissions on
+macOS/Linux and a protected account/LocalSystem ACL on Windows. A replaced
+directory is rejected before execution or cleanup. The Windows directory is
+created under the current account's local cache directory with its ACL set at
+creation time. Password prompts are disabled for this diagnostic plan. A leading
+`IdentityFile=none` prevents
 OpenSSH from falling back to implicit personal keys if the selected
 `IdentityFile` is missing. A selected `IdentityFile none` is treated as an
 explicit absence of a key; if other identity files are selected, they remain

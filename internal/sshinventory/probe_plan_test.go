@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,19 +25,43 @@ func TestPrepareDirectProbe(t *testing.T) {
 	}
 	root := plan.root
 	t.Cleanup(func() { _ = plan.Close() })
+	if !privateProbeDirectory(root, plan.rootInfo) {
+		t.Fatal("probe directory is not private")
+	}
 	if plan.Snapshot() != selection.Snapshot {
 		t.Fatalf("snapshot = %q", plan.Snapshot())
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "known_hosts")); err != nil || string(got) != string(knownHosts) {
 		t.Fatalf("known_hosts = %q, %v", got, err)
 	}
-	if runtime.GOOS != "windows" {
-		for _, name := range []string{"config", "known_hosts"} {
-			info, err := os.Stat(filepath.Join(root, name))
-			if err != nil || info.Mode().Perm() != 0o600 {
-				t.Fatalf("%s permissions: %v, %v", name, info, err)
-			}
+	for _, name := range []string{"config", "known_hosts"} {
+		file, err := os.Open(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
 		}
+		info, statErr := file.Stat()
+		private := statErr == nil && privateTrustFile(info, file)
+		_ = file.Close()
+		if !private {
+			t.Fatalf("%s is not private: %v", name, statErr)
+		}
+	}
+	logPath := filepath.Join(root, "client.log")
+	if err := createPrivateProbeFile(logPath, nil); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logInfo, statErr := logFile.Stat()
+	privateLog := statErr == nil && privateTrustFile(logInfo, logFile)
+	_ = logFile.Close()
+	if !privateLog {
+		t.Fatalf("diagnostic log is not private: %v", statErr)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
 	}
 	planArgs := plan.Arguments()
 	args := strings.Join(planArgs, "\x00")
@@ -77,6 +100,40 @@ func TestPrepareDirectProbe(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("temporary root remains: %v", err)
+	}
+}
+
+func TestProbePlanRejectsReplacedPrivateDirectory(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := plan.root
+	moved := root + "-moved"
+	t.Cleanup(func() {
+		_ = os.RemoveAll(root)
+		_ = os.RemoveAll(moved)
+	})
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := createPrivateTrustDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Revalidate(); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("replaced directory revalidated: %v", err)
+	}
+	if err := plan.Close(); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("Close removed a replacement directory: %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("Close removed a different directory: %v", err)
 	}
 }
 

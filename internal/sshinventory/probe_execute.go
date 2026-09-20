@@ -39,11 +39,7 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 		defer unlock()
 	}
 	logPath := filepath.Join(plan.root, "client.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return ProbeResult{}, err
-	}
-	if err := logFile.Close(); err != nil {
+	if err := createPrivateProbeFile(logPath, nil); err != nil {
 		return ProbeResult{}, err
 	}
 	defer func() { _ = os.Remove(logPath) }()
