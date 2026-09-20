@@ -441,4 +441,23 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err != nil || missingResult.ClientReportedAuthenticated || missingResult.Failure != ProbeFailureAuthRequired {
 		t.Fatalf("gateway without a key diagnosis = %+v, %v; want %s", missingResult, err, ProbeFailureAuthRequired)
 	}
+	missingTargetConfig := filepath.Join(root, "target_missing_identity_config")
+	writeFixture(t, missingTargetConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias target-pin\n ProxyJump jump\n IdentityFile none\nHost jump\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias jump-pin\n IdentityFile %s\n", account.Username, port, account.Username, port, filepath.Join(root, "client")))
+	targetWithoutKey, err := ResolveStatic(missingTargetConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingJump, err := ResolveStatic(missingTargetConfig, "", "jump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetMissingPlan, err := PrepareSingleJumpProbe(missingTargetConfig, "", targetWithoutKey, workingJump, jumpPins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = targetMissingPlan.Close() }()
+	targetMissingResult, err := ExecuteDirectProbe(context.Background(), ssh, targetMissingPlan)
+	if err != nil || targetMissingResult.ClientReportedAuthenticated || targetMissingResult.Failure != ProbeFailureAuthRequired {
+		t.Fatalf("destination without a key diagnosis = %+v, %v; want %s", targetMissingResult, err, ProbeFailureAuthRequired)
+	}
 }
