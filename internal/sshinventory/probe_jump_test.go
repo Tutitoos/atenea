@@ -215,6 +215,28 @@ func TestPrepareSingleJumpProbeRejectsUnreviewedOrChangedRoutes(t *testing.T) {
 	}
 }
 
+func TestValidateJumpPinsRequiresTwoCanonicalLines(t *testing.T) {
+	target := "[target.example.test]:2222"
+	jump := "[jump.example.test]:2200"
+	pins := append(syntheticJumpPin(target, 'a'), syntheticJumpPin(jump, 'b')...)
+	if err := validateJumpPins(pins, target, jump); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		candidate []byte
+		want      error
+	}{
+		{append([]byte(nil), pins[:len(pins)-1]...), ErrUnresolved},
+		{append(append([]byte(nil), pins...), '\n'), ErrProbeUnsupported},
+		{[]byte(strings.Replace(string(pins), " ssh-ed25519 ", "\tssh-ed25519\t", 1)), ErrUnresolved},
+		{[]byte(strings.ReplaceAll(string(pins), "\n", "\r\n")), ErrUnresolved},
+	} {
+		if err := validateJumpPins(tt.candidate, target, jump); !errors.Is(err, tt.want) {
+			t.Fatalf("noncanonical two-pin snapshot accepted: %v", err)
+		}
+	}
+}
+
 func TestSingleJumpRejectsCollidingKnownHostIdentity(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "config")
 	writeFixture(t, config, "Host selected\n HostName target.example.test\n User destination\n HostKeyAlias shared-pin\n ProxyJump jump\nHost jump\n HostName jump.example.test\n User gateway\n HostKeyAlias shared-pin\n")

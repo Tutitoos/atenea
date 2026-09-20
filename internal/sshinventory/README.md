@@ -97,7 +97,8 @@ config and refuses a stale or closed plan.
 
 `PrepareSingleJumpProbe` supports one bare, explicitly listed `ProxyJump`
 alias on macOS and Linux. It resolves and revalidates both selections, requires
-plain ED25519 known-hosts pins for both the gateway and destination, and
+exactly two canonical plain ED25519 known-hosts lines, one for the gateway and
+one for the destination, and
 generates a private configuration for the gateway. A changed pin on either hop
 prevents authenticated success in the loopback server test. The two hops must
 have distinct known-hosts identities; a shared `HostKeyAlias` fails closed

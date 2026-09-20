@@ -201,12 +201,15 @@ func validateJumpPins(data []byte, targetToken, jumpToken string) error {
 	if targetToken == jumpToken {
 		return ErrProbeUnsupported
 	}
-	if len(data) == 0 || len(data) > 1<<20 {
+	if len(data) == 0 || len(data) > 1<<20 || data[len(data)-1] != '\n' {
 		return ErrUnresolved
+	}
+	if strings.Count(string(data), "\n") != 2 {
+		return ErrProbeUnsupported
 	}
 	foundTarget, foundJump := false, false
 	seen := make(map[string]bool, 2)
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for _, line := range strings.Split(string(data[:len(data)-1]), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || fields[1] != "ssh-ed25519" ||
 			(fields[0] != targetToken && fields[0] != jumpToken) {
@@ -218,6 +221,9 @@ func validateJumpPins(data []byte, targetToken, jumpToken string) error {
 		seen[fields[0]] = true
 		blob, err := base64.StdEncoding.DecodeString(fields[2])
 		if err != nil || !validED25519Blob(blob) {
+			return ErrUnresolved
+		}
+		if line != fields[0]+" ssh-ed25519 "+base64.StdEncoding.EncodeToString(blob) {
 			return ErrUnresolved
 		}
 		foundTarget = foundTarget || fields[0] == targetToken
