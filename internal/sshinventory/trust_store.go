@@ -146,6 +146,36 @@ func (s *DirectTrustStore) PrepareEnrolledDirectProbe(userConfig, systemConfig s
 	return PrepareDirectProbe(userConfig, systemConfig, selection, line)
 }
 
+// EnrolledDirectHostKeyFingerprint reports the SHA256 fingerprint of the
+// exact current app-owned pin. It reads only local files; it cannot establish
+// that the remote host is reachable or that its agent is installed.
+func (s *DirectTrustStore) EnrolledDirectHostKeyFingerprint(userConfig, systemConfig string, selection Selection) (string, error) {
+	if err := s.checkRoot(); err != nil {
+		return "", err
+	}
+	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+		return "", err
+	}
+	path, host, err := s.fileFor(selection)
+	if err != nil {
+		return "", err
+	}
+	line, err := s.read(path, host)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(line))
+	blob, err := base64.StdEncoding.DecodeString(fields[2])
+	if err != nil {
+		return "", ErrProbeUnsupported
+	}
+	fingerprint := sha256.Sum256(blob)
+	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+		return "", err
+	}
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(fingerprint[:]), nil
+}
+
 func (s *DirectTrustStore) read(path, host string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

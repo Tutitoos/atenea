@@ -43,8 +43,14 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 	if plan, err := store.PrepareEnrolledDirectProbe(config, "", selection); plan != nil || !errors.Is(err, ErrTrustNotEnrolled) {
 		t.Fatalf("unenrolled target accepted: %v", err)
 	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); got != "" || !errors.Is(err, ErrTrustNotEnrolled) {
+		t.Fatalf("unenrolled fingerprint = %q, %v", got, err)
+	}
 	if err := store.Enroll(config, "", selection, confirmed); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); err != nil || got != fingerprint {
+		t.Fatalf("enrolled fingerprint = %q, %v", got, err)
 	}
 	if err := store.Enroll(config, "", selection, confirmed); err != nil {
 		t.Fatalf("same pin did not enroll idempotently: %v", err)
@@ -74,6 +80,9 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 	if plan, err := store.PrepareEnrolledDirectProbe(config, "", selection); plan != nil || !errors.Is(err, ErrProbeUnsupported) {
 		t.Fatalf("malformed stored pin accepted: %v", err)
 	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); got != "" || !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("malformed stored fingerprint = %q, %v", got, err)
+	}
 	if err := os.WriteFile(path, confirmed.entry.KnownHostsLine(), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -93,12 +102,18 @@ func TestPrivateDirectTrustStoreEnrollmentAndInvalidation(t *testing.T) {
 	if plan, err := store.PrepareEnrolledDirectProbe(config, "", selection); plan != nil || !errors.Is(err, ErrChanged) {
 		t.Fatalf("old config retained trust: %v", err)
 	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", selection); got != "" || !errors.Is(err, ErrChanged) {
+		t.Fatalf("old config retained fingerprint: %q, %v", got, err)
+	}
 	current, err := ResolveStatic(config, "", "selected")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan, err := store.PrepareEnrolledDirectProbe(config, "", current); plan != nil || !errors.Is(err, ErrTrustNotEnrolled) {
 		t.Fatalf("changed config inherited trust: %v", err)
+	}
+	if got, err := store.EnrolledDirectHostKeyFingerprint(config, "", current); got != "" || !errors.Is(err, ErrTrustNotEnrolled) {
+		t.Fatalf("changed config inherited fingerprint: %q, %v", got, err)
 	}
 }
 
