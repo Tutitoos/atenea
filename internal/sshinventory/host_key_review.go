@@ -82,6 +82,31 @@ func validateDirectHostKeyEntry(userConfig, systemConfig string, selected Select
 // ED25519 key, an exact direct host/port or HostKeyAlias binding, and current
 // static config. It performs no network call and writes no trust store.
 func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selection, candidatePublic, independentSHA256 string) (DirectHostKeyEntry, error) {
+	return matchED25519HostKey(userConfig, systemConfig, selected, candidatePublic, independentSHA256, false)
+}
+
+// MatchSingleJumpED25519HostKey matches one of the two keys for a selected
+// single-hop route. The caller must review the destination and gateway keys
+// independently, then explicitly confirm each fingerprint before probing.
+// It does not accept arbitrary proxy commands or other jump routes.
+func MatchSingleJumpED25519HostKey(userConfig, systemConfig string, target, jump, selected Selection, candidatePublic, independentSHA256 string) (DirectHostKeyEntry, error) {
+	if err := validateSingleJumpRoute(userConfig, systemConfig, target, jump); err != nil {
+		return DirectHostKeyEntry{}, err
+	}
+	if selected.Alias != target.Alias && selected.Alias != jump.Alias {
+		return DirectHostKeyEntry{}, ErrProbeUnsupported
+	}
+	entry, err := matchED25519HostKey(userConfig, systemConfig, selected, candidatePublic, independentSHA256, true)
+	if err != nil {
+		return DirectHostKeyEntry{}, err
+	}
+	if err := validateSingleJumpRoute(userConfig, systemConfig, target, jump); err != nil {
+		return DirectHostKeyEntry{}, err
+	}
+	return entry, nil
+}
+
+func matchED25519HostKey(userConfig, systemConfig string, selected Selection, candidatePublic, independentSHA256 string, allowProxy bool) (DirectHostKeyEntry, error) {
 	if err := RevalidateSelection(userConfig, systemConfig, selected); err != nil {
 		return DirectHostKeyEntry{}, err
 	}
@@ -89,7 +114,7 @@ func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selecti
 		(selected.HostKeyAlias != "" && !safeHostArgument(selected.HostKeyAlias)) {
 		return DirectHostKeyEntry{}, ErrUnresolved
 	}
-	if activeProxyRoute(selected) {
+	if !allowProxy && activeProxyRoute(selected) {
 		return DirectHostKeyEntry{}, ErrProbeUnsupported
 	}
 	host, err := directKnownHostToken(selected)

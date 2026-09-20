@@ -1,6 +1,7 @@
 package sshinventory
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -11,6 +12,69 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestConfirmedSingleJumpPinsBindBothSelections(t *testing.T) {
+	config, target, jump, pins := jumpFixture(t)
+	fingerprint := func(line []byte) (string, string) {
+		fields := strings.Fields(string(line))
+		blob, err := base64.StdEncoding.DecodeString(fields[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := sha256.Sum256(blob)
+		return fields[1] + " " + fields[2], "SHA256:" + base64.RawStdEncoding.EncodeToString(hash[:])
+	}
+	lines := strings.Split(strings.TrimSpace(string(pins)), "\n")
+	candidateTarget, fingerprintTarget := fingerprint([]byte(lines[0]))
+	candidateJump, fingerprintJump := fingerprint([]byte(lines[1]))
+	matchedTarget, err := MatchSingleJumpED25519HostKey(config, "", target, jump, target, candidateTarget, fingerprintTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchedJump, err := MatchSingleJumpED25519HostKey(config, "", target, jump, jump, candidateJump, fingerprintJump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedTarget, err := ConfirmDirectED25519HostKey(config, "", target, matchedTarget, fingerprintTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedJump, err := ConfirmDirectED25519HostKey(config, "", jump, matchedJump, fingerprintJump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MatchDirectED25519HostKey(config, "", target, candidateTarget, fingerprintTarget); !errors.Is(err, ErrProbeUnsupported) {
+		t.Fatalf("direct matcher accepted proxy: %v", err)
+	}
+	if _, err := MatchSingleJumpED25519HostKey(config, "", target, jump, target, candidateTarget, fingerprintJump); !errors.Is(err, ErrFingerprintMismatch) {
+		t.Fatalf("wrong target fingerprint accepted: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		if plan, err := PrepareConfirmedSingleJumpProbe(config, "", target, jump, confirmedTarget, confirmedJump); plan != nil || !errors.Is(err, ErrProbeUnsupported) {
+			t.Fatalf("Windows jump execution accepted: %v", err)
+		}
+		return
+	}
+	if plan, err := PrepareConfirmedSingleJumpProbe(config, "", target, jump, confirmedJump, confirmedTarget); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("swapped approvals accepted: %v", err)
+	}
+	if plan, err := PrepareConfirmedSingleJumpProbe(config, "", target, jump, confirmedTarget, ConfirmedDirectHostKey{}); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("missing gateway approval accepted: %v", err)
+	}
+	plan, err := PrepareConfirmedSingleJumpProbe(config, "", target, jump, confirmedTarget, confirmedJump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	stored, err := os.ReadFile(filepath.Join(plan.root, "known_hosts"))
+	if err != nil || string(stored) != string(pins) {
+		t.Fatalf("reviewed pair changed: %v", err)
+	}
+	writeFixture(t, config, "Host selected\n HostName changed.example.test\n ProxyJump jump\nHost jump\n HostName jump.example.test\n")
+	if plan, err := PrepareConfirmedSingleJumpProbe(config, "", target, jump, confirmedTarget, confirmedJump); plan != nil || !errors.Is(err, ErrChanged) {
+		t.Fatalf("stale route accepted: %v", err)
+	}
+}
 
 func syntheticJumpPin(token string, fill byte) []byte {
 	var blob []byte

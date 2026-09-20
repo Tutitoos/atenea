@@ -107,6 +107,12 @@ PTY and unrelated forwarding from running. The gateway's `-W` TCP forwarding
 is the only forwarding needed for this route. The caller still owns separate
 fingerprint review for both pins; this helper never enrolls them. The executor
 kills the Unix SSH process group so a jump child cannot outlive the probe.
+`MatchSingleJumpED25519HostKey` matches either selected host to an independent
+fingerprint after validating the one-hop route. Confirm each returned entry
+separately with `ConfirmDirectED25519HostKey`; then
+`PrepareConfirmedSingleJumpProbe` accepts only those two exact confirmations.
+These in-memory approvals are not durable enrollment or evidence that the
+fingerprints were actually checked by a person.
 
 Selected `RemoteCommand` and `LocalCommand` text, plus validated
 `PermitLocalCommand` and `RequestTTY` settings, are read but never copied into

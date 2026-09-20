@@ -150,6 +150,49 @@ func safeJumpAlias(alias string) bool {
 	return true
 }
 
+func validateSingleJumpRoute(userConfig, systemConfig string, target, jump Selection) error {
+	if err := RevalidateSelection(userConfig, systemConfig, target); err != nil {
+		return err
+	}
+	if err := RevalidateSelection(userConfig, systemConfig, jump); err != nil {
+		return err
+	}
+	if target.Snapshot == "" || target.Snapshot != jump.Snapshot || target.Alias == jump.Alias ||
+		!safeJumpAlias(jump.Alias) || target.ProxyJump != jump.Alias ||
+		(target.ProxyCommand != "" && !strings.EqualFold(target.ProxyCommand, "none")) || activeProxyRoute(jump) {
+		return ErrProbeUnsupported
+	}
+	targetToken, err := directKnownHostToken(target)
+	if err != nil {
+		return err
+	}
+	jumpToken, err := directKnownHostToken(jump)
+	if err != nil {
+		return err
+	}
+	if targetToken == jumpToken && (target.HostName != jump.HostName || target.Port != jump.Port) {
+		return ErrProbeUnsupported
+	}
+	return nil
+}
+
+// PrepareConfirmedSingleJumpProbe uses two independently confirmed host keys
+// bound to the exact destination and gateway selections. It creates no durable
+// trust state and still requires explicit review by the caller.
+func PrepareConfirmedSingleJumpProbe(userConfig, systemConfig string, target, jump Selection, targetKey, jumpKey ConfirmedDirectHostKey) (*ProbePlan, error) {
+	if err := validateSingleJumpRoute(userConfig, systemConfig, target, jump); err != nil {
+		return nil, err
+	}
+	if err := validateDirectHostKeyEntry(userConfig, systemConfig, target, targetKey.entry); err != nil {
+		return nil, err
+	}
+	if err := validateDirectHostKeyEntry(userConfig, systemConfig, jump, jumpKey.entry); err != nil {
+		return nil, err
+	}
+	return PrepareSingleJumpProbe(userConfig, systemConfig, target, jump,
+		append(targetKey.entry.KnownHostsLine(), jumpKey.entry.KnownHostsLine()...))
+}
+
 func safeProbeConfigAtom(value string) bool {
 	return value != "" && !strings.ContainsAny(value, " \t\r\n\x00#\"'\\%${}")
 }
