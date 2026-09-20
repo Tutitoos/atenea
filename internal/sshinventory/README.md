@@ -108,6 +108,15 @@ provisional: DNS names and IP addresses do not prove a device identity, and
 config or key changes still require fresh trust and authorization review.
 Proxy routes are rejected until their target identity can be bound safely.
 
+`MatchedDirectAccountKey` derives a second opaque lock key from a
+fingerprint-matched ED25519 host key and the selected account. It revalidates
+the config and checks that the matched entry belongs to that alias and
+snapshot. Two aliases with the same matched key and account share the key;
+changing the host key or account changes it. This does not prove independent
+fingerprint review, user confirmation, or physical device uniqueness: cloned
+machines can share a host key. Authorization must separately bind and
+invalidate the current config and credential state.
+
 `MatchDirectED25519HostKey` accepts a plain candidate ED25519 public key and
 a SHA256 fingerprint supplied from an independent channel. It validates the
 key blob and exact fingerprint, binds one known-hosts line to the selected

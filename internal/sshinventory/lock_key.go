@@ -10,6 +10,26 @@ import (
 	"strings"
 )
 
+// MatchedDirectAccountKey groups aliases by a fingerprint-matched ED25519
+// host key and account after the selected config is revalidated. It is an
+// opaque serialization key, not proof that a fingerprint was independently
+// reviewed or that a physical device is unique: cloned hosts may share keys.
+// Callers must still require explicit trust confirmation and invalidate cached
+// authorization when the selection or credential changes.
+func MatchedDirectAccountKey(userConfig, systemConfig string, selection Selection, entry DirectHostKeyEntry) (string, error) {
+	if err := RevalidateSelection(userConfig, systemConfig, selection); err != nil {
+		return "", err
+	}
+	if entry.line == "" || entry.snapshot != selection.Snapshot || entry.alias != selection.Alias || entry.account != selection.User {
+		return "", ErrChanged
+	}
+	h := sha256.New()
+	writeLockField(h, "atenea-ed25519-account-v1")
+	writeLockField(h, string(entry.keyHash[:]))
+	writeLockField(h, selection.User)
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // ProvisionalDirectLockKey groups aliases that resolve to the same direct
 // hostname, port and account. It is only a pre-authentication serialization
 // key: DNS, host keys and credentials are not verified here. Revalidate the

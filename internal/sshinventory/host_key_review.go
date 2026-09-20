@@ -22,6 +22,9 @@ var ErrFingerprintMismatch = errors.New("ssh inventory: host key fingerprint mis
 type DirectHostKeyEntry struct {
 	line     string
 	snapshot string
+	alias    string
+	account  string
+	keyHash  [sha256.Size]byte
 }
 
 // KnownHostsLine returns a copy suitable for a temporary known_hosts file.
@@ -81,7 +84,7 @@ func MatchDirectED25519HostKey(userConfig, systemConfig string, selected Selecti
 	if err := RevalidateSelection(userConfig, systemConfig, selected); err != nil {
 		return DirectHostKeyEntry{}, err
 	}
-	return DirectHostKeyEntry{line: line, snapshot: selected.Snapshot}, nil
+	return DirectHostKeyEntry{line: line, snapshot: selected.Snapshot, alias: selected.Alias, account: selected.User, keyHash: actual}, nil
 }
 
 func directKnownHostName(value string) (string, error) {
