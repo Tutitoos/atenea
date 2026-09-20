@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +47,12 @@ func RevalidateSelection(userConfig, systemConfig string, selected Selection) er
 	}
 	current, err := ResolveStatic(userConfig, systemConfig, selected.Alias)
 	if err != nil {
+		if errors.Is(err, ErrUnresolved) {
+			inventory, scanErr := Scan(userConfig, systemConfig)
+			if scanErr == nil && inventory.Snapshot != selected.Snapshot {
+				return ErrChanged
+			}
+		}
 		return err
 	}
 	if !reflect.DeepEqual(current, selected) {
@@ -79,6 +87,16 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 			return Selection{}, fmt.Errorf("%w: %s at %s:%d", ErrUnresolved, diagnostic.Code, diagnostic.Source, diagnostic.Line)
 		}
 	}
+	found := false
+	for _, host := range before.Hosts {
+		if host.Alias == alias {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Selection{}, ErrUnresolved
+	}
 	r := &resolver{alias: alias, result: Selection{Alias: alias, HostName: alias, Port: 22}, set: make(map[string]bool), active: make(map[string]bool)}
 	for index, root := range []string{userConfig, systemConfig} {
 		if root == "" {
@@ -103,8 +121,44 @@ func ResolveStatic(userConfig, systemConfig, alias string) (Selection, error) {
 	if before.Snapshot != after.Snapshot {
 		return Selection{}, ErrChanged
 	}
+	if r.result.User == "" {
+		local, err := localSSHUser()
+		if err != nil {
+			return Selection{}, err
+		}
+		r.result.User = local
+	}
 	r.result.Snapshot = after.Snapshot
 	return r.result, nil
+}
+
+func localSSHUser() (string, error) {
+	account, err := user.Current()
+	if err != nil || account == nil {
+		return "", fmt.Errorf("%w: local account unavailable", ErrUnresolved)
+	}
+	name := account.Username
+	if runtime.GOOS == "windows" {
+		machine, err := os.Hostname()
+		if err != nil {
+			return "", fmt.Errorf("%w: local computer unavailable", ErrUnresolved)
+		}
+		name = windowsDefaultSSHUser(name, machine)
+	}
+	if !safeAccountArgument(name) {
+		return "", fmt.Errorf("%w: local account unavailable", ErrUnresolved)
+	}
+	return name, nil
+}
+
+func windowsDefaultSSHUser(account, computer string) string {
+	// Windows OpenSSH drops a local computer prefix but retains a domain
+	// prefix. Go's os/user reports both in DOMAIN\user form.
+	if index := strings.IndexByte(account, '\\'); index >= 0 &&
+		strings.EqualFold(account[:index], strings.SplitN(computer, ".", 2)[0]) {
+		return strings.ToLower(account[index+1:])
+	}
+	return strings.ToLower(account)
 }
 
 func (r *resolver) file(path, includeRoot string, user bool, depth int, optional bool) error {

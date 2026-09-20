@@ -232,7 +232,7 @@ func safeHostArgument(value string) bool {
 }
 
 func safeAccountArgument(value string) bool {
-	if value == "" || value[0] == '-' || strings.ContainsAny(value, ":/\\ \t\r\n\x00") {
+	if value == "" || value[0] == '-' || strings.ContainsAny(value, ":/ \t\r\n\x00") {
 		return false
 	}
 	for _, c := range value {

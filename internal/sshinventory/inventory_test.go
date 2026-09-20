@@ -1,6 +1,7 @@
 package sshinventory
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,7 +137,7 @@ func TestStaticOriginalHostConditionFiltersInclude(t *testing.T) {
 		t.Fatalf("allowed alias resolution = %+v, %v", allowed, err)
 	}
 	blocked, err := ResolveStatic(config, "", "blocked.lab")
-	if err != nil || blocked.User != "" {
+	if !errors.Is(err, ErrUnresolved) || blocked.Snapshot != "" {
 		t.Fatalf("excluded alias resolution = %+v, %v", blocked, err)
 	}
 	if ssh, err := exec.LookPath("ssh"); err == nil {

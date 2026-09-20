@@ -39,7 +39,13 @@ conditions deliberately reports unresolved state rather than running them.
 `IdentityFile` entries accumulate. The proxy command is returned as text and
 is never run by resolution. A `ProxyCommand` containing `#`, quotes or escapes
 is unresolved because OpenSSH can treat its entire suffix as command text;
-stripping it could falsely classify an active route as disabled. `Match all`
+stripping it could falsely classify an active route as disabled. If no active
+`User` option is set, resolution uses the local account name as OpenSSH does;
+on Windows it drops a local computer prefix, retains a domain prefix and uses
+OpenSSH's lowercase account spelling. Native `ssh -G` fixtures check both
+forms. An unavailable or unsafe local name fails closed. Resolution requires
+an alias that the side-effect-free inventory listed explicitly; a wildcard-only
+target cannot be selected for a diagnostic. `Match all`
 and a single `Match originalhost`
 pattern list are supported; other `Match` criteria,
 canonicalization, dynamic target tokens and unrecognized active options fail

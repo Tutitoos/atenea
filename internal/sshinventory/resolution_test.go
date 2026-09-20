@@ -10,6 +10,64 @@ import (
 	"testing"
 )
 
+func TestResolveStaticUsesLocalAccountWhenUserIsAbsent(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	local, err := localSSHUser()
+	if err != nil {
+		t.Skipf("local account cannot be represented as a safe SSH user: %v", err)
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n")
+	selected, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.User != local {
+		t.Fatalf("implicit user = %q, want local account", selected.User)
+	}
+	output, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("OpenSSH fixture: %v: %s", err, output)
+	}
+	settings := strings.ReplaceAll(string(output), "\r\n", "\n")
+	if !strings.Contains("\n"+settings, "\nuser "+selected.User+"\n") {
+		t.Fatal("implicit user differs from OpenSSH effective configuration")
+	}
+	if err := RevalidateSelection(config, "", selected); err != nil {
+		t.Fatalf("implicit user did not revalidate: %v", err)
+	}
+}
+
+func TestResolveStaticRequiresListedConcreteAlias(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host listed\n HostName listed.example.test\nHost *\n User person\n")
+	if _, err := ResolveStatic(config, "", "unlisted.example.test"); !errors.Is(err, ErrUnresolved) {
+		t.Fatalf("wildcard-only target resolved: %v", err)
+	}
+	if _, err := ResolveStatic(config, "", "listed"); err != nil {
+		t.Fatalf("listed target rejected: %v", err)
+	}
+}
+
+func TestWindowsDefaultSSHUserKeepsDomainAuthority(t *testing.T) {
+	for _, tt := range []struct{ account, computer, want string }{
+		{`WORKSTATION\local`, "WORKSTATION", "local"},
+		{`workstation\local`, "WORKSTATION.example.test", "local"},
+		{`CORP\Person`, "WORKSTATION", `corp\person`},
+		{`Person`, "WORKSTATION", "person"},
+	} {
+		if got := windowsDefaultSSHUser(tt.account, tt.computer); got != tt.want {
+			t.Fatalf("Windows default for %q = %q, want %q", tt.account, got, tt.want)
+		}
+	}
+	if !safeAccountArgument(`CORP\person`) {
+		t.Fatal("domain-qualified SSH login was rejected")
+	}
+}
+
 func TestResolveStaticFirstValuesAndConditionalIncludes(t *testing.T) {
 	root := t.TempDir()
 	user := filepath.Join(root, "user", "config")
