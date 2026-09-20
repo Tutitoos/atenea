@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-shell=build/bin/atenea-ssh
-controller=build/bin/atenea-ssh-controller
+shell=${ATENEA_SSH_SHELL:-build/bin/atenea-ssh}
+controller=${ATENEA_SSH_CONTROLLER:-build/bin/atenea-ssh-controller}
 capture=${ATENEA_SSH_CAPTURE:-build/ci-artifacts/linux-render-smoke.png}
 log_file=$(mktemp)
 app_pid=''

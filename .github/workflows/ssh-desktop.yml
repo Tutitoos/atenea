@@ -66,6 +66,21 @@ jobs:
         working-directory: desktop/ssh
         shell: bash
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
+      - name: Render copied Linux package through a Terminal link
+        if: runner.os == 'Linux'
+        working-directory: desktop/ssh
+        shell: bash
+        run: |
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          mkdir -p "$install_root/bin" "$install_root/command" "$install_root/config"
+          install -m 755 build/bin/atenea-ssh build/bin/atenea-ssh-bin build/bin/atenea-ssh-controller "$install_root/bin/"
+          ln -s ../bin/atenea-ssh "$install_root/command/atenea-ssh"
+          ATENEA_SSH_SHELL="$install_root/command/atenea-ssh" \
+          ATENEA_SSH_CONTROLLER="$install_root/bin/atenea-ssh-controller" \
+          ATENEA_SSH_CAPTURE=build/ci-artifacts/linux-installed-link.png \
+          XDG_CONFIG_HOME="$install_root/config" \
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash scripts/linux_render_smoke.sh
       - name: Exercise Linux lifecycle in a virtual Wayland session
         if: runner.os == 'Linux'
         working-directory: desktop/ssh
@@ -99,6 +114,7 @@ jobs:
           name: atenea-ssh-linux-window
           path: |
             desktop/ssh/build/ci-artifacts/linux-render-smoke.png
+            desktop/ssh/build/ci-artifacts/linux-installed-link.png
             desktop/ssh/build/ci-artifacts/linux-bridge-probe.png
             desktop/ssh/build/ci-artifacts/linux-navigation-probe.png
             desktop/ssh/build/ci-artifacts/linux-wayland.png

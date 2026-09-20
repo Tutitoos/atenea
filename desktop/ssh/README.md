@@ -28,6 +28,10 @@ errors on stderr. A Terminal link to the launcher resolves to that package
 directory, with a bounded link chain; the executable and controller still stay
 together there. For Ubuntu 24.04, the required runtime packages include
 `libgtk-3-0` and `libwebkit2gtk-4.1-0`; see the [Wails Linux runtime guide](https://wails.io/docs/guides/linux-distro-support/).
+Ubuntu CI also copies the three executables to a separate temporary package
+directory and opens the window through a relative Terminal link under virtual
+X11. Its capture proves that this package layout launches in the CI session;
+it does not represent an installer or a clean desktop installation.
 These checks do not prove that a stale display address can open a window or
 that a clean machine has every runtime requirement. The window starts the
 controller on demand. Closing the window does
