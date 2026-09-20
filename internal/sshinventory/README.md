@@ -62,3 +62,10 @@ reviewed trust evidence immediately before use, impose a bounded lifetime,
 and verify platform-specific private-file access (especially Windows ACLs).
 ProxyJump and ProxyCommand routes remain unresolved until they can be probed
 without changing the configured path or its security properties.
+
+The controlled `sshd` test starts a disposable server on IPv4 loopback, makes
+temporary client/server keys and checks three real OpenSSH outcomes: a known
+key with public-key authentication, an unknown key, and a changed key. It
+checks that diagnostics do not modify their known-hosts copy. The test skips
+when the local OpenSSH server fixture is unavailable and on Windows; it does
+not establish native Windows support or trust in any external host.
