@@ -219,6 +219,18 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 		}
 		return nil
 	}
+	if key == "localforward" || key == "remoteforward" || key == "dynamicforward" {
+		// Forwarding is deliberately absent from the diagnostic plan. Reject
+		// missing or extra operands; this does not parse the full OpenSSH
+		// forwarding-address grammar.
+		valid := (key == "localforward" && len(args) == 2) ||
+			(key == "remoteforward" && (len(args) == 1 || len(args) == 2)) ||
+			(key == "dynamicforward" && len(args) == 1)
+		if !valid {
+			return fmt.Errorf("%w: invalid %s at %s:%d", ErrUnresolved, key, path, line)
+		}
+		return nil
+	}
 	if key == "proxycommand" {
 		// Rejoining quoted shell words would change the user's route. The
 		// first version supports only unquoted, space-separated commands.
@@ -284,6 +296,22 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 	case "requesttty":
 		if value != "yes" && value != "no" && value != "auto" && value != "force" {
 			return fmt.Errorf("%w: invalid RequestTTY", ErrUnresolved)
+		}
+	case "forwardagent", "forwardx11", "forwardx11trusted":
+		if value != "yes" && value != "no" {
+			return fmt.Errorf("%w: invalid %s", ErrUnresolved, key)
+		}
+	case "controlmaster":
+		if value != "yes" && value != "no" && value != "ask" && value != "auto" && value != "autoask" {
+			return fmt.Errorf("%w: invalid ControlMaster", ErrUnresolved)
+		}
+	case "controlpath":
+		if value == "" {
+			return fmt.Errorf("%w: empty ControlPath", ErrUnresolved)
+		}
+	case "controlpersist":
+		if value != "yes" && value != "no" {
+			return fmt.Errorf("%w: unsupported ControlPersist", ErrUnresolved)
 		}
 	default:
 		// Retain no implied safety for other options. A later probe plan must

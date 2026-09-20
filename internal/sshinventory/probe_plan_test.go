@@ -209,6 +209,50 @@ func TestDirectProbeSuppressesSelectedSessionCommands(t *testing.T) {
 	}
 }
 
+func TestDirectProbeSuppressesSelectedForwardingAndSharing(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n"+
+		" LocalForward 127.0.0.1:18080 127.0.0.1:18081\n"+
+		" RemoteForward 127.0.0.1:18082 127.0.0.1:18083\n"+
+		" DynamicForward 127.0.0.1:18084\n"+
+		" ForwardAgent yes\n ForwardX11 yes\n ForwardX11Trusted yes\n"+
+		" ControlMaster auto\n ControlPath control-fixture\n ControlPersist yes\n")
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, expected := range []string{"localforward ", "remoteforward ", "dynamicforward ", "forwardagent yes", "forwardx11 yes", "controlmaster auto", "controlpath control-fixture"} {
+		if !strings.Contains(string(original), expected) {
+			t.Fatalf("original config lacks %q: %s", expected, original)
+		}
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "localforward ") || strings.HasPrefix(line, "remoteforward ") ||
+			strings.HasPrefix(line, "dynamicforward ") || strings.HasPrefix(line, "controlpath ") ||
+			line == "forwardagent yes" || line == "forwardx11 yes" || line == "controlmaster auto" || line == "controlpersist yes" {
+			t.Fatalf("selected forwarding or sharing survived the restricted plan: %s", line)
+		}
+	}
+}
+
 func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	ssh, err := exec.LookPath("ssh")
 	if err != nil {

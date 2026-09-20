@@ -79,7 +79,10 @@ Selected `RemoteCommand` and `LocalCommand` text, plus validated
 `PermitLocalCommand` and `RequestTTY` settings, are read but never copied into
 the restricted diagnostic plan. The plan's empty config, `-N`, `-T` and
 `PermitLocalCommand=no` prevent those selected-session actions during the
-diagnostic. Unsupported active options still fail resolution.
+diagnostic. Common `LocalForward`, `RemoteForward`, `DynamicForward`, agent/X11
+forwarding and control-sharing settings are likewise suppressed: the plan's
+effective `ssh -G` output contains no selected forwards or control path.
+Unsupported active options and unsupported option forms still fail resolution.
 
 `ExecuteDirectProbe` revalidates the plan, starts the local OpenSSH client with
 an eight-second limit and stops as soon as its private `-E` diagnostic log
