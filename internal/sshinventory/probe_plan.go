@@ -114,6 +114,7 @@ func PrepareDirectProbe(userConfig, systemConfig string, selection Selection, kn
 		"-o", "ControlPersist=no",
 		"-o", "ForwardAgent=no",
 		"-o", "ForwardX11=no",
+		"-o", "AddKeysToAgent=no",
 		"-o", "IdentitiesOnly=yes",
 		"-o", "IdentityAgent=none",
 		"-o", "IdentityFile=none",

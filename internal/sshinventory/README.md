@@ -82,6 +82,10 @@ the restricted diagnostic plan. The plan's empty config, `-N`, `-T` and
 diagnostic. Common `LocalForward`, `RemoteForward`, `DynamicForward`, agent/X11
 forwarding and control-sharing settings are likewise suppressed: the plan's
 effective `ssh -G` output contains no selected forwards or control path.
+Selected `IdentitiesOnly`, `IdentityAgent` and bounded `AddKeysToAgent` values
+are read but the diagnostic uses only explicit identity files, disables the
+agent socket and prevents adding keys to an agent. It therefore may report
+authentication as required when an ordinary session would use an agent.
 Unsupported active options and unsupported option forms still fail resolution.
 
 `ExecuteDirectProbe` revalidates the plan, starts the local OpenSSH client with

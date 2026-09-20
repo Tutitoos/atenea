@@ -301,6 +301,18 @@ func (r *resolver) option(key string, args []string, raw, path string, line int)
 		if value != "yes" && value != "no" {
 			return fmt.Errorf("%w: invalid %s", ErrUnresolved, key)
 		}
+	case "identitiesonly":
+		if value != "yes" && value != "no" {
+			return fmt.Errorf("%w: invalid IdentitiesOnly", ErrUnresolved)
+		}
+	case "identityagent":
+		if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("%w: invalid IdentityAgent", ErrUnresolved)
+		}
+	case "addkeystoagent":
+		if value != "yes" && value != "no" && value != "ask" && value != "confirm" {
+			return fmt.Errorf("%w: unsupported AddKeysToAgent", ErrUnresolved)
+		}
 	case "controlmaster":
 		if value != "yes" && value != "no" && value != "ask" && value != "auto" && value != "autoask" {
 			return fmt.Errorf("%w: invalid ControlMaster", ErrUnresolved)

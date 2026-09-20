@@ -333,6 +333,43 @@ func TestDirectProbeOpenSSHEffectiveOptions(t *testing.T) {
 	}
 }
 
+func TestDirectProbeSuppressesSelectedAgentSettings(t *testing.T) {
+	ssh, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH client unavailable")
+	}
+	root := t.TempDir()
+	config := filepath.Join(root, "config")
+	writeFixture(t, config, "Host selected\n HostName example.test\n User person\n IdentitiesOnly no\n IdentityAgent "+filepath.Join(root, "agent.sock")+"\n AddKeysToAgent yes\n")
+	original, err := exec.Command(ssh, "-G", "-F", config, "selected").CombinedOutput()
+	if err != nil {
+		t.Fatalf("original ssh -G: %v: %s", err, original)
+	}
+	for _, setting := range []string{"identitiesonly no", "identityagent " + filepath.Join(root, "agent.sock"), "addkeystoagent true"} {
+		if !strings.Contains(string(original), setting) {
+			t.Fatalf("fixture did not activate %q", setting)
+		}
+	}
+	selection, err := ResolveStatic(config, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDirectProbe(config, "", selection, []byte("example.test ssh-ed25519 fixture\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plan.Close() }()
+	output, err := exec.Command(ssh, append([]string{"-G"}, plan.Arguments()...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("restricted ssh -G: %v: %s", err, output)
+	}
+	for _, setting := range []string{"identitiesonly yes", "identityagent none", "addkeystoagent false"} {
+		if !strings.Contains(string(output), setting) {
+			t.Fatalf("restricted diagnostic lacks %q: %s", setting, output)
+		}
+	}
+}
+
 func identityFileSettings(settings string) []string {
 	var files []string
 	for _, line := range strings.Split(settings, "\n") {
