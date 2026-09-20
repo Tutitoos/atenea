@@ -365,6 +365,44 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 	if err != nil || !jumpResult.ClientReportedAuthenticated {
 		t.Fatalf("single jump did not authenticate through two reviewed pins: %+v, %v", jumpResult, err)
 	}
+	jumpStore, err := OpenPrivateDirectTrustStore(filepath.Join(root, "jump-app-trust"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmJumpKey := func(selected Selection, key, fingerprint string) ConfirmedDirectHostKey {
+		t.Helper()
+		entry, err := MatchSingleJumpED25519HostKey(jumpConfig, "", jumpTarget, jumpHost, selected, key, fingerprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		confirmed, err := ConfirmDirectED25519HostKey(jumpConfig, "", selected, entry, fingerprint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return confirmed
+	}
+	for _, selected := range []Selection{jumpTarget, jumpHost} {
+		if err := jumpStore.EnrollSingleJumpPin(jumpConfig, "", jumpTarget, jumpHost, selected,
+			confirmJumpKey(selected, hostFields[0]+" "+hostFields[1], fingerprintFields[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enrolledJumpPlan, err := jumpStore.PrepareEnrolledSingleJumpProbe(jumpConfig, "", jumpTarget, jumpHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = enrolledJumpPlan.Close() }()
+	enrolledJumpResult, err := ExecuteDirectProbe(context.Background(), ssh, enrolledJumpPlan)
+	if err != nil || !enrolledJumpResult.ClientReportedAuthenticated {
+		t.Fatalf("enrolled jump did not authenticate through both stored pins: %+v, %v", enrolledJumpResult, err)
+	}
+	if err := jumpStore.Rotate(jumpConfig, "", jumpHost, fingerprintFields[1],
+		confirmJumpKey(jumpHost, clientFields[0]+" "+clientFields[1], rotatedFields[1])); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExecuteDirectProbe(context.Background(), ssh, enrolledJumpPlan); !errors.Is(err, ErrChanged) {
+		t.Fatalf("enrolled jump plan survived gateway key rotation: %v", err)
+	}
 	for _, tt := range []struct{ name, pins string }{
 		{"changed jump pin", "target-pin " + keyText + "jump-pin " + clientFields[0] + " " + clientFields[1] + "\n"},
 		{"changed destination pin", "target-pin " + clientFields[0] + " " + clientFields[1] + "\n" + "jump-pin " + keyText},

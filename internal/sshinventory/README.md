@@ -234,7 +234,9 @@ failure after the first write leaves one pin, and
 `PrepareEnrolledSingleJumpProbe` refuses to proceed until both are present.
 It rechecks both records and locks them in a stable order during execution;
 rotation of either invalidates an earlier plan. This jump executor remains
-Unix-only. The two pins do not authorize a remote command or prompt.
+Unix-only. A controlled local `sshd` test checks authentication through both
+enrolled pins and refuses the old plan after gateway-key rotation. The two
+pins do not authorize a remote command or prompt.
 `EnrolledDirectHostKeyFingerprint` reads the current local pin without a
 network call, so the UI can show the approved fingerprint separately from
 connectivity and remote-agent status. A stale config or malformed pin fails
