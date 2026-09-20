@@ -77,3 +77,11 @@ It does not keep raw logs or treat a zero exit or `Authenticated to` text as
 proof of authentication. OpenSSH diagnostics can include server-controlled
 banners, so these hints must never authorize trust or credentials. A rejected
 login alone does not show whether credentials were absent or incorrect.
+
+`ProvisionalDirectLockKey` hashes the normalized direct hostname, port and
+account to serialize two aliases that resolve to the same apparent endpoint.
+It ignores display alias, config snapshot and HostKeyAlias, so a renamed alias
+cannot create a second pre-authentication lock. This key is deliberately
+provisional: DNS names and IP addresses do not prove a device identity, and
+config or key changes still require fresh trust and authorization review.
+Proxy routes are rejected until their target identity can be bound safely.
