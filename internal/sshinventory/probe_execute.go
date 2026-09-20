@@ -53,12 +53,14 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 	}
 	args := append([]string{"-v", "-E", logPath}, plan.args...)
 	cmd := exec.Command(sshPath, args...)
+	configureProbeProcess(cmd, plan.jump != nil)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
 		return ProbeResult{}, err
 	}
+	defer stopProbeProcess(cmd, plan.jump != nil)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(25 * time.Millisecond)
@@ -66,26 +68,26 @@ func ExecuteDirectProbe(ctx context.Context, sshPath string, plan *ProbePlan) (P
 	for {
 		select {
 		case runErr := <-done:
-			return inspectProbeLog(logPath, plan.selection, runErr, false)
+			return inspectProbeLog(logPath, plan.selection, plan.jump != nil, runErr, false)
 		case <-ticker.C:
-			result, logErr := inspectProbeLog(logPath, plan.selection, nil, false)
+			result, logErr := inspectProbeLog(logPath, plan.selection, plan.jump != nil, nil, false)
 			if logErr != nil || result.ClientReportedAuthenticated {
-				_ = cmd.Process.Kill()
+				stopProbeProcess(cmd, plan.jump != nil)
 				<-done
 				return result, logErr
 			}
 		case <-bounded.Done():
-			_ = cmd.Process.Kill()
+			stopProbeProcess(cmd, plan.jump != nil)
 			<-done
 			if ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return ProbeResult{}, ctx.Err()
 			}
-			return inspectProbeLog(logPath, plan.selection, nil, true)
+			return inspectProbeLog(logPath, plan.selection, plan.jump != nil, nil, true)
 		}
 	}
 }
 
-func inspectProbeLog(path string, selection Selection, runErr error, timedOut bool) (ProbeResult, error) {
+func inspectProbeLog(path string, selection Selection, viaProxy bool, runErr error, timedOut bool) (ProbeResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return ProbeResult{}, err
@@ -103,8 +105,9 @@ func inspectProbeLog(path string, selection Selection, runErr error, timedOut bo
 	for _, raw := range strings.Split(string(data), "\n") {
 		line := strings.TrimSuffix(raw, "\r")
 		prefix := "Authenticated to " + selection.HostName + " ("
-		if strings.HasPrefix(line, prefix) &&
-			strings.HasSuffix(line, "]:"+strconv.Itoa(int(selection.Port))+") using \"publickey\".") {
+		if (viaProxy && line == "Authenticated to "+selection.HostName+" (via proxy) using \"publickey\".") ||
+			(!viaProxy && strings.HasPrefix(line, prefix) &&
+				strings.HasSuffix(line, "]:"+strconv.Itoa(int(selection.Port))+") using \"publickey\".")) {
 			return ProbeResult{ClientReportedAuthenticated: true}, nil
 		}
 	}

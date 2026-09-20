@@ -344,4 +344,41 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 		}
 		t.Fatalf("HostKeyAlias and nonstandard-port pin did not authenticate: client marker=%v deadline=%v failure=%s", aliasAuthenticated, ctx.Err(), ClassifyOpenSSHFailure(code, string(aliasLogBytes), false))
 	}
+	jumpConfig := filepath.Join(root, "jump_client_config")
+	writeFixture(t, jumpConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias target-pin\n ProxyJump jump\n IdentityFile %s\nHost jump\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias jump-pin\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "client"), account.Username, port, filepath.Join(root, "client")))
+	jumpTarget, err := ResolveStatic(jumpConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumpHost, err := ResolveStatic(jumpConfig, "", "jump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyText := hostFields[0] + " " + hostFields[1] + "\n"
+	jumpPins := []byte("target-pin " + keyText + "jump-pin " + keyText)
+	jumpPlan, err := PrepareSingleJumpProbe(jumpConfig, "", jumpTarget, jumpHost, jumpPins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = jumpPlan.Close() }()
+	jumpResult, err := ExecuteDirectProbe(context.Background(), ssh, jumpPlan)
+	if err != nil || !jumpResult.ClientReportedAuthenticated {
+		t.Fatalf("single jump did not authenticate through two reviewed pins: %+v, %v", jumpResult, err)
+	}
+	for _, tt := range []struct{ name, pins string }{
+		{"changed jump pin", "target-pin " + keyText + "jump-pin " + clientFields[0] + " " + clientFields[1] + "\n"},
+		{"changed destination pin", "target-pin " + clientFields[0] + " " + clientFields[1] + "\n" + "jump-pin " + keyText},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := PrepareSingleJumpProbe(jumpConfig, "", jumpTarget, jumpHost, []byte(tt.pins))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = plan.Close() }()
+			result, err := ExecuteDirectProbe(context.Background(), ssh, plan)
+			if err != nil || result.ClientReportedAuthenticated {
+				t.Fatalf("changed pin authenticated: %+v, %v", result, err)
+			}
+		})
+	}
 }

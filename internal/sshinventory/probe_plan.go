@@ -21,6 +21,7 @@ type ProbePlan struct {
 	userConfig   string
 	systemConfig string
 	selection    Selection
+	jump         *Selection
 	trustCheck   func() error
 	trustLock    func() (func(), error)
 }
@@ -54,6 +55,11 @@ func (p *ProbePlan) Revalidate() error {
 	}
 	if err := RevalidateSelection(p.userConfig, p.systemConfig, p.selection); err != nil {
 		return err
+	}
+	if p.jump != nil {
+		if err := RevalidateSelection(p.userConfig, p.systemConfig, *p.jump); err != nil {
+			return err
+		}
 	}
 	if p.trustCheck != nil {
 		return p.trustCheck()
@@ -209,6 +215,7 @@ func (p *ProbePlan) Close() error {
 	p.userConfig = ""
 	p.systemConfig = ""
 	p.selection = Selection{}
+	p.jump = nil
 	p.trustCheck = nil
 	p.trustLock = nil
 	if !privateProbeDirectory(root, rootInfo) {

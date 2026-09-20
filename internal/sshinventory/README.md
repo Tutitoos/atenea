@@ -64,8 +64,8 @@ direct route. It never starts SSH. It rejects proxy routes and unsafe target
 arguments rather than silently changing their path.
 `ProxyJump none` and `ProxyCommand none` explicitly disable the proxy route,
 so those selected configurations can use direct fingerprint matching, private
-enrollment, provisional locking and the diagnostic; other proxy values remain
-unsupported. The caller must provide a
+enrollment, provisional locking and the diagnostic. Active routes require the
+separate bounded jump API below. The caller must provide a
 known-hosts snapshot whose fingerprints were independently reviewed; the
 builder cannot verify that review. A temporary empty config suppresses the
 user and system configuration during a later probe, while the supplied
@@ -93,6 +93,21 @@ The builder revalidates the selection before and after creating the temporary
 files. `Arguments` returns a defensive copy; `Revalidate` rereads the source
 config and refuses a stale or closed plan.
 
+`PrepareSingleJumpProbe` supports one bare, explicitly listed `ProxyJump`
+alias on macOS and Linux. It resolves and revalidates both selections, requires
+plain ED25519 known-hosts pins for both the gateway and destination, and
+generates a private configuration for the gateway. A changed pin on either hop
+prevents authenticated success in the loopback server test. The gateway uses
+the selected host, port and absolute identity files; its account must be safe
+to render in the private config. The destination uses its own selected identity
+files. Dynamic key paths, multiple hops,
+arbitrary `ProxyCommand` text and Windows jump execution remain unsupported.
+The private configuration prevents selected remote/local commands, agent use,
+PTY and unrelated forwarding from running. The gateway's `-W` TCP forwarding
+is the only forwarding needed for this route. The caller still owns separate
+fingerprint review for both pins; this helper never enrolls them. The executor
+kills the Unix SSH process group so a jump child cannot outlive the probe.
+
 Selected `RemoteCommand` and `LocalCommand` text, plus validated
 `PermitLocalCommand` and `RequestTTY` settings, are read but never copied into
 the restricted diagnostic plan. The plan's empty config, `-N`, `-T` and
@@ -108,8 +123,9 @@ Unsupported active options and unsupported option forms still fail resolution.
 
 `ExecuteDirectProbe` revalidates the plan, starts the local OpenSSH client with
 an eight-second limit and stops as soon as its private `-E` diagnostic log
-reports public-key authentication. It never opens a remote command or returns
-raw logs. Server-supplied banners are discarded separately; the loopback test
+reports public-key authentication. For a jump plan it requires the client's
+exact `via proxy` authentication marker. It never opens a remote command or
+returns raw logs. Server-supplied banners are discarded separately; the loopback test
 includes a forged authentication banner to guard this boundary. Failed-process
 classification is advisory. The successful result is explicitly
 client-reported authentication to the supplied pin, not a durable device
@@ -119,13 +135,14 @@ close the plan. This diagnostic has not established trust in a physical device
 or native GUI and agent readiness.
 
 No code here supplies a verified physical-device identity.
-ProxyJump and ProxyCommand routes remain unresolved until they can be probed
-without changing the configured path or its security properties.
+Other ProxyJump forms and active ProxyCommand routes remain unresolved until
+they can be probed without changing the configured path or its security properties.
 
 The controlled `sshd` test starts a disposable server on IPv4 loopback, makes
 temporary client/server keys and checks three real OpenSSH outcomes: a known
 key with public-key authentication, an unknown key, and a changed key. It also
-checks a rejected public-key login and that diagnostics do not modify their
+checks an authenticated single-hop jump, rejects a changed pin on either hop,
+checks a rejected public-key login and confirms diagnostics do not modify their
 known-hosts copy. The test skips when the local OpenSSH server fixture is
 unavailable and on Windows. It does not establish native Windows support or
 trust in any external host.
