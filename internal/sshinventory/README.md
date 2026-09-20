@@ -85,3 +85,13 @@ cannot create a second pre-authentication lock. This key is deliberately
 provisional: DNS names and IP addresses do not prove a device identity, and
 config or key changes still require fresh trust and authorization review.
 Proxy routes are rejected until their target identity can be bound safely.
+
+`MatchDirectED25519HostKey` accepts a plain candidate ED25519 public key and
+a SHA256 fingerprint supplied from an independent channel. It validates the
+key blob and exact fingerprint, binds one known-hosts line to the selected
+direct hostname/port or `HostKeyAlias`, and rechecks the config snapshot. It
+does not persist the line or prove that the caller's fingerprint source was
+independent. The UI must require explicit user review before persisting or
+using it. Hashed known-host entries, host certificates, CA and revoked markers,
+other key algorithms and proxy routes remain unsupported by this helper; do
+not silently convert them to a plain ED25519 pin.

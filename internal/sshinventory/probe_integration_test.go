@@ -102,6 +102,18 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 		t.Fatal("fixture public key malformed")
 	}
 	hostEntry := fmt.Sprintf("[127.0.0.1]:%d %s %s\n", port, hostFields[0], hostFields[1])
+	fingerprintOutput, err := exec.Command(keygen, "-l", "-E", "sha256", "-f", filepath.Join(root, "host.pub")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("fixture host fingerprint: %v", err)
+	}
+	fingerprintFields := strings.Fields(string(fingerprintOutput))
+	if len(fingerprintFields) < 2 {
+		t.Fatal("fixture host fingerprint missing")
+	}
+	matched, err := MatchDirectED25519HostKey(clientConfig, "", selection, hostFields[0]+" "+hostFields[1], fingerprintFields[1])
+	if err != nil || string(matched.KnownHostsLine()) != hostEntry {
+		t.Fatalf("reviewed entry differs from OpenSSH fixture: %v", err)
+	}
 	wrongEntry := fmt.Sprintf("[127.0.0.1]:%d %s %s\n", port, clientFields[0], clientFields[1])
 	unrelatedEntry := fmt.Sprintf("other.example.test %s %s\n", hostFields[0], hostFields[1])
 
@@ -158,5 +170,35 @@ func TestDirectProbeControlledServerHostKeys(t *testing.T) {
 				t.Fatalf("diagnostic modified known_hosts: %v", err)
 			}
 		})
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "authorized_keys"), clientPublic, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aliasConfig := filepath.Join(root, "alias_config")
+	writeFixture(t, aliasConfig, fmt.Sprintf("Host selected\n HostName 127.0.0.1\n User %s\n Port %d\n HostKeyAlias reviewed-host\n IdentityFile %s\n", account.Username, port, filepath.Join(root, "client")))
+	aliasSelection, err := ResolveStatic(aliasConfig, "", "selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasEntry, err := MatchDirectED25519HostKey(aliasConfig, "", aliasSelection, hostFields[0]+" "+hostFields[1], fingerprintFields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(aliasEntry.KnownHostsLine()), "reviewed-host ssh-ed25519 ") {
+		t.Fatal("HostKeyAlias was not used as known-hosts identity")
+	}
+	aliasPlan, err := PrepareDirectProbe(aliasConfig, "", aliasSelection, aliasEntry.KnownHostsLine())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = aliasPlan.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	aliasCommand := exec.CommandContext(ctx, ssh, append([]string{"-v"}, aliasPlan.Args...)...)
+	aliasCommand.Env = append(os.Environ(), "LC_ALL=C")
+	aliasOutput, _ := aliasCommand.CombinedOutput()
+	if !strings.Contains(string(aliasOutput), "Authenticated to") || ctx.Err() != context.DeadlineExceeded {
+		t.Fatal("HostKeyAlias and nonstandard-port pin did not authenticate")
 	}
 }
